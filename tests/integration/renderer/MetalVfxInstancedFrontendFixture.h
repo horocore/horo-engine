@@ -28,4 +28,9 @@ namespace Horo::Render::Test {
                                                    const std::filesystem::path &receipt);
     /** @brief Repeats a real bounded submission-pin rejection and checks unsent diagnostic cleanup without measurement. */
     void RunMetalVfxInstancedPinBudgetRejection(const std::filesystem::path &root);
+    /** @brief Measures the canonical finite CPU World simulation and rebuilt native additive billboard graph; static profiles unchanged. */
+    void RunMetalVfxInstancedDynamicBenchmark(const std::filesystem::path &root, std::uint32_t instances,
+                                              const std::filesystem::path &receipt);
+    /** @brief Proves bounded multi-chunk dynamic reuse and genuine simulation/native uniform progress outside long measurements. */
+    void RunMetalVfxInstancedDynamicReuse(const std::filesystem::path &root);
 }  // namespace Horo::Render::Test

@@ -46,6 +46,11 @@ namespace Horo::Render::Test {
             RunMetalVfxInstancedBenchmark(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"), Count(false), Absolute("HORO_VFX_BENCHMARK_RECEIPT"));
             return;
         }
+        if (std::string_view{profile} == "cpu-world-additive-v1") {
+            RunMetalVfxInstancedDynamicBenchmark(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"), Count(false),
+                                                 Absolute("HORO_VFX_BENCHMARK_RECEIPT"));
+            return;
+        }
         REQUIRE(std::string_view{profile} == "opaque-cube-scalability-v1");
         RunMetalVfxInstancedOpaqueCubeScalability(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"), Count(true),
                                                   Absolute("HORO_VFX_BENCHMARK_RECEIPT"));
@@ -53,5 +58,9 @@ namespace Horo::Render::Test {
 
     TEST_CASE("Manual Metal submission-pin rejection cleans unsent diagnostics", "[.manual-vfx-pin-budget-rejection]") {
         RunMetalVfxInstancedPinBudgetRejection(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"));
+    }
+
+    TEST_CASE("Manual Metal dynamic World reuses every chunk and changes real native data", "[.manual-vfx-dynamic-reuse]") {
+        RunMetalVfxInstancedDynamicReuse(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"));
     }
 }  // namespace Horo::Render::Test

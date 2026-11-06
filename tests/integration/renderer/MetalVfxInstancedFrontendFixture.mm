@@ -1,5 +1,6 @@
 #include "MetalVfxInstancedFrontendFixture.h"
 
+#include "../../support/VfxTestSupport.h"
 #include "../../unit/runtime/renderer/RenderGraphTestUtils.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
@@ -477,7 +478,37 @@ namespace Horo::Render::Test {
             return chunk;
         }
 
-        /** @brief Owns actual canonical CPU simulation/extraction and actual frontend material/geometry generations. */
+        /** @brief Measures only explicitly named owner CPU phases; waits and actual frame graph allocations stay visible. */
+        struct DynamicPhases final {
+            double simulate{}, extract{}, schedule{}, packUpload{}, prepareTotal{}, compile{}, acquire{}, completion{}, reclaim{}, pump{},
+                total{};
+        };
+
+        constexpr float DynamicDelta = 1.F / 60.F;
+
+        /** @brief Uses the real descriptor validator for a finite, initial-burst-only canonical CPU population. */
+        Vfx::VfxSpawnAssetPreparation DynamicAsset(std::uint32_t count, MaterialRuntimeId material) {
+            auto data = Vfx::Tests::ValidParticleDescriptorData();
+            data.maximumParticles = count;
+            data.simulationPreference = Vfx::SimulationPreference::RequireCPU;
+            data.shape = Vfx::ParticleEmitterShape::Sphere;
+            data.spawnRate = {0., 0.};
+            data.lifetimeSeconds = {60., 60.};
+            data.initialSpeed = {.002, .002};
+            data.initialSize = {.01, .01};
+            data.initialOpacity = {.05, .05};
+            data.sortMode = Vfx::ParticleSortMode::None;
+            data.collisionMode = Vfx::ParticleCollisionMode::None;
+            return {.asset = data.material,
+                    .particles = std::make_shared<const Vfx::ParticleSystemDescriptor>(Vfx::Tests::ParticleDescriptor(data)),
+                    .simulation = {.effectSeed = 1735, .maximumBurstParticles = count, .maximumDeltaSeconds = DynamicDelta},
+                    .maximumInstances = 1,
+                    .initialBurst = count,
+                    .durationSeconds = 60.F,
+                    .material = material};
+        }
+
+        /** @brief Owns canonical CPU World state and actual frontend material/geometry generations. */
         struct Scene final {
             NativeOwner &owner;
             MeshFixture billboard, mesh;
@@ -485,7 +516,7 @@ namespace Horo::Render::Test {
             RenderTargetHandle target;
             std::vector<MaterialFixture> materials, chunkMaterials;
             std::uint32_t benchmarkCount{};
-            bool cubeProfile{};
+            bool cubeProfile{}, dynamicProfile{};
             FramebufferExtent extent{Extent};
             std::uint32_t maximumInstances{64}, maximumDraws{16};
             std::unique_ptr<Vfx::VfxWorld> world;
@@ -494,10 +525,10 @@ namespace Horo::Render::Test {
 
             /** @brief Creates real fixed scene resources outside frame encoding and measurement windows. */
             Scene(NativeOwner &native, const std::filesystem::path &root, bool cutout = false, std::uint32_t measuredCount = 0,
-                  bool cubes = false)
-                : owner(native), benchmarkCount(measuredCount), cubeProfile(cubes), extent(SceneExtent(measuredCount, cubes)),
-                  maximumInstances(measuredCount ? measuredCount : 64), maximumDraws(NativeDrawCapacity(measuredCount, cubes)),
-                  view(View(native, extent)) {
+                  bool cubes = false, bool dynamic = false)
+                : owner(native), benchmarkCount(measuredCount), cubeProfile(cubes), dynamicProfile(dynamic),
+                  extent(SceneExtent(measuredCount, cubes)), maximumInstances(measuredCount ? measuredCount : 64),
+                  maximumDraws(NativeDrawCapacity(measuredCount, cubes || dynamic)), view(View(native, extent)) {
                 const std::size_t bytes = measuredCount ? 32'000'000 : 1'000'000;
                 Accepted(owner.frontend->PrepareVfxScheduling({maximumInstances, 1, bytes, maximumDraws}));
                 billboard = Mesh(owner, 0);
@@ -519,12 +550,43 @@ namespace Horo::Render::Test {
                 const std::array artifacts{Load(root, false), Load(root, true)};
                 artifactKeys = {artifacts[0].artifactKey, artifacts[1].artifactKey};
                 for (unsigned i = 0; i < FamilyNumber(); ++i)
-                    materials.push_back(Material(owner, i, artifacts, cutout));
+                    materials.push_back(Material(owner, dynamicProfile ? 4U : i, artifacts, cutout));
                 const auto scope = Value(Vfx::VfxIdentityScope::Create(17));
+                if (dynamicProfile) {
+                    PrepareDynamic(scope);
+                    PrepareChunks();
+                    return;
+                }
                 const auto emitters = Emitters(scope);
                 world = Value(Vfx::VfxWorld::Prepare(scope, std::span{emitters}.first(FamilyNumber()),
                                                      {16, maximumInstances, ExtractionDrawCredits(), 2, bytes}));
                 Populate(emitters);
+            }
+
+            /** @brief Prepares and admits one genuine World-owned kernel without manually writing particle streams. */
+            void PrepareDynamic(Vfx::VfxIdentityScope scope) {
+                const auto asset = DynamicAsset(benchmarkCount, materials[0].id);
+                world = Value(Vfx::VfxWorld::PrepareSpawns(scope, std::span{&asset, 1},
+                                                           {.maximumPending = 1,
+                                                            .maximumResults = 1,
+                                                            .maximumOwners = 1,
+                                                            .maximumProducers = 1,
+                                                            .maximumInstances = 1,
+                                                            .maximumParticles = benchmarkCount,
+                                                            .maximumBytes = 64U * 1024U * 1024U,
+                                                            .maximumDeltaSeconds = DynamicDelta},
+                                                           {1, benchmarkCount, maximumDraws, 2, 32'000'000}));
+                REQUIRE(world->AdmitSpawnOwner(scope, 1) == Vfx::VfxSpawnStatus::Accepted);
+                Vfx::VfxSpawnRequest request{.effectAsset = asset.asset,
+                                             .scene = scope,
+                                             .owner = scope,
+                                             .ownerGeneration = 1,
+                                             .tick = 1,
+                                             .occurrence = {1, 1},
+                                             .bindingGeneration = 1,
+                                             .destination = 1};
+                request.transform.position = Math::WorldCoordinate64::FromMillimeters(0, 0, -3000);
+                REQUIRE(world->TryEnqueueSpawns(std::span{&request, 1}).status == Vfx::VfxSpawnStatus::Accepted);
             }
 
             /** @brief Closes only actual material/world owners while the selected frontend still exists. */
@@ -546,18 +608,20 @@ namespace Horo::Render::Test {
 
             /** @brief The separate cube profile has one opaque emitter; legacy mixed behavior retains all five. */
             unsigned FamilyNumber() const noexcept {
-                return cubeProfile ? 1U : 5U;
+                return cubeProfile || dynamicProfile ? 1U : 5U;
             }
 
             /** @brief Distributes the exact total deterministically over five declared blend/topology families. */
             std::uint32_t FamilyCount(unsigned index) const noexcept {
-                if (cubeProfile)
+                if (cubeProfile || dynamicProfile)
                     return index == 0 ? benchmarkCount : 0;
                 return benchmarkCount / 5 + std::uint32_t(index < benchmarkCount % 5);
             }
 
             /** @brief Reserves canonical conservative translucent-per-particle and solid depth/color extraction credits. */
             std::uint32_t ExtractionDrawCredits() const noexcept {
+                if (dynamicProfile)
+                    return maximumDraws;
                 if (cubeProfile)
                     return 2 * maximumDraws;
                 return benchmarkCount ? FamilyCount(2) + 7 : 128;
@@ -710,7 +774,7 @@ namespace Horo::Render::Test {
             RenderGraphPassRef clearColor, clearDepth;
             RenderGraphResourceId color, depth;
             /** @brief Constructs and fills one stable graph owner in place; its issued references never cross a builder move. */
-            explicit Recipe(Scene &scene);
+            explicit Recipe(Scene &scene, DynamicPhases *timings = nullptr);
             Recipe(const Recipe &) = delete;
             Recipe(Recipe &&) = delete;
         };
@@ -759,7 +823,9 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Uses the canonical extractor/scheduler with the real scene, view and graph resource identities. */
-        void Schedule(Scene &scene, Recipe &recipe) {
+        void Schedule(Scene &scene, Recipe &recipe, DynamicPhases *timings) {
+            if (scene.dynamicProfile)
+                ++scene.view.frame;
             auto &builder = recipe.builder;
             const auto color = Value(builder.ImportTexture(scene.color.texture, RenderGraphResourceClass::Persistent));
             const auto depth = Value(builder.ImportTexture(scene.depth.texture, RenderGraphResourceClass::Persistent));
@@ -787,28 +853,43 @@ namespace Horo::Render::Test {
                                           .outputTransform = output,
                                           .sceneColor = color,
                                           .sceneDepth = depth};
+            const auto extractStart = std::chrono::steady_clock::now();
             const auto extracted = scene.world->Extract(scene.view.frame, {}, 1);
+            const auto extractedAt = std::chrono::steady_clock::now();
             REQUIRE(extracted.report.status == Vfx::VfxExtractionStatus::Complete);
             REQUIRE(extracted.report.omittedInstances == 0);
+            if (scene.dynamicProfile)
+                REQUIRE(extracted.snapshot.Instances().size() == scene.benchmarkCount);
             auto scheduled = scene.owner.frontend->ScheduleVfx(builder, extracted.snapshot, request);
             INFO((scheduled.HasError() ? scheduled.ErrorValue().message : "Actual VFX snapshot scheduled"));
             REQUIRE(scheduled.HasValue());
             recipe.schedule = std::move(scheduled.Value());
+            if (scene.dynamicProfile) {
+                REQUIRE(recipe.schedule.instances == scene.benchmarkCount);
+                REQUIRE(recipe.schedule.drawCalls == (scene.benchmarkCount + 127) / 128);
+            }
             recipe.clearColor = clearColor;
             recipe.clearDepth = clearDepth;
             recipe.color = color;
             recipe.depth = depth;
             BindDraws(scene, recipe);
+            const auto packedStart = std::chrono::steady_clock::now();
             Accepted(scene.owner.frontend->PrepareVfxDraws(recipe.builder, recipe.schedule, scene.view, recipe.bindings));
+            if (timings) {
+                const auto end = std::chrono::steady_clock::now();
+                timings->extract = std::chrono::duration<double, std::milli>(extractedAt - extractStart).count();
+                timings->schedule = std::chrono::duration<double, std::milli>(packedStart - extractedAt).count();
+                timings->packUpload = std::chrono::duration<double, std::milli>(end - packedStart).count();
+            }
         }
 
         /** @copydoc Recipe::Recipe */
-        Recipe::Recipe(Scene &scene)
+        Recipe::Recipe(Scene &scene, DynamicPhases *timings)
             : builder(Value(RenderGraphBuilder::Create({.maxPasses = 16,
                                                         .maxResources = scene.benchmarkCount ? 1024U : 32U,
                                                         .maxUsages = scene.benchmarkCount ? 2048U : 128U,
                                                         .maxDependencies = 64}))) {
-            Schedule(scene, *this);
+            Schedule(scene, *this, timings);
         }
 
         /** @brief Derives synchronization from actual imported resources and the selected graphics queue, not a handwritten execution plan.
@@ -1103,6 +1184,8 @@ namespace Horo::Render::Test {
             double gpuStart{}, gpuEnd{};
             unsigned nativeStatus{};
             bool terminal{};
+            std::optional<DynamicPhases> dynamic;
+            std::uint64_t tick{}, extractionFrame{}, nativeFrame{};
         };
 
         /** @brief Classifies genuine native timestamp evidence without silently discarding any sample. */
@@ -1125,12 +1208,19 @@ namespace Horo::Render::Test {
             std::optional<double> coldSchedulePackMs;
             bool complete{}, written{};
 
-            BenchmarkReceipt(const std::filesystem::path &path, std::uint32_t count, bool cubes = false) : instances(count) {
+            BenchmarkReceipt(const std::filesystem::path &path, std::uint32_t count, bool cubes = false, bool dynamic = false)
+                : instances(count) {
                 REQUIRE(path.is_absolute());
                 REQUIRE_FALSE(std::filesystem::exists(path));
                 file.reset(std::fopen(path.c_str(), "wx"));
                 REQUIRE(file);
-                if (cubes)
+                if (dynamic)
+                    std::fprintf(file.get(),
+                                 "{\"type\":\"invocation\",\"schema\":1,\"profile\":\"cpu-world-additive-v1\","
+                                 "\"profileRevision\":1,\"instances\":%u,\"requestedExtent\":[1920,1080],"
+                                 "\"presentModeRequested\":\"Fifo\",\"budgetStatus\":\"UNSET_NON_GATING\",\"deviceQualification\":false}\n",
+                                 count);
+                else if (cubes)
                     std::fprintf(file.get(),
                                  "{\"type\":\"invocation\",\"schema\":1,\"profile\":\"opaque-cube-scalability-v1\","
                                  "\"profileRevision\":2,\"instances\":%u,\"requestedExtent\":[1600,900],"
@@ -1166,14 +1256,16 @@ namespace Horo::Render::Test {
 #else
                 std::fputs(",\"ndebug\":false", out);
 #endif
-                if (scene.cubeProfile)
+                if (scene.dynamicProfile)
+                    DynamicCohort(out, owner, scene, recipe);
+                else if (scene.cubeProfile)
                     CubeCohort(out, owner, scene, recipe);
                 else
                     MixedCohort(out, scene, recipe);
                 std::fprintf(out, "],\"extractorDrawCredits\":%u,\"nativeDrawCapacity\":%u,\"compiledArtifactKeys\":[",
                              scene.ExtractionDrawCredits(), scene.maximumDraws);
                 JsonText(out, FormatSha256(scene.artifactKeys[0]));
-                if (!scene.cubeProfile) {
+                if (!scene.cubeProfile && !scene.dynamicProfile) {
                     std::fputc(',', out);
                     JsonText(out, FormatSha256(scene.artifactKeys[1]));
                 }
@@ -1199,6 +1291,41 @@ namespace Horo::Render::Test {
                             "\"maximumMeasuredFrames\":10000,\"maximumIterationSeconds\":300,\"families\":[",
                             recipe.schedule.drawCalls, double(AuthoredZ));
                 Families(out, scene);
+            }
+
+            /** @brief Declares the bounded production CPU-simulation path and its distinct stage/graph-allocation costs. */
+            static void DynamicCohort(std::FILE *out, const NativeOwner &owner, const Scene &scene, const Recipe &recipe) {
+                std::fprintf(out,
+                             ",\"profile\":\"cpu-world-additive-v1\",\"profileRevision\":1,\"maximumSubmissionPins\":%u,"
+                             "\"instances\":%u,\"indexedDraws\":%u,\"maximumInstancesPerDraw\":128,"
+                             "\"meshVertices\":4,\"meshIndices\":6,\"topology\":\"camera_facing_billboard\","
+                             "\"validationRequested\":false,\"material\":\"unlit_white_RGBA8_default_sampler\",\"blend\":\"Additive\","
+                             "\"depthTest\":true,\"depthWrite\":false,\"cull\":\"None\","
+                             "\"color\":\"RGBA16F\",\"depth\":\"Depth32F\",\"outputExtent\":[1920,1080],"
+                             "\"presentModeRequested\":\"Fifo\",\"configuredMaxFramesInFlight\":2,\"measurementInflightDepth\":1,"
+                             "\"simulationDeltaSeconds\":%.17g,\"initialBurst\":%u,\"continuousSpawnRate\":0,"
+                             "\"maximumSimulationTicks\":3301,\"particleLifetimeSeconds\":60,\"effectDurationSeconds\":60,\"seed\":1735,"
+                             "\"spawnShape\":\"unit_sphere_volume\",\"originMeters\":[0,0,-3],\"radialSpeed\":0.002,"
+                             "\"particleSize\":0.01,\"particleOpacity\":0.05,\"sort\":\"None\",\"collision\":\"None\","
+                             "\"cameraEye\":[0.7,0.25,0.5],\"cameraTarget\":[0,0,-3],\"cameraUp\":[0,1,0],"
+                             "\"verticalFovRadians\":1.1,\"nearFar\":[0.2,80],\"clearColor\":[0,0,0,1],\"clearDepth\":1,"
+                             "\"simulationExecutedPerFrame\":true,\"extractionExecutedPerFrame\":true,\"staticPreparedGraph\":false,"
+                             "\"graphCompileIncludesWorkloadAssembly\":true,\"graphPrepareContainsExtractSchedulePackUpload\":true,"
+                             "\"graphAllocatedAndCompiledPerFrame\":true,\"nativeResourcesCreatedPerFrame\":false,"
+                             "\"cpuScope\":\"owner_phase_sum_including_graph_allocation_and_destruction_excluding_waits\","
+                             "\"gpuScope\":\"entire_native_command_buffer\",\"wholeFrameCpuMeasured\":false,"
+                             "\"autoreleasePoolCleanupOutsidePhaseTotal\":true,"
+                             "\"completionObservation\":\"serial_native_status_poll_1ms\",\"serialCompletionFpsIsNotProductThroughput\":"
+                             "true,"
+                             "\"minimumWarmupFrames\":300,\"minimumMeasuredFrames\":1200,\"minimumMeasuredSeconds\":20,"
+                             "\"maximumMeasuredFrames\":3000,\"maximumIterationSeconds\":300,\"maximumReceiptBytes\":4194304,"
+                             "\"simulationBudgetBytes\":67108864,\"extractionFrameSlots\":2,\"extractionArenaBytes\":32000000,"
+                             "\"retainedSchedulingViews\":1,\"schedulingArenaBytes\":32000000,"
+                             "\"sceneImageCopiedToPresentation\":false,\"shadows\":false,\"postProcessing\":false,"
+                             "\"engineParityQualified\":false,\"catchAssertionInstrumentation\":true,"
+                             "\"families\":[{\"name\":\"cpu_world_additive_billboard\",\"instances\":%u}",
+                             owner.retirementLimits.maximumSubmissionPins, scene.benchmarkCount, recipe.schedule.drawCalls,
+                             double(DynamicDelta), scene.benchmarkCount, scene.benchmarkCount);
             }
 
             /** @brief Describes a separately named static cube stress cohort, not a simulation port or cross-engine parity result. */
@@ -1272,8 +1399,34 @@ namespace Horo::Render::Test {
                     JsonNumber(out, (sample.gpuEnd - sample.gpuStart) * 1000);
                 else
                     std::fputs("null", out);
-                std::fprintf(out, ",\"nativeStatus\":%u,\"terminalCompleted\":%s}\n", sample.nativeStatus,
-                             sample.terminal ? "true" : "false");
+                std::fprintf(out, ",\"nativeStatus\":%u,\"terminalCompleted\":%s", sample.nativeStatus, sample.terminal ? "true" : "false");
+                if (sample.dynamic)
+                    DynamicSample(out, *sample.dynamic, sample.tick, sample.extractionFrame, sample.nativeFrame);
+                std::fputs("}\n", out);
+            }
+
+            /** @brief Writes actual same-frame phase values; the total is never a sum of separately computed percentiles. */
+            static void DynamicSample(std::FILE *out, const DynamicPhases &v, std::uint64_t tick, std::uint64_t extractionFrame,
+                                      std::uint64_t nativeFrame) {
+                std::fprintf(out, ",\"tick\":%llu,\"extractionFrame\":%llu,\"nativeFrame\":%llu", static_cast<unsigned long long>(tick),
+                             static_cast<unsigned long long>(extractionFrame), static_cast<unsigned long long>(nativeFrame));
+                const std::array values{std::pair{"simulateMs", v.simulate},
+                                        std::pair{"extractMs", v.extract},
+                                        std::pair{"scheduleMs", v.schedule},
+                                        std::pair{"packUploadMs", v.packUpload},
+                                        std::pair{"graphPrepareTotalMs", v.prepareTotal},
+                                        std::pair{"graphCompileMs", v.compile},
+                                        std::pair{"reclaimMs", v.reclaim},
+                                        std::pair{"ownerPhaseTotalMs", v.total},
+                                        std::pair{"acquireWaitMs", v.acquire},
+                                        std::pair{"completionWaitMs", v.completion},
+                                        std::pair{"completionPumpMs", v.pump}};
+                for (const auto &[name, value] : values) {
+                    std::fputc(',', out);
+                    JsonText(out, name);
+                    std::fputc(':', out);
+                    JsonNumber(out, value);
+                }
             }
 
             /** @brief Flushes bounded evidence exactly once, including honest partial state on assertion failure. */
@@ -1362,6 +1515,230 @@ namespace Horo::Render::Test {
             }
             receipt.complete = true;
             receipt.phase = "finished";
+        }
+
+        /** @brief Computes elapsed wall observations for a single phase, without substituting GPU or thread CPU clocks. */
+        double Milliseconds(BenchmarkClock::time_point begin) {
+            return std::chrono::duration<double, std::milli>(BenchmarkClock::now() - begin).count();
+        }
+
+        /** @brief Executes exactly one increasing World tick and requires the genuine population to remain live. */
+        void AdvanceDynamic(Scene &scene, std::uint64_t tick) {
+            const auto update = scene.world->UpdateSpawns(tick, DynamicDelta);
+            REQUIRE(update.status == Vfx::VfxSpawnStatus::Accepted);
+            REQUIRE(update.live == 1);
+            REQUIRE(update.retired == 0);
+            scene.world->ClearSpawnResults();
+        }
+
+        /** @brief Returns one unique host handle to an existing empty bank location; no resources are created. */
+        bool RestoreSlot(std::vector<MaterialFixture> &bank, std::shared_ptr<PreparedVfxFrameSlot> &slot) {
+            const auto id = slot->Material()->Descriptor().material;
+            auto free = std::ranges::find_if(bank, [&](const MaterialFixture &material) {
+                return material.id == id && !material.slot;
+            });
+            if (free == bank.end())
+                return false;
+            free->slot = std::move(slot);
+            return true;
+        }
+
+        /** @brief Recovers all chunk owners after submission while native leases retain their independent publication borrows. */
+        void RestoreSlots(Scene &scene, Recipe &recipe) {
+            for (auto &binding : recipe.bindings) {
+                REQUIRE(binding.slot);
+                const bool restored = RestoreSlot(scene.materials, binding.slot) || RestoreSlot(scene.chunkMaterials, binding.slot);
+                REQUIRE(restored);
+            }
+            recipe.bindings.clear();
+            recipe.schedule = {};
+        }
+
+        /** @brief Pumps existing owner completion processing without creating simulation ticks or claiming an extra presented frame. */
+        void PumpDynamic(NativeOwner &owner, BenchmarkClock::time_point deadline) {
+            auto frame = owner.Begin(deadline);
+        }
+
+        /** @brief Records acquisition separately and submits a genuinely rebuilt, freshly uploaded graph. */
+        BenchmarkSample SubmitDynamic(NativeOwner &owner, const CompiledRenderGraphExecution &graph,
+                                      std::span<const RenderGraphPassWorkload> workloads, BenchmarkClock::time_point deadline,
+                                      DynamicPhases &phases) {
+            const auto acquire = BenchmarkClock::now();
+            auto frame = owner.Begin(deadline);
+            phases.acquire = Milliseconds(acquire);
+            owner.commands = (__bridge id<MTLCommandBuffer>)owner.bridge.CurrentCommandBuffer();
+            REQUIRE(owner.commands);
+            UnsubmittedDiagnostic diagnostic{owner};
+            const auto encode = BenchmarkClock::now();
+            Accepted(frame.ExecuteGraph(graph, workloads));
+            const auto encoded = Milliseconds(encode);
+            const auto submit = BenchmarkClock::now();
+            Accepted(frame.Present());
+            const auto submitted = Milliseconds(submit);
+            const auto wait = BenchmarkClock::now();
+            const bool terminal = BenchmarkTerminal(owner.commands, std::min(deadline, BenchmarkClock::now() + 5s));
+            phases.completion = Milliseconds(wait);
+            return {{encoded, submitted},
+                    owner.commands.GPUStartTime,
+                    owner.commands.GPUEndTime,
+                    unsigned(owner.commands.status),
+                    terminal};
+        }
+
+        /** @brief Measures genuine simulation, immutable extraction, canonical packing/upload, compilation and native draw each frame. */
+        BenchmarkSample DynamicFrame(Scene &scene, std::uint64_t tick, BenchmarkClock::time_point deadline) {
+            @autoreleasepool {
+                auto &owner = scene.owner;
+                DynamicPhases phases;
+                auto start = BenchmarkClock::now();
+                PumpDynamic(owner, deadline);
+                phases.pump = Milliseconds(start);
+                start = BenchmarkClock::now();
+                AdvanceDynamic(scene, tick);
+                phases.simulate = Milliseconds(start);
+                start = BenchmarkClock::now();
+                auto recipe = std::make_unique<Recipe>(scene, &phases);
+                phases.prepareTotal = Milliseconds(start);
+                start = BenchmarkClock::now();
+                std::optional<CompiledRenderGraphExecution> graph{Compile(owner, *recipe)};
+                auto workloads = Workloads(*recipe, *graph);
+                phases.compile = Milliseconds(start);
+                auto sample = SubmitDynamic(owner, *graph, workloads, deadline, phases);
+                REQUIRE(sample.terminal);
+                start = BenchmarkClock::now();
+                RestoreSlots(scene, *recipe);
+                workloads.clear();
+                graph.reset();
+                recipe.reset();
+                phases.reclaim = Milliseconds(start);
+                phases.total =
+                    phases.simulate + phases.prepareTotal + phases.compile + sample.cpu.encode + sample.cpu.submit + phases.reclaim;
+                sample.dynamic = phases;
+                sample.tick = tick;
+                sample.extractionFrame = scene.view.frame;
+                sample.nativeFrame = owner.frame;
+                return sample;
+            }
+        }
+
+        /** @brief Checks both client and genuine in-flight retention, then releases all chunks for a later successful publication. */
+        void DynamicInFlightControl(Scene &scene, BenchmarkClock::time_point deadline) {
+            Recipe recipe{scene};
+            const auto graph = Compile(scene.owner, recipe);
+            auto workloads = Workloads(recipe, graph);
+            const std::array<VfxPackedDrawInstance, 1> replacement{};
+            {
+                const auto &borrowed = recipe.bindings.front().slot;
+                const auto client = scene.owner.frontend->UpdateVfxFrame(borrowed, borrowed->Revision() + 1, replacement);
+                REQUIRE(client.HasError());
+                CHECK(client.ErrorValue().code.Value() == VfxFrameErrors::Pending.code.Value());
+            }
+            Execute(scene.owner, graph, workloads, true, true, deadline);
+            REQUIRE(scene.owner.commands.status != MTLCommandBufferStatusCompleted);
+            RestoreSlots(scene, recipe);
+            workloads.clear();
+            auto &slot = scene.materials[0].slot;
+            const auto native = scene.owner.frontend->UpdateVfxFrame(slot, slot->Revision() + 1, replacement);
+            REQUIRE(native.HasError());
+            CHECK(native.ErrorValue().code.Value() == VfxFrameErrors::Pending.code.Value());
+            scene.owner.gate.signaledValue = 1;
+            REQUIRE(Terminal(scene.owner.commands));
+            PumpDynamic(scene.owner, deadline);
+            Accepted(scene.owner.frontend->UpdateVfxFrame(slot, slot->Revision() + 1, replacement));
+        }
+
+        /** @brief Aborts genuine newly uploaded work and leaves every host slot available for the next dynamic frame. */
+        void DynamicAbortControl(Scene &scene, BenchmarkClock::time_point deadline) {
+            Recipe recipe{scene};
+            const auto graph = Compile(scene.owner, recipe);
+            auto workloads = Workloads(recipe, graph);
+            Execute(scene.owner, graph, workloads, false, false, deadline);
+            CHECK(scene.owner.commands == nil);
+            RestoreSlots(scene, recipe);
+        }
+
+        /** @brief Takes an untimed, genuinely committed World snapshot after all native/client borrows have retired. */
+        std::vector<VfxRenderInstance> DynamicParticles(Scene &scene) {
+            const auto extracted = scene.world->Extract(++scene.view.frame, {}, 1);
+            REQUIRE(extracted.report.status == Vfx::VfxExtractionStatus::Complete);
+            REQUIRE(extracted.report.omittedInstances == 0);
+            REQUIRE(extracted.snapshot.Instances().size() == scene.benchmarkCount);
+            const auto values = extracted.snapshot.Instances();
+            return {values.begin(), values.end()};
+        }
+
+        /** @brief Reads terminal host-visible uniform storage from its exact frontend-issued Metal buffer for untimed data-change proof. */
+        std::vector<std::byte> DynamicNativeBytes(Scene &scene) {
+            REQUIRE(Terminal(scene.owner.commands));
+            const auto instance =
+                Value(Detail::RenderFrontendResourceAccess::BackendInstance(*scene.owner.frontend, scene.materials[0].instances));
+            const auto *native = reinterpret_cast<const Detail::MetalBufferInstance *>(static_cast<std::uintptr_t>(instance));
+            REQUIRE(native);
+            REQUIRE(native->buffer);
+            REQUIRE(native->vfxPublished);
+            REQUIRE(native->vfxRevision == scene.materials[0].slot->Revision());
+            REQUIRE(native->buffer.contents);
+            REQUIRE(native->buffer.length >= 10240);
+            const auto *first = static_cast<const std::byte *>(native->buffer.contents);
+            return {first, first + 10240};
+        }
+
+        /** @brief Checks complete identity/count preservation and real motion outside the timed frame path. */
+        void CheckDynamicProgress(Scene &scene, std::span<const VfxRenderInstance> initial) {
+            PumpDynamic(scene.owner, BenchmarkClock::now() + 5s);
+            const auto final = DynamicParticles(scene);
+            REQUIRE(final.size() == initial.size());
+            for (std::size_t i = 0; i < final.size(); ++i)
+                REQUIRE(final[i].particle == initial[i].particle);
+            const auto delta = final.front().position - initial.front().position;
+            REQUIRE(Math::Dot(delta, delta) > 0.F);
+            REQUIRE(scene.materials.size() == 1);
+            REQUIRE(scene.chunkMaterials.size() + 1 == (scene.benchmarkCount + 127) / 128);
+        }
+
+        /** @brief Rejects nonfinite/negative phase observations instead of filtering or fabricating measurements. */
+        void CheckDynamicSample(const BenchmarkSample &sample) {
+            REQUIRE(sample.dynamic);
+            const auto &v = *sample.dynamic;
+            const std::array values{v.simulate,   v.extract, v.schedule, v.packUpload, v.prepareTotal,    v.compile,        v.acquire,
+                                    v.completion, v.reclaim, v.pump,     v.total,      sample.cpu.encode, sample.cpu.submit};
+            for (const auto value : values) {
+                REQUIRE(std::isfinite(value));
+                REQUIRE(value >= 0.);
+            }
+        }
+
+        /** @brief Checks the existing native ledger remains bounded without claiming that per-frame graph host allocations disappear. */
+        void CheckDynamicMemory(const NativeOwner &owner, const RenderMemoryBudgetSnapshot &initial) {
+            const auto final = owner.frontend->MemorySnapshot();
+            CHECK(final.allocationCount == initial.allocationCount);
+            CHECK(final.livePayloadBytes == initial.livePayloadBytes);
+            CHECK(final.reservationCount == initial.reservationCount);
+            CHECK(final.failedReservationCount == initial.failedReservationCount);
+            CHECK_FALSE(final.overBudget);
+        }
+
+        /** @brief Performs the separate bounded dynamic measurement protocol, retaining every measured frame. */
+        void DynamicWindow(Scene &scene, BenchmarkReceipt &receipt, std::uint64_t &tick, BenchmarkClock::time_point deadline) {
+            receipt.phase = "warmup";
+            for (unsigned i = 0; i < 300; ++i) {
+                REQUIRE(BenchmarkClock::now() < deadline);
+                ++receipt.warmupAttempts;
+                receipt.lastWarmup = DynamicFrame(scene, ++tick, deadline);
+                receipt.lastWarmupOrdinal = i;
+                CheckDynamicSample(*receipt.lastWarmup);
+                ++receipt.warmupCompleted;
+            }
+            receipt.phase = "measuring";
+            const auto start = BenchmarkClock::now();
+            while (NeedsBenchmarkSamples(receipt.samples.size(), receipt.measuredSeconds)) {
+                REQUIRE(receipt.samples.size() < 3000);
+                REQUIRE(BenchmarkClock::now() < deadline);
+                ++receipt.measuredAttempts;
+                receipt.samples.push_back(DynamicFrame(scene, ++tick, deadline));
+                CheckDynamicSample(receipt.samples.back());
+                receipt.measuredSeconds = std::chrono::duration<double>(BenchmarkClock::now() - start).count();
+            }
         }
 
         /** @brief Shares only the existing bounded native measurement lifecycle; workload profiles remain explicit. */
@@ -1509,6 +1886,64 @@ namespace Horo::Render::Test {
                                                    const std::filesystem::path &path) {
         REQUIRE((instances == 5000 || instances == 90000));
         RunStaticProfile(root, instances, path, true);
+    }
+
+    /** @copydoc RunMetalVfxInstancedDynamicBenchmark */
+    void RunMetalVfxInstancedDynamicBenchmark(const std::filesystem::path &root, std::uint32_t instances,
+                                              const std::filesystem::path &path) {
+        REQUIRE((instances == 1024 || instances == 4096 || instances == 16384));
+        NativeOwner owner;
+        BenchmarkReceipt receipt{path, instances, false, true};
+        owner.Initialize(BenchmarkExtent, false, PresentMode::Fifo);
+        Scene scene(owner, root, false, instances, false, true);
+        std::uint64_t tick{1};
+        AdvanceDynamic(scene, tick);
+        const auto initial = DynamicParticles(scene);
+        std::vector<std::byte> initialNative;
+        const auto memory = owner.frontend->MemorySnapshot();
+        const auto deadline = BenchmarkClock::now() + 300s;
+        {
+            DynamicPhases phases;
+            Recipe description{scene, &phases};
+            receipt.Describe(owner, scene, description);
+            RestoreSlots(scene, description);
+        }
+        // Cold packing is not a simulation or presented frame; retain its real native bytes as the initial data-change probe.
+        initialNative = DynamicNativeBytes(scene);
+        DynamicWindow(scene, receipt, tick, deadline);
+        CheckDynamicProgress(scene, initial);
+        REQUIRE(DynamicNativeBytes(scene) != initialNative);
+        CheckDynamicMemory(owner, memory);
+        std::fprintf(receipt.file.get(),
+                     "{\"type\":\"validation\",\"stableIdentities\":true,\"motionObserved\":true,"
+                     "\"nativeUniformBytesChanged\":true,\"finalTick\":%llu}\n",
+                     static_cast<unsigned long long>(tick));
+        receipt.complete = true;
+        receipt.phase = "finished";
+        REQUIRE(receipt.Write());
+    }
+
+    /** @copydoc RunMetalVfxInstancedDynamicReuse */
+    void RunMetalVfxInstancedDynamicReuse(const std::filesystem::path &root) {
+        NativeOwner owner;
+        owner.Initialize(BenchmarkExtent, true, PresentMode::Fifo);
+        Scene scene(owner, root, false, 512, false, true);
+        AdvanceDynamic(scene, 1);
+        const auto initial = DynamicParticles(scene);
+        std::vector<std::byte> initialNative;
+        const auto memory = owner.frontend->MemorySnapshot();
+        const auto deadline = BenchmarkClock::now() + 30s;
+        DynamicInFlightControl(scene, deadline);
+        DynamicAbortControl(scene, deadline);
+        for (std::uint64_t tick = 2; tick <= 242; ++tick) {
+            const auto sample = DynamicFrame(scene, tick, deadline);
+            CheckDynamicSample(sample);
+            if (tick == 2)
+                initialNative = DynamicNativeBytes(scene);
+        }
+        CheckDynamicProgress(scene, initial);
+        REQUIRE(DynamicNativeBytes(scene) != initialNative);
+        CheckDynamicMemory(owner, memory);
     }
 
 }  // namespace Horo::Render::Test

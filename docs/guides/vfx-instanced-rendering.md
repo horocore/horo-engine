@@ -661,3 +661,75 @@ copy to the drawable is timed. It is not a reproduction of the moving, shadowed
 Unity scene, a whole-engine FPS result, or evidence of matching Unity's speed.
 The original mixed profile's conservative transparency admission also remains
 authoritative; this opaque profile does not qualify 90,000 mixed particles.
+
+### Dynamic CPU World measurement profile
+
+`cpu-world-additive-v1` is a separate opt-in manual cohort for 1,024, 4,096 or
+16,384 additive camera-facing billboards at 1920x1080. It advances the actual
+`VfxWorld::PrepareSpawns` simulation, extracts a fresh immutable snapshot, schedules
+and packs/uploads the canonical indexed chunks, compiles a new graph and submits
+real Metal work on every frame. It does not mutate raw particle buffers to imitate
+simulation. The existing spawn contract supports this bounded additive billboard
+profile; it does not establish support for 90,000 dynamically simulated opaque cubes.
+
+The deterministic initial burst has no continuous spawning, seed 1735, a unit-sphere
+volume, radial speed 0.002, size 0.01 and opacity 0.05. Both particle lifetime and
+effect duration are 60 seconds. The fixed simulation delta is `1.F / 60.F`:
+one cold activation, 300 warm-up frames and at most 3,000 measured frames remain
+below 55.02 simulated seconds. Simulation time and wall time are distinct. The
+measurement still requires at least 1,200 frames and 20 wall seconds; exceeding
+the frame/time envelope is an incomplete run, never a filtered success.
+
+```sh
+HORO_VFX_BENCHMARK_PROFILE=cpu-world-additive-v1 \
+HORO_VFX_INSTANCED_ASSET_ROOT=/absolute/path/to/cooked-metal-package \
+HORO_VFX_BENCHMARK_COUNT=16384 \
+HORO_VFX_BENCHMARK_RECEIPT=/absolute/path/to/new-dynamic-iteration.jsonl \
+MTL_DEBUG_LAYER=0 \
+  build/vfx-metal-release/tests/HoroMetalVfxInstancedBenchmark
+```
+
+Raw observations separate simulation, extraction, scheduling, packing/upload,
+graph compilation, encoding, submission and reclamation. The owner-phase total
+adds the actual same-frame non-overlapping phases; extraction/scheduling/upload
+are already inside graph preparation and are not counted twice. These are wall
+clock durations around owner CPU work, not thread CPU time or whole-engine FPS.
+Drawable acquisition, native completion, completion pumping and autorelease-pool
+cleanup are outside that total. GPU time still covers the entire command buffer.
+Graph allocation, compilation and destruction are included; no allocation-free
+preparation claim is made. Native resources and upload slots are prepared cold.
+
+The hidden manual case `[.manual-vfx-dynamic-reuse]` checks multi-chunk reuse,
+client/native retention, completion and abort recovery. Untimed end checks compare
+copied particle identities/positions, real native uniform bytes and the native
+resource ledger. Snapshots and slots are not retained merely for diagnostics.
+This profile remains outside ordinary CTest/build execution and does not define
+an automatic performance gate or establish Unity/Unreal parity.
+
+#### Dynamic pilot observations (2026-11-06)
+
+One successful independent process per count completed 6,150 measured frames on
+the Apple M3/Metal Release executable. Each passed the complete protocol, actual
+motion/native-byte-change checks and native resource ledger checks, with no invalid
+GPU timestamps. These are single-process pilot quantiles, not medians of seven
+runs or a stable cross-engine comparison:
+
+| Particles | Draws | Frames | Owner phase p50 (ms) | Owner phase p99 (ms) | GPU command-buffer p50 (ms) | GPU command-buffer p99 (ms) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,024 | 8 | 2,300 | 0.460 | 2.058 | 1.639 | 4.452 |
+| 4,096 | 32 | 2,398 | 2.455 | 3.714 | 0.217 | 1.079 |
+| 16,384 | 128 | 1,452 | 6.296 | 7.065 | 0.582 | 1.209 |
+
+At 16,384 particles, the individually measured simulation and packing/upload
+medians were 1.977 ms and 3.548 ms. The total column uses actual same-frame totals;
+it was not obtained by adding these medians. Bracketed phases include their Catch
+assertion/check machinery. The differing GPU ordering across these single-process
+pilots is not enough evidence to rank scaling or claim a repeatable speed ratio.
+The earlier 1,024-particle attempt was interrupted by the continuous free-disk
+reserve guard; its partial artifacts remain separate and are not in this table.
+
+The new hidden native reuse case passed with 26,420 assertions. All four original
+functional cases and the prior budget-rejection case also passed, with zero skips.
+Six deliberately invalid profile/count inputs were rejected before native receipt
+creation; they are expected rejection controls, not successful measurement runs.
+No new coverage, hosted gate, engine FPS or throughput-parity clearance is implied.
