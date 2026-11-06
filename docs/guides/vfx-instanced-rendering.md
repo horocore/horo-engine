@@ -787,3 +787,40 @@ layouts, typed failure ordering and zero allocations. The affected public fronte
 header consumer also compiled. Local Sonar remains waived; no new coverage,
 Codacy, hosted-platform or whole-ticket acceptance clearance is claimed. Manual
 benchmarks remain opt-in and outside normal build/CTest execution.
+
+
+#### Stable particle payload self-moves
+
+Stable CPU compaction now leaves a particle's payload untouched when its source
+and destination dense indices are identical. Handle admission, stable ordering,
+slot mappings, generation retirement, tail clearing and canonical free-slot
+rebuilding still run. In particular, keeping every particle does not bypass the
+free-slot rebuild: that would change subsequent spawn identities after prior kills.
+The private copy helper adds one branch and no storage, allocation or public API.
+
+A separate matched Apple M3/Metal Release comparison retained the preceding
+frontend/serializer optimization in both implementations. Three processes per
+implementation ran in AB/BA/AB order, with the same 79 cohort fields and no
+profiler, completing 7,201 measured frames. Medians of per-process quantiles were:
+
+| Metric | Before p50 (ms) | After p50 (ms) | Before p99 (ms) | After p99 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Simulation | 3.041 | 1.667 | 4.015 | 2.306 |
+| Packing/upload | 1.332 | 1.758 | 2.315 | 2.741 |
+| Owner phase total | 5.480 | 5.101 | 6.871 | 6.501 |
+| GPU command buffer | 0.580 | 0.580 | 0.597 | 0.601 |
+
+Owner-phase p50 improved in all three pairs, by 4.0% to 8.0%. Packing/upload
+worsened in this batch despite its unchanged source path; the cause is unproven.
+The independently measured phase quantiles must not be added or subtracted to
+infer the total. The preceding power/thermal, workload, timing-scope and parity
+limitations apply; this does not set a reference-scene acceptance budget.
+
+All 157 owning VFX API/simulator/buffer cases passed separately on macOS and Linux
+ARM64 GCC 15, with no failures or skips. Two regressions check exact fixed/custom
+payload bits, preserved and moved particles, canonical free-slot reuse, stale
+handles, zeroed recycled payloads and allocation-free full-survivor compaction.
+All six native Metal functional/reuse/budget cases also passed. OpenGL and software
+Vulkan native results above belong to their recorded preceding source, rather
+than a fresh run of this CPU-only change. No new hosted, coverage or analyzer
+clearance is claimed; HORO-1735 throughput acceptance remains open.
