@@ -359,6 +359,67 @@ Neither fixed packing layout tests nor unsupported-return tests replace these
 results. A performance report must name instance/mesh complexity, resolution,
 blend/depth workload, CPU/GPU timing availability, and the measured budget.
 
+## Manual Metal measurement
+
+The long measurement is deliberately separate from ordinary tests. The
+`HORO_BUILD_METAL_VFX_BENCHMARK` option defaults to `OFF`. When enabled,
+`HoroMetalVfxInstancedBenchmark` is still excluded from the default build and has
+no CTest/discovery registration. Existing GPU smoke selectors do not run it.
+Build only this target in a separate Release tree; a single-config Debug tree
+cannot become Release by passing `--config Release`.
+
+```sh
+cmake -S . -B build/vfx-metal-release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+  -DHORO_BUILD_METAL_VFX_BENCHMARK=ON \
+  -DHORO_BUILD_EDITOR_GUI=ON -DHORO_EDITOR_LIVE_UI=OFF \
+  -DHORO_BUILD_RENDER_METAL=ON -DHORO_BUILD_RENDER_OPENGL=OFF \
+  -DHORO_BUILD_RENDER_VULKAN=OFF -DHORO_BUILD_XR_OPENXR=OFF \
+  -DHORO_ENABLE_GPU_SMOKE_TESTS=OFF
+cmake --build build/vfx-metal-release --target HoroMetalVfxInstancedBenchmark --parallel 1
+```
+
+The GUI configuration enables the existing SDL/Metal presentation composition;
+this target does not build or run the Editor application. Supply an absolute
+path to the authentic cooked ordinary/masked Metal package, a count of exactly
+`1024`, `4096` or `16384`, and a new absolute JSONL destination whose parent
+already exists. The receipt refuses overwrite.
+
+```sh
+HORO_VFX_INSTANCED_ASSET_ROOT=/absolute/path/to/cooked-metal-package \
+HORO_VFX_BENCHMARK_COUNT=1024 \
+HORO_VFX_BENCHMARK_RECEIPT=/absolute/path/to/new-iteration.jsonl \
+MTL_DEBUG_LAYER=0 \
+  build/vfx-metal-release/tests/HoroMetalVfxInstancedBenchmark
+```
+
+Each invocation measures one count in one process. For a measurement set, run
+seven independent processes per count, sequentially, retaining every receipt and
+failure. Each iteration prepares a static 1920x1080 RGBA16F/Depth32F scene with
+five deterministic blend/depth families: translucent/additive billboards and
+three opaque/masked indexed-mesh families, one with authored mesh-local Z. Each
+geometry uses four vertices and six indices. Canonical 128-instance chunks
+produce 10, 35 or 130 indexed draws. Resources and graph preparation occur before
+the measured window. The explicit Fifo cohort uses serial native-completion
+observation; it introduces no hidden pacing sleeps to satisfy the sample count.
+
+There are 300 completed warmup frames, then at least 1,200 measured frames and
+20 measured seconds. Both minimums must hold within 10,000 samples and the
+300-second iteration deadline; a limit/error preserves partial evidence and
+fails the invocation. Raw observations are buffered within a fixed bound and
+written after the window. The receipt reports CPU encode and Present-call time
+separately from the entire native command-buffer GPU interval, retaining
+unavailable/invalid GPU timestamps explicitly. It does not measure whole-frame
+CPU time, simulation/update throughput or product FPS. Catch instrumentation,
+serial completion polling, presentation policy and requested validation state
+remain part of this diagnostic cohort.
+
+This is an opt-in measurement candidate, not an automatic performance gate or
+approved baseline. Numeric targets remain unset until the measured reference
+workload/cohort is reviewed. Run it when renderer/VFX performance changes or at
+milestone qualification, rather than on every build or PR. Keep the existing
+functional pixel/depth/lifetime checks separate from timing evidence.
+
 ## Current availability and remaining acceptance
 
 Implementation proceeds against available OpenGL, Metal and Vulkan graphics
@@ -461,3 +522,41 @@ with validation enabled are diagnostic timing only. No reviewed reference scene,
 performance cohort or numeric throughput budget has been supplied. This does not
 satisfy ADR-051 measurement windows or the ticket's throughput acceptance.
 The ticket remains In Progress until the remaining acceptance is resolved.
+
+## Manual Metal measurement baseline (2026-11-06)
+
+The isolated Release functional executable also passed the original four native
+cases with 1,843 assertions, zero failures and zero skips, with Metal validation
+enabled. This is fresh functional evidence, separate from timing windows.
+
+The opt-in Release benchmark completed seven independent processes at each count
+on an Apple M3 with a 10-core GPU, at 1920x1080. Each process completed 300 warm-up
+frames followed by at least 1,200 measured frames and 20 seconds. All 21 processes
+completed, producing 50,337 measured frames with valid GPU timestamps. The table
+reports the median of the seven per-process nearest-rank p99 values; samples from
+different processes are not pooled or filtered.
+
+| Instances | Indexed draws | CPU encode p99 (ms) | GPU command-buffer p99 (ms) |
+| ---: | ---: | ---: | ---: |
+| 1,024 | 10 | 0.547 | 2.247 |
+| 4,096 | 35 | 0.852 | 2.284 |
+| 16,384 | 130 | 2.099 | 2.467 |
+
+At 16,384 instances, the seven CPU p99 values ranged from 2.007 to 2.249 ms;
+GPU p99 values ranged from 2.397 to 3.555 ms. CPU encode excludes drawable
+acquisition and completion waiting. GPU time covers the entire native command
+buffer, rather than an isolated VFX pass. The prepared static graph is replayed
+with serial completion; these windows exclude per-frame simulation, extraction,
+camera updates, readback and resource creation. They therefore do not establish
+whole-engine frame time or the complete ADR-051 performance cohort.
+
+The performance target is comparable behavior against mainstream engines such as
+Unity and Unreal under matched workloads. No numeric acceptance threshold is
+derived from Horo's own results. A comparison must match hardware, resolution,
+particle simulation mode, geometry, material behavior, screen coverage, depth and
+blend work, and measurement boundaries. Simulation and rendering costs must be
+reported separately. Equivalent reference-engine runs have not yet been recorded;
+performance parity and HORO-1735 throughput acceptance remain open.
+
+The benchmark stays manual, disabled by default and outside normal build and
+CTest execution. These measurements are a baseline for comparison, not a CI gate.

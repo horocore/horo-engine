@@ -7136,3 +7136,41 @@ set_tests_properties(HoroAndroidPresentationAdmissionTests PROPERTIES LABELS "un
 
 # Self-referential material batches preserve aggregate and completed-type span interoperation.
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderMaterialBatchPublicContract.cpp)
+
+# Explicitly manual long-running measurement cohort: never part of ALL, CTest, discovery, or ordinary GPU smoke selectors.
+option(HORO_BUILD_METAL_VFX_BENCHMARK "Enable the isolated manual Metal VFX measurement executable" OFF)
+if(HORO_BUILD_METAL_VFX_BENCHMARK)
+    if(NOT APPLE OR NOT TARGET HoroSdlMetalPresentationInternal)
+        message(FATAL_ERROR "Manual Metal VFX measurement requires the real Apple Metal/SDL presentation composition")
+    endif()
+    # Only these unchanged native contracts are shared by this selected-backend diagnostic fixture.
+    # Preserve their relative include topology without exposing the implementation source root.
+    set(_horo_metal_vfx_benchmark_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/metal-vfx-benchmark")
+    foreach(header IN ITEMS
+        editor/renderer/metal/SdlMetalPresentationPort.h
+        runtime/renderer/modules/metal/MetalBackendModule.h
+        runtime/renderer/modules/metal/MetalResourceInstances.h)
+        get_filename_component(_horo_metal_vfx_header_directory "${header}" DIRECTORY)
+        file(MAKE_DIRECTORY "${_horo_metal_vfx_benchmark_headers}/${_horo_metal_vfx_header_directory}")
+        configure_file("${PROJECT_SOURCE_DIR}/src/${header}"
+            "${_horo_metal_vfx_benchmark_headers}/${header}" COPYONLY)
+    endforeach()
+    add_library(HoroMetalVfxBenchmarkNativeHeadersInternal INTERFACE)
+    target_include_directories(HoroMetalVfxBenchmarkNativeHeadersInternal INTERFACE "${_horo_metal_vfx_benchmark_headers}")
+    target_link_libraries(HoroMetalVfxBenchmarkNativeHeadersInternal INTERFACE
+        HoroEngine::RenderMetal HoroSdlMetalPresentationInternal HoroRenderFrontendResourceAccessInternal)
+    add_executable(HoroMetalVfxInstancedBenchmark EXCLUDE_FROM_ALL
+        benchmarks/vfx/MetalInstancedRenderingBenchmark.mm
+        integration/renderer/MetalVfxInstancedFrontendFixture.mm)
+    add_executable(HoroMetalVfxInstancedFunctionalSmoke EXCLUDE_FROM_ALL
+        integration/renderer/MetalVfxInstancedFrontendSmoke.mm
+        integration/renderer/MetalVfxInstancedFrontendFixture.mm)
+    foreach(target IN ITEMS HoroMetalVfxInstancedBenchmark HoroMetalVfxInstancedFunctionalSmoke)
+        target_compile_features(${target} PRIVATE cxx_std_20)
+        target_compile_options(${target} PRIVATE -fobjc-arc)
+        target_link_libraries(${target} PRIVATE Catch2::Catch2WithMain
+            HoroEngine::RenderMetal HoroEngine::RenderFrontend HoroEngine::VfxApi
+            HoroRenderFrontendResourceAccessInternal HoroShaderReflectionCookInternal
+            HoroSdlMetalPresentationInternal HoroMetalVfxBenchmarkNativeHeadersInternal "-framework Metal")
+    endforeach()
+endif()

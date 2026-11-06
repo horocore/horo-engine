@@ -1,5 +1,6 @@
 #pragma once
 /** @file MetalVfxInstancedFrontendFixture.h @brief Real public frontend indexed VFX qualification; no simulated native evidence. */
+#include <cstdint>
 #include <filesystem>
 
 namespace Horo::Render::Test {
@@ -11,4 +12,11 @@ namespace Horo::Render::Test {
     void RunMetalVfxInstancedAbort(const std::filesystem::path &root);
     /** @brief Reports measured cold/hot reference work without inventing an unapproved throughput threshold. */
     void RunMetalVfxInstancedReference(const std::filesystem::path &root);
+    /** @brief Runs one explicitly requested static-scene native measurement iteration; no throughput threshold is enforced.
+     * @param root Authentic ordinary/masked offline package. @param instances One of 1024,4096,16384.
+     * @param receipt New exclusive JSONL destination; bounded raw observations are written after the steady window.
+     * @details Dedicated manual executable only. CPU metrics exclude acquisition/completion/extraction; GPU time is the whole
+     * actual command buffer. Serial completion observation and requested validation-off form a separate diagnostic cohort.
+     */
+    void RunMetalVfxInstancedBenchmark(const std::filesystem::path &root, std::uint32_t instances, const std::filesystem::path &receipt);
 }  // namespace Horo::Render::Test
