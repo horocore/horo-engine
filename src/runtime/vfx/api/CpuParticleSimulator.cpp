@@ -254,7 +254,9 @@ namespace Horo::Vfx {
                                       .age = floats(view.age),
                                       .maximumAge = floats(view.maximumAge),
                                       .customFlags = unsigneds(view.customFlags),
-                                      .customFloatStreamCount = state_->customFloatStreams};
+                                      .customFloatStreamCount = state_->customFloatStreams,
+                                      .handles = std::span<const CpuParticleHandle>{state_->handles}.subspan(state_->committedOffset,
+                                                                                                             view.positionX.size())};
         for (std::uint32_t index = 0; index < state_->payloadChannelCount; ++index) {
             const auto &channel = state_->payloadChannels[index];
             if (channel.classification == CpuParticlePayloadClass::RenderOnly)

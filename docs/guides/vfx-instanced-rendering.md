@@ -824,3 +824,51 @@ All six native Metal functional/reuse/budget cases also passed. OpenGL and softw
 Vulkan native results above belong to their recorded preceding source, rather
 than a fresh run of this CPU-only change. No new hosted, coverage or analyzer
 clearance is claimed; HORO-1735 throughput acceptance remains open.
+
+
+#### Bulk committed CPU identity view
+
+`CpuParticleExtractView::handles` borrows the simulator's existing committed
+handle prefix in the same dense order and generation as its position/payload
+streams. It allocates no identity table and adds no ownership authority. All
+borrowed spans expire at the next owner-thread mutation; callers needing a longer
+lifetime must copy values or consume the existing immutable World snapshot.
+Candidate handles remain private until the same successful atomic commit. The
+individual `HandleAtDenseIndex` API remains available for isolated checked reads.
+
+World spawn extraction consumes this one admitted bulk view, preserving finite
+geometry checks and immutable snapshot copies. It also computes the unchanged
+placement scale once per emitter rather than once per particle; quaternion
+rotation and large-world coordinate arithmetic keep their existing operations.
+
+This appends a span to a public C++ result structure. C++ consumers/providers must
+rebuild against the updated `HoroVfxApi` header; compatibility with an older binary
+structure layout is not promised. No serialized asset schema or external C ABI is
+changed. The owning public-header consumer checks the exact read-only handle type.
+
+
+For this change, both macOS and Linux ARM64 GCC 15 passed 161 API JUnit entries
+(including the new rollback sections), plus 29 extraction entries and the actual
+public-header consumer build. All six native Metal functional/reuse/budget cases
+passed. The bulk view allocated nothing in its direct extraction checks; successful
+compaction/reuse and rejected/cancelled candidates retained the expected identities.
+
+A separate AB/BA/AB comparison on the same Apple M3/Metal Release workload completed
+14,354 measured frames across six independent processes with all 79 cohort fields
+matched, no filtered samples and valid GPU timestamps throughout. Medians of the
+three per-process nearest-rank quantiles were:
+
+| Metric | Before p50 (ms) | After p50 (ms) | Before p99 (ms) | After p99 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Extraction | 0.394 | 0.277 | 0.991 | 0.725 |
+| Packing/upload | 1.231 | 1.281 | 1.807 | 1.906 |
+| Owner phase total | 3.456 | 3.413 | 4.554 | 4.440 |
+| GPU command buffer | 0.582 | 0.582 | 1.126 | 0.855 |
+
+Extraction p50 improved in all three pairs. Total owner-phase p50 changed by
+27.3%, 1.2% and 0.8% respectively; the large first-pair variation is not a general
+speedup guarantee. The total benefit in the median table is small, and packing
+again worsened slightly despite unchanged packing code. Background/thermal effects
+and per-phase costs are not fully isolated. These wall observations retain the
+same assertion-inclusive scope and do not establish normal-engine FPS or a
+reference-engine performance acceptance budget.

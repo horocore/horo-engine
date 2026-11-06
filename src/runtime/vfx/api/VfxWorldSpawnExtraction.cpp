@@ -4,9 +4,8 @@
 namespace Horo::Vfx {
     namespace {
         /** @brief Converts emitter-local coordinates through copied world placement without losing nearby large-world precision. */
-        [[nodiscard]] Math::Vec3 Position(const VfxSpawnRequest &request, const Math::Vec3 local,
+        [[nodiscard]] Math::Vec3 Position(const VfxSpawnRequest &request, const Math::Vec3 scale, const Math::Vec3 local,
                                           const Math::WorldCoordinate64 &origin) noexcept {
-            const auto scale = request.transform.scale * request.scale;
             const auto rotated = request.transform.orientation.Rotate({local.x * scale.x, local.y * scale.y, local.z * scale.z});
             return {Detail::VfxRelativeAxis(request.transform.position.X(), origin.X(), rotated.x),
                     Detail::VfxRelativeAxis(request.transform.position.Y(), origin.Y(), rotated.y),
@@ -26,18 +25,17 @@ namespace Horo::Vfx {
 
     bool VfxRenderExtractor::CopySpawnParticles(Detail::VfxSpawnInstance &instance, const CpuParticleExtractView &source,
                                                 Render::RenderWorldFrameData &data, const Math::WorldCoordinate64 &origin) noexcept {
+        if (source.handles.size() != source.positionX.size())
+            return false;
         const auto scale = instance.request.transform.scale * instance.request.scale;
         for (std::uint32_t particle = 0; particle < source.positionX.size(); ++particle) {
-            const auto position =
-                Position(instance.request, {source.positionX[particle], source.positionY[particle], source.positionZ[particle]}, origin);
+            const auto position = Position(instance.request, scale,
+                                           {source.positionX[particle], source.positionY[particle], source.positionZ[particle]}, origin);
             const Math::Vec2 size{source.sizeX[particle] * scale.x, source.sizeY[particle] * scale.y};
             if (!ValidInstance(position, size, source.rotation[particle]))
                 return false;
-            const auto identity = instance.simulation.HandleAtDenseIndex(particle);
-            if (identity.HasError())
-                return false;
             data.instances_.push_back(
-                {identity.Value().particle.Value(), position, size, source.rotation[particle], source.packedColor[particle]});
+                {source.handles[particle].particle.Value(), position, size, source.rotation[particle], source.packedColor[particle]});
         }
         return true;
     }

@@ -1,5 +1,7 @@
+#include "Horo/Vfx/CpuParticleSimulator.h"
 #include "Horo/Vfx/VfxWorld.h"
 
+#include <span>
 #include <type_traits>
 static_assert(!std::is_copy_constructible_v<Horo::Vfx::VfxWorld>);
 static_assert(std::is_copy_constructible_v<Horo::Render::RenderWorldSnapshot>);
@@ -9,3 +11,5 @@ static_assert(
     noexcept(std::declval<const Horo::Vfx::CpuParticleBuffer &>().TryReadView(std::declval<Horo::Vfx::CpuParticleSoAConstView &>())));
 static_assert(noexcept(std::declval<const Horo::Vfx::CpuParticleBuffer &>().TryHandleAt(0,
                                                                                         std::declval<Horo::Vfx::CpuParticleHandle &>())));
+
+static_assert(std::is_same_v<decltype(Horo::Vfx::CpuParticleExtractView{}.handles), std::span<const Horo::Vfx::CpuParticleHandle>>);

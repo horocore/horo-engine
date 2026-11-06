@@ -251,6 +251,8 @@ namespace Horo::Vfx {
         /** @brief Only declared RenderOnly streams are populated; other indices are empty. */
         std::array<std::span<const float>, CpuParticleBufferHardLimits::CustomFloatStreams> customFloats{};
         std::uint32_t customFloatStreamCount{}; /**< Allocated stream count; protected indices remain empty. */
+        /** @brief Exact logical handles in the same committed dense order; borrows expire with the other streams. */
+        std::span<const CpuParticleHandle> handles{};
     };
 
     /** @brief Allocation-free lifetime diagnostics for one CPU simulator. */

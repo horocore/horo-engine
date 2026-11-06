@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <thread>
 #include <utility>
 
@@ -79,6 +80,22 @@ namespace Horo::Vfx {
                                                           .maximumBurstParticles = CpuParticleSimulationHardLimits::BurstParticles});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
+        }
+
+        /** @brief Checks an allocation-free committed bulk borrow against existing individual-handle authority. */
+        void CheckExtractedHandles(CpuParticleSimulator &simulator, std::span<const CpuParticleHandle> expected) {
+            const auto before = ::Horo::Tests::AllocationProbe::Count();
+            const auto extracted = simulator.Extract();
+            const auto after = ::Horo::Tests::AllocationProbe::Count();
+            REQUIRE(extracted.HasValue());
+            const auto view = extracted.Value();
+            CHECK(after == before);
+            REQUIRE(view.handles.size() == expected.size());
+            CHECK(view.handles.size() == view.positionX.size());
+            CHECK(view.committedGeneration == simulator.Statistics().committedGeneration);
+            CHECK(std::ranges::equal(view.handles, expected));
+            for (std::uint32_t dense = 0; dense < view.handles.size(); ++dense)
+                CHECK(view.handles[dense] == simulator.HandleAtDenseIndex(dense).Value());
         }
 
         struct LegacyReentry final {
@@ -520,5 +537,52 @@ namespace Horo::Vfx {
             CpuParticleSimulator::Create(substitute, {.buffer = BufferId(71), .activation = Activation(), .maximumBurstParticles = 4});
         REQUIRE(admitted.HasValue());
         CHECK(source.Data().gpuReadback.enabled);
+    }
+
+    TEST_CASE("CPU extraction bulk identities follow committed compaction and slot reuse", "[unit][vfx][particle-simulator]") {
+        auto simulator = Simulator(Descriptor(8), 42);
+        CheckExtractedHandles(simulator, {});
+        REQUIRE(simulator.Advance({.deltaSeconds = .1F, .burstCount = 4, .tick = 0}).HasValue());
+        const std::array initial{simulator.HandleAtDenseIndex(0).Value(), simulator.HandleAtDenseIndex(1).Value(),
+                                 simulator.HandleAtDenseIndex(2).Value(), simulator.HandleAtDenseIndex(3).Value()};
+        CheckExtractedHandles(simulator, initial);
+        REQUIRE(simulator.SignalKill(initial[1]).HasValue());
+        REQUIRE(simulator.Advance({.deltaSeconds = .1F, .tick = 1}).HasValue());
+        const std::array survivors{initial[0], initial[2], initial[3]};
+        CheckExtractedHandles(simulator, survivors);
+        REQUIRE(simulator.Advance({.deltaSeconds = .1F, .burstCount = 1, .tick = 2}).HasValue());
+        const auto reused = simulator.HandleAtDenseIndex(3).Value();
+        CHECK(reused.slot == initial[1].slot);
+        CHECK(reused.generation == initial[1].generation + 1);
+        CHECK(reused.particle != initial[1].particle);
+        const std::array final{survivors[0], survivors[1], survivors[2], reused};
+        CheckExtractedHandles(simulator, final);
+    }
+
+    TEST_CASE("CPU extraction bulk identities never expose rejected candidate generations", "[unit][vfx][particle-simulator]") {
+        StageTrace trace{};
+        auto created = CpuParticleSimulator::Create(Descriptor(8), {.buffer = BufferId(43),
+                                                                    .activation = Activation(),
+                                                                    .maximumBurstParticles = 8,
+                                                                    .stageObserver = ObserveStage,
+                                                                    .stageObserverContext = &trace});
+        REQUIRE(created.HasValue());
+        auto simulator = std::move(created).Value();
+        REQUIRE(simulator.Advance({.deltaSeconds = .1F, .burstCount = 4, .tick = 0}).HasValue());
+        const std::array committed{simulator.HandleAtDenseIndex(0).Value(), simulator.HandleAtDenseIndex(1).Value(),
+                                   simulator.HandleAtDenseIndex(2).Value(), simulator.HandleAtDenseIndex(3).Value()};
+        const auto generation = simulator.Statistics().committedGeneration;
+        SECTION("cancelled candidate") {
+            CHECK(HasError(simulator.Advance({.deltaSeconds = .1F, .burstCount = 1, .tick = 1, .cancelled = true}),
+                           VfxErrors::ParticleSimulationStepCancelled));
+        }
+        SECTION("failed candidate") {
+            trace.count = 0;
+            trace.failAfter = 2;
+            CHECK(
+                HasError(simulator.Advance({.deltaSeconds = .1F, .burstCount = 1, .tick = 1}), VfxErrors::ParticleStageContractViolation));
+        }
+        CHECK(simulator.Statistics().committedGeneration == generation);
+        CheckExtractedHandles(simulator, committed);
     }
 }  // namespace Horo::Vfx
