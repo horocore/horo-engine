@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderShaderResourceErrors.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
+#include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "Horo/Vfx/VfxWorld.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLMaterialFixture.h"

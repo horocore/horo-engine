@@ -206,22 +206,54 @@ namespace Horo::Render {
         VfxMutationScope mutation{retained->updating_};
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(VfxFrameErrors::Cancelled));
-        const auto buffer = BackendInstance(retained->buffer_);
-        const auto &descriptor = retained->material_->Descriptor();
+        const auto proof = ResolveVfxFrameResidents(*retained);
+        if (proof.HasError())
+            return Result<void>::Failure(proof.ErrorValue());
+        if (const auto packed = StageVfxFrameParameters(*retained, instances); packed.HasError())
+            return packed;
+        return PublishVfxSlot(retained, proof.Value(), revision, static_cast<std::uint32_t>(instances.size()), cancellation);
+    }
+
+    /** @copydoc RenderFrontend::ResolveVfxFrameResidents */
+    Result<RenderFrontend::VfxResidentProof> RenderFrontend::ResolveVfxFrameResidents(const PreparedVfxFrameSlot &slot) const {
+        using Proof = Result<VfxResidentProof>;
+        const auto buffer = BackendInstance(slot.buffer_);
+        const auto &descriptor = slot.material_->Descriptor();
         const auto pipeline = BackendInstance(descriptor.pipeline);
         if (buffer.HasError())
-            return Result<void>::Failure(buffer.ErrorValue());
+            return Proof::Failure(buffer.ErrorValue());
         if (pipeline.HasError())
-            return Result<void>::Failure(pipeline.ErrorValue());
-        const VfxResidentProof proof{retained->buffer_, descriptor.pipeline,       buffer.Value(),
-                                     pipeline.Value(),  retained->staging_.size(), retained->deviceIncarnation_};
+            return Proof::Failure(pipeline.ErrorValue());
+        const VfxResidentProof proof{slot.buffer_,     descriptor.pipeline,  buffer.Value(),
+                                     pipeline.Value(), slot.staging_.size(), slot.deviceIncarnation_};
         if (const auto valid = ValidateVfxResidents(proof); valid.HasError())
-            return valid;
-        const auto packed = PackVfxShaderParameters(descriptor.layout, instances, retained->staging_);
+            return Proof::Failure(valid.ErrorValue());
+        return Proof::Success(proof);
+    }
+
+    /** @copydoc RenderFrontend::StageVfxFrameParameters */
+    Result<void> RenderFrontend::StageVfxFrameParameters(PreparedVfxFrameSlot &slot,
+                                                         const std::span<const VfxPackedDrawInstance> instances) {
+        const auto packed = PackVfxShaderParameters(slot.material_->Descriptor().layout, instances, slot.staging_);
         if (packed.HasError())
             return Result<void>::Failure(packed.ErrorValue());
-        std::fill(retained->staging_.begin() + packed.Value(), retained->staging_.end(), std::byte{0});
-        return PublishVfxSlot(retained, proof, revision, static_cast<std::uint32_t>(instances.size()), cancellation);
+        std::fill(slot.staging_.begin() + packed.Value(), slot.staging_.end(), std::byte{0});
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RenderFrontend::PublishStagedVfxFrame */
+    Result<void> RenderFrontend::PublishStagedVfxFrame(const VfxPreparedDraw &draw, const VfxDrawOrder &issuer) {
+        if (draw.instanceCount == 0 || draw.instanceCount > MaximumVfxDrawInstances)
+            return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+        if (const auto admitted = AdmitVfxFrameMutation(draw.slot, draw.revision, &issuer); admitted.HasError())
+            return admitted;
+        // Every other draw's staging remains protected by its own transaction claim during this callback.
+        const auto retained = draw.slot;
+        VfxMutationScope mutation{retained->updating_};
+        const auto proof = ResolveVfxFrameResidents(*retained);
+        if (proof.HasError())
+            return Result<void>::Failure(proof.ErrorValue());
+        return PublishVfxSlot(retained, proof.Value(), draw.revision, draw.instanceCount, {});
     }
 
     /** @copydoc RenderFrontend::PublishVfxSlot */

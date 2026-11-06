@@ -733,3 +733,57 @@ functional cases and the prior budget-rejection case also passed, with zero skip
 Six deliberately invalid profile/count inputs were rejected before native receipt
 creation; they are expected rejection controls, not successful measurement runs.
 No new coverage, hosted gate, engine FPS or throughput-parity clearance is implied.
+
+
+#### Dynamic packing optimization observations (2026-11-06)
+
+The frontend now serializes each admitted canonical chunk once into its existing
+cold-owned slot staging, before any native upload callback. Publication retains
+its exact transaction claim, owner/revision admission, resident checks and native
+write evidence. A later preflight rejection performs no native writes; a later
+native upload failure releases graph/transaction claims but does not undo a
+previous successful native write. No new per-frame staging allocation is added.
+
+The VFX serializer uses a direct writer only for fully admitted, disjoint,
+contiguous 128-lane matrix/color arrays with the required reflected strides and
+bounds. Both matrix orders, reversed arrays and gaps are supported. Irregular,
+interleaved or padded layouts and descriptor/output overlap retain the canonical
+generic path. All inputs are copied and finite-checked before destination mutation;
+unused lanes and padding remain zero and the suffix remains untouched.
+
+On the same Apple M3/Metal Release profile, three independent processes per
+implementation ran in interleaved AB/BA/AB order, with no profiler. All 79 cohort
+fields matched. Each process completed its 300-frame warm-up and 1,200 measured
+frames over at least 20 seconds, for 7,200 measured frames total. All frames had
+valid GPU timestamps; motion, stable identities, native uniform changes and the
+final resource ledger passed. These values are medians of three per-process
+nearest-rank quantiles; samples were not pooled or filtered:
+
+| Metric | Before p50 (ms) | After p50 (ms) | Before p99 (ms) | After p99 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Packing/upload | 3.733 | 1.306 | 4.613 | 2.352 |
+| Owner phase total | 6.558 | 5.285 | 8.237 | 7.310 |
+| GPU command buffer | 0.579 | 0.578 | 0.596 | 0.595 |
+
+Within the three matched pairs, owner-phase p50 reductions ranged from 16.3% to
+26.0%, and packing/upload reductions from 64.4% to 67.1%. Acquisition, native
+completion, completion pumping and autorelease cleanup remain outside the owner
+phase. Power/thermal state was observed at batch boundaries, without formal
+thermal or background-workload control. This is a local observation, not an
+engine FPS result, a general stability guarantee or Unity/Unreal parity proof.
+
+An earlier baseline attempt stopped at warm-up attempt 50, after 49 completed
+warm-up frames and before any measured sample. Its raw failure is preserved and
+its underlying cause remains unknown; successful later runs do not explain it.
+The manual harness now emits bounded native command-buffer status and NSError
+details only on terminal failure, plus one untimed measurement-start marker.
+No timeout, completion rule, assertion or sample admission was weakened.
+
+Fresh validation passed 29 VFX extraction/serialization cases, 34 injected OpenGL
+protocol cases and all six actual Metal functional/reuse/budget cases, with zero
+failures or skips. Serializer tests compare full output against the independent
+generic writer, including both matrix orders, inactive lanes, aliasing, malformed
+layouts, typed failure ordering and zero allocations. The affected public frontend
+header consumer also compiled. Local Sonar remains waived; no new coverage,
+Codacy, hosted-platform or whole-ticket acceptance clearance is claimed. Manual
+benchmarks remain opt-in and outside normal build/CTest execution.

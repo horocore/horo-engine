@@ -1559,6 +1559,17 @@ namespace Horo::Render::Test {
             auto frame = owner.Begin(deadline);
         }
 
+        /** @brief Emits bounded failure-only native evidence before the caller preserves terminal failure and safe unwind. */
+        void ReportDynamicTerminalFailure(id<MTLCommandBuffer> commands) {
+            NSError *error = commands.error;
+            const char *domain = error.domain.UTF8String;
+            const char *description = error.localizedDescription.UTF8String;
+            std::fprintf(stderr, "HORO_VFX_DYNAMIC_TERMINAL_FAILURE status=%lu errorPresent=%s domain=%.*s code=%lld description=%.*s\n",
+                         static_cast<unsigned long>(commands.status), error ? "true" : "false", 96, domain ? domain : "UNAVAILABLE",
+                         static_cast<long long>(error.code), 256, description ? description : "UNAVAILABLE");
+            std::fflush(stderr);
+        }
+
         /** @brief Records acquisition separately and submits a genuinely rebuilt, freshly uploaded graph. */
         BenchmarkSample SubmitDynamic(NativeOwner &owner, const CompiledRenderGraphExecution &graph,
                                       std::span<const RenderGraphPassWorkload> workloads, BenchmarkClock::time_point deadline,
@@ -1578,6 +1589,8 @@ namespace Horo::Render::Test {
             const auto wait = BenchmarkClock::now();
             const bool terminal = BenchmarkTerminal(owner.commands, std::min(deadline, BenchmarkClock::now() + 5s));
             phases.completion = Milliseconds(wait);
+            if (!terminal)
+                ReportDynamicTerminalFailure(owner.commands);
             return {{encoded, submitted},
                     owner.commands.GPUStartTime,
                     owner.commands.GPUEndTime,
@@ -1730,6 +1743,8 @@ namespace Horo::Render::Test {
                 ++receipt.warmupCompleted;
             }
             receipt.phase = "measuring";
+            std::fputs("HORO_VFX_DYNAMIC_MEASUREMENT_BEGIN\n", stderr);
+            std::fflush(stderr);
             const auto start = BenchmarkClock::now();
             while (NeedsBenchmarkSamples(receipt.samples.size(), receipt.measuredSeconds)) {
                 REQUIRE(receipt.samples.size() < 3000);

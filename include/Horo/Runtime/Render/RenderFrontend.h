@@ -1048,6 +1048,12 @@ namespace Horo::Render {
         /** @brief Checks owner-thread, revision, nonreentrancy and unique writer admission before staging mutation. */
         [[nodiscard]] Result<void> AdmitVfxFrameMutation(const std::shared_ptr<PreparedVfxFrameSlot> &slot, std::uint64_t revision,
                                                          const VfxDrawOrder *drawIssuer);
+        /** @brief Resolves and validates exact current slot residents without changing publication. */
+        [[nodiscard]] Result<VfxResidentProof> ResolveVfxFrameResidents(const PreparedVfxFrameSlot &slot) const;
+        /** @brief Serializes validated semantic instances into the slot's existing cold-owned staging; performs no native write. */
+        [[nodiscard]] Result<void> StageVfxFrameParameters(PreparedVfxFrameSlot &slot, std::span<const VfxPackedDrawInstance> instances);
+        /** @brief Publishes only bytes staged by the exact still-admitted canonical draw transaction. */
+        [[nodiscard]] Result<void> PublishStagedVfxFrame(const VfxPreparedDraw &draw, const VfxDrawOrder &issuer);
         /** @brief Publishes a staged slot only after native write evidence and postcallback resident validation. */
         [[nodiscard]] Result<void> PublishVfxSlot(const std::shared_ptr<PreparedVfxFrameSlot> &retained, const VfxResidentProof &proof,
                                                   std::uint64_t revision, std::uint32_t instanceCount,
@@ -1056,6 +1062,12 @@ namespace Horo::Render {
         /** @brief Captures issued draw-order ownership and bounded draw counts before any mutation or callback. */
         [[nodiscard]] Result<void> CaptureVfxDrawOrders(VfxDrawPreparation &preparation, const VfxGraphSchedule &schedule,
                                                         std::size_t bindingCount);
+        /** @brief Checks unique writer admission and nonwrapping publication identity for one canonical binding. */
+        [[nodiscard]] Result<void> AdmitVfxDrawBinding(const VfxGraphDrawBinding &binding, std::uint32_t next) const;
+        /** @brief Validates resources and packs one complete chunk into existing slot staging before native callbacks. */
+        [[nodiscard]] Result<void> StageVfxDrawParameters(const RenderGraphBuilder &builder, const RenderGraphVfx &workload,
+                                                          const VfxDrawView &view, const VfxPreparedDraw &draw, std::uint32_t batch,
+                                                          std::span<VfxPackedDrawInstance> scratch);
         /** @brief Copies and finite-validates borrowed bindings into reserved immutable-order storage before callbacks. */
         [[nodiscard]] Result<void> StageVfxDrawBindings(RenderGraphBuilder &builder, VfxDrawPreparation &preparation,
                                                         std::span<const VfxGraphDrawBinding> bindings);

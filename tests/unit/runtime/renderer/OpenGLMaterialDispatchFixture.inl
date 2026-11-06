@@ -20,6 +20,7 @@ struct NativeState {
     bool failUpload{};
     std::function<void()> onUniformQuery;
     std::function<void()> onUpload;
+    std::function<void(std::uint32_t, std::span<const std::byte>)> onUploadBytes;
     std::function<void()> onDraw;
 };
 
@@ -153,8 +154,10 @@ Detail::OpenGLCommandFunctions Functions() {
     }, .queryFeatures = []() {
         return Result<Detail::OpenGLMaterialContextFeatures>::Success({1, 8, false});
     }, .execute = &ExecuteNativeMaterial};
-    functions.buffers.bufferSubData = [](std::uint32_t, std::span<const std::byte>) noexcept {
+    functions.buffers.bufferSubData = [](std::uint32_t buffer, std::span<const std::byte> bytes) noexcept {
         ++native.uploads;
+        if (native.onUploadBytes)
+            native.onUploadBytes(buffer, bytes);
         if (native.onUpload) {
             auto callback = std::move(native.onUpload);
             callback();
