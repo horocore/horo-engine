@@ -131,6 +131,7 @@ target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicH
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
 target_sources(HoroShaderHotReloadPublicHeaderConsumer PRIVATE support/ShaderHotReloadPublicHeaderConsumer.cpp)
 target_sources(HoroVfxApiPublicHeaderConsumer PRIVATE support/VfxWorldPublicHeaderConsumer.cpp)
+target_sources(HoroVfxApiPublicHeaderConsumer PRIVATE support/VfxGpuReadbackPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderGraphWorkloadPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/VfxDrawPublicHeaderConsumer.cpp)
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/ShaderArtifactPublicHeaderConsumer.cpp)
@@ -1288,7 +1289,9 @@ target_include_directories(HoroGpuParticleSimulatorTests PRIVATE ${CMAKE_CURRENT
 target_link_libraries(HoroGpuParticleSimulatorTests PRIVATE HoroEngine::VfxApi)
 horo_register_catch_test(HoroGpuParticleSimulatorTests LABELS "unit;vfx;headless")
 
-add_executable(HoroVfxGpuSimulationTests unit/runtime/renderer/VfxGpuSimulationTests.cpp)
+add_executable(HoroVfxGpuSimulationTests
+        unit/runtime/renderer/VfxGpuSimulationTests.cpp
+        unit/runtime/renderer/VfxGpuReadbackPolicyTests.cpp)
 target_compile_features(HoroVfxGpuSimulationTests PRIVATE cxx_std_20)
 target_include_directories(HoroVfxGpuSimulationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroVfxGpuSimulationTests PRIVATE HoroEngine::VfxApi)

@@ -185,11 +185,54 @@ namespace Horo::Vfx {
             return failure;
         }
 
+        /** @brief Decodes every observation count as an exact unsigned32 value before any policy admission. */
+        [[nodiscard]] std::optional<std::array<std::uint32_t, 5>> ReadbackNumbers(const Json &value) {
+            constexpr std::array names{"schemaVersion", "cadenceSteps", "maximumRecords", "maximumBytesPerResult", "maximumPendingResults"};
+            std::array<std::uint32_t, 5> numbers{};
+            for (std::size_t i = 0; i < names.size(); ++i) {
+                const auto number = Unsigned<std::uint32_t>(value.at(names[i]));
+                if (!number)
+                    return std::nullopt;
+                numbers[i] = *number;
+            }
+            return numbers;
+        }
+
+        /** @brief Decodes the optional closed source object; unknown enum values remain full-pass import findings. */
+        [[nodiscard]] Result<Render::VfxGpuReadbackDescriptor> DecodeReadback(const Json &root) {
+            using Policy = Render::VfxGpuReadbackDescriptor;
+            if (!root.contains("gpuReadback"))
+                return Result<Policy>::Success({});
+            const auto &value = root.at("gpuReadback");
+            if (!ExactObject(value, {"enabled", "schemaVersion", "purpose", "requirement", "cadenceSteps", "maximumRecords",
+                                     "maximumBytesPerResult", "maximumPendingResults"}) ||
+                !value.at("enabled").is_boolean())
+                return Reject<Policy>(VfxErrors::ParticleDescriptorMalformed, "gpuReadback must contain the exact closed policy fields.");
+            const auto numbers = ReadbackNumbers(value);
+            if (!numbers)
+                return Reject<Policy>(VfxErrors::ParticleDescriptorMalformed, "gpuReadback counts must be unsigned32 integers.");
+            constexpr std::array purposes{std::pair{"authoringPreview"sv, Render::VfxGpuReadbackPurpose::AuthoringPreview},
+                                          std::pair{"diagnosticsCapture"sv, Render::VfxGpuReadbackPurpose::DiagnosticsCapture},
+                                          std::pair{"cosmeticObservation"sv, Render::VfxGpuReadbackPurpose::CosmeticObservation}};
+            constexpr std::array requirements{std::pair{"optional"sv, Render::VfxGpuReadbackRequirement::Optional},
+                                              std::pair{"requiredForVisualEffect"sv,
+                                                        Render::VfxGpuReadbackRequirement::RequiredForVisualEffect}};
+            return Result<Policy>::Success(
+                {.enabled = value.at("enabled").get<bool>(),
+                 .schemaVersion = (*numbers)[0],
+                 .purpose = EnumValue(value.at("purpose"), purposes, static_cast<Render::VfxGpuReadbackPurpose>(255)),
+                 .requirement = EnumValue(value.at("requirement"), requirements, static_cast<Render::VfxGpuReadbackRequirement>(255)),
+                 .cadenceSteps = (*numbers)[1],
+                 .maximumRecords = (*numbers)[2],
+                 .maximumBytesPerResult = (*numbers)[3],
+                 .maximumPendingResults = (*numbers)[4]});
+        }
+
         [[nodiscard]] bool ValidRoot(const Json &root) {
             return ExactObject(root,
                                {"schemaVersion", "emitterId", "simulationPreference", "maximumParticles", "shape", "spawnRate", "lifetime",
                                 "initialSpeed", "initialSize", "initialOpacity", "materialId", "renderMode", "sortMode", "collisionMode"},
-                               {"collisionResponse"}) &&
+                               {"collisionResponse", "gpuReadback"}) &&
                    ExactObject(root.at("lifetime"), {"kind", "seconds", "killCondition"});
         }
 
@@ -216,6 +259,9 @@ namespace Horo::Vfx {
             if (material.HasError())
                 return Reject<ParticleSystemDescriptorData>(VfxErrors::ParticleDescriptorMalformed,
                                                             "materialId must be one canonical non-zero lowercase UUID.");
+            auto readback = DecodeReadback(root);
+            if (readback.HasError())
+                return Result<ParticleSystemDescriptorData>::Failure(readback.ErrorValue());
 
             return Result<ParticleSystemDescriptorData>::Success(
                 {.version = version.Value(),
@@ -236,7 +282,8 @@ namespace Horo::Vfx {
                  .collisionMode = EnumValue(root.at("collisionMode"), CollisionModes, ParticleCollisionMode::Count),
                  .collisionResponse = root.contains("collisionResponse")
                                           ? EnumValue(root.at("collisionResponse"), CollisionResponses, ParticleCollisionResponse::Count)
-                                          : ParticleCollisionResponse::Bounce});
+                                          : ParticleCollisionResponse::Bounce,
+                 .gpuReadback = readback.Value()});
         }
 
         [[nodiscard]] bool FiniteOrdered(const ParticleScalarRange &range) noexcept {
@@ -272,18 +319,25 @@ namespace Horo::Vfx {
             std::optional<Error> failure_;
         };
 
-        [[nodiscard]] std::optional<Error> AddImportFindings(ValidationResultBuilder &builder, const ParticleSystemDescriptorData &data,
-                                                             const ParticleDescriptorLimits &limits, const std::string &sourceName) {
-            FindingCollector findings{builder, sourceName};
+        /** @brief Preserves the exact closed-enum predicate previously evaluated in the monolithic import pass. */
+        [[nodiscard]] bool UnknownPolicy(const ParticleSystemDescriptorData &data) noexcept {
+            return data.simulationPreference >= SimulationPreference::Count || data.shape >= ParticleEmitterShape::Count ||
+                   data.lifetimeKind >= ParticleLifetimeKind::Count || data.killCondition >= ParticleKillCondition::Count ||
+                   data.renderMode >= ParticleRenderMode::Count || data.sortMode >= ParticleSortMode::Count ||
+                   data.collisionMode >= ParticleCollisionMode::Count || data.collisionResponse >= ParticleCollisionResponse::Count;
+        }
+
+        /** @brief Adds the original version, identity and closed-policy findings in their original order. */
+        void AddIdentityFindings(FindingCollector &findings, const ParticleSystemDescriptorData &data) {
             findings.AddIf(ClassifyParticleDescriptorCompatibility(data.version) != ParticleDescriptorCompatibility::Exact,
                            VfxErrors::ParticleDescriptorVersionUnsupported, "schemaVersion is not directly compatible.");
             findings.AddIf(!data.emitter.IsValid(), VfxErrors::ParticleDescriptorMalformed, "emitterId contains a reserved value.");
-            findings.AddIf(data.simulationPreference >= SimulationPreference::Count || data.shape >= ParticleEmitterShape::Count ||
-                               data.lifetimeKind >= ParticleLifetimeKind::Count || data.killCondition >= ParticleKillCondition::Count ||
-                               data.renderMode >= ParticleRenderMode::Count || data.sortMode >= ParticleSortMode::Count ||
-                               data.collisionMode >= ParticleCollisionMode::Count ||
-                               data.collisionResponse >= ParticleCollisionResponse::Count,
-                           VfxErrors::ParticleDescriptorMalformed, "One or more closed policy values are unknown.");
+            findings.AddIf(UnknownPolicy(data), VfxErrors::ParticleDescriptorMalformed, "One or more closed policy values are unknown.");
+        }
+
+        /** @brief Adds the original capacity and scalar-range findings in their original order. */
+        void AddRangeFindings(FindingCollector &findings, const ParticleSystemDescriptorData &data,
+                              const ParticleDescriptorLimits &limits) {
             findings.AddIf(data.maximumParticles == 0 || data.maximumParticles > limits.maximumParticles,
                            VfxErrors::ParticleDescriptorLimitExceeded, "maximumParticles exceeds the active semantic limit.");
             findings.AddIf(!FiniteOrdered(data.spawnRate) || data.spawnRate.minimum < 0.0 ||
@@ -295,6 +349,10 @@ namespace Horo::Vfx {
                            "initialSize must contain finite ordered positive values.");
             findings.AddIf(!FiniteOrdered(data.initialOpacity) || data.initialOpacity.minimum < 0.0 || data.initialOpacity.maximum > 1.0,
                            VfxErrors::ParticleRangeInvalid, "initialOpacity must remain inside the inclusive range [0, 1].");
+        }
+
+        /** @brief Adds the original finite/infinite lifetime findings in their original order. */
+        void AddLifetimeFindings(FindingCollector &findings, const ParticleSystemDescriptorData &data) {
             if (data.lifetimeKind == ParticleLifetimeKind::Finite) {
                 findings.AddIf(!FiniteOrdered(data.lifetimeSeconds) || data.lifetimeSeconds.minimum <= 0.0, VfxErrors::ParticleRangeInvalid,
                                "Finite lifetime seconds must contain finite ordered positive values.");
@@ -307,7 +365,10 @@ namespace Horo::Vfx {
                                VfxErrors::ParticleLifetimeUnbounded,
                                "Infinite particles require collision or explicit-signal termination.");
             }
+        }
 
+        /** @brief Adds the original coupled-mode and material identity findings in their original order. */
+        void AddModeFindings(FindingCollector &findings, const ParticleSystemDescriptorData &data) {
             findings.AddIf(data.killCondition == ParticleKillCondition::Collision && data.collisionMode == ParticleCollisionMode::None,
                            VfxErrors::ParticleModeIncompatible, "Collision termination requires a non-None collision mode.");
             findings.AddIf(data.collisionMode == ParticleCollisionMode::PhysicsWorld &&
@@ -316,6 +377,22 @@ namespace Horo::Vfx {
             findings.AddIf(data.renderMode == ParticleRenderMode::Ribbon && data.sortMode == ParticleSortMode::OldestFirst,
                            VfxErrors::ParticleModeIncompatible, "Ribbon output cannot use per-particle OldestFirst sorting.");
             findings.AddIf(!data.material.IsValid(), VfxErrors::ParticleDescriptorMalformed, "materialId is a reserved zero identity.");
+        }
+
+        /** @brief Preserves every existing finding order, then adds authored observation admission without backend discovery. */
+        [[nodiscard]] std::optional<Error> AddImportFindings(ValidationResultBuilder &builder, const ParticleSystemDescriptorData &data,
+                                                             const ParticleDescriptorLimits &limits, const std::string &sourceName) {
+            FindingCollector findings{builder, sourceName};
+            AddIdentityFindings(findings, data);
+            AddRangeFindings(findings, data, limits);
+            AddLifetimeFindings(findings, data);
+            AddModeFindings(findings, data);
+            findings.AddIf(!Render::IsValidVfxGpuReadbackPolicy(data.gpuReadback, data.maximumParticles),
+                           VfxErrors::ParticleDescriptorMalformed,
+                           "gpuReadback has an unknown schema/policy or invalid bounded observation limits.");
+            findings.AddIf(data.gpuReadback.enabled && data.simulationPreference == SimulationPreference::RequireCPU,
+                           VfxErrors::ParticleModeIncompatible,
+                           "Enabled GPU observations conflict with the authored RequireCPU execution policy.");
             return std::move(findings).Finish();
         }
 
@@ -456,7 +533,8 @@ namespace Horo::Vfx {
                                           .emitter = descriptor.Data().emitter,
                                           .material = descriptor.Data().material,
                                           .maximumParticles = descriptor.Data().maximumParticles,
-                                          .maximumSpawnRate = descriptor.Data().spawnRate.maximum});
+                                          .maximumSpawnRate = descriptor.Data().spawnRate.maximum,
+                                          .gpuReadback = descriptor.Data().gpuReadback});
         }
         return Result<ParticleCookValidation>::Success({std::move(diagnostics), std::move(plan)});
     }

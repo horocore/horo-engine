@@ -37,22 +37,15 @@ namespace Horo::Render::VfxGpuDetail {
         }
 
         /** @brief Checks enabled schema payload and result bounds without conflating optional capability admission. */
-        bool ReadbackLimits(const VfxGpuSimulationDescriptor &d) noexcept {
-            const auto &r = d.readback;
+        bool ReadbackLimits(const VfxGpuReadbackDescriptor &r, std::uint32_t recordCapacity, std::uint32_t customFloatStreams) noexcept {
             const auto bytes = std::uint64_t{r.maximumRecords} * VfxGpuObservationWords::Bytes;
-            return !d.layout.customFloatStreams && r.maximumRecords && r.maximumRecords <= d.initialParticleCount &&
-                   bytes <= r.maximumBytesPerResult && r.maximumPendingResults && r.maximumPendingResults <= 64;
+            return !customFloatStreams && r.maximumRecords && r.maximumRecords <= recordCapacity && bytes <= r.maximumBytesPerResult &&
+                   r.maximumPendingResults && r.maximumPendingResults <= 64;
         }
 
         /** @brief Checks exact bounded observation declaration without allocating or querying hardware. */
         bool ValidReadback(const VfxGpuSimulationDescriptor &d) noexcept {
-            const auto &r = d.readback;
-            if (r.schemaVersion != 1 || r.purpose > VfxGpuReadbackPurpose::CosmeticObservation ||
-                r.requirement > VfxGpuReadbackRequirement::RequiredForVisualEffect || !r.cadenceSteps)
-                return false;
-            if (!r.enabled)
-                return !r.maximumRecords && !r.maximumBytesPerResult && !r.maximumPendingResults;
-            return ReadbackLimits(d);
+            return IsValidVfxGpuReadbackPolicy(d.readback, d.initialParticleCount, d.layout.customFloatStreams);
         }
 
         /** @brief Bounds every descriptor-derived allocation product before native preparation consumes it. */
@@ -112,6 +105,17 @@ namespace Horo::Render::VfxGpuDetail {
 }  // namespace Horo::Render::VfxGpuDetail
 
 namespace Horo::Render {
+    /** @copydoc IsValidVfxGpuReadbackPolicy */
+    bool IsValidVfxGpuReadbackPolicy(const VfxGpuReadbackDescriptor &descriptor, std::uint32_t recordCapacity,
+                                     std::uint32_t customFloatStreams) noexcept {
+        if (descriptor.schemaVersion != 1 || descriptor.purpose > VfxGpuReadbackPurpose::CosmeticObservation ||
+            descriptor.requirement > VfxGpuReadbackRequirement::RequiredForVisualEffect || !descriptor.cadenceSteps)
+            return false;
+        if (!descriptor.enabled)
+            return !descriptor.maximumRecords && !descriptor.maximumBytesPerResult && !descriptor.maximumPendingResults;
+        return VfxGpuDetail::ReadbackLimits(descriptor, recordCapacity, customFloatStreams);
+    }
+
     namespace {
         /** @brief Appends one canonical little-endian numeric lane without object padding. */
         void HashWord(Sha256Builder &hash, std::uint32_t value) noexcept {

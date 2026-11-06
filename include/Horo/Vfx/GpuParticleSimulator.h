@@ -60,7 +60,6 @@ namespace Horo::Vfx {
         std::uint32_t maximumPendingSteps{};
         std::uint32_t maximumSteps{}; /**< Explicit finite work envelope; at most one million, enforced without catch-up. */
         float maximumDeltaSeconds{};
-        Render::VfxGpuReadbackDescriptor readback;
     };
     /** @brief Allocation-free normal-path/expected-failure status; detailed Error objects belong to cold/presentation boundaries. */
     enum class GpuParticleStepStatus : std::uint8_t {
@@ -105,7 +104,7 @@ namespace Horo::Vfx {
         ~GpuParticleSimulator();
         /** @brief Validates supported authored stages and proves a bounded finite arithmetic envelope before activation.
          * @param descriptor Validated source descriptor; unsupported authored requirements fail explicitly.
-         * @param info Captured identities/resolution/seeds/forces/budgets and declared observation policy.
+         * @param info Captured identities/resolution/seeds/forces/budgets; observation policy belongs to descriptor.Data().gpuReadback.
          * @return Cold prepared owner or typed failure, with no native allocation or dispatch.
          */
         [[nodiscard]] static Result<std::unique_ptr<GpuParticleSimulator>> Create(const ParticleSystemDescriptor &descriptor,

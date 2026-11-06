@@ -81,7 +81,17 @@ namespace Horo::Render {
         std::uint32_t maximumRecords{};
         std::uint32_t maximumBytesPerResult{};
         std::uint32_t maximumPendingResults{};
+        constexpr auto operator<=>(const VfxGpuReadbackDescriptor &) const noexcept = default;
     };
+
+    /** @brief Checks the shared scalar observation policy without querying a backend or allocating resources.
+     * @param descriptor Authored or cooked observation policy, including explicit disabled values.
+     * @param recordCapacity Available source capacity; preparation passes the actual admitted initial particle count.
+     * @param customFloatStreams Declared custom stream count; schema one cannot observe custom streams.
+     * @return True for a known, bounded policy. Capability admission and reserved memory remain separate authorities.
+     */
+    [[nodiscard]] bool IsValidVfxGpuReadbackPolicy(const VfxGpuReadbackDescriptor &descriptor, std::uint32_t recordCapacity,
+                                                   std::uint32_t customFloatStreams = 0) noexcept;
 
     /** @brief Cold-proved arithmetic envelope for the admitted PreparedParticles unit.
      * @details Bounds include every admitted step up to maximumSteps, even when float age stagnates for tiny deltas.

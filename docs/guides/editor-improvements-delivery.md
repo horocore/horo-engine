@@ -139,3 +139,43 @@ calibrated HDR/PQ/EDR and hardware device-loss injection are not qualified. Loca
 managed Sonar is waived; no full Codacy, coverage, hosted-gate or vulnerability
 clearance is claimed. Earlier exposure-component evidence remains scoped to its
 original source and native fixture.
+
+## HORO-1731 / #1774 / VFX-003.2 — asset-owned GPU observation
+
+This component makes the particle source and cook plan the canonical owner of
+GPU readback opt-in. The optional closed `gpuReadback` source object uses the same
+typed policy and pure bounded validator as logical GPU preparation. Host create
+information no longer overrides the asset. Actual CPU units reject an enabled
+GPU policy before allocation; a separately authored CPU substitute can disable it.
+Old assets with the field omitted remain disabled. See the
+[particle source migration](particle-system-descriptor-migration.md) and
+[GPU preparation migration](vfx-gpu-simulation-migration.md).
+
+### Local validation
+
+- Mac Debug owning libraries, public-header consumers and Metal fixture compiled.
+  VFX API 149, GPU preparation 6, logical GPU protocol 14 and renderer frontend 307
+  JUnit cases passed with no failures or skips.
+- Actual native Metal execution passed both selected authored scenarios, represented
+  by 5 JUnit cases and 981 assertions, with no failures or skips. The asset policy
+  reached real compute/draw preparation and bounded observations; disabled readback,
+  retained-result pressure, cancellation and timeout behavior remained covered.
+- Linux ARM64 GCC 15 Debug configured and built the owning targets with Vulkan
+  enabled and GUI/live UI disabled. Fresh VFX API 149, GPU preparation 6 and logical
+  GPU protocol 14 JUnit cases passed with no failures or skips.
+- The selected genuine Vulkan compute/draw/parity and partial-submit cases passed
+  under the validation layer: 2 JUnit cases, 1,233 assertions, no failures or skips.
+  This uses software Vulkan and establishes functional behavior, not physical GPU
+  performance. Shader source and its locked cooked package were unchanged.
+- Clang-format 19 accepted the 17 changed C++ files. Local Lizard review measured
+  54 new or changed functions with maximum cyclomatic complexity 9. These metrics
+  do not establish complete Codacy or Sonar clearance.
+
+### Remaining acceptance
+
+HORO-1731 remains In Progress. Prepared-particle execution and authored observation
+policy are qualified components; the full authored GPU emitter stages and native
+D3D12 provider/Windows qualification remain incomplete. No physical Vulkan device,
+performance budget, full Editor relink/runtime, hosted gate, coverage or
+vulnerability-clearance claim is made for this component. Local Sonar is waived;
+Codacy is optional under the current user scope.

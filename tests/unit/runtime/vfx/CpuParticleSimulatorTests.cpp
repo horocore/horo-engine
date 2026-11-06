@@ -493,4 +493,32 @@ namespace Horo::Vfx {
         REQUIRE(simulation.Shutdown().HasValue());
         CHECK(simulation.AdvancePrepared({.tick = 0}).failure == &VfxErrors::ParticleBufferShutDown);
     }
+
+    TEST_CASE("CpuParticleSimulator rejects authored GPU readback in an actual CPU unit", "[unit][vfx][particle-simulator][readback]") {
+        auto data = Descriptor().Data();
+        data.simulationPreference = SimulationPreference::Automatic;
+        SECTION("automatic source selected for CPU") {}
+        SECTION("prefer GPU source selected for CPU") {
+            data.simulationPreference = SimulationPreference::PreferGPU;
+        }
+        data.gpuReadback = {true, 1, Render::VfxGpuReadbackPurpose::DiagnosticsCapture, Render::VfxGpuReadbackRequirement::Optional, 2, 1,
+                            1024, 1};
+        const auto source = Tests::ParticleDescriptor(data);
+        const auto denied =
+            CpuParticleSimulator::Create(source, {.buffer = BufferId(70), .activation = Activation(), .maximumBurstParticles = 4});
+        CHECK(HasError(denied, VfxErrors::GpuSimulationUnsupported));
+        const auto invalidOwner =
+            CpuParticleSimulator::Create(source, {.buffer = BufferId(70), .activation = Activation(), .maximumBurstParticles = 0});
+        CHECK(HasError(invalidOwner, VfxErrors::ParticleSimulationDescriptorInvalid));
+        CHECK(source.Data().gpuReadback.enabled);
+
+        // A separately authored CPU-compatible source is admitted; the rejected GPU source is never rewritten.
+        data.gpuReadback = {};
+        data.simulationPreference = SimulationPreference::RequireCPU;
+        const auto substitute = Tests::ParticleDescriptor(data);
+        const auto admitted =
+            CpuParticleSimulator::Create(substitute, {.buffer = BufferId(71), .activation = Activation(), .maximumBurstParticles = 4});
+        REQUIRE(admitted.HasValue());
+        CHECK(source.Data().gpuReadback.enabled);
+    }
 }  // namespace Horo::Vfx

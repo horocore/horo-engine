@@ -80,3 +80,37 @@ TEST_CASE("GPU unit lifetime revocation is available before its first step and s
     CHECK(owner->Shutdown() == GpuParticleStepStatus::Complete);
     CHECK(owner->PrepareStep(0, 0).status == GpuParticleStepStatus::ShutDown);
 }
+
+TEST_CASE("GPU readback policy comes from the immutable authored descriptor", "[vfx][gpu-logical][readback]") {
+    Vfx::Tests::GpuSeedFixture input;
+    auto source = input.Source();
+    source.gpuReadback =
+        {true, 1, Render::VfxGpuReadbackPurpose::CosmeticObservation, Render::VfxGpuReadbackRequirement::RequiredForVisualEffect, 3, 2,
+         1024, 4};
+    const auto descriptor = Vfx::Tests::ParticleDescriptor(source);
+    auto result = GpuParticleSimulator::Create(descriptor, input.Info());
+    REQUIRE(result.HasValue());
+    source.gpuReadback = {};
+    const auto &policy = result.Value()->Preparation().descriptor.readback;
+    CHECK(policy.enabled);
+    CHECK(policy.schemaVersion == 1);
+    CHECK(policy.purpose == Render::VfxGpuReadbackPurpose::CosmeticObservation);
+    CHECK(policy.requirement == Render::VfxGpuReadbackRequirement::RequiredForVisualEffect);
+    CHECK(policy.cadenceSteps == 3);
+    CHECK(policy.maximumRecords == 2);
+    CHECK(policy.maximumBytesPerResult == 1024);
+    CHECK(policy.maximumPendingResults == 4);
+    CHECK(Render::ValidateVfxGpuSimulationPreparation(result.Value()->Preparation()).HasValue());
+}
+
+TEST_CASE("GPU authored readback cannot observe unsupported custom streams", "[vfx][gpu-logical][readback]") {
+    Vfx::Tests::GpuSeedFixture input;
+    auto source = input.Source();
+    source.gpuReadback = {true, 1, Render::VfxGpuReadbackPurpose::DiagnosticsCapture, Render::VfxGpuReadbackRequirement::Optional, 1, 2,
+                          1024, 1};
+    auto info = input.Info();
+    info.initial.attributes.customFloatStreamCount = 1;
+    info.initial.attributes.customFloats[0] = input.floats[0];
+    Horo::Tests::RequireActionableError(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(source), info),
+                                        VfxErrors::GpuSimulationUnsupported);
+}

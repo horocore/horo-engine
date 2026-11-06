@@ -11,7 +11,8 @@ The existing capability bitset grew from 16 to 32 bits to hold these facts. Ever
 previous enum value and feature bit position remains unchanged. Rebuild engine,
 module and header consumers together; the in-memory C++ layout changed. Repository
 consumers use typed capability queries and do not persist this object as a binary
-format. No saved project or asset schema conversion is introduced.
+format. The authored readback migration below adds an optional particle asset field;
+existing assets that omit it retain canonical disabled observations.
 
 `HoroEngine::RenderApi` now publicly depends on the narrow
 `HoroEngine::VfxSimulationData` target for canonical force/RNG values. It does not
@@ -60,6 +61,37 @@ Existing CPU simulation remains available with its original behavior. The shared
 `ParticleSimulationData` force definitions and full-simulation RNG version 1 are
 the GPU reference. The older `CpuParticleSpawnPipeline` retains its distinct legacy
 spawn stream; it is not substituted for the full-simulation RNG oracle.
+
+## Asset-owned GPU readback opt-in
+
+`ParticleSystemDescriptorData::gpuReadback` is the sole source observation policy.
+It uses the existing `Render::VfxGpuReadbackDescriptor`, and `ParticleCookPlan`
+retains the same typed value. An omitted source `gpuReadback` field and a default
+constructed descriptor both mean observations are disabled. An enabled declaration
+must specify the supported schema, purpose, requirement, positive cadence and bounded
+record, byte and pending-result counts. Import/cook validate that declaration before
+runtime preparation; malformed or incompatible declarations fail explicitly.
+
+`GpuParticleSimulatorCreateInfo::readback` was removed deliberately. Migrate callers
+by assigning the policy to the particle source before creating its validated
+`ParticleSystemDescriptor` and cooking it. `GpuParticleSimulator::Create` copies
+`descriptor.Data().gpuReadback` into its immutable renderer preparation. Hosts retain
+identity, seed and budget composition, but cannot enable observations or change the
+cooked policy through create options. Custom-float observation remains unsupported
+in the current prepared-particle schema.
+
+Enabled GPU readback is incompatible with an authored `RequireCPU` unit. Actual
+`CpuParticleSimulator` and legacy `CpuParticleSpawnPipeline` creation also reject it
+with `VfxErrors::GpuSimulationUnsupported`, including an `Automatic` or `PreferGPU`
+source presented to the CPU path. They never ignore the observation declaration or
+manufacture CPU observation parity. A CPU alternative requires a separately authored
+compatible source with readback disabled and its own admission, as described by
+[ADR-124](../adr/124-vfx-gpu-simulation-readback-and-compute-fallback.md).
+
+This migration does not change the renderer's existing readback admission, cadence,
+request queue, cancellation or result lifetime. It adds no synchronous readback and
+no gameplay authority. D3D12 integration and complete GPU emitter stages remain open;
+this component does not complete HORO-1731.
 
 ## Mixed scene ownership and immutable extraction
 

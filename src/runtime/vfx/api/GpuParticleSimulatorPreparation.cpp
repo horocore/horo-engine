@@ -104,7 +104,7 @@ namespace Horo::Vfx::GpuParticleDetail {
             d.policyRevision = i.resolution.policyRevision.Value();
             d.arithmetic.maximumSteps = i.maximumSteps;
             d.arithmetic.maximumDeltaSeconds = i.maximumDeltaSeconds;
-            d.readback = i.readback;
+            d.readback = source.gpuReadback;
             return d;
         }
 
@@ -178,7 +178,7 @@ namespace Horo::Vfx::GpuParticleDetail {
                                                                                const GpuParticleSimulatorCreateInfo &i) {
         using Outcome = Result<std::unique_ptr<Detail::GpuParticleSimulatorState>>;
         const auto &d = descriptor.Data();
-        if (!SupportedSource(d, i) || (i.readback.enabled && i.initial.attributes.customFloatStreamCount))
+        if (!SupportedSource(d, i) || (d.gpuReadback.enabled && i.initial.attributes.customFloatStreamCount))
             return Outcome::Failure(MakeError(VfxErrors::GpuSimulationUnsupported));
         if (!ValidSeedAdmission(d, i))
             return Outcome::Failure(MakeError(VfxErrors::GpuSimulationInvalid));

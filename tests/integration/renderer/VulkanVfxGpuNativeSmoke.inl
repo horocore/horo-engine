@@ -92,7 +92,8 @@ namespace VulkanVfxGpuSmoke {
         return result;
     }
 
-    ParticleSystemDescriptor Source(SimulationPreference preference) {
+    /** @brief Authors source readback policy before canonical asset validation; CPU oracle calls retain disabled defaults. */
+    ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}) {
         auto d = Vfx::Tests::ValidParticleDescriptorData();
         d.maximumParticles = Count;
         d.shape = ParticleEmitterShape::Point;
@@ -108,7 +109,20 @@ namespace VulkanVfxGpuSmoke {
         d.renderMode = ParticleRenderMode::Billboard;
         d.sortMode = ParticleSortMode::None;
         d.simulationPreference = preference;
+        d.gpuReadback = readback;
         return Vfx::Tests::ParticleDescriptor(d);
+    }
+
+    /** @brief Requires the actual authored policy to survive both logical and real Vulkan preparation unchanged. */
+    void CheckReadbackPolicy(const VfxGpuReadbackDescriptor &actual, const VfxGpuReadbackDescriptor &source) {
+        CHECK(actual.enabled == source.enabled);
+        CHECK(actual.schemaVersion == source.schemaVersion);
+        CHECK(actual.purpose == source.purpose);
+        CHECK(actual.requirement == source.requirement);
+        CHECK(actual.cadenceSteps == source.cadenceSteps);
+        CHECK(actual.maximumRecords == source.maximumRecords);
+        CHECK(actual.maximumBytesPerResult == source.maximumBytesPerResult);
+        CHECK(actual.maximumPendingResults == source.maximumPendingResults);
     }
 
     const std::array
@@ -205,6 +219,7 @@ namespace VulkanVfxGpuSmoke {
                 (void)owner_.frontend->ReleaseTexture(color_);
         }
 
+        /** @brief Prepares real Vulkan execution exclusively from the validated asset's authored observation policy. */
         void Prepare() {
             auto &frontend = *owner_.frontend;
             const auto bytes = Count * VfxGpuObservationWords::Bytes;
@@ -230,13 +245,18 @@ namespace VulkanVfxGpuSmoke {
             info.maximumPendingSteps = 2;
             info.maximumSteps = 16;
             info.maximumDeltaSeconds = Delta;
-            info.readback = {true, 1,     VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
-                             1,    Count, Count * VfxGpuObservationWords::Bytes,     1};
-            auto logical = Value(GpuParticleSimulator::Create(Source(SimulationPreference::RequireGPU), info));
+            const VfxGpuReadbackDescriptor
+                policy{true, 1,     VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
+                       1,    Count, Count * VfxGpuObservationWords::Bytes,     1};
+            const auto source = Source(SimulationPreference::RequireGPU, policy);
+            auto logical = Value(GpuParticleSimulator::Create(source, info));
+            CheckReadbackPolicy(logical->Preparation().descriptor.readback, source.Data().gpuReadback);
             PrepareNative(*logical);
+            CheckReadbackPolicy(receipt_.Descriptor().readback, source.Data().gpuReadback);
+            CHECK(receipt_.Readback() == VfxGpuReadbackAdmission::Available);
             Accepted(logical->Activate(receipt_));
             std::array<VfxGpuEmitterPreparation, 1> gpu;
-            gpu[0] = {Effect(), Source(SimulationPreference::RequireGPU).Data().emitter, std::move(logical)};
+            gpu[0] = {Effect(), source.Data().emitter, std::move(logical)};
             world_ = Value(VfxWorld::Prepare(Effect().scope, {}, gpu, {4, Count, 4, 4, 1024U * 1024U}));
             Accepted(world_->Play(Effect()));
             auto color = Value(frontend.CreateTexture(

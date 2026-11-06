@@ -302,6 +302,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         const auto &data = descriptor.Data();
         if (auto result = ValidateBasic(data, info); result.HasError())
             return Result<std::unique_ptr<Detail::CpuParticleSimulatorState>>::Failure(result.ErrorValue());
+        if (data.gpuReadback.enabled)
+            return Failure<std::unique_ptr<Detail::CpuParticleSimulatorState>>(VfxErrors::GpuSimulationUnsupported);
         if (auto result = ValidateForces(info.forces); result.HasError())
             return Result<std::unique_ptr<Detail::CpuParticleSimulatorState>>::Failure(result.ErrorValue());
         if (auto result = ValidatePayloadModules(info); result.HasError())

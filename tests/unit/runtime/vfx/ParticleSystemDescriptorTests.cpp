@@ -1,4 +1,5 @@
 #include "Horo/Foundation/ModuleDescriptor.h"
+#include "Horo/Runtime/Render/VfxGpuKernel.h"
 #include "Horo/Vfx/ParticleSystemDescriptor.h"
 #include "Horo/Vfx/VfxErrors.h"
 #include "support/VfxTestSupport.h"
@@ -6,6 +7,8 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <format>
 #include <limits>
 #include <span>
 #include <string>
@@ -48,6 +51,39 @@ namespace Horo::Vfx {
                 "sortMode":"byDistance",
                 "collisionMode":"sceneDepth"
             })json";
+        }
+
+        /** @brief Produces one exact authored opt-in, without provider discovery or runtime policy overrides. */
+        Render::VfxGpuReadbackDescriptor ReadbackPolicy() {
+            return {.enabled = true,
+                    .purpose = Render::VfxGpuReadbackPurpose::CosmeticObservation,
+                    .requirement = Render::VfxGpuReadbackRequirement::RequiredForVisualEffect,
+                    .cadenceSteps = 3,
+                    .maximumRecords = 16,
+                    .maximumBytesPerResult = 16 * Render::VfxGpuObservationWords::Bytes,
+                    .maximumPendingResults = 2};
+        }
+
+        /** @brief Builds a closed source object with the same exact public policy vocabulary as the production codec. */
+        std::string ReadbackObject(std::string_view purpose = "cosmeticObservation",
+                                   std::string_view requirement = "requiredForVisualEffect") {
+            return std::format(R"({{"enabled":true,"schemaVersion":1,"purpose":"{}","requirement":"{}","cadenceSteps":3,
+                "maximumRecords":16,"maximumBytesPerResult":{},"maximumPendingResults":2}})",
+                               purpose, requirement, ReadbackPolicy().maximumBytesPerResult);
+        }
+
+        /** @brief Adds only the optional readback field to an otherwise unchanged legacy source. */
+        std::string WithReadback(const std::string &object) {
+            auto source = ValidJson();
+            source.insert(source.rfind('}'), ",\"gpuReadback\":" + object);
+            return source;
+        }
+
+        /** @brief Changes exactly one known fixture token so malformed-input cases retain every unrelated source field. */
+        void ReplaceReadback(std::string &source, std::string_view before, std::string_view after) {
+            const auto position = source.find(before);
+            REQUIRE(position != std::string::npos);
+            source.replace(position, before.size(), after);
         }
 
         void RequireError(const Error &error, const ErrorCodeDescriptor &descriptor) {
@@ -259,5 +295,199 @@ namespace Horo::Vfx {
         REQUIRE(ClassifyParticleDescriptorCompatibility({0, 9}) == ParticleDescriptorCompatibility::Unsupported);
         REQUIRE(ClassifyParticleDescriptorCompatibility({2, 0}) == ParticleDescriptorCompatibility::Unsupported);
         REQUIRE(GetParticleCookProfile(ParticleCookTier::Count).HasError());
+    }
+
+    TEST_CASE("Particle authored GPU readback preserves absence and exact policy through real cook admission",
+              "[unit][vfx][particle-descriptor][gpu-readback]") {
+        const bool enabled = GENERATE(false, true);
+        const auto parsed = ParseParticleSystemDescriptor(enabled ? WithReadback(ReadbackObject()) : ValidJson());
+        REQUIRE(parsed.HasValue());
+        const auto expected = enabled ? ReadbackPolicy() : Render::VfxGpuReadbackDescriptor{};
+        CHECK(parsed.Value().gpuReadback == expected);
+        const auto validation = ValidateParticleSystemDescriptor(parsed.Value(), Registry());
+        REQUIRE(validation.HasValue());
+        REQUIRE(validation.Value().Accepted());
+        const auto profile = GetParticleCookProfile(ParticleCookTier::Standard);
+        REQUIRE(profile.HasValue());
+        const auto cooked = BuildParticleSystemCookPlan(*validation.Value().descriptor, profile.Value(),
+                                                        {Material(), ParticleMaterialAvailability::Available}, Registry());
+        REQUIRE(cooked.HasValue());
+        REQUIRE(cooked.Value().Accepted());
+        CHECK(cooked.Value().plan->gpuReadback == expected);
+        CHECK(cooked.Value().plan->maximumParticles == parsed.Value().maximumParticles);
+    }
+
+    TEST_CASE("Particle readback source decodes every declared purpose and requirement without substitution",
+              "[unit][vfx][particle-descriptor][gpu-readback]") {
+        const auto purpose = GENERATE(0U, 1U, 2U);
+        const auto requirement = GENERATE(0U, 1U);
+        constexpr std::array purposes{"authoringPreview", "diagnosticsCapture", "cosmeticObservation"};
+        constexpr std::array requirements{"optional", "requiredForVisualEffect"};
+        const auto parsed = ParseParticleSystemDescriptor(WithReadback(ReadbackObject(purposes[purpose], requirements[requirement])));
+        REQUIRE(parsed.HasValue());
+        CHECK(parsed.Value().gpuReadback.purpose == static_cast<Render::VfxGpuReadbackPurpose>(purpose));
+        CHECK(parsed.Value().gpuReadback.requirement == static_cast<Render::VfxGpuReadbackRequirement>(requirement));
+        CHECK(ValidateParticleSystemDescriptor(parsed.Value(), Registry()).Value().Accepted());
+    }
+
+    TEST_CASE("Particle readback JSON rejects structural errors unsigned overflow duplicate fields and unknown members",
+              "[unit][vfx][particle-descriptor][gpu-readback]") {
+        auto object = ReadbackObject();
+        SECTION("nonobject") {
+            object = "[]";
+        }
+        SECTION("unknown member") {
+            object.insert(object.rfind('}'), ",\"extra\":0");
+        }
+        SECTION("missing member") {
+            ReplaceReadback(object, "\"cadenceSteps\":3,", "");
+        }
+        SECTION("enabled must be boolean") {
+            ReplaceReadback(object, "\"enabled\":true", "\"enabled\":1");
+        }
+        SECTION("negative count") {
+            ReplaceReadback(object, "\"maximumRecords\":16", "\"maximumRecords\":-1");
+        }
+        SECTION("fractional count") {
+            ReplaceReadback(object, "\"maximumRecords\":16", "\"maximumRecords\":1.5");
+        }
+        SECTION("u32 overflow") {
+            ReplaceReadback(object, "\"maximumRecords\":16", "\"maximumRecords\":4294967296");
+        }
+        SECTION("numeric string") {
+            ReplaceReadback(object, "\"maximumPendingResults\":2", "\"maximumPendingResults\":\"2\"");
+        }
+        SECTION("nonfinite JSON") {
+            ReplaceReadback(object, "\"maximumRecords\":16", "\"maximumRecords\":NaN");
+        }
+        const auto parsed = ParseParticleSystemDescriptor(WithReadback(object));
+        REQUIRE(parsed.HasError());
+        RequireError(parsed.ErrorValue(), VfxErrors::ParticleDescriptorMalformed);
+    }
+
+    TEST_CASE("Particle readback nested duplicate detection precedes source decoding", "[unit][vfx][particle-descriptor][gpu-readback]") {
+        auto object = ReadbackObject();
+        object.insert(1, "\"enabled\":true,");
+        const auto parsed = ParseParticleSystemDescriptor(WithReadback(object));
+        REQUIRE(parsed.HasError());
+        RequireError(parsed.ErrorValue(), VfxErrors::ParticleDescriptorDuplicate);
+    }
+
+    TEST_CASE("Particle readback semantic bounds are rejected by the shared canonical policy validator",
+              "[unit][vfx][particle-descriptor][gpu-readback]") {
+        auto data = ValidData();
+        data.gpuReadback = ReadbackPolicy();
+        SECTION("unknown schema") {
+            data.gpuReadback.schemaVersion = 2;
+        }
+        SECTION("zero cadence") {
+            data.gpuReadback.cadenceSteps = 0;
+        }
+        SECTION("zero records") {
+            data.gpuReadback.maximumRecords = 0;
+        }
+        SECTION("over emitter capacity") {
+            data.gpuReadback.maximumRecords = data.maximumParticles + 1;
+        }
+        SECTION("undersized result") {
+            data.gpuReadback.maximumBytesPerResult -= 1;
+        }
+        SECTION("zero pending") {
+            data.gpuReadback.maximumPendingResults = 0;
+        }
+        SECTION("over pending ceiling") {
+            data.gpuReadback.maximumPendingResults = 65;
+        }
+        SECTION("disabled cannot retain observation limits") {
+            data.gpuReadback.enabled = false;
+        }
+        const auto result = ValidateParticleSystemDescriptor(data, Registry());
+        REQUIRE(result.HasValue());
+        CHECK_FALSE(result.Value().Accepted());
+        REQUIRE(result.Value().diagnostics.Size() == 1);
+        CHECK(result.Value().diagnostics.Diagnostics().front().code.Value() == VfxErrors::ParticleDescriptorMalformed.code.Value());
+    }
+
+    TEST_CASE("Particle readback unknown enum strings remain ordered import findings instead of silently disabling",
+              "[unit][vfx][particle-descriptor][gpu-readback]") {
+        const auto object = GENERATE(ReadbackObject("authoritativeGameplay"), ReadbackObject("cosmeticObservation", "fallbackToCpu"));
+        const auto parsed = ParseParticleSystemDescriptor(WithReadback(object));
+        REQUIRE(parsed.HasValue());
+        const auto result = ValidateParticleSystemDescriptor(parsed.Value(), Registry());
+        REQUIRE(result.HasValue());
+        CHECK_FALSE(result.Value().Accepted());
+        CHECK(result.Value().diagnostics.Diagnostics().front().code.Value() == VfxErrors::ParticleDescriptorMalformed.code.Value());
+    }
+
+    TEST_CASE("Particle authored required CPU mode cannot ignore enabled GPU observations",
+              "[unit][vfx][particle-descriptor][gpu-readback]") {
+        auto data = ValidData();
+        data.simulationPreference = SimulationPreference::RequireCPU;
+        data.gpuReadback = ReadbackPolicy();
+        const auto denied = ValidateParticleSystemDescriptor(data, Registry());
+        REQUIRE(denied.HasValue());
+        CHECK_FALSE(denied.Value().Accepted());
+        REQUIRE(denied.Value().diagnostics.Size() == 1);
+        CHECK(denied.Value().diagnostics.Diagnostics().front().code.Value() == VfxErrors::ParticleModeIncompatible.code.Value());
+        data.gpuReadback = {};
+        const auto disabled = ValidateParticleSystemDescriptor(data, Registry());
+        REQUIRE(disabled.HasValue());
+        CHECK(disabled.Value().Accepted());
+    }
+
+    TEST_CASE("Particle readback full-pass findings preserve existing errors and cook tier failures never erase policy",
+              "[unit][vfx][particle-descriptor][gpu-readback]") {
+        auto data = ValidData();
+        data.maximumParticles = 0;
+        data.initialSize = {0, -1};
+        data.gpuReadback = ReadbackPolicy();
+        const auto rejected = ValidateParticleSystemDescriptor(data, Registry());
+        REQUIRE(rejected.HasValue());
+        CHECK_FALSE(rejected.Value().Accepted());
+        CHECK(rejected.Value().diagnostics.Size() == 3);
+        CHECK(std::ranges::is_sorted(rejected.Value().diagnostics.Diagnostics(), {}, [](const ValidationDiagnostic &d) {
+            return std::pair{d.domain.Value(), d.code.Value()};
+        }));
+        data = ValidData();
+        data.gpuReadback = ReadbackPolicy();
+        const auto admitted = ValidateParticleSystemDescriptor(data, Registry());
+        REQUIRE(admitted.HasValue());
+        REQUIRE(admitted.Value().Accepted());
+        const auto cooked = BuildParticleSystemCookPlan(*admitted.Value().descriptor, {ParticleCookTier::Compact, 1, 1},
+                                                        {Material(), ParticleMaterialAvailability::Available}, Registry());
+        REQUIRE(cooked.HasValue());
+        CHECK_FALSE(cooked.Value().Accepted());
+        CHECK_FALSE(cooked.Value().plan.has_value());
+        CHECK(admitted.Value().descriptor->Data().gpuReadback == ReadbackPolicy());
+    }
+
+    TEST_CASE("Particle explicit disabled readback is canonically equal to omission", "[unit][vfx][particle-descriptor][gpu-readback]") {
+        const auto source = WithReadback(R"({"enabled":false,"schemaVersion":1,"purpose":"diagnosticsCapture","requirement":"optional",
+            "cadenceSteps":1,"maximumRecords":0,"maximumBytesPerResult":0,"maximumPendingResults":0})");
+        const auto parsed = ParseParticleSystemDescriptor(source);
+        REQUIRE(parsed.HasValue());
+        CHECK(parsed.Value().gpuReadback == Render::VfxGpuReadbackDescriptor{});
+        const auto admitted = ValidateParticleSystemDescriptor(parsed.Value(), Registry());
+        REQUIRE(admitted.HasValue());
+        CHECK(admitted.Value().Accepted());
+    }
+
+    TEST_CASE("Particle readback maximum record capacity and pending64 boundary survives cook unchanged",
+              "[unit][vfx][particle-descriptor][gpu-readback]") {
+        auto data = ValidData();
+        data.gpuReadback = ReadbackPolicy();
+        data.gpuReadback.maximumRecords = data.maximumParticles;
+        data.gpuReadback.maximumBytesPerResult = data.maximumParticles * Render::VfxGpuObservationWords::Bytes;
+        data.gpuReadback.maximumPendingResults = 64;
+        const auto admitted = ValidateParticleSystemDescriptor(data, Registry());
+        REQUIRE(admitted.HasValue());
+        REQUIRE(admitted.Value().Accepted());
+        const auto profile = GetParticleCookProfile(ParticleCookTier::Compact);
+        REQUIRE(profile.HasValue());
+        const auto cooked = BuildParticleSystemCookPlan(*admitted.Value().descriptor, profile.Value(),
+                                                        {Material(), ParticleMaterialAvailability::Available}, Registry());
+        REQUIRE(cooked.HasValue());
+        REQUIRE(cooked.Value().Accepted());
+        CHECK(cooked.Value().plan->gpuReadback == data.gpuReadback);
     }
 }  // namespace Horo::Vfx

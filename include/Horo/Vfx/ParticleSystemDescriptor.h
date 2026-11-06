@@ -7,6 +7,7 @@
 
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Foundation/ValidationResult.h"
+#include "Horo/Runtime/Render/VfxGpuSimulation.h"
 #include "Horo/Vfx/VfxIdentity.h"
 #include "Horo/Vfx/VfxQualityPolicy.h"
 
@@ -134,7 +135,8 @@ namespace Horo::Vfx {
         ParticleSortMode sortMode{ParticleSortMode::ByDistance};                    /**< Authored ordering policy. */
         ParticleCollisionMode collisionMode{ParticleCollisionMode::None};           /**< Authored collision source. */
         ParticleCollisionResponse collisionResponse{
-            ParticleCollisionResponse::Bounce}; /**< Optional source field; legacy sources bounce. */
+            ParticleCollisionResponse::Bounce};       /**< Optional source field; legacy sources bounce. */
+        Render::VfxGpuReadbackDescriptor gpuReadback; /**< Optional authored observation policy; absent sources are canonically disabled. */
         constexpr bool operator==(const ParticleSystemDescriptorData &) const = default;
     };
 
@@ -238,6 +240,8 @@ namespace Horo::Vfx {
         Assets::AssetId material;         /**< Stable material dependency identity. */
         std::uint32_t maximumParticles{}; /**< Fixed cooked capacity. */
         double maximumSpawnRate{};        /**< Fixed cooked spawn-rate ceiling. */
+        Render::VfxGpuReadbackDescriptor
+            gpuReadback; /**< Exact validated authored policy, never supplied or escalated by a runtime host. */
         constexpr auto operator<=>(const ParticleCookPlan &) const noexcept = default;
     };
 

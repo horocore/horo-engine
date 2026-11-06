@@ -26,15 +26,17 @@ namespace Horo::Render::ProtocolFake {
         public:
             explicit Fixture(bool observe = false, bool bindColdLifetime = true) : frontend(Create(audit)) {
                 auto info = seed.Info();
+                auto source = seed.Source();
                 if (observe) {
                     const auto bytes = 2 * VfxGpuObservationWords::Bytes;
                     Value(frontend->PrepareVfxGpuReadbackStorage({bytes, bytes, bytes, 16, 1}, {1, bytes, 16}, 1024U * 1024U,
                                                                  std::chrono::seconds{5}));
-                    info.readback =
+                    source.gpuReadback =
                         {true,  1, VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect, 1, 2,
                          bytes, 1};
                 }
-                logical = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(seed.Source()), info));
+                logical = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(source), info));
+                CHECK(logical->Preparation().descriptor.readback == source.gpuReadback);
                 Prepare(bindColdLifetime);
                 color = Value(frontend->CreateTexture({.extent = {16, 16}, .usage = RenderTextureUsage::RenderAttachment})).handle;
                 Value(frontend->ProcessResourceRequests());

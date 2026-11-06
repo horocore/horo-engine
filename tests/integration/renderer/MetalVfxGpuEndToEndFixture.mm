@@ -104,7 +104,7 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Defines authored seed inputs shared by two real CPU simulators and the actual GPU preparation. */
-        ParticleSystemDescriptor Source(SimulationPreference preference) {
+        ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}) {
             auto d = Vfx::Tests::ValidParticleDescriptorData();
             d.maximumParticles = Count;
             d.shape = ParticleEmitterShape::Point;
@@ -120,7 +120,20 @@ namespace Horo::Render::Test {
             d.renderMode = ParticleRenderMode::Billboard;
             d.sortMode = ParticleSortMode::None;
             d.simulationPreference = preference;
+            d.gpuReadback = readback;
             return Vfx::Tests::ParticleDescriptor(d);
+        }
+
+        /** @brief Requires every authored readback field to survive actual logical and native preparation without a host override. */
+        void CheckReadbackPolicy(const VfxGpuReadbackDescriptor &actual, const VfxGpuReadbackDescriptor &source) {
+            CHECK(actual.enabled == source.enabled);
+            CHECK(actual.schemaVersion == source.schemaVersion);
+            CHECK(actual.purpose == source.purpose);
+            CHECK(actual.requirement == source.requirement);
+            CHECK(actual.cadenceSteps == source.cadenceSteps);
+            CHECK(actual.maximumRecords == source.maximumRecords);
+            CHECK(actual.maximumBytesPerResult == source.maximumBytesPerResult);
+            CHECK(actual.maximumPendingResults == source.maximumPendingResults);
         }
 
         const std::array Forces{CpuParticleForceModule{.kind = CpuParticleForceKind::Gravity, .vector = {0, -.1F, 0}},
@@ -280,17 +293,22 @@ namespace Horo::Render::Test {
                 info.maximumPendingSteps = 2;
                 info.maximumSteps = 16;
                 info.maximumDeltaSeconds = Delta;
+                VfxGpuReadbackDescriptor policy;
                 if (observe)
-                    info.readback =
-                        {true, 1,     VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
-                         1,    Count, Count * VfxGpuObservationWords::Bytes,     1};
+                    policy = {true, 1,     VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
+                              1,    Count, Count * VfxGpuObservationWords::Bytes,     1};
+                const auto source = Source(SimulationPreference::RequireGPU, policy);
+                CHECK(source.Data().gpuReadback.enabled == observe);
                 INFO("Cold GPU logical admission: actual selected domain, finite PreparedParticles state, shared policy and payload "
                      "ledger.");
-                auto logical = Value(GpuParticleSimulator::Create(Source(SimulationPreference::RequireGPU), info));
+                auto logical = Value(GpuParticleSimulator::Create(source, info));
+                CheckReadbackPolicy(logical->Preparation().descriptor.readback, source.Data().gpuReadback);
                 receipt_ = PrepareNative(*logical);
+                CheckReadbackPolicy(receipt_.Descriptor().readback, source.Data().gpuReadback);
+                CHECK(receipt_.Readback() == (observe ? VfxGpuReadbackAdmission::Available : VfxGpuReadbackAdmission::Disabled));
                 Accepted(logical->Activate(receipt_));
                 std::array<VfxGpuEmitterPreparation, 1> gpu;
-                gpu[0] = {Effect(), Source(SimulationPreference::RequireGPU).Data().emitter, std::move(logical)};
+                gpu[0] = {Effect(), source.Data().emitter, std::move(logical)};
                 INFO("Transfer actual activated GPU owner into canonical VfxWorld: one emitter, eight lanes, four bounded frame slots.");
                 world_ = Value(VfxWorld::Prepare(Effect().scope, {}, gpu, {4, Count, 4, 4, 1024U * 1024U}));
                 REQUIRE_FALSE(gpu[0].simulator);
