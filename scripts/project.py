@@ -108,9 +108,33 @@ def validate_asset_names(profile: dict) -> None:
         raise AndroidError("Source assets cannot overwrite owned provenance or generated package metadata.")
 
 
+def exact_graphics_profile(actual: object, expected: dict) -> bool:
+    """Require the closed profile's exact field types as well as values."""
+    if not isinstance(actual, dict) or actual.keys() != expected.keys():
+        return False
+    return all(type(actual[key]) is type(value) and actual[key] == value for key, value in expected.items())
+
+
+def validate_renderer_profile(profile: dict) -> None:
+    """Admit only explicit assembly-only or bounded Android Vulkan development composition."""
+    if profile["distributionQualified"]:
+        raise AndroidError("Qualification packages cannot claim distribution/device qualification.")
+    if profile["renderer"] == "none":
+        if "graphicsProfile" in profile:
+            raise AndroidError("Assembly-only profiles cannot declare native graphics support.")
+        return
+    expected = {"schema": 1, "api": "Vulkan1.1", "presentMode": "Fifo",
+                "swapchainMaintenance1Required": True, "singleGraphicsPresentQueue": True}
+    if profile["renderer"] != "vulkan-android" or not exact_graphics_profile(profile.get("graphicsProfile"), expected):
+        raise AndroidError("Unsupported Android development graphics profile; select the declared effective Vulkan tuple.")
+    if profile["preset"] != "android-vulkan-development" or profile["configuration"] != "Debug":
+        raise AndroidError("Android Vulkan qualification requires its explicit development preset.")
+    if profile["assets"] != {"qualification.json": "android/qualification-vulkan.json"}:
+        raise AndroidError("Android Vulkan development requires its presentation-intent asset without device qualification claims.")
+
+
 def validate_profile_identity(profile: dict) -> None:
-    if profile["renderer"] != "none" or profile["distributionQualified"]:
-        raise AndroidError("This qualification composition has no presentation/device support; provide a qualified product host.")
+    validate_renderer_profile(profile)
     if profile["permissions"] != [profile["applicationId"] + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
                                    "android.permission.ACTIVITY_RECOGNITION"] or profile["features"]:
         raise AndroidError("Qualification profiles admit only AndroidX receiver and optional Activity Recognition permissions; no required hardware features.")
@@ -496,6 +520,26 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
         raise AndroidError("GameActivity changed during staging; retry with the admitted AAR.")
 
 
+def ndk_host_tag() -> str:
+    """Select the NDK host package for this build machine without searching foreign installations."""
+    tags = {"Linux": "linux-x86_64", "Darwin": "darwin-x86_64", "Windows": "windows-x86_64"}
+    tag = tags.get(host_platform.system())
+    if tag is None:
+        raise AndroidError("Unsupported NDK build host; select a declared Linux, macOS or Windows toolchain.")
+    return tag
+
+
+def ndk_shared_runtime(ndk: Path, abi: str) -> Path:
+    """Resolve the exact declared ABI runtime within the selected host's NDK sysroot."""
+    triples = {"arm64-v8a": "aarch64-linux-android", "x86_64": "x86_64-linux-android"}
+    triple = triples.get(abi)
+    if triple is None:
+        raise AndroidError("Unsupported Android runtime ABI.")
+    runtime = ndk / f"toolchains/llvm/prebuilt/{ndk_host_tag()}/sysroot/usr/lib/{triple}/libc++_shared.so"
+    bounded_bytes(runtime)
+    return runtime
+
+
 def build_native(arguments: argparse.Namespace, profile: dict, activity_root: Path, workspace: Path) -> Path:
     if arguments.native_root:
         if arguments.native_root.is_symlink():
@@ -513,8 +557,7 @@ def build_native(arguments: argparse.Namespace, profile: dict, activity_root: Pa
         destination = native_root / abi
         destination.mkdir(parents=True)
         shutil.copyfile(binary / f"lib{profile['nativeLibrary']}.so", destination / f"lib{profile['nativeLibrary']}.so")
-        triple = "aarch64-linux-android" if abi == "arm64-v8a" else "x86_64-linux-android"
-        runtime = arguments.ndk / f"toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/{triple}/libc++_shared.so"
+        runtime = ndk_shared_runtime(arguments.ndk, abi)
         shutil.copyfile(runtime, destination / "libc++_shared.so")
     return native_root
 
@@ -688,7 +731,7 @@ def verify_manifest(badging: str, profile: dict) -> None:
 
 def apk_main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("qualification-debug", "qualification-release"), required=True)
+    parser.add_argument("--profile", choices=("qualification-debug", "qualification-release", "qualification-vulkan-development"), required=True)
     parser.add_argument("--abi", action="append", required=True)
     for name in ("sdk", "ndk", "gradle", "game-activity", "output"):
         parser.add_argument("--" + name, type=Path, required=True)

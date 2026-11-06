@@ -140,15 +140,8 @@ install(FILES "${horo_lunasvg_SOURCE_DIR}/LICENSE"
 install(FILES "${PROJECT_SOURCE_DIR}/docs/licenses/LunaSVG-third-party-notices.txt"
     DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses")
 
-set(HORO_NLOHMANN_JSON_REVISION "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03")
-set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
-set(JSON_Install OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    nlohmann_json
-    URL https://codeload.github.com/nlohmann/json/tar.gz/${HORO_NLOHMANN_JSON_REVISION}
-    URL_HASH SHA256=0dbc5e40a01ff142e7e68c03e85247a4dcede2f592d12d3677dee3664d17975a
-)
-FetchContent_MakeAvailable(nlohmann_json)
+include("${CMAKE_CURRENT_LIST_DIR}/HoroRendererCoreDependencies.cmake")
+horo_populate_renderer_json()
 
 set(HORO_UFBX_REVISION "83bc7cf44f76bc8622de63b809a42b5d557cd733")
 FetchContent_Declare(
@@ -402,19 +395,11 @@ if(HORO_BUILD_RENDER_OPENGL)
     )
 endif()
 
-if(HORO_BUILD_RENDER_VULKAN OR (BUILD_TESTING AND HORO_BUILD_XR_OPENXR))
+if(HORO_BUILD_RENDER_VULKAN OR HORO_BUILD_RENDER_VULKAN_ANDROID OR (BUILD_TESTING AND HORO_BUILD_XR_OPENXR))
     # Canonical OpenXR test dispatch also needs the official Vulkan extension
     # declarations when its renderer is disabled. This SDK-only dependency does
     # not enable renderer targets or runtime loading outside the host loader lease.
-    set(HORO_VULKAN_HEADERS_REVISION "29f979ee5aa58b7b005f805ea8df7a855c39ff37")
-    set(VULKAN_HEADERS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-        VulkanHeaders
-        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-        GIT_TAG "${HORO_VULKAN_HEADERS_REVISION}"
-        GIT_SHALLOW FALSE
-    )
-    FetchContent_MakeAvailable(VulkanHeaders)
+    horo_populate_renderer_vulkan_headers()
 endif()
 
 

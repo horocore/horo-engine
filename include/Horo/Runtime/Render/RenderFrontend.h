@@ -161,14 +161,15 @@ namespace Horo::Render {
          * @brief Explicitly captures a compiled graph at this real frame's pre-submission safe point.
          * @param graph Intact immutable authored graph. @param schedule Exact compiled schedule.
          * @param lifetime Exact logical lifetime plan. @param execution Exact compiled execution plan.
-         * @param limits Finite inspection allowances. @param cancellation Cooperative tooling cancellation.
+         * @param limits Finite inspection allowances. @param cancellation Foundation cooperative tooling token; empty means no
+         * cancellation.
          * @return Detached snapshot or typed failure; inspection failure never aborts rendering.
          * @details Owner-thread tooling only, before Execute/Present. Capture records planned logical facts,
          * not native realization. No capture occurs unless explicitly requested by the host.
          */
         [[nodiscard]] Result<std::shared_ptr<const RenderGraphInspectionSnapshot>> CaptureInspection(
             const RenderGraph &graph, const RenderGraphSchedule &schedule, const RenderGraphLifetimePlan &lifetime,
-            const CompiledRenderGraphExecution &execution, RenderGraphInspectionLimits limits = {}, std::stop_token cancellation = {});
+            const CompiledRenderGraphExecution &execution, RenderGraphInspectionLimits limits = {}, CancellationToken cancellation = {});
         /** @brief Aborts the matching frame when this scope still owns one. */
         ~RenderFrameScope();
 

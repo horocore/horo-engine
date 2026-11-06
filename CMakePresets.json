@@ -232,7 +232,8 @@
       "cacheVariables": {
         "BUILD_TESTING": "OFF",
         "HORO_ANDROID_PACKAGE_QUALIFICATION": "ON",
-        "CMAKE_POSITION_INDEPENDENT_CODE": "ON"
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "HORO_ANDROID_QUALIFICATION_RENDERER": "none"
       }
     },
     {
@@ -240,6 +241,13 @@
       "inherits": "android-package-base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "android-vulkan-development",
+      "inherits": "android-debug",
+      "cacheVariables": {
+        "HORO_ANDROID_QUALIFICATION_RENDERER": "vulkan-android"
       }
     },
     {

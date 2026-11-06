@@ -7108,3 +7108,31 @@ include(HoroScriptModuleTests)
 # Genuine dynamic prefab reconstruction through the existing Save and Scene owners.
 include(HoroPrefabPersistenceTests)
 
+
+# Android window ownership and the distinct Vulkan 1.1 presentation protocol.
+add_executable(HoroAndroidWindowHostTests unit/platform/AndroidWindowHostTests.cpp support/AllocationProbe.cpp)
+target_include_directories(HoroAndroidWindowHostTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
+target_compile_features(HoroAndroidWindowHostTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAndroidWindowHostTests PRIVATE HoroEngine::PlatformAndroidWindow Catch2::Catch2WithMain)
+add_test(NAME HoroAndroidWindowHostTests COMMAND HoroAndroidWindowHostTests)
+set_tests_properties(HoroAndroidWindowHostTests PROPERTIES LABELS "unit;platform;android;headless")
+
+if(TARGET HoroRenderVulkanAndroid)
+    add_executable(HoroRenderVulkanAndroidTests unit/runtime/renderer/VulkanAndroidBackendTests.cpp)
+    target_compile_features(HoroRenderVulkanAndroidTests PRIVATE cxx_std_20)
+    target_include_directories(HoroRenderVulkanAndroidTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
+    target_link_libraries(HoroRenderVulkanAndroidTests PRIVATE
+        HoroRenderVulkanAndroidTestingInternal Catch2::Catch2WithMain)
+    add_test(NAME HoroRenderVulkanAndroidTests COMMAND HoroRenderVulkanAndroidTests)
+    set_tests_properties(HoroRenderVulkanAndroidTests PROPERTIES LABELS "unit;renderer;vulkan;android;protocol;headless")
+endif()
+
+add_executable(HoroAndroidPresentationAdmissionTests unit/platform/AndroidPresentationAdmissionTests.cpp)
+target_compile_features(HoroAndroidPresentationAdmissionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAndroidPresentationAdmissionTests PRIVATE
+    HoroAndroidPresentationAdmissionInternal HoroEngine::PlatformAndroidWindow Catch2::Catch2WithMain)
+add_test(NAME HoroAndroidPresentationAdmissionTests COMMAND HoroAndroidPresentationAdmissionTests)
+set_tests_properties(HoroAndroidPresentationAdmissionTests PROPERTIES LABELS "unit;platform;android;presentation;headless")
+
+# Self-referential material batches preserve aggregate and completed-type span interoperation.
+target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderMaterialBatchPublicContract.cpp)

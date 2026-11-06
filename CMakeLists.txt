@@ -62,6 +62,7 @@ if(APPLE AND HORO_BUILD_EDITOR_GUI)
 endif()
 option(HORO_BUILD_RENDER_METAL "Build the Metal renderer backend" ${_HORO_BUILD_RENDER_METAL_DEFAULT})
 option(HORO_BUILD_RENDER_VULKAN "Build the Vulkan renderer backend" OFF)
+option(HORO_BUILD_RENDER_VULKAN_ANDROID "Build the Android Vulkan presentation backend and host-test protocol" OFF)
 option(HORO_ENABLE_GPU_SMOKE_TESTS "Register tests that require a display server and hardware graphics context" OFF)
 option(HORO_ENABLE_IMGUI_UI_TESTS "Build headless Dear ImGui UI automation tests" OFF)
 option(HORO_ENABLE_TELEMETRY "Compile Horo telemetry producer instrumentation" ON)
@@ -115,6 +116,9 @@ horo_configure_extension_sdk()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/CMakeLists.txt")
     add_subdirectory(src)
+    if(TARGET HoroPlatformAndroidWindow)
+        add_subdirectory(apps/android-package-qualification)
+    endif()
 endif()
 
 set(HORO_GAMEPLAY_SDK_PACKAGE_DIR "${CMAKE_BINARY_DIR}/sdk/gameplay" CACHE INTERNAL

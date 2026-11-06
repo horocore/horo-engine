@@ -1,45 +1,10 @@
+include("${PROJECT_SOURCE_DIR}/cmake/HoroCoreSourceSets.cmake")
+
 add_library(HoroSceneIdentity INTERFACE)
 add_library(HoroEngine::SceneIdentity ALIAS HoroSceneIdentity)
 target_compile_features(HoroSceneIdentity INTERFACE cxx_std_20)
 
-add_library(HoroFoundation STATIC
-        foundation/assertions/Assertions.cpp
-        foundation/AssetCookTargetId.cpp
-        foundation/FoundationErrors.cpp
-        foundation/ImmutableFileStorage.cpp
-        foundation/PublicationReads.cpp
-        foundation/PublicationLock.cpp
-        foundation/modules/ModuleActivationContext.cpp
-        foundation/modules/ModuleDescriptor.cpp
-        foundation/modules/ModuleHost.cpp
-        foundation/modules/ModuleHostLifecycle.cpp
-        foundation/modules/ModuleHostRegistration.cpp
-        foundation/error/ErrorCode.cpp
-        foundation/error/ErrorCodeRegistry.cpp
-        foundation/error/FoundationErrorDomains.cpp
-        foundation/error/ValidationResult.cpp
-        foundation/diagnostics/DiagnosticBundle.cpp
-        foundation/diagnostics/DiagnosticBundleErrors.cpp
-        foundation/hashing/Sha256.cpp
-        foundation/math/SceneMath.cpp
-        foundation/math/WorldCoordinate64.cpp
-        foundation/text/String.cpp
-        foundation/text/Utf8.cpp
-        foundation/logging/Logger.cpp
-        foundation/logging/LogContext.cpp
-        foundation/logging/StructuredLogStore.cpp
-        foundation/telemetry/Telemetry.cpp
-        foundation/telemetry/Operation.cpp
-        foundation/diagnostics/BuildOutputStore.cpp
-        foundation/diagnostics/OperationStore.cpp
-        foundation/diagnostics/OperationHistory.cpp
-        foundation/data_bus/DataBus.cpp
-        foundation/jobs/JobSystem.cpp
-        foundation/jobs/JobAdmission.cpp
-        foundation/config/Configuration.cpp
-        foundation/diagnostics/DiagnosticsEngine.cpp
-        foundation/paths/PathUtils.cpp
-)
+add_library(HoroFoundation STATIC ${HORO_FOUNDATION_SOURCES})
 
 add_library(HoroEngine::Foundation ALIAS HoroFoundation)
 
@@ -2831,110 +2796,7 @@ add_library(HoroEngine::RuntimeUiInput ALIAS HoroRuntimeUiInput)
 target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
 target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
 
-add_library(HoroRenderApi STATIC
-        runtime/renderer/api/ColorPipeline.cpp
-        runtime/renderer/api/ColorOutputProgram.cpp
-        runtime/renderer/api/ColorPipelineTransform.cpp
-        runtime/renderer/api/Exposure.cpp
-        runtime/renderer/api/SceneColorEncoding.cpp
-        runtime/renderer/api/ExposureGpuKernel.cpp
-        runtime/renderer/api/ExposureGpuWorkload.cpp
-        runtime/renderer/api/DirectionalShadow.cpp
-        runtime/renderer/api/DirectionalShadowFit.cpp
-        runtime/renderer/api/DirectionalShadowFingerprint.cpp
-        runtime/renderer/api/VfxDrawData.cpp
-        runtime/renderer/api/VfxShaderParameters.cpp
-        runtime/renderer/api/VfxFrameUpload.cpp
-        runtime/renderer/api/VfxGraphValidation.cpp
-        runtime/renderer/api/MultiviewSceneExtraction.cpp
-        runtime/renderer/api/MultiviewGraphWorkload.cpp
-        runtime/renderer/api/MultiviewShaderParameters.cpp
-        runtime/renderer/api/MultiviewExtractionErrors.cpp
-        runtime/renderer/api/PostProcessErrors.cpp
-        runtime/renderer/api/PostProcessSettings.cpp
-        runtime/renderer/api/PostProcessVolumes.cpp
-        runtime/renderer/api/PostProcessGraph.cpp
-        runtime/renderer/api/PostProcessGraphAdmission.cpp
-        runtime/renderer/api/MotionHistory.cpp
-        runtime/renderer/api/MotionHistoryErrors.cpp
-        runtime/renderer/api/MaterialBinding.cpp
-        runtime/renderer/api/MaterialBindingValidation.cpp
-        runtime/renderer/api/MaterialBindingErrors.cpp
-        runtime/renderer/api/PipelinePreparation.cpp
-        runtime/renderer/api/PipelinePreparationErrors.cpp
-        runtime/renderer/api/PipelineCache.cpp
-        runtime/renderer/api/PipelineCacheErrors.cpp
-        runtime/renderer/api/RenderAdapter.cpp
-        runtime/renderer/api/RenderAdapterErrors.cpp
-        runtime/renderer/api/RenderDisplay.cpp
-        runtime/renderer/api/RenderDisplayErrors.cpp
-        runtime/renderer/api/RenderPresentationOutput.cpp
-        runtime/renderer/api/RenderPresentationErrors.cpp
-        runtime/renderer/api/FramePacing.cpp
-        runtime/renderer/api/FramePacingErrors.cpp
-        runtime/renderer/api/PresentMode.cpp
-        runtime/renderer/api/PresentModeErrors.cpp
-        runtime/renderer/api/RenderSurfaceLifecycle.cpp
-        runtime/renderer/api/RenderSurfaceLifecycleErrors.cpp
-        runtime/renderer/api/RenderGraph.cpp
-        runtime/renderer/api/RenderGraphExecution.cpp
-        runtime/renderer/api/RenderGraphInspection.cpp
-        runtime/renderer/api/RenderGraphInspectionErrors.cpp
-        runtime/renderer/api/RenderGraphInspectionExport.cpp
-        runtime/renderer/api/RenderGraphExecutionErrors.cpp
-        runtime/renderer/api/RenderGraphErrors.cpp
-        runtime/renderer/api/RenderGraphSynchronization.cpp
-        runtime/renderer/api/RenderGraphSynchronizationErrors.cpp
-        runtime/renderer/api/RenderGraphLifetime.cpp
-        runtime/renderer/api/RenderGraphWorkload.cpp
-        runtime/renderer/api/RenderGraphTextureUpload.cpp
-        runtime/renderer/api/UiPaintWorkload.cpp
-        runtime/renderer/api/UiPaintKernel.cpp
-        runtime/renderer/api/UiPaintFrameUpload.cpp
-        runtime/renderer/api/RenderDeviceIncarnation.cpp
-        runtime/renderer/api/LightCulling.cpp
-        runtime/renderer/api/RenderGraphMaterialRaster.cpp
-        runtime/renderer/api/ClusteredLightGrid.cpp
-        runtime/renderer/api/ClusteredLightGridGeometry.cpp
-        runtime/renderer/api/ClusteredLightGridMapping.cpp
-        runtime/renderer/api/ClusteredLightPreparation.cpp
-        runtime/renderer/api/LightCullingKernel.cpp
-        runtime/renderer/api/LightFrameLayout.cpp
-        runtime/renderer/api/LightFrameUpload.cpp
-        runtime/renderer/api/GpuParticleLayout.cpp
-        runtime/renderer/api/VfxGpuGraphWorkload.cpp
-        runtime/renderer/api/VfxGpuBackend.cpp
-        runtime/renderer/api/VfxGpuSimulation.cpp
-        runtime/renderer/api/VfxGpuArithmetic.cpp
-        runtime/renderer/api/VfxGpuParameters.cpp
-        runtime/renderer/api/VfxGpuKernel.cpp
-        runtime/renderer/api/VfxGpuSimulationInternal.h
-        runtime/renderer/api/RenderGraphLifetimeErrors.cpp
-        runtime/renderer/api/RenderGraphValidation.cpp
-        runtime/renderer/api/RenderResourceDescriptorErrors.cpp
-        runtime/renderer/api/RenderResourceAdmission.cpp
-        runtime/renderer/api/RenderResourceDescriptors.cpp
-        runtime/renderer/api/ShaderArtifact.cpp
-        runtime/renderer/api/RenderShaderResources.cpp
-        runtime/renderer/api/RenderShaderResourceErrors.cpp
-        runtime/renderer/api/ShaderCompilerPipeline.cpp
-        runtime/renderer/api/ShaderCompilerArtifactKey.cpp
-        runtime/renderer/api/ShaderReflectionArtifact.cpp
-        runtime/renderer/api/ShaderReflectionArtifactValues.cpp
-        runtime/renderer/api/ShaderCompilerPipelineErrors.cpp
-        runtime/renderer/api/ShaderManifest.cpp
-        runtime/renderer/api/ShaderManifestErrors.cpp
-        runtime/renderer/api/ShaderPermutation.cpp
-        runtime/renderer/api/ShaderPermutationErrors.cpp
-        runtime/renderer/api/ShaderReflection.cpp
-        runtime/renderer/api/ShaderReflectionErrors.cpp
-        runtime/renderer/api/StandardPbrMaterial.cpp
-        runtime/renderer/api/StandardPbrMaterialErrors.cpp
-        runtime/renderer/api/StandardPbrPassPlan.cpp
-        runtime/renderer/api/StandardPbrPassPlanErrors.cpp
-        runtime/renderer/api/TemporalHistory.cpp
-        runtime/renderer/api/TemporalHistoryErrors.cpp
-)
+add_library(HoroRenderApi STATIC ${HORO_RENDER_API_SOURCES})
 add_library(HoroEngine::RenderApi ALIAS HoroRenderApi)
 
 target_compile_features(HoroRenderApi PUBLIC cxx_std_20)
@@ -3060,10 +2922,7 @@ target_include_directories(HoroEditorViewportShaderRecipeInternal PUBLIC
 target_link_libraries(HoroEditorViewportShaderRecipeInternal PUBLIC HoroEngine::RenderApi)
 
 
-add_library(HoroRenderBackendRegistry STATIC
-        runtime/renderer/backend_registry/RenderBackendRegistry.cpp
-        runtime/renderer/backend_registry/RenderBackendRegistryErrors.cpp
-)
+add_library(HoroRenderBackendRegistry STATIC ${HORO_RENDER_REGISTRY_SOURCES})
 add_library(HoroEngine::RenderBackendRegistry ALIAS HoroRenderBackendRegistry)
 
 target_compile_features(HoroRenderBackendRegistry PUBLIC cxx_std_20)
@@ -3072,6 +2931,9 @@ target_include_directories(HoroRenderBackendRegistry
         ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(HoroRenderBackendRegistry PUBLIC HoroEngine::RenderApi)
+
+include("${PROJECT_SOURCE_DIR}/cmake/HoroAndroidPresentationTargets.cmake")
+horo_add_android_presentation_targets()
 
 # Dedicated non-installed external-allocation handoff; native source subclasses stay in
 # selected backend adapters and no repository-wide source include root is exported.
