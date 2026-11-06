@@ -34,11 +34,13 @@ preparation receipt. Native adapters must validate their private preparation,
 buffer capacities and current generations before encoding. GL 4.1 and Null reject
 these operations explicitly.
 
-HORO-1731 remains in progress. Metal and Vulkan implement the explicitly prepared
-initial-particle slice; neither implements a complete authored GPU emitter. Vulkan
-has been exercised through its real Linux loader and Mesa lavapipe CPU driver.
-D3D12 native compute/direct-draw/readback integration remains open. Offline
-artifacts and these backend qualifications do not establish all-backend ticket completion.
+HORO-1731 covers typed compute dispatch, shared force/integration semantics and
+asset-declared bounded readback on the currently implemented compute-capable
+renderer providers. Metal and Vulkan implement and execute that contract. The
+current D3D12 foundation provides resource/copy commands, but no compute-dispatch
+renderer provider; creating that provider is separate roadmap work. OpenGL 4.1
+and Null reject GPU simulation explicitly. This does not claim a complete authored
+GPU emitter or physical-GPU/performance qualification on every platform.
 
 ## Supported initial-particle slice
 
@@ -74,11 +76,17 @@ runtime preparation; malformed or incompatible declarations fail explicitly.
 
 `GpuParticleSimulatorCreateInfo::readback` was removed deliberately. Migrate callers
 by assigning the policy to the particle source before creating its validated
-`ParticleSystemDescriptor` and cooking it. `GpuParticleSimulator::Create` copies
-`descriptor.Data().gpuReadback` into its immutable renderer preparation. Hosts retain
-identity, seed and budget composition, but cannot enable observations or change the
-cooked policy through create options. Custom-float observation remains unsupported
-in the current prepared-particle schema.
+`ParticleSystemDescriptor` and cooking it. `BuildParticleSystemCookPlan` returns an
+immutable `ParticleCookAdmission` only after material and tier checks succeed.
+`ParticleCookValidation::admission` replaces the mutable plan-only result; inspect
+its `Plan()` for the summary and `Descriptor()` for the exact owned source.
+`GpuParticleSimulator::Create` requires that admission and copies its descriptor's
+policy into immutable renderer preparation. The source-only overload is removed;
+a caller cannot construct an admission or replace its source/plan independently.
+Hosts retain identity, seed and budget composition, but cannot enable observations
+or change cooked policy through create options. Custom-float observation remains
+unsupported in the current prepared-particle schema. This is subordinate particle
+unit cook admission; it does not add a persisted top-level compiled-effect loader.
 
 Enabled GPU readback is incompatible with an authored `RequireCPU` unit. Actual
 `CpuParticleSimulator` and legacy `CpuParticleSpawnPipeline` creation also reject it
@@ -90,8 +98,9 @@ compatible source with readback disabled and its own admission, as described by
 
 This migration does not change the renderer's existing readback admission, cadence,
 request queue, cancellation or result lifetime. It adds no synchronous readback and
-no gameplay authority. D3D12 integration and complete GPU emitter stages remain open;
-this component does not complete HORO-1731.
+no gameplay authority. Together with the existing native force/integration pipeline,
+this supplies HORO-1731's asset-declared readback requirement. D3D12 provider creation
+and complete authored GPU emitter stages remain separate, unimplemented roadmap work.
 
 ## Mixed scene ownership and immutable extraction
 

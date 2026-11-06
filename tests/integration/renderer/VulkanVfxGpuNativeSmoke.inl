@@ -125,6 +125,23 @@ namespace VulkanVfxGpuSmoke {
         CHECK(actual.maximumPendingResults == source.maximumPendingResults);
     }
 
+    /** @brief Obtains genuine cook admission for this exact validated fixture source and declared fixture dependency.
+     * @details Available asserts only this fixture's authored material identity; it is not an AssetRegistry snapshot
+     * or native material qualification. Native GPU program/resource evidence is exercised independently below.
+     */
+    ParticleCookAdmission CookAdmission(const ParticleSystemDescriptor &source) {
+        const auto profile = Value(GetParticleCookProfile(ParticleCookTier::Compact));
+        const ParticleMaterialEvidence material{source.Data().material, ParticleMaterialAvailability::Available};
+        auto cooked = Value(BuildParticleSystemCookPlan(source, profile, material, Vfx::Tests::ParticleErrorRegistry(),
+                                                        "native-vfx-prepared-particles-fixture"));
+        REQUIRE(cooked.Accepted());
+        REQUIRE(cooked.admission.has_value());
+        CHECK(cooked.admission->Descriptor().Data() == source.Data());
+        CHECK(cooked.admission->Plan().material == source.Data().material);
+        CheckReadbackPolicy(cooked.admission->Plan().gpuReadback, source.Data().gpuReadback);
+        return std::move(*cooked.admission);
+    }
+
     const std::array
         Forces{CpuParticleForceModule{.kind = CpuParticleForceKind::Gravity, .vector = {0, -.1F, 0}},
                CpuParticleForceModule{.kind = CpuParticleForceKind::Wind, .vector = {1, 0, 0}, .strength = .1F},
@@ -249,7 +266,8 @@ namespace VulkanVfxGpuSmoke {
                 policy{true, 1,     VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
                        1,    Count, Count * VfxGpuObservationWords::Bytes,     1};
             const auto source = Source(SimulationPreference::RequireGPU, policy);
-            auto logical = Value(GpuParticleSimulator::Create(source, info));
+            const auto admission = CookAdmission(source);
+            auto logical = Value(GpuParticleSimulator::Create(admission, info));
             CheckReadbackPolicy(logical->Preparation().descriptor.readback, source.Data().gpuReadback);
             PrepareNative(*logical);
             CheckReadbackPolicy(receipt_.Descriptor().readback, source.Data().gpuReadback);

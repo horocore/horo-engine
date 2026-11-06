@@ -13,10 +13,16 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace Horo::Vfx {
+    static_assert(!std::is_default_constructible_v<ParticleCookAdmission>);
+    static_assert(!std::is_constructible_v<ParticleCookAdmission, ParticleSystemDescriptor, ParticleCookPlan>);
+    static_assert(std::is_same_v<decltype(std::declval<const ParticleCookAdmission &>().Descriptor()), const ParticleSystemDescriptor &>);
+    static_assert(std::is_same_v<decltype(std::declval<const ParticleCookAdmission &>().Plan()), const ParticleCookPlan &>);
+
     namespace {
         [[nodiscard]] Assets::AssetId Material(const std::string_view text = "00112233-4455-6677-8899-aabbccddeeff") {
             return Tests::ParticleMaterial(text);
@@ -261,7 +267,7 @@ namespace Horo::Vfx {
         REQUIRE(cook.HasValue());
         REQUIRE_FALSE(cook.Value().Accepted());
         REQUIRE(cook.Value().diagnostics.Size() == 2);
-        REQUIRE_FALSE(cook.Value().plan.has_value());
+        REQUIRE_FALSE(cook.Value().admission.has_value());
     }
 
     TEST_CASE("Particle cook admits stable material identity and canonical tier", "[unit][vfx][particle-descriptor]") {
@@ -275,8 +281,8 @@ namespace Horo::Vfx {
         REQUIRE(cook.HasValue());
         REQUIRE(cook.Value().Accepted());
         REQUIRE(cook.Value().diagnostics.Empty());
-        REQUIRE(cook.Value().plan->material == Material());
-        REQUIRE(cook.Value().plan->emitter == Emitter());
+        REQUIRE(cook.Value().admission->Plan().material == Material());
+        REQUIRE(cook.Value().admission->Plan().emitter == Emitter());
     }
 
     TEST_CASE("Particle validation fails closed when required diagnostics are not registered", "[unit][vfx][particle-descriptor]") {
@@ -313,8 +319,9 @@ namespace Horo::Vfx {
                                                         {Material(), ParticleMaterialAvailability::Available}, Registry());
         REQUIRE(cooked.HasValue());
         REQUIRE(cooked.Value().Accepted());
-        CHECK(cooked.Value().plan->gpuReadback == expected);
-        CHECK(cooked.Value().plan->maximumParticles == parsed.Value().maximumParticles);
+        CHECK(cooked.Value().admission->Plan().gpuReadback == expected);
+        CHECK(cooked.Value().admission->Descriptor().Data().gpuReadback == expected);
+        CHECK(cooked.Value().admission->Plan().maximumParticles == parsed.Value().maximumParticles);
     }
 
     TEST_CASE("Particle readback source decodes every declared purpose and requirement without substitution",
@@ -457,7 +464,7 @@ namespace Horo::Vfx {
                                                         {Material(), ParticleMaterialAvailability::Available}, Registry());
         REQUIRE(cooked.HasValue());
         CHECK_FALSE(cooked.Value().Accepted());
-        CHECK_FALSE(cooked.Value().plan.has_value());
+        CHECK_FALSE(cooked.Value().admission.has_value());
         CHECK(admitted.Value().descriptor->Data().gpuReadback == ReadbackPolicy());
     }
 
@@ -488,6 +495,152 @@ namespace Horo::Vfx {
                                                         {Material(), ParticleMaterialAvailability::Available}, Registry());
         REQUIRE(cooked.HasValue());
         REQUIRE(cooked.Value().Accepted());
-        CHECK(cooked.Value().plan->gpuReadback == data.gpuReadback);
+        CHECK(cooked.Value().admission->Plan().gpuReadback == data.gpuReadback);
+        CHECK(cooked.Value().admission->Descriptor().Data().gpuReadback == data.gpuReadback);
+    }
+
+    TEST_CASE("Particle cook admission owns its source and plan after all caller storage changes",
+              "[unit][vfx][particle-descriptor][cook-admission]") {
+        auto source = ValidData();
+        source.gpuReadback = ReadbackPolicy();
+        const auto expected = source;
+        auto imported = ValidateParticleSystemDescriptor(source, Registry());
+        REQUIRE(imported.HasValue());
+        REQUIRE(imported.Value().Accepted());
+        auto importedPayload = std::move(imported).Value();
+        auto profile = GetParticleCookProfile(ParticleCookTier::Standard).Value();
+        const auto expectedProfile = profile;
+        ParticleMaterialEvidence material{source.material, ParticleMaterialAvailability::Available};
+        auto cooked = BuildParticleSystemCookPlan(*importedPayload.descriptor, profile, material, Registry());
+        REQUIRE(cooked.HasValue());
+        REQUIRE(cooked.Value().Accepted());
+        auto cookedPayload = std::move(cooked).Value();
+        const auto retained = *cookedPayload.admission;
+        auto detachedPlan = retained.Plan();
+        detachedPlan.gpuReadback = {};
+        detachedPlan.maximumParticles = 0;
+        source.gpuReadback = {};
+        source.maximumParticles = 1;
+        importedPayload.descriptor = Tests::ParticleDescriptor(source);
+        profile.maximumParticles = 1;
+        material.availability = ParticleMaterialAvailability::Missing;
+        cookedPayload.admission.reset();
+        CHECK(retained.Descriptor().Data() == expected);
+        CHECK(retained.Plan().profile == expectedProfile);
+        CHECK(retained.Plan().material == expected.material);
+        CHECK(retained.Plan().emitter == expected.emitter);
+        CHECK(retained.Plan().maximumParticles == expected.maximumParticles);
+        CHECK(retained.Plan().maximumSpawnRate == expected.spawnRate.maximum);
+        const auto &policy = retained.Plan().gpuReadback;
+        CHECK(policy.enabled == expected.gpuReadback.enabled);
+        CHECK(policy.schemaVersion == expected.gpuReadback.schemaVersion);
+        CHECK(policy.purpose == expected.gpuReadback.purpose);
+        CHECK(policy.requirement == expected.gpuReadback.requirement);
+        CHECK(policy.cadenceSteps == expected.gpuReadback.cadenceSteps);
+        CHECK(policy.maximumRecords == expected.gpuReadback.maximumRecords);
+        CHECK(policy.maximumBytesPerResult == expected.gpuReadback.maximumBytesPerResult);
+        CHECK(policy.maximumPendingResults == expected.gpuReadback.maximumPendingResults);
+    }
+
+    TEST_CASE("Every canonical particle cook tier admits its exact limits and preserves tighter project ceilings",
+              "[unit][vfx][particle-descriptor][cook-admission]") {
+        const auto tier = GENERATE(ParticleCookTier::Compact, ParticleCookTier::Standard, ParticleCookTier::Large);
+        const bool lowered = GENERATE(false, true);
+        auto profile = GetParticleCookProfile(tier).Value();
+        if (lowered) {
+            profile.maximumParticles /= 2;
+            profile.maximumSpawnRate /= 2;
+        }
+        auto source = ValidData();
+        source.maximumParticles = profile.maximumParticles;
+        source.spawnRate = {0, profile.maximumSpawnRate};
+        const auto imported = ValidateParticleSystemDescriptor(source, Registry());
+        REQUIRE(imported.HasValue());
+        REQUIRE(imported.Value().Accepted());
+        const auto cooked = BuildParticleSystemCookPlan(*imported.Value().descriptor, profile,
+                                                        {source.material, ParticleMaterialAvailability::Available}, Registry());
+        REQUIRE(cooked.HasValue());
+        REQUIRE(cooked.Value().Accepted());
+        CHECK(cooked.Value().admission->Plan().profile == profile);
+        CHECK(cooked.Value().admission->Descriptor().Data() == source);
+    }
+
+    TEST_CASE("Particle cook admission rejects forged tier ceilings one beyond canonical limits",
+              "[unit][vfx][particle-descriptor][cook-admission]") {
+        const auto tier = GENERATE(ParticleCookTier::Compact, ParticleCookTier::Standard, ParticleCookTier::Large);
+        const bool particles = GENERATE(false, true);
+        auto profile = GetParticleCookProfile(tier).Value();
+        if (particles)
+            ++profile.maximumParticles;
+        else
+            ++profile.maximumSpawnRate;
+        const auto source = Tests::ParticleDescriptor(ValidData());
+        const auto cooked =
+            BuildParticleSystemCookPlan(source, profile, {source.Data().material, ParticleMaterialAvailability::Available}, Registry());
+        REQUIRE(cooked.HasValue());
+        CHECK_FALSE(cooked.Value().Accepted());
+        CHECK_FALSE(cooked.Value().admission.has_value());
+        REQUIRE(cooked.Value().diagnostics.Size() == 1);
+        CHECK(cooked.Value().diagnostics.Diagnostics().front().code.Value() == VfxErrors::ParticleDescriptorMalformed.code.Value());
+    }
+
+    TEST_CASE("Particle source one beyond selected cook capacity or spawn ceiling never receives admission",
+              "[unit][vfx][particle-descriptor][cook-admission]") {
+        const auto tier = GENERATE(ParticleCookTier::Compact, ParticleCookTier::Standard);
+        const bool particles = GENERATE(false, true);
+        const auto profile = GetParticleCookProfile(tier).Value();
+        auto data = ValidData();
+        data.maximumParticles = profile.maximumParticles;
+        data.spawnRate = {0, profile.maximumSpawnRate};
+        if (particles)
+            ++data.maximumParticles;
+        else
+            ++data.spawnRate.maximum;
+        const auto imported = ValidateParticleSystemDescriptor(data, Registry());
+        REQUIRE(imported.HasValue());
+        REQUIRE(imported.Value().Accepted());
+        const auto cooked = BuildParticleSystemCookPlan(*imported.Value().descriptor, profile,
+                                                        {data.material, ParticleMaterialAvailability::Available}, Registry());
+        REQUIRE(cooked.HasValue());
+        CHECK_FALSE(cooked.Value().Accepted());
+        CHECK_FALSE(cooked.Value().admission.has_value());
+        REQUIRE(cooked.Value().diagnostics.Size() == 1);
+        CHECK(cooked.Value().diagnostics.Diagnostics().front().code.Value() == VfxErrors::ParticleCookTierExceeded.code.Value());
+    }
+
+    TEST_CASE("Exact available material evidence is mandatory for immutable particle cook admission",
+              "[unit][vfx][particle-descriptor][cook-admission]") {
+        const auto availability = GENERATE(ParticleMaterialAvailability::Missing, ParticleMaterialAvailability::TypeMismatch,
+                                           ParticleMaterialAvailability::Unloadable, ParticleMaterialAvailability::Count,
+                                           static_cast<ParticleMaterialAvailability>(5), static_cast<ParticleMaterialAvailability>(255));
+        const auto source = Tests::ParticleDescriptor(ValidData());
+        const auto profile = GetParticleCookProfile(ParticleCookTier::Standard).Value();
+        const auto cooked = BuildParticleSystemCookPlan(source, profile, {source.Data().material, availability}, Registry());
+        REQUIRE(cooked.HasValue());
+        CHECK_FALSE(cooked.Value().Accepted());
+        CHECK_FALSE(cooked.Value().admission.has_value());
+        CHECK(cooked.Value().diagnostics.Size() == 1);
+        if (availability >= ParticleMaterialAvailability::Count)
+            CHECK(cooked.Value().diagnostics.Diagnostics().front().code.Value() == VfxErrors::ParticleDescriptorMalformed.code.Value());
+        const auto wrong =
+            BuildParticleSystemCookPlan(source, profile,
+                                        {Material("10112233-4455-6677-8899-aabbccddeeff"), ParticleMaterialAvailability::Available},
+                                        Registry());
+        REQUIRE(wrong.HasValue());
+        CHECK_FALSE(wrong.Value().admission.has_value());
+        REQUIRE(wrong.Value().diagnostics.Size() == 1);
+        CHECK(wrong.Value().diagnostics.Diagnostics().front().code.Value() == VfxErrors::ParticleMaterialMissing.code.Value());
+    }
+
+    TEST_CASE("Particle cook cannot issue an admission when its rejection diagnostics are unavailable",
+              "[unit][vfx][particle-descriptor][cook-admission]") {
+        ModuleDescriptor emptyModule{.id = {"horo.empty"}, .version = {1, 0, 0}};
+        const auto emptyRegistry = BuildErrorCodeRegistry(std::span{&emptyModule, 1});
+        REQUIRE(emptyRegistry.HasValue());
+        const auto source = Tests::ParticleDescriptor(ValidData());
+        const auto profile = GetParticleCookProfile(ParticleCookTier::Standard).Value();
+        const auto cooked = BuildParticleSystemCookPlan(source, profile, {source.Data().material, ParticleMaterialAvailability::Missing},
+                                                        emptyRegistry.Value());
+        REQUIRE(cooked.HasError());
     }
 }  // namespace Horo::Vfx

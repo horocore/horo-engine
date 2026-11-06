@@ -245,10 +245,36 @@ namespace Horo::Vfx {
         constexpr auto operator<=>(const ParticleCookPlan &) const noexcept = default;
     };
 
-    /** @brief Full-pass cook validation outcome with a plan only when every requirement is satisfied. */
+    struct ParticleCookValidation;
+
+    /** @brief Immutable subordinate particle-unit cook admission, owning the exact validated source and its admitted plan.
+     * @details Only successful full-pass cook validation can issue this value. It is not a serialized asset, native capability,
+     * or top-level compiled effect. Runtime consumers borrow both values from the same admission rather than accepting a mutable plan.
+     */
+    class ParticleCookAdmission final {
+    public:
+        /** @brief Returns the exact source captured by successful cook validation. @return Borrow owned for this admission's lifetime. */
+        [[nodiscard]] const ParticleSystemDescriptor &Descriptor() const noexcept;
+        /** @brief Returns the exact tier, material, capacity and observation policy admitted with that source.
+         * @return Immutable plan owned for this admission's lifetime. */
+        [[nodiscard]] const ParticleCookPlan &Plan() const noexcept;
+
+    private:
+        /** @brief Captures one fully validated source/plan pair without retaining caller storage.
+         * @param descriptor Exact source checked by the cook. @param plan Exact successful cook result. */
+        ParticleCookAdmission(ParticleSystemDescriptor descriptor, ParticleCookPlan plan) noexcept;
+        ParticleSystemDescriptor descriptor_;
+        ParticleCookPlan plan_;
+
+        friend Result<ParticleCookValidation> BuildParticleSystemCookPlan(const ParticleSystemDescriptor &, const ParticleCookProfile &,
+                                                                          const ParticleMaterialEvidence &, ErrorCodeRegistry,
+                                                                          const std::string &);
+    };
+
+    /** @brief Full-pass cook validation outcome with an immutable admission only when every requirement is satisfied. */
     struct ParticleCookValidation final {
-        ValidationResult diagnostics;         /**< Deterministically ordered complete cook findings. */
-        std::optional<ParticleCookPlan> plan; /**< Present only when no error finding exists. */
+        ValidationResult diagnostics;                   /**< Deterministically ordered complete cook findings. */
+        std::optional<ParticleCookAdmission> admission; /**< Owned source/plan pair present only when no error finding exists. */
 
         /** @brief Returns whether the candidate was admitted. @return True only when validation has no error findings. */
         [[nodiscard]] bool Accepted() const noexcept;
@@ -265,7 +291,7 @@ namespace Horo::Vfx {
      * @param material Exact dependency evidence for the descriptor's material identity.
      * @param registry Immutable registry containing every VFX validation descriptor.
      * @param sourceName Non-empty stable source context recorded on every finding.
-     * @return All cook findings and an admitted plan, or an operation failure when diagnostics cannot be produced.
+     * @return All cook findings and an immutable source/plan admission, or an operation failure when diagnostics cannot be produced.
      */
     [[nodiscard]] Result<ParticleCookValidation> BuildParticleSystemCookPlan(const ParticleSystemDescriptor &descriptor,
                                                                              const ParticleCookProfile &profile,

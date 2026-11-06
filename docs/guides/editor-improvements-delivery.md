@@ -154,28 +154,42 @@ Old assets with the field omitted remain disabled. See the
 ### Local validation
 
 - Mac Debug owning libraries, public-header consumers and Metal fixture compiled.
-  VFX API 149, GPU preparation 6, logical GPU protocol 14 and renderer frontend 307
+  VFX API 155, GPU preparation 7, logical GPU protocol 14 and renderer frontend 307
   JUnit cases passed with no failures or skips.
 - Actual native Metal execution passed both selected authored scenarios, represented
-  by 5 JUnit cases and 981 assertions, with no failures or skips. The asset policy
+  by 5 JUnit cases and 1,041 assertions, with no failures or skips. The asset policy
   reached real compute/draw preparation and bounded observations; disabled readback,
   retained-result pressure, cancellation and timeout behavior remained covered.
 - Linux ARM64 GCC 15 Debug configured and built the owning targets with Vulkan
-  enabled and GUI/live UI disabled. Fresh VFX API 149, GPU preparation 6 and logical
-  GPU protocol 14 JUnit cases passed with no failures or skips.
+  enabled and GUI/live UI disabled. Fresh VFX API 155, GPU preparation 7 and logical
+  GPU protocol 14 JUnit cases passed with no failures or skips. The Linux renderer
+  frontend suite also passed 307 cases with no failures or skips.
 - The selected genuine Vulkan compute/draw/parity and partial-submit cases passed
-  under the validation layer: 2 JUnit cases, 1,233 assertions, no failures or skips.
+  under the validation layer: 2 JUnit cases, 1,248 assertions, no failures or skips.
   This uses software Vulkan and establishes functional behavior, not physical GPU
   performance. Shader source and its locked cooked package were unchanged.
-- Clang-format 19 accepted the 17 changed C++ files. Local Lizard review measured
-  54 new or changed functions with maximum cyclomatic complexity 9. These metrics
-  do not establish complete Codacy or Sonar clearance.
+- The initial asset-policy batch formatted 17 C++ files and measured 54 new or
+  changed functions with maximum cyclomatic complexity 9. The final cook-admission
+  follow-up formatted 14 C++ files and measured 43 new or changed functions with
+  maximum complexity 8. These metrics do not establish complete Codacy or Sonar
+  clearance.
+- GPU runtime creation now requires the immutable cook admission. Regression cases
+  cover captured source/plan lifetime, exact and lowered tier limits, forged tier
+  ceilings, failed material evidence including unknown enum values, missing
+  diagnostic registration and runtime capacity escalation. Public consumers compile
+  assertions that source-only and mutable-plan GPU creation are unavailable.
 
 ### Remaining acceptance
 
-HORO-1731 remains In Progress. Prepared-particle execution and authored observation
-policy are qualified components; the full authored GPU emitter stages and native
-D3D12 provider/Windows qualification remain incomplete. No physical Vulkan device,
+The exact Jira and GitHub scope requires shared force/integration compute, typed
+asset-opt-in readback and renderer-neutral VFX contracts. Those requirements are
+implemented and locally qualified on the currently available Metal and Vulkan
+compute providers. The D3D12 foundation has no compute-dispatch renderer provider;
+full authored spawn/over-life emitter stages and that future provider are broader
+roadmap work, not extra acceptance criteria invented for this ticket.
+
+This delivery is suitable for ticket review. No physical Vulkan device,
 performance budget, full Editor relink/runtime, hosted gate, coverage or
-vulnerability-clearance claim is made for this component. Local Sonar is waived;
-Codacy is optional under the current user scope.
+vulnerability-clearance claim is made. Local Sonar is waived; Codacy is optional
+under the current user scope. Full authored GPU emitter and future D3D12 behavior
+remain unimplemented; the limitations above are preserved.

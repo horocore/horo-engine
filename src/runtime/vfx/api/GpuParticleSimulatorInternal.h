@@ -29,6 +29,6 @@ namespace Horo::Vfx::Detail {
 }  // namespace Horo::Vfx::Detail
 
 namespace Horo::Vfx::GpuParticleDetail {
-    [[nodiscard]] Result<std::unique_ptr<Detail::GpuParticleSimulatorState>> PrepareGpuState(const ParticleSystemDescriptor &descriptor,
+    [[nodiscard]] Result<std::unique_ptr<Detail::GpuParticleSimulatorState>> PrepareGpuState(const ParticleCookAdmission &admission,
                                                                                              const GpuParticleSimulatorCreateInfo &info);
 }

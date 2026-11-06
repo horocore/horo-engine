@@ -103,11 +103,12 @@ namespace Horo::Vfx {
         GpuParticleSimulator &operator=(const GpuParticleSimulator &) = delete;
         ~GpuParticleSimulator();
         /** @brief Validates supported authored stages and proves a bounded finite arithmetic envelope before activation.
-         * @param descriptor Validated source descriptor; unsupported authored requirements fail explicitly.
-         * @param info Captured identities/resolution/seeds/forces/budgets; observation policy belongs to descriptor.Data().gpuReadback.
+         * @param admission Immutable successful material/tier cook admission owning the exact validated source, plan bounds and observation
+         * policy.
+         * @param info Captured identities/resolution/seeds/forces/budgets; observation policy belongs to the admitted cook result.
          * @return Cold prepared owner or typed failure, with no native allocation or dispatch.
          */
-        [[nodiscard]] static Result<std::unique_ptr<GpuParticleSimulator>> Create(const ParticleSystemDescriptor &descriptor,
+        [[nodiscard]] static Result<std::unique_ptr<GpuParticleSimulator>> Create(const ParticleCookAdmission &admission,
                                                                                   const GpuParticleSimulatorCreateInfo &info);
         /** @brief Borrows immutable cold initialization for the renderer's synchronous preparation copy. */
         [[nodiscard]] const Render::VfxGpuSimulationPreparation &Preparation() const noexcept;

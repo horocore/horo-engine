@@ -396,13 +396,22 @@ namespace Horo::Vfx {
             return std::move(findings).Finish();
         }
 
+        /** @brief Allows explicit project lowering while rejecting ceilings above the one canonical selected tier. */
+        [[nodiscard]] bool ValidCookProfile(const ParticleCookProfile &profile) {
+            if (profile.tier >= ParticleCookTier::Count || profile.maximumParticles == 0 || !std::isfinite(profile.maximumSpawnRate) ||
+                profile.maximumSpawnRate <= 0.0)
+                return false;
+            const auto canonical = GetParticleCookProfile(profile.tier);
+            return canonical.HasValue() && profile.maximumParticles <= canonical.Value().maximumParticles &&
+                   profile.maximumSpawnRate <= canonical.Value().maximumSpawnRate;
+        }
+
+        /** @brief Retains the complete ordered tier/material findings before any immutable admission is issued. */
         [[nodiscard]] std::optional<Error> AddCookFindings(ValidationResultBuilder &builder, const ParticleSystemDescriptorData &data,
                                                            const ParticleCookProfile &profile, const ParticleMaterialEvidence &material,
                                                            const std::string &sourceName) {
             FindingCollector findings{builder, sourceName};
-            findings.AddIf(profile.tier >= ParticleCookTier::Count || profile.maximumParticles == 0 ||
-                               !std::isfinite(profile.maximumSpawnRate) || profile.maximumSpawnRate <= 0.0,
-                           VfxErrors::ParticleDescriptorMalformed, "Particle cook profile is malformed.");
+            findings.AddIf(!ValidCookProfile(profile), VfxErrors::ParticleDescriptorMalformed, "Particle cook profile is malformed.");
             findings.AddIf(data.maximumParticles > profile.maximumParticles || data.spawnRate.maximum > profile.maximumSpawnRate,
                            VfxErrors::ParticleCookTierExceeded, "Particle count or spawn rate exceeds the selected cook tier.");
             findings.AddIf(material.material != data.material, VfxErrors::ParticleMaterialMissing,
@@ -423,6 +432,7 @@ namespace Horo::Vfx {
                     materialFailure = &VfxErrors::ParticleMaterialUnloadable;
                     break;
                 case Count:
+                default:
                     materialFailure = &VfxErrors::ParticleDescriptorMalformed;
                     break;
             }
@@ -490,9 +500,23 @@ namespace Horo::Vfx {
         return Result<ParticleDescriptorValidation>::Success({std::move(diagnostics), std::move(descriptor)});
     }
 
+    /** @copydoc ParticleCookAdmission::ParticleCookAdmission */
+    ParticleCookAdmission::ParticleCookAdmission(ParticleSystemDescriptor descriptor, ParticleCookPlan plan) noexcept
+        : descriptor_(std::move(descriptor)), plan_(std::move(plan)) {}
+
+    /** @copydoc ParticleCookAdmission::Descriptor */
+    const ParticleSystemDescriptor &ParticleCookAdmission::Descriptor() const noexcept {
+        return descriptor_;
+    }
+
+    /** @copydoc ParticleCookAdmission::Plan */
+    const ParticleCookPlan &ParticleCookAdmission::Plan() const noexcept {
+        return plan_;
+    }
+
     /** @copydoc ParticleCookValidation::Accepted */
     bool ParticleCookValidation::Accepted() const noexcept {
-        return plan.has_value() && !diagnostics.HasErrors();
+        return admission.has_value() && !diagnostics.HasErrors();
     }
 
     /** @copydoc GetParticleCookProfile */
@@ -527,15 +551,16 @@ namespace Horo::Vfx {
             return Result<ParticleCookValidation>::Failure(completed.ErrorValue());
 
         ValidationResult diagnostics = std::move(completed).Value();
-        std::optional<ParticleCookPlan> plan;
+        std::optional<ParticleCookAdmission> admission;
         if (!diagnostics.HasErrors()) {
-            plan.emplace(ParticleCookPlan{.profile = profile,
-                                          .emitter = descriptor.Data().emitter,
-                                          .material = descriptor.Data().material,
-                                          .maximumParticles = descriptor.Data().maximumParticles,
-                                          .maximumSpawnRate = descriptor.Data().spawnRate.maximum,
-                                          .gpuReadback = descriptor.Data().gpuReadback});
+            const ParticleCookPlan plan{.profile = profile,
+                                        .emitter = descriptor.Data().emitter,
+                                        .material = descriptor.Data().material,
+                                        .maximumParticles = descriptor.Data().maximumParticles,
+                                        .maximumSpawnRate = descriptor.Data().spawnRate.maximum,
+                                        .gpuReadback = descriptor.Data().gpuReadback};
+            admission.emplace(ParticleCookAdmission{descriptor, plan});
         }
-        return Result<ParticleCookValidation>::Success({std::move(diagnostics), std::move(plan)});
+        return Result<ParticleCookValidation>::Success({std::move(diagnostics), std::move(admission)});
     }
 }  // namespace Horo::Vfx

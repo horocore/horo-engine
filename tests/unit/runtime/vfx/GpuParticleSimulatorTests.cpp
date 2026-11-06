@@ -55,7 +55,7 @@ TEST_CASE("GPU prepared unit rejects every unsupported authored feature before n
     SECTION("CPU requirement cannot be relabeled GPU") {
         source.simulationPreference = SimulationPreference::RequireCPU;
     }
-    Horo::Tests::RequireActionableError(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(source), info),
+    Horo::Tests::RequireActionableError(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(source), info),
                                         VfxErrors::GpuSimulationUnsupported);
 }
 
@@ -63,7 +63,7 @@ TEST_CASE("GPU logical payload copies cannot exceed the shared selected memory e
     Vfx::Tests::GpuSeedFixture input;
     auto info = input.Info();
     info.resolution.selectedMemoryBytes = info.maximumRetainedBytes;
-    Horo::Tests::RequireActionableError(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(input.Source()), info),
+    Horo::Tests::RequireActionableError(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(input.Source()), info),
                                         VfxErrors::GpuSimulationInvalid);
 }
 
@@ -87,8 +87,8 @@ TEST_CASE("GPU readback policy comes from the immutable authored descriptor", "[
     source.gpuReadback =
         {true, 1, Render::VfxGpuReadbackPurpose::CosmeticObservation, Render::VfxGpuReadbackRequirement::RequiredForVisualEffect, 3, 2,
          1024, 4};
-    const auto descriptor = Vfx::Tests::ParticleDescriptor(source);
-    auto result = GpuParticleSimulator::Create(descriptor, input.Info());
+    const auto admission = Vfx::Tests::CookGpuParticleSource(source);
+    auto result = GpuParticleSimulator::Create(admission, input.Info());
     REQUIRE(result.HasValue());
     source.gpuReadback = {};
     const auto &policy = result.Value()->Preparation().descriptor.readback;
@@ -111,6 +111,18 @@ TEST_CASE("GPU authored readback cannot observe unsupported custom streams", "[v
     auto info = input.Info();
     info.initial.attributes.customFloatStreamCount = 1;
     info.initial.attributes.customFloats[0] = input.floats[0];
-    Horo::Tests::RequireActionableError(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(source), info),
+    Horo::Tests::RequireActionableError(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(source), info),
                                         VfxErrors::GpuSimulationUnsupported);
+}
+
+TEST_CASE("GPU runtime capacity cannot exceed its immutable cook admission", "[vfx][gpu-logical][cook]") {
+    Vfx::Tests::GpuSeedFixture input;
+    const auto admission = Vfx::Tests::CookGpuParticleSource(input.Source());
+    REQUIRE(admission.Plan().maximumParticles == 2);
+    auto info = input.Info();
+    info.resolution.selectedCount = 3;
+    Horo::Tests::RequireActionableError(GpuParticleSimulator::Create(admission, info), VfxErrors::GpuSimulationInvalid);
+    CHECK(admission.Plan().maximumParticles == 2);
+    CHECK(admission.Descriptor().Data().maximumParticles == 2);
+    CHECK(GpuParticleSimulator::Create(admission, input.Info()).HasValue());
 }

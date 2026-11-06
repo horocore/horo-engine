@@ -4,8 +4,22 @@
 #include "support/VfxTestSupport.h"
 
 #include <array>
+#include <utility>
 
 namespace Horo::Vfx::Tests {
+    /** @brief Produces a genuine cook admission using explicitly available fixture material evidence and the canonical compact tier. */
+    inline ParticleCookAdmission CookGpuParticleSource(ParticleSystemDescriptorData source) {
+        const auto descriptor = ParticleDescriptor(std::move(source));
+        const auto profile = GetParticleCookProfile(ParticleCookTier::Compact);
+        REQUIRE(profile.HasValue());
+        const ParticleMaterialEvidence material{descriptor.Data().material, ParticleMaterialAvailability::Available};
+        auto cooked = BuildParticleSystemCookPlan(descriptor, profile.Value(), material, ParticleErrorRegistry(), "fixture-gpu-particles");
+        REQUIRE(cooked.HasValue());
+        REQUIRE(cooked.Value().Accepted());
+        REQUIRE(cooked.Value().admission.has_value());
+        return *cooked.Value().admission;
+    }
+
     /** @brief Authored input-only seed fixture; this never fabricates a native resource or submission receipt. */
     struct GpuSeedFixture final {
         std::array<std::array<float, 2>, 12> floats{};
@@ -76,7 +90,7 @@ namespace Horo::Vfx::Tests {
         }
 
         std::unique_ptr<GpuParticleSimulator> Prepare() const {
-            auto result = GpuParticleSimulator::Create(ParticleDescriptor(Source()), Info());
+            auto result = GpuParticleSimulator::Create(CookGpuParticleSource(Source()), Info());
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }

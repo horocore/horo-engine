@@ -50,16 +50,16 @@ namespace Horo::Vfx::GpuParticleDetail {
         }
 
         /** @brief Keeps admission within the actual resolver count/memory projection and explicit owner-supplied ledger slice. */
-        bool Budget(const ParticleSystemDescriptorData &d, const GpuParticleSimulatorCreateInfo &i) noexcept {
-            return i.resolution.selectedCount && i.resolution.selectedCount <= d.maximumParticles &&
+        bool Budget(const ParticleCookPlan &plan, const GpuParticleSimulatorCreateInfo &i) noexcept {
+            return i.resolution.selectedCount && i.resolution.selectedCount <= plan.maximumParticles &&
                    i.resolution.capabilityRevision.IsValid() && i.resolution.policyRevision.IsValid() && i.maximumRetainedBytes &&
                    i.maximumRetainedBytes <= i.resolution.selectedMemoryBytes && i.maximumPendingSteps && i.maximumPendingSteps <= 64;
         }
 
         /** @brief Validates complete logical seed admission independently from allocation and source feature selection. */
-        bool ValidSeedAdmission(const ParticleSystemDescriptorData &d, const GpuParticleSimulatorCreateInfo &i) noexcept {
-            return OwnerIdentities(d, i) && Budget(d, i) && SeedShape(i.initial, i.resolution.selectedCount) &&
-                   ValidateParticleForceModules(i.forces);
+        bool ValidSeedAdmission(const ParticleCookAdmission &admission, const GpuParticleSimulatorCreateInfo &i) noexcept {
+            return OwnerIdentities(admission.Descriptor().Data(), i) && Budget(admission.Plan(), i) &&
+                   SeedShape(i.initial, i.resolution.selectedCount) && ValidateParticleForceModules(i.forces);
         }
 
         /** @brief Adds a known requested payload using subtraction bounds before multiplication. */
@@ -89,8 +89,9 @@ namespace Horo::Vfx::GpuParticleDetail {
         }
 
         /** @brief Builds scalar cold metadata without reading native state or retaining caller spans. */
-        Render::VfxGpuSimulationDescriptor Descriptor(const ParticleSystemDescriptorData &source, const GpuParticleSimulatorCreateInfo &i,
+        Render::VfxGpuSimulationDescriptor Descriptor(const ParticleCookAdmission &admission, const GpuParticleSimulatorCreateInfo &i,
                                                       const Render::GpuParticleLayout &layout) {
+            const auto &source = admission.Descriptor().Data();
             Render::VfxGpuSimulationDescriptor d;
             d.identity = {i.scene.Value(), IdentityValue(i.activation), IdentityValue(source.emitter), IdentityValue(i.buffer)};
             d.layout = layout;
@@ -104,7 +105,7 @@ namespace Horo::Vfx::GpuParticleDetail {
             d.policyRevision = i.resolution.policyRevision.Value();
             d.arithmetic.maximumSteps = i.maximumSteps;
             d.arithmetic.maximumDeltaSeconds = i.maximumDeltaSeconds;
-            d.readback = source.gpuReadback;
+            d.readback = admission.Plan().gpuReadback;
             return d;
         }
 
@@ -153,11 +154,11 @@ namespace Horo::Vfx::GpuParticleDetail {
         }
 
         /** @brief Materializes fixed source/ack storage before the unit can become active. */
-        Result<std::unique_ptr<Detail::GpuParticleSimulatorState>> Allocate(const ParticleSystemDescriptorData &source,
+        Result<std::unique_ptr<Detail::GpuParticleSimulatorState>> Allocate(const ParticleCookAdmission &admission,
                                                                             const GpuParticleSimulatorCreateInfo &i,
                                                                             const Render::GpuParticleLayout &layout) {
             auto s = std::make_unique<Detail::GpuParticleSimulatorState>();
-            s->preparation.descriptor = Descriptor(source, i, layout);
+            s->preparation.descriptor = Descriptor(admission, i, layout);
             s->initialWords.resize(layout.wordCount);
             s->forceWords.resize(i.forces.size() * Render::GpuParticleForceWords::Count);
             s->submitted.resize(i.maximumPendingSteps);
@@ -174,13 +175,13 @@ namespace Horo::Vfx::GpuParticleDetail {
         }
     }  // namespace
 
-    Result<std::unique_ptr<Detail::GpuParticleSimulatorState>> PrepareGpuState(const ParticleSystemDescriptor &descriptor,
+    Result<std::unique_ptr<Detail::GpuParticleSimulatorState>> PrepareGpuState(const ParticleCookAdmission &admission,
                                                                                const GpuParticleSimulatorCreateInfo &i) {
         using Outcome = Result<std::unique_ptr<Detail::GpuParticleSimulatorState>>;
-        const auto &d = descriptor.Data();
+        const auto &d = admission.Descriptor().Data();
         if (!SupportedSource(d, i) || (d.gpuReadback.enabled && i.initial.attributes.customFloatStreamCount))
             return Outcome::Failure(MakeError(VfxErrors::GpuSimulationUnsupported));
-        if (!ValidSeedAdmission(d, i))
+        if (!ValidSeedAdmission(admission, i))
             return Outcome::Failure(MakeError(VfxErrors::GpuSimulationInvalid));
         const auto layout =
             Render::BuildGpuParticleLayout(i.resolution.selectedCount, i.initial.attributes.customFloatStreamCount, i.layoutLimits);
@@ -189,7 +190,7 @@ namespace Horo::Vfx::GpuParticleDetail {
         if (!LogicalBudget(i, layout.Value().wordCount, i.forces.size() * Render::GpuParticleForceWords::Count, i.maximumPendingSteps))
             return Outcome::Failure(MakeError(VfxErrors::GpuSimulationInvalid));
         try {
-            return Allocate(d, i, layout.Value());
+            return Allocate(admission, i, layout.Value());
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(VfxErrors::GpuSimulationAllocationFailed));
         }

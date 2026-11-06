@@ -35,7 +35,7 @@ namespace Horo::Render::ProtocolFake {
                         {true,  1, VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect, 1, 2,
                          bytes, 1};
                 }
-                logical = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(source), info));
+                logical = Value(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(source), info));
                 CHECK(logical->Preparation().descriptor.readback == source.gpuReadback);
                 Prepare(bindColdLifetime);
                 color = Value(frontend->CreateTexture({.extent = {16, 16}, .usage = RenderTextureUsage::RenderAttachment})).handle;
@@ -409,7 +409,7 @@ namespace Horo::Render::ProtocolFake {
         auto info = seed.Info();
         const auto base = seed.Prepare()->Preparation().descriptor;
         info.maximumRetainedBytes = base.layout.byteCount * VfxGpuStateBufferCount(base) + GpuParticleForceWords::Bytes + 4;
-        auto logical = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(seed.Source()), info));
+        auto logical = Value(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(seed.Source()), info));
         auto prepared = frontend->PrepareVfxGpuSimulation(logical->Preparation(), {}, logical->LifetimeCancellation());
         if (prepared.HasError() &&
             ErrorChainContains(prepared.ErrorValue(), VfxFrameErrors::Pending.domain, VfxFrameErrors::Pending.code)) {
@@ -456,7 +456,7 @@ namespace Horo::Render::ProtocolFake {
         auto frontend = Create(audit, memory);
         auto small = seed.Info();
         small.maximumRetainedBytes = 128U * 1024U;
-        auto rejectedOwner = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(seed.Source()), small));
+        auto rejectedOwner = Value(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(seed.Source()), small));
         auto *sameOwner = rejectedOwner.get();
         const auto rejected = PrepareCold(*frontend, *rejectedOwner);
         REQUIRE(rejected.HasError());
@@ -469,7 +469,7 @@ namespace Horo::Render::ProtocolFake {
         REQUIRE(frontend->MemorySnapshot().committedBackingBytes == physical);
         const auto traceStart = audit->coldCallCount;
         auto corrected = seed.Info();
-        auto retryOwner = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(seed.Source()), corrected));
+        auto retryOwner = Value(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(seed.Source()), corrected));
         CHECK(SameVfxGpuIdentity(rejectedOwner->Preparation().descriptor.identity, retryOwner->Preparation().descriptor.identity));
         CHECK(rejectedOwner->Preparation().descriptor.initializationDigest != retryOwner->Preparation().descriptor.initializationDigest);
         const auto prepared = PrepareCold(*frontend, *retryOwner);
@@ -536,7 +536,7 @@ namespace Horo::Render::ProtocolFake {
         Vfx::Tests::GpuSeedFixture seed;
         auto info = seed.Info();
         info.maximumRetainedBytes = 640U * 1024U;
-        auto logical = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(seed.Source()), info));
+        auto logical = Value(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(seed.Source()), info));
         auto audit = std::make_shared<Audit>();
         audit->preparationResources = ArenaPlan();
         const auto physical = InventoryBytes(logical->Preparation().descriptor, audit->preparationResources);
@@ -672,7 +672,7 @@ namespace Horo::Render::ProtocolFake {
         Vfx::Tests::GpuSeedFixture seed;
         auto small = seed.Info();
         small.maximumRetainedBytes = 128U * 1024U;
-        auto rejected = Value(GpuParticleSimulator::Create(Vfx::Tests::ParticleDescriptor(seed.Source()), small));
+        auto rejected = Value(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(seed.Source()), small));
         auto audit = std::make_shared<Audit>();
         audit->preparationResources = {{4096, RenderBufferUsage::Uniform, RenderBufferAccess::HostVisible}, 16, 256};
         audit->extraMetadataBytes = 256U * 1024U;

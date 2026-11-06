@@ -135,9 +135,9 @@ namespace Horo::Vfx {
     }
 
     /** @copydoc GpuParticleSimulator::Create */
-    Result<std::unique_ptr<GpuParticleSimulator>> GpuParticleSimulator::Create(const ParticleSystemDescriptor &descriptor,
+    Result<std::unique_ptr<GpuParticleSimulator>> GpuParticleSimulator::Create(const ParticleCookAdmission &admission,
                                                                                const GpuParticleSimulatorCreateInfo &info) {
-        auto state = GpuParticleDetail::PrepareGpuState(descriptor, info);
+        auto state = GpuParticleDetail::PrepareGpuState(admission, info);
         if (state.HasError())
             return Result<std::unique_ptr<GpuParticleSimulator>>::Failure(state.ErrorValue());
         try {
