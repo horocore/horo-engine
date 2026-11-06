@@ -63,4 +63,12 @@ namespace Horo::Render::Test {
     TEST_CASE("Manual Metal dynamic World reuses every chunk and changes real native data", "[.manual-vfx-dynamic-reuse]") {
         RunMetalVfxInstancedDynamicReuse(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"));
     }
+
+    TEST_CASE("Manual Metal World-spawned opaque cubes preserve real pixels native reuse and abort", "[.manual-vfx-spawn-mesh]") {
+        RunMetalVfxInstancedDynamicMeshReuse(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"));
+    }
+
+    TEST_CASE("Manual Metal World-spawned masked cubes preserve real coverage and depth", "[.manual-vfx-spawn-mesh]") {
+        RunMetalVfxInstancedSpawnMaskedMeshPixels(Absolute("HORO_VFX_INSTANCED_ASSET_ROOT"));
+    }
 }  // namespace Horo::Render::Test

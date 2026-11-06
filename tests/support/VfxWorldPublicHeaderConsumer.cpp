@@ -13,3 +13,5 @@ static_assert(noexcept(std::declval<const Horo::Vfx::CpuParticleBuffer &>().TryH
                                                                                         std::declval<Horo::Vfx::CpuParticleHandle &>())));
 
 static_assert(std::is_same_v<decltype(Horo::Vfx::CpuParticleExtractView{}.handles), std::span<const Horo::Vfx::CpuParticleHandle>>);
+
+static_assert(std::is_same_v<decltype(Horo::Vfx::VfxSpawnAssetPreparation{}.mesh), Horo::Render::RenderMeshHandle>);

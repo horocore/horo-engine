@@ -33,4 +33,8 @@ namespace Horo::Render::Test {
                                               const std::filesystem::path &receipt);
     /** @brief Proves bounded multi-chunk dynamic reuse and genuine simulation/native uniform progress outside long measurements. */
     void RunMetalVfxInstancedDynamicReuse(const std::filesystem::path &root);
+    /** @brief Qualifies actual World-spawned opaque cube pixels, native reuse, retirement and abort controls. */
+    void RunMetalVfxInstancedDynamicMeshReuse(const std::filesystem::path &root);
+    /** @brief Qualifies real World-spawned masked cube front-face coverage and native depth readback. */
+    void RunMetalVfxInstancedSpawnMaskedMeshPixels(const std::filesystem::path &root);
 }  // namespace Horo::Render::Test

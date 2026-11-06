@@ -872,3 +872,46 @@ again worsened slightly despite unchanged packing code. Background/thermal effec
 and per-phase costs are not fully isolated. These wall observations retain the
 same assertion-inclusive scope and do not establish normal-engine FPS or a
 reference-engine performance acceptance budget.
+
+
+#### Prepared mesh spawn recipes
+
+CPU `PrepareSpawns` recipes may now supply a host-admitted logical `mesh` handle
+for Mesh descriptors with opaque, masked or additive materials. Additive billboards
+retain an exactly empty mesh handle. Ribbon, translucent, unsupported sorting and
+callback/collision combinations still reject explicitly; no recipe falls back to
+billboards or a different blend class. Cold preparation captures the exact mesh,
+material, topology and pass by value. A structural handle is not native admission
+or ownership: the host retains resources, and frontend draw preparation still
+checks the actual registry generation and geometry/material compatibility.
+
+Solid mesh batches reserve two logical extraction credits, additive batches one,
+matching the existing fixed-emitter policy. Insufficient credits omit the whole
+batch before copying particles. Native 128-instance draw chunk admission remains
+a separate renderer scheduling budget. Deferred and shadow flags stay false.
+The ADR-128 aggregate CPU ceiling remains 16,384; neither these recipes nor the
+90,000-cube static diagnostic raise it. ADR-125's numeric time targets cover sort
+work only and cannot clear total simulation, upload or raster throughput.
+
+The existing representation provides sizeXY and particle-local Z rotation while
+preserving authored mesh Z. Mesh spawn requests therefore require identity world
+orientation (including its equivalent negative quaternion) and effective Z scale
+one. Other valid TRS requests return `UnsupportedRecipe` before queue/dedup state
+changes; translation and XY scaling remain supported. Full 3D mesh TRS is not
+silently approximated. The public C++ preparation struct gains a mesh field, so
+C++ consumers/providers rebuild; no serialized asset or external C ABI changes.
+
+The opt-in manual target adds `[.manual-vfx-spawn-mesh]` controls for actual
+World-owned opaque cube simulation/reuse/abort and masked front-face color/depth
+readback. These are explicit native controls, not ordinary CTest cases or a new
+long-running default benchmark.
+
+For this change, macOS and Linux ARM64 GCC 15 each passed 166 API JUnit entries
+and 29 extraction entries with no failures or skips; both public-header consumer
+targets compiled. All eight actual Metal controls passed, including the two new
+World mesh cases. The masked control independently checks front-face depth and
+decoded RGB at particle-rotation-aware texel positions. The opaque control also
+exercises 241 simulation ticks, retained native/client frames and abort/reuse.
+Ten changed C++ files passed formatting; reviewed production and native helper
+functions had cyclomatic complexity at most ten. These results do not establish
+new throughput, cross-engine parity, or current hosted quality-gate clearance.

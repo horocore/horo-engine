@@ -2,8 +2,11 @@
 #include "support/AllocationProbe.h"
 #include "support/VfxTestSupport.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <thread>
+#include <utility>
 
 namespace Horo::Vfx {
     namespace {
@@ -38,6 +41,17 @@ namespace Horo::Vfx {
                     .material = {1}};
         }
 
+        /** @brief Supplies logical host geometry to the same canonical CPU recipe, without fabricating native admission. */
+        [[nodiscard]] VfxSpawnAssetPreparation MeshSpawnRecipe(Render::MaterialAlphaMode blend) {
+            auto recipe = SpawnRecipe();
+            auto data = recipe.particles->Data();
+            data.renderMode = ParticleRenderMode::Mesh;
+            recipe.particles = std::make_shared<const ParticleSystemDescriptor>(Tests::ParticleDescriptor(data));
+            recipe.materialBlend = blend;
+            recipe.mesh = {.owner = {1}, .slot = 37, .generation = 1};
+            return recipe;
+        }
+
         [[nodiscard]] VfxSpawnBudget SpawnBudget() {
             return {.maximumPending = 8,
                     .maximumResults = 8,
@@ -58,8 +72,9 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] std::unique_ptr<VfxWorld> SpawnWorld(std::span<const VfxSpawnAssetPreparation> recipes,
-                                                           VfxSpawnBudget budget = SpawnBudget()) {
-            auto prepared = VfxWorld::PrepareSpawns(SpawnScope(), recipes, budget, SpawnExtraction());
+                                                           VfxSpawnBudget budget = SpawnBudget(),
+                                                           VfxExtractionBudget extraction = SpawnExtraction()) {
+            auto prepared = VfxWorld::PrepareSpawns(SpawnScope(), recipes, budget, extraction);
             INFO((prepared.HasError() ? prepared.ErrorValue().message : "prepared"));
             INFO((prepared.HasError() ? prepared.ErrorValue().code.Value() : "prepared"));
             REQUIRE(prepared.HasValue());
@@ -373,5 +388,150 @@ namespace Horo::Vfx {
         CHECK(world->SpawnResults()[0].status == VfxSpawnStatus::Spawned);
         CHECK(retained.Instances().size() == 1);
         CHECK(world->Extract(2, {}, 1).snapshot.Instances().empty());
+    }
+
+    TEST_CASE("World mesh spawns preserve captured topology material and blend without hot allocations", "[unit][vfx][spawn-world]") {
+        const auto mode = GENERATE(std::pair{Render::MaterialAlphaMode::Opaque, Render::VfxParticlePass::Opaque},
+                                   std::pair{Render::MaterialAlphaMode::Masked, Render::VfxParticlePass::Masked},
+                                   std::pair{Render::MaterialAlphaMode::Additive, Render::VfxParticlePass::Additive});
+        auto recipe = MeshSpawnRecipe(mode.first);
+        const auto mesh = recipe.mesh;
+        const auto material = recipe.material;
+        auto world = SpawnWorld(std::span{&recipe, 1});
+        recipe.mesh = {.owner = {1}, .slot = 99, .generation = 1};
+        recipe.material = {99};
+        recipe.materialBlend = Render::MaterialAlphaMode::Translucent;
+        const auto request = SpawnCommand();
+        VfxSpawnStatus admitted{};
+        VfxSpawnUpdate updated;
+        VfxExtractionOutcome frame;
+        Horo::Tests::AllocationProbe::Measurement measured;
+        {
+            Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+            admitted = Enqueue(*world, request).status;
+            updated = world->UpdateSpawns(1, .125F);
+            frame = world->Extract(1, {}, 1);
+            measured = probe.Snapshot();
+        }
+        CHECK(measured.requests == 0);
+        REQUIRE(admitted == VfxSpawnStatus::Accepted);
+        REQUIRE(updated.live == 1);
+        REQUIRE(frame.report.status == VfxExtractionStatus::Complete);
+        REQUIRE(frame.snapshot.Batches().size() == 1);
+        REQUIRE(frame.snapshot.Instances().size() == 2);
+        const auto &batch = frame.snapshot.Batches()[0];
+        CHECK(batch.mesh == mesh);
+        CHECK(batch.material == material);
+        CHECK(batch.topology == Render::VfxPrimitiveTopology::InstancedMesh);
+        CHECK(batch.blend == mode.second);
+        CHECK_FALSE(batch.deferredCompatible);
+        CHECK_FALSE(batch.shadowCaster);
+        CHECK(frame.report.reservedDrawCalls == (mode.second == Render::VfxParticlePass::Additive ? 1U : 2U));
+    }
+
+    TEST_CASE("World solid mesh extraction admits complete two-credit batches or omits them whole", "[unit][vfx][spawn-world]") {
+        const auto credits = GENERATE(1U, 2U);
+        auto recipe = MeshSpawnRecipe(Render::MaterialAlphaMode::Opaque);
+        recipe.maximumInstances = 1;
+        auto budget = SpawnBudget();
+        budget.maximumInstances = 1;
+        auto extraction = SpawnExtraction();
+        extraction.maximumDrawCalls = credits;
+        auto world = SpawnWorld(std::span{&recipe, 1}, budget, extraction);
+        REQUIRE(Enqueue(*world, SpawnCommand()).status == VfxSpawnStatus::Accepted);
+        REQUIRE(world->UpdateSpawns(1, .125F).live == 1);
+        const auto frame = world->Extract(1, {}, 1);
+        if (credits == 1) {
+            CHECK(frame.report.status == VfxExtractionStatus::BudgetExceeded);
+            CHECK(frame.report.reservedDrawCalls == 0);
+            CHECK(frame.report.omittedBatches == 1);
+            CHECK(frame.report.omittedInstances == 2);
+            CHECK(frame.report.firstOmitted.scene == SpawnScope().Value());
+            CHECK(frame.snapshot.Batches().empty());
+            CHECK(frame.snapshot.Instances().empty());
+        } else {
+            CHECK(frame.report.status == VfxExtractionStatus::Complete);
+            CHECK(frame.report.reservedDrawCalls == 2);
+            CHECK(frame.report.omittedBatches == 0);
+            CHECK(frame.snapshot.Batches().size() == 1);
+            CHECK(frame.snapshot.Instances().size() == 2);
+        }
+    }
+
+    TEST_CASE("World rejects unsupported mesh recipe combinations before publishing a palette", "[unit][vfx][spawn-world]") {
+        auto recipe = MeshSpawnRecipe(Render::MaterialAlphaMode::Opaque);
+        auto data = recipe.particles->Data();
+        SECTION("missing mesh") {
+            recipe.mesh = {};
+        }
+        SECTION("translucent without a sorted recipe") {
+            recipe.materialBlend = Render::MaterialAlphaMode::Translucent;
+        }
+        SECTION("unknown blend") {
+            recipe.materialBlend = static_cast<Render::MaterialAlphaMode>(255);
+        }
+        SECTION("ribbon") {
+            data.renderMode = ParticleRenderMode::Ribbon;
+            data.sortMode = ParticleSortMode::ByDistance;
+        }
+        SECTION("unsupported sorting") {
+            data.sortMode = ParticleSortMode::ByDistance;
+        }
+        SECTION("billboard cannot hide an unused mesh") {
+            data.renderMode = ParticleRenderMode::Billboard;
+            recipe.materialBlend = Render::MaterialAlphaMode::Additive;
+        }
+        SECTION("solid billboard") {
+            data.renderMode = ParticleRenderMode::Billboard;
+            recipe.mesh = {};
+        }
+        SECTION("billboard cannot hide a partially formed mesh") {
+            data.renderMode = ParticleRenderMode::Billboard;
+            recipe.materialBlend = Render::MaterialAlphaMode::Additive;
+            recipe.mesh.generation = 0;
+        }
+        recipe.particles = std::make_shared<const ParticleSystemDescriptor>(Tests::ParticleDescriptor(data));
+        const auto result = VfxWorld::PrepareSpawns(SpawnScope(), std::span{&recipe, 1}, SpawnBudget(), SpawnExtraction());
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == VfxErrors::SpawnPreparationUnsupported.code.Value());
+    }
+
+    TEST_CASE("Unsupported mesh placement leaves queue and source watermark available for a valid retry", "[unit][vfx][spawn-world]") {
+        const auto recipe = MeshSpawnRecipe(Render::MaterialAlphaMode::Opaque);
+        auto world = SpawnWorld(std::span{&recipe, 1});
+        auto request = SpawnCommand();
+        SECTION("rotation") {
+            request.transform.orientation = Math::Quaternion::FromAxisAngle({0, 1, 0}, .5F);
+        }
+        SECTION("unrepresented Z scale") {
+            request.transform.scale.z = 2.F;
+        }
+        SECTION("uniform scale also changes Z") {
+            request.scale = 2.F;
+        }
+        CHECK(Enqueue(*world, request).status == VfxSpawnStatus::UnsupportedRecipe);
+        CHECK(world->SpawnResults().empty());
+        request.transform.orientation = {};
+        request.transform.scale = {1, 1, 1};
+        request.scale = 1.F;
+        REQUIRE(Enqueue(*world, request).status == VfxSpawnStatus::Accepted);
+        CHECK(world->UpdateSpawns(1, .125F).live == 1);
+    }
+
+    TEST_CASE("World mesh placement supports translation XY scaling and equivalent identity orientation", "[unit][vfx][spawn-world]") {
+        const auto recipe = MeshSpawnRecipe(Render::MaterialAlphaMode::Additive);
+        auto world = SpawnWorld(std::span{&recipe, 1});
+        auto request = SpawnCommand();
+        request.transform.orientation = {0, 0, 0, -1};
+        request.transform.scale = {2, 3, .5F};
+        request.scale = 2.F;
+        REQUIRE(Enqueue(*world, request).status == VfxSpawnStatus::Accepted);
+        REQUIRE(world->UpdateSpawns(1, .125F).live == 1);
+        const auto frame = world->Extract(1, {}, 1);
+        REQUIRE(frame.report.status == VfxExtractionStatus::Complete);
+        REQUIRE(frame.snapshot.Instances().size() == 2);
+        CHECK(frame.snapshot.Instances()[0].position == Math::Vec3{10, 20, 30});
+        CHECK(frame.snapshot.Instances()[0].size == Math::Vec2{4, 6});
+        CHECK(frame.report.reservedDrawCalls == 1);
     }
 }  // namespace Horo::Vfx

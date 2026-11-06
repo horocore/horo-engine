@@ -28,6 +28,9 @@ namespace Horo::Vfx::Detail {
         VfxSpawnAssetInfo info;
         EmitterId emitter;
         Render::MaterialRuntimeId material;
+        Render::RenderMeshHandle mesh;
+        Render::VfxParticlePass blend{Render::VfxParticlePass::Additive};
+        Render::VfxPrimitiveTopology topology{Render::VfxPrimitiveTopology::CameraFacingBillboard};
         std::vector<VfxSpawnInstance> instances;
         std::uint32_t firstSlot{};
         std::uint32_t initialBurst{};

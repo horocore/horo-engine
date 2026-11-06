@@ -33,7 +33,9 @@ namespace Horo::Vfx {
 
     /** @brief One asset's finite prepared CPU recipe; no graph compilation or native GPU resource admission is implied.
      * @details The canonical simulator copies all supported kernel inputs during preparation. Collision adapters and arbitrary
-     * stage callbacks are unsupported here; renderer material/mesh handles remain host-admitted values.
+     * stage callbacks are unsupported here; renderer material/mesh handles remain host-admitted values, not native admission evidence.
+     * Mesh placement requires identity spawn orientation and effective Z scale one; translation/XY scale and particle-local Z rotation
+     * retain the existing renderer representation. Unsupported placement is rejected before queue/dedup mutation.
      */
     struct VfxSpawnAssetPreparation final {
         Assets::AssetId asset;
@@ -46,6 +48,7 @@ namespace Horo::Vfx {
         std::uint64_t parameterSchema{};
         Render::MaterialRuntimeId material;
         Render::MaterialAlphaMode materialBlend{Render::MaterialAlphaMode::Additive};
+        Render::RenderMeshHandle mesh{}; /**< Host-admitted geometry for Mesh output; empty for additive billboards. */
     };
 
     /** @brief Immutable copied recipe availability; sufficient for cold mapping validation without exposing storage. */

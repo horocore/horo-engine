@@ -49,8 +49,9 @@ namespace Horo::Vfx {
         const auto count = static_cast<std::uint32_t>(source.Value().positionX.size());
         if (count == 0)
             return true;
+        const std::uint32_t draws = asset.blend == Render::VfxParticlePass::Additive ? 1U : 2U;
         if (report.admittedBatches == budget_.maximumBatches || count > budget_.maximumInstances - report.admittedInstances ||
-            report.reservedDrawCalls == budget_.maximumDrawCalls) {
+            draws > budget_.maximumDrawCalls - report.reservedDrawCalls) {
             ++report.omittedBatches;
             report.omittedInstances += count;
             if (report.firstOmitted.scene == 0)
@@ -61,18 +62,11 @@ namespace Horo::Vfx {
         const auto first = static_cast<std::uint32_t>(data.instances_.size());
         if (!CopySpawnParticles(instance, source.Value(), data, origin))
             return false;
-        data.batches_.push_back({Batch(asset, instance),
-                                 asset.material,
-                                 {},
-                                 Render::VfxParticlePass::Additive,
-                                 Render::VfxPrimitiveTopology::CameraFacingBillboard,
-                                 false,
-                                 false,
-                                 first,
-                                 count});
+        data.batches_.push_back(
+            {Batch(asset, instance), asset.material, asset.mesh, asset.blend, asset.topology, false, false, first, count});
         ++report.admittedBatches;
         report.admittedInstances += count;
-        ++report.reservedDrawCalls;
+        report.reservedDrawCalls += draws;
         return true;
     }
 

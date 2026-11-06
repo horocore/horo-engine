@@ -16,13 +16,32 @@ namespace Horo::Vfx::SpawnDetail {
                    static_cast<std::uint64_t>(source.simulation.sceneDepth.samples.size()) * sizeof(CpuParticleDepthSample);
         }
 
-        /** @brief Rejects unprepared native/collision/mesh paths explicitly rather than selecting a substitute. */
+        /** @brief Admits exact prepared visual recipes without substituting topology, sorting or blend behavior. */
+        [[nodiscard]] bool SupportedVisual(const VfxSpawnAssetPreparation &source) noexcept {
+            const auto mode = source.particles->Data().renderMode;
+            if (mode == ParticleRenderMode::Billboard)
+                return source.mesh == Render::RenderMeshHandle{} && source.materialBlend == Render::MaterialAlphaMode::Additive;
+            if (mode != ParticleRenderMode::Mesh || !source.mesh.IsValid())
+                return false;
+            return source.materialBlend == Render::MaterialAlphaMode::Opaque || source.materialBlend == Render::MaterialAlphaMode::Masked ||
+                   source.materialBlend == Render::MaterialAlphaMode::Additive;
+        }
+
+        /** @brief Rejects unprepared native/collision/sort paths while preserving the CPU kernel and callback boundary. */
         [[nodiscard]] bool SupportedRecipe(const VfxSpawnAssetPreparation &source) noexcept {
             const auto &data = source.particles->Data();
             return data.simulationPreference == SimulationPreference::RequireCPU &&
                    data.collisionMode != ParticleCollisionMode::PhysicsWorld && data.collisionMode != ParticleCollisionMode::SceneDepth &&
-                   data.renderMode == ParticleRenderMode::Billboard && data.sortMode == ParticleSortMode::None &&
-                   source.simulation.stageObserver == nullptr && source.materialBlend == Render::MaterialAlphaMode::Additive;
+                   data.sortMode == ParticleSortMode::None && source.simulation.stageObserver == nullptr && SupportedVisual(source);
+        }
+
+        /** @brief Projects only admitted blend classes into the existing immutable renderer pass contract. */
+        [[nodiscard]] Render::VfxParticlePass SpawnPass(Render::MaterialAlphaMode blend) noexcept {
+            if (blend == Render::MaterialAlphaMode::Opaque)
+                return Render::VfxParticlePass::Opaque;
+            if (blend == Render::MaterialAlphaMode::Masked)
+                return Render::VfxParticlePass::Masked;
+            return Render::VfxParticlePass::Additive;
         }
 
         /** @brief Validates positive explicit effect lifetime and bounded per-asset demand. */
@@ -104,6 +123,11 @@ namespace Horo::Vfx::SpawnDetail {
             asset.initialBurst = source.initialBurst;
             asset.durationSeconds = source.durationSeconds;
             asset.material = source.material;
+            asset.mesh = source.mesh;
+            asset.blend = SpawnPass(source.materialBlend);
+            asset.topology = source.particles->Data().renderMode == ParticleRenderMode::Mesh
+                                 ? Render::VfxPrimitiveTopology::InstancedMesh
+                                 : Render::VfxPrimitiveTopology::CameraFacingBillboard;
             asset.emitter = source.particles->Data().emitter;
             asset.requiredGameplay = source.simulation.requiredGameplay;
             if (auto copied = CopySchema(asset, source); copied.HasError())

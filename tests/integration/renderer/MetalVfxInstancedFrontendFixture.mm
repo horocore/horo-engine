@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <catch2/catch_approx.hpp>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -487,7 +488,8 @@ namespace Horo::Render::Test {
         constexpr float DynamicDelta = 1.F / 60.F;
 
         /** @brief Uses the real descriptor validator for a finite, initial-burst-only canonical CPU population. */
-        Vfx::VfxSpawnAssetPreparation DynamicAsset(std::uint32_t count, MaterialRuntimeId material) {
+        Vfx::VfxSpawnAssetPreparation DynamicAsset(std::uint32_t count, MaterialRuntimeId material, RenderMeshHandle mesh = {},
+                                                   MaterialAlphaMode blend = MaterialAlphaMode::Additive) {
             auto data = Vfx::Tests::ValidParticleDescriptorData();
             data.maximumParticles = count;
             data.simulationPreference = Vfx::SimulationPreference::RequireCPU;
@@ -497,6 +499,11 @@ namespace Horo::Render::Test {
             data.initialSpeed = {.002, .002};
             data.initialSize = {.01, .01};
             data.initialOpacity = {.05, .05};
+            if (mesh.IsValid()) {
+                data.renderMode = Vfx::ParticleRenderMode::Mesh;
+                data.initialSize = {double(CubeSize), double(CubeSize)};
+                data.initialOpacity = {1., 1.};
+            }
             data.sortMode = Vfx::ParticleSortMode::None;
             data.collisionMode = Vfx::ParticleCollisionMode::None;
             return {.asset = data.material,
@@ -505,7 +512,9 @@ namespace Horo::Render::Test {
                     .maximumInstances = 1,
                     .initialBurst = count,
                     .durationSeconds = 60.F,
-                    .material = material};
+                    .material = material,
+                    .materialBlend = blend,
+                    .mesh = mesh};
         }
 
         /** @brief Owns canonical CPU World state and actual frontend material/geometry generations. */
@@ -550,10 +559,10 @@ namespace Horo::Render::Test {
                 const std::array artifacts{Load(root, false), Load(root, true)};
                 artifactKeys = {artifacts[0].artifactKey, artifacts[1].artifactKey};
                 for (unsigned i = 0; i < FamilyNumber(); ++i)
-                    materials.push_back(Material(owner, dynamicProfile ? 4U : i, artifacts, cutout));
+                    materials.push_back(Material(owner, FamilyIndex(i, cutout), artifacts, cutout));
                 const auto scope = Value(Vfx::VfxIdentityScope::Create(17));
                 if (dynamicProfile) {
-                    PrepareDynamic(scope);
+                    PrepareDynamic(scope, cutout);
                     PrepareChunks();
                     return;
                 }
@@ -564,8 +573,10 @@ namespace Horo::Render::Test {
             }
 
             /** @brief Prepares and admits one genuine World-owned kernel without manually writing particle streams. */
-            void PrepareDynamic(Vfx::VfxIdentityScope scope) {
-                const auto asset = DynamicAsset(benchmarkCount, materials[0].id);
+            void PrepareDynamic(Vfx::VfxIdentityScope scope, bool cutout) {
+                const auto blend =
+                    cubeProfile ? (cutout ? MaterialAlphaMode::Masked : MaterialAlphaMode::Opaque) : MaterialAlphaMode::Additive;
+                const auto asset = DynamicAsset(benchmarkCount, materials[0].id, cubeProfile ? mesh.mesh : RenderMeshHandle{}, blend);
                 world = Value(Vfx::VfxWorld::PrepareSpawns(scope, std::span{&asset, 1},
                                                            {.maximumPending = 1,
                                                             .maximumResults = 1,
@@ -575,7 +586,7 @@ namespace Horo::Render::Test {
                                                             .maximumParticles = benchmarkCount,
                                                             .maximumBytes = 64U * 1024U * 1024U,
                                                             .maximumDeltaSeconds = DynamicDelta},
-                                                           {1, benchmarkCount, maximumDraws, 2, 32'000'000}));
+                                                           {1, benchmarkCount, ExtractionDrawCredits(), 2, 32'000'000}));
                 REQUIRE(world->AdmitSpawnOwner(scope, 1) == Vfx::VfxSpawnStatus::Accepted);
                 Vfx::VfxSpawnRequest request{.effectAsset = asset.asset,
                                              .scene = scope,
@@ -606,6 +617,15 @@ namespace Horo::Render::Test {
                 }
             }
 
+            /** @brief Selects the exact native material class for the declared dynamic recipe, preserving legacy families. */
+            unsigned FamilyIndex(unsigned index, bool cutout) const noexcept {
+                if (!dynamicProfile)
+                    return index;
+                if (!cubeProfile)
+                    return 4U;
+                return cutout ? 3U : 0U;
+            }
+
             /** @brief The separate cube profile has one opaque emitter; legacy mixed behavior retains all five. */
             unsigned FamilyNumber() const noexcept {
                 return cubeProfile || dynamicProfile ? 1U : 5U;
@@ -620,10 +640,10 @@ namespace Horo::Render::Test {
 
             /** @brief Reserves canonical conservative translucent-per-particle and solid depth/color extraction credits. */
             std::uint32_t ExtractionDrawCredits() const noexcept {
-                if (dynamicProfile)
-                    return maximumDraws;
                 if (cubeProfile)
                     return 2 * maximumDraws;
+                if (dynamicProfile)
+                    return maximumDraws;
                 return benchmarkCount ? FamilyCount(2) + 7 : 128;
             }
 
@@ -997,9 +1017,10 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Computes an independent pixel-center ray/plane intersection in Metal zero-to-one depth and top-left coordinates. */
-        float PlaneDepth(const Math::Mat4 &projection, unsigned x, unsigned y, Math::Vec3 center, Math::Vec3 normal) {
+        float PlaneDepth(const Math::Mat4 &projection, unsigned x, unsigned y, Math::Vec3 center, Math::Vec3 normal,
+                         FramebufferExtent extent = Extent) {
             const auto inverse = Value(Math::TryInverse(projection));
-            const float nx = (float(x) + .5F) * 2 / Extent.width - 1, ny = 1 - (float(y) + .5F) * 2 / Extent.height;
+            const float nx = (float(x) + .5F) * 2 / extent.width - 1, ny = 1 - (float(y) + .5F) * 2 / extent.height;
             const auto near = Math::TransformPoint(inverse, {nx, ny, 0}), far = Math::TransformPoint(inverse, {nx, ny, 1});
             const auto ray = far - near;
             const auto denominator = Math::Dot(normal, ray);
@@ -1680,6 +1701,64 @@ namespace Horo::Render::Test {
             return {values.begin(), values.end()};
         }
 
+        /** @brief Real readback and its pixel-center coordinates for independent front-plane depth checks. */
+        struct MeshPixel final {
+            unsigned x{}, y{};
+            PixelValue value;
+        };
+
+        /** @brief Projects a known admitted world point, then copies actual native color/depth rather than synthesizing pixel values. */
+        MeshPixel ObserveMeshPoint(Scene &scene, Math::Vec3 world) {
+            const auto clip = Math::TransformPoint(scene.view.viewProjection, world);
+            REQUIRE(Math::IsFinite(clip));
+            REQUIRE(clip.x > -1.F);
+            REQUIRE(clip.x < 1.F);
+            REQUIRE(clip.y > -1.F);
+            REQUIRE(clip.y < 1.F);
+            const auto x = static_cast<unsigned>((clip.x + 1.F) * .5F * scene.extent.width);
+            const auto y = static_cast<unsigned>((1.F - clip.y) * .5F * scene.extent.height);
+            REQUIRE(x < scene.extent.width);
+            REQUIRE(y < scene.extent.height);
+            return {x, y, ReadPixel(scene.owner, scene, x, y)};
+        }
+
+        /** @brief Compares real RGB with independently decoded linear particle color under the fixture's white texture/tint. */
+        void CheckSpawnedMeshColor(const PixelValue &pixel, const VfxRenderInstance &particle) {
+            for (unsigned channel = 0; channel < 3; ++channel) {
+                const float expected = float((particle.packedColor >> (24U - channel * 8U)) & 255U) / 255.F;
+                REQUIRE(expected > 0.F);
+                CHECK(pixel.color[channel] == Catch::Approx(expected).margin(.02F).epsilon(0));
+            }
+        }
+
+        /** @brief Proves actual opaque spawned cube geometry writes visible color and depth after repeated real simulation. */
+        void CheckSpawnedMeshPixel(Scene &scene) {
+            const auto particles = DynamicParticles(scene);
+            REQUIRE_FALSE(particles.empty());
+            const auto pixel = ObserveMeshPoint(scene, particles.front().position).value;
+            CHECK(std::isfinite(pixel.depth));
+            CHECK(pixel.depth >= 0.F);
+            CHECK(pixel.depth < 1.F);
+            CheckSpawnedMeshColor(pixel, particles.front());
+        }
+
+        /** @brief Verifies the same real masked front-face texels control both visible color and native depth publication. */
+        void CheckSpawnedMaskedMeshPixels(Scene &scene) {
+            const auto particles = DynamicParticles(scene);
+            REQUIRE(particles.size() == 1);
+            const auto &particle = particles.front();
+            const auto front = particle.position + Math::Vec3{0, 0, CubeSize * .5F};
+            const Math::Vec3 quarter{std::cos(particle.rotation) * particle.size.x * .25F,
+                                     std::sin(particle.rotation) * particle.size.x * .25F, 0};
+            const auto discarded = ObserveMeshPoint(scene, front - quarter);
+            const auto surviving = ObserveMeshPoint(scene, front + quarter);
+            const auto discardedFront = PlaneDepth(scene.view.viewProjection, discarded.x, discarded.y, front, {0, 0, 1}, scene.extent);
+            const auto survivingFront = PlaneDepth(scene.view.viewProjection, surviving.x, surviving.y, front, {0, 0, 1}, scene.extent);
+            CHECK(surviving.value.depth == Catch::Approx(survivingFront).margin(.0001F).epsilon(0));
+            CheckSpawnedMeshColor(surviving.value, particle);
+            CHECK(discarded.value.depth > discardedFront + .0001F);
+        }
+
         /** @brief Reads terminal host-visible uniform storage from its exact frontend-issued Metal buffer for untimed data-change proof. */
         std::vector<std::byte> DynamicNativeBytes(Scene &scene) {
             REQUIRE(Terminal(scene.owner.commands));
@@ -1938,27 +2017,52 @@ namespace Horo::Render::Test {
         REQUIRE(receipt.Write());
     }
 
+    namespace {
+        /** @brief Reuses real World spawn chunks without altering native retirement, abort or population checks. */
+        void DynamicReuse(const std::filesystem::path &root, bool cubes) {
+            NativeOwner owner;
+            owner.Initialize(SceneExtent(512, cubes), true, PresentMode::Fifo);
+            Scene scene(owner, root, false, 512, cubes, true);
+            AdvanceDynamic(scene, 1);
+            const auto initial = DynamicParticles(scene);
+            std::vector<std::byte> initialNative;
+            const auto memory = owner.frontend->MemorySnapshot();
+            const auto deadline = BenchmarkClock::now() + 30s;
+            DynamicInFlightControl(scene, deadline);
+            DynamicAbortControl(scene, deadline);
+            for (std::uint64_t tick = 2; tick <= 242; ++tick) {
+                const auto sample = DynamicFrame(scene, tick, deadline);
+                CheckDynamicSample(sample);
+                if (tick == 2)
+                    initialNative = DynamicNativeBytes(scene);
+            }
+            CheckDynamicProgress(scene, initial);
+            REQUIRE(DynamicNativeBytes(scene) != initialNative);
+            CheckDynamicMemory(owner, memory);
+            if (cubes)
+                CheckSpawnedMeshPixel(scene);
+        }
+    }  // namespace
+
     /** @copydoc RunMetalVfxInstancedDynamicReuse */
     void RunMetalVfxInstancedDynamicReuse(const std::filesystem::path &root) {
+        DynamicReuse(root, false);
+    }
+
+    /** @copydoc RunMetalVfxInstancedDynamicMeshReuse */
+    void RunMetalVfxInstancedDynamicMeshReuse(const std::filesystem::path &root) {
+        DynamicReuse(root, true);
+    }
+
+    /** @copydoc RunMetalVfxInstancedSpawnMaskedMeshPixels */
+    void RunMetalVfxInstancedSpawnMaskedMeshPixels(const std::filesystem::path &root) {
         NativeOwner owner;
-        owner.Initialize(BenchmarkExtent, true, PresentMode::Fifo);
-        Scene scene(owner, root, false, 512, false, true);
+        owner.Initialize(CubeExtent, true, PresentMode::Fifo);
+        Scene scene(owner, root, true, 1, true, true);
         AdvanceDynamic(scene, 1);
-        const auto initial = DynamicParticles(scene);
-        std::vector<std::byte> initialNative;
-        const auto memory = owner.frontend->MemorySnapshot();
-        const auto deadline = BenchmarkClock::now() + 30s;
-        DynamicInFlightControl(scene, deadline);
-        DynamicAbortControl(scene, deadline);
-        for (std::uint64_t tick = 2; tick <= 242; ++tick) {
-            const auto sample = DynamicFrame(scene, tick, deadline);
-            CheckDynamicSample(sample);
-            if (tick == 2)
-                initialNative = DynamicNativeBytes(scene);
-        }
-        CheckDynamicProgress(scene, initial);
-        REQUIRE(DynamicNativeBytes(scene) != initialNative);
-        CheckDynamicMemory(owner, memory);
+        const auto sample = DynamicFrame(scene, 2, BenchmarkClock::now() + 30s);
+        CheckDynamicSample(sample);
+        CheckSpawnedMaskedMeshPixels(scene);
     }
 
 }  // namespace Horo::Render::Test

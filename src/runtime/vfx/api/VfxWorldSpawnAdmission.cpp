@@ -20,6 +20,14 @@ namespace Horo::Vfx::SpawnDetail {
             return found->active ? VfxSpawnStatus::Accepted : VfxSpawnStatus::Cancelled;
         }
 
+        /** @brief Rejects mesh placement that the existing sizeXY/local-Z-rotation representation cannot express. */
+        [[nodiscard]] bool SupportedPlacement(const Detail::VfxSpawnAsset &asset, const VfxSpawnRequest &request) noexcept {
+            if (asset.topology != Render::VfxPrimitiveTopology::InstancedMesh)
+                return true;
+            const auto &rotation = request.transform.orientation;
+            return rotation.x == 0.F && rotation.y == 0.F && rotation.z == 0.F && request.transform.scale.z * request.scale == 1.F;
+        }
+
         /** @brief Validates all representation and prepared schema facts before queue or dedup state changes. */
         [[nodiscard]] VfxSpawnStatus ValidateOne(Detail::VfxWorldSpawnState &state, const VfxIdentityScope scene,
                                                  const VfxSpawnRequest &request) noexcept {
@@ -35,6 +43,8 @@ namespace Horo::Vfx::SpawnDetail {
             if (request.requirement == VfxRequirementClass::GameplayRequired &&
                 (!asset->requiredGameplay || asset->info.requiredReserve == 0))
                 return VfxSpawnStatus::PermissionDenied;
+            if (!SupportedPlacement(*asset, request))
+                return VfxSpawnStatus::UnsupportedRecipe;
             return ParametersMatch(request.parameters, asset->info) ? VfxSpawnStatus::Accepted : VfxSpawnStatus::ParameterSchemaMismatch;
         }
 
