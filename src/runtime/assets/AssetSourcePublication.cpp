@@ -241,7 +241,7 @@ namespace Horo::Assets {
     Result<std::filesystem::path> AssetSourcePublicationLockPath(const std::filesystem::path &root, const std::filesystem::path &path) {
         if (!SafePath(root, path))
             return Result<std::filesystem::path>::Failure(MakeError(AssetSourceErrors::InvalidPath));
-        const auto relative = path.lexically_relative(root).generic_string();
+        const auto relative = path.lexically_relative(root).generic_u8string();
         const auto digest = ComputeSha256(std::as_bytes(std::span(relative.data(), relative.size())));
         return Result<std::filesystem::path>::Success(root / ".horo/local/source-locks" / (FormatSha256(digest).substr(7) + ".lock"));
     }

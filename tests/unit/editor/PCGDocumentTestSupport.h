@@ -173,6 +173,11 @@ namespace Horo::Editor::PCGDocumentTestSupport {
         }
     };
 
+    inline std::filesystem::path StagingPath(std::filesystem::path source) {
+        source += ".source-publication.tmp";
+        return source;
+    }
+
     class Project final {
     public:
         Project() : mutations(files) {

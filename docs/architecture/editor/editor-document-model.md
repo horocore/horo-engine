@@ -52,6 +52,11 @@ used as a mutable tab handle. `DocumentKind` describes the document semantics,
 while `SourceDocumentId` stores a validated project-relative path using `/`
 separators. `DocumentOpenKey` combines those two persistent values.
 
+Source identities use UTF-8. PCG open/save admission converts that spelling to a
+native filesystem path explicitly; it does not use the Windows locale code page.
+Asset source publication hashes the canonical relative UTF-8 spelling for its
+writer lock, so Unicode source names retain the same identity on every host.
+
 `DocumentInstanceId` is session-local and monotonic. `DocumentIdentity` combines
 it with a `DocumentOpenKey` for the lifetime of one open instance. Opening an
 existing key returns `FocusExisting` and the existing instance; it never creates
