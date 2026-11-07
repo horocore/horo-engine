@@ -95,7 +95,8 @@ namespace {
         std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner;
         bool native{};
         TemporaryDirectory directory;
-        SteadyClock clock;
+        // Functional lifecycle checks use controlled capture time; Until still bounds real worker settlement.
+        DeterministicClock clock;
         SystemWallClock wall;
         JobSystem jobs{{2, 32}};
         OperationStore operations{8, 16};

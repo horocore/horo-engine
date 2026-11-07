@@ -51,7 +51,8 @@ namespace Horo::Physics::StateTest {
         /** @brief Actual Scene aggregate owns Physics, Save uses production storage/1481 handoff, and every worker really settles. */
         struct SceneSaveFixture final {
             Runtime::SaveFilesystemTest::TemporaryDirectory directory;
-            SteadyClock clock;
+            // Keep instrumented capture work independent of host scheduling; Ready bounds real worker settlement.
+            DeterministicClock clock;
             SystemWallClock wall;
             OperationStore operations{16, 32};
             std::unique_ptr<PhysicsRuntime> runtime;
