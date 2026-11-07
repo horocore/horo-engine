@@ -77,7 +77,7 @@ namespace Horo::Physics {
 
         TEST_CASE("Physics world capacities reject each bound independently and never clamp", "[physics][world]") {
             using Mutation = void (*)(PhysicsWorldCapacity &);
-            const std::array<Mutation, 6> mutations{
+            const Mutation mutations[]{
                 [](auto &value) {
                 value.maximumBodies = MaximumPhysicsBodies + 1;
             },
