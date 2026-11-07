@@ -139,6 +139,14 @@ namespace Horo::Tests::VulkanEditor {
             Check(cooked);
             viewport = std::make_unique<EditorViewportRendererVulkan>(*frontend, *bridge, std::move(cooked).Value());
             Check(viewport->Initialize());
+            const auto view = frontend->CreateRenderViewIdentity();
+            Check(view);
+            Check(viewport->BindLightingViewIdentity(view.Value()));
+            EditorViewportLightingProfile lighting;
+            lighting.requested = LightPreparationMode::BaselineForwardCpu;
+            const auto selected = frontend->ResolveLightPreparation(lighting.requested, lighting.fallback, {});
+            Check(selected);
+            Check(viewport->RequestLightingProfile(lighting, selected.Value()));
             viewport->RequestExtent({320, 240});
             viewport->RequestGrid({.visible = false});
             for (std::size_t attempt = 0; attempt < 8; ++attempt) {
@@ -234,12 +242,15 @@ namespace Horo::Tests::VulkanEditor {
         const RenderMeshSourceHandle source{{1}, 1};
         const std::array meshes{RenderMeshResourceView{source, vertices, indices, {{-1, -1, 0}, {1, 1, 0}}}};
         const std::array instances{RenderStaticMeshInstance{.mesh = source}};
-        const std::array lights{RenderLight{}, RenderLight{.kind = RenderLightKind::Point, .position = {2, 3, 4}},
-                                RenderLight{.kind = RenderLightKind::Spot, .position = {0, 0, 3}}};
+        const std::array lights{RenderLight{.stableIdentity = 1},
+                                RenderLight{.kind = RenderLightKind::Point, .position = {2, 3, 4}, .stableIdentity = 2},
+                                RenderLight{.kind = RenderLightKind::Spot, .position = {0, 0, 3}, .stableIdentity = 3}};
         const RenderSceneView scene{.camera = {.position = {0, 2, 5}, .target = {0, 0, 0}},
                                     .meshResources = meshes,
                                     .instances = instances,
-                                    .lights = lights};
+                                    .lights = lights,
+                                    .lightSceneDomain = 1,
+                                    .lightSnapshotRevision = 1};
         REQUIRE(scene.IsValid());
         Host host;
         host.CreateViewport(scene);
