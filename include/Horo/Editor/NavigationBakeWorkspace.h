@@ -63,15 +63,7 @@ namespace Horo::Editor {
         /** @brief Requests cancellation only after explicit confirmation; errors allow a deliberate retry.
          * @return Original operation result. Repeated successful confirmation is idempotent.
          */
-        [[nodiscard]] Result<void> Confirm() {
-            if (confirmed_)
-                return Result<void>::Success();
-            if (!cancel_ || (id_.opening == 0 || id_.command == 0))
-                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::InvalidHandle));
-            auto result = cancel_(id_);
-            confirmed_ = result.HasValue();
-            return result;
-        }
+        [[nodiscard]] Result<void> Confirm();
 
     private:
         std::function<Result<void>(NavigationBakeOperationIdentity)> cancel_;

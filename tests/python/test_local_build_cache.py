@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -401,3 +402,51 @@ def test_cleanup_latch_created_after_gc_guard_preserves_generation(
     assert cache.status(repo)["generation"] != old.name
     assert cache.status(repo)["cleanup_blocked"] is True
     assert (old / "compiler" / "entry").read_text() == "object"
+
+
+def test_readonly_consumer_hit_and_miss_preserve_generation_contents_and_counters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = shutil.which("ccache")
+    compiler = shutil.which("cc")
+    if launcher is None or compiler is None:
+        pytest.skip("real compiler and ccache required for immutable-consumer regression")
+    generation = tmp_path / "generation with spaces türkçe"
+    generation.mkdir()
+    (generation / "compiler").mkdir()
+    cache._write_configs(generation, "1G")
+    scratch = tmp_path / "consumer scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(cache.tempfile, "gettempdir", lambda: str(scratch))
+    source = tmp_path / "value.c"
+    output = tmp_path / "value.o"
+    source.write_text("int cached_value(void) { return 1; }\n", encoding="utf-8")
+    command = [launcher, compiler, "-c", str(source), "-o", str(output)]
+
+    def compile_with(environment: dict[str, str]) -> None:
+        result = subprocess.run(command, cwd=tmp_path, env=environment, capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr
+        assert output.stat().st_size > 0
+
+    def inventory() -> dict[str, str]:
+        # ccache refreshes LRU mtimes even in read_only mode; bytes, counters and file inventory stay immutable.
+        return {str(path.relative_to(generation)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in generation.rglob("*") if path.is_file()}
+
+    writer = cache._binding(generation, "0" * 40, tmp_path, launcher, os.environ, readonly=False)
+    compile_with(writer.env)
+    before = inventory()
+    reader = cache._binding(generation, "0" * 40, tmp_path, launcher, os.environ, readonly=True)
+    log = tmp_path / "consumer.log"
+    reader.env["CCACHE_LOGFILE"] = str(log)
+    compile_with(reader.env)
+    assert "Succeeded getting cached result" in log.read_text(encoding="utf-8")
+    first_object = output.read_bytes()
+    assert inventory() == before
+    source.write_text("int cached_value(void) { return 2; }\n", encoding="utf-8")
+    log.unlink()
+    compile_with(reader.env)
+    assert "running real compiler" in log.read_text(encoding="utf-8").lower()
+    assert output.read_bytes() != first_object
+    assert inventory() == before
+    assert reader.env["CCACHE_TEMPDIR"] == str(scratch)

@@ -123,6 +123,8 @@ namespace Horo::Render::D3D12Detail {
         RenderResourceNativeLifetime lifetime;
         std::shared_ptr<HeapAllocation> heap;
         ComPtr<ID3D12Resource> native;
+        std::array<ComPtr<ID3D12Fence>, 3> commandFences;
+        std::array<std::uint64_t, 3> commandFenceValues{};
         RenderBufferDescriptor buffer;
         RenderTextureDescriptor texture;
         RenderTextureViewDescriptor view;
@@ -155,6 +157,8 @@ namespace Horo::Render::D3D12Detail {
         ComPtr<ID3D12GraphicsCommandList> commands;
         std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints;
     };
+
+    class NativeCommandRuntime;
 
     /** @brief Owns exact initialized device resources; no host/backend discovery is performed here. */
     class Resources final : public ID3D12Resources {
@@ -217,6 +221,12 @@ namespace Horo::Render::D3D12Detail {
         D3D12ResourceSnapshot Snapshot() const noexcept override;
 
     private:
+        friend class NativeCommandRuntime;
+        /** @brief Orders the direct transfer queue after exact command references without waiting on the CPU. */
+        Result<void> WaitForCommandAccess(const Resource &resource);
+        /** @brief Host-visible writes cannot overwrite bytes while an accepted GPU graph still refers to them. */
+        Result<void> CheckHostWriteAvailable(const Resource &resource) const;
+
         template <typename T> static Result<T> Failure(const char *code, const char *message) {
             return Result<T>::Failure(ResourceError(code, message));
         }
@@ -293,6 +303,8 @@ namespace Horo::Render::D3D12Detail {
                                        std::span<const std::byte> payload, bool readback, const CancellationToken &cancellation);
         /** @brief Computes bounded per-layer base-level footprints, retaining native padding. */
         Result<void> PrepareFootprints(Transfer &transfer);
+        /** @brief Completes footprints, staging and closed copy commands before any queue admission. */
+        Result<void> PrepareTransfer(Transfer &transfer, std::span<const std::byte> payload, std::size_t offset);
         /** @brief Prepares and closes a batch before irreversible submission. */
         Result<void> PrepareCopyCommands(Transfer &transfer, std::size_t offset);
         /** @brief Submits an already-owned batch; failure retains its backing and native retirement lease. */
@@ -313,10 +325,13 @@ namespace Horo::Render::D3D12Detail {
         D3D12ResourceTestHooks testHooks_;
         std::thread::id owner_{std::this_thread::get_id()};
         bool accepting_{true};
+        NativeCommandRuntime *commandOwner_{nullptr}; /**< One live command owner borrows this exact resource authority. */
+        bool commandTimelineUsed_{false};             /**< Issued graph timelines cannot restart in the same resource incarnation. */
         std::uint64_t deviceIncarnation_{0};
         std::uint64_t nextResource_{1};
         std::uint64_t nextTransfer_{1};
         std::uint64_t nextFence_{1};
+        std::uint64_t lastSubmittedFence_{0}; /**< Exact Execute-issued transfer point; failed preparation may burn issuer values. */
         ComPtr<ID3D12Fence> fence_;
         std::array<DescriptorPool, 4> pools_;
         std::vector<std::shared_ptr<HeapAllocation>> heapAllocations_;

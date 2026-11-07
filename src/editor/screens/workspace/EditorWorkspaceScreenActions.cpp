@@ -8,6 +8,7 @@
 #include "editor/modals/packages/PackageModal.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
 #include "editor/modals/prefab_creation/PrefabCreationModal.h"
+#include "editor/modals/save_load/SaveLoadManagerModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
 #include "editor/modals/source_document/SourceDocumentCloseModal.h"
 #include "editor/modals/world_layer/CreateWorldLayerModal.h"
@@ -22,13 +23,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
         /** @brief Formats bounded creation diagnostics after the workspace lifetime fence passes. */
         std::string PrefabCreationFailureMessage(const PrefabCreationOutcome *outcome, const ILocalizationService &localization) {
-            std::string message = localization.Get("editor", "workspace.prefab.create.failed");
+            std::string message = EditorWorkspaceScreen::kTextScope.Text(localization, "prefab.create.failed");
             if (!outcome)
                 return message;
             if (outcome->error)
                 message += std::format("\n{}", outcome->error->message);
             constexpr std::size_t maximumVisibleBoundaries{32};
-            const auto count = std::min(outcome->boundaries.size(), maximumVisibleBoundaries);
+            const auto count = (std::min)(outcome->boundaries.size(), maximumVisibleBoundaries);
             for (const auto &boundary : std::span{outcome->boundaries}.first(count)) {
                 message += std::format("\n{}: {}", boundary.source.value, boundary.property);
                 if (boundary.target)
@@ -36,7 +37,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             }
             if (count < outcome->boundaries.size())
                 message += std::format("\n{} {}", outcome->boundaries.size() - count,
-                                       localization.Get("editor", "workspace.prefab.create.more_diagnostics"));
+                                       EditorWorkspaceScreen::kTextScope.Text(localization, "prefab.create.more_diagnostics"));
             for (const auto &receipt : outcome->files)
                 if (receipt.recoveryError)
                     message += std::format("\n{}: {}", receipt.path.generic_string(), receipt.recoveryError->message);
@@ -130,43 +131,75 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::HandleMenuInvocation */
     bool EditorWorkspaceScreen::HandleMenuInvocation(const EditorMenuInvocation &invocation) {
         EditorMenuAction action = invocation.action;
+        if (OpenWorkspaceManager(action))
+            return true;
+        if (sourceCommands_.HandleMenuAction(controller_.get(), action))
+            return true;
+        action = NormalizeSceneSaveAction(action);
+        if (HandlePrimitiveMenu(invocation))
+            return true;
+        if (const auto persisted = HandleScenePersistenceMenu(action); persisted.has_value())
+            return *persisted;
+        return HandleDocumentHistoryMenu(action);
+    }
+
+    /** @brief Promotes an untitled document's Save to the existing Save As route without creating any source write authority. */
+    EditorMenuAction EditorWorkspaceScreen::NormalizeSceneSaveAction(EditorMenuAction action) const {
+        if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
+            !controller_->CurrentScenePath())
+            return EditorMenuAction::SaveSceneAs;
+        return action;
+    }
+
+    /** @brief Preserves exact primitive payload and document selection through the ordinary controller command. */
+    bool EditorWorkspaceScreen::HandlePrimitiveMenu(const EditorMenuInvocation &invocation) {
+        if (!controller_ || invocation.action != EditorMenuAction::CreatePrimitive || !invocation.primitive)
+            return false;
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::CreatePrimitive;
+        command.primitivePayload = invocation.primitive;
+        command.objectPayload = controller_->ViewModel().primarySelection;
+        controller_->ProcessCommand(command);
+        PublishViewportSceneIfChanged();
+        return true;
+    }
+
+    /** @brief Distinguishes an unrelated action from the real Save As dialog's accepted/cancelled result. */
+    std::optional<bool> EditorWorkspaceScreen::HandleScenePersistenceMenu(EditorMenuAction action) {
+        if (!controller_ || (action != EditorMenuAction::SaveSceneAs && action != EditorMenuAction::SaveSceneCopyAs))
+            return {};
+        return SaveSceneAs(action == EditorMenuAction::SaveSceneCopyAs);
+    }
+
+    /** @brief Routes ordinary Save/Undo/Redo through existing canonical document history. */
+    bool EditorWorkspaceScreen::HandleDocumentHistoryMenu(EditorMenuAction action) {
+        using enum EditorMenuAction;
+        if (!controller_ || (action != SaveScene && action != Undo && action != Redo))
+            return false;
+        EditorWorkspaceViewCommandData command;
+        if (action == SaveScene)
+            command.command = EditorWorkspaceViewCommand::SaveScene;
+        else if (action == Undo)
+            command.command = EditorWorkspaceViewCommand::UndoScene;
+        else
+            command.command = EditorWorkspaceViewCommand::RedoScene;
+        controller_->ProcessCommand(command);
+        PublishViewportSceneIfChanged();
+        return true;
+    }
+
+    /** @brief Opens the actual workspace manager surface while keeping each feature's authority private to its existing owner. */
+    bool EditorWorkspaceScreen::OpenWorkspaceManager(EditorMenuAction action) {
         if (action == EditorMenuAction::ManagePackages) {
             OpenPackagesModal();
             return true;
         }
-        if (sourceCommands_.HandleMenuAction(controller_.get(), action))
-            return true;
-        if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
-            !controller_->CurrentScenePath().has_value())
-            action = EditorMenuAction::SaveSceneAs;
-        if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
-            EditorWorkspaceViewCommandData command;
-            command.command = EditorWorkspaceViewCommand::CreatePrimitive;
-            command.primitivePayload = invocation.primitive;
-            command.objectPayload = controller_->ViewModel().primarySelection;
-            controller_->ProcessCommand(command);
-            PublishViewportSceneIfChanged();
-            return true;
-        }
-        if (controller_ && (action == EditorMenuAction::SaveSceneAs || action == EditorMenuAction::SaveSceneCopyAs)) {
-            return SaveSceneAs(action == EditorMenuAction::SaveSceneCopyAs);
-        }
-        if (!controller_ ||
-            (action != EditorMenuAction::SaveScene && action != EditorMenuAction::Undo && action != EditorMenuAction::Redo)) {
+        if (action != EditorMenuAction::OpenSaveLoadManager)
             return false;
-        }
-
-        using enum EditorMenuAction;
-        EditorWorkspaceViewCommandData command;
-        if (action == SaveScene) {
-            command.command = EditorWorkspaceViewCommand::SaveScene;
-        } else if (action == Undo) {
-            command.command = EditorWorkspaceViewCommand::UndoScene;
-        } else {
-            command.command = EditorWorkspaceViewCommand::RedoScene;
-        }
-        controller_->ProcessCommand(command);
-        PublishViewportSceneIfChanged();
+        const auto binding = controller_ ? controller_->PlaySaveBinding() : std::weak_ptr<EditorPlayRuntimeBinding>{};
+        const auto opened = modalHost_.OpenRoot(std::make_unique<SaveLoadManagerModal>(context_, binding));
+        if (opened.HasError())
+            LOG_WARN("editor.play.save", "Manager admission failed: %s", opened.ErrorValue().message.c_str());
         return true;
     }
 
@@ -189,7 +222,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         pfd::save_file dialog(std::string{context_.localization.Get("editor", copyOnly ? "workspace.scene_save_copy_as.title"
                                                                                        : "workspace.scene_save_as.title")},
                               dialogDefault,
-                              {std::string{context_.localization.Get("editor", "workspace.scene_save.file_type")}, "*.horo"});
+                              {std::string{EditorWorkspaceScreen::kTextScope.Text(context_.localization, "scene_save.file_type")},
+                               "*.horo"});
         const std::string selected = dialog.result();
         if (selected.empty()) {
             return true;
@@ -289,7 +323,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }));
         if (opened.HasError() && controller_)
             controller_->Notifications().Publish("world_layers", NotificationSeverity::Error,
-                                                 context_.localization.Get("editor", "workspace.world_layers.rejected"));
+                                                 EditorWorkspaceScreen::kTextScope.Text(context_.localization, "world_layers.rejected"));
     }
 
     /** @copydoc EditorWorkspaceScreen::OpenPrefabCreationModal */
@@ -301,7 +335,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             std::make_unique<PrefabCreationModal>(context_, captured.Value(), controller_->ViewModel().projectRoot,
                                                   [controller = controller_.get(), localization = &context_.localization,
                                                    lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_},
-                                                   expired = context_.localization.Get("editor", "workspace.prefab.create.expired")](
+                                                   expired = EditorWorkspaceScreen::kTextScope.Text(context_.localization,
+                                                                                                    "prefab.create.expired")](
                                                       PrefabCreationIntent intent) -> std::optional<std::string> {
             if (lifetime.expired())
                 return expired;
@@ -339,8 +374,16 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
 
         const std::string baseName = SuggestGameplayBehaviorBaseName(*destination, kind);
+        const auto browse = [this](const std::string_view title,
+                                   const std::filesystem::path &initialDirectory) -> std::optional<std::filesystem::path> {
+            auto dialogContext = input_.router.PushContext(Input::InputContextId{"editor.native_dialog.behavior_destination"},
+                                                           Input::InputContextKind::NativeDialog);
+            const std::string selected = pfd::select_folder(std::string{title}, initialDirectory.string()).result();
+            return selected.empty() ? std::nullopt : std::optional{std::filesystem::path{selected}};
+        };
         Result<void> opened =
             modalHost_.OpenRoot(std::make_unique<GameplayBehaviorFilenameModal>(context_, kind, destination->string(), baseName,
+                                                                                controller_->ViewModel().projectRoot, browse,
                                                                                 [this](CreateGameplayBehaviorRequest request) {
             if (!controller_) {
                 return;

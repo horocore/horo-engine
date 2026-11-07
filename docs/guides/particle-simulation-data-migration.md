@@ -1,0 +1,15 @@
+# Shared particle simulation data (HORO-1731 Phase 1)
+
+`HoroEngine::VfxSimulationData` owns the canonical force descriptors, logical stage order and full-simulation counter RNG. It exports only `Horo/Vfx/ParticleSimulationData.h` and depends on Foundation, which owns the Math value types. Renderer contracts can depend on this target without depending on the full VFX API, Assets, scene ownership or CPU simulator lifecycle.
+
+Existing clients including `CpuParticleSimulator.h` keep the same fully qualified `CpuParticleStage`, `CpuParticleForceKind` and `CpuParticleForceModule` types, enum values and field layouts. That header includes the new owner. `HoroEngine::VfxApi` publicly depends on the shared target, so CMake consumers retain access through the existing target. New clients needing only these values should include the shared header and link its target directly. Reconfigure and rebuild from the same source snapshot; there is no persisted source-schema, RNG-version, extension C ABI or gameplay SDK change in this phase.
+
+Force validation retains the ordered maximum of 64 descriptors, finite scalar/vector inputs, nonnegative falloff/frequency, finite constant/noise amplitude products, and unique noise channels of at least ten. CPU failure descriptors and preparation behavior remain unchanged. This is semantic data, not a native GPU record: adapters must explicitly lower fields and must not copy `sizeof(CpuParticleForceModule)` or Math padding into shader buffers.
+
+The full simulator delegates its existing identity prefix and random sample mapping to the shared implementation. The key order remains effect seed, activation scope/slot/generation, emitter scope/slot/generation, stable particle identity, semantic channel, sample ordinal, logical tick and algorithm version one. Arithmetic wraps as unsigned 64-bit values; unit floats use the top 24 bits divided by `2^24`. Native/dense indices, frame rate and completion order are never key inputs. The pure functions accept value tuples and do not admit identities, choose domains, allocate storage or mutate state.
+
+The older `CpuParticleSpawnPipeline` has a distinct pre-existing stream with different combining/key semantics. It remains unchanged and is not the ADR-123 full-simulation or GPU reference. Existing replay and CPU qualification fixtures are not regenerated.
+
+This phase establishes shared authority only. It does not implement or qualify GPU compute, direct GPU particle drawing, asynchronous opt-in readback, backend capability admission or D3D12 integration. Those remain required work for HORO-1731 / #1774 [VFX-003.2]. Readback must remain visual-only, absent unless declared, and renderer-owned under ADR-124.
+
+Qualification targets are `HoroParticleSimulationDataTests`, existing `HoroVfxApiTests`, and generated `HoroVfxSimulationDataPublicHeaderConsumer` / `HoroVfxApiPublicHeaderConsumer`. The new RNG vectors are fixed values independently transcribed from the pre-extraction implementation; existing CPU force/replay tests must also pass. No native GPU behavior is proved by these CPU tests.

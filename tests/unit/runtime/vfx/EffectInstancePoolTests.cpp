@@ -372,4 +372,40 @@ namespace Horo::Vfx {
         CHECK(observed.load() == EffectPoolStatus::ThreadViolation);
         CHECK(pool.Statistics().active == 0);
     }
+
+    TEST_CASE("Effect pool reserved slot offsets survive restart retirement and stale handle validation", "[unit][vfx][effect-pool]") {
+        auto descriptor = Descriptor(2);
+        descriptor.firstInstanceSlot = 100;
+        auto pool = Pool(descriptor, Budget(2));
+        const auto first = pool.Play(Request());
+        REQUIRE(first.status == EffectPoolStatus::Admitted);
+        CHECK(first.instance.slot == 100);
+        auto wrong = first.instance;
+        wrong.slot = 0;
+        CHECK(pool.Stop(wrong) == EffectPoolStatus::InvalidHandle);
+        const auto restarted = pool.Restart(first.instance, 1);
+        REQUIRE(restarted.status == EffectPoolStatus::Admitted);
+        CHECK(restarted.instance.slot == 100);
+        CHECK(restarted.instance.generation > first.instance.generation);
+        CHECK(pool.Stop(first.instance) == EffectPoolStatus::StaleHandle);
+        REQUIRE(pool.Stop(restarted.instance) == EffectPoolStatus::Admitted);
+        REQUIRE(pool.CompleteRetirement(restarted.instance) == EffectPoolStatus::Admitted);
+        const auto reused = pool.Play(Request(2));
+        REQUIRE(reused.status == EffectPoolStatus::Admitted);
+        CHECK(reused.instance.slot == 100);
+        CHECK(reused.instance.generation > restarted.instance.generation);
+    }
+
+    TEST_CASE("Effect pool rejects reserved slot ranges containing the invalid sentinel or wrapping", "[unit][vfx][effect-pool]") {
+        auto descriptor = Descriptor(2);
+        descriptor.firstInstanceSlot = EffectSystemId::InvalidSlot - 1;
+        CHECK(HasErrorCode(EffectInstancePool::Prepare(descriptor, Budget(2), {}), VfxErrors::EffectPoolInvalid));
+        descriptor.firstInstanceSlot = EffectSystemId::InvalidSlot;
+        CHECK(HasErrorCode(EffectInstancePool::Prepare(descriptor, Budget(2), {}), VfxErrors::EffectPoolInvalid));
+        descriptor.firstInstanceSlot = EffectSystemId::InvalidSlot - 2;
+        auto pool = Pool(descriptor, Budget(2));
+        const auto first = pool.Play(Request());
+        REQUIRE(first.status == EffectPoolStatus::Admitted);
+        CHECK(first.instance.slot == EffectSystemId::InvalidSlot - 2);
+    }
 }  // namespace Horo::Vfx

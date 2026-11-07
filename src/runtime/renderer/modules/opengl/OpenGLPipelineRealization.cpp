@@ -389,6 +389,30 @@ namespace Horo::Render::Detail {
         }
     }  // namespace
 
+    /** @copydoc ValidateOpenGLProgramInterface */
+    Result<void> ValidateOpenGLProgramInterface(const std::uint32_t program, const ShaderManifest &manifest,
+                                                const ShaderTargetRequirement &target, const NormalizedShaderReflection &reflection) {
+        if (!IsAvailable())
+            return Result<void>::Failure(MakeError(OpenGLBackendErrors::MissingRequiredEntryPoints));
+        if (const auto validated = ValidateShaderManifest(manifest); validated.HasError())
+            return validated;
+        RenderGraphicsPipelineDescriptor descriptor;
+        descriptor.manifest = manifest;
+        descriptor.target = target;
+        descriptor.reflection = reflection;
+        if (glGetError() != GL_NO_ERROR)
+            return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
+        if (const auto attributes = ValidateAttributes(program, descriptor); attributes.HasError())
+            return attributes;
+        if (const auto outputs = ValidateOutputs(program, reflection); outputs.HasError())
+            return outputs;
+        if (const auto bindings = ValidateBindings(program, descriptor); bindings.HasError())
+            return bindings;
+        if (glGetError() != GL_NO_ERROR)
+            return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
+        return Result<void>::Success();
+    }
+
     /** @copydoc ValidateOpenGLVertexAttributes */
     Result<void> ValidateOpenGLVertexAttributes(const std::span<const OpenGLVertexAttribute> attributes,
                                                 const RenderGraphicsPipelineDescriptor &descriptor) {

@@ -104,7 +104,19 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensio
                                                      .messageCount = 4,
                                                      .invokeAction = Invoke};
     session = (HoroEditorActivitySessionApi){.structSize = sizeof(HoroEditorActivitySessionApi)};
+#if defined(HORO_ACTIVITY_COMMAND_FIXTURE)
+    const HoroEditorActivityCommand command = {.id = TEXT("fixture.command.run"),
+                                               .nodeId = TEXT("fixture.run"),
+                                               .actionId = TEXT("fixture.run"),
+                                               .labelKey = TEXT("fixture.run.label"),
+                                               .shortcut = TEXT("Ctrl+Shift+P")};
+    HoroEditorActivityDescriptorV2 extended = {.activity = descriptor, .commands = &command, .commandCount = 1};
+    extended.activity.structSize = sizeof(extended);
+    extended.activity.schemaVersion = 2;
+    const HoroExtensionStatus status = host->registerEditorActivity(host->hostContext, &extended.activity, &session);
+#else
     const HoroExtensionStatus status = host->registerEditorActivity(host->hostContext, &descriptor, &session);
+#endif
     if (status == HORO_EXTENSION_SUCCESS &&
         (session.structSize < sizeof(HoroEditorActivitySessionApi) || session.sessionVersion != HORO_EDITOR_ACTIVITY_SESSION_VERSION ||
          (session.supportedNodeMask & (1U << HORO_EDITOR_ACTIVITY_ACTION)) == 0 ||

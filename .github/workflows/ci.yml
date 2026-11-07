@@ -172,7 +172,7 @@ jobs:
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}
           -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
-          -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
+          -DHORO_BUILD_AUDIO_SDL3=OFF
           -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF
       - name: Build native Vulkan contracts
         run: >-
@@ -337,7 +337,7 @@ jobs:
       - name: Build D3D12 tests
         run: >-
           cmake --build build/ci-d3d12-resources --parallel 2
-          --target HoroD3D12InitializationTests HoroD3D12ResourceTests
+          --target HoroD3D12InitializationTests HoroD3D12ResourceTests HoroD3D12CommandTests
       - name: Test D3D12 initialization
         run: >-
           ctest --test-dir build/ci-d3d12-resources --output-on-failure --parallel 1 --no-tests=error
@@ -346,6 +346,11 @@ jobs:
         run: >-
           build/ci-d3d12-resources/tests/HoroD3D12ResourceTests.exe '[warp]'
           --reporter junit --out build/ci-d3d12-resources/warp.xml
+      - name: Test D3D12 commands on WARP
+        run: >-
+          ctest --test-dir build/ci-d3d12-resources --output-on-failure --parallel 1 --no-tests=error
+          --timeout 90 -R '^HoroD3D12CommandTests::'
+          --output-junit "$GITHUB_WORKSPACE/build/ci-d3d12-resources/commands.xml"
       - name: Upload D3D12 test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -1034,6 +1039,62 @@ jobs:
     strategy: *macos_build_strategy
     outputs: *macos_bundle_outputs
     steps: *native_steps
+
+  reference-sdk-macos-x64:
+    name: Reference SDK · macOS x64
+    needs: [tooling]
+    if: ${{ !cancelled() && needs.tooling.result == 'success' }}
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CC: clang
+      CXX: clang++
+      HORO_COMPILER_LAUNCHER: ccache
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      CTEST_PARALLEL_LEVEL: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Setup build tools
+        uses: ./.github/actions/setup-build-tools
+      - name: Restore compatible main caches
+        uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-tests-v1
+          compiler-storage: registry
+          mode: Debug
+          max-size: 2G
+      - name: Configure reference SDK host
+        run: >-
+          cmake --preset ci-macos-debug
+          -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk"
+          -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON
+      - name: Build actual SDK consumers and native host
+        run: >-
+          cmake --build --preset ci-macos-debug --parallel 2 --target
+          HoroReferenceExtensionQualification HoroExtensionAbiCConsumer
+          HoroExtensionsPublicHeaderConsumer HoroExtensionLuaBindingsPublicHeaderConsumer
+      - name: Validate reference packages and native lifecycle
+        run: >-
+          ctest --test-dir build/ci -C Debug --parallel 1 --output-on-failure --no-tests=error
+          -R '^(HoroReferenceExtensionExamplesTest|HoroNativeExtensionServiceTests|HoroNativeExtensionServiceOffLaneRetentionTests|HoroExtensionAbiCConsumer|HoroExtensionSdkExternalConsumerTest|HoroExtensionSdkReconfigureTest)$'
+          --output-junit reference-sdk-ctest.xml
+      - name: Preserve SDK qualification results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reference-sdk-macos-x64-${{ github.sha }}
+          path: build/ci/reference-sdk-ctest.xml
+          if-no-files-found: warn
+          retention-days: 7
 
   macos-metal:
     name: Test · macOS / Clang${{ github.ref == 'refs/heads/main' && ' (main)' || '' }}

@@ -98,6 +98,19 @@ namespace Horo::Vfx {
             return range.minimum >= -FloatMaximum && range.maximum <= FloatMaximum;
         }
 
+        /** @brief Checks the legacy spawn owner's finite work envelope before allocation. */
+        [[nodiscard]] bool ValidSpawnOwner(const CpuParticleSpawnPipelineCreateInfo &info) noexcept {
+            return info.buffer.IsValid() && info.activation.IsValid() && info.maximumBurstParticles != 0 &&
+                   info.maximumBurstParticles <= CpuParticleSpawnHardLimits::BurstParticles && std::isfinite(info.maximumDeltaSeconds) &&
+                   info.maximumDeltaSeconds > 0.0F && info.maximumDeltaSeconds <= CpuParticleSpawnHardLimits::DeltaSeconds;
+        }
+
+        /** @brief Requires all authored spawn ranges to fit the CPU storage representation. */
+        [[nodiscard]] bool ValidSpawnRanges(const ParticleSystemDescriptorData &data) noexcept {
+            return data.maximumParticles != 0 && FloatRangeRepresentable(data.initialSpeed) && FloatRangeRepresentable(data.initialSize) &&
+                   FloatRangeRepresentable(data.initialOpacity) && FloatRangeRepresentable(data.lifetimeSeconds);
+        }
+
         void InitializePosition(const Detail::CpuParticleSpawnPipelineState &state, const ParticleSimulationId particle,
                                 const CpuParticleSoAView &view, const std::uint32_t dense) noexcept {
             using enum ParticleEmitterShape;
@@ -274,12 +287,10 @@ namespace Horo::Vfx {
     Result<CpuParticleSpawnPipeline> CpuParticleSpawnPipeline::Create(const ParticleSystemDescriptor &descriptor,
                                                                       const CpuParticleSpawnPipelineCreateInfo &info) {
         const ParticleSystemDescriptorData &data = descriptor.Data();
-        if (!info.buffer.IsValid() || !info.activation.IsValid() || info.maximumBurstParticles == 0 ||
-            info.maximumBurstParticles > CpuParticleSpawnHardLimits::BurstParticles || !std::isfinite(info.maximumDeltaSeconds) ||
-            info.maximumDeltaSeconds <= 0.0F || info.maximumDeltaSeconds > CpuParticleSpawnHardLimits::DeltaSeconds ||
-            data.maximumParticles == 0 || !FloatRangeRepresentable(data.initialSpeed) || !FloatRangeRepresentable(data.initialSize) ||
-            !FloatRangeRepresentable(data.initialOpacity) || !FloatRangeRepresentable(data.lifetimeSeconds))
+        if (!ValidSpawnOwner(info) || !ValidSpawnRanges(data))
             return Failure<CpuParticleSpawnPipeline>(VfxErrors::ParticleSpawnStepInvalid);
+        if (data.gpuReadback.enabled)
+            return Failure<CpuParticleSpawnPipeline>(VfxErrors::GpuSimulationUnsupported);
 
         auto buffer = CpuParticleBuffer::Create(
             {.buffer = info.buffer, .capacity = data.maximumParticles, .customFloatStreams = 0, .maximumBytes = info.maximumBufferBytes});

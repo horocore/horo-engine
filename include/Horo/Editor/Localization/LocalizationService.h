@@ -14,7 +14,7 @@ namespace Horo::Editor {
     /** @brief Immutable message catalog for one normalized locale. */
     struct LocalizationCatalog {
         LocaleTag locale;
-        std::unordered_map<MessageKey, std::string, MessageKeyHash> messages;
+        std::unordered_map<MessageKey, std::string, MessageKeyHash, MessageKeyEqual> messages;
     };
 
     /** @brief Read-only localization view captured for one presentation snapshot. */
@@ -63,6 +63,15 @@ namespace Horo::Editor {
 
         /** @brief Resolves a message. Returns a reference to the mapped string or a cached missing-key string. */
         [[nodiscard]] const std::string &Get(std::string_view namespaceId, std::string_view localKey) const override;
+
+        /** @brief Resolves a scoped key without allocating a concatenated lookup key.
+         * @param namespaceId Catalog namespace.
+         * @param scope Surface prefix without a trailing dot.
+         * @param key Relative message key.
+         * @return Active catalog string or a cached missing-key diagnostic.
+         */
+        [[nodiscard]] const std::string &GetScoped(std::string_view namespaceId, std::string_view scope,
+                                                   std::string_view key) const override;
 
         /** @brief Returns the currently active locale. */
         [[nodiscard]] LocaleTag ActiveLocale() const;

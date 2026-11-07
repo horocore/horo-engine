@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Platform.h"
 #include "editor/modals/settings/NavigationSettingsDraft.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -5,9 +6,27 @@
 #include <algorithm>
 
 namespace Horo::Editor {
+    /** @copydoc EditorWorkspaceController::UpdateSourceAutosave */
+    void EditorWorkspaceController::UpdateSourceAutosave(const float elapsedSeconds, const int delaySeconds) {
+        NativeDurableFileSystem files;
+        if (auto outcome = m_sourceOpenService.Documents().UpdateAutosave(elapsedSeconds, delaySeconds, files)) {
+            m_sourceSaveOutcome = std::move(*outcome);
+            if (m_sourceSaveOutcome->HasError())
+                LOG_ERROR("editor.source.autosave", "%s", m_sourceSaveOutcome->ErrorValue().message.c_str());
+            RefreshSourceDocumentProjection();
+        }
+    }
+
     /** @copydoc EditorWorkspaceController::HasDirtySourceDocuments */
     bool EditorWorkspaceController::HasDirtySourceDocuments() {
         RefreshSourceDocumentProjection();
+        RefreshTerrainDocuments();
+        for (const auto &[instance, revision] : TerrainDocumentRevisions()) {
+            static_cast<void>(revision);
+            for (const auto &tab : m_viewModel.workspacePanelHost.DocumentTabs())
+                if (tab.identity.instance == instance && tab.dirty)
+                    return true;
+        }
         return std::ranges::any_of(m_viewModel.workspacePanelHost.DocumentTabs(), [](const WorkspaceDocumentTab &tab) {
             return (tab.identity.key.kind == DocumentKind::Source || tab.identity.key.kind == DocumentKind::UiCanvas) && tab.dirty;
         });
@@ -38,7 +57,7 @@ namespace Horo::Editor {
                 return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
         }
         RefreshUiCanvasProjection();
-        return Result<void>::Success();
+        return SaveTerrainDocuments();
     }
 
     /** @copydoc EditorWorkspaceController::RefreshSourceDocumentProjection */

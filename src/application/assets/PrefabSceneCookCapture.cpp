@@ -1,6 +1,8 @@
+#include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Packages/PackageLockfile.h"
 #include "Horo/Packages/PackageRequest.h"
+#include "Horo/Prefab/PrefabValueOverrides.h"
 #include "PrefabSceneCookState.h"
 
 #include <array>
@@ -37,6 +39,11 @@ namespace Horo::Application {
 
     namespace PrefabCookDetail {
         namespace {
+            /** @brief Commits only explicitly supplied override schema policy; no provider metadata implies permission. */
+            Sha256Digest OverrideSchemaIdentity(const PrefabSceneCookRequest &request) noexcept {
+                return request.overrideSchemas ? request.overrideSchemas->Revision() : Sha256Digest{};
+            }
+
             /** @brief Reads an exact bounded control document without following linked path components. */
             Result<std::optional<std::string>> ReadControl(const std::filesystem::path &root, const char *name,
                                                            const std::size_t maximumBytes, const bool required) {
@@ -157,24 +164,76 @@ namespace Horo::Application {
             }
         }  // namespace
 
+        namespace {
+            /** @brief Preserves project-policy and compatibility error precedence before source-byte admission. */
+            Result<PrefabProjectSettingsFile> CaptureSettings(const PrefabSceneCookRequest &request,
+                                                              const ProjectCompatibilitySnapshot &classified) {
+                auto settings = LoadPrefabProjectSettings(request.assets.sourceRoot);
+                if (settings.HasError())
+                    return Result<PrefabProjectSettingsFile>::Failure(settings.ErrorValue());
+                const auto configured = PrefabPolicyFieldValues(settings.Value().settings->Limits().Policy());
+                const auto requested = PrefabPolicyFieldValues(request.prefabPolicy);
+                for (std::size_t i = 0; i < configured.size(); ++i)
+                    if (requested[i] > configured[i])
+                        return Result<PrefabProjectSettingsFile>::Failure(MakeError(PrefabSceneCookErrors::Stale));
+                using enum ProjectCompatibilityStatus;
+                if ((classified.status != Current && classified.status != CompatibleReleaseLine) || classified.markerUpdateRequired ||
+                    !classified.metadata)
+                    return Result<PrefabProjectSettingsFile>::Failure(
+                        classified.diagnostic.value_or(MakeError(PrefabSceneCookErrors::Invalid)));
+                return settings;
+            }
+
+            /** @brief Owns exact validated project bytes alongside the independently classified metadata witness. */
+            Result<std::pair<ProjectMetadata, std::string>> CaptureProject(const PrefabSceneCookRequest &request,
+                                                                           const ProjectCompatibilitySnapshot &classified) {
+                using Outcome = Result<std::pair<ProjectMetadata, std::string>>;
+                auto raw = ReadControl(request.assets.sourceRoot, "project.json", 1U * 1024U * 1024U, true);
+                if (raw.HasError())
+                    return Outcome::Failure(raw.ErrorValue());
+                auto document = DecodeProjectSourceDocument(*raw.Value());
+                if (document.HasError())
+                    return Outcome::Failure(document.ErrorValue());
+                const auto &metadata = document.Value().metadata;
+                if (metadata.horoVersion != classified.metadata->horoVersion ||
+                    metadata.persistentContract != classified.metadata->persistentContract)
+                    return Outcome::Failure(MakeError(PrefabSceneCookErrors::Stale));
+                return Outcome::Success({std::move(document).Value().metadata, std::move(raw).Value().value()});
+            }
+
+            /** @brief Commits the actual optional control file bytes without confusing absence with an empty present file. */
+            std::optional<Sha256Digest> OptionalControlDigest(const std::optional<std::string> &bytes) {
+                return bytes ? std::optional{ComputeSha256(std::as_bytes(std::span{*bytes}))} : std::nullopt;
+            }
+
+            /** @brief Applies the release owner's existing exact dependency-lock fence before adding its semantic commitments. */
+            Result<void> AppendRelease(std::string &semantic, const std::optional<std::string> &packages,
+                                       const Release::ReleaseExecutionPlan *plan) {
+                if (!plan)
+                    return Result<void>::Success();
+                const auto digest =
+                    packages ? ComputeSha256(std::as_bytes(std::span{*packages})) : ComputeSha256(std::span<const std::byte>{});
+                if (digest != plan->Identities().dependencyLock)
+                    return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
+                Append(semantic, FormatSha256(plan->Identities().profile));
+                Append(semantic, FormatSha256(plan->Identities().policy));
+                Append(semantic, FormatSha256(plan->Identities().toolchain));
+                return Result<void>::Success();
+            }
+
+        }  // namespace
+
         /** @copydoc CaptureHost */
         Result<HostCapture> CaptureHost(const PrefabSceneCookRequest &request, const ProjectCompatibilityInspector &compatibility,
                                         const Release::ReleaseExecutionPlan *releasePlan) {
             const auto classified = compatibility.Inspect(request.assets.sourceRoot);
-            using enum ProjectCompatibilityStatus;
-            if ((classified.status != Current && classified.status != CompatibleReleaseLine) || classified.markerUpdateRequired ||
-                !classified.metadata)
-                return Result<HostCapture>::Failure(classified.diagnostic.value_or(MakeError(PrefabSceneCookErrors::Invalid)));
-            auto rawProject = ReadControl(request.assets.sourceRoot, "project.json", 1U * 1024U * 1024U, true);
-            if (rawProject.HasError())
-                return Result<HostCapture>::Failure(rawProject.ErrorValue());
-            auto document = DecodeProjectSourceDocument(*rawProject.Value());
-            if (document.HasError())
-                return Result<HostCapture>::Failure(document.ErrorValue());
-            const auto &metadata = document.Value().metadata;
-            if (metadata.horoVersion != classified.metadata->horoVersion ||
-                metadata.persistentContract != classified.metadata->persistentContract)
-                return Result<HostCapture>::Failure(MakeError(PrefabSceneCookErrors::Stale));
+            auto settings = CaptureSettings(request, classified);
+            if (settings.HasError())
+                return Result<HostCapture>::Failure(settings.ErrorValue());
+            auto project = CaptureProject(request, classified);
+            if (project.HasError())
+                return Result<HostCapture>::Failure(project.ErrorValue());
+            const auto &metadata = project.Value().first;
             auto rawPackages = ReadControl(request.assets.sourceRoot, "packages.lock", 4U * 1024U * 1024U, false);
             if (rawPackages.HasError())
                 return Result<HostCapture>::Failure(rawPackages.ErrorValue());
@@ -189,20 +248,16 @@ namespace Horo::Application {
             Append(semantic, FormatPersistentContractHash(metadata.persistentContract));
             Append(semantic, packages.Value());
             Append(semantic, PolicyIdentity(request));
+            Append(semantic, settings.Value().settings->Configuration().ToJson());
+            if (auto released = AppendRelease(semantic, rawPackages.Value(), releasePlan); released.HasError())
+                return Result<HostCapture>::Failure(released.ErrorValue());
+            Append(semantic, FormatSha256(OverrideSchemaIdentity(request)));
+            const auto cacheDigest = ComputeSha256(std::as_bytes(std::span{semantic}));
             Append(semantic, request.schemas ? FormatSha256(request.schemas->Digest()) : "no-project-schema-context");
-            if (releasePlan) {
-                if (const auto actualLockDigest = rawPackages.Value() ? ComputeSha256(std::as_bytes(std::span{*rawPackages.Value()}))
-                                                                      : ComputeSha256(std::span<const std::byte>{});
-                    actualLockDigest != releasePlan->Identities().dependencyLock)
-                    return Result<HostCapture>::Failure(MakeError(PrefabSceneCookErrors::Stale));
-                Append(semantic, FormatSha256(releasePlan->Identities().profile));
-                Append(semantic, FormatSha256(releasePlan->Identities().policy));
-                Append(semantic, FormatSha256(releasePlan->Identities().toolchain));
-            }
-            return Result<HostCapture>::Success(
-                {metadata, ComputeSha256(std::as_bytes(std::span{semantic})), ComputeSha256(std::as_bytes(std::span{*rawProject.Value()})),
-                 rawPackages.Value() ? std::optional{ComputeSha256(std::as_bytes(std::span{*rawPackages.Value()}))} : std::nullopt,
-                 rawIntent.Value() ? std::optional{ComputeSha256(std::as_bytes(std::span{*rawIntent.Value()}))} : std::nullopt});
+            return Result<HostCapture>::Success({metadata, ComputeSha256(std::as_bytes(std::span{semantic})), cacheDigest,
+                                                 ComputeSha256(std::as_bytes(std::span{project.Value().second})),
+                                                 OptionalControlDigest(rawPackages.Value()), OptionalControlDigest(rawIntent.Value()),
+                                                 settings.Value().identity});
         }
 
         /** @copydoc VerifyHost */
@@ -214,6 +269,8 @@ namespace Horo::Application {
             if (current.Value().projectBytes != capture.projectBytes || current.Value().packageBytes != capture.packageBytes ||
                 current.Value().packageIntentBytes != capture.packageIntentBytes ||
                 current.Value().semanticDigest != capture.semanticDigest)
+                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
+            if (current.Value().prefabSettings != capture.prefabSettings)
                 return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
             return Result<void>::Success();
         }

@@ -130,7 +130,7 @@ namespace Horo::Editor {
             m_prefabDrop->registry == m_assetRegistry.Revision())
             return Result<void>::Success();
         m_prefabDrop.reset();
-        auto limits = Prefab::PrefabLimitProfile::Create({});
+        auto limits = PrefabLimits();
         if (limits.HasError())
             return Result<void>::Failure(limits.ErrorValue());
         std::vector<Assets::AssetId> roots{record.id};

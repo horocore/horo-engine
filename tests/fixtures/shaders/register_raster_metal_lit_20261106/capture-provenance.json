@@ -1,0 +1,68 @@
+{
+  "capturePolicy": {
+    "decorationBinding": true,
+    "hlslVersion": 2021,
+    "intermediate": "Vulkan1.3 SPIR-V1.6",
+    "layout": "fvk-use-gl-layout",
+    "mslVersion": 20400,
+    "optimization": "O3",
+    "strictFloat": true
+  },
+  "files": {
+    "fragment.json": "c5cbc2cf209f2fd16608ca3297991930fe360a819e0ff9c451715dda023048b0",
+    "fragment.metal": "a5708419362b75ef7c200eb12487749bc89b050796db65b8798cc1dd1dccf6e9",
+    "fragment.spv": "37f67e1200e9b9c64a18a6fc7a2b17e86d0bc1294e8f3199dafc2745a9efd3f3",
+    "vertex.json": "56d17ed9948181f198ee6609616da2b32ceaef962338a1145fa0466d9516f903",
+    "vertex.metal": "9641e0c5e13ba84eab37a8880a5588effef5a76aedc5a580bf79657a92d1d06a",
+    "vertex.spv": "31d4d43619a41a065f8f8af9d2c77fbac98acca547a66d381ab02a1de84fca51"
+  },
+  "licenseScope": "Engine-authored shader outputs; no OCIO analytic code is included.",
+  "observedUniform": {
+    "BaseColor": {
+      "offset": 672,
+      "type": "vec4"
+    },
+    "bytes": 688,
+    "name": "type.ViewportParameters"
+  },
+  "originalFiles": {
+    "fragment.json": "viewport_clustered_lit-frag.json",
+    "fragment.metal": "viewport_clustered_lit-frag.metal",
+    "fragment.spv": "viewport_clustered_lit-frag.spv",
+    "vertex.json": "viewport_clustered_lit-vert.json",
+    "vertex.metal": "viewport_clustered_lit-vert.metal",
+    "vertex.spv": "viewport_clustered_lit-vert.spv"
+  },
+  "receiptSHA256": "dc9b46134290529d9cc33f5e2b1969b776ddd53a3149f9938f52b3cfd99a05b5",
+  "schemaVersion": 1,
+  "scope": "Original strict DXC/SPIRV-Val/Cross JSON+MSL parser evidence only; no authenticated cook, native pipeline, image or GPU qualification claim.",
+  "sources": {
+    "assets/shaders/editor/viewport_clustered_lit.hlsl": "beae1776e0a72da6be77765bb602c3080ef06a17321f2d45f625b96c02179f97"
+  },
+  "tools": [
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:b0bf9b20b9425d8e80c39bd4e3c5ce5dbdf26be7973f2122d2ea50de8a8d8a4e",
+      "release": "lunarg-1.4.363.0.dxc-1.9.0.5512",
+      "role": "dxc"
+    },
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:42938d66ae3703537376116c11abed84639a9bc2c02c1f360058287320603ad6",
+      "release": "lunarg-1.4.363.0.spirv-tools-2026.4",
+      "role": "spirv-val"
+    },
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:2adca603ef473f3b292784c1020c61b597a1545c981b2ed128e3de04feb46ad2",
+      "release": "lunarg-1.4.363.0.spirv-cross-f11ba9f0",
+      "role": "spirv-cross"
+    },
+    {
+      "archive_sha256": "sha256:54ba4b368264ecbe2afd0ad988d7df3ad1b2906f51578cbd2ded53f8f3f55db6",
+      "executable_sha256": "sha256:bbe7671518a3905f9d3fce54312fbc77c2876b0d62aca74a0688fa869d31a8a9",
+      "release": "local-deployment.apple-metal-32023.921.5",
+      "role": "apple-metal"
+    }
+  ]
+}

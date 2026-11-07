@@ -9,6 +9,12 @@ namespace Horo::Application {
         /** @brief Explicit registered typed producer; canonical material source and cooked payload share one format. */
         class PhysicsMaterialCooker final : public Assets::ICookerStrategy {
         public:
+            /** @brief Declares a source-only producer; all other byte-affecting settings are captured by CacheIdentity. */
+            Result<std::optional<std::vector<Assets::AssetId>>> InputDependencies(const Assets::CookSourceView &,
+                                                                                  const CancellationToken &) const override {
+                return Result<std::optional<std::vector<Assets::AssetId>>>::Success(std::vector<Assets::AssetId>{});
+            }
+
             Assets::CookerCacheIdentity CacheIdentity() const noexcept override {
                 return {.version = "horo.physics-material.v1", .settingsDigest = {}, .settingsSchemaVersion = 1};
             }

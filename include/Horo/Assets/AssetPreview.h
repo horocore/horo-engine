@@ -8,9 +8,11 @@
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Result.h"
+#include "Horo/Foundation/Sha256.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -27,11 +29,12 @@ namespace Horo::Assets {
 
     /** @brief Borrowed bounded input passed to one asset preview provider invocation. */
     struct AssetPreviewInput {
-        std::span<const std::uint8_t> editorPayload; /**< Immutable imported editor payload. */
-        std::string_view absoluteAssetPath;          /**< Absolute source path for diagnostics only. */
-        AssetTypeId assetType;                       /**< Stable type produced by the importer. */
-        std::uint32_t width{128};                    /**< Requested output width in pixels. */
-        std::uint32_t height{128};                   /**< Requested output height in pixels. */
+        std::span<const std::uint8_t> editorPayload;  /**< Immutable imported editor payload. */
+        std::string_view absoluteAssetPath;           /**< Absolute source path for diagnostics only. */
+        AssetTypeId assetType;                        /**< Stable type produced by the importer. */
+        std::uint32_t width{128};                     /**< Requested output width in pixels. */
+        std::uint32_t height{128};                    /**< Requested output height in pixels. */
+        std::optional<Sha256Digest> capturedRevision; /**< Exact provider revision used by the host cache and this generation. */
     };
 
     /** @brief Owned tightly packed RGBA8 image returned by a preview provider. */
@@ -56,6 +59,19 @@ namespace Horo::Assets {
     class IAssetPreviewProvider {
     public:
         virtual ~IAssetPreviewProvider() = default;
+
+        /** @brief Captures optional immutable provider inputs before cache lookup and revalidates them before delivery.
+         * @param input Borrowed root payload and request dimensions. @param cancellation Host-owned cooperative token.
+         * @return Owned bounded revision digest, absent for root-only providers, or a typed unavailable/freshness failure.
+         * @details Called on the background job, never Draw or Submit. Implementations must use immutable captures;
+         * no mutable document may be read. The host contains exceptions and compares the same proof before delivery.
+         */
+        [[nodiscard]] virtual Result<std::optional<Sha256Digest>> CaptureRevision(const AssetPreviewInput &input,
+                                                                                  const CancellationToken &cancellation) const {
+            static_cast<void>(input);
+            static_cast<void>(cancellation);
+            return Result<std::optional<Sha256Digest>>::Success(std::nullopt);
+        }
 
         /**
          * @brief Produces a bounded RGBA8 image for an imported editor payload.

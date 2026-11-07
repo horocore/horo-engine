@@ -12,7 +12,7 @@ namespace Horo::Editor {
     namespace {
         /** @brief Resolves closed presentation vocabulary; technical values remain data. */
         const std::string &Text(const EditorGuiContext &context, const char *key) {
-            return context.localization.Get("editor", std::string{"workspace.navigation_bake."} + key);
+            return NavigationTab::kTextScope.Text(context.localization, key);
         }
 
         /** @brief Formats localized labels independently of opaque technical values. */
@@ -46,7 +46,7 @@ namespace Horo::Editor {
 
     /** @copydoc NavigationTab::NavigationTab */
     NavigationTab::NavigationTab(NavigationBakeWorkspaceAccess access, EditorModalHost &modals)
-        : access_(std::move(access)), modals_(modals) {}
+        : IWorkspacePanel(kTextScope), access_(std::move(access)), modals_(modals) {}
 
     /** @copydoc NavigationTab::OnAttach */
     void NavigationTab::OnAttach(PanelContext &context) {

@@ -7,6 +7,7 @@
 namespace Horo::Editor {
     namespace {
         constexpr const char *kThemeKey = "editor.theme.active";
+        constexpr const char *kPackageThemeKey = "editor.theme.package_id";
         constexpr const char *kAccentColorKey = "editor.appearance.accent_color";
         constexpr const char *kUiScaleKey = "editor.appearance.ui_scale_percent";
         constexpr const char *kCodeFontSizeKey = "editor.appearance.code_font_size_px";
@@ -82,21 +83,41 @@ namespace Horo::Editor {
                                                            ConfigurationSourceMask::Session | ConfigurationSourceMask::User |
                                                            ConfigurationSourceMask::PackagedProfile}};
         };
-        return {.module = ModuleId{"horo.editor.services"},
-                .ownerPrefix = "editor",
-                .settings = {setting(kThemeKey, SettingValueType::String, std::string{ToConfigurationThemeValue(settings.themePreset)}),
-                             setting(kAccentColorKey, SettingValueType::String, settings.accentColorHex),
-                             setting(kUiScaleKey, SettingValueType::Integer, static_cast<std::int64_t>(settings.uiScalePercent)),
-                             setting(kCodeFontSizeKey, SettingValueType::Integer, static_cast<std::int64_t>(settings.codeFontSizePx))}};
+        ModuleConfigurationContribution contribution{.module = ModuleId{"horo.editor.services"},
+                                                     .ownerPrefix = "editor",
+                                                     .settings = {setting(kThemeKey, SettingValueType::String,
+                                                                          std::string{ToConfigurationThemeValue(settings.themePreset)}),
+                                                                  setting(kPackageThemeKey, SettingValueType::String, settings.themeId),
+                                                                  setting(kAccentColorKey, SettingValueType::String,
+                                                                          settings.accentColorHex),
+                                                                  setting(kUiScaleKey, SettingValueType::Integer,
+                                                                          static_cast<std::int64_t>(settings.uiScalePercent)),
+                                                                  setting(kCodeFontSizeKey, SettingValueType::Integer,
+                                                                          static_cast<std::int64_t>(settings.codeFontSizePx))}};
+        contribution.settings.push_back(setting("editor.appearance.code_font_family", SettingValueType::String, settings.codeFontFamily));
+        for (const auto &entry : CodeEditorBooleanSettings())
+            contribution.settings.push_back(
+                setting((std::string{"editor.code."} + entry.key).c_str(), SettingValueType::Boolean, settings.codeEditor.*entry.member));
+        for (const auto &entry : CodeEditorIntegerSettings())
+            contribution.settings.push_back(setting((std::string{"editor.code."} + entry.key).c_str(), SettingValueType::Integer,
+                                                    static_cast<std::int64_t>(settings.codeEditor.*entry.member)));
+        return contribution;
     }
 
     /** @copydoc MakeEditorAppearanceConfigurationDraft */
     ConfigurationDraft MakeEditorAppearanceConfigurationDraft(const ConfigurationSnapshot &base, const EditorSettings &settings) {
         ConfigurationDraft draft{.baseRevision = base.Revision()};
         draft.proposedValues.try_emplace(SettingKey{kThemeKey}, std::string{ToConfigurationThemeValue(settings.themePreset)});
+        draft.proposedValues.try_emplace(SettingKey{kPackageThemeKey}, settings.themeId);
         draft.proposedValues.try_emplace(SettingKey{kAccentColorKey}, settings.accentColorHex);
         draft.proposedValues.try_emplace(SettingKey{kUiScaleKey}, static_cast<std::int64_t>(settings.uiScalePercent));
         draft.proposedValues.try_emplace(SettingKey{kCodeFontSizeKey}, static_cast<std::int64_t>(settings.codeFontSizePx));
+        draft.proposedValues.try_emplace(SettingKey{"editor.appearance.code_font_family"}, settings.codeFontFamily);
+        for (const auto &entry : CodeEditorBooleanSettings())
+            draft.proposedValues.try_emplace(SettingKey{std::string{"editor.code."} + entry.key}, settings.codeEditor.*entry.member);
+        for (const auto &entry : CodeEditorIntegerSettings())
+            draft.proposedValues.try_emplace(SettingKey{std::string{"editor.code."} + entry.key},
+                                             static_cast<std::int64_t>(settings.codeEditor.*entry.member));
         return draft;
     }
 }  // namespace Horo::Editor

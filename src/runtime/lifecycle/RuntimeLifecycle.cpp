@@ -98,6 +98,34 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc RuntimeLifecycle::PrepareFixedCommit */
+    Result<void> RuntimeLifecycle::PrepareFixedCommit(const FixedStepContext &context) {
+        if (state_ != RuntimeLifecycleState::Running)
+            return StateFailure();
+        for (std::size_t index = 0; index < startedParticipantCount_; ++index) {
+            auto prepared = ContainParticipantException([this, index, &context] {
+                return participants_[index]->PrepareFixedCommit(context);
+            });
+            if (prepared.HasError())
+                return prepared;
+            if (state_ != RuntimeLifecycleState::Running)
+                return StateFailure();
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeLifecycle::CommitFixedUpdate */
+    void RuntimeLifecycle::CommitFixedUpdate(const FixedStepContext &context) noexcept {
+        for (std::size_t index = 0; index < startedParticipantCount_; ++index)
+            participants_[index]->CommitFixedUpdate(context);
+    }
+
+    /** @copydoc RuntimeLifecycle::AbortFixedUpdate */
+    void RuntimeLifecycle::AbortFixedUpdate(const FixedStepContext &context) noexcept {
+        for (std::size_t index = startedParticipantCount_; index > 0; --index)
+            participants_[index - 1]->AbortFixedUpdate(context);
+    }
+
     /** @copydoc RuntimeLifecycle::Suspend */
     Result<void> RuntimeLifecycle::Suspend() {
         if (state_ != RuntimeLifecycleState::Running)

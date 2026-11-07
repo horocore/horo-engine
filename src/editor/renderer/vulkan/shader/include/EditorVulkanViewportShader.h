@@ -8,10 +8,22 @@ namespace Horo::Editor {
     [[nodiscard]] Render::ShaderManifest EditorVulkanViewportShaderManifest();
     [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanViewportReflectionNames();
 
+    /** @brief Separate actual cooked depth artifact from the canonical shared shadow source. */
+    struct EditorVulkanShadowCook {
+        std::vector<std::uint8_t> payload;
+        Render::ReflectedShaderArtifact metadata;
+    };
+
+    [[nodiscard]] Render::ShaderManifest EditorVulkanShadowShaderManifest();
+    [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanShadowReflectionNames();
+    [[nodiscard]] Result<EditorVulkanShadowCook> LoadEditorVulkanShadowCook(std::span<const std::uint8_t> payload,
+                                                                            std::span<const std::uint8_t> metadata);
+
     /** @brief Immutable ready-to-load Vulkan package; native shader/pipeline realization belongs to the frontend. */
     struct EditorVulkanViewportCook {
         std::vector<std::uint8_t> payload;
         Render::ReflectedShaderArtifact metadata;
+        std::optional<EditorVulkanShadowCook> shadow;
     };
 
     /** @brief Rejects altered/mismatched cooked payload/layout before any native shader object is created. */

@@ -4,6 +4,7 @@
  * @brief Private, native-free D3D12 device initialization and host admission seam.
  */
 
+#include "D3D12Commands.h"
 #include "D3D12Resources.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
@@ -15,13 +16,6 @@
 #include <vector>
 
 namespace Horo::Render {
-    /** @brief Optional independent queues; the direct graphics queue is always required. */
-    enum class D3D12QueueKind {
-        Direct,
-        Compute,
-        Copy
-    };
-
     /** @brief Exact machine-local selection and diagnostic configuration. */
     struct D3D12InitializationRequest {
         std::optional<RenderAdapterId> adapter;
@@ -32,6 +26,10 @@ namespace Horo::Render {
         bool allowSoftwareForTests{false};
         CancellationToken cancellation;
         D3D12ResourceLimits resourceLimits;
+        std::vector<D3D12CommandQueueBinding>
+            commandQueues; /**< Empty explicitly admits resources only; logical IDs come from the frontend. */
+        D3D12BarrierMode barrierMode{D3D12BarrierMode::Legacy};
+        D3D12CommandLimits commandLimits;
     };
 
     /**
@@ -93,6 +91,17 @@ namespace Horo::Render {
             return nullptr;
         }
 
+        /** @brief Prepares commands on the same resource/device authority after resources are initialized. */
+        [[nodiscard]] virtual Result<void> InitializeCommands(const D3D12CommandConfiguration &) {
+            return Result<void>::Failure(
+                D3D12CommandError("render.d3d12.commands_unavailable", "This initialization adapter owns no command service."));
+        }
+
+        /** @brief Borrows the exact optional command service; null for explicitly resource-only sessions. */
+        [[nodiscard]] virtual ID3D12Commands *Commands() noexcept {
+            return nullptr;
+        }
+
         /** @brief Releases every acquired native object, including partial device/queue state. */
         virtual void Release() noexcept = 0;
     };
@@ -125,6 +134,8 @@ namespace Horo::Render {
          * @return Owner-thread service, or typed lifecycle/unsupported error. Lifetime ends at successful Shutdown.
          */
         [[nodiscard]] Result<ID3D12Resources *> Resources();
+        /** @brief Borrows the explicitly configured command service on the session owner; never discovers queues or modes. */
+        [[nodiscard]] Result<ID3D12Commands *> Commands();
         /** @brief Closes admission and polls transfer retirement without blocking.
          * @return Wrong-thread, drain-pending or native error; success releases native state. Retry pending shutdown on the owner thread.
          */

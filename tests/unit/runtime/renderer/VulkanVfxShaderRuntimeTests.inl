@@ -56,3 +56,17 @@ TEST_CASE("Vulkan rejects VFX reflection beyond the actual selected uniform rang
     f.Prepare();
     CHECK(f.Pipeline().HasError());
 }
+
+TEST_CASE("Vulkan pipeline admission uses the exact canonical uniform extent boundary", "[vulkan][shader][material][vfx][limits]") {
+    Fixture f;
+    UseVfxParameters(f);
+    f.maximumUniformRange = static_cast<std::uint32_t>(f.resolvedBufferBytes);
+    bool rejected{};
+    SECTION("exact reflected extent fits") {}
+    SECTION("one byte below reflected extent fails") {
+        --f.maximumUniformRange;
+        rejected = true;
+    }
+    f.Prepare();
+    CHECK(f.Pipeline().HasError() == rejected);
+}

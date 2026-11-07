@@ -47,6 +47,7 @@ namespace Horo::XR {
         EyeGaze,
         QuadViews,
         SpaceWarp,
+        HandTracking, /**< Bounded articulated hands; no native provider support is implied. */
         Count
     };
 

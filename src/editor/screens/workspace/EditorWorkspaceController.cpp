@@ -1,5 +1,6 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Assets/AssetReimport.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
@@ -115,9 +116,18 @@ namespace Horo::Editor {
         m_viewModel.pcgPalette = dependencies.procedural.catalog.palette;
         m_viewModel.pcgSchemas = dependencies.procedural.catalog.schemas;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
+        m_terrainCookFactory = dependencies.terrainCook;
+        m_terrainAssetFactory = dependencies.terrainAssets;
+        m_viewModel.terrainCookAvailable = m_terrainCookFactory && static_cast<bool>(*m_terrainCookFactory);
+        m_viewModel.terrainAssetCreationAvailable =
+            m_terrainAssetFactory && static_cast<bool>(*m_terrainAssetFactory) && m_mutableAssetRegistry && m_mutations;
         InitializeWorldBake(dependencies);
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;
+        m_playSaveRetirement = dependencies.gameplay.saveRetirement;
+        m_playSession.ConfigureSaveRetirement(m_playSaveRetirement);
+        if (auto modules = m_playSession.ConfigureModuleScripts(dependencies.gameplay.moduleScripts); modules.HasError())
+            LOG_ERROR("editor.extensions", "Play module-script composition is unavailable: %s", modules.ErrorValue().message.c_str());
         m_inspectorDocumentOwner = dependencies.world.documentSessionOwner;
         m_inspectorHost = dependencies.inspectorHost;
         m_physicsDocumentOwner = dependencies.world.documentSessionOwner;
@@ -133,6 +143,9 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::InitializeProjectState(const std::filesystem::path &absoluteProjectRoot) {
         m_viewModel.projectRoot = absoluteProjectRoot.string();
+        if (const auto metadata = Application::LoadProjectMetadata(absoluteProjectRoot); metadata.HasValue())
+            m_viewModel.projectName = metadata.Value().name;
+        RefreshPhysicsProfiles();
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
         RebuildContentBrowserProjection(m_viewModel.projectRoot, {});
         if (m_durableFiles != nullptr) {
@@ -142,12 +155,7 @@ namespace Horo::Editor {
                           repaired.ErrorValue().message.c_str());
         }
         m_gameplayRegistry = ProjectGameplayRegistry::Discover(absoluteProjectRoot, m_gameplayRetirements);
-        for (const ProjectGameplayDiagnostic &diagnostic : m_gameplayRegistry->Diagnostics())
-            LOG_ERROR("editor.gameplay", "Gameplay source '%s' is invalid: %s", diagnostic.source.string().c_str(),
-                      diagnostic.error.message.c_str());
-        InvalidateInspectorBehaviorBindings();
-        for (const Gameplay::BehaviorRegistration &registration : m_gameplayRegistry->Registry().Registrations())
-            m_viewModel.availableBehaviors.push_back(registration.descriptor);
+        RefreshAvailableBehaviorProjection();
     }
 
     void EditorWorkspaceController::InitializeWorkspaceLayout() {
@@ -158,6 +166,7 @@ namespace Horo::Editor {
                                       {"horo.global_dock", WorkspaceDockArea::Bottom},
                                       {"horo.navigation", WorkspaceDockArea::Bottom},
                                       {"horo.inspector", WorkspaceDockArea::Right}};
+        m_viewModel.panelDockAreas.emplace("horo.foliage_palette", WorkspaceDockArea::Right);
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.hierarchy", ActivityBarSlot{ActivityBarRail::Left, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.viewport", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.game", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 1}));
@@ -166,6 +175,7 @@ namespace Horo::Editor {
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.global_dock", ActivityBarSlot{ActivityBarRail::Left, 2, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.navigation", ActivityBarSlot{ActivityBarRail::Left, 3, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.inspector", ActivityBarSlot{ActivityBarRail::Right, 0, 0}));
+        static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.foliage_palette", ActivityBarSlot{ActivityBarRail::Right, 1, 0}));
     }
 
     void EditorWorkspaceController::InitializeInitialScene(const std::filesystem::path &absoluteProjectRoot) {
@@ -284,6 +294,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::UpdateGameplaySources(const float elapsedSeconds) {
+        UpdatePrefabSettingsProjection();
         if (m_prefabStagePending) {
             m_prefabStagePending = false;
             for (const auto &entry : m_prefabDocuments)

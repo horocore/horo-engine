@@ -124,6 +124,17 @@ namespace Horo::Runtime {
     /** @brief Stable durable entity identity, independent from a runtime Scene domain or ECS slot. */
     using PersistentEntityId = PersistentSaveIdentity<PersistentEntityIdentityTag>;
 
+    struct SaveWorldIdentityTag;
+    /** @brief Stable logical world identity recorded by save metadata. */
+    using SaveWorldId = PersistentSaveIdentity<SaveWorldIdentityTag>;
+
+    /** @brief Stable entity target inside a logical world. */
+    struct SaveEntityReference final {
+        SaveWorldId world;
+        PersistentEntityId entity;
+        auto operator<=>(const SaveEntityReference &) const noexcept = default;
+    };
+
     /** @brief Maximum canonical participant identity length in bytes. */
     inline constexpr std::size_t MaximumSaveParticipantIdBytes = 96;
 

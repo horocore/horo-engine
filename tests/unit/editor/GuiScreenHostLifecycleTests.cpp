@@ -22,7 +22,10 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Navigation/NavigationSettingsErrors.h"
+#include "Horo/Runtime/RuntimeHost.h"
 #include "SecurityTestSupport.h"
+#include "editor/modals/build_release/BuildModal.h"
+#include "editor/modals/build_release/BuildReleaseModal.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/update/UpdateExperienceSession.h"
 
@@ -35,6 +38,7 @@
 #include <imgui.h>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <thread>
 #include <type_traits>
 
@@ -46,6 +50,14 @@ namespace {
     using namespace Horo;
     using namespace Horo::Editor;
 
+    enum class FixedAction {
+        None,
+        Close,
+        Shutdown,
+        Throw,
+        Navigate
+    };
+
     struct ScreenStats {
         int enters = 0;
         int leaves = 0;
@@ -53,11 +65,17 @@ namespace {
         GuiScreenHost *closeFromUpdate{};
         bool closeCallbackStayedAlive{};
         std::optional<Error> navigationFailure;
+        GuiScreenHost *fixedHost{};
+        Runtime::RuntimeDispatchSource source;
+        FixedAction fixedAction{};
+        int fixedUpdates{}, fixedPreparations{}, fixedCommits{}, fixedAborts{};
+        bool fixedCallbackStayedAlive{}, committedProof{};
+        bool denyLeave{};
     };
 
     class RecordingScreen final : public GuiScreen {
     public:
-        explicit RecordingScreen(ScreenStats &stats) : stats_(stats) {}
+        explicit RecordingScreen(ScreenStats &stats) : GuiScreen("test.RecordingScreen"), stats_(stats) {}
 
         RecordingScreen(const RecordingScreen &) = delete;
         RecordingScreen &operator=(const RecordingScreen &) = delete;
@@ -90,6 +108,44 @@ namespace {
             // This shutdown fixture intentionally submits no graphical controls.
         }
 
+        Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &) override {
+            ++stats_.fixedUpdates;
+            switch (stats_.fixedAction) {
+                case FixedAction::Close:
+                    static_cast<void>(stats_.fixedHost->RequestCloseApplication());
+                    break;
+                case FixedAction::Shutdown:
+                    stats_.fixedHost->Shutdown();
+                    break;
+                case FixedAction::Throw:
+                    throw std::runtime_error("Injected screen fixed failure.");
+                case FixedAction::Navigate:
+                    static_cast<void>(stats_.fixedHost->Navigate({GuiRouteKind::ProjectCreation, ProjectCreationRouteParameters{}}));
+                    break;
+                case FixedAction::None:
+                    break;
+            }
+            stats_.fixedCallbackStayedAlive = stats_.leaves == 0 && stats_.destructions == 0;
+            return Result<void>::Success();
+        }
+
+        Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &) override {
+            ++stats_.fixedPreparations;
+            return Result<void>::Success();
+        }
+
+        void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            ++stats_.fixedCommits;
+            Runtime::RuntimeDispatchFacts facts;
+            stats_.committedProof = context.dispatchEvidence.Read(stats_.source, Runtime::RuntimePhase::FixedUpdate, facts) ==
+                                        Runtime::RuntimeDispatchStatus::Valid &&
+                                    facts.committedTick == context.simulationTick && facts.committedAttempt == context.attemptNumber;
+        }
+
+        void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept override {
+            ++stats_.fixedAborts;
+        }
+
         [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings() override {
             if (stats_.navigationFailure)
                 return Result<NavigationProjectSettingsSession *>::Failure(*stats_.navigationFailure);
@@ -97,7 +153,7 @@ namespace {
         }
 
         [[nodiscard]] LeaveDecision CanLeave(const LeaveTarget &) const override {
-            return {.disposition = LeaveDisposition::Allow, .requirement = std::nullopt};
+            return {.disposition = stats_.denyLeave ? LeaveDisposition::Deny : LeaveDisposition::Allow, .requirement = std::nullopt};
         }
 
         [[nodiscard]] Result<LeaveDecision> ResolveLeave(const LeaveTarget &, const LeaveResolution &) override {
@@ -111,6 +167,137 @@ namespace {
     private:
         ScreenStats &stats_;
     };
+
+    class GuiFixedParticipant final : public Runtime::RuntimeLifecycleParticipant {
+    public:
+        explicit GuiFixedParticipant(GuiScreenHost &host) : host_(host) {}
+
+        Result<void> Startup(const CancellationToken &) override {
+            return Result<void>::Success();
+        }
+
+        void Shutdown() noexcept override {}
+
+        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> OnFixedUpdate(const Runtime::FixedStepContext &c) override {
+            auto forged = c;
+            ++forged.simulationTick;
+            forgedRejected = host_.OnRuntimeFixedUpdate(forged).HasError();
+            evidence = c.dispatchEvidence;
+            return host_.OnRuntimeFixedUpdate(c);
+        }
+
+        Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &c) override {
+            return host_.PrepareRuntimeFixedCommit(c);
+        }
+
+        void CommitFixedUpdate(const Runtime::FixedStepContext &c) noexcept override {
+            host_.CommitRuntimeFixedUpdate(c);
+        }
+
+        void AbortFixedUpdate(const Runtime::FixedStepContext &c) noexcept override {
+            host_.AbortRuntimeFixedUpdate(c);
+        }
+
+        bool forgedRejected{};
+        Runtime::RuntimeDispatchEvidence evidence;
+
+    private:
+        GuiScreenHost &host_;
+    };
+
+    class GuiFixedGate final : public Runtime::RuntimeLifecycleParticipant {
+    public:
+        Result<void> Startup(const CancellationToken &) override {
+            return Result<void>::Success();
+        }
+
+        void Shutdown() noexcept override {}
+
+        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> OnFixedUpdate(const Runtime::FixedStepContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &) override {
+            if (retire)
+                scheduler->RetireDispatch();
+            if (fail)
+                throw std::runtime_error("Injected later fixed owner failure.");
+            return Result<void>::Success();
+        }
+
+        Runtime::FrameScheduler *scheduler{};
+        bool fail{}, retire{};
+    };
+
+    void CheckDeferredScreenChanges(GuiScreenHost &host, ScreenStats &stats, const int scenario) {
+        stats.fixedAction = FixedAction::None;
+        host.OnUpdate(0);
+        if (scenario == 1 || scenario == 2 || scenario == 4)
+            CHECK(stats.destructions == 1);
+        if (scenario == 3) {
+            // Exception unwinding must restore callback state, otherwise this navigation remains queued.
+            REQUIRE(host.Navigate({GuiRouteKind::ProjectCreation, ProjectCreationRouteParameters{}}).HasValue());
+            CHECK(stats.destructions == 1);
+        }
+        if (scenario == 7) {
+            CHECK_FALSE(host.IsApplicationCloseRequested());
+            CHECK(stats.destructions == 0);
+        }
+    }
+
+    void CheckFixedScreenTransaction(GuiScreenHost &host, ScreenStats &stats, Runtime::FrameScheduler &scheduler,
+                                     DeterministicClock &clock) {
+        const auto scenario = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
+        stats.fixedHost = &host;
+        stats.source = scheduler.DispatchSource();
+        REQUIRE(host.BindRuntimeDispatch(stats.source).HasError());
+        REQUIRE(host.BindRuntimeDispatch({}).HasError());
+        stats.fixedAction = scenario < 5 ? static_cast<FixedAction>(scenario) : FixedAction::None;
+        if (scenario == 7) {
+            stats.fixedAction = FixedAction::Close;
+            stats.denyLeave = true;
+        }
+        Runtime::RuntimeLifecycle lifecycle;
+        auto forwarding = std::make_unique<GuiFixedParticipant>(host);
+        auto *forwardingView = forwarding.get();
+        REQUIRE(lifecycle.AddParticipant(std::move(forwarding)).HasValue());
+        auto gate = std::make_unique<GuiFixedGate>();
+        gate->scheduler = &scheduler;
+        gate->fail = scenario == 5;
+        gate->retire = scenario == 6;
+        REQUIRE(lifecycle.AddParticipant(std::move(gate)).HasValue());
+        CancellationSource cancellation;
+        const auto token = cancellation.Token();
+        REQUIRE(lifecycle.Startup(token).HasValue());
+        REQUIRE(scheduler.RunFrame(lifecycle, token, false).HasValue());
+        clock.Advance(Duration::FromMilliseconds(10));
+        const auto result = scheduler.RunFrame(lifecycle, token, false);
+        const bool aborted = scenario == 2 || scenario == 3 || scenario == 5 || scenario == 6;
+        CHECK(result.HasError() == aborted);
+        CHECK(stats.fixedUpdates == 1);
+        CHECK(stats.fixedCommits == (aborted ? 0 : 1));
+        CHECK(stats.fixedAborts == (aborted ? 1 : 0));
+        CHECK(stats.destructions == 0);
+        CHECK(stats.leaves == 0);
+        CHECK(forwardingView->forgedRejected);
+        if (!aborted)
+            CHECK(stats.committedProof);
+        Runtime::FixedStepContext fabricated{.simulationTick = 1, .fixedDelta = Duration::FromMilliseconds(10), .cancellation = token};
+        CHECK(host.OnRuntimeFixedUpdate(fabricated).HasError());
+        fabricated.dispatchEvidence = forwardingView->evidence;
+        CHECK(host.OnRuntimeFixedUpdate(fabricated).HasError());
+        CHECK(stats.fixedUpdates == 1);
+        CheckDeferredScreenChanges(host, stats, scenario);
+        lifecycle.Shutdown();
+    }
 
     /** @brief Holds discovery until settings closes, then counts host-owned preparation and activation. */
     class BackgroundUpdateBackend final : public IEditorUpdateBackend {
@@ -412,6 +599,10 @@ namespace {
     }
 
     TEST_CASE("Gui Screen Host Registers Core Status And Shuts Down Safely", "[unit][editor]") {
+        DeterministicClock clock;
+        auto madeScheduler = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+        REQUIRE(madeScheduler.HasValue());
+        auto scheduler = std::move(madeScheduler).Value();
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
         Input::InputRouter input;
@@ -432,6 +623,9 @@ namespace {
         screens.Register(GuiRouteKind::Welcome, [](const EditorServiceRegistry &services, const GuiRoute &) {
             return std::make_unique<RecordingScreen>(services.Get<ScreenStats>());
         });
+        screens.Register(GuiRouteKind::ProjectCreation, [](const EditorServiceRegistry &services, const GuiRoute &) {
+            return std::make_unique<RecordingScreen>(services.Get<ScreenStats>());
+        });
         WorkspacePanelRegistry panels;
 
         GuiScreenHost host{gui, GuiScreenHostComposition{.modalHost = modals,
@@ -445,6 +639,10 @@ namespace {
                                                          .screenRegistry = std::move(screens),
                                                          .workspacePanelRegistry = std::move(panels)}};
         REQUIRE((host.StatusItems().Find("horo.status.backend") != nullptr));
+        const auto *backgroundBuild = host.StatusItems().Find("horo.status.build");
+        REQUIRE(backgroundBuild != nullptr);
+        CHECK_FALSE(backgroundBuild->content.available);
+        CHECK(backgroundBuild->descriptor.actionId == "horo.build.show");
         REQUIRE((host.StatusItems().Find("horo.status.cpu") == nullptr));
         CheckApplicationServiceBorrows(host, jobs, input, modals, settings);
         REQUIRE((stats.enters == 0));
@@ -453,11 +651,17 @@ namespace {
         REQUIRE((host.Start(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasValue()));
         REQUIRE((stats.enters == 1));
         REQUIRE((!host.Services().Empty()));
+        REQUIRE(host.BindRuntimeDispatch(scheduler->DispatchSource()).HasValue());
 
         const Result<void> invalidRoute = host.Navigate(GuiRoute{GuiRouteKind::Welcome, ProjectCreationRouteParameters{}});
         REQUIRE((invalidRoute.HasError()));
         REQUIRE((invalidRoute.ErrorValue().domain.Value() == "horo.editor.screens"));
         REQUIRE((invalidRoute.ErrorValue().code.Value() == "navigation.invalid_route_parameters"));
+
+        SECTION("Actual fixed dispatch keeps screen lifetime until commit or rollback") {
+            CheckFixedScreenTransaction(host, stats, *scheduler, clock);
+            return;
+        }
 
         SECTION("Closed settings does not stop discovery, automatic download, or install-on-exit") {
             CheckUpdatesAfterSettingsClose(host, modals, gui, jobs);
@@ -480,3 +684,49 @@ namespace {
     }
 
 }  // namespace
+
+TEST_CASE("Application Build menu dispatch opens the matching modal and respects the modal gate", "[editor][gui][build_release]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    EngineDataBus engineEvents;
+    EditorDataBus editorEvents;
+    Input::InputRouter input;
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+    ProjectCreationService creation{jobs, engineEvents};
+    LocalizationService localization{LocaleTag{"en-US"}};
+    ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
+    EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
+    EditorModalHost modals{editorEvents, input};
+    const Theme::Fonts fonts{};
+    ThemeContext theme{fonts};
+    EditorSettingsSnapshot snapshot = settings.Snapshot();
+    EditorGuiContext gui{engineEvents, editorEvents, localization, theme, snapshot};
+    RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
+                                           "opengl"};
+    GuiScreenHost host{gui, GuiScreenHostComposition{.modalHost = modals,
+                                                     .settingsService = settings,
+                                                     .localization = localization,
+                                                     .engineEvents = engineEvents,
+                                                     .creationService = creation,
+                                                     .jobs = jobs,
+                                                     .inputRouter = input,
+                                                     .rendererAvailability = renderers,
+                                                     .extensionInspectorPolicy = Extensions::Tests::InspectorSupport::Policy()}};
+    for (const auto action : {EditorMenuAction::OpenBuild, EditorMenuAction::OpenRelease}) {
+        host.DispatchMenuInvocation({action});
+        REQUIRE(modals.HasOpenModal());
+        auto *modal = modals.TopModal();
+        REQUIRE(modal != nullptr);
+        if (action == EditorMenuAction::OpenBuild)
+            CHECK(dynamic_cast<BuildModal *>(modal) != nullptr);
+        else
+            CHECK(dynamic_cast<BuildReleaseModal *>(modal) != nullptr);
+        host.DispatchMenuInvocation({EditorMenuAction::OpenBuild});
+        CHECK(modals.TopModal() == modal);
+        REQUIRE(modals.RequestClose(modal->Id(), ModalCloseReason::Cancelled).HasValue());
+        modals.OnUpdate(0);
+        CHECK_FALSE(modals.HasOpenModal());
+    }
+    host.Shutdown();
+    jobs.Shutdown(ShutdownPolicy::Cancel);
+}

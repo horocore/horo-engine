@@ -1,9 +1,12 @@
 #include "ShaderCompilerRoute.h"
 
+#include "ExposureGpuReflection.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
+#include "LightCullingMetalReflection.h"
 #include "ShaderCompilerToolchainSupport.h"
+#include "VfxGpuReflection.h"
 
 #include <algorithm>
 #include <array>
@@ -31,6 +34,11 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         using ShaderCompilerToolchainDetail::StageProfile;
         using ShaderCompilerToolchainDetail::ToolArtifactRecord;
 
+        [[nodiscard]] bool IsMetalLibrary(const std::span<const std::uint8_t> bytes) noexcept {
+            constexpr std::array<std::uint8_t, 4> magic{'M', 'T', 'L', 'B'};
+            return bytes.size() >= magic.size() && std::equal(magic.begin(), magic.end(), bytes.begin());
+        }
+
         class CompilerRouteContext final {
         public:
             CompilerRouteContext(const ShaderCompilerToolchainConfiguration &configuration, IExternalProcessRunner &processes,
@@ -52,6 +60,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                     if (admitted.HasError())
                         return Result<ShaderCompilerAdapterOutput>::Failure(admitted.ErrorValue());
                     vfxInterface_ = admitted.Value();
+                    registerInterface_ = UsesRegisterRasterReflection(invocation_);
                     payloadStages_.reserve(invocation_.manifest.entryPoints.size());
                     debugStages_.reserve(invocation_.manifest.entryPoints.size());
                 } catch (const std::bad_alloc &) {
@@ -281,6 +290,16 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 return CompileDxcDebug(dxc, entry, scratch_ / (stem + ".debug"), true, {"-Zi", "-Qembed_debug"});
             }
 
+            /** @brief Retains exactly the binary fed to Cross for selected readonly input proof; fragment never overwrites vertex evidence.
+             */
+            bool RetainsVfxSpirv(const ShaderEntryPoint &entry) const {
+                if (entry.stage == ShaderStage::Compute)
+                    return true;
+                return entry.stage == ShaderStage::Vertex && invocation_.reflection &&
+                       ValidateVfxGpuMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                           .HasValue();
+            }
+
             [[nodiscard]] Result<void> RouteSpirv(const ShaderEntryPoint &entry, const std::string &stem,
                                                   const std::filesystem::path &spirvPath, std::vector<std::uint8_t> spirv) {
                 using enum ShaderTargetBackend;
@@ -288,8 +307,11 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                     return StoreVulkan(entry, std::move(spirv));
                 if (invocation_.target.requirement.backend == OpenGL)
                     return CompileOpenGLRoute(entry, stem, spirvPath);
-                if (invocation_.target.requirement.backend == Metal)
+                if (invocation_.target.requirement.backend == Metal) {
+                    if (RetainsVfxSpirv(entry))
+                        validatedReadonlySpirv_ = std::move(spirv);
                     return CompileMetalRoute(entry, stem, spirvPath);
+                }
                 return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
             }
 
@@ -315,8 +337,51 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 const ShaderCompilerToolInstallation *translator = Lookup(ShaderCompilerTool::SpirvCross);
                 if (translator == nullptr)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                auto arguments = RasterTranslationArguments(entry, spirvPath, nativePath, metal, vfxInterface_);
+                auto arguments = RasterTranslationArguments(entry, spirvPath, nativePath, metal, vfxInterface_, registerInterface_);
+                if (metal && invocation_.reflection &&
+                    ValidateExposureGpuMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                        .HasValue())
+                    arguments.emplace_back("--msl-decoration-binding");
+                if (registerInterface_) {
+                    if (auto prepared = PrepareRegisterTranslation(entry, spirvPath, metal, arguments); prepared.HasError())
+                        return prepared;
+                }
                 return Run(*translator, std::move(arguments), ShaderCompilerPhase::Translation, entry);
+            }
+
+            /** @brief Captures same-operation intermediate evidence once before native translation. */
+            Result<void> CaptureIntermediateReflection(const ShaderEntryPoint &entry, const std::filesystem::path &spirvPath) {
+                const auto *cross = Lookup(ShaderCompilerTool::SpirvCross);
+                if (auto valid =
+                        ValidateRasterReflection(invocation_.manifest, invocation_.target.requirement, *invocation_.reflection, cross);
+                    valid.HasError())
+                    return valid;
+                const auto path = spirvPath.string() + ".reflection.json";
+                if (auto reflected =
+                        Run(*cross, {spirvPath.string(), "--reflect", "--output", path}, ShaderCompilerPhase::Translation, entry);
+                    reflected.HasError())
+                    return reflected;
+                auto json = ReadBoundedFile(path, 1024U * 1024U, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (json.HasError())
+                    return Result<void>::Failure(json.ErrorValue());
+                reflectionStages_.push_back({entry.stage, entry.name, {json.Value().begin(), json.Value().end()}});
+                return Result<void>::Success();
+            }
+
+            /** @brief Renames only actual intermediate varying locations so GLSL410 stages link by canonical names. */
+            Result<void> PrepareRegisterTranslation(const ShaderEntryPoint &entry, const std::filesystem::path &spirvPath, const bool metal,
+                                                    std::vector<std::string> &arguments) {
+                if (auto captured = CaptureIntermediateReflection(entry, spirvPath); captured.HasError())
+                    return captured;
+                if (metal)
+                    return Result<void>::Success();
+                const auto locations = RegisterRasterVaryingLocations(reflectionStages_.back());
+                if (locations.HasError())
+                    return Result<void>::Failure(locations.ErrorValue());
+                for (const auto location : locations.Value())
+                    arguments.insert(arguments.end(), {"--rename-interface-variable", entry.stage == ShaderStage::Vertex ? "out" : "in",
+                                                       std::to_string(location), "horo_raster_varying_" + std::to_string(location)});
+                return Result<void>::Success();
             }
 
             /** @brief Uses the explicit descriptor for compilation, validation and debug output without changing other routes. */
@@ -347,6 +412,13 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                                const std::filesystem::path &nativePath) {
                 if (!invocation_.reflection)
                     return Result<void>::Success();
+                if (registerInterface_) {
+                    auto native = ReadBoundedFile(nativePath, 1024U * 1024U, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                    if (native.HasError())
+                        return Result<void>::Failure(native.ErrorValue());
+                    translations_.emplace_back(native.Value().begin(), native.Value().end());
+                    return Result<void>::Success();
+                }
                 const auto *cross = Lookup(ShaderCompilerTool::SpirvCross);
                 if (const auto valid =
                         ValidateRasterReflection(invocation_.manifest, invocation_.target.requirement, *invocation_.reflection, cross);
@@ -368,6 +440,48 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 return Result<void>::Success();
             }
 
+            /** @brief Qualifies the exact canonical exposure input only after validated binary and native ABI proof. */
+            [[nodiscard]] Result<void> PrepareExposureMetalSource(const std::filesystem::path &nativePath,
+                                                                  std::span<const std::uint8_t> native) {
+                const std::string source(native.begin(), native.end());
+                auto qualified = QualifyExposureGpuMetalInputs(invocation_.manifest, source, validatedReadonlySpirv_);
+                if (qualified.HasError())
+                    return Result<void>::Failure(qualified.ErrorValue());
+                const auto &text = qualified.Value();
+                return WriteFile(nativePath, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
+            }
+
+            /** @brief Preserves ordinary routes and qualifies only proven canonical compute inputs before actual Apple compilation. */
+            [[nodiscard]] Result<void> PrepareMetalSource(const ShaderEntryPoint &entry, const std::filesystem::path &nativePath) {
+                auto native =
+                    ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (native.HasError())
+                    return Result<void>::Failure(native.ErrorValue());
+                if (!invocation_.reflection)
+                    return Result<void>::Success();
+                if (ValidateExposureGpuMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                        .HasValue())
+                    return PrepareExposureMetalSource(nativePath, native.Value());
+                if (ValidateVfxGpuMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                        .HasValue()) {
+                    const std::string source(native.Value().begin(), native.Value().end());
+                    auto qualified = QualifyVfxGpuMetalInputs(invocation_.manifest, entry, source, validatedReadonlySpirv_);
+                    if (qualified.HasError())
+                        return Result<void>::Failure(qualified.ErrorValue());
+                    const auto &text = qualified.Value();
+                    return WriteFile(nativePath, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
+                }
+                if (ValidateLightCullingMetalReflection(invocation_.manifest, invocation_.target.requirement, invocation_.reflection->names)
+                        .HasError())
+                    return Result<void>::Success();
+                const std::string source(native.Value().begin(), native.Value().end());
+                auto qualified = QualifyLightCullingMetalInputs(source, validatedReadonlySpirv_);
+                if (qualified.HasError())
+                    return Result<void>::Failure(qualified.ErrorValue());
+                const auto &text = qualified.Value();
+                return WriteFile(nativePath, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
+            }
+
             [[nodiscard]] Result<void> CompileMetalRoute(const ShaderEntryPoint &entry, const std::string &stem,
                                                          const std::filesystem::path &spirvPath) {
                 const ShaderCompilerToolInstallation *metal = Lookup(ShaderCompilerTool::AppleMetal);
@@ -376,15 +490,14 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                 const std::filesystem::path nativePath = scratch_ / (stem + ".native");
                 if (auto translated = TranslateSpirv(entry, spirvPath, nativePath, true); translated.HasError())
                     return translated;
-                if (auto native = ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes,
-                                                  ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                    native.HasError())
-                    return Result<void>::Failure(std::move(native).ErrorValue());
+                if (auto prepared = PrepareMetalSource(entry, nativePath); prepared.HasError())
+                    return prepared;
                 if (auto reflected = CaptureNativeReflection(entry, stem, spirvPath, nativePath); reflected.HasError())
                     return reflected;
                 const std::filesystem::path airPath = scratch_ / (stem + ".air");
                 if (auto compiled = Run(*metal,
-                                        {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0", "-c",
+                                        {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0",
+                                         invocation_.target.enableFastMath ? "-ffast-math" : "-fno-fast-math", "-x", "metal", "-c",
                                          nativePath.string(), "-o", airPath.string()},
                                         ShaderCompilerPhase::NativeCompilation, entry);
                     compiled.HasError())
@@ -394,10 +507,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                       ShaderCompilerPhase::NativeLink, entry);
                     linked.HasError())
                     return linked;
-                auto library = ReadValidatedPayload(libraryPath, invocation_.limits.maximumPayloadBytes,
-                                                    [](const std::span<const std::uint8_t> bytes) {
-                    return bytes.size() >= 4U && bytes[0] == 'M' && bytes[1] == 'T' && bytes[2] == 'L' && bytes[3] == 'B';
-                });
+                auto library = ReadValidatedPayload(libraryPath, invocation_.limits.maximumPayloadBytes, IsMetalLibrary);
                 if (library.HasError())
                     return Result<void>::Failure(std::move(library).ErrorValue());
                 payloadStages_.emplace_back(entry.stage, entry.name, std::move(library).Value());
@@ -492,7 +602,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                                                    std::move(payload).Value(), std::move(debugPayload), std::move(diagnostics_)};
                 if (invocation_.reflection &&
                     (output.backend == ShaderTargetBackend::Metal || output.backend == ShaderTargetBackend::OpenGL)) {
-                    auto reflected = NormalizeCapturedRasterReflection(invocation_, reflectionStages_, translations_);
+                    auto reflected =
+                        NormalizeCapturedRasterReflection(invocation_, reflectionStages_, translations_, validatedReadonlySpirv_);
                     if (reflected.HasError())
                         return Result<ShaderCompilerAdapterOutput>::Failure(reflected.ErrorValue());
                     CompiledShaderArtifact compiled{output.backend,
@@ -514,6 +625,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             IExternalProcessRunner &processes_;
             const ShaderCompilerInvocation &invocation_;
             bool vfxInterface_{false};
+            bool registerInterface_{};
             const CancellationToken &cancellation_;
             const std::filesystem::path &scratch_;
             const std::filesystem::path &sourcePath_;
@@ -522,6 +634,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             std::vector<ShaderCompilerDiagnostic> diagnostics_;
             std::vector<SpirvReflectionStage> reflectionStages_;
             std::vector<std::string> translations_;
+            std::vector<std::uint8_t> validatedReadonlySpirv_;
             ShaderCompilerDiagnosticContext diagnosticContext_;
             bool outputTruncated_{};
             std::optional<Error> diagnosticFailure_;

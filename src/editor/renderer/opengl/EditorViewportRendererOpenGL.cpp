@@ -1,8 +1,13 @@
 #include "EditorViewportRendererOpenGL.h"
 
+#include "EditorViewportMeshReadiness.h"
+#include "Horo/Runtime/Render/ShaderArtifact.h"
+#include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
+#include "OpenGLProgramValidation.h"
 #include "OpenGLStateSnapshot.h"
 #include "OpenGLViewportResourceBridge.h"
 #include "OpenGLViewportShaders.h"
+#include "RenderFrontendResourceAccess.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorRendererErrors.h"
 #include "editor/renderer/grid/EditorViewportGridGeometry.h"
@@ -13,6 +18,7 @@
 #include <bit>
 #include <cmath>
 #include <glad/gl.h>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,16 +42,58 @@ namespace Horo::Editor {
                 return Result<std::uint32_t>::Success(shader);
             }
 
-            GLint logLength = 0;
-            glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
-            std::string log(static_cast<std::size_t>(std::max(logLength, 1)), '\0');
-            glGetShaderInfoLog(shader, logLength, nullptr, log.data());
+            std::array<char, 4096> log{};
+            glGetShaderInfoLog(shader, static_cast<GLsizei>(log.size()), nullptr, log.data());
             glDeleteShader(shader);
-            return Result<std::uint32_t>::Failure(
-                MakeViewportError(RendererErrors::ViewportShaderCompileFailed, "Viewport shader compilation failed: " + log));
+            return Result<std::uint32_t>::Failure(MakeViewportError(RendererErrors::ViewportShaderCompileFailed,
+                                                                    "Viewport shader compilation failed: " + std::string{log.data()}));
         }
 
     }  // namespace
+
+    /** @brief Owns both unpublished programs and their exact uniform locations on the current GL context. */
+    struct EditorViewportRendererOpenGL::ProgramGeneration final : Render::IShaderHotReloadCandidate {
+        EditorViewportRendererOpenGL *owner{};
+        Render::ShaderHotReloadTargetState expected;
+        std::uint32_t gridProgram{};
+        std::array<std::uint32_t, 3> buffers{}, bufferSlots{};
+        std::uint32_t textureUnit{7};
+        std::array<std::size_t, 3> bufferBytes{};
+        std::array<Render::MaterialBindingLayout, 3> layouts;
+        bool reflected{};
+        std::uint32_t program{};
+        std::uint32_t shadowProgram{};
+        UniformLocations uniforms;
+
+        ~ProgramGeneration() {
+            if (gridProgram)
+                glDeleteProgram(gridProgram);
+            for (const auto buffer : buffers)
+                if (buffer)
+                    glDeleteBuffers(1, &buffer);
+            if (program != 0)
+                glDeleteProgram(program);
+            if (shadowProgram != 0)
+                glDeleteProgram(shadowProgram);
+        }
+    };
+
+#include "EditorViewportOpenGLHotReload.inl"
+#include "OpenGLViewportLighting.inl"
+
+    /** @copydoc EditorViewportRendererOpenGL::AdoptProgram */
+    void EditorViewportRendererOpenGL::AdoptProgram(ProgramGeneration &candidate) noexcept {
+        std::swap(program_, candidate.program);
+        std::swap(shadowProgram_, candidate.shadowProgram);
+        std::swap(uniforms_, candidate.uniforms);
+        std::swap(gridProgram_, candidate.gridProgram);
+        std::swap(reloadBuffers_, candidate.buffers);
+        std::swap(reloadBufferSlots_, candidate.bufferSlots);
+        std::swap(reloadTextureUnit_, candidate.textureUnit);
+        std::swap(reloadBufferBytes_, candidate.bufferBytes);
+        std::swap(reloadLayouts_, candidate.layouts);
+        std::swap(reflectedProgram_, candidate.reflected);
+    }
 
     /** @copydoc EditorViewportRendererOpenGL::EditorViewportRendererOpenGL */
     EditorViewportRendererOpenGL::EditorViewportRendererOpenGL(Render::RenderFrontend &frontend) noexcept
@@ -64,14 +112,26 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportAlreadyInitialized, "Editor viewport renderer is already initialized."));
         }
-        if (const Result<void> program = CreateProgram(); program.HasError()) {
+        ProgramGeneration candidate;
+        if (const Result<void> program = CreateProgram(candidate); program.HasError()) {
             Shutdown();
             return program;
         }
-        if (const Result<void> shadowResources = CreateShadowProgram(); shadowResources.HasError()) {
+        if (const Result<void> shadowResources = CreateShadowProgram(candidate); shadowResources.HasError()) {
             Shutdown();
             return shadowResources;
         }
+        if (const auto geometry = CreateGridGeometry(); geometry.HasError()) {
+            Shutdown();
+            return geometry;
+        }
+        AdoptProgram(candidate);
+        ++liveGeneration_;
+        initialized_ = true;
+        return Result<void>::Success();
+    }
+
+    Result<void> EditorViewportRendererOpenGL::CreateGridGeometry() {
         GLint previousVertexArray = 0;
         GLint previousArrayBuffer = 0;
         glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
@@ -85,22 +145,18 @@ namespace Horo::Editor {
                                                    .access = Render::RenderBufferAccess::HostVisible},
                                                   std::span<const std::byte>{emptyGrid});
         if (gridBuffer.HasError()) {
-            Shutdown();
             return Result<void>::Failure(gridBuffer.ErrorValue());
         }
         gridVertexBufferHandle_ = gridBuffer.Value().handle;
         const auto processed = frontend_->ProcessResourceRequests();
+        if (processed.HasError())
+            return Result<void>::Failure(processed.ErrorValue());
         const auto completed = frontend_->ResourceOperationResult(gridBuffer.Value().operation);
+        if (completed.HasError())
+            return Result<void>::Failure(completed.ErrorValue());
         const auto nativeBuffer = OpenGLViewportResourceBridge::ResolveBuffer(*frontend_, gridVertexBufferHandle_);
-        if (processed.HasError() || completed.HasError() || nativeBuffer.HasError()) {
-            Error error = nativeBuffer.ErrorValue();
-            if (processed.HasError())
-                error = processed.ErrorValue();
-            else if (completed.HasError())
-                error = completed.ErrorValue();
-            Shutdown();
-            return Result<void>::Failure(error);
-        }
+        if (nativeBuffer.HasError())
+            return Result<void>::Failure(nativeBuffer.ErrorValue());
         gridVertexBuffer_ = nativeBuffer.Value();
         glBindVertexArray(gridVertexArray_);
         glBindBuffer(GL_ARRAY_BUFFER, gridVertexBuffer_);
@@ -112,16 +168,23 @@ namespace Horo::Editor {
         glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(previousArrayBuffer));
         glBindVertexArray(static_cast<GLuint>(previousVertexArray));
         if (gridVertexArray_ == 0 || gridVertexBuffer_ == 0) {
-            Shutdown();
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportGeometryCreationFailed, "Failed to create viewport grid geometry."));
         }
-        initialized_ = true;
         return Result<void>::Success();
     }
 
     /** @copydoc EditorViewportRendererOpenGL::Shutdown */
     void EditorViewportRendererOpenGL::Shutdown() noexcept {
+        if (gridProgram_)
+            glDeleteProgram(std::exchange(gridProgram_, 0));
+        for (const auto buffer : reloadBuffers_)
+            if (buffer)
+                glDeleteBuffers(1, &buffer);
+        reloadBuffers_ = {};
+        reflectedProgram_ = false;
+
+        shadowCache_ = {};
         resources_.Shutdown();
         if (gridVertexBufferHandle_.IsValid())
             static_cast<void>(frontend_->ReleaseBuffer(gridVertexBufferHandle_));
@@ -144,6 +207,10 @@ namespace Horo::Editor {
         gridOptions_ = {};
         lightVisualizerOptions_ = {};
         initialized_ = false;
+    }
+
+    Result<void> EditorViewportRendererOpenGL::RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) {
+        return resources_.RequestDirectionalShadowProfile(profile);
     }
 
     /** @copydoc EditorViewportRendererOpenGL::RequestExtent */
@@ -193,11 +260,14 @@ namespace Horo::Editor {
         const EditorViewportExtent renderExtent = allocatedExtent.IsValid() ? allocatedExtent : extentRequest;
         if (const Result<void> valid = ValidatePassRequest(descriptor, renderExtent); valid.HasError())
             return valid;
-        const auto shadow = BuildEditorViewportDirectionalShadowView(descriptor.scene, Math::ClipDepthRange::NegativeOneToOne);
+        if (const auto lights = forwardLighting_.Prepare(descriptor.scene); lights.HasError())
+            return lights;
+        const float aspect = static_cast<float>(allocatedExtent.width) / static_cast<float>(allocatedExtent.height);
+        const auto shadow = Render::BuildDirectionalShadowFrame(descriptor.scene, aspect, Math::ClipDepthRange::NegativeOneToOne,
+                                                                resources_.ActiveDirectionalShadowProfile());
         if (shadow.HasError())
             return Result<void>::Failure(shadow.ErrorValue());
-        const float aspect = static_cast<float>(allocatedExtent.width) / static_cast<float>(allocatedExtent.height);
-        const OpenGLStateSnapshot stateSnapshot;
+        const OpenGLStateSnapshot stateSnapshot(reloadTextureUnit_, reloadBufferSlots_);
         return RenderViewportPass(descriptor, shadow.Value(), aspect);
     }
 
@@ -214,7 +284,7 @@ namespace Horo::Editor {
         if (const EditorViewportExtent allocatedExtent = resources_.AllocatedExtent();
             requestedExtent.width != allocatedExtent.width || requestedExtent.height != allocatedExtent.height)
             return Result<void>::Failure(MakeViewportError(RendererErrors::ViewportStaleTarget, "Viewport target extent is not ready."));
-        return Result<void>::Success();
+        return ValidateEditorViewportMeshReadiness(resources_, descriptor.scene.instances);
     }
 
     Result<void> EditorViewportRendererOpenGL::RenderViewportPass(const Render::StaticMeshPassDescriptor &descriptor,
@@ -239,14 +309,20 @@ namespace Horo::Editor {
         glClearColor(descriptor.clearColor.red, descriptor.clearColor.green, descriptor.clearColor.blue, descriptor.clearColor.alpha);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glUseProgram(program_);
-        if (const Result<void> boundShadow = OpenGLViewportResourceBridge::BindTexture(*frontend_, resources_.ShadowTextureView(), 7);
+        if (const Result<void> boundShadow =
+                OpenGLViewportResourceBridge::BindTexture(*frontend_, resources_.ShadowTextureView(), reloadTextureUnit_);
             boundShadow.HasError())
             return boundShadow;
-        UploadLighting(descriptor.scene, shadow);
+        frameShadow_ = shadow;
+        // Grid uses the bootstrap material's complete selection color; no global light truncation is uploaded.
+        if (!reflectedProgram_)
+            glUniform1i(uniforms_.lightCount, 0);
         if (const Result<void> grid = DrawGrid(descriptor.scene.camera, aspect, static_cast<float>(allocatedExtent.height));
             grid.HasError()) {
             return grid;
         }
+        if (reflectedProgram_)
+            glUseProgram(program_);
         if (const Result<void> meshes = DrawSceneMeshes(descriptor.scene, aspect); meshes.HasError())
             return meshes;
         if (const Result<void> visualizer = DrawLightVisualizer(descriptor.scene.camera, aspect); visualizer.HasError())
@@ -254,8 +330,10 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    Result<void> EditorViewportRendererOpenGL::DrawSceneMeshes(const Render::RenderSceneView &scene, const float aspect) const {
-        for (const Render::RenderStaticMeshInstance &instance : scene.instances) {
+    Result<void> EditorViewportRendererOpenGL::DrawSceneMeshes(const Render::RenderSceneView &scene, const float aspect) {
+        for (const auto &instance : scene.instances) {
+            if (const auto lights = PrepareDrawLighting(scene, instance); lights.HasError())
+                return lights;
             const auto mesh = resources_.FindMesh(instance.mesh.id.value);
             if (!mesh.has_value()) {
                 return Result<void>::Failure(
@@ -267,10 +345,25 @@ namespace Horo::Editor {
                 BuildRenderMvp(scene.camera, instance.localToWorld, aspect, Math::ClipDepthRange::NegativeOneToOne);
             if (mvp.HasError())
                 return Result<void>::Failure(mvp.ErrorValue());
-            glUniformMatrix4fv(uniforms_.mvp, 1, GL_FALSE, mvp.Value().values.data());
-            glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, instance.localToWorld.values.data());
-            glUniform3f(uniforms_.selectionColor, instance.presentation.tint.x, instance.presentation.tint.y, instance.presentation.tint.z);
-            glUniform1f(uniforms_.selectionStrength, instance.presentation.tintStrength);
+            if (reflectedProgram_) {
+                auto parameters = reloadParameters_;
+                parameters.mvp = mvp.Value();
+                parameters.model = instance.localToWorld;
+                parameters.selection = {instance.presentation.tint.x, instance.presentation.tint.y, instance.presentation.tint.z,
+                                        instance.presentation.tintStrength};
+                std::array<std::byte, 4096> bytes{};
+                const auto packed = parameters.PackLit(reloadLayouts_[0], bytes);
+                if (packed.HasError())
+                    return Result<void>::Failure(packed.ErrorValue());
+                if (const auto uploaded = UploadReload(0, std::span{bytes}.first(packed.Value())); uploaded.HasError())
+                    return uploaded;
+            } else {
+                glUniformMatrix4fv(uniforms_.mvp, 1, GL_FALSE, mvp.Value().values.data());
+                glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, instance.localToWorld.values.data());
+                glUniform3f(uniforms_.selectionColor, instance.presentation.tint.x, instance.presentation.tint.y,
+                            instance.presentation.tint.z);
+                glUniform1f(uniforms_.selectionStrength, instance.presentation.tintStrength);
+            }
             glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh->indexCount), GL_UNSIGNED_INT, nullptr);
         }
         return Result<void>::Success();
@@ -296,11 +389,18 @@ namespace Horo::Editor {
         glBindVertexArray(gridVertexArray_);
         glBindBuffer(GL_ARRAY_BUFFER, gridVertexBuffer_);
         glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(geometry.Lines().size_bytes()), geometry.Lines().data());
-        glUniformMatrix4fv(uniforms_.mvp, 1, GL_FALSE, viewProjection.Value().values.data());
-        const Math::Mat4 identity = Math::Mat4::Identity();
-        glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, identity.values.data());
-        glUniform3f(uniforms_.selectionColor, geometry.color.x, geometry.color.y, geometry.color.z);
-        glUniform1f(uniforms_.selectionStrength, 1.0F);
+        if (reflectedProgram_) {
+            glUseProgram(gridProgram_);
+            const auto uploaded = UploadReloadGrid(viewProjection.Value(), geometry.color);
+            if (uploaded.HasError())
+                return uploaded;
+        } else {
+            glUniformMatrix4fv(uniforms_.mvp, 1, GL_FALSE, viewProjection.Value().values.data());
+            const Math::Mat4 identity = Math::Mat4::Identity();
+            glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, identity.values.data());
+            glUniform3f(uniforms_.selectionColor, geometry.color.x, geometry.color.y, geometry.color.z);
+            glUniform1f(uniforms_.selectionStrength, 1.0F);
+        }
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(geometry.vertexCount));
         glDepthMask(GL_TRUE);
         return Result<void>::Success();
@@ -333,23 +433,34 @@ namespace Horo::Editor {
 
         glDepthMask(GL_FALSE);
         glBindVertexArray(gridVertexArray_);
-        glUniformMatrix4fv(uniforms_.mvp, 1, GL_FALSE, viewProjection.Value().values.data());
-        const Math::Mat4 identity = Math::Mat4::Identity();
-        glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, identity.values.data());
-        glUniform1f(uniforms_.selectionStrength, 1.0F);
+        if (reflectedProgram_)
+            glUseProgram(gridProgram_);
+        else {
+            glUniformMatrix4fv(uniforms_.mvp, 1, GL_FALSE, viewProjection.Value().values.data());
+            const Math::Mat4 identity = Math::Mat4::Identity();
+            glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, identity.values.data());
+            glUniform1f(uniforms_.selectionStrength, 1.0F);
+        }
+        Result<void> upload = Result<void>::Success();
         const auto drawBatch = [&](const ViewportGridLineBatch &batch) {
             if (batch.positions.empty())
                 return;
             glBindBuffer(GL_ARRAY_BUFFER, gridVertexBuffer_);
             glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(batch.positions.size_bytes()), batch.positions.data());
-            glUniform3f(uniforms_.selectionColor, batch.color.x, batch.color.y, batch.color.z);
+            if (reflectedProgram_) {
+                upload = UploadReloadGrid(viewProjection.Value(), batch.color);
+                if (upload.HasError())
+                    return;
+            } else
+                glUniform3f(uniforms_.selectionColor, batch.color.x, batch.color.y, batch.color.z);
             const GLenum primitive = batch.topology == ViewportGridPrimitiveTopology::Triangles ? GL_TRIANGLES : GL_LINES;
             glDrawArrays(primitive, 0, static_cast<GLsizei>(batch.positions.size()));
         };
         drawBatch(geometry.RegularLines());
-        drawBatch(geometry.Axes());
+        if (upload.HasValue())
+            drawBatch(geometry.Axes());
         glDepthMask(GL_TRUE);
-        return Result<void>::Success();
+        return upload;
     }
 
     /** @copydoc EditorViewportRendererOpenGL::TextureView */
@@ -369,7 +480,7 @@ namespace Horo::Editor {
         return initialized_ && resources_.IsReady();
     }
 
-    Result<void> EditorViewportRendererOpenGL::CreateProgram() {
+    Result<void> EditorViewportRendererOpenGL::CreateProgram(ProgramGeneration &candidate) {
         auto vertex = CompileShader(GL_VERTEX_SHADER, Detail::ViewportVertexShader);
         if (vertex.HasError()) {
             return Result<void>::Failure(vertex.ErrorValue());
@@ -380,60 +491,74 @@ namespace Horo::Editor {
             return Result<void>::Failure(fragment.ErrorValue());
         }
 
-        program_ = glCreateProgram();
-        glAttachShader(program_, vertex.Value());
-        glAttachShader(program_, fragment.Value());
-        glBindAttribLocation(program_, 0, "aPosition");
-        glBindAttribLocation(program_, 1, "aNormal");
-        glBindAttribLocation(program_, 2, "aUv");
-        glBindFragDataLocation(program_, 0, "outColor");
-        glLinkProgram(program_);
+        candidate.program = glCreateProgram();
+        glAttachShader(candidate.program, vertex.Value());
+        glAttachShader(candidate.program, fragment.Value());
+        glBindAttribLocation(candidate.program, 0, "aPosition");
+        glBindAttribLocation(candidate.program, 1, "aNormal");
+        glBindAttribLocation(candidate.program, 2, "aUv");
+        glBindFragDataLocation(candidate.program, 0, "outColor");
+        glLinkProgram(candidate.program);
         glDeleteShader(vertex.Value());
         glDeleteShader(fragment.Value());
 
         GLint linked = GL_FALSE;
-        glGetProgramiv(program_, GL_LINK_STATUS, &linked);
+        glGetProgramiv(candidate.program, GL_LINK_STATUS, &linked);
         if (linked != GL_TRUE) {
             GLint logLength = 0;
-            glGetProgramiv(program_, GL_INFO_LOG_LENGTH, &logLength);
+            glGetProgramiv(candidate.program, GL_INFO_LOG_LENGTH, &logLength);
             std::string log(static_cast<std::size_t>(std::max(logLength, 1)), '\0');
-            glGetProgramInfoLog(program_, logLength, nullptr, log.data());
+            glGetProgramInfoLog(candidate.program, logLength, nullptr, log.data());
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportShaderLinkFailed, "Viewport shader linking failed: " + log));
         }
-        return LoadUniformLocations();
+        return LoadUniformLocations(candidate);
     }
 
-    Result<void> EditorViewportRendererOpenGL::LoadUniformLocations() {
-        uniforms_.mvp = glGetUniformLocation(program_, "uMvp");
-        uniforms_.model = glGetUniformLocation(program_, "uModel");
-        uniforms_.cameraPosition = glGetUniformLocation(program_, "uCameraPosition");
-        uniforms_.lightCount = glGetUniformLocation(program_, "uLightCount");
-        uniforms_.lightPositionKind = glGetUniformLocation(program_, "uLightPositionKind[0]");
-        uniforms_.lightDirectionRange = glGetUniformLocation(program_, "uLightDirectionRange[0]");
-        uniforms_.lightColorIntensity = glGetUniformLocation(program_, "uLightColorIntensity[0]");
-        uniforms_.lightCone = glGetUniformLocation(program_, "uLightCone[0]");
-        uniforms_.shadowViewProjection = glGetUniformLocation(program_, "uShadowViewProjection");
-        uniforms_.shadowMap = glGetUniformLocation(program_, "uShadowMap");
-        uniforms_.shadowEnabled = glGetUniformLocation(program_, "uShadowEnabled");
-        uniforms_.shadowLightIndex = glGetUniformLocation(program_, "uShadowLightIndex");
-        uniforms_.selectionColor = glGetUniformLocation(program_, "uSelectionColor");
-        uniforms_.selectionStrength = glGetUniformLocation(program_, "uSelectionStrength");
+    Result<void> EditorViewportRendererOpenGL::LoadUniformLocations(ProgramGeneration &candidate) {
+        candidate.uniforms.mvp = glGetUniformLocation(candidate.program, "uMvp");
+        candidate.uniforms.model = glGetUniformLocation(candidate.program, "uModel");
+        candidate.uniforms.cameraPosition = glGetUniformLocation(candidate.program, "uCameraPosition");
+        candidate.uniforms.lightCount = glGetUniformLocation(candidate.program, "uLightCount");
+        candidate.uniforms.lightPositionKind = glGetUniformLocation(candidate.program, "uLightPositionKind[0]");
+        candidate.uniforms.lightDirectionRange = glGetUniformLocation(candidate.program, "uLightDirectionRange[0]");
+        candidate.uniforms.lightColorIntensity = glGetUniformLocation(candidate.program, "uLightColorIntensity[0]");
+        candidate.uniforms.lightCone = glGetUniformLocation(candidate.program, "uLightCone[0]");
+        candidate.uniforms.shadowViewProjection = glGetUniformLocation(candidate.program, "uShadowViewProjection[0]");
+        candidate.uniforms.shadowMap = glGetUniformLocation(candidate.program, "uShadowMap");
+        candidate.uniforms.shadowEnabled = glGetUniformLocation(candidate.program, "uShadowEnabled");
+        candidate.uniforms.shadowLightIndex = glGetUniformLocation(candidate.program, "uShadowLightIndex");
+        candidate.uniforms.shadowCascadeCount = glGetUniformLocation(candidate.program, "uShadowCascadeCount");
+        candidate.uniforms.cascadeSplits = glGetUniformLocation(candidate.program, "uCascadeSplits[0]");
+        candidate.uniforms.atlasRects = glGetUniformLocation(candidate.program, "uAtlasRects[0]");
+        candidate.uniforms.cameraForward = glGetUniformLocation(candidate.program, "uCameraForward");
+        candidate.uniforms.shadowTexel = glGetUniformLocation(candidate.program, "uShadowTexel");
+        candidate.uniforms.shadowBiasFilter = glGetUniformLocation(candidate.program, "uShadowBiasFilter");
+        candidate.uniforms.selectionColor = glGetUniformLocation(candidate.program, "uSelectionColor");
+        candidate.uniforms.selectionStrength = glGetUniformLocation(candidate.program, "uSelectionStrength");
+        candidate.uniforms.baseColor = glGetUniformLocation(candidate.program, "uBaseColor");
         if (const std::array locations{
-                uniforms_.mvp,
-                uniforms_.model,
-                uniforms_.cameraPosition,
-                uniforms_.lightCount,
-                uniforms_.lightPositionKind,
-                uniforms_.lightDirectionRange,
-                uniforms_.lightColorIntensity,
-                uniforms_.lightCone,
-                uniforms_.shadowViewProjection,
-                uniforms_.shadowMap,
-                uniforms_.shadowEnabled,
-                uniforms_.shadowLightIndex,
-                uniforms_.selectionColor,
-                uniforms_.selectionStrength,
+                candidate.uniforms.mvp,
+                candidate.uniforms.model,
+                candidate.uniforms.cameraPosition,
+                candidate.uniforms.lightCount,
+                candidate.uniforms.lightPositionKind,
+                candidate.uniforms.lightDirectionRange,
+                candidate.uniforms.lightColorIntensity,
+                candidate.uniforms.lightCone,
+                candidate.uniforms.shadowViewProjection,
+                candidate.uniforms.shadowMap,
+                candidate.uniforms.shadowEnabled,
+                candidate.uniforms.shadowLightIndex,
+                candidate.uniforms.shadowCascadeCount,
+                candidate.uniforms.cascadeSplits,
+                candidate.uniforms.atlasRects,
+                candidate.uniforms.cameraForward,
+                candidate.uniforms.shadowTexel,
+                candidate.uniforms.shadowBiasFilter,
+                candidate.uniforms.selectionColor,
+                candidate.uniforms.selectionStrength,
+                candidate.uniforms.baseColor,
             };
             !std::ranges::all_of(locations, [](const std::int32_t location) {
             return location >= 0;
@@ -444,7 +569,7 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    Result<void> EditorViewportRendererOpenGL::CreateShadowProgram() {
+    Result<void> EditorViewportRendererOpenGL::CreateShadowProgram(ProgramGeneration &candidate) {
         auto vertex = CompileShader(GL_VERTEX_SHADER, Detail::ShadowVertexShader);
         if (vertex.HasError())
             return Result<void>::Failure(vertex.ErrorValue());
@@ -453,26 +578,26 @@ namespace Horo::Editor {
             glDeleteShader(vertex.Value());
             return Result<void>::Failure(fragment.ErrorValue());
         }
-        shadowProgram_ = glCreateProgram();
-        glAttachShader(shadowProgram_, vertex.Value());
-        glAttachShader(shadowProgram_, fragment.Value());
-        glBindAttribLocation(shadowProgram_, 0, "aPosition");
-        glLinkProgram(shadowProgram_);
+        candidate.shadowProgram = glCreateProgram();
+        glAttachShader(candidate.shadowProgram, vertex.Value());
+        glAttachShader(candidate.shadowProgram, fragment.Value());
+        glBindAttribLocation(candidate.shadowProgram, 0, "aPosition");
+        glLinkProgram(candidate.shadowProgram);
         glDeleteShader(vertex.Value());
         glDeleteShader(fragment.Value());
 
         GLint linked = GL_FALSE;
-        glGetProgramiv(shadowProgram_, GL_LINK_STATUS, &linked);
+        glGetProgramiv(candidate.shadowProgram, GL_LINK_STATUS, &linked);
         if (linked != GL_TRUE) {
             GLint logLength = 0;
-            glGetProgramiv(shadowProgram_, GL_INFO_LOG_LENGTH, &logLength);
+            glGetProgramiv(candidate.shadowProgram, GL_INFO_LOG_LENGTH, &logLength);
             std::string log(static_cast<std::size_t>(std::max(logLength, 1)), '\0');
-            glGetProgramInfoLog(shadowProgram_, logLength, nullptr, log.data());
+            glGetProgramInfoLog(candidate.shadowProgram, logLength, nullptr, log.data());
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportShaderLinkFailed, "Viewport shadow shader linking failed: " + log));
         }
-        uniforms_.shadowMvp = glGetUniformLocation(shadowProgram_, "uShadowMvp");
-        if (uniforms_.shadowMvp < 0) {
+        candidate.uniforms.shadowMvp = glGetUniformLocation(candidate.shadowProgram, "uShadowMvp");
+        if (candidate.uniforms.shadowMvp < 0) {
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportShaderContractInvalid, "Viewport shadow shader is missing its matrix uniform."));
         }
@@ -481,12 +606,17 @@ namespace Horo::Editor {
     }
 
     Result<void> EditorViewportRendererOpenGL::DrawDirectionalShadowMap(const Render::RenderSceneView &scene,
-                                                                        const EditorViewportDirectionalShadowView &shadow) const {
-        constexpr auto shadowMapResolution = static_cast<GLsizei>(EditorViewportDirectionalShadowMapResolution);
+                                                                        const EditorViewportDirectionalShadowView &shadow) {
+        if (shadowProgramGeneration_ != liveGeneration_)
+            shadowCache_ = {};
+        if (!Render::DirectionalShadowRenderRequired(shadow, resources_.ShadowGeneration(), shadowCache_))
+            return Result<void>::Success();
+        // A failed partial redraw invalidates previous contents even if the next scene returns to an old fingerprint.
+        shadowCache_.valid = false;
         if (const Result<void> bound = OpenGLViewportResourceBridge::BindRenderTarget(*frontend_, resources_.ShadowTarget());
             bound.HasError())
             return bound;
-        glViewport(0, 0, shadowMapResolution, shadowMapResolution);
+        glDisable(GL_SCISSOR_TEST);
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
         glDepthMask(GL_TRUE);
         glEnable(GL_DEPTH_TEST);
@@ -495,14 +625,47 @@ namespace Horo::Editor {
         glCullFace(GL_FRONT);
         glClear(GL_DEPTH_BUFFER_BIT);
         glUseProgram(shadowProgram_);
+        for (std::size_t cascade = 0; cascade < shadow.cascadeCount; ++cascade) {
+            const auto drawn = DrawShadowCascade(scene, shadow, cascade);
+            if (drawn.HasError())
+                return drawn;
+        }
+        glCullFace(GL_BACK);
+        if (glGetError() != GL_NO_ERROR) {
+            shadowCache_ = {};
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        }
+        const auto cache = Render::CommitDirectionalShadowRender(shadow, resources_.ShadowGeneration(), shadowCache_);
+        if (cache.HasError())
+            return Result<void>::Failure(cache.ErrorValue());
+        shadowCache_ = cache.Value();
+        shadowProgramGeneration_ = liveGeneration_;
+        return Result<void>::Success();
+    }
+
+    Result<void> EditorViewportRendererOpenGL::DrawShadowCascade(const Render::RenderSceneView &scene,
+                                                                 const Render::DirectionalShadowFrame &shadow,
+                                                                 const std::size_t cascade) const {
+        const auto &viewport = shadow.cascades[cascade].viewport;
+        // Shared rectangles are top-left; GL's native viewport starts at the bottom-left.
+        glViewport(static_cast<GLint>(viewport.x), static_cast<GLint>(shadow.atlasHeight - viewport.y - viewport.height),
+                   static_cast<GLsizei>(viewport.width), static_cast<GLsizei>(viewport.height));
         for (const Render::RenderStaticMeshInstance &instance : scene.instances) {
             const auto mesh = resources_.FindMesh(instance.mesh.id.value);
             if (!mesh.has_value()) {
                 return Result<void>::Failure(
                     MakeViewportError(RendererErrors::ViewportStaleMeshResource, "Shadow pass instance references a stale mesh resource."));
             }
-            const Math::Mat4 shadowMvp = Math::Multiply(shadow.viewProjection, instance.localToWorld);
-            glUniformMatrix4fv(uniforms_.shadowMvp, 1, GL_FALSE, shadowMvp.values.data());
+            const Math::Mat4 shadowMvp = EditorViewportShadowMvp(shadow, cascade, instance.localToWorld);
+            if (reflectedProgram_) {
+                std::array<std::byte, 4096> bytes{};
+                const auto packed = PackEditorViewportShadow(reloadLayouts_[2], shadowMvp, bytes);
+                if (packed.HasError())
+                    return Result<void>::Failure(packed.ErrorValue());
+                if (const auto uploaded = UploadReload(2, std::span{bytes}.first(packed.Value())); uploaded.HasError())
+                    return uploaded;
+            } else
+                glUniformMatrix4fv(uniforms_.shadowMvp, 1, GL_FALSE, shadowMvp.values.data());
             if (const Result<void> bound = OpenGLViewportResourceBridge::BindMesh(*frontend_, mesh->mesh); bound.HasError())
                 return bound;
             glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(mesh->indexCount), GL_UNSIGNED_INT, nullptr);
@@ -535,9 +698,15 @@ namespace Horo::Editor {
             cones[index * 2 + 1] = light.outerConeCosine;
         }
         glUniform3f(uniforms_.cameraPosition, scene.camera.position.x, scene.camera.position.y, scene.camera.position.z);
+        glUniform3fv(uniforms_.baseColor, 1, reloadParameters_.baseColor.data());
         glUniform1i(uniforms_.lightCount, static_cast<GLint>(scene.lights.size()));
-        const Math::Mat4 shadowViewProjection = shadow.has_value() ? shadow->viewProjection : Math::Mat4::Identity();
-        glUniformMatrix4fv(uniforms_.shadowViewProjection, 1, GL_FALSE, shadowViewProjection.values.data());
+        glUniformMatrix4fv(uniforms_.shadowViewProjection, 4, GL_FALSE, reloadParameters_.shadow.data());
+        glUniform4fv(uniforms_.cascadeSplits, 4, reloadParameters_.cascadeSplits.data());
+        glUniform4fv(uniforms_.atlasRects, 4, reloadParameters_.atlasRects.data());
+        glUniform3fv(uniforms_.cameraForward, 1, reloadParameters_.cameraForward.data());
+        glUniform2f(uniforms_.shadowTexel, reloadParameters_.shadowSettings[3], reloadParameters_.cameraForward[3]);
+        glUniform4fv(uniforms_.shadowBiasFilter, 1, reloadParameters_.shadowBiasFilter.data());
+        glUniform1i(uniforms_.shadowCascadeCount, static_cast<GLint>(reloadParameters_.shadowSettings[2]));
         glUniform1i(uniforms_.shadowMap, 7);
         glUniform1i(uniforms_.shadowEnabled, shadow.has_value() ? 1 : 0);
         glUniform1i(uniforms_.shadowLightIndex, shadow.has_value() ? static_cast<GLint>(shadow->lightIndex) : -1);

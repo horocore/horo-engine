@@ -27,7 +27,8 @@ namespace Horo::Assets {
         ModuleChanged,
     };
 
-    /** @brief Complete reproducible provenance stored in an asset identity sidecar. */
+    /** @brief Complete reproducible provenance stored in an asset identity sidecar.
+     */
     struct AssetImportMetadata {
         static constexpr std::uint32_t kSchemaVersion = 1;
 
@@ -63,24 +64,40 @@ namespace Horo::Assets {
      */
     [[nodiscard]] Result<AssetImportMetadata> ReadAssetImportMetadata(const std::filesystem::path &absoluteMetadataPath);
 
+    /** @brief Decode one already-admitted metadata generation without rereading a
+     * mutable path.
+     * @param contents Complete owned or borrowed metadata bytes, nonempty and at
+     * most 1 MiB.
+     * @return The same schema/provenance projection as ReadAssetImportMetadata, or
+     * a typed malformed/limit error.
+     * @details The caller retains source admission and publication leases; decoding
+     * performs no filesystem access.
+     */
+    [[nodiscard]] Result<AssetImportMetadata> DecodeAssetImportMetadata(std::string_view contents);
+
     /**
-     * @brief Serializes importer provenance as deterministic UTF-8 JSON with a trailing newline.
+     * @brief Serializes importer provenance as deterministic UTF-8 JSON with a
+     * trailing newline.
      * @param metadata Complete metadata to serialize.
-     * @return Serialized JSON, or a typed error when required provenance is missing.
+     * @return Serialized JSON, or a typed error when required provenance is
+     * missing.
      */
     [[nodiscard]] Result<std::string> SerializeAssetImportMetadata(const AssetImportMetadata &metadata);
 
     /**
      * @brief Resolves serialized settings against the current importer schema.
-     * @param contribution Current importer contribution and declarative settings schema.
+     * @param contribution Current importer contribution and declarative settings
+     * schema.
      * @param serializedSettings Settings keyed by `settings.<descriptor-id>`.
-     * @return Settings in descriptor order, or a typed error for invalid retained values.
+     * @return Settings in descriptor order, or a typed error for invalid retained
+     * values.
      */
     [[nodiscard]] Result<std::vector<ImportSettingValue>> ResolveImportSettings(
         const AssetImporterContribution &contribution, const TransparentStringMap<std::string> &serializedSettings);
 
     /**
-     * @brief Returns a canonical UTC timestamp suitable for durable import metadata.
+     * @brief Returns a canonical UTC timestamp suitable for durable import
+     * metadata.
      * @return ISO-8601 UTC timestamp with millisecond precision.
      */
     [[nodiscard]] std::string CurrentImportTimestampUtc();

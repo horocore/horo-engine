@@ -14,7 +14,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
+#include <thread>
 #include <vector>
 
 namespace Horo::Runtime {
@@ -174,15 +176,43 @@ namespace Horo::Runtime {
         IStagedRestoreParticipant() = default;
     };
 
+    /** @brief Optional exact-owner proof for transfer-completed transient preparation only.
+     * @details Absent capability retains all ownership. Called only after Activated and outside publication/owner locks.
+     * Returning false retains pins for retry; failure preserves live published state and cannot mean rollback.
+     */
+    class IStagedRestoreTransientRetirement {
+    public:
+        virtual ~IStagedRestoreTransientRetirement() = default;
+        [[nodiscard]] virtual Result<bool> RetirePublishedTransient() = 0;
+    };
+
     /**
      * @brief Host-owned transfer of the remaining aggregate roots at the restore commit gate.
      * @details The owner validates and reserves every root before calling Activate. Publication must
      *          only transfer prepared ownership, without allocation, observers, provider work or failure.
      *          The object and every borrowed authority must outlive the synchronous Activate call.
      */
-    class IStagedRestoreAggregatePublication {
+    /** @brief Last owner-local fallible check, immediately before the existing commit gate.
+     * @details Runs after all preparation/provider validation. Implementations validate every
+     * fallible prerequisite before arming their private owners, invoke no callbacks after arm,
+     * and retain those exact owners through publication or rollback. This is not a commit gate.
+     */
+    class IStagedRestoreFinalPublicationCheck {
+    public:
+        virtual ~IStagedRestoreFinalPublicationCheck() = default;
+        /** @brief Validates and arms exact private owners; failure leaves live roots unchanged. */
+        [[nodiscard]] virtual Result<void> ValidateAndArm() = 0;
+    };
+
+    class IStagedRestoreAggregatePublication : public IStagedRestoreFinalPublicationCheck {
     public:
         virtual ~IStagedRestoreAggregatePublication() = default;
+
+        /** @brief Legacy aggregates have no separate final owner claim. */
+        [[nodiscard]] Result<void> ValidateAndArm() override {
+            return Result<void>::Success();
+        }
+
         /** @brief Transfers the prepared aggregate roots before operation completion becomes observable. */
         virtual void PublishPrepared() noexcept = 0;
 
@@ -270,6 +300,12 @@ namespace Horo::Runtime {
         /** @brief Fails and rolls back an unpublished transaction with the supplied typed cause. @param error Terminal cause. */
         void Rollback(Error error);
 
+        /** @brief Retires only published receipts explicitly proving transient ownership transfer.
+         * @return Exact retired participant IDs or original cleanup failure; repeated calls retry retained owners.
+         * @pre Old aggregate owners have retired. Never call inside Activate/publication or an owner mutex.
+         * @details All non-retired registry adapter leases remain owned; canonical identity/reference/core state is preserved.
+         */
+        [[nodiscard]] Result<std::optional<std::vector<SaveParticipantId>>> RetirePublishedTransient();
         /** @brief Returns current unique ownership state. @return Transaction state. */
         [[nodiscard]] StagedRestoreTransactionState State() const noexcept;
         /** @brief Returns immutable operation/runtime generation evidence. @return Borrowed context. */
@@ -305,12 +341,19 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> EnterReadyToActivate();
         /** @brief Resolves the complete applied aggregate before any owner fixup callback runs. */
         [[nodiscard]] Result<void> ResolveReferences();
+        /** @brief Runs the last fallible aggregate claim and enters the SAME operation gate. */
+        [[nodiscard]] Result<void> BeginAggregateCommit(IStagedRestoreAggregatePublication &aggregate);
         [[nodiscard]] Result<void> FailUnpublished(Error error);
         [[nodiscard]] Result<void> FailPreparation(Error error, StagedRestorePhase phase, std::size_t participantIndex);
 
         StagedRestoreContext context_;
         SaveOperationController operation_;
         SaveParticipantRegistrySnapshot participants_;
+        std::vector<SaveParticipantBinding> retainedPublishedBindings_;
+        std::vector<SaveParticipantId> retiredTransientOwners_;
+        bool transientRetirementComplete_{};
+        bool activationInProgress_{};
+        std::thread::id transientRetirementOwner_{std::this_thread::get_id()};
         std::unique_ptr<IStagedRestoreReferenceResolver> referenceResolver_;
         SaveRestoreReferenceContext references_;
         std::vector<std::unique_ptr<IStagedRestoreParticipant>> staged_;

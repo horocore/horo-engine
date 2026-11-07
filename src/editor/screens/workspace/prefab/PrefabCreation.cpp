@@ -243,7 +243,8 @@ namespace Horo::Editor {
                                     std::pair{"characterController", CharacterController},
                                     std::pair{"rigidBody", RigidBody},
                                     std::pair{"colliders", Collider},
-                                    std::pair{"physicsConstraints", PhysicsConstraint}};
+                                    std::pair{"physicsConstraints", PhysicsConstraint},
+                                    std::pair{"animation", Animation}};
             ComponentProjection projection;
             if (object.primitiveMesh)
                 if (const auto added = AppendBuiltinOccurrence(PrimitiveMesh, encoded.at("primitiveMesh"), node, nextInstance, projection);
@@ -327,8 +328,8 @@ namespace Horo::Editor {
         }
 
         /** @brief Captures typed AssetIds from all supported authored references, including disabled components. */
-        Result<void> AppendAssets(const SceneSource::SceneObjectSnapshot &object, const Assets::AssetRegistrySnapshot &registry,
-                                  std::vector<Assets::AssetId> &references) {
+        Result<void> AppendLegacyAssets(const SceneSource::SceneObjectSnapshot &object, const Assets::AssetRegistrySnapshot &registry,
+                                        std::vector<Assets::AssetId> &references) {
             const auto &components = object.components;
             if (components.audioSource)
                 if (auto added = AppendAudioAsset(*components.audioSource, registry, references); added.HasError())
@@ -346,6 +347,32 @@ namespace Horo::Editor {
                     return added;
             return AppendColliderAssets(components.colliders, registry, references);
         }
+
+        /** @brief Captures the exact durable animation dependency roles from the actual project registry. */
+        Result<void> AppendAnimationAssets(const Animation::AnimationAuthoringComponent &component,
+                                           const Assets::AssetRegistrySnapshot &registry, std::vector<Assets::AssetId> &references) {
+            if (auto skeleton = AppendAsset(component.skeleton.Asset(), registry, references, "core.animation.skeleton");
+                skeleton.HasError())
+                return skeleton;
+            const bool clip = component.source.kind == Animation::AnimationSourceKind::Clip;
+            auto source = AppendAsset(clip ? component.source.clip.Asset() : component.source.graph.Asset(), registry, references,
+                                      clip ? "core.animation.clip" : "core.animation.graph");
+            if (source.HasError())
+                return source;
+            if (component.retarget.IsValid())
+                return AppendAsset(component.retarget.Asset(), registry, references, "core.animation.retarget_profile");
+            return Result<void>::Success();
+        }
+
+        /** @brief Preserves original dependency validation order before admitting the optional animation closure. */
+        Result<void> AppendAssets(const SceneSource::SceneObjectSnapshot &object, const Assets::AssetRegistrySnapshot &registry,
+                                  std::vector<Assets::AssetId> &references) {
+            if (auto legacy = AppendLegacyAssets(object, registry, references); legacy.HasError())
+                return legacy;
+            if (object.components.animation)
+                return AppendAnimationAssets(*object.components.animation, registry, references);
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc PreparePrefabSelectionSource */
@@ -353,7 +380,8 @@ namespace Horo::Editor {
                                                                 const Assets::AssetId asset, const Application::HoroVersion &version,
                                                                 const Assets::AssetRegistrySnapshot &registry,
                                                                 const Gameplay::BehaviorRegistry *behaviors,
-                                                                std::vector<PrefabCreationBoundary> &boundaries) {
+                                                                std::vector<PrefabCreationBoundary> &boundaries,
+                                                                const Prefab::PrefabLimitProfile *projectLimits) {
         using Return = Result<Prefab::PrefabDocument>;
         boundaries.clear();
         auto selected = Subtree(snapshot, root);
@@ -367,7 +395,7 @@ namespace Horo::Editor {
         AuditSelectedBehaviors(selected.Value(), behaviors, boundaries);
         if (!boundaries.empty())
             return Return::Failure(Unsupported());
-        auto limits = Prefab::PrefabLimitProfile::Create({});
+        auto limits = projectLimits ? Result<Prefab::PrefabLimitProfile>::Success(*projectLimits) : Prefab::PrefabLimitProfile::Create({});
         if (limits.HasError())
             return Return::Failure(limits.ErrorValue());
         Prefab::PrefabDocumentData data{.projectVersion = version, .assetId = asset};

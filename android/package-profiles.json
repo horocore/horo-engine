@@ -60,6 +60,43 @@
         "dexopt/baseline.prof",
         "dexopt/baseline.profm"
       ]
+    },
+    "qualification-vulkan-development": {
+      "applicationId": "org.horocore.packagequalification",
+      "versionName": "0.2.0",
+      "versionCode": 1,
+      "configuration": "Debug",
+      "preset": "android-vulkan-development",
+      "minimumApi": 29,
+      "targetApi": 36,
+      "renderer": "vulkan-android",
+      "distributionQualified": false,
+      "abis": [
+        "arm64-v8a",
+        "x86_64"
+      ],
+      "nativeLibrary": "horo-package-qualification",
+      "permissions": [
+        "org.horocore.packagequalification.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "android.permission.ACTIVITY_RECOGNITION"
+      ],
+      "features": [],
+      "assets": {
+        "qualification.json": "android/qualification-vulkan.json"
+      },
+      "nativeLibraries": [
+        "libhoro-package-qualification.so",
+        "libc++_shared.so"
+      ],
+      "generatedAssets": [],
+      "graphicsProfile": {
+        "schema": 2,
+        "api": "Vulkan1.1",
+        "presentMode": "Fifo",
+        "swapchainMaintenance1Required": true,
+        "singleGraphicsPresentQueue": true,
+        "compositeAlphaPolicy": "prefer-opaque-else-inherit-alpha-one"
+      }
     }
   }
 }

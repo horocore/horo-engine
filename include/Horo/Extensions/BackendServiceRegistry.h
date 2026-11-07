@@ -150,6 +150,8 @@ namespace Horo::Extensions {
     namespace Detail {
         template <typename Service> inline constexpr std::byte BackendServiceTypeTag{};
 
+        [[nodiscard]] const BackendServiceDescriptor *BackendServiceDescriptorOf(
+            const std::shared_ptr<BackendServiceProviderState> &) noexcept;
         [[nodiscard]] void *BackendServiceObject(const std::shared_ptr<BackendServiceProviderState> &provider) noexcept;
         [[nodiscard]] Error AttributeBackendServiceError(const BackendServiceDescriptor &provider, Error cause);
         [[nodiscard]] Error BackendServiceCancellationError(const BackendServiceDescriptor &provider);
@@ -171,6 +173,14 @@ namespace Horo::Extensions {
         BackendServiceCall &operator=(const BackendServiceCall &) = delete;
         BackendServiceCall(BackendServiceCall &&) noexcept = default;
         BackendServiceCall &operator=(BackendServiceCall &&) noexcept = default;
+
+        /** @brief Borrows the immutable actual provider metadata, including its real thread rule.
+         * @return Null for an empty/consumed call; otherwise valid until this call is moved, consumed or destroyed.
+         * @note Revocation does not erase diagnostic metadata. This getter grants no execution/liveness rights.
+         */
+        [[nodiscard]] const BackendServiceDescriptor *Descriptor() const noexcept {
+            return Detail::BackendServiceDescriptorOf(provider_);
+        }
 
         /**
          * @brief Invokes one mutable typed service operation exactly once.

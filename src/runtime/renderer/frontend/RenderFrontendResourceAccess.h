@@ -7,6 +7,27 @@ namespace Horo::Render::Detail {
     /** @brief Internal adapter used by matching integrations without publishing native resource identity. */
     class RenderFrontendResourceAccess final {
     public:
+        /** @brief Validates the existing open graphics owner outside any active frame.
+         * @param frontend Selected existing frontend. @return Exact registry incarnation or original lifecycle error. */
+        [[nodiscard]] static Result<RenderResourceOwnerId> RequirePreparationBoundary(const RenderFrontend &frontend);
+        /** @brief Borrows the frontend's actual issued queue topology at a cold preparation boundary.
+         * @return Existing immutable assignments, valid until frontend teardown; never synthesized native queue ordinals. */
+        [[nodiscard]] static Result<std::span<const RenderQueueAssignment>> QueueAssignments(const RenderFrontend &frontend);
+        /** @brief Copies one exact completed native observation directly into the existing queue's writable byte arena.
+         * @param frontend Same live render owner outside an active frame. @param preparation Exact prepared simulation.
+         * @param step Actual completed observe=true step. @param destination Queue-owned writable result storage.
+         * @return Actual copied bytes or original native error; consumes native hold only on complete successful copy.
+         */
+        [[nodiscard]] static Result<std::size_t> CopyCompletedVfxGpuObservation(RenderFrontend &frontend,
+                                                                                const VfxGpuPreparationReceipt &preparation,
+                                                                                const VfxGpuStepIdentity &step,
+                                                                                std::span<std::byte> destination);
+        /** @brief Releases a completed native observation without a CPU copy; pending/uncertain work remains retained.
+         * @return Successful exact discard or original typed native pending/error.
+         */
+        [[nodiscard]] static Result<void> DiscardCompletedVfxGpuObservation(RenderFrontend &frontend,
+                                                                            const VfxGpuPreparationReceipt &preparation,
+                                                                            const VfxGpuStepIdentity &step);
         /** @brief Cold-admits owned depth backing for an explicitly supported complete multiview workload.
          * @param frontend Selected frontend whose owner thread must be open and outside a frame.
          * @param scope Canonical memory scope charged for this resource.
@@ -30,6 +51,17 @@ namespace Horo::Render::Detail {
         /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
         [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend,
                                                          const ResourceCreation<RenderTextureViewHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend, const ResourceCreation<RenderBufferHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend, const ResourceCreation<RenderMeshHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend,
+                                                         const ResourceCreation<RenderShaderModuleHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend, const ResourceCreation<RenderPipelineHandle> &creation);
+        /** @copydoc RetireCreation(RenderFrontend &, const ResourceCreation<RenderTextureHandle> &) */
+        [[nodiscard]] static Result<void> RetireCreation(RenderFrontend &frontend, const ResourceCreation<RenderSamplerHandle> &creation);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderBufferHandle buffer);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderMeshHandle mesh);
         [[nodiscard]] static Result<std::uint64_t> BackendInstance(const RenderFrontend &frontend, RenderTextureViewHandle view);

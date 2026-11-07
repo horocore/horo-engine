@@ -1,5 +1,6 @@
 #include "Horo/Animation/AnimationClip.h"
 
+#include "AnimationClipEventsInternal.h"
 #include "Horo/Animation/AnimationErrors.h"
 
 #include <algorithm>
@@ -80,7 +81,9 @@ namespace Horo::Animation {
             if (limits.maximumTracks == 0 || limits.maximumTracks > AnimationClipHardLimits::Tracks || limits.maximumKeysPerTrack == 0 ||
                 limits.maximumKeysPerTrack > AnimationClipHardLimits::KeysPerTrack || limits.maximumTotalKeys == 0 ||
                 limits.maximumTotalKeys > AnimationClipHardLimits::TotalKeys ||
-                limits.maximumBoundaryCrossings > AnimationClipHardLimits::BoundaryCrossings)
+                limits.maximumBoundaryCrossings > AnimationClipHardLimits::BoundaryCrossings ||
+                limits.maximumEvents > AnimationClipHardLimits::Events ||
+                limits.maximumEventSchemas > AnimationClipHardLimits::EventSchemas)
                 return HotReject<void>(AnimationErrors::ClipLimitExceeded, "The requested clip limits exceed hard safety ceilings.");
             return AnimationClipOutcome<void>::Success();
         }
@@ -113,8 +116,8 @@ namespace Horo::Animation {
                 return Reject<void>(AnimationErrors::ClipUnsupported, "The clip uses unknown typed playback metadata.");
             if (descriptor.kind == AnimationClipKind::Additive) {
                 if (!descriptor.referencePose || !descriptor.referencePose->id.IsValid() || !descriptor.referencePose->generation.IsValid())
-                    return Reject<void>(AnimationErrors::ClipReferencePoseMismatch,
-                                        "An additive clip requires an exact reference-pose identity and generation.");
+                    return Reject<void>(AnimationErrors::ClipReferencePoseMismatch, "An additive clip requires an exact reference-pose "
+                                                                                    "identity and generation.");
             } else if (descriptor.referencePose) {
                 return Reject<void>(AnimationErrors::ClipMalformed, "An absolute clip cannot declare an additive reference pose.");
             }
@@ -158,6 +161,21 @@ namespace Horo::Animation {
             }
             if (std::ranges::adjacent_find(track.keys, {}, &AnimationTransformKey::time) != track.keys.end())
                 return Reject<void>(AnimationErrors::ClipDuplicateIdentity, "A joint track contains duplicate key times.");
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates immutable marker provenance before publishing the exact
+         * clip generation. */
+        Result<void> ValidateSyncMarkers(const AnimationClipData &data) {
+            if (data.syncMarkers.size() > AnimationClipHardLimits::SyncMarkers)
+                return Reject<void>(AnimationErrors::ClipLimitExceeded, "The clip marker table exceeds its finite limit.");
+            std::int64_t previous = -1;
+            for (const auto &marker : data.syncMarkers) {
+                if (!marker.id.IsValid() || marker.time.ticks <= previous || marker.time.ticks >= data.descriptor.duration.ticks)
+                    return Reject<void>(AnimationErrors::ClipMalformed, "Clip markers require identities and strictly "
+                                                                        "ordered in-range times.");
+                previous = marker.time.ticks;
+            }
             return Result<void>::Success();
         }
 
@@ -430,8 +448,8 @@ namespace Horo::Animation {
             if (time.ticks < 0 || time.ticks > descriptor.duration.ticks)
                 return HotReject<void>(AnimationErrors::ClipMalformed, "Sampling time is outside the closed clip duration.");
             if (context.outputPose.size() != jointCount)
-                return HotReject<void>(AnimationErrors::ClipLimitExceeded,
-                                       "The output pose does not match the clip's canonical skeleton joint count.");
+                return HotReject<void>(AnimationErrors::ClipLimitExceeded, "The output pose does not match the clip's "
+                                                                           "canonical skeleton joint count.");
             return AnimationClipOutcome<void>::Success();
         }
 
@@ -457,8 +475,8 @@ namespace Horo::Animation {
             if (const bool outputAliasesBase = context.outputPose.data() == context.basePose.data();
                 (SpansOverlap(context.outputPose, context.basePose) && !outputAliasesBase) ||
                 SpansOverlap(context.outputPose, context.referenceLocalPose))
-                return HotReject<void>(AnimationErrors::ClipMalformed,
-                                       "Additive output may alias its complete base pose but no other input storage.");
+                return HotReject<void>(AnimationErrors::ClipMalformed, "Additive output may alias its complete base pose "
+                                                                       "but no other input storage.");
             return AnimationClipOutcome<void>::Success();
         }
 
@@ -469,6 +487,63 @@ namespace Horo::Animation {
                     .rotation = (base.rotation * rotationDelta).Normalized(),
                     .scale = {base.scale.x * (sample.scale.x / reference.scale.x), base.scale.y * (sample.scale.y / reference.scale.y),
                               base.scale.z * (sample.scale.z / reference.scale.z)}};
+        }
+
+        /** @brief Sole checked traversal kernel shared by whole-clip and explicit
+         * regional playback. */
+        AnimationClipOutcome<AnimationClipTraversal> TraverseDescriptor(const AnimationClipCursor cursor, const AnimationTimeDelta delta,
+                                                                        const AnimationClipDescriptor &descriptor,
+                                                                        const AnimationClipLimits &limits,
+                                                                        const AnimationClipAdmissionState admission) {
+            if (const auto valid = ValidateTraversal(cursor, delta, descriptor, limits, admission); valid.HasError())
+                return AnimationClipOutcome<AnimationClipTraversal>::Failure(valid.ErrorValue());
+            if (cursor.terminal || delta.ticks == 0) {
+                using enum AnimationTraversalDirection;
+                const auto sampleTime = descriptor.wrapMode == AnimationWrapMode::PingPong
+                                            ? PingPongSampleTime(cursor.phase.ticks, descriptor.duration.ticks)
+                                            : cursor.phase;
+                return AnimationClipOutcome<AnimationClipTraversal>::Success(
+                    {.cursor = cursor, .sampleTime = sampleTime, .direction = Held});
+            }
+
+            const std::int64_t duration = descriptor.duration.ticks;
+            const std::int64_t unbounded = cursor.phase.ticks + delta.ticks;
+            using enum AnimationWrapMode;
+            switch (descriptor.wrapMode) {
+                case Once:
+                case ClampForever:
+                    return TraverseClamped(cursor, delta, unbounded, duration, descriptor.wrapMode, limits);
+                case Loop:
+                    return TraverseLoop(cursor, delta, unbounded, duration, limits);
+                case PingPong:
+                    return TraversePingPong(cursor, delta, unbounded, duration, limits);
+                case Count:
+                    return HotReject<AnimationClipTraversal>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
+            }
+            return HotReject<AnimationClipTraversal>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
+        }
+
+        /** @brief Rejects malformed region arithmetic before constructing the effective
+         * traversal descriptor. */
+        AnimationClipOutcome<void> ValidateRegion(const AnimationClipRegion region, const AnimationClipDescriptor &descriptor,
+                                                  const AnimationClipAdmissionState admission) {
+            if (const auto admitted = ValidateAdmission(admission); admitted.HasError())
+                return admitted;
+            if (region.begin.ticks < 0 || region.end.ticks <= region.begin.ticks || region.end.ticks > descriptor.duration.ticks)
+                return HotReject<void>(AnimationErrors::ClipMalformed,
+                                       "The playback region must be nonempty and inside the immutable clip.");
+            if (region.wrap >= AnimationWrapMode::Count)
+                return HotReject<void>(AnimationErrors::ClipUnsupported, "The playback region wrap policy is unknown.");
+            return AnimationClipOutcome<void>::Success();
+        }
+    }  // namespace
+
+    namespace {
+        /** @brief Both immutable metadata tables are validated before clip publication. */
+        Result<void> ValidateClipMetadata(AnimationClipData &candidate, const AnimationClipLimits &limits) {
+            if (const auto events = Detail::ValidateClipEvents(candidate, limits); events.HasError())
+                return events;
+            return ValidateSyncMarkers(candidate);
         }
     }  // namespace
 
@@ -484,6 +559,8 @@ namespace Horo::Animation {
         if (context.replacing && (!context.replacing->IsValid() || *context.replacing != candidate.descriptor.id))
             return Reject<AnimationClipAsset>(AnimationErrors::ClipReloadMismatch,
                                               "The candidate does not replace the requested stable clip identity.");
+        if (const auto metadata = ValidateClipMetadata(candidate, context.limits); metadata.HasError())
+            return Result<AnimationClipAsset>::Failure(metadata.ErrorValue());
         if (const auto tracks = CanonicalizeTracks(candidate, context.limits); tracks.HasError())
             return Result<AnimationClipAsset>::Failure(tracks.ErrorValue());
         auto jointIndices = ResolveJointIndices(candidate, skeleton);
@@ -503,28 +580,111 @@ namespace Horo::Animation {
                                                                                       const AnimationTimeDelta delta,
                                                                                       const AnimationClipLimits &limits,
                                                                                       const AnimationClipAdmissionState admission) const {
-        if (const auto valid = ValidateTraversal(cursor, delta, data_.descriptor, limits, admission); valid.HasError())
+        return TraverseDescriptor(cursor, delta, data_.descriptor, limits, admission);
+    }
+
+    /** @copydoc AnimationClipAsset::TraverseRegionPrepared */
+    AnimationClipOutcome<AnimationClipTraversal> AnimationClipAsset::TraverseRegionPrepared(
+        const AnimationClipCursor cursor, const AnimationTimeDelta delta, const AnimationClipRegion region,
+        const AnimationClipLimits &limits, const AnimationClipAdmissionState admission) const {
+        if (const auto valid = ValidateRegion(region, data_.descriptor, admission); valid.HasError())
             return AnimationClipOutcome<AnimationClipTraversal>::Failure(valid.ErrorValue());
-        if (cursor.terminal || delta.ticks == 0) {
-            using enum AnimationTraversalDirection;
-            return AnimationClipOutcome<AnimationClipTraversal>::Success({.cursor = cursor, .sampleTime = cursor.phase, .direction = Held});
+        auto descriptor = data_.descriptor;
+        descriptor.duration = {region.end.ticks - region.begin.ticks};
+        descriptor.wrapMode = region.wrap;
+        auto traversed = TraverseDescriptor(cursor, delta, descriptor, limits, admission);
+        if (traversed.HasValue())
+            traversed.value.sampleTime.ticks += region.begin.ticks;
+        return traversed;
+    }
+
+    namespace {
+        /** @brief Splitting only chooses a bounded next boundary distance; cursor and samples still come from the same provider. */
+        std::int64_t TraceDistance(const AnimationClipCursor cursor, const AnimationClipRegion region, const bool reverse) noexcept {
+            const auto duration = region.end.ticks - region.begin.ticks;
+            const auto remainder = cursor.phase.ticks % duration;
+            return reverse ? (remainder == 0 ? duration : remainder) : duration - remainder;
         }
 
-        const std::int64_t duration = data_.descriptor.duration.ticks;
-        const std::int64_t unbounded = cursor.phase.ticks + delta.ticks;
-        using enum AnimationWrapMode;
-        switch (data_.descriptor.wrapMode) {
-            case Once:
-            case ClampForever:
-                return TraverseClamped(cursor, delta, unbounded, duration, data_.descriptor.wrapMode, limits);
-            case Loop:
-                return TraverseLoop(cursor, delta, unbounded, duration, limits);
-            case PingPong:
-                return TraversePingPong(cursor, delta, unbounded, duration, limits);
-            case Count:
-                return HotReject<AnimationClipTraversal>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
+        /** @brief Unsigned directed magnitude cannot overflow for INT64_MIN. */
+        std::uint64_t TraceMagnitude(const std::int64_t ticks) noexcept {
+            return ticks < 0 ? 0ULL - static_cast<std::uint64_t>(ticks) : static_cast<std::uint64_t>(ticks);
         }
-        return HotReject<AnimationClipTraversal>(AnimationErrors::ClipUnsupported, "The clip wrap mode is unknown.");
+
+        /** @brief Cycle identity comes only from a checked cyclic cursor reaching/departing phase zero. */
+        std::int8_t TraceCycleDelta(const std::int64_t phase, const bool directed, const bool cyclic, const std::int8_t delta) noexcept {
+            return cyclic && directed && phase == 0 ? delta : 0;
+        }
+
+        /** @brief Maps a checked piece to its actual sample path, with explicit Loop seam discontinuities. */
+        AnimationClipTraversalSegment TraceSegment(const AnimationClipAsset &clip, const AnimationClipCursor before,
+                                                   const AnimationClipTraversal &after, const AnimationClipRegion region,
+                                                   const std::int64_t delta) {
+            const auto held = clip.TraverseRegionPrepared(before, {}, region);
+            const bool loop = region.wrap == AnimationWrapMode::Loop;
+            const bool cyclic = loop || region.wrap == AnimationWrapMode::PingPong;
+            const bool seamBefore = loop && delta < 0 && before.phase.ticks == 0;
+            const bool seamAfter = loop && delta > 0 && after.cursor.phase.ticks == 0;
+            return {.from = seamBefore ? region.end : held.Value().sampleTime,
+                    .to = seamAfter ? region.end : after.sampleTime,
+                    .direction = after.direction,
+                    .loopSeamBefore = seamBefore,
+                    .loopSeamAfter = seamAfter,
+                    .cycleDeltaBefore = TraceCycleDelta(before.phase.ticks, delta < 0, cyclic, -1),
+                    .cycleDeltaAfter = TraceCycleDelta(after.cursor.phase.ticks, delta > 0, cyclic, 1)};
+        }
+
+        /** @brief Runs deterministic count/fill passes over immutable checked input without publishing a partial path. */
+        AnimationClipOutcome<std::uint32_t> TraceWalk(const AnimationClipAsset &clip, AnimationClipCursor cursor,
+                                                      const AnimationTimeDelta delta, const AnimationClipRegion region,
+                                                      const AnimationClipLimits &limits, std::span<AnimationClipTraversalSegment> output,
+                                                      const bool write) {
+            std::uint32_t count = 0;
+            auto remaining = delta.ticks;
+            while (remaining != 0 && !cursor.terminal) {
+                const auto distance = TraceDistance(cursor, region, remaining < 0);
+                const auto amount = static_cast<std::int64_t>(std::min(TraceMagnitude(remaining), static_cast<std::uint64_t>(distance)));
+                const auto step = remaining < 0 ? -amount : amount;
+                const auto part = clip.TraverseRegionPrepared(cursor, {step}, region, limits);
+                if (part.HasError())
+                    return AnimationClipOutcome<std::uint32_t>::Failure(part.ErrorValue());
+                if (part.Value().direction == AnimationTraversalDirection::Held)
+                    break;
+                if (count >= AnimationClipHardLimits::TraceSegments)
+                    return HotReject<std::uint32_t>(AnimationErrors::ClipLimitExceeded,
+                                                    "The complete traversal path exceeds its segment ceiling.");
+                if (write)
+                    output[count] = TraceSegment(clip, cursor, part.Value(), region, step);
+                ++count;
+                cursor = part.Value().cursor;
+                remaining -= step;
+            }
+            return AnimationClipOutcome<std::uint32_t>::Success(count);
+        }
+    }  // namespace
+
+    /** @copydoc AnimationClipAsset::TraceRegionPrepared */
+    AnimationClipOutcome<AnimationClipTrace> AnimationClipAsset::TraceRegionPrepared(const AnimationClipCursor cursor,
+                                                                                     const AnimationTimeDelta delta,
+                                                                                     const AnimationClipRegion region,
+                                                                                     const std::span<AnimationClipTraversalSegment> output,
+                                                                                     const AnimationClipLimits &limits,
+                                                                                     const AnimationClipAdmissionState admission) const {
+        const auto full = TraverseRegionPrepared(cursor, delta, region, limits, admission);
+        if (full.HasError())
+            return AnimationClipOutcome<AnimationClipTrace>::Failure(full.ErrorValue());
+        if (full.Value().direction == AnimationTraversalDirection::Held)
+            return AnimationClipOutcome<AnimationClipTrace>::Success({full.Value(), 0});
+        const auto count = TraceWalk(*this, cursor, delta, region, limits, {}, false);
+        if (count.HasError())
+            return AnimationClipOutcome<AnimationClipTrace>::Failure(count.ErrorValue());
+        if (count.Value() > output.size())
+            return HotReject<AnimationClipTrace>(AnimationErrors::ClipLimitExceeded,
+                                                 "Caller storage cannot hold the complete traversal path.");
+        const auto filled = TraceWalk(*this, cursor, delta, region, limits, output, true);
+        if (filled.HasError())
+            return AnimationClipOutcome<AnimationClipTrace>::Failure(filled.ErrorValue());
+        return AnimationClipOutcome<AnimationClipTrace>::Success({full.Value(), filled.Value()});
     }
 
     /** @copydoc AnimationClipAsset::SamplePrepared */

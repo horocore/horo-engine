@@ -34,6 +34,17 @@ namespace Horo::AI {
             return SourceLocation{"<decision-asset>", 1, 1};
         }
 
+        [[nodiscard]] bool ValidIntrinsic(const DecisionAssetNode &node) noexcept {
+            const auto kind = node.intrinsic;
+            if (kind <= DecisionControlKind::Unspecified || kind >= DecisionControlKind::Count || node.type.IsValid())
+                return false;
+            return kind != DecisionControlKind::Task && kind != DecisionControlKind::Condition && kind != DecisionControlKind::Service;
+        }
+
+        [[nodiscard]] bool ValidDefinition(const DecisionAssetNode &node) noexcept {
+            return ValidIntrinsic(node) || (node.intrinsic == DecisionControlKind::Unspecified && node.type.IsValid());
+        }
+
         [[nodiscard]] bool ValidOrigin(const DecisionDescriptorOrigin &origin) noexcept {
             return IsKnown(origin.kind, DecisionDescriptorSourceKind::Count) && origin.provider.IsValid() && origin.version != 0;
         }
@@ -293,92 +304,102 @@ namespace Horo::AI {
                 return valid;
             }
 
+            bool ValidateUniqueRequirement(const DecisionBlackboardRequirement &requirement,
+                                           std::vector<const DecisionBlackboardRequirement *> &unique,
+                                           const std::shared_ptr<const BlackboardSchema> &schema, const SourceLocation &fallback,
+                                           const SourceLocation &nodeSource, const std::string &path,
+                                           std::vector<DecisionPlanBlackboardBinding> &bindings) {
+                if (!ValidRequirement(requirement)) {
+                    Add(AIErrors::DecisionAssetSchemaInvalid, {}, requirement.source, fallback, path);
+                    return false;
+                }
+                const auto duplicate = std::ranges::find_if(unique, [&](const auto *existing) {
+                    return existing->key == requirement.key;
+                });
+                if (duplicate != unique.end()) {
+                    if (!SameRequirementContract(**duplicate, requirement)) {
+                        Add(AIErrors::DecisionAssetBindingAmbiguous, {}, requirement.source, nodeSource, path);
+                        return false;
+                    }
+                    return true;
+                }
+                unique.push_back(&requirement);
+                return ResolveRequirement(requirement, schema, fallback, path, bindings);
+            }
+
             [[nodiscard]] bool ValidateNodeRequirements(const DecisionAssetNode &node, const NodeDescriptorLookup &lookup,
                                                         const std::shared_ptr<const BlackboardSchema> &schema,
                                                         const SourceLocation &fallback, const std::string &path,
                                                         std::vector<DecisionPlanBlackboardBinding> &resolvedBindings) {
                 std::vector<const DecisionBlackboardRequirement *> requirements;
-                requirements.reserve(node.requirements.size() +
-                                     (lookup.descriptor == nullptr ? 0U : lookup.descriptor->requirements.size()));
-                if (lookup.descriptor != nullptr)
+                if (lookup.descriptor)
                     for (const auto &requirement : lookup.descriptor->requirements)
                         requirements.push_back(&requirement);
                 for (const auto &requirement : node.requirements)
                     requirements.push_back(&requirement);
-
-                std::vector<const DecisionBlackboardRequirement *> uniqueRequirements;
-                uniqueRequirements.reserve(requirements.size());
-                bool nodeValid = lookup.descriptor != nullptr;
+                std::vector<const DecisionBlackboardRequirement *> unique;
+                unique.reserve(requirements.size());
+                bool valid = lookup.descriptor != nullptr || ValidIntrinsic(node);
                 for (const auto *requirement : requirements) {
-                    if (!ValidRequirement(*requirement)) {
-                        Add(AIErrors::DecisionAssetSchemaInvalid, {}, requirement->source, fallback, path + ".blackboard");
-                        nodeValid = false;
-                        continue;
-                    }
-                    if (const auto duplicate = std::ranges::find_if(uniqueRequirements,
-                                                                    [requirement](const auto *existing) {
-                        return existing->key == requirement->key;
-                    });
-                        duplicate != uniqueRequirements.end()) {
-                        if (!SameRequirementContract(**duplicate, *requirement)) {
-                            Add(AIErrors::DecisionAssetBindingAmbiguous, {}, requirement->source, node.source, path + ".blackboard");
-                            nodeValid = false;
-                        }
-                        continue;
-                    }
-                    uniqueRequirements.push_back(requirement);
-                    const bool requirementValid =
-                        ResolveRequirement(*requirement, schema, fallback, path + ".blackboard", resolvedBindings);
-                    nodeValid = nodeValid && requirementValid;
+                    const bool admitted = ValidateUniqueRequirement(*requirement, unique, schema, fallback, node.source,
+                                                                    path + ".blackboard", resolvedBindings);
+                    valid = admitted && valid;
                 }
-                return nodeValid;
+                return valid;
+            }
+
+            bool AdmitRequirementCount(std::size_t count, const SourceLocation &source, const SourceLocation &fallback,
+                                       const std::string &path) {
+                if (count > limits_.maximumRequirementsPerNode) {
+                    Add(AIErrors::DecisionAssetLimitExceeded, {}, source, fallback, path);
+                    return false;
+                }
+                totalRequirements_ += count;
+                if (totalRequirements_ > limits_.maximumTotalRequirements) {
+                    Add(AIErrors::DecisionAssetLimitExceeded, {}, source, fallback, path);
+                    return false;
+                }
+                return true;
+            }
+
+            static bool ValidNodeHeader(const DecisionAssetNode &node) noexcept {
+                return node.id.IsValid() && ValidDefinition(node) && node.descriptorVersion.IsValid() && ValidSource(node.source);
+            }
+
+            void PublishNode(const DecisionAssetNode &node, const NodeDescriptorLookup &lookup,
+                             std::vector<DecisionPlanBlackboardBinding> bindings) {
+                std::ranges::sort(bindings, {}, &DecisionPlanBlackboardBinding::key);
+                const auto first = planBindings_.size();
+                const auto count = bindings.size();
+                planBindings_.insert(planBindings_.end(), std::make_move_iterator(bindings.begin()),
+                                     std::make_move_iterator(bindings.end()));
+                planNodes_.push_back({.id = node.id,
+                                      .type = node.type,
+                                      .origin = lookup.descriptor ? lookup.descriptor->origin : DecisionDescriptorOrigin{},
+                                      .firstBlackboardBinding = first,
+                                      .blackboardBindingCount = count,
+                                      .intrinsic = node.intrinsic});
             }
 
             void ValidateNode(const DecisionAssetDescriptor &asset, const DecisionAssetNode &node,
-                              const std::shared_ptr<const BlackboardSchema> &schema, const bool rootAsset) {
+                              const std::shared_ptr<const BlackboardSchema> &schema, bool rootAsset) {
                 const std::string path = std::format("asset.nodes[{}]", node.id.Value());
-                if (!node.id.IsValid() || !node.type.IsValid() || !node.descriptorVersion.IsValid() || !ValidSource(node.source)) {
+                if (!ValidNodeHeader(node)) {
                     Add(AIErrors::DecisionAssetSchemaInvalid, {}, node.source, asset.source, path);
                     return;
                 }
-                if (node.requirements.size() > limits_.maximumRequirementsPerNode) {
-                    Add(AIErrors::DecisionAssetLimitExceeded, {}, node.source, asset.source, path);
+                if (!AdmitRequirementCount(node.requirements.size(), node.source, asset.source, path))
                     return;
-                }
-                totalRequirements_ += node.requirements.size();
-                if (totalRequirements_ > limits_.maximumTotalRequirements) {
-                    Add(AIErrors::DecisionAssetLimitExceeded, {}, node.source, asset.source, path);
-                    return;
-                }
-
                 const auto descriptorPath = path + ".descriptor";
-                const auto lookup = ResolveNodeDescriptor(node, asset.source, descriptorPath);
-                if (lookup.descriptor != nullptr) {
-                    if (lookup.descriptor->requirements.size() > limits_.maximumRequirementsPerNode) {
-                        Add(AIErrors::DecisionAssetLimitExceeded, {}, lookup.descriptor->source, node.source, descriptorPath);
-                        return;
-                    }
-                    totalRequirements_ += lookup.descriptor->requirements.size();
-                    if (totalRequirements_ > limits_.maximumTotalRequirements) {
-                        Add(AIErrors::DecisionAssetLimitExceeded, {}, lookup.descriptor->source, node.source, descriptorPath);
-                        return;
-                    }
-                }
-
-                std::vector<DecisionPlanBlackboardBinding> resolvedBindings;
-                if (!ValidateNodeRequirements(node, lookup, schema, node.source, path, resolvedBindings) || !rootAsset)
+                const auto lookup =
+                    ValidIntrinsic(node) ? NodeDescriptorLookup{} : ResolveNodeDescriptor(node, asset.source, descriptorPath);
+                if (lookup.descriptor &&
+                    !AdmitRequirementCount(lookup.descriptor->requirements.size(), lookup.descriptor->source, node.source, descriptorPath))
                     return;
-
-                std::ranges::sort(resolvedBindings, {}, &DecisionPlanBlackboardBinding::key);
-                const std::size_t firstBinding = planBindings_.size();
-                const std::size_t bindingCount = resolvedBindings.size();
-                planBindings_.insert(planBindings_.end(), std::make_move_iterator(resolvedBindings.begin()),
-                                     std::make_move_iterator(resolvedBindings.end()));
-                planNodes_.push_back({.id = node.id,
-                                      .type = node.type,
-                                      .origin = lookup.descriptor->origin,
-                                      .firstBlackboardBinding = firstBinding,
-                                      .blackboardBindingCount = bindingCount});
+                std::vector<DecisionPlanBlackboardBinding> bindings;
+                if (!ValidateNodeRequirements(node, lookup, schema, node.source, path, bindings) || !rootAsset)
+                    return;
+                PublishNode(node, lookup, std::move(bindings));
             }
 
             void ValidateAssetNodes(const DecisionAssetDescriptor &asset, const std::shared_ptr<const BlackboardSchema> &schema,

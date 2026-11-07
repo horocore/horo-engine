@@ -1,0 +1,187 @@
+#include "HostModuleComposition.h"
+
+#include "Horo/Foundation/ErrorCode.h"
+#include "Horo/PlatformServices/PlatformServiceErrors.h"
+
+#include <algorithm>
+#include <array>
+#include <initializer_list>
+#include <string>
+#include <string_view>
+#include <utility>
+
+namespace Horo::Application::Internal {
+    namespace {
+        constexpr ModuleContractVersion kContractVersion{1, 0, 0};
+
+        /** @brief Inert backend and module identities; host activation remains an explicit separate operation. */
+        struct HostRendererDescription {
+            std::string_view backendId;
+            HostRenderer kind;
+            std::string_view renderer;
+            std::string_view viewport;
+        };
+
+        constexpr std::array kHostRenderers{
+            HostRendererDescription{"opengl", HostRenderer::OpenGL, "horo.render.opengl", "horo.editor.viewport.opengl"},
+            HostRendererDescription{"metal", HostRenderer::Metal, "horo.render.metal", "horo.editor.viewport.metal"},
+            HostRendererDescription{"vulkan", HostRenderer::Vulkan, "horo.render.vulkan", "horo.editor.viewport.vulkan"},
+        };
+
+        /**
+         * @brief Builds inert metadata for one module and its required dependencies.
+         * @param id Canonical module identity.
+         * @param dependencies Canonical identities of required provider modules.
+         * @return Complete inert descriptor using the current internal contract version.
+         */
+        [[nodiscard]] ModuleDescriptor Describe(std::string id, const std::initializer_list<std::string_view> dependencies = {}) {
+            ModuleDescriptor descriptor{.id = ModuleId{std::move(id)}, .version = kContractVersion};
+            descriptor.dependencies.reserve(dependencies.size());
+            for (const std::string_view dependency : dependencies) {
+                descriptor.dependencies.push_back(
+                    ModuleDependency{.module = ModuleId{std::string{dependency}}, .minimumVersion = kContractVersion});
+            }
+            return descriptor;
+        }
+
+        [[nodiscard]] ModuleDescriptor DescribePlatformServices() {
+            ModuleDescriptor descriptor = Describe("horo.platform.services", {"horo.foundation", "horo.platform"});
+            descriptor.errorDomains.push_back(PlatformServices::PlatformServiceErrorDomain());
+            return descriptor;
+        }
+
+        /**
+         * @brief Creates a typed failure for an unsupported host composition selection.
+         * @tparam T Success value type expected by the caller.
+         * @param message Actionable explanation of the invalid selection.
+         * @return Failed result in the application host error domain.
+         */
+        template <typename T> [[nodiscard]] Result<T> InvalidSelection(std::string message) {
+            return Result<T>::Failure(Error{.code = ErrorCode{"application.host.invalid_module_selection"},
+                                            .domain = ErrorDomainId{"horo.application.host"},
+                                            .severity = ErrorSeverity::Critical,
+                                            .message = std::move(message)});
+        }
+
+        /**
+         * @brief Describes the renderer-independent modules linked into the editor host.
+         * @return Inert descriptors for the editor's shared module closure.
+         */
+        [[nodiscard]] std::vector<ModuleDescriptor> DescribeEditorCoreModules() {
+            return {
+                Describe("horo.foundation"),
+                Describe("horo.application", {"horo.foundation"}),
+                Describe("horo.application.project_migrations", {"horo.application"}),
+                Describe("horo.platform", {"horo.foundation"}),
+                DescribePlatformServices(),
+                Describe("horo.runtime", {"horo.foundation"}),
+                Describe("horo.assets", {"horo.foundation"}),
+                Describe("horo.input", {"horo.foundation"}),
+                Describe("horo.input.sdl", {"horo.input"}),
+                Describe("horo.gameplay.api", {"horo.foundation"}),
+                Describe("horo.render.api", {"horo.foundation"}),
+                Describe("horo.scene.model", {"horo.foundation", "horo.render.api"}),
+                Describe("horo.runtime.scene", {"horo.foundation", "horo.runtime", "horo.assets", "horo.gameplay.api", "horo.scene.model"}),
+                Describe("horo.gameplay.runtime", {"horo.gameplay.api", "horo.runtime.scene"}),
+                Describe("horo.gameplay.module_host", {"horo.gameplay.runtime", "horo.platform"}),
+                Describe("horo.gameplay.build", {"horo.foundation", "horo.platform", "horo.gameplay.module_host"}),
+                Describe("horo.gameplay.lua", {"horo.gameplay.runtime"}),
+                Describe("horo.render.backend_registry", {"horo.render.api"}),
+                Describe("horo.render.frontend", {"horo.render.api", "horo.render.backend_registry"}),
+                Describe("horo.editor.model", {"horo.foundation", "horo.scene.model", "horo.runtime.scene"}),
+                Describe("horo.editor.viewport_scene", {"horo.editor.model"}),
+                Describe("horo.editor.render_extraction", {"horo.editor.model", "horo.editor.viewport_scene"}),
+                Describe("horo.editor.services",
+                         {"horo.foundation", "horo.application", "horo.platform", "horo.editor.model", "horo.gameplay.module_host",
+                          "horo.gameplay.build", "horo.gameplay.lua", "horo.input", "horo.application.project_migrations", "horo.assets"}),
+                Describe("horo.extensions", {"horo.foundation", "horo.platform", "horo.assets"}),
+                Describe("horo.gui", {"horo.editor.services", "horo.foundation", "horo.editor.render_extraction", "horo.extensions"}),
+            };
+        }
+    }  // namespace
+
+    /** @copydoc HostRendererFromBackendId */
+    Result<HostRenderer> HostRendererFromBackendId(const std::string_view backendId) {
+        const auto selected = std::ranges::find(kHostRenderers, backendId, &HostRendererDescription::backendId);
+        if (selected == kHostRenderers.end())
+            return InvalidSelection<HostRenderer>("Unsupported interactive renderer backend identity: " + std::string{backendId});
+        return Result<HostRenderer>::Success(selected->kind);
+    }
+
+    /** @copydoc DescribeHostModules */
+    Result<std::vector<ModuleDescriptor>> DescribeHostModules(const HostModuleSelection &selection) {
+        if (selection.host == HostKind::Headless) {
+            if (selection.renderer != HostRenderer::None) {
+                return InvalidSelection<std::vector<ModuleDescriptor>>(
+                    "The current headless host does not link an interactive renderer module.");
+            }
+            std::vector<ModuleDescriptor> modules;
+            modules.reserve(9);
+            modules.push_back(Describe("horo.foundation"));
+            modules.push_back(Describe("horo.security", {"horo.foundation"}));
+            modules.push_back(Describe("horo.platform", {"horo.foundation", "horo.security"}));
+            modules.push_back(DescribePlatformServices());
+            modules.push_back(Describe("horo.assets", {"horo.foundation"}));
+            modules.push_back(Describe("horo.application", {"horo.foundation"}));
+            modules.push_back(Describe("horo.extensions", {"horo.foundation", "horo.platform", "horo.assets", "horo.security"}));
+            modules.push_back(Describe("horo.runtime", {"horo.foundation"}));
+            modules.push_back(Describe("horo.host.cli", {"horo.application", "horo.extensions", "horo.runtime"}));
+            return Result<std::vector<ModuleDescriptor>>::Success(std::move(modules));
+        }
+
+        if (selection.renderer == HostRenderer::None) {
+            return InvalidSelection<std::vector<ModuleDescriptor>>(
+                "The graphical editor host requires one concrete interactive renderer module.");
+        }
+
+        std::vector<ModuleDescriptor> modules = DescribeEditorCoreModules();
+
+        const auto selected = std::ranges::find(kHostRenderers, selection.renderer, &HostRendererDescription::kind);
+        if (selected == kHostRenderers.end())
+            return InvalidSelection<std::vector<ModuleDescriptor>>("Unsupported editor renderer selection.");
+        const auto &selectedModules = *selected;
+        modules.push_back(Describe(std::string{selectedModules.renderer}, {"horo.render.backend_registry"}));
+        modules.push_back(Describe(std::string{selectedModules.viewport}, {"horo.editor.viewport_scene", selectedModules.renderer}));
+
+        ModuleDescriptor host =
+            Describe("horo.host.editor", {"horo.gui", "horo.editor.services", "horo.editor.render_extraction", "horo.render.frontend",
+                                          "horo.runtime", "horo.runtime.scene", "horo.extensions", "horo.platform", "horo.input.sdl",
+                                          "horo.application.project_migrations", selectedModules.viewport});
+
+        modules.push_back(std::move(host));
+        return Result<std::vector<ModuleDescriptor>>::Success(std::move(modules));
+    }
+
+    /** @copydoc ComposeHostModules */
+    Result<std::unique_ptr<ModuleHost>> ComposeHostModules(const HostModuleSelection &selection,
+                                                           const std::span<const ModuleConfigurationContribution> contributions) {
+        auto described = DescribeHostModules(selection);
+        if (described.HasError())
+            return Result<std::unique_ptr<ModuleHost>>::Failure(described.ErrorValue());
+
+        for (const ModuleConfigurationContribution &contribution : contributions) {
+            if (std::ranges::count_if(described.Value(),
+                                      [&contribution](const ModuleDescriptor &descriptor) {
+                return descriptor.id == contribution.module;
+            }) != 1 ||
+                std::ranges::count_if(contributions, [&contribution](const ModuleConfigurationContribution &other) {
+                return other.module == contribution.module;
+            }) != 1)
+                return InvalidSelection<std::unique_ptr<ModuleHost>>("Settings contribution requires exactly one selected module: " +
+                                                                     contribution.module.value);
+        }
+        auto host = std::make_unique<ModuleHost>();
+        for (const ModuleDescriptor &descriptor : described.Value()) {
+            const auto contribution = std::ranges::find_if(contributions, [&descriptor](const ModuleConfigurationContribution &candidate) {
+                return candidate.module == descriptor.id;
+            });
+            const Result<void> registered =
+                contribution == contributions.end() ? host->Register(descriptor) : host->Register(descriptor, *contribution);
+            if (registered.HasError())
+                return Result<std::unique_ptr<ModuleHost>>::Failure(registered.ErrorValue());
+        }
+        if (const Result<std::size_t> activated = host->ActivateRegistered(nullptr); activated.HasError())
+            return Result<std::unique_ptr<ModuleHost>>::Failure(activated.ErrorValue());
+        return Result<std::unique_ptr<ModuleHost>>::Success(std::move(host));
+    }
+}  // namespace Horo::Application::Internal

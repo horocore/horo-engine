@@ -5,7 +5,8 @@
 #include <set>
 
 namespace Horo::Prefab::ValueDetail {
-    /** @brief Private borrowed access metadata exists only during one synchronous detached resolution. */
+    /** @brief Private borrowed access metadata exists only during one synchronous
+     * detached resolution. */
     struct ValueBinding {
         PrefabValueProvenance provenance;
         std::size_t object{};
@@ -13,16 +14,17 @@ namespace Horo::Prefab::ValueDetail {
         const PrefabValuePropertySchema *schema{};
     };
 
-    /** @brief All mutable preparation storage is owned by this bounded operation, never by a widget or source document. */
+    /** @brief All mutable preparation storage is owned by this bounded operation,
+     * never by a widget or source document. */
     struct ResolutionState {
-        const EffectivePrefabCandidate &source;
+        const PrefabOverrideBaseline &source;
         const PrefabValueSchemaSnapshot *schemas;
         const PrefabLimitProfile &limits;
         const CancellationToken &cancellation;
         PrefabExpansionBudget budget;
         std::vector<ResolvedPrefabObject> objects;
         std::vector<ValueBinding> bindings;
-        std::map<std::pair<std::size_t, std::size_t>, Json> payloads;
+        std::map<std::pair<std::size_t, std::size_t>, OwnedJson> payloads;
         std::set<std::pair<std::size_t, std::size_t>> modifiedPayloads;
         std::size_t provenanceBytes{};
     };
@@ -32,6 +34,6 @@ namespace Horo::Prefab::ValueDetail {
     [[nodiscard]] Result<void> WriteBinding(ResolutionState &state, ValueBinding &binding, const PrefabOverrideValue &value);
     [[nodiscard]] Result<void> ValidateComponentObject(const ResolvedPrefabObject &object, const PrefabValueSchemaSnapshot &schemas);
     [[nodiscard]] Result<void> ResolveComponentIntents(ResolutionState &state, const PrefabValueOverrideSet &set,
-                                                       PrefabValueOverrideResolution &result);
+                                                       PrefabOverrideResolution &result);
     [[nodiscard]] Result<void> FinishPayloads(ResolutionState &state);
 }  // namespace Horo::Prefab::ValueDetail

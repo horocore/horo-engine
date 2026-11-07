@@ -165,6 +165,15 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroGameplayNavigationIntegrationPublicHeaderConsumer", "HoroGameplayApiPublicHeaderConsumer",
     "HoroGameplayRuntimePublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
     "HoroGameplayLuaPublicHeaderConsumer", "HoroNavigationRuntimePublicHeaderConsumer",
+    # Existing module/prefab delivery owners retain exact reduced-build membership.
+    "HoroScriptModuleRuntimeAdapterTests", "HoroModuleScriptProductHostTests",
+    "HoroScriptModuleRuntimePublicHeaderConsumer", "HoroLuaScriptModuleRuntimePublicHeaderConsumer",
+    "HoroJavaScriptModuleRuntimePublicHeaderConsumer",
+    "HoroPrefabPersistenceTests", "HoroEditorPlaySavePrefabTests", "HoroPrefabPersistencePublicConsumer",
+    "HoroPrefabPersistencePublicHeaderConsumer", "HoroPrefabOverridesPublicHeaderConsumer", "HoroProjectVersionPublicHeaderConsumer",
+    # Navigation automation discovery must have the same actual executable build closure.
+    "HoroNavigationBakeApplicationTests", "HoroNavigationBakeAdapterTests", "HoroNavigationNativeCliTests",
+    "HoroNavigationHostErrorTests", "HoroNavigationProjectBakeInputNativeTests", "HoroEditorNavigationBakeHostTests",
 })
 
 
@@ -698,7 +707,9 @@ def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composit
     assert "catalog.tsv" in job
     assert "HoroEditorAssetRoot-Debug.txt" in job
     apps = (ROOT / "apps/CMakeLists.txt").read_text(encoding="utf-8")
-    assert "HoroEditorAssetRoot-$<CONFIG>.txt" in apps
+    assert 'include("${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/cmake/Host.cmake")' in apps
+    editor = (ROOT / "apps/HoroEditor/cmake/Host.cmake").read_text(encoding="utf-8")
+    assert "HoroEditorAssetRoot-$<CONFIG>.txt" in editor
 
 
 def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -> None:
@@ -759,7 +770,7 @@ def test_pr_bursts_bound_matrix_width_without_dropping_platforms() -> None:
     assert "max-parallel: 1" in workflow_job("shaders")
     android = (ROOT / ".github/workflows/android-package.yml").read_text(encoding="utf-8")
     assert "max-parallel: 1" in android
-    assert "profile: [qualification-debug, qualification-release]" in android
+    assert "profile: [qualification-debug, qualification-release, qualification-vulkan-development]" in android
     assert preset("buildPresets", "ci-audio-release")["jobs"] == 2
     assert preset("testPresets", "ci-audio-release")["execution"]["jobs"] == 1
 

@@ -147,6 +147,8 @@ def bundle(tmp_path):
     # Deliberately synthetic protocol fixtures, not claimed as native cooked assets.
     (root / module.PAYLOAD).write_bytes(b'protocol fixture payload')
     (root / module.REFLECTION).write_text('{}')
+    (root / module.SHADOW_PAYLOAD).write_bytes(b'protocol fixture shadow payload')
+    (root / module.SHADOW_REFLECTION).write_text('{}')
     (root / 'catalog.tsv').write_text(module.canonical_catalog(ROOT))
     expected = {'sha': 'a' * 40, 'tree': 'b' * 40, 'run_id': '123', 'run_attempt': '1', 'repository': 'fixture/repo'}
     module.create(root, ROOT, expected)
@@ -167,7 +169,9 @@ def test_bundle_rejects_stale_source_or_other_run(bundle, field):
 
 
 @pytest.mark.parametrize('name', ['shaders/editor/viewport-vulkan.horoshdr',
-                                  'shaders/editor/viewport-vulkan.reflection.json', 'catalog.tsv'])
+                                  'shaders/editor/viewport-vulkan.reflection.json',
+                                  'shaders/editor/viewport-shadow-vulkan.horoshdr',
+                                  'shaders/editor/viewport-shadow-vulkan.reflection.json', 'catalog.tsv'])
 def test_bundle_rejects_missing_required_data(bundle, name):
     module, root, expected = bundle
     (root / name).unlink()
@@ -180,6 +184,28 @@ def test_bundle_rejects_changed_payload_hash(bundle):
     (root / module.PAYLOAD).write_bytes(b'tampered fixture')
     with pytest.raises(ValueError, match='digest mismatch'):
         module.verify(root, ROOT, expected)
+
+
+def test_bundle_rejects_changed_shadow_payload_hash(bundle):
+    module, root, expected = bundle
+    (root / module.SHADOW_PAYLOAD).write_bytes(b'tampered shadow fixture')
+    with pytest.raises(ValueError, match='digest mismatch'):
+        module.verify(root, ROOT, expected)
+
+
+def test_bundle_rejects_malformed_shadow_metadata(bundle):
+    module, root, expected = bundle
+    (root / module.SHADOW_REFLECTION).write_text('{')
+    with pytest.raises(json.JSONDecodeError):
+        module.verify(root, ROOT, expected)
+
+
+def test_offline_action_cooks_the_canonical_shadow_pair_before_provenance():
+    action = (ROOT / '.github/actions/cook-vulkan-viewport/action.yml').read_text()
+    shadow = action.index('assets/shaders/editor/viewport_shadow.hlsl')
+    assert '"$asset_root/shaders/editor/viewport-shadow-vulkan"' in action[shadow:]
+    mode = action.index('--shadow', shadow)
+    assert mode < action.index('viewport_asset_bundle.py create')
 
 
 def test_bundle_rejects_catalog_substitution_even_with_rehashed_provenance(bundle):

@@ -84,7 +84,16 @@ TEST_CASE("Editor host composition publishes module settings to the canonical re
 }
 
 TEST_CASE("Editor host composition selects exactly one concrete renderer", "[unit][application][modules]") {
-    const HostModuleSelection selection{.host = HostKind::Editor, .renderer = HostRenderer::OpenGL, .includeOpenTelemetry = true};
+    const HostModuleSelection selection{.host = HostKind::Editor, .renderer = HostRenderer::OpenGL};
+    const auto described = DescribeHostModules(selection);
+    REQUIRE(described.HasValue());
+    for (const auto &module : described.Value()) {
+        for (const auto &dependency : module.dependencies) {
+            CHECK(std::ranges::any_of(described.Value(), [&](const ModuleDescriptor &candidate) {
+                return candidate.id == dependency.module;
+            }));
+        }
+    }
     auto composed = ComposeHostModules(selection);
     REQUIRE(composed.HasValue());
     REQUIRE(composed.Value()->StateOf(ModuleId{"horo.host.editor"}) == ModuleLifecycleState::Active);
@@ -92,7 +101,6 @@ TEST_CASE("Editor host composition selects exactly one concrete renderer", "[uni
                                                     PlatformServices::PlatformServiceErrors::RateLimited.code) != nullptr);
     REQUIRE(composed.Value()->StateOf(ModuleId{"horo.render.opengl"}) == ModuleLifecycleState::Active);
     REQUIRE(composed.Value()->StateOf(ModuleId{"horo.editor.viewport.opengl"}) == ModuleLifecycleState::Active);
-    REQUIRE(composed.Value()->StateOf(ModuleId{"horo.observability.opentelemetry"}) == ModuleLifecycleState::Active);
     REQUIRE_FALSE(composed.Value()->StateOf(ModuleId{"horo.render.metal"}).has_value());
     REQUIRE_FALSE(composed.Value()->StateOf(ModuleId{"horo.editor.viewport.metal"}).has_value());
 }
@@ -115,7 +123,6 @@ TEST_CASE("Supported host descriptor order is deterministic from the same select
 
 TEST_CASE("Impossible host module selections fail before activation", "[unit][application][modules]") {
     REQUIRE(DescribeHostModules({.host = HostKind::Headless, .renderer = HostRenderer::OpenGL}).HasError());
-    REQUIRE(DescribeHostModules({.host = HostKind::Headless, .includeOpenTelemetry = true}).HasError());
     REQUIRE(DescribeHostModules({.host = HostKind::Editor, .renderer = HostRenderer::None}).HasError());
 }
 

@@ -195,14 +195,14 @@ namespace Horo::Extensions::Tests {
         REQUIRE(ValidateScriptExportDescriptor(descriptor, limits).HasValue());
 
         AddOptionalFunction(descriptor);
-        RequireError(ValidateScriptExportDescriptor(descriptor, limits), "script_export_descriptor_capacity_exceeded");
+        RequireError(ValidateScriptExportDescriptor(descriptor, limits), "extensions.script_export_descriptor_capacity_exceeded");
 
         descriptor = ValidDescriptor();
         limits = {};
         limits.maximumSymbols = 15;
         REQUIRE(ValidateScriptExportDescriptor(descriptor, limits).HasValue());
         --limits.maximumSymbols;
-        RequireError(ValidateScriptExportDescriptor(descriptor, limits), "script_export_descriptor_capacity_exceeded");
+        RequireError(ValidateScriptExportDescriptor(descriptor, limits), "extensions.script_export_descriptor_capacity_exceeded");
 
         descriptor = ValidDescriptor();
         limits = {};
@@ -212,7 +212,7 @@ namespace Horo::Extensions::Tests {
         limits.maximumDocumentationBytes = descriptor.documentation.summary.size();
         REQUIRE(ValidateScriptExportDescriptor(descriptor, limits).HasValue());
         --limits.maximumDocumentationBytes;
-        RequireError(ValidateScriptExportDescriptor(descriptor, limits), "script_export_descriptor_capacity_exceeded");
+        RequireError(ValidateScriptExportDescriptor(descriptor, limits), "extensions.script_export_descriptor_capacity_exceeded");
     }
 
     TEST_CASE("Script export descriptors reject malformed references, duplicate identities, and cycles",
@@ -220,29 +220,29 @@ namespace Horo::Extensions::Tests {
         auto descriptor = ValidDescriptor();
         descriptor.functions.front().parameters.front().type =
             ScriptExportTypeReference{.primitive = ScriptExportPrimitiveKind::String, .namedType = "com.example.request"};
-        RequireError(ValidateScriptExportDescriptor(descriptor), "script_export_descriptor_invalid");
+        RequireError(ValidateScriptExportDescriptor(descriptor), "extensions.script_export_descriptor_invalid");
 
         descriptor = ValidDescriptor();
         descriptor.functions.front().parameters.front().type = Named("com.example.missing");
-        RequireError(ValidateScriptExportDescriptor(descriptor), "script_export_descriptor_invalid");
+        RequireError(ValidateScriptExportDescriptor(descriptor), "extensions.script_export_descriptor_invalid");
 
         descriptor = ValidDescriptor();
         descriptor.types[1].fields.push_back(descriptor.types[1].fields.front());
-        RequireError(ValidateScriptExportDescriptor(descriptor), "script_export_descriptor_conflict");
+        RequireError(ValidateScriptExportDescriptor(descriptor), "extensions.script_export_descriptor_conflict");
 
         descriptor = ValidDescriptor();
         descriptor.types[1].fields.front().type = Named("com.example.request");
-        RequireError(ValidateScriptExportDescriptor(descriptor), "script_export_descriptor_invalid");
+        RequireError(ValidateScriptExportDescriptor(descriptor), "extensions.script_export_descriptor_invalid");
 
         descriptor = ValidDescriptor();
         descriptor.types.back().keyType = Named("com.example.mode");
-        RequireError(ValidateScriptExportDescriptor(descriptor), "script_export_descriptor_invalid");
+        RequireError(ValidateScriptExportDescriptor(descriptor), "extensions.script_export_descriptor_invalid");
 
         descriptor = ValidDescriptor();
         auto conflictingNamespace = ValidDescriptor();
         conflictingNamespace.id = "com.example.other";
         RequireError(BuildScriptExportDescriptorSnapshot(std::array{descriptor, conflictingNamespace}),
-                     "script_export_descriptor_conflict");
+                     "extensions.script_export_descriptor_conflict");
     }
 
     TEST_CASE("Script export generations canonicalize order and preserve lifecycle generations", "[unit][extensions][script-export]") {
@@ -270,7 +270,7 @@ namespace Horo::Extensions::Tests {
         auto incompatible = descriptor;
         incompatible.nameSpace = "com.example.other";
         RequireError(BuildScriptExportDescriptorReplacement(first.Value(), std::array{incompatible}),
-                     "script_export_descriptor_incompatible");
+                     "extensions.script_export_descriptor_incompatible");
         CHECK(first.Value()->Generation() == 1);
 
         auto retired = ValidDescriptor();
@@ -288,7 +288,7 @@ namespace Horo::Extensions::Tests {
         sameMajorRetirement.functions.clear();
         sameMajorRetirement.tombstonedSymbols = {"com.example.fetch"};
         RequireError(BuildScriptExportDescriptorReplacement(first.Value(), std::array{sameMajorRetirement}),
-                     "script_export_descriptor_incompatible");
+                     "extensions.script_export_descriptor_incompatible");
     }
 
     TEST_CASE("Script export optional member removal requires a major version", "[unit][extensions][script-export]") {
@@ -309,7 +309,7 @@ namespace Horo::Extensions::Tests {
         fieldRemoval.types[1].fields.pop_back();
         fieldRemoval.tombstonedSymbols = {"com.example.request.note"};
         RequireError(BuildScriptExportDescriptorReplacement(previous.Value(), std::array{fieldRemoval}),
-                     "script_export_descriptor_incompatible");
+                     "extensions.script_export_descriptor_incompatible");
 
         auto parameterRemoval = previousDescriptor;
         parameterRemoval.version = {1, 1, 0};
@@ -317,20 +317,21 @@ namespace Horo::Extensions::Tests {
         parameterRemoval.functions.front().parameters.pop_back();
         parameterRemoval.tombstonedSymbols = {"com.example.fetch.options"};
         RequireError(BuildScriptExportDescriptorReplacement(previous.Value(), std::array{parameterRemoval}),
-                     "script_export_descriptor_incompatible");
+                     "extensions.script_export_descriptor_incompatible");
     }
 
     TEST_CASE("Script export replacement rejects null and preserves the prior immutable generation", "[unit][extensions][script-export]") {
         const auto descriptor = ValidDescriptor();
         const auto candidate = std::array{descriptor};
-        RequireError(BuildScriptExportDescriptorReplacement({}, candidate), "script_export_descriptor_invalid");
+        RequireError(BuildScriptExportDescriptorReplacement({}, candidate), "extensions.script_export_descriptor_invalid");
 
         const auto first = BuildScriptExportDescriptorSnapshot(candidate).Value();
         auto changed = descriptor;
         changed.version = {1, 1, 0};
         changed.compatibility = {.minimum = {1, 0, 0}, .maximum = {1, 1, 0}};
         changed.functions.front().invocation = ScriptExportInvocationMode::Asynchronous;
-        RequireError(BuildScriptExportDescriptorReplacement(first, std::array{changed}), "script_export_descriptor_incompatible");
+        RequireError(BuildScriptExportDescriptorReplacement(first, std::array{changed}),
+                     "extensions.script_export_descriptor_incompatible");
         CHECK(first->Generation() == 1);
         CHECK(first->Find("com.example.records")->functions.front().invocation == ScriptExportInvocationMode::Synchronous);
     }

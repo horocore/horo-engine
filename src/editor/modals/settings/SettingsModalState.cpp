@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/SettingsModalDraft.h"
 
 #include <algorithm>
@@ -15,14 +16,20 @@ namespace Horo::Editor {
         out.defaultSceneOnProjectOpen = st.general.defaultScene;
         out.languageTag = st.general.languageTag;
 
-        out.themePreset = static_cast<EditorThemePreset>(st.appearance.themeIndex);
+        out.themePreset =
+            st.appearance.themeIndex < 3 ? static_cast<EditorThemePreset>(std::max(st.appearance.themeIndex, 0)) : st.committed.themePreset;
+        out.themeId = st.appearance.themeId;
         out.accentColorHex = st.appearance.accentHex;
         out.uiScalePercent = st.appearance.uiScale;
+        out.codeEditor = st.appearance.codeEditor;
+        out.uiFontFamily = st.appearance.uiFontFamily;
+        out.codeFontFamily = st.appearance.codeFontFamily;
         out.codeFontSizePx = std::atoi(st.appearance.editorFontSize.c_str());
 
         out.orbitSensitivity = st.input.orbitSensitivity;
         out.panSensitivity = st.input.panSensitivity;
         out.invertOrbitY = st.input.invertOrbitY;
+        out.keymap = st.input.keymap;
 
         out.viewportMode = static_cast<EditorViewportMode>(std::clamp(st.rendering.viewportMode, 0, 3));
         out.gridOverlay = st.rendering.gridOverlay;
@@ -55,14 +62,24 @@ namespace Horo::Editor {
         st.general.defaultScene = settings.defaultSceneOnProjectOpen;
         st.general.languageTag = settings.languageTag;
 
+        st.appearance.themeId = settings.themeId;
         st.appearance.themeIndex = static_cast<int>(settings.themePreset);
+        const auto &themes = Theme::GetThemeList();
+        for (std::size_t i = 0; i < themes.size(); ++i)
+            if (!settings.themeId.empty() && themes[i].id == settings.themeId)
+                st.appearance.themeIndex = static_cast<int>(i);
         st.appearance.uiScale = settings.uiScalePercent;
+        st.appearance.codeEditor = settings.codeEditor;
+        st.appearance.uiFontFamily = settings.uiFontFamily;
+        st.appearance.codeFontFamily = settings.codeFontFamily;
         st.appearance.editorFontSize = std::to_string(settings.codeFontSizePx);
         st.appearance.accentHex = settings.accentColorHex;
 
         st.input.orbitSensitivity = settings.orbitSensitivity;
         st.input.panSensitivity = settings.panSensitivity;
         st.input.invertOrbitY = settings.invertOrbitY;
+        st.input.keymap = settings.keymap;
+        st.input.recordingAction.clear();
 
         st.rendering.viewportMode = static_cast<int>(settings.viewportMode);
         st.rendering.gridOverlay = settings.gridOverlay;
@@ -99,6 +116,8 @@ namespace Horo::Editor {
     /** @copydoc SettingsModal.h */
     [[nodiscard]] bool ApplySettings(SettingsState &state, EditorSettingsService &settings) {
         if (state.navigationProjectDraftDirty)
+            return false;
+        if (const auto owner = state.prefab.owner.lock(); owner && owner->IsDirty())
             return false;
         const EditorSettings draft = CollectDraftSettings(state);
         const Result<EditorSettingsSnapshot> result =

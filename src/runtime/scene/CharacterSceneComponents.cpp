@@ -36,14 +36,32 @@ namespace Horo::Runtime {
                    value.platformLeaveVelocity <= Character::CharacterPlatformLeaveVelocityPolicy::Point;
         }
 
-        /** @brief Checks present identities without inventing defaults or resolving current project authority. */
-        [[nodiscard]] bool ValidCollision(const CharacterSceneCollision &value, bool enabled) noexcept {
-            return (!enabled || (value.profile && value.queryChannel && value.defaultMaterial)) &&
-                   (!value.profile || value.profile->IsValid()) && (!value.queryChannel || value.queryChannel->IsValid()) &&
-                   (!value.defaultMaterial || (value.defaultMaterial->material.IsValid() && value.defaultMaterial->slot.IsValid())) &&
-                   (!value.requiredLayer || value.requiredLayer->IsValid()) &&
+        /** @brief Enabled controllers require the explicit physical/query binding triple. */
+        [[nodiscard]] bool HasRequiredCollision(const CharacterSceneCollision &value, bool enabled) noexcept {
+            return !enabled || (value.profile && value.queryChannel && value.defaultMaterial);
+        }
+
+        /** @brief Check the paired physical fallback and independent optional semantic policy. */
+        [[nodiscard]] bool ValidCollisionDefaults(const CharacterSceneCollision &value) noexcept {
+            return (!value.defaultMaterial || (value.defaultMaterial->material.IsValid() && value.defaultMaterial->slot.IsValid())) &&
+                   (!value.defaultSurface || value.defaultSurface->IsValid());
+        }
+
+        /** @brief Optional selectors retain complete identity pairs even while a component is disabled. */
+        [[nodiscard]] bool ValidCollisionSelectors(const CharacterSceneCollision &value) noexcept {
+            return (!value.requiredLayer || value.requiredLayer->IsValid()) &&
                    (!value.requiredProfile || value.requiredProfile->IsValid()) &&
                    (!value.excludedBody || (value.excludedBody->object.IsValid() && value.excludedBody->body.IsValid()));
+        }
+
+        /** @brief Check project-owned movement routing without resolving a project or inventing defaults. */
+        [[nodiscard]] bool ValidCollisionRouting(const CharacterSceneCollision &value) noexcept {
+            return (!value.profile || value.profile->IsValid()) && (!value.queryChannel || value.queryChannel->IsValid());
+        }
+
+        [[nodiscard]] bool ValidCollision(const CharacterSceneCollision &value, bool enabled) noexcept {
+            return HasRequiredCollision(value, enabled) && ValidCollisionDefaults(value) && ValidCollisionSelectors(value) &&
+                   ValidCollisionRouting(value);
         }
     }  // namespace
 

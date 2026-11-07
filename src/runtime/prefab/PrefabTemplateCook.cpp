@@ -1,18 +1,21 @@
 #include "Horo/Prefab/PrefabTemplateCook.h"
 
+#include "Horo/Prefab/PrefabAssetDependencyClosure.h"
+
 #include <algorithm>
 #include <utility>
 
 namespace Horo::Prefab {
     namespace {
-        /** @brief Admits exactly one captured canonical resource and computes its actual full-envelope digest. */
-        [[nodiscard]] Result<CookedPrefabDependency> ResourceDependency(const PrefabDependencyNode &node,
+        /** @brief Admits exactly one captured canonical resource and computes its
+         * actual full-envelope digest. */
+        [[nodiscard]] Result<CookedPrefabDependency> ResourceDependency(const Assets::AssetDependency &node,
                                                                         const std::span<const PrefabTemplateCookResource> resources,
                                                                         const AssetCookTargetId &target,
                                                                         const Assets::AssetCookLimits &resourceLimits) {
             const PrefabTemplateCookResource *found{};
             for (const auto &resource : resources) {
-                if (resource.asset != node.assetId)
+                if (resource.asset != node.id)
                     continue;
                 if (found != nullptr)
                     return Result<CookedPrefabDependency>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
@@ -23,33 +26,35 @@ namespace Horo::Prefab {
             auto envelope = Assets::DecodeCookedArtifact(found->artifact, resourceLimits);
             if (envelope.HasError())
                 return Result<CookedPrefabDependency>::Failure(envelope.ErrorValue());
-            if (envelope.Value().id != node.assetId || envelope.Value().type != node.assetType || envelope.Value().target != target)
+            if (envelope.Value().id != node.id || envelope.Value().type != node.expectedType || envelope.Value().target != target)
                 return Result<CookedPrefabDependency>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
-            return Result<CookedPrefabDependency>::Success({{node.assetId, node.assetType}, ComputeSha256(std::as_bytes(found->artifact))});
+            return Result<CookedPrefabDependency>::Success({{node.id, node.expectedType}, ComputeSha256(std::as_bytes(found->artifact))});
         }
 
-        /** @brief Uses the same validated graph to separate flattened source closure from required runtime resources. */
+        /** @brief Uses the same validated graph to separate flattened source closure
+         * from required runtime resources. */
         [[nodiscard]] Result<std::vector<CookedPrefabDependency>> Dependencies(
             const PrefabSourceResolverSnapshot &sources, const Assets::AssetRegistrySnapshot &registry, const Assets::AssetId root,
             const std::span<const PrefabTemplateCookResource> resources, const AssetCookTargetId &target, const PrefabLimitProfile &limits,
             const PrefabTemplateCookOptions &options) {
             const std::vector<PrefabDependencySource> sourceValues(sources.Sources().begin(), sources.Sources().end());
-            auto graph = BuildPrefabDependencyGraph(registry, sourceValues, limits);
+            auto graph = BuildPrefabDependencyGraph(registry, sourceValues, limits, sources.Metrics());
             if (graph.HasError())
                 return Result<std::vector<CookedPrefabDependency>>::Failure(graph.ErrorValue());
-            auto closure = graph.Value().DependencyClosure(std::span{&root, 1});
+            std::vector<PrefabAssetDependency> projected;
+            for (const auto &role : options.projectedResourceDependencies)
+                projected.push_back({role.id, role.expectedType, {}});
+            auto closure = BuildPrefabAssetDependencyClosure(registry, graph.Value(), std::span{&root, 1}, projected,
+                                                             std::min<std::size_t>(limits.Policy().maximumReferencedAssets,
+                                                                                   options.resourceLimits.maximumAssets),
+                                                             PrefabDependencyConflictPolicy::Reject);
             if (closure.HasError())
                 return Result<std::vector<CookedPrefabDependency>>::Failure(closure.ErrorValue());
             std::vector<CookedPrefabDependency> result;
-            for (const auto asset : closure.Value()) {
+            for (const auto &role : closure.Value().RuntimeDependencies()) {
                 if (options.cancellation.IsCancellationRequested())
                     return Result<std::vector<CookedPrefabDependency>>::Failure(MakeError(PrefabErrors::Cancelled));
-                const auto *node = graph.Value().FindNode(asset);
-                if (node == nullptr)
-                    return Result<std::vector<CookedPrefabDependency>>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-                if (node->sourceRevision)
-                    continue;
-                auto dependency = ResourceDependency(*node, resources, target, options.resourceLimits);
+                auto dependency = ResourceDependency(role, resources, target, options.resourceLimits);
                 if (dependency.HasError())
                     return Result<std::vector<CookedPrefabDependency>>::Failure(dependency.ErrorValue());
                 result.push_back(std::move(dependency).Value());
@@ -59,7 +64,8 @@ namespace Horo::Prefab {
             return Result<std::vector<CookedPrefabDependency>>::Success(std::move(result));
         }
 
-        /** @brief Maps one resolver object to a dense slot while retaining original provider payloads and provenance. */
+        /** @brief Maps one resolver object to a dense slot while retaining original
+         * provider payloads and provenance. */
         [[nodiscard]] Result<CookedPrefabEntity> Entity(const ResolvedPrefabObject &object,
                                                         const std::span<const ResolvedPrefabObject> preceding,
                                                         const PrefabSourceResolverSnapshot &sources) {
@@ -86,44 +92,67 @@ namespace Horo::Prefab {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Transfers the same source resolver's actual entities/provenance under its one expansion budget. */
+        Result<void> PopulateEntities(CookedPrefabData &data, const EffectivePrefabCandidate &candidate,
+                                      const PrefabSourceResolverSnapshot &sources, const PrefabLimitProfile &limits,
+                                      const CancellationToken &cancellation) {
+            const auto objects = candidate.Objects();
+            data.entities.reserve(objects.size());
+            PrefabExpansionBudget budget(limits);
+            for (std::size_t index = 0; index < objects.size(); ++index) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
+                const auto &object = objects[index];
+                if (auto consumed = budget.Consume(1 + index + sources.Sources().size() + object.object.components.size() +
+                                                   object.object.behaviors.size());
+                    consumed.HasError())
+                    return Result<void>::Failure(consumed.ErrorValue());
+                auto entity = Entity(object, objects.first(index), sources);
+                if (entity.HasError())
+                    return Result<void>::Failure(entity.ErrorValue());
+                data.entities.push_back(std::move(entity).Value());
+            }
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc CookPrefabTemplate */
     Result<CookedPrefab> CookPrefabTemplate(const PrefabSourceResolverSnapshot &sources, const Assets::AssetRegistrySnapshot &registry,
                                             const Assets::AssetId root, const std::span<const PrefabTemplateCookResource> resources,
                                             const AssetCookTargetId &target, const PrefabLimitProfile &limits,
                                             const PrefabTemplateCookOptions &options) {
-        if (options.cancellation.IsCancellationRequested())
-            return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::Cancelled));
-        if (!target.IsValid())
-            return Result<CookedPrefab>::Failure(MakeError(AssetCookTargetErrors::Invalid));
-        if (sources.RegistryRevision() != registry.Revision())
-            return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::ResolutionStale));
-        if (resources.size() > limits.Policy().maximumReferencedAssets || resources.size() > options.resourceLimits.maximumAssets)
-            return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::ReferenceCountExceeded));
-        auto candidate = sources.Resolve(root, PrefabInstanceId::Create(1).Value(), limits);
-        if (candidate.HasError())
-            return Result<CookedPrefab>::Failure(candidate.ErrorValue());
-        auto dependencies = Dependencies(sources, registry, root, resources, target, limits, options);
-        if (dependencies.HasError())
-            return Result<CookedPrefab>::Failure(dependencies.ErrorValue());
-        CookedPrefabData data{.assetId = root, .dependencies = std::move(dependencies).Value()};
-        const auto objects = candidate.Value().Objects();
-        data.entities.reserve(objects.size());
-        PrefabExpansionBudget budget(limits);
-        for (std::size_t index = 0; index < objects.size(); ++index) {
+        PrefabMetricOperation observation{sources.Metrics(), PrefabMetricPhase::Cook};
+        auto result = [&]() -> Result<CookedPrefab> {
             if (options.cancellation.IsCancellationRequested())
                 return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::Cancelled));
-            const auto &object = objects[index];
-            if (auto consumed =
-                    budget.Consume(1 + index + sources.Sources().size() + object.object.components.size() + object.object.behaviors.size());
-                consumed.HasError())
-                return Result<CookedPrefab>::Failure(consumed.ErrorValue());
-            auto entity = Entity(object, objects.first(index), sources);
-            if (entity.HasError())
-                return Result<CookedPrefab>::Failure(entity.ErrorValue());
-            data.entities.push_back(std::move(entity).Value());
+            if (!target.IsValid())
+                return Result<CookedPrefab>::Failure(MakeError(AssetCookTargetErrors::Invalid));
+            if (sources.RegistryRevision() != registry.Revision())
+                return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::ResolutionStale));
+            if (resources.size() > limits.Policy().maximumReferencedAssets || resources.size() > options.resourceLimits.maximumAssets)
+                return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::ReferenceCountExceeded));
+            auto candidate = sources.Resolve(root, PrefabInstanceId::Create(1).Value(), limits);
+            if (candidate.HasError())
+                return Result<CookedPrefab>::Failure(candidate.ErrorValue());
+            auto dependencies = Dependencies(sources, registry, root, resources, target, limits, options);
+            if (dependencies.HasError())
+                return Result<CookedPrefab>::Failure(dependencies.ErrorValue());
+            CookedPrefabData data{.assetId = root, .dependencies = std::move(dependencies).Value()};
+            data.rootSourceRevision = candidate.Value().Revision().rootSource;
+            if (auto populated = PopulateEntities(data, candidate.Value(), sources, limits, options.cancellation); populated.HasError())
+                return Result<CookedPrefab>::Failure(populated.ErrorValue());
+            return CookedPrefab::Create(std::move(data), limits);
+        }();
+        if (result.HasError())
+            observation.Fail(result.ErrorValue());
+        else {
+            observation.Observe(PrefabMetricItem::CookedBytes, result.Value().Bytes().size());
+            observation.Observe(PrefabMetricItem::RuntimeEntities, result.Value().Data().entities.size());
+            observation.Complete();
         }
-        if (options.cancellation.IsCancellationRequested())
-            return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::Cancelled));
-        return CookedPrefab::Create(std::move(data), limits);
+        return result;
     }
 }  // namespace Horo::Prefab

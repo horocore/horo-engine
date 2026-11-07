@@ -714,6 +714,15 @@ composition root supplies exact immutable material evidence and an explicit fini
 profile. Parsing and validation do not query an asset registry, load a provider or
 publish runtime state.
 
+Successful `BuildParticleSystemCookPlan` returns an immutable `ParticleCookAdmission`
+that owns the exact validated particle source and admitted plan together. A caller
+may tighten a canonical tier's ceilings, but cannot increase them while retaining
+that tier identity. GPU simulator creation requires this admission; a source-only
+descriptor or mutable plan cannot bypass material and tier cook checks. This is a
+subordinate particle-unit admission, not a separate top-level effect asset or a
+claim that a persisted compiled-effect loader exists. The host supplies immutable
+material evidence explicitly and retains responsibility for its real asset snapshot.
+
 ```cpp
 struct ParticleSystemDescriptor {
     ParticleSystemId id;

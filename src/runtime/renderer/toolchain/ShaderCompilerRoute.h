@@ -26,6 +26,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
      * @param invocation Immutable validated cook request. @return Its VFX role, or the original typed revision/profile failure.
      */
     [[nodiscard]] Result<bool> AdmitRasterCookInterface(const ShaderCompilerInvocation &invocation);
+    /** @brief Identifies the admitted register raster family without changing the fixed UI/VFX routes. */
+    [[nodiscard]] bool UsesRegisterRasterReflection(const ShaderCompilerInvocation &invocation);
     /** @brief Builds the selected native-language arguments and the exact admitted VFX lowering/interface options.
      * @param entry Actual translated stage. @param spirvPath Same-operation validated intermediate.
      * @param nativePath Adapter-owned output path. @param metal Selected native language.
@@ -33,14 +35,15 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
      */
     [[nodiscard]] std::vector<std::string> RasterTranslationArguments(const ShaderEntryPoint &entry, const std::filesystem::path &spirvPath,
                                                                       const std::filesystem::path &nativePath, bool metal,
-                                                                      bool vfxInterface);
+                                                                      bool vfxInterface, bool registerInterface = false);
     /** @brief Selects the existing UI or VFX normalizer for actual same-operation captured evidence.
      * @param invocation Immutable validated cook request. @param stages Actual reflection JSON for each translated stage.
      * @param translations Actual corresponding native texts. @return Strictly normalized final-target evidence or a typed failure.
      */
     [[nodiscard]] Result<NormalizedShaderReflection> NormalizeCapturedRasterReflection(const ShaderCompilerInvocation &invocation,
                                                                                        const std::vector<SpirvReflectionStage> &stages,
-                                                                                       const std::vector<std::string> &translations);
+                                                                                       const std::vector<std::string> &translations,
+                                                                                       std::span<const std::uint8_t> validatedSpirv);
     /** @brief Admits the fixed UI paint reflection names and the exact locked translation tool before any process runs.
      * @param request Explicit same-cook reflection identities supplied by the validated invocation.
      * @param cross Installed Cross tool, or null when that installation is unavailable.

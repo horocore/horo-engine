@@ -9,6 +9,12 @@ namespace Horo::Editor {
     /** @brief Workspace surface for action maps, live devices, profile persistence, and typed rebinding. */
     class InputMappingPanel final : public IWorkspacePanel {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.input_mapping"};
+
+        /** @brief Creates a surface with its required localization scope. */
+        InputMappingPanel() : IWorkspacePanel(kTextScope) {}
+
         [[nodiscard]] std::string GetId() const override {
             return "horo.input_mapping";
         }

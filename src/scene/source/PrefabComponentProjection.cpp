@@ -5,6 +5,7 @@
 #include "SceneSourceInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <utility>
 
@@ -15,43 +16,26 @@ namespace Horo::SceneSource {
 
         /** @brief Names only actual canonical Scene codec fields; unavailable representations stay unsupported. */
         std::string_view Field(const Kind kind) noexcept {
-            using enum Kind;
-            switch (kind) {
-                case Camera:
-                    return "camera";
-                case Light:
-                    return "light";
-                case AudioSource:
-                    return "audioSource";
-                case NavigationSurface:
-                    return "navigationSurface";
-                case NavigationRegion:
-                    return "navigationRegion";
-                case NavigationModifier:
-                    return "navigationModifier";
-                case NavigationLink:
-                    return "navigationLink";
-                case NavigationAgent:
-                    return "navigationAgent";
-                case AiAgent:
-                    return "aiAgent";
-                case AiController:
-                    return "aiController";
-                case CharacterController:
-                    return "characterController";
-                case RigidBody:
-                    return "rigidBody";
-                case Collider:
-                    return "colliders";
-                case PhysicsConstraint:
-                    return "physicsConstraints";
-                case PrimitiveMesh:
-                case AudioListener:
-                case UiCanvas:
-                case Count:
-                    return {};
-            }
-            return {};
+            constexpr std::array<std::string_view, static_cast<std::size_t>(Kind::Count)> fields{"",
+                                                                                                 "camera",
+                                                                                                 "light",
+                                                                                                 "audioSource",
+                                                                                                 "",
+                                                                                                 "",
+                                                                                                 "navigationSurface",
+                                                                                                 "navigationRegion",
+                                                                                                 "navigationModifier",
+                                                                                                 "navigationLink",
+                                                                                                 "navigationAgent",
+                                                                                                 "aiAgent",
+                                                                                                 "aiController",
+                                                                                                 "characterController",
+                                                                                                 "rigidBody",
+                                                                                                 "colliders",
+                                                                                                 "physicsConstraints",
+                                                                                                 "animation"};
+            const auto index = static_cast<std::size_t>(kind);
+            return index < fields.size() ? fields[index] : std::string_view{};
         }
 
         /** @brief Copies bounded encoded bytes into the parser's owned character input. */
@@ -83,51 +67,50 @@ namespace Horo::SceneSource {
             return Result<void>::Success();
         }
 
-        /** @brief Moves only the decoded field, preserving all unrelated candidate components. */
+        /** @brief Type-erases only one existing typed optional-field adoption, never payload validation. */
+        template <auto Destination, auto Source>
+        Result<void> AdoptField(Runtime::RuntimeComponentSet &destination, SceneObjectComponentSet &source) {
+            return Adopt(destination.*Destination, std::move(source.*Source));
+        }
+
+        /** @brief Moves exactly one decoded field using the finite canonical built-in schema table. */
         Result<void> Merge(const Kind kind, Runtime::RuntimeComponentSet &destination, SceneObjectComponentSet &&source) {
-            using enum Kind;
-            switch (kind) {
-                case Camera:
-                    return Adopt(destination.camera, std::move(source.camera));
-                case Light:
-                    return Adopt(destination.light, std::move(source.light));
-                case AudioSource:
-                    return Adopt(destination.audioSource, std::move(source.audioSource));
-                case NavigationSurface:
-                    return Adopt(destination.navigationSurface, std::move(source.navigationSurface));
-                case NavigationRegion:
-                    return Adopt(destination.navigationRegion, std::move(source.navigationRegion));
-                case NavigationModifier:
-                    return Adopt(destination.navigationModifier, std::move(source.navigationModifier));
-                case NavigationLink:
-                    return Adopt(destination.navigationLink, std::move(source.navigationLink));
-                case NavigationAgent:
-                    return Adopt(destination.navigationAgent, std::move(source.navigationAgent));
-                case AiAgent:
-                    return Adopt(destination.aiAgent, std::move(source.aiAgent));
-                case AiController:
-                    return Adopt(destination.aiController, std::move(source.aiController));
-                case CharacterController:
-                    return Adopt(destination.characterController, std::move(source.characterController));
-                case RigidBody:
-                    return Adopt(destination.rigidBody, std::move(source.rigidBody));
-                case Collider:
-                    return Append(destination.colliders, std::move(source.colliders));
-                case PhysicsConstraint:
-                    return Append(destination.physicsConstraints, std::move(source.physicsConstraints));
-                case PrimitiveMesh:
-                case AudioListener:
-                case UiCanvas:
-                case Count:
-                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ComponentTypeUnregistered));
-            }
-            return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ComponentTypeUnregistered));
+            using Merger = Result<void> (*)(Runtime::RuntimeComponentSet &, SceneObjectComponentSet &);
+            constexpr std::array<Merger, static_cast<std::size_t>(Kind::Count)> mergers{
+                nullptr,
+                AdoptField<&Runtime::RuntimeComponentSet::camera, &SceneObjectComponentSet::camera>,
+                AdoptField<&Runtime::RuntimeComponentSet::light, &SceneObjectComponentSet::light>,
+                AdoptField<&Runtime::RuntimeComponentSet::audioSource, &SceneObjectComponentSet::audioSource>,
+                nullptr,
+                nullptr,
+                AdoptField<&Runtime::RuntimeComponentSet::navigationSurface, &SceneObjectComponentSet::navigationSurface>,
+                AdoptField<&Runtime::RuntimeComponentSet::navigationRegion, &SceneObjectComponentSet::navigationRegion>,
+                AdoptField<&Runtime::RuntimeComponentSet::navigationModifier, &SceneObjectComponentSet::navigationModifier>,
+                AdoptField<&Runtime::RuntimeComponentSet::navigationLink, &SceneObjectComponentSet::navigationLink>,
+                AdoptField<&Runtime::RuntimeComponentSet::navigationAgent, &SceneObjectComponentSet::navigationAgent>,
+                AdoptField<&Runtime::RuntimeComponentSet::aiAgent, &SceneObjectComponentSet::aiAgent>,
+                AdoptField<&Runtime::RuntimeComponentSet::aiController, &SceneObjectComponentSet::aiController>,
+                AdoptField<&Runtime::RuntimeComponentSet::characterController, &SceneObjectComponentSet::characterController>,
+                AdoptField<&Runtime::RuntimeComponentSet::rigidBody, &SceneObjectComponentSet::rigidBody>,
+                +[](Runtime::RuntimeComponentSet &target, SceneObjectComponentSet &decoded) {
+                return Append(target.colliders, std::move(decoded.colliders));
+            },
+                +[](Runtime::RuntimeComponentSet &target, SceneObjectComponentSet &decoded) {
+                return Append(target.physicsConstraints, std::move(decoded.physicsConstraints));
+            },
+                AdoptField<&Runtime::RuntimeComponentSet::animation, &SceneObjectComponentSet::animation>,
+            };
+            const auto index = static_cast<std::size_t>(kind);
+            if (index >= mergers.size() || !mergers[index])
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ComponentTypeUnregistered));
+            return mergers[index](destination, source);
         }
 
         /** @brief Reads bounded canonical payload bytes through the shared duplicate/depth guard. */
         Result<Json> ReadPayload(const Prefab::RawComponentPayload &source) {
             if (source.instance.Value() == 0 || source.component.encoding != Gameplay::ComponentPayloadEncoding::CanonicalJson ||
-                source.component.schemaVersion != 1 || Gameplay::ValidateSerializedComponent(source.component).HasError())
+                source.component.schemaVersion != PrefabBuiltinComponentPayloadSchemaVersion ||
+                Gameplay::ValidateSerializedComponent(source.component).HasError())
                 return Result<Json>::Failure(MakeError(Prefab::PrefabErrors::CorruptedPayload));
             Foundation::JsonParseGuard guard{64};
             auto payload = Json::parse(PayloadBytes(source.component.payload), std::ref(guard), false);
@@ -168,6 +151,32 @@ namespace Horo::SceneSource {
         }
     }  // namespace
 
+    Sha256Digest PrefabBuiltinComponentCodecFingerprint() {
+        std::string identity{"horo.prefab.builtin-component-codec"};
+        const auto append = [&](std::string_view value) {
+            identity += std::to_string(value.size());
+            identity += ':';
+            identity += value;
+        };
+        for (const auto version :
+             {PrefabBuiltinComponentCodecContractVersion, PrefabBuiltinComponentPayloadSchemaVersion, Detail::kSceneSchemaVersion,
+              Detail::kCharacterSceneSchemaVersion, Detail::kNavigationSourceSceneSchemaVersion, Detail::kAnimationSceneSchemaVersion})
+            append(std::to_string(version));
+        const auto actual = Runtime::BuiltinSceneComponentSchemas();
+        std::vector<Runtime::BuiltinSceneComponentSchema> schemas(actual.begin(), actual.end());
+        std::ranges::sort(schemas, [](const auto &left, const auto &right) {
+            if (left.kind != right.kind)
+                return left.kind < right.kind;
+            return left.typeId < right.typeId;
+        });
+        for (const auto &schema : schemas) {
+            append(std::to_string(static_cast<unsigned>(schema.kind)));
+            append(schema.typeId);
+            append(Field(schema.kind));
+        }
+        return ComputeSha256(std::as_bytes(std::span{identity}));
+    }
+
     /** @copydoc EncodePrefabNavigationComponent */
     Result<Prefab::RawComponentPayload> EncodePrefabNavigationComponent(const Kind kind, const Prefab::PrefabComponentInstanceId instance,
                                                                         const SceneObjectComponentSet &components) {
@@ -184,7 +193,7 @@ namespace Horo::SceneSource {
         const auto type = Gameplay::ComponentTypeId::Parse(schema->typeId);
         if (type.HasError())
             return Return::Failure(type.ErrorValue());
-        Prefab::RawComponentPayload result{instance, {.typeId = type.Value()}};
+        Prefab::RawComponentPayload result{instance, {.typeId = type.Value(), .schemaVersion = PrefabBuiltinComponentPayloadSchemaVersion}};
         const auto bytes = selected->second.dump(0);
         result.component.payload.reserve(bytes.size());
         for (const auto byte : bytes)

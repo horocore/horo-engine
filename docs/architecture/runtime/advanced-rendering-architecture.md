@@ -130,6 +130,12 @@ Directional lights use cascaded shadow maps (CSM).
 - cascade blending reduces seams
 - stable cascades reduce shimmer during camera rotation
 
+The editor viewport implements the shared bounded fitting/profile contract and
+native GL/Metal cascade consumers, with a Vulkan depth/lit batch implementation.
+Its current source-level integration and platform qualification limits are
+recorded in [Directional Shadows](../../guides/directional-shadows.md); viewport
+coverage does not qualify the complete production lighting pipeline.
+
 ### Punctual Shadows
 
 Point and spot lights use shadow maps or cubemaps. Shadow allocation is managed

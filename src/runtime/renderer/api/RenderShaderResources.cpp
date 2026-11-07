@@ -142,12 +142,32 @@ namespace Horo::Render {
         return Result<void>::Success();
     }
 
+    namespace {
+        bool KnownRasterEnums(const RenderGraphicsPipelineState &state) {
+            return state.cull <= RenderCullMode::Back && state.frontFace <= RenderFrontFace::Clockwise &&
+                   state.blend <= RenderBlendMode::Additive && state.depthCompare <= RenderCompareFunction::Always;
+        }
+
+        bool ValidPipelineDepthState(const RenderGraphicsPipelineState &state) {
+            return DepthFormatValid(state.depthFormat) &&
+                   (!(state.depthTest || state.depthWrite || state.depthOnly) || state.depthFormat.has_value());
+        }
+
+        Sha256Digest RasterStateDigest(std::span<const std::uint8_t> bytes, bool depthOnly) {
+            if (!depthOnly)
+                return ComputeSha256(std::as_bytes(bytes));
+            Sha256Builder digest;
+            static_cast<void>(digest.Update(std::as_bytes(bytes)));
+            constexpr std::array<std::byte, 1> tag{std::byte{1}};
+            static_cast<void>(digest.Update(tag));
+            return digest.Finalize();
+        }
+    }  // namespace
+
     /** @copydoc ComputeRenderGraphicsPipelineStateDigest */
     Result<Sha256Digest> ComputeRenderGraphicsPipelineStateDigest(const RenderGraphicsPipelineState &state) {
-        if (state.cull > RenderCullMode::Back || state.frontFace > RenderFrontFace::Clockwise || state.blend > RenderBlendMode::Additive ||
-            state.depthCompare > RenderCompareFunction::Always || !ColorFormatValid(state.colorFormat) ||
-            !DepthFormatValid(state.depthFormat) || (state.depthTest && !state.depthFormat) || (state.depthWrite && !state.depthFormat) ||
-            state.sampleCount == 0 || state.sampleCount > 64 || (state.sampleCount & (state.sampleCount - 1U)) != 0 ||
+        if (!KnownRasterEnums(state) || !ColorFormatValid(state.colorFormat) || !ValidPipelineDepthState(state) || state.sampleCount == 0 ||
+            state.sampleCount > 64 || (state.sampleCount & (state.sampleCount - 1U)) != 0 ||
             state.viewRouting > RenderViewRouting::VertexLayer)
             return Result<Sha256Digest>::Failure(MakeError(RenderShaderResourceErrors::InvalidPipeline));
         // Version one encodes the established MeshVertex triangle layout plus every fixed-state dimension.
@@ -164,7 +184,7 @@ namespace Horo::Render {
                                                  static_cast<std::uint8_t>(state.depthFormat.value_or(RenderTextureFormat::Rgba8Unorm)),
                                                  static_cast<std::uint8_t>(state.sampleCount),
                                                  static_cast<std::uint8_t>(state.viewRouting)};
-        return Result<Sha256Digest>::Success(ComputeSha256(std::as_bytes(std::span{bytes})));
+        return Result<Sha256Digest>::Success(RasterStateDigest(bytes, state.depthOnly));
     }
 
     /** @copydoc ComputeRenderGraphicsPipelineDescriptorDigest */

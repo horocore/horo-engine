@@ -77,7 +77,7 @@ namespace Horo::Editor {
 
         [[nodiscard]] bool IsHiddenSidecar(const std::filesystem::path &path) {
             const std::string extension = LowercaseExtension(path);
-            if (extension == ".meta")
+            if (extension == ".meta" || path.filename().string().ends_with(".horo-source.lock"))
                 return true;
             if (extension != ".horo")
                 return false;
@@ -327,13 +327,26 @@ namespace Horo::Editor {
         return !error && std::filesystem::is_directory(status);
     }
 
+    /** @copydoc IsProjectContentBrowserDirectoryTargetAllowed */
+    bool IsProjectContentBrowserDirectoryTargetAllowed(const std::filesystem::path &absoluteProjectRoot,
+                                                       const std::filesystem::path &absoluteTarget) {
+        const auto projectRoot = NormalizeAbsolute(absoluteProjectRoot);
+        if (!IsContentBrowserDirectoryTargetAllowed(projectRoot, absoluteTarget))
+            return false;
+        return IsContentBrowserDirectoryTargetAllowed(ProjectLayout::AssetRoot(projectRoot), absoluteTarget) ||
+               IsContentBrowserDirectoryTargetAllowed(projectRoot / "source", absoluteTarget);
+    }
+
     /** @copydoc BuildContentBrowserDirectory */
     ContentBrowserDirectory BuildContentBrowserDirectory(const std::filesystem::path &absoluteProjectRoot,
                                                          const std::filesystem::path &requestedAbsoluteDirectory,
                                                          const Assets::AssetRegistrySnapshot &snapshot,
                                                          const Assets::AssetImporterCatalogSnapshot *importerCatalog) {
         const std::filesystem::path projectRoot = NormalizeAbsolute(absoluteProjectRoot);
-        const std::filesystem::path assetRoot = NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
+        const std::filesystem::path sourceRoot = NormalizeAbsolute(projectRoot / "source");
+        const bool browsingSource = IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, requestedAbsoluteDirectory) &&
+                                    IsContentBrowserDirectoryTargetAllowed(sourceRoot, requestedAbsoluteDirectory);
+        const std::filesystem::path assetRoot = browsingSource ? sourceRoot : NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
         std::filesystem::path currentDirectory =
             requestedAbsoluteDirectory.empty() ? assetRoot : NormalizeAbsolute(requestedAbsoluteDirectory);
         if (!IsContentBrowserDirectoryTargetAllowed(assetRoot, currentDirectory))
@@ -344,7 +357,13 @@ namespace Horo::Editor {
             .absoluteCurrentPath = currentDirectory.string(),
             .breadcrumbs = BuildBreadcrumbs(assetRoot, currentDirectory),
             .loadState = ContentBrowserLoadState::Loading,
+            .rootKind = browsingSource ? ContentBrowserRootKind::NativeSources : ContentBrowserRootKind::Assets,
         };
+        const auto projectAssets = NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
+        if (IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, projectAssets))
+            directory.roots.push_back({ContentBrowserRootKind::Assets, projectAssets.string()});
+        if (IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, sourceRoot))
+            directory.roots.push_back({ContentBrowserRootKind::NativeSources, sourceRoot.string()});
         if (!IsContentBrowserDirectoryTargetAllowed(assetRoot, currentDirectory)) {
             directory.loadState = ContentBrowserLoadState::Error;
             return directory;
@@ -385,7 +404,10 @@ namespace Horo::Editor {
                     continue;
                 }
 
-                directory.entries.push_back(CreateAssetFileEntry(diskEntry, absoluteEntry, projectRoot, registeredAssets, importerCatalog));
+                auto entry = CreateAssetFileEntry(diskEntry, absoluteEntry, projectRoot, registeredAssets, importerCatalog);
+                if (browsingSource)
+                    entry.displayName = absoluteEntry.filename().string();
+                directory.entries.push_back(std::move(entry));
             }
             iterator.increment(error);
         }

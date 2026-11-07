@@ -88,7 +88,7 @@ namespace Horo::Extensions::Tests {
         contextRegistration.Reset();
         CHECK(contextHandle.Snapshot()->cancellationReason == ScriptInvocationCancellationReason::Context);
         CHECK_FALSE(contextHandle.Snapshot()->terminalResult->error->code == "");
-        CHECK(registry.Drain(contextRegistration).ErrorValue().code.Value() == "script_invocation_context_revoked");
+        CHECK(registry.Drain(contextRegistration).ErrorValue().code.Value() == "extensions.script_invocation_context_revoked");
     }
 
     TEST_CASE("Script invocation backpressure coalesces progress without losing terminal completion", "[Extensions][ScriptInvocation]") {
@@ -115,12 +115,12 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Script invocation rejects malformed lifecycle admission inputs", "[Extensions][ScriptInvocation]") {
         ScriptInvocationRegistry registry;
-        RequireErrorCode(registry.RegisterProvider({.generation = 0}), "script_invocation_invalid");
+        RequireErrorCode(registry.RegisterProvider({.generation = 0}), "extensions.script_invocation_invalid");
         auto provider = registry.RegisterProvider({.generation = 7, .maximumInvocations = 8});
         REQUIRE(provider.HasValue());
         auto providerRegistration = std::move(provider).Value();
-        RequireErrorCode(registry.RegisterProvider({.generation = 7}), "script_invocation_provider_duplicate");
-        RequireErrorCode(registry.RegisterContext({.maximumInvocations = 0, .maximumHandles = 1}), "script_invocation_invalid");
+        RequireErrorCode(registry.RegisterProvider({.generation = 7}), "extensions.script_invocation_provider_duplicate");
+        RequireErrorCode(registry.RegisterContext({.maximumInvocations = 0, .maximumHandles = 1}), "extensions.script_invocation_invalid");
         auto context = registry.RegisterContext({.maximumInvocations = 8, .maximumHandles = 4});
         REQUIRE(context.HasValue());
         auto contextRegistration = std::move(context).Value();
@@ -128,22 +128,24 @@ namespace Horo::Extensions::Tests {
 
         auto incomplete = Request(snapshot);
         incomplete.apiId.clear();
-        RequireErrorCode(registry.Begin(contextRegistration, providerRegistration, std::move(incomplete)), "script_invocation_invalid");
+        RequireErrorCode(registry.Begin(contextRegistration, providerRegistration, std::move(incomplete)),
+                         "extensions.script_invocation_invalid");
         auto missingFunction = Request(snapshot);
         missingFunction.functionId = "missing";
         RequireErrorCode(registry.Begin(contextRegistration, providerRegistration, std::move(missingFunction)),
-                         "script_invocation_invalid");
+                         "extensions.script_invocation_invalid");
         auto unsupportedAffinity = Request(snapshot);
         unsupportedAffinity.completionAffinity = ScriptInvocationCompletionAffinity::Count;
         RequireErrorCode(registry.Begin(contextRegistration, providerRegistration, std::move(unsupportedAffinity)),
-                         "script_invocation_invalid");
+                         "extensions.script_invocation_invalid");
         auto negativeTimeout = Request(snapshot);
         negativeTimeout.timeout = -1ms;
         RequireErrorCode(registry.Begin(contextRegistration, providerRegistration, std::move(negativeTimeout)),
-                         "script_invocation_invalid");
+                         "extensions.script_invocation_invalid");
         auto largeTimeout = Request(snapshot);
         largeTimeout.timeout = std::chrono::hours{25};
-        RequireErrorCode(registry.Begin(contextRegistration, providerRegistration, std::move(largeTimeout)), "script_invocation_invalid");
+        RequireErrorCode(registry.Begin(contextRegistration, providerRegistration, std::move(largeTimeout)),
+                         "extensions.script_invocation_invalid");
     }
 
     TEST_CASE("Script invocation terminal failure preserves errors and terminalizes abandoned work", "[Extensions][ScriptInvocation]") {
@@ -159,12 +161,12 @@ namespace Horo::Extensions::Tests {
         REQUIRE(controller.HasValue());
         CHECK(controller.Value().ObserveCancellation().Value() == ScriptInvocationCancellationObservation::NotRequested);
         RequireErrorCode(controller.Value().PublishProgress({.phase = "", .completedUnits = 0, .totalUnits = 1}),
-                         "script_invocation_invalid");
+                         "extensions.script_invocation_invalid");
         RequireErrorCode(controller.Value().PublishProgress({.phase = "work", .completedUnits = 2, .totalUnits = 1}),
-                         "script_invocation_invalid");
+                         "extensions.script_invocation_invalid");
         REQUIRE(controller.Value().PublishProgress({.phase = "work", .completedUnits = 2, .totalUnits = 3}).HasValue());
         RequireErrorCode(controller.Value().PublishProgress({.phase = "work", .completedUnits = 1, .totalUnits = 3}),
-                         "script_invocation_invalid");
+                         "extensions.script_invocation_invalid");
 
         const Error foundationError{
             .code = ErrorCode{"backend.failed"},
@@ -187,7 +189,7 @@ namespace Horo::Extensions::Tests {
         }
         REQUIRE(abandonedHandle.Snapshot().has_value());
         CHECK(abandonedHandle.Snapshot()->state == ScriptInvocationStateKind::Failed);
-        CHECK(abandonedHandle.Snapshot()->terminalResult->error->code == "script_invocation_abandoned");
+        CHECK(abandonedHandle.Snapshot()->terminalResult->error->code == "extensions.script_invocation_abandoned");
         CHECK(ScriptInvocationProgress{.completedUnits = 1, .totalUnits = 2}.Fraction() == 0.5);
         CHECK(ScriptInvocationProgress{.completedUnits = 0, .totalUnits = 0}.Fraction() == 0.0);
         CHECK_FALSE(ScriptInvocationSnapshot{.state = ScriptInvocationStateKind::Running}.IsTerminal());
@@ -211,13 +213,15 @@ namespace Horo::Extensions::Tests {
         auto context = registry.RegisterContext({.maximumInvocations = 1, .maximumHandles = 1});
         REQUIRE(context.HasValue());
         auto contextRegistration = std::move(context).Value();
-        RequireErrorCode(registry.RegisterProvider({.generation = 9}), "script_invocation_capacity_exceeded");
-        RequireErrorCode(registry.RegisterContext({.maximumInvocations = 1, .maximumHandles = 1}), "script_invocation_capacity_exceeded");
+        RequireErrorCode(registry.RegisterProvider({.generation = 9}), "extensions.script_invocation_capacity_exceeded");
+        RequireErrorCode(registry.RegisterContext({.maximumInvocations = 1, .maximumHandles = 1}),
+                         "extensions.script_invocation_capacity_exceeded");
         RequireErrorCode(registry.ValidateHandle(ScriptHandle{}), "script_handle_invalid");
         RequireErrorCode(registry.IssueHandle(contextRegistration, providerRegistration, ""), "script_handle_invalid");
         const auto handle = registry.IssueHandle(contextRegistration, providerRegistration, "com.example.resource");
         REQUIRE(handle.HasValue());
-        RequireErrorCode(registry.IssueHandle(contextRegistration, providerRegistration, "second"), "script_invocation_capacity_exceeded");
+        RequireErrorCode(registry.IssueHandle(contextRegistration, providerRegistration, "second"),
+                         "extensions.script_invocation_capacity_exceeded");
         REQUIRE(registry.ReleaseHandle(handle.Value()).HasValue());
     }
 
@@ -274,13 +278,14 @@ namespace Horo::Extensions::Tests {
         auto otherContext = otherRegistry.RegisterContext();
         REQUIRE(otherContext.HasValue());
         RequireErrorCode(registry.Begin(otherContext.Value(), otherProvider.Value(), Request(DescriptorSnapshot())),
-                         "script_invocation_unavailable");
-        RequireErrorCode(registry.IssueHandle(otherContext.Value(), otherProvider.Value(), "resource"), "script_invocation_unavailable");
+                         "extensions.script_invocation_unavailable");
+        RequireErrorCode(registry.IssueHandle(otherContext.Value(), otherProvider.Value(), "resource"),
+                         "extensions.script_invocation_unavailable");
 
         registry.BeginShutdown();
         CHECK(registry.IsShutdown());
-        RequireErrorCode(registry.RegisterProvider({.generation = 10}), "script_invocation_shutdown");
-        RequireErrorCode(registry.RegisterContext(), "script_invocation_shutdown");
+        RequireErrorCode(registry.RegisterProvider({.generation = 10}), "extensions.script_invocation_shutdown");
+        RequireErrorCode(registry.RegisterContext(), "extensions.script_invocation_shutdown");
     }
 
     TEST_CASE("Script opaque handles fail closed after disposal and provider revocation", "[Extensions][ScriptInvocation]") {
@@ -325,9 +330,9 @@ namespace Horo::Extensions::Tests {
             handleError = issued.HasError() ? issued.ErrorValue().code.Value() : "unexpected_success";
         });
         foreign.join();
-        CHECK(beginError == "script_invocation_thread_violation");
-        CHECK(drainError == "script_invocation_thread_violation");
-        CHECK(handleError == "script_invocation_thread_violation");
+        CHECK(beginError == "extensions.script_invocation_thread_violation");
+        CHECK(drainError == "extensions.script_invocation_thread_violation");
+        CHECK(handleError == "extensions.script_invocation_thread_violation");
     }
 
     TEST_CASE("Script invocation terminalization remains exactly once under cancellation and completion races",

@@ -1,4 +1,5 @@
 #pragma once
+#include "CharacterSurfaceInternal.h"
 
 /** @file
  * @brief Target-private checked step admission and complete capsule clearance certification.
@@ -66,6 +67,8 @@ namespace Horo::Character::Detail {
         auto evidence = std::move(probe).Value();
         if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
             return Result<CharacterSweepProbeResult>::Failure(valid.ErrorValue());
+        if (const auto surface = ValidateCharacterSurfaceProbe(impl.surfaces, evidence); surface.HasError())
+            return Result<CharacterSweepProbeResult>::Failure(surface.ErrorValue());
         impl.debug.RecordSweep(request, evidence,
                                purpose == SweepPurpose::Movement ? CharacterDebugProbePurpose::Movement : CharacterDebugProbePurpose::Step);
         std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);

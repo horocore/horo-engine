@@ -2,6 +2,7 @@
 
 /** @file ProjectSession.h @brief Validated project-session candidate and activation reservation contracts. */
 
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Foundation/Result.h"
 
 #include <cstdint>
@@ -32,6 +33,7 @@ namespace Horo::Editor {
         std::string rendererBackend;
         std::string sourceFingerprint;
         std::vector<std::string> derivedStateRevisions;
+        Application::ProjectSurfaceFileSnapshot surfaces; /**< Exact validated catalog retained through activation. */
     };
 
     /** @brief Reservation over one ready session; destruction rolls an uncommitted reservation back to ready. */

@@ -24,6 +24,12 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> AdmitGraphSubmissions(std::span<const RenderGraphQueueSubmission> submissions);
         /** @brief Installs admitted topology before the first frame; aliases share one timeline. */
         [[nodiscard]] Result<void> Configure(std::span<const RenderQueueAssignment> assignments);
+
+        /** @brief Borrows the exact admitted role/queue assignments without issuing new identities. */
+        [[nodiscard]] std::span<const RenderQueueAssignment> Assignments() const noexcept {
+            return std::span{assignments_}.first(assignmentCount_);
+        }
+
         /** @brief Drops abandoned reservations without recycling any issued order or signal. */
         void BeginFrame() noexcept;
         /** @brief Reserves a frame-local view whose wait storage remains stable through this frame. */
@@ -33,6 +39,12 @@ namespace Horo::Render::Detail {
             std::array<RenderTimelinePoint, MaximumQueues> &storage) const noexcept;
         /** @brief Transactionally imports a complete ordered batch or consumes matching reservations. */
         [[nodiscard]] Result<void> Admit(std::span<const RenderQueueSubmission> submissions);
+
+        /** @brief Reads actual existing admission history without issuing or accepting native work.
+         * @param point Exact queue point supplied by native receipt validation.
+         * @return True only if this same allocator admitted it; admission alone is never GPU acceptance/completion proof.
+         */
+        [[nodiscard]] bool WasAdmittedPoint(RenderTimelinePoint point) const noexcept;
 
     private:
         struct Queue {

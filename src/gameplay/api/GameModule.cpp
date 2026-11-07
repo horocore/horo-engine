@@ -41,15 +41,33 @@ namespace Horo::Gameplay {
             return count <= maximum && (count == 0) == (records == nullptr);
         }
 
+        Result<void> ValidateBundleArrays(const GeneratedGameplayDescriptorBundle &bundle) {
+            if (!IsBoundedArray(bundle.behaviorCount, MaximumGeneratedBehaviorDescriptors, bundle.behaviors) ||
+                bundle.nativeFactoryBindingCount != bundle.behaviorCount ||
+                !IsBoundedArray(bundle.nativeFactoryBindingCount, MaximumGeneratedBehaviorDescriptors, bundle.nativeFactoryBindings) ||
+                !IsBoundedArray(bundle.diagnosticCount, MaximumGeneratedDescriptorDiagnostics, bundle.diagnostics))
+                return Result<void>::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateBundleShape(const GeneratedGameplayDescriptorBundle &bundle) {
             if (bundle.structSize != sizeof(GeneratedGameplayDescriptorBundle) ||
                 bundle.schemaVersion != GameplayDescriptorBundleSchemaVersion || bundle.sdkBoundaryVersion != GameplaySdkBoundaryVersion ||
-                !IsBoundedArray(bundle.behaviorCount, MaximumGeneratedBehaviorDescriptors, bundle.behaviors) ||
-                bundle.nativeFactoryBindingCount != bundle.behaviorCount ||
-                !IsBoundedArray(bundle.nativeFactoryBindingCount, MaximumGeneratedBehaviorDescriptors, bundle.nativeFactoryBindings) ||
-                !IsBoundedArray(bundle.diagnosticCount, MaximumGeneratedDescriptorDiagnostics, bundle.diagnostics) ||
                 bundle.lifecycle.create == nullptr || bundle.lifecycle.destroy == nullptr)
                 return Result<void>::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            return ValidateBundleArrays(bundle);
+        }
+
+        Result<void> ValidateDecisionNodes(const GeneratedGameplayDescriptorBundle &bundle) {
+            if (!IsBoundedArray(bundle.decisionNodeCount, AI::DecisionNodeGeneration::MaximumNodes, bundle.decisionNodes))
+                return Result<void>::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            for (std::size_t index = 0; index < bundle.decisionNodeCount; ++index) {
+                if (auto valid = AI::ValidateDecisionNodeRegistration(bundle.decisionNodes[index]); valid.HasError())
+                    return valid;
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (bundle.decisionNodes[previous].contract.descriptor.type == bundle.decisionNodes[index].contract.descriptor.type)
+                        return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetDescriptorAmbiguous));
+            }
             return Result<void>::Success();
         }
 
@@ -117,6 +135,8 @@ namespace Horo::Gameplay {
             return identity;
         if (const Result<void> diagnostics = ValidateGeneratedDiagnostics(bundle); diagnostics.HasError())
             return diagnostics;
-        return ValidateFactoryBindings(bundle);
+        if (auto factories = ValidateFactoryBindings(bundle); factories.HasError())
+            return factories;
+        return ValidateDecisionNodes(bundle);
     }
 }  // namespace Horo::Gameplay

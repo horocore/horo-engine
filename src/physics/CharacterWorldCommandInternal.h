@@ -1,5 +1,5 @@
 #pragma once
-
+#include "CharacterSurfaceInternal.h"
 #include "CharacterWorldMovementInternal.h"
 #include "CharacterWorldPlatformInternal.h"
 #include "CharacterWorldShapeInternal.h"
@@ -179,6 +179,16 @@ namespace Horo::Character::Detail {
         return Result<CharacterMovementResult>::Success(std::move(result));
     }
 
+    /** @brief Fence semantic evidence and apply explicit policy before the candidate reaches publication validation. */
+    [[nodiscard]] Result<CharacterMovementResult> FinalizeResolvedMovement(const auto &impl, CharacterMovementResult movement,
+                                                                           const CharacterControllerDescriptor &descriptor,
+                                                                           const Math::Vec3 previousPosition) {
+        if (const auto semantics = ValidateCharacterMovementSurfaces(impl.surfaces, movement); semantics.HasError())
+            return Result<CharacterMovementResult>::Failure(semantics.ErrorValue());
+        FinalizeCharacterSurface(impl.surfaces, descriptor, movement);
+        return FinalizeMovementResult(impl, std::move(movement), previousPosition);
+    }
+
     /** @brief Produces a deterministic backend-free result when no Physics resolver is attached. */
     [[nodiscard]] Result<CharacterMovementResult> BuildBaselineMovementResult(const auto &impl, const CharacterMovementRequest &command,
                                                                               const CharacterTransformPublication &previous,
@@ -343,7 +353,7 @@ namespace Horo::Character::Detail {
             movement.groundTransition = movement.grounded ? CharacterGroundTransition::Landed : CharacterGroundTransition::LeftGround;
         else
             movement.groundTransition = CharacterGroundTransition::None;
-        return FinalizeMovementResult(impl, std::move(movement), previous.publication.position);
+        return FinalizeResolvedMovement(impl, std::move(movement), descriptor, previous.publication.position);
     }
 
     /** @brief Identifies the final replacement for one controller in sorted command scratch. */
@@ -436,6 +446,8 @@ namespace Horo::Character::Detail {
 
     /** @brief Validates all staged publications while registry and publication state are frozen. */
     [[nodiscard]] Result<void> PreflightCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
+        if (impl.published.publicationRevision == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(CharacterErrors::PublicationRevisionExhausted));
         std::size_t movementResultIndex{};
         for (std::size_t index = 0; index < impl.fastPath.CommandScratch().size(); ++index) {
             if (!IsFinalCommand(impl.fastPath.CommandScratch(), index))
@@ -457,6 +469,45 @@ namespace Horo::Character::Detail {
         return Result<void>::Success();
     }
 
+    /** @brief Projects once from the previous committed record and the final preflighted candidate. */
+    void StageMovementEvents(auto &impl, const CharacterControllerRecord &record, const CharacterLocomotionSnapshot &candidate) noexcept {
+        CharacterEventPreviousState previous;
+        if (record.locomotion) {
+            const auto &movement = record.locomotion->movement;
+            previous = {movement.grounded, movement.sliding, movement.collisions, movement.groundSurface};
+        } else {
+            previous.grounded = record.publication.grounded;
+        }
+        auto projection = ProjectCharacterMovementEvents(previous, candidate, record.descriptor);
+        for (std::uint8_t index{}; index < projection.count; ++index) {
+            projection.events[index].streamPublicationRevision = impl.published.publicationRevision + 1;
+            static_cast<void>(impl.fastPath.TryAppendEvent(projection.events[index]));
+        }
+    }
+
+    /** @brief Preserve complete resident terminal state independently of bounded event retention. */
+    void StageTerminalStates(auto &impl) noexcept {
+        for (std::uint32_t index{}; index < impl.controllerGenerations.size(); ++index) {
+            const CharacterControllerHandle handle{impl.descriptor.sceneGeneration,
+                                                   impl.descriptor.identity,
+                                                   {index, impl.controllerGenerations[index]}};
+            const auto *record = impl.controllers.TryResolve(handle);
+            if (record == nullptr)
+                continue;
+            if (record->locomotion) {
+                impl.fastPath.StageTerminalState(ProjectCharacterTerminalState(*record->locomotion));
+                continue;
+            }
+            CharacterEventTerminalState terminal;
+            terminal.controller = handle;
+            terminal.sourceTick = record->publication.sourceTick;
+            terminal.stateRevision = record->stateRevision;
+            terminal.publicationRevision = record->publication.publicationRevision;
+            terminal.grounded = record->publication.grounded;
+            impl.fastPath.StageTerminalState(terminal);
+        }
+    }
+
     /** @brief Commits one final command and its already-preflighted immutable publication. */
     [[nodiscard]] Result<void> CommitCommand(auto &impl, const CharacterMovementRequest &command, const CharacterFixedTickInput &input,
                                              std::size_t &movementResultIndex) {
@@ -474,6 +525,7 @@ namespace Horo::Character::Detail {
         if (snapshot.HasError())
             return Result<void>::Failure(snapshot.ErrorValue());
         CharacterLocomotionSnapshot committed = std::move(snapshot).Value();
+        StageMovementEvents(impl, *record.Value(), committed);
         if (command.filterChange)
             record.Value()->descriptor.selectors = *command.filterChange;
         record.Value()->capsule = committed.capsule;
@@ -491,6 +543,7 @@ namespace Horo::Character::Detail {
         const auto publicationLock = impl.synchronization.LockPublication();
         if (const auto valid = PreflightCommandFrame(impl, input); valid.HasError())
             return valid;
+        impl.fastPath.BeginEventFrame();
         std::size_t movementResultIndex{};
         for (std::size_t index = 0; index < impl.fastPath.CommandScratch().size(); ++index) {
             if (!IsFinalCommand(impl.fastPath.CommandScratch(), index))
@@ -499,6 +552,7 @@ namespace Horo::Character::Detail {
                 committed.HasError())
                 return committed;
         }
+        StageTerminalStates(impl);
         return Result<void>::Success();
     }
 
@@ -518,6 +572,14 @@ namespace Horo::Character::Detail {
         impl.published.completedTick = input.tick;
         ++impl.published.publicationRevision;
         impl.published.appliedCommands = applied;
+        CharacterEventCapture frame;
+        frame.status = CharacterEventCaptureStatus::Captured;
+        frame.sceneGeneration = impl.descriptor.sceneGeneration;
+        frame.world = impl.descriptor.identity;
+        frame.physicsWorld = impl.descriptor.physicsWorld;
+        frame.tick = input.tick;
+        frame.publicationRevision = impl.published.publicationRevision;
+        impl.fastPath.PublishEventFrame(frame);
     }
 
     /** @brief Emits one optional phase observation without exposing pipeline storage. */

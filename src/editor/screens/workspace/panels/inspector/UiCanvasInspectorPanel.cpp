@@ -1,6 +1,7 @@
 #include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 
 #include <algorithm>
@@ -12,7 +13,7 @@ namespace Horo::Editor {
 
         /** @brief Resolve presentation text without inventing an authored property schema. */
         const char *Label(const EditorGuiContext &context, const char *key) {
-            return context.localization.Get("editor", key).c_str();
+            return UiCanvasInspectorPanel::kTextScope.Text(context.localization, key).c_str();
         }
 
         /** @brief Capture canonical UUID presentation only on source/input changes. */
@@ -39,7 +40,7 @@ namespace Horo::Editor {
             const auto parsed = Assets::AssetId::Parse(std::string_view{text.bytes.data()});
             text.valid = parsed.HasValue() && parsed.Value().IsValid();
             if (text.valid) {
-                const auto typed = T::Create(parsed.Value().Bytes());
+                const auto typed = GuiLive::HostSymbol<&T::Create>()(parsed.Value().Bytes());
                 text.valid = typed.HasValue();
                 if (text.valid)
                     value = typed.Value();
@@ -198,11 +199,10 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasInspectorPanel::DrawResources */
     bool UiCanvasInspectorPanel::DrawResources(const EditorGuiContext &context) {
-        bool changed = Identity(context, "workspace.ui_inspector.style_asset", presentation_.styleAsset, styleAsset_, true);
-        changed = Identity(context, "workspace.ui_inspector.type_class_asset", presentation_.typeClass.asset, typeAsset_, true) || changed;
-        changed = Identity(context, "workspace.ui_inspector.type_class_id", presentation_.typeClass.id, typeClass_, true) || changed;
-        Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "workspace.ui_inspector.resource_resolution"), Theme::Muted(),
-                        context.theme.fonts);
+        bool changed = Identity(context, "style_asset", presentation_.styleAsset, styleAsset_, true);
+        changed = Identity(context, "type_class_asset", presentation_.typeClass.asset, typeAsset_, true) || changed;
+        changed = Identity(context, "type_class_id", presentation_.typeClass.id, typeClass_, true) || changed;
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "resource_resolution"), Theme::Muted(), context.theme.fonts);
         return DrawClasses(context) || changed;
     }
 
@@ -212,24 +212,24 @@ namespace Horo::Editor {
         if (!classLabels_.empty()) {
             int selected = classIndex_;
             ImGui::BeginDisabled(!classAsset_.valid || !classId_.valid);
-            if (Select(context, "workspace.ui_inspector.classes", selected, classLabels_))
+            if (Select(context, "classes", selected, classLabels_))
                 SelectClass(selected);
             ImGui::EndDisabled();
             auto &value = presentation_.classes[static_cast<std::size_t>(classIndex_)];
-            changed = Identity(context, "workspace.ui_inspector.class_asset", value.asset, classAsset_);
-            if (Identity(context, "workspace.ui_inspector.class_id", value.id, classId_)) {
+            changed = Identity(context, "class_asset", value.asset, classAsset_);
+            if (Identity(context, "class_id", value.id, classId_)) {
                 if (classId_.valid)
                     classLabels_[static_cast<std::size_t>(classIndex_)] = IdText(value.id);
                 changed = true;
             }
-            if (Action(context, "workspace.ui_inspector.remove_class")) {
+            if (Action(context, "remove_class")) {
                 presentation_.classes.erase(presentation_.classes.begin() + classIndex_);
                 classLabels_.erase(classLabels_.begin() + classIndex_);
                 SelectClass(classLabels_.empty() ? -1 : 0);
                 changed = true;
             }
         }
-        if (Action(context, "workspace.ui_inspector.add_class",
+        if (Action(context, "add_class",
                    presentation_.classes.size() < Runtime::Ui::MaximumUiStyleClasses && classAsset_.valid && classId_.valid)) {
             presentation_.classes.push_back({});
             classLabels_.push_back({});
@@ -241,18 +241,15 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasInspectorPanel::DrawIntrinsic */
     bool UiCanvasInspectorPanel::DrawIntrinsic(const EditorGuiContext &context) {
-        const char *kinds[]{Label(context, "workspace.ui_inspector.intrinsic_none"), Label(context, "workspace.ui_inspector.text"),
-                            Label(context, "workspace.ui_inspector.intrinsic_image")};
+        const char *kinds[]{Label(context, "intrinsic_none"), Label(context, "text"), Label(context, "intrinsic_image")};
         int kind = static_cast<int>(presentation_.intrinsic.kind);
-        bool changed = Ui::DrawComboPropRow(Label(context, "workspace.ui_inspector.intrinsic_kind"), "intrinsic_kind", kind, kinds,
-                                            context.theme.fonts);
+        bool changed = Ui::DrawComboPropRow(Label(context, "intrinsic_kind"), "intrinsic_kind", kind, kinds, context.theme.fonts);
         if (changed)
             presentation_.intrinsic.kind = static_cast<Runtime::Ui::UiLayoutIntrinsicKind>(kind);
-        changed = Ui::CheckboxControl(Label(context, "workspace.ui_inspector.intrinsic_required"), &presentation_.intrinsic.required,
-                                      context.theme.fonts) ||
-                  changed;
+        changed =
+            Ui::CheckboxControl(Label(context, "intrinsic_required"), &presentation_.intrinsic.required, context.theme.fonts) || changed;
         std::array<std::int32_t *, 2> values{&presentation_.intrinsic.fallback.width, &presentation_.intrinsic.fallback.height};
-        const char *keys[]{"workspace.ui_inspector.fallback_width", "workspace.ui_inspector.fallback_height"};
+        const char *keys[]{"fallback_width", "fallback_height"};
         for (std::size_t i = 0; i < values.size(); ++i) {
             Ui::FieldLabel(Label(context, keys[i]), context.theme.fonts);
             auto &text = intrinsicText_[i];
@@ -269,7 +266,7 @@ namespace Horo::Editor {
         bool changed{};
         auto &value = draft_.Values().style->value;
         bool token = value.referencesToken;
-        if (Ui::CheckboxControl(Label(context, "workspace.ui_inspector.use_token"), &token, context.theme.fonts)) {
+        if (Ui::CheckboxControl(Label(context, "use_token"), &token, context.theme.fonts)) {
             value = token ? Runtime::Ui::UiStyleValueSource::Token({}) : Runtime::Ui::UiStyleValueSource::Literal(value.literal);
             tokenAsset_ = {};
             tokenId_ = {};
@@ -278,20 +275,15 @@ namespace Horo::Editor {
             changed = true;
         }
         if (token) {
-            changed = Identity(context, "workspace.ui_inspector.token_asset", value.token.asset, tokenAsset_) || changed;
-            changed = Identity(context, "workspace.ui_inspector.token_id", value.token.id, tokenId_) || changed;
+            changed = Identity(context, "token_asset", value.token.asset, tokenAsset_) || changed;
+            changed = Identity(context, "token_id", value.token.id, tokenId_) || changed;
         } else {
-            const char *categories[]{Label(context, "workspace.ui_inspector.category_color"),
-                                     Label(context, "workspace.ui_inspector.category_dimension"),
-                                     Label(context, "workspace.ui_inspector.category_typography"),
-                                     Label(context, "workspace.ui_inspector.category_imagery"),
-                                     Label(context, "workspace.ui_inspector.category_shape"),
-                                     Label(context, "workspace.ui_inspector.category_scalar"),
-                                     Label(context, "workspace.ui_inspector.category_enum"),
-                                     Label(context, "workspace.ui_inspector.category_motion")};
+            const char *categories[]{Label(context, "category_color"),      Label(context, "category_dimension"),
+                                     Label(context, "category_typography"), Label(context, "category_imagery"),
+                                     Label(context, "category_shape"),      Label(context, "category_scalar"),
+                                     Label(context, "category_enum"),       Label(context, "category_motion")};
             int category = static_cast<int>(value.literal.index());
-            if (Ui::DrawComboPropRow(Label(context, "workspace.ui_inspector.category"), "category", category, categories,
-                                     context.theme.fonts)) {
+            if (Ui::DrawComboPropRow(Label(context, "category"), "category", category, categories, context.theme.fonts)) {
                 value = Runtime::Ui::UiStyleValueSource::Literal(Literal(category));
                 UiInspectorWidgets::CaptureStyle(value.literal, styleText_);
                 changed = true;
@@ -307,11 +299,11 @@ namespace Horo::Editor {
         if (!propertyLabels_.empty()) {
             int selected = propertyIndex_;
             ImGui::BeginDisabled(!styleText_.IsValid() || !tokenAsset_.valid || !tokenId_.valid || !draft_.Values().style->value.IsValid());
-            if (Select(context, "workspace.ui_inspector.overrides", selected, propertyLabels_))
+            if (Select(context, "overrides", selected, propertyLabels_))
                 SelectProperty(selected);
             ImGui::EndDisabled();
             changed = DrawStyleValue(context) || changed;
-            if (Action(context, "workspace.ui_inspector.remove_override")) {
+            if (Action(context, "remove_override")) {
                 presentation_.inlineStyle.erase(presentation_.inlineStyle.begin() + propertyIndex_);
                 propertyLabels_.erase(propertyLabels_.begin() + propertyIndex_);
                 propertyIndex_ = -1;
@@ -319,11 +311,11 @@ namespace Horo::Editor {
                 changed = true;
             }
         }
-        static_cast<void>(Identity(context, "workspace.ui_inspector.property_id", pendingProperty_, newProperty_));
+        static_cast<void>(Identity(context, "property_id", pendingProperty_, newProperty_));
         const bool unique = std::ranges::none_of(presentation_.inlineStyle, [&](const auto &item) {
             return item.property == pendingProperty_;
         });
-        if (Action(context, "workspace.ui_inspector.add_override",
+        if (Action(context, "add_override",
                    pendingProperty_.IsValid() && newProperty_.valid && unique &&
                        presentation_.inlineStyle.size() < Runtime::Ui::MaximumUiStyleProperties &&
                        (propertyIndex_ < 0 ||
@@ -353,12 +345,11 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasInspectorPanel::DrawFields */
     bool UiCanvasInspectorPanel::DrawFields(const EditorGuiContext &context, const bool stylesAvailable) {
-        Ui::FieldLabel(Label(context, "workspace.ui_inspector.title"), context.theme.fonts);
+        Ui::FieldLabel(Label(context, "title"), context.theme.fonts);
         bool changed = UiInspectorWidgets::Layout(context, draft_.Values().layout, layoutText_);
         changed = DrawIntrinsic(context) || changed;
         if (!stylesAvailable)
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "workspace.ui_inspector.registry_unavailable"), Theme::Muted(),
-                            context.theme.fonts);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "registry_unavailable"), Theme::Muted(), context.theme.fonts);
         ImGui::BeginDisabled(!stylesAvailable);
         changed = DrawResources(context) || changed;
         changed = DrawStyle(context) || changed;
@@ -376,24 +367,22 @@ namespace Horo::Editor {
         const auto &themes = *source.inspectorThemes;
         const auto selected = std::ranges::find(themes, source.inspectorTheme, &UiInspectorTheme::id);
         int index = selected == themes.end() ? 0 : static_cast<int>(std::distance(themes.begin(), selected)) + 1;
-        Ui::FieldLabel(Label(context, "workspace.ui_inspector.project_theme"), context.theme.fonts);
+        Ui::FieldLabel(Label(context, "project_theme"), context.theme.fonts);
         ImGui::BeginDisabled(source.inspectorStylePending);
         bool changed = Ui::ComboControl("ui_project_theme", &index, static_cast<int>(themes.size()) + 1,
                                         Ui::ComboItemSource{.label =
                                                                 [&](const int item) {
-            return item == 0 ? Label(context, "workspace.ui_inspector.choose_theme")
-                             : themes[static_cast<std::size_t>(item - 1)].label.c_str();
+            return item == 0 ? Label(context, "choose_theme") : themes[static_cast<std::size_t>(item - 1)].label.c_str();
         },
                                                             .enabled =
                                                                 [](const int item) {
             return item > 0;
         }},
                                         context.theme.fonts);
-        changed = Action(context, "workspace.ui_inspector.refresh_theme", index > 0) || changed;
+        changed = Action(context, "refresh_theme", index > 0) || changed;
         ImGui::EndDisabled();
         if (source.inspectorStylePending)
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "workspace.ui_inspector.preparing_theme"), Theme::Muted(),
-                            context.theme.fonts);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "preparing_theme"), Theme::Muted(), context.theme.fonts);
         if (!changed || index <= 0)
             return false;
         output.command = EditorWorkspaceViewCommand::UiCanvasSelectTheme;
@@ -412,8 +401,7 @@ namespace Horo::Editor {
             return;
         if (!source.selectedElement || source.selectionRevision == std::numeric_limits<std::uint64_t>::max()) {
             Clear();
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "workspace.ui_inspector.select_element"), Theme::Muted(),
-                            context.theme.fonts);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "select_element"), Theme::Muted(), context.theme.fonts);
             return;
         }
         const UiInspectorContext current{.document = source.identity.instance,
@@ -426,7 +414,7 @@ namespace Horo::Editor {
                                          .resourcePublication = source.inspectorResourcePublication};
         if (!current.IsValid() || source.selectedElement->id != current.element) {
             Clear();
-            Ui::ErrorText(Label(context, "workspace.ui_inspector.invalid_draft"), context.theme.fonts);
+            Ui::ErrorText(Label(context, "invalid_draft"), context.theme.fonts);
             return;
         }
         if (!context_ || *context_ != current)
@@ -439,8 +427,8 @@ namespace Horo::Editor {
             Validate();
         }
         if (dirty_ && !valid_)
-            Ui::ErrorText(Label(context, "workspace.ui_inspector.invalid_draft"), context.theme.fonts);
-        if (Action(context, "workspace.ui_inspector.apply", dirty_ && valid_)) {
+            Ui::ErrorText(Label(context, "invalid_draft"), context.theme.fonts);
+        if (Action(context, "apply", dirty_ && valid_)) {
             auto prepared = draft_.PreparePresentation(current, presentation_, true);
             if (prepared.HasValue()) {
                 auto command = std::move(prepared).Value();
@@ -449,9 +437,9 @@ namespace Horo::Editor {
                 Emit(command, output);
             }
         }
-        if (Action(context, "workspace.ui_inspector.cancel", dirty_))
+        if (Action(context, "cancel", dirty_))
             Reset();
-        if (Action(context, "workspace.ui_inspector.reset", hadPresentation_))
+        if (Action(context, "reset", hadPresentation_))
             Emit({current.element, std::nullopt}, output);
         ImGui::PopID();
     }

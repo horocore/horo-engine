@@ -1,14 +1,16 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <glad/gl.h>
+#include <span>
 
 namespace Horo::Editor {
     /** @brief Restores host-owned OpenGL bindings and fixed-function state on scope exit. */
     class OpenGLStateSnapshot final {
     public:
         /** @brief Captures the OpenGL state mutated by an editor viewport pass. */
-        OpenGLStateSnapshot() noexcept;
+        explicit OpenGLStateSnapshot(std::uint32_t shadowUnit = 7, std::span<const std::uint32_t> uniformSlots = {}) noexcept;
 
         /** @brief Restores the captured OpenGL state. */
         ~OpenGLStateSnapshot();
@@ -22,6 +24,17 @@ namespace Horo::Editor {
         GLint program_{0};
         GLint vertexArray_{0};
         GLint arrayBuffer_{0};
+        GLint uniformBuffer_{0};
+
+        struct UniformBinding {
+            GLuint slot{};
+            GLint buffer{};
+            GLint64 offset{}, size{};
+        };
+
+        std::array<UniformBinding, 3> uniforms_{};
+        std::size_t uniformCount_{};
+        std::uint32_t shadowUnit_{7};
         GLint depthFunction_{0};
         GLint cullFaceMode_{0};
         GLint activeTexture_{0};

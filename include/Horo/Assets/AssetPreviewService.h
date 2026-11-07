@@ -35,6 +35,7 @@ namespace Horo::Assets {
         std::uint32_t width{128};                              /**< Requested output width. */
         std::uint32_t height{128};                             /**< Requested output height. */
         std::shared_ptr<const IAssetPreviewProvider> provider; /**< Provider lease retained through terminal completion. */
+        bool requiresRevision{}; /**< A missing provider proof is a failure, never a root-only cache fallback. */
     };
 
     /** @brief Terminal preview image and whether provider execution was avoided by a cache hit. */

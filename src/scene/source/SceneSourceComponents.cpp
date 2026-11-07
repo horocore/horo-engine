@@ -534,6 +534,8 @@ namespace Horo::SceneSource::Detail {
                                       {"weight", listener.weight},
                                       {"enabled", listener.enabled}};
         }
+        if (components.animation)
+            AppendAnimationComponent(value, *components.animation);
         AppendNavigationComponents(value, components);
         AppendAiComponents(value, components);
         AppendPhysicsComponents(value, components);

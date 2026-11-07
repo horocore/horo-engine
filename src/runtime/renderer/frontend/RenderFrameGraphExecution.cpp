@@ -11,6 +11,7 @@
 #include "RenderMultiviewResources.h"
 #include "RenderResourceRegistry.h"
 #include "RenderSubmissionAllocator.h"
+#include "VfxGpuStorage.h"
 #include "VfxSchedulingStorage.h"
 
 #include <algorithm>
@@ -25,6 +26,24 @@ namespace Horo::Render {
             return handle.IsValid() ? pool.Resolve(handle, graph) : Result<Detail::RenderGraphTransientResourceSet *>::Success(nullptr);
         }
 
+        bool HasGpuVfx(const std::span<const RenderGraphPassWorkload> workloads) noexcept {
+            return std::ranges::any_of(workloads, [](const auto &entry) {
+                return std::holds_alternative<RenderGraphVfxGpuCompute>(entry.workload) ||
+                       std::holds_alternative<RenderGraphVfxGpuDraw>(entry.workload);
+            });
+        }
+
+        Result<void> ValidateGpuVfxSupport(const IRenderBackend &backend, const std::span<const RenderGraphPassWorkload> workloads,
+                                           const bool explicitSubmissions) {
+            if (!HasGpuVfx(workloads))
+                return Result<void>::Success();
+            const auto &features = backend.Capabilities().support.features;
+            if (!explicitSubmissions || !features.Supports(RenderCapability::VfxGpuSimulation) ||
+                !features.Supports(RenderCapability::VfxGpuDraw))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
+            return Result<void>::Success();
+        }
+
         /** @brief Rejects unavailable encoders before resources or native work are acquired. */
         Result<void> ValidateGraphWorkloadSupport(const IRenderBackend &backend, const std::span<const RenderGraphPassWorkload> workloads,
                                                   const bool explicitSubmissions, RenderGraphExecutionRole role,
@@ -34,12 +53,17 @@ namespace Horo::Render {
             if (explicitSubmissions && !backend.Capabilities().supportsExplicitGraphSubmissions)
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
                                                        "The selected backend does not implement explicit graph submissions."));
+            if (!backend.Capabilities().supportsMaterialRasterGraph && std::ranges::any_of(workloads, [](const auto &binding) {
+                return std::holds_alternative<RenderGraphMaterialRaster>(binding.workload);
+            }))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
+                                                       "The selected backend does not implement same-graph material raster consumers."));
             if (!backend.Capabilities().support.features.Supports(RenderCapability::VfxForwardInstancing) &&
                 std::ranges::any_of(workloads, [](const auto &workload) {
                 return std::holds_alternative<RenderGraphVfx>(workload.workload);
             }))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
-            return Result<void>::Success();
+            return ValidateGpuVfxSupport(backend, workloads, explicitSubmissions);
         }
 
         /** @brief Retains the canonical VFX scratch owner only when this graph needs it and no callback already borrows it. */
@@ -218,6 +242,20 @@ namespace Horo::Render {
         return ExecuteGraphInternal(graph, workloads, &ui, transientResources);
     }
 
+    /** @copydoc RenderFrameScope::AdmitGpuGraphDispatch */
+    Result<void> RenderFrameScope::AdmitGpuGraphDispatch(const RenderGraphExecutionRequest &request,
+                                                         const Detail::RenderSubmissionAllocator &history) {
+        if (!HasGpuVfx(request.workloads))
+            return Result<void>::Success();
+        if (const auto valid = ValidateRenderGraphExecutionRequest(request); valid.HasError())
+            return valid;
+        if (const auto registered = owner_->RegisterVfxGpuDispatch(request, history); registered.HasError())
+            return registered;
+        // Admission is not acceptance, and remains recorded even when the native result is uncertain.
+        *owner_->submissionAllocator_ = history;
+        return Result<void>::Success();
+    }
+
     /** @copydoc RenderFrameScope::ExecuteLeasedGraph */
     Result<void> RenderFrameScope::ExecuteLeasedGraph(RenderGraphExecutionRequest request,
                                                       const Detail::RenderSubmissionAllocator &submissionHistory) {
@@ -230,6 +268,17 @@ namespace Horo::Render {
         };
         std::unique_ptr<IRenderGraphResourceLease, decltype(releaseLease)> lease{request.lease, releaseLease};
         request.transfer = &transfer;
+        const bool gpu = HasGpuVfx(request.workloads);
+        if (const auto admitted = AdmitGpuGraphDispatch(request, submissionHistory); admitted.HasError()) {
+            Abort();
+            return admitted;
+        }
+        const auto clearGpuBusy = [](Detail::VfxGpuStorage *storage) noexcept {
+            storage->busy = false;
+        };
+        std::unique_ptr<Detail::VfxGpuStorage, decltype(clearGpuBusy)> gpuGuard{gpu ? owner_->vfxGpuStorage_.get() : nullptr, clearGpuBusy};
+        if (gpuGuard)
+            gpuGuard->busy = true;
         if (const auto result = backend_->ExecuteGraph(request); result.HasError()) {
             Abort();
             return result;

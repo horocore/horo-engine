@@ -95,6 +95,61 @@ class AndroidPackageTests(unittest.TestCase):
                        "org.jetbrains.kotlin:kotlin-stdlib:1.8.22", "org.jetbrains.kotlinx:kotlinx-coroutines-bom:1.6.4"):
             self.assertIn(module + "=debugRuntimeClasspath,releaseRuntimeClasspath", lock)
 
+    def test_vulkan_development_profile_preserves_declared_effective_constraints(self):
+        _, profile = load_contract("qualification-vulkan-development", ["arm64-v8a", "x86_64"])
+        self.assertEqual(profile["renderer"], "vulkan-android")
+        self.assertFalse(profile["distributionQualified"])
+        with patch.object(android_package, "version_output", return_value="fixture-source-revision"):
+            evidence = android_package.provenance(self.tools, profile, {}, [])
+        self.assertEqual(evidence["profile"], profile)
+        self.assertTrue(evidence["profile"]["graphicsProfile"]["swapchainMaintenance1Required"])
+        self.assertEqual(evidence["profile"]["graphicsProfile"]["schema"], 2)
+        self.assertEqual(evidence["profile"]["graphicsProfile"]["compositeAlphaPolicy"],
+                         "prefer-opaque-else-inherit-alpha-one")
+
+    def test_vulkan_development_profile_reaches_package_assembly_from_cli(self):
+        arguments = ["--profile", "qualification-vulkan-development", "--abi", "arm64-v8a"]
+        for name in ("sdk", "ndk", "gradle", "game-activity", "output"):
+            arguments.extend(["--" + name, str(self.root / name)])
+        with patch.object(android_package, "assemble") as assemble:
+            self.assertEqual(android_package.main(["android", *arguments]), 0)
+        parsed = assemble.call_args.args[0]
+        self.assertEqual(parsed.profile, "qualification-vulkan-development")
+        self.assertEqual(parsed.abi, ["arm64-v8a"])
+        self.assertEqual(parsed.output, self.root / "output")
+
+    def test_vulkan_development_asset_declares_intent_without_device_qualification(self):
+        _, profile = load_contract("qualification-vulkan-development", ["arm64-v8a"])
+        source = input_path(android_package.ROOT, profile["assets"]["qualification.json"])
+        intent = json.loads(bounded_bytes(source))
+        self.assertIs(intent["presentation"], True)
+        self.assertIs(intent["deviceQualified"], False)
+        old_source = input_path(android_package.ROOT, self.profile["assets"]["qualification.json"])
+        self.assertNotEqual(source, old_source)
+        self.assertIs(json.loads(bounded_bytes(old_source))["presentation"], False)
+
+    def test_vulkan_development_profile_rejects_policy_drift(self):
+        _, profile = load_contract("qualification-vulkan-development", ["arm64-v8a"])
+        invalid = [dict(profile, renderer="vulkan"), dict(profile, distributionQualified=True),
+                   dict(profile, preset="android-debug"), dict(profile, configuration="Release")]
+        graphics = dict(profile["graphicsProfile"], swapchainMaintenance1Required=False)
+        invalid.append(dict(profile, graphicsProfile=graphics))
+        invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], unknown=True)))
+        invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], swapchainMaintenance1Required=1)))
+        invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], schema=True)))
+        invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], schema=2.0)))
+        invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], schema=1)))
+        invalid.append(dict(profile, graphicsProfile=dict(profile["graphicsProfile"], compositeAlphaPolicy="opaque-only")))
+        invalid.append(dict(profile, assets={"qualification.json": "android/qualification.json"}))
+        for candidate in invalid:
+            with self.subTest(candidate=candidate), self.assertRaises(AndroidError):
+                android_package.validate_profile(candidate, self.tools, ["arm64-v8a"])
+
+    def test_assembly_only_profile_cannot_claim_graphics_profile(self):
+        profile = dict(self.profile, graphicsProfile={"schema": 1})
+        with self.assertRaises(AndroidError):
+            android_package.validate_profile(profile, self.tools, ["arm64-v8a"])
+
     def test_provenance_binds_exact_runtime_dependency_lock(self):
         with patch.object(android_package, "version_output", return_value="abc123"):
             evidence = android_package.provenance(self.tools, self.profile, {}, [])
@@ -188,12 +243,27 @@ class AndroidPackageTests(unittest.TestCase):
         evidence, native = self.evidence()
         source = self.root / "source.apk"
         self.package(source, evidence, native)
+        with zipfile.ZipFile(source, "a") as archive:
+            archive.writestr("resources.arsc", b"resource table", compress_type=zipfile.ZIP_DEFLATED)
         first, second = self.root / "first.apk", self.root / "second.apk"
         canonical_apk(source, first)
         canonical_apk(source, second)
         self.assertEqual(first.read_bytes(), second.read_bytes())
         with zipfile.ZipFile(first) as archive:
             self.assertEqual(archive.getinfo("lib/arm64-v8a/libentry.so").compress_type, zipfile.ZIP_STORED)
+            self.assertEqual(archive.getinfo("resources.arsc").compress_type, zipfile.ZIP_STORED)
+
+    def test_inspection_rejects_compressed_android_resource_tables(self):
+        evidence, native = self.evidence()
+        source = self.root / "compressed-resources.apk"
+        self.package(source, evidence, native)
+        with zipfile.ZipFile(source, "a") as archive:
+            archive.writestr("resources.arsc", b"resource table", compress_type=zipfile.ZIP_DEFLATED)
+        with self.assertRaisesRegex(AndroidError, "resource tables must be uncompressed"):
+            inspect_package(source, evidence)
+        canonical = self.root / "uncompressed-resources.apk"
+        canonical_apk(source, canonical)
+        self.assertEqual(len(inspect_package(canonical, evidence)["contents"]), 5)
 
     def test_declared_release_generated_assets_are_bound_to_provenance(self):
         evidence, native = self.evidence()
@@ -374,6 +444,30 @@ class AndroidAssemblyTests(unittest.TestCase):
              self.assertRaisesRegex(AndroidError,"Signing identity cannot be opened"):
             android_preflight.signing_inputs()
 
+    def test_ndk_shared_runtime_uses_exact_host_and_abi(self):
+        hosts = {"Linux": "linux-x86_64", "Darwin": "darwin-x86_64", "Windows": "windows-x86_64"}
+        triples = {"arm64-v8a": "aarch64-linux-android", "x86_64": "x86_64-linux-android"}
+        for host, tag in hosts.items():
+            for abi, triple in triples.items():
+                with self.subTest(host=host, abi=abi):
+                    runtime = self.root / f"toolchains/llvm/prebuilt/{tag}/sysroot/usr/lib/{triple}/libc++_shared.so"
+                    runtime.parent.mkdir(parents=True, exist_ok=True)
+                    runtime.write_bytes(elf())
+                    with patch.object(android_package.host_platform, "system", return_value=host):
+                        self.assertEqual(android_package.ndk_shared_runtime(self.root, abi), runtime)
+
+    def test_ndk_shared_runtime_rejects_foreign_host_and_missing_runtime(self):
+        foreign = self.root / "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_bytes(elf())
+        with patch.object(android_package.host_platform, "system", return_value="Plan9"), self.assertRaises(AndroidError):
+            android_package.ndk_shared_runtime(self.root, "arm64-v8a")
+        with patch.object(android_package.host_platform, "system", return_value="Darwin"):
+            with self.assertRaises(AndroidError):
+                android_package.ndk_shared_runtime(self.root, "armeabi-v7a")
+            with self.assertRaises(AndroidError):
+                android_package.ndk_shared_runtime(self.root, "arm64-v8a")
+
     def test_native_configure_commands_are_abi_specific(self):
         arguments = self.arguments()
         arguments.native_root = None
@@ -390,7 +484,8 @@ class AndroidAssemblyTests(unittest.TestCase):
                 output = Path(argv[argv.index("--build")+1])
                 output.mkdir(parents=True)
                 (output / "libhoro-package-qualification.so").write_bytes(elf())
-        with patch.dict(os.environ,{},clear=False), patch.object(android_package,"android_run",side_effect=build):
+        with patch.dict(os.environ,{},clear=False), patch.object(android_package,"android_run",side_effect=build), \
+             patch.object(android_package.host_platform, "system", return_value="Linux"):
             native = android_package.build_native(arguments,self.profile,self.root / "activity",workspace)
             self.assertTrue((native / "arm64-v8a/libc++_shared.so").is_file())
             self.assertIn("android-debug",commands[0])

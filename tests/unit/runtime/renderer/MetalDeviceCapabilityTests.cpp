@@ -90,6 +90,28 @@ TEST_CASE("Metal device admission publishes queried identity limits formats and 
     }));
 }
 
+TEST_CASE("Metal depth observation capability preserves exact queried usage facts", "[runtime][renderer][metal][capabilities]") {
+    auto facts = SupportedFacts();
+    const RenderTextureDescriptor observed{.extent = {4, 4},
+                                           .format = RenderTextureFormat::Depth32Float,
+                                           .usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource};
+    const auto baseline = AdmitMetalDevice(facts, {});
+    REQUIRE(baseline.HasValue());
+    CHECK_FALSE(baseline.Value().SupportsTexture(observed));
+    facts.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = observed.usage | RenderTextureUsage::Sampled;
+    const auto queried = AdmitMetalDevice(facts, {});
+    REQUIRE(queried.HasValue());
+    CHECK(queried.Value().SupportsTexture(observed));
+    auto sampled = observed;
+    sampled.usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
+    CHECK(queried.Value().SupportsTexture(sampled));
+    auto upload = observed;
+    upload.usage = observed.usage | RenderTextureUsage::CopyDestination;
+    CHECK_FALSE(queried.Value().SupportsTexture(upload));
+    facts.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = RenderTextureUsage::CopySource;
+    CHECK(AdmitMetalDevice(facts, {}).HasError());
+}
+
 TEST_CASE("Metal admission rejects old hosts and architecture-specific family mismatches", "[runtime][renderer][metal][capabilities]") {
     auto facts = SupportedFacts();
     facts.operatingSystemMajor = 13;

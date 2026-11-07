@@ -1,6 +1,8 @@
 #pragma once
 #include "EditorWorkspaceHostServices.h"
 #include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Application/TerrainAuthoringAssets.h"
+#include "Horo/Application/TerrainAuthoringCook.h"
 #include "Horo/Application/WorldBakeApplication.h"
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Cinematic/CameraCutRuntime.h"
@@ -11,10 +13,12 @@
 #include "Horo/Editor/NavigationProjectSettingsSession.h"
 #include "Horo/Editor/NotificationService.h"
 #include "Horo/Editor/PCGGraphDocumentService.h"
+#include "Horo/Editor/PrefabProjectSettingsSession.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorldStreamingPreviewRuntime.h"
+#include "Horo/Foundation/Sha256.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -29,6 +33,7 @@
 #include "editor/screens/workspace/PCGPreviewWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
+#include "terrain/TerrainAssetCreation.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -51,6 +56,7 @@ namespace Horo::Platform {
 }
 
 namespace Horo::Editor {
+    struct TerrainDocumentView;
     class IEditorPlayXrHost;
     class ILocalizationService;
     struct EditorViewportPickResult;
@@ -71,6 +77,8 @@ namespace Horo::Editor {
         Application::GameplayBuildService *builds{};
         Application::GameplayBuildEnvironment environment{};
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements;
+        std::shared_ptr<EditorPlaySaveRetirement> saveRetirement;
+        std::shared_ptr<Extensions::ScriptModuleHostServices> moduleScripts;
         EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
     };
 
@@ -119,10 +127,21 @@ namespace Horo::Editor {
         EditorWorkspacePrefabServices prefab;             /**< Explicit authoring composition; never discovered by panels. */
         EditorWorkspaceProceduralServices procedural;
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Immutable project capture; omitted in Null. */
+        const Application::TerrainAuthoringCookFactory *terrainCook{};
+        const Application::TerrainAuthoringAssetFactory *terrainAssets{};
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
     public:
+        /** Explicit host operation on actual isolated Play; source must already be an authenticated immutable capture.
+         * Project/context capability policy and both consents remain mandatory. Never runs package entry code automatically. */
+        [[nodiscard]] Result<void> BeginModuleProgram(std::shared_ptr<const Extensions::ScriptModuleProgram>,
+                                                      Extensions::ScriptModuleOperationPolicy, const CancellationToken & = {});
+        [[nodiscard]] std::optional<Extensions::ScriptCallResult> TakeModuleProgramResult();
+        [[nodiscard]] Result<void> RequestModuleReferenceUpdate(Extensions::ScriptExportVersion);
+        [[nodiscard]] Result<Extensions::ScriptModuleUpdateReport> RequestNativeModuleUpdate(const Extensions::ScriptModuleProgram &);
+        [[nodiscard]] std::optional<Extensions::ScriptModuleUpdateReport> TakeModuleUpdateReport();
+
         /** @brief Supplies the SAME workspace caches/document through a weak owner-lane fence. */
         [[nodiscard]] EditorXrSceneSourcePort XrSceneSource() const noexcept {
             return m_xrSceneSource.Port();
@@ -177,7 +196,7 @@ namespace Horo::Editor {
         /** @brief Includes collision semantics and uncertain durability in the workspace leave guard. */
         [[nodiscard]] bool HasDirtyCollisionSettings() const noexcept;
         /** @brief Saves the exact collision draft with complete reference review. @return Original typed outcome. */
-        [[nodiscard]] Result<void> SaveCollisionSettings() const;
+        [[nodiscard]] Result<void> SaveCollisionSettings();
         /** @brief Revokes modal access before Scene owners retire. @param discardDirty Explicit discard decision.
          * @return Unchanged dirty rejection or successful owner shutdown. */
         [[nodiscard]] Result<void> ShutdownCollisionSettings(bool discardDirty = false);
@@ -221,6 +240,19 @@ namespace Horo::Editor {
         /** @brief Saves all dirty sources through their owner; uncertain durability keeps navigation blocked.
          * @return Success only after every source is durably clean. */
         [[nodiscard]] Result<void> SaveSourceDocuments();
+        /** @brief Capture terrain instances/revisions for exact delayed workspace leave decisions. */
+        [[nodiscard]] std::vector<std::pair<DocumentInstanceId, std::uint64_t>> TerrainDocumentRevisions() const;
+        /** @brief Settle asset-rooted terrain owners after explicit save/discard navigation. */
+        [[nodiscard]] Result<void> ShutdownTerrainDocuments(bool discard = false);
+        /** @brief Poll feature-owned cook transfers on the owner lane, without I/O or waiting. */
+        void UpdateTerrainCook();
+        /** @brief Explicit teardown only: close admission and drain accepted cook work before services retire. */
+        void ShutdownTerrainCook() noexcept;
+        /** @brief Capture actual bounded mesh/material registry choices for one transient resource creation modal. */
+        [[nodiscard]] Result<std::vector<TerrainCreationAssetChoice>> CaptureTerrainAssetChoices() const;
+        /** @brief Create one tracked resource through the explicitly composed factory and retain the immutable publication receipt. */
+        [[nodiscard]] Result<std::shared_ptr<const Application::TerrainAuthoringAssetCreated>> CreateTerrainAsset(
+            const TerrainDocumentView &document, const Application::TerrainAuthoringAssetRequest &request);
 
         /** @brief Last typed single-source save/Save As outcome from the actual workspace command route. */
         [[nodiscard]] const std::optional<Result<SourceSaveResult>> &SourceSaveOutcome() const noexcept {
@@ -281,7 +313,13 @@ namespace Horo::Editor {
         /** @brief Drains graph ownership after explicit save/discard/recovery policy.
          * @param discardDirty Explicit leave decision. @return Success or retryable incomplete ownership result. */
         [[nodiscard]] Result<void> ShutdownPCGDocuments(bool discardDirty = false);
+
         /** @brief Stops play and drains native module retirement before workspace destruction. @return Typed busy if callbacks remain. */
+        /** @brief Returns only revocable owner-lane UI binding; the modal never retains this controller. */
+        [[nodiscard]] std::weak_ptr<EditorPlayRuntimeBinding> PlaySaveBinding() noexcept {
+            return m_playSession.SaveBinding();
+        }
+
         [[nodiscard]] Result<void> ShutdownGameplayModules();
 
         /** @brief Queues actual bake/validation from the canonical world owner, never a filtered browser subset.
@@ -335,6 +373,20 @@ namespace Horo::Editor {
 
         /** @brief Lazily composes actual project navigation sources with this exact active Scene/history owner. */
         [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings();
+        /** @brief Compose the exact project prefab document owner; no UI or runtime authority is created. */
+        [[nodiscard]] Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings();
+        /** @brief Capture the accepted immutable profile for a new authoring/conversion operation. */
+        [[nodiscard]] Result<Prefab::PrefabLimitProfile> PrefabLimits();
+        /** @brief Observe accepted publication and invalidate authoring projections only at the host boundary. */
+        void UpdatePrefabSettingsProjection();
+        /** @brief Include settings edits in ordinary project save/leave semantics. */
+        [[nodiscard]] bool HasDirtyPrefabSettings() const;
+        /** @brief Save exact current settings draft before project leave. */
+        [[nodiscard]] Result<void> SavePrefabSettings();
+        /** @brief Close the exact opening after explicit save/discard policy. */
+        [[nodiscard]] Result<void> ShutdownPrefabSettings(bool discard = false);
+        /** @brief Read the draft fence captured by delayed leave consent; zero means no opening. */
+        [[nodiscard]] std::uint64_t PrefabSettingsRevision() const;
         /** @brief Includes all navigation authoring owners in the ordinary leave guard. */
         [[nodiscard]] bool HasDirtyNavigationDocuments() const;
         /** @brief Saves each dirty navigation owner through actual Assets publication. */
@@ -410,6 +462,10 @@ namespace Horo::Editor {
          * @param intervalMinutes Zero disables autosave; positive values schedule recovery writes.
          */
         void UpdateAutosave(float elapsedSeconds, int intervalMinutes);
+        /** @brief Advances canonical source autosave with the committed idle-delay preference.
+         * @param elapsedSeconds Host update delta. @param delaySeconds Zero disables source saves.
+         */
+        void UpdateSourceAutosave(float elapsedSeconds, int delaySeconds);
         /**
          * @brief Schedules and drains non-blocking canonical scene identity inspections.
          * @param elapsedSeconds Owner-thread elapsed frame time.
@@ -428,6 +484,11 @@ namespace Horo::Editor {
         void UpdatePlayPresentation(float elapsedSeconds);
         /** @brief Advances one play-mode fixed tick with already-routed semantic actions. */
         void UpdatePlayFixed(std::span<const Gameplay::GameplayInputAction> input, double fixedDeltaSeconds);
+        [[nodiscard]] Result<void> BindPlayRuntimeDispatch(const Runtime::RuntimeDispatchSource &source);
+        void UpdatePlayFixed(std::span<const Gameplay::GameplayInputAction> input, const Runtime::FixedStepContext &context);
+        void PreparePlayFixedCommit(const Runtime::FixedStepContext &context);
+        void CommitPlayFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
+        void AbortPlayFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
 
     private:
         /** @brief Composes the explicit controller-owned operation from host-borrowed process capabilities.
@@ -454,6 +515,58 @@ namespace Horo::Editor {
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
         std::optional<Result<std::vector<SourceSaveAllItem>>> m_sourceSaveAllOutcome;
         std::optional<Result<bool>> m_sourceCloseOutcome;
+        /** @brief Intercept only explicitly registered terrain assets; generic source routing remains unchanged. */
+        bool TryOpenTerrainDocument(const SourceOpenRequest &request);
+        bool ProcessTerrainDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        void RefreshTerrainDocuments();
+        /** @brief Resolve one owner-thread transient palette/selection state for an existing document. */
+        [[nodiscard]] std::shared_ptr<TerrainToolSelection> TerrainSelection(DocumentInstanceId instance);
+        [[nodiscard]] Result<std::shared_ptr<TerrainToolSelection>> PrepareTerrainSelection(const TerrainDocumentHost &document);
+        /** @brief Validate the exact typed workspace target before dispatching any source or transient command. */
+        [[nodiscard]] Result<TerrainDocumentHost *> TerrainTarget(const TerrainToolCommand &intent);
+        [[nodiscard]] Result<TerrainDocumentHost *> TerrainTarget(const TerrainDocumentView &view, bool requireFocus);
+        /** @brief Dispatch source actions independently from bounded stroke/palette production. */
+        [[nodiscard]] Result<void> ExecuteTerrainTool(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainStroke(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainDocumentAction(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainPublication(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainPalette(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> ExecuteTerrainCook(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> EnsureTerrainCook(const std::filesystem::path &root);
+        [[nodiscard]] Result<void> StartTerrainCook(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        void CancelTerrainCook(DocumentInstanceId instance) noexcept;
+        [[nodiscard]] bool TerrainCookFenceMatches() const;
+        [[nodiscard]] Result<void> RefreshTerrainAssetCreation(const TerrainDocumentView &view,
+                                                               const Application::TerrainAuthoringAssetCreated &created,
+                                                               Application::TerrainAuthoringAssetKind kind);
+        [[nodiscard]] Result<void> ExecuteTerrainFoliageStroke(TerrainDocumentHost &document, const TerrainToolCommand &intent,
+                                                               TerrainEditOperationId operation);
+        [[nodiscard]] Result<void> ExecuteTerrainSelection(TerrainDocumentHost &document, const TerrainToolCommand &intent);
+        [[nodiscard]] Result<void> AdmitTerrainOpen() const;
+        bool FocusTerrainDocument(std::string_view path);
+        [[nodiscard]] Result<void> OpenTerrainDocument(Assets::AssetId asset, const std::filesystem::path &absolute,
+                                                       const std::string &path);
+        void ObserveTerrainDocument(const TerrainDocumentHost &document);
+        void ActivateTerrainCamera(const TerrainDocumentHost &document);
+        void PublishTerrainFocus(std::optional<DocumentInstanceId> terrain, bool wasTerrain);
+        bool TryCloseTerrainCommand(const EditorWorkspaceViewCommandData &command);
+        void ProcessTerrainToolIntent(const TerrainToolCommand &intent);
+        void ProcessFocusedTerrainCommand(const EditorWorkspaceViewCommandData &command);
+        [[nodiscard]] Result<void> SaveTerrainDocuments();
+        [[nodiscard]] Result<void> CloseTerrainDocument(DocumentInstanceId instance, bool discard);
+        std::vector<std::shared_ptr<TerrainDocumentHost>> m_terrainDocuments;
+        std::vector<std::pair<DocumentInstanceId, std::shared_ptr<TerrainToolSelection>>> m_terrainToolSelections;
+        std::optional<DocumentInstanceId> m_activeTerrainDocument;
+        std::optional<EditorViewportCamera> m_terrainPriorCamera;
+        std::uint64_t m_nextTerrainOperation{1};
+        const Application::TerrainAuthoringCookFactory *m_terrainCookFactory{};
+        const Application::TerrainAuthoringAssetFactory *m_terrainAssetFactory{};
+        std::optional<Application::TerrainAuthoringCookSession> m_terrainCook;
+        std::shared_ptr<Application::TerrainAuthoringCookCompletion> m_terrainCookReceipt;
+        std::optional<Application::TerrainAuthoringCookFence> m_terrainCookFence;
+        DocumentInstanceId m_terrainCookDocument;
+        bool m_terrainCookAdoption{};
+        Assets::AssetRegistryRevision m_terrainCookRegistry;
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
         std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;
@@ -531,6 +644,10 @@ namespace Horo::Editor {
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
         /** @brief Refresh the sole borrowed Physics edit port after an actual document replacement. */
         void RefreshPhysicsInspectorPort();
+        /** @brief Refreshes named committed collision profiles outside the frame draw path. */
+        void RefreshPhysicsProfiles();
+        /** @brief Projects registered Physics materials from the owner-pinned asset snapshot. */
+        void RefreshPhysicsMaterials();
         /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
         /** @brief Admit one atomic navigation gesture through existing document/history owners. */
         void ApplyNavigationInspectorCommand(const EditorWorkspaceViewCommandData &command);
@@ -562,6 +679,8 @@ namespace Horo::Editor {
         std::shared_ptr<CollisionProjectSettingsSession> m_collisionSettings;
         std::unique_ptr<SceneDocumentTransactions> m_navigationScene;
         std::unique_ptr<NavigationProjectSettingsSession> m_navigationSettings;
+        std::shared_ptr<PrefabProjectSettingsSession> m_prefabSettings;
+        std::uint64_t m_prefabSettingsPublication{};
         std::uint64_t m_navigationOpening{1};
         SceneDocumentCommandExecutor m_documentCommands{m_document, m_history};
         Assets::AssetId m_inspectorDocumentOwner;
@@ -611,6 +730,7 @@ namespace Horo::Editor {
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> m_gameplayRetirements{std::make_shared<Gameplay::GameModuleRetirementQueue>()};
         std::unique_ptr<ProjectGameplayRegistry> m_gameplayRegistry;
         std::unique_ptr<ProjectGameplayRegistry> m_pendingGameplayRegistry;
+        std::shared_ptr<EditorPlaySaveRetirement> m_playSaveRetirement;
         EditorPlaySessionController m_playSession;
         std::string m_prePlayDocumentPanelId{"horo.viewport"};
         std::vector<std::filesystem::path> m_contentBrowserBackHistory;
@@ -627,6 +747,7 @@ namespace Horo::Editor {
 
         std::vector<PendingContentBrowserPreview> m_pendingContentBrowserPreviews;
         std::uint64_t m_contentBrowserPreviewGeneration{};
+        Sha256Digest m_contentBrowserPreviewSchemaRevision;
         std::size_t m_contentBrowserNextPreviewEntry{};
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
         float m_pcgAutosaveElapsedSeconds{};
@@ -808,8 +929,35 @@ namespace Horo::Editor {
         void InspectInitialSceneRecovery(const std::filesystem::path &absoluteProjectRoot);
         [[nodiscard]] bool CommitSceneSave(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
                                            const std::optional<std::filesystem::path> &newActivePath = std::nullopt);
+        /** @brief Closed owner intents; every deferred replacement retains its original authoring consent. */
+        enum class PlaySceneReplacementKind {
+            External,
+            Recovery
+        };
+
+        /** @brief Captures authoring identity without retaining a controller callback or a mutable document borrow. */
+        struct PlaySceneReplacementIntent final {
+            PlaySceneReplacementKind kind;
+            DocumentRevision revision;
+            std::uint64_t replacementEpoch{};
+            std::optional<std::filesystem::path> scenePath;
+        };
+
+        std::optional<PlaySceneReplacementIntent> m_playSceneReplacement;
+        /** @brief Stops and drains actual Play ownership before a replacement can enter existing publication. */
+        [[nodiscard]] bool DeferPlaySceneReplacement(PlaySceneReplacementKind kind);
+        /** @brief Drops stale authoring consent and executes a still-current intent only after real Play settlement. */
+        void ResumePlaySceneReplacement();
+        /** @brief Compares exact revision/load epoch/path; edits while waiting require new explicit consent. */
+        [[nodiscard]] bool PlaySceneReplacementMatches() const noexcept;
+        /** @brief Releases a superseded registry only after the old Play runtime no longer borrows it. */
+        void FinishStoppedGameplayRegistry();
         /** @brief Replaces the active session from the validated external canonical scene. */
         void ReloadExternalScene();
+        /** @brief Reads and validates detached external values before any canonical document mutation. */
+        [[nodiscard]] Result<LoadedProjectScene> ReadExternalSceneForReplacement() const;
+        /** @brief Commits already validated values through existing collision/document owners. */
+        [[nodiscard]] bool InstallExternalScene(LoadedProjectScene scene);
         /** @brief Restores validated recovery content into a new dirty document session. */
         void RestoreSceneRecovery();
         /** @brief Explicitly discards recovery state and suppresses leave-checkpoint autosave. */
@@ -819,6 +967,8 @@ namespace Horo::Editor {
         void QueueRuntimeScene(SceneDocumentSnapshot snapshot);
         void StartPlaySession();
         void BeginPlaySession();
+        /** @brief Captures the complete current native save inventory cold; errors disable save without silently dropping owners. */
+        void BindPlaySaveSources();
         void StartGameplayBuild(bool playWhenReady);
         void UpdateGameplayBuild(float elapsedSeconds);
         [[nodiscard]] Application::GameplayBuildRequest MakeGameplayBuildRequest() const;
@@ -827,6 +977,10 @@ namespace Horo::Editor {
         void RefreshPlayStateProjection();
         [[nodiscard]] EditorViewportCamera ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const;
         void ExtractPlayViewportScene();
+        /** @brief Clear unavailable simulated evidence before publishing another viewport revision. */
+        void ClearSimulatorViewport();
+        /** @brief Extract the exact current Play Scene with an explicitly admitted camera. */
+        void ExtractPlayViewportWithCamera(const Runtime::RuntimeSceneView &runtimeView, const EditorViewportCamera &camera);
         [[nodiscard]] Result<EditorViewportCamera> ResolveCameraCutPreview(Runtime::RuntimeSceneView scene);
         void HandleCreatePrimitive(Runtime::PrimitiveId primitive, std::optional<SceneObjectId> parent);
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
@@ -889,6 +1043,11 @@ namespace Horo::Editor {
         void RefreshAvailableBehaviorProjection();
         void ApplyPendingGameplayRegistry();
         void ApplyNativeGameplayReload();
+        /** @brief Defers actual module replacement while the old Play save owner still pins accepted worker/delegate sources. */
+        [[nodiscard]] bool CanApplyNativeGameplayReload();
+        /** @brief Reacquires only still-admitted old-generation save sources after a failure before runtime quiescence.
+         * @return True when the original runner remains active; this does not claim Save readiness if actual rebind fails. */
+        [[nodiscard]] bool RebindSaveAfterUnchangedNativeFailure();
         [[nodiscard]] Result<NativeGameplayReloadTransaction> BeginNativeGameplayReload(const std::filesystem::path &projectRoot) const;
         [[nodiscard]] Result<void> RetireNativeGameplayGeneration(NativeGameplayReloadTransaction &transaction);
         [[nodiscard]] Result<std::unique_ptr<ProjectGameplayRegistry>> TryActivateNativeGameplayGeneration(

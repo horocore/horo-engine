@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ExposureGpuKernel.h"
 #include "MetalLightCullingKernel.h"
 #include "MetalPreparedMaterialState.h"
 #include "MetalRenderBackendErrors.h"
@@ -7,6 +8,7 @@
 #include "MetalResourcePolicy.h"
 #include "MetalResourceRuntime.h"
 #include "MetalUiPaintKernel.h"
+#include "MetalVfxGpuState.h"
 
 #import <Metal/Metal.h>
 #include <cstring>
@@ -43,6 +45,10 @@ namespace Horo::Render::Detail {
         return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(instance));
     }
 
+    struct MetalRasterAttachments final {
+        MetalTextureViewInstance *color{}, *depth{};
+    };
+
     /** @brief Single render-owner native heap/identity/retirement store shared by materialization and graph operations. */
     struct MetalResourceRuntime::Impl {
         static constexpr std::size_t MaxResidentInstances = 65'535;
@@ -50,6 +56,7 @@ namespace Horo::Render::Detail {
 
         Impl() {
             retired.reserve(MaxResidentInstances);
+            vfxGpuSimulations.reserve(MaxResidentInstances);
         }
 
         std::vector<RetiredResident> retired;
@@ -112,8 +119,13 @@ namespace Horo::Render::Detail {
         __strong id<MTLDevice> device{nil};
         __strong MTLRenderPassDescriptor *vfxPass{[MTLRenderPassDescriptor renderPassDescriptor]};
         std::uint64_t deviceIncarnation{};
+        std::shared_ptr<const ExposureGpuKernelOwner> exposureGpuOwner{std::make_shared<const ExposureGpuKernelOwner>()};
+        std::array<std::weak_ptr<ExposureGpuKernel>, 16> exposureGpuKernels{};
         std::shared_ptr<const MetalLightKernelOwnerIdentity> lightKernelOwner{std::make_shared<const MetalLightKernelOwnerIdentity>()};
         std::shared_ptr<const MetalUiPaintOwnerIdentity> uiPaintKernelOwner{std::make_shared<const MetalUiPaintOwnerIdentity>()};
+        std::shared_ptr<const MetalVfxGpuOwner> vfxGpuOwner{std::make_shared<const MetalVfxGpuOwner>()};
+        std::vector<std::shared_ptr<MetalVfxGpuSimulation>> vfxGpuSimulations;
+        std::size_t vfxGpuRetirementCursor{};
         std::uint64_t lightKernelIncarnation{0}; /**< Monotonic runtime admission generation; old cooked leases cannot cross reset. */
         bool lightKernelIdentityExhausted{false};
         __strong id<MTLCommandQueue> commandQueue{nil};
@@ -131,8 +143,29 @@ namespace Horo::Render::Detail {
         std::unordered_set<MetalRenderTargetInstance *> renderTargets;
 
         /** @brief Resolves one already-admitted resource without allocating native backing or publishing a partial table. */
+        [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialTexture(const MaterialResidentResource &resident) const;
+        [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialSampler(const MaterialResidentResource &resident) const;
+        [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialSlot(const MetalGraphicsPipeline &pipeline,
+                                                                    const MaterialResourceBinding &logical,
+                                                                    const MaterialResidentResource &resident) const;
+        [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialBuffer(ShaderResourceKind kind, const MaterialResidentResource &resident,
+                                                                      std::size_t requiredBufferBytes) const;
         [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialResource(ShaderResourceKind kind, const MaterialResidentResource &resident,
                                                                         std::size_t requiredBufferBytes) const;
+        [[nodiscard]] Result<MetalTextureViewInstance *> RasterView(RenderGraphResourceId resource, RenderTextureViewHandle view,
+                                                                    const RenderGraphExecutionRequest &request,
+                                                                    FramebufferExtent extent) const;
+        [[nodiscard]] Result<MetalRasterAttachments> RasterAttachments(const RenderGraphMaterialRaster &raster,
+                                                                       const RenderGraphExecutionRequest &request) const;
+        [[nodiscard]] Result<void> RasterDraw(const RenderGraphMaterialRaster &raster, const RenderGraphMaterialDraw &draw,
+                                              const RenderGraphExecutionRequest &request, const MetalRasterAttachments &attachments) const;
+        [[nodiscard]] Result<const MetalMaterialBinding *> RasterMaterial(const RenderGraphMaterialDraw &draw) const;
+        [[nodiscard]] bool RasterSlotRead(const RenderGraphMaterialRaster &raster, const ResidentMaterialBinding &resident,
+                                          const MetalMaterialSlot &slot, const RenderGraphExecutionRequest &request) const;
+        void TrackRasterMaterialUse(const MetalMaterialBinding &material, id<MTLCommandBuffer> commands) noexcept;
+        [[nodiscard]] Result<void> RasterMaterialReads(const RenderGraphMaterialRaster &raster, const ResidentMaterialBinding &resident,
+                                                       const MetalMaterialBinding &material,
+                                                       const RenderGraphExecutionRequest &request) const;
         /** @brief Resolves only a graph-pinned native target whose views match the declared whole attachments. */
         [[nodiscard]] Result<MetalRenderTargetInstance *> VfxTarget(const RenderGraphVfx &workload,
                                                                     const RenderGraphExecutionRequest &request) const;
@@ -322,10 +355,13 @@ namespace Horo::Render::Detail {
                 RollBackResident(instance, heap, placement, instances, resource, false);
                 return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed, trackingError));
             }
+            // Cold creation is serial: each actual GPU upload creates a new staging command in BeginStagingBlit.
+            // Retaining the prior command makes identity comparison safe; empty/shared uploads submit no new command.
+            __strong id<MTLCommandBuffer> previousUpload = lastSubmittedUpload;
             try {
                 Result<void> uploaded = std::forward<Upload>(upload)();
                 if (uploaded.HasValue()) {
-                    instance->use.last = lastSubmittedUpload;
+                    instance->use.last = lastSubmittedUpload != previousUpload ? lastSubmittedUpload : nil;
                     return Result<std::uint64_t>::Success(Identity(instance));
                 }
                 RollBackResident(instance, heap, placement, instances, resource, true);

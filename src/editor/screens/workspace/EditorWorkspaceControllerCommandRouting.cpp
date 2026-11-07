@@ -46,6 +46,7 @@ namespace Horo::Editor {
         RefreshWorldDocumentProjection();
         UpdateWorldBake();
         RefreshSourceDocumentProjection();
+        RefreshTerrainDocuments();
         RefreshPrefabDocuments();
     }
 
@@ -59,12 +60,18 @@ namespace Horo::Editor {
             RefreshWorldDocumentProjection();
             return;
         }
+        if (ProcessTerrainDocumentCommand(cmd))
+            return;
         if (ProcessWorldStreamingPreviewCommand(cmd) || ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) ||
             ProcessWorldSourceCommand(cmd) || ProcessUiCanvasCommand(cmd) || ProcessPrefabDocumentCommand(cmd) ||
             ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) ||
             ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
             ProcessLayoutCommand(cmd))
             return;
+        if (m_activeTerrainDocument) {
+            ProcessFocusedTerrainCommand(cmd);
+            return;
+        }
         if (m_activePrefabDocument) {
             ProcessFocusedPrefabCommand(cmd);
             return;

@@ -1,3 +1,4 @@
+#include "EditorViewportMeshReadiness.h"
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraph.h"
@@ -96,6 +97,106 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("Color viewport publishes its encoded image while retaining distinct scene and display targets",
+          "[unit][headless][renderer][resource][color]") {
+    auto frontend = CreateFrontend();
+    ImageResolverFixture imageResolver;
+    auto resources = CreateResources(*frontend);
+    REQUIRE(resources.EnableColorPipeline().HasValue());
+    SettleResources(resources, *frontend, {}, {128, 128});
+    REQUIRE(resources.ColorTexture().IsValid());
+    REQUIRE(resources.DisplayTexture().IsValid());
+    REQUIRE(resources.PresentationTexture().IsValid());
+    CHECK(resources.ColorTexture() != resources.DisplayTexture());
+    CHECK(resources.ColorTexture() != resources.PresentationTexture());
+    CHECK(resources.DisplayTexture() != resources.PresentationTexture());
+    CHECK(imageResolver.lastView == resources.PresentationTextureView());
+    CHECK(resources.ImageIdentity() == resources.PresentationTextureView().slot);
+
+    const auto previousScene = resources.ColorTexture();
+    const auto previousDisplay = resources.DisplayTexture();
+    const auto previousPresentation = resources.PresentationTexture();
+    const auto previousImage = resources.ImageIdentity();
+    imageResolver.reject = true;
+    bool failed = false;
+    for (int step = 0; step < MaxResourcePasses && !failed; ++step) {
+        const auto replacement = resources.Prepare({}, {256, 256});
+        failed = replacement.HasError();
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    }
+    REQUIRE(failed);
+    CHECK(resources.IsReady());
+    CHECK((resources.AllocatedExtent() == EditorViewportExtent{128, 128}));
+    CHECK(resources.ColorTexture() == previousScene);
+    CHECK(resources.DisplayTexture() == previousDisplay);
+    CHECK(resources.PresentationTexture() == previousPresentation);
+    CHECK(resources.ImageIdentity() == previousImage);
+    imageResolver.reject = false;
+    SettleResources(resources, *frontend, {}, {256, 256});
+    CHECK(resources.ColorTexture() != previousScene);
+    CHECK(resources.DisplayTexture() != previousDisplay);
+    CHECK(resources.PresentationTexture() != previousPresentation);
+    CHECK(imageResolver.lastView == resources.PresentationTextureView());
+    resources.Shutdown();
+}
+
+TEST_CASE("Color activation cannot reinterpret already published legacy viewport storage", "[unit][headless][renderer][resource][color]") {
+    auto frontend = CreateFrontend();
+    ImageResolverFixture imageResolver;
+    auto resources = CreateResources(*frontend);
+    SettleResources(resources, *frontend, {}, {128, 128});
+    const auto color = resources.ColorTexture();
+    const auto view = resources.ColorTextureView();
+    REQUIRE(resources.EnableColorPipeline().HasError());
+    CHECK(resources.IsReady());
+    CHECK(resources.ColorTexture() == color);
+    CHECK(resources.PresentationTextureView() == view);
+    CHECK_FALSE(resources.DisplayTexture().IsValid());
+    resources.Shutdown();
+}
+
+TEST_CASE("Viewport light admission defers newer draw bounds until their exact resident mesh generation is ready",
+          "[unit][headless][renderer][resource][lighting]") {
+    auto frontend = CreateFrontend();
+    ImageResolverFixture imageResolver;
+    auto resources = CreateResources(*frontend);
+    MeshSceneFixture fixture;
+    auto scene = fixture.Scene(1);
+    std::array<RenderStaticMeshInstance, 1> instances{{{.mesh = {{41}, 1}}}};
+    REQUIRE(resources.Prepare(scene, {128, 128}).HasValue());
+    REQUIRE(resources.FindMesh(41));
+    CHECK(resources.FindMesh(41)->sourceGeneration == 1);
+    CHECK_FALSE(resources.FindMesh(41)->ready);
+    const auto queued = ValidateEditorViewportMeshReadiness(resources, instances);
+    REQUIRE(queued.HasError());
+    CHECK(queued.ErrorValue().code.Value() == LightCullingErrors::Pending.code.Value());
+    SettleResources(resources, *frontend, scene, {128, 128});
+    REQUIRE(ValidateEditorViewportMeshReadiness(resources, {}).HasValue());
+    REQUIRE(ValidateEditorViewportMeshReadiness(resources, instances).HasValue());
+    CHECK(resources.FindMesh(41)->ready);
+    instances[0].mesh.generation = 2;
+    auto pending = ValidateEditorViewportMeshReadiness(resources, instances);
+    REQUIRE(pending.HasError());
+    CHECK(pending.ErrorValue().code.Value() == LightCullingErrors::Pending.code.Value());
+    CHECK_FALSE(pending.ErrorValue().message.empty());
+    scene = fixture.Scene(2);
+    REQUIRE(resources.Prepare(scene, {128, 128}).HasValue());
+    REQUIRE(resources.FindMesh(41));
+    CHECK(resources.FindMesh(41)->sourceGeneration == 1);
+    CHECK(ValidateEditorViewportMeshReadiness(resources, instances).HasError());
+    for (int step = 0; step < MaxResourcePasses && ValidateEditorViewportMeshReadiness(resources, instances).HasError(); ++step) {
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(resources.Prepare(scene, {128, 128}).HasValue());
+    }
+    REQUIRE(ValidateEditorViewportMeshReadiness(resources, instances).HasValue());
+    CHECK(resources.FindMesh(41)->sourceGeneration == 2);
+    instances[0].mesh.id = {99};
+    pending = ValidateEditorViewportMeshReadiness(resources, instances);
+    REQUIRE(pending.HasError());
+    CHECK(pending.ErrorValue().code.Value() == LightCullingErrors::Pending.code.Value());
+    resources.Shutdown();
+}
 
 TEST_CASE("Cold mesh preparation admits exact ready buffers and mesh before graph imports", "[unit][headless][renderer][resource]") {
     auto frontend = CreateFrontend();
@@ -269,4 +370,55 @@ TEST_CASE("Headless viewport resources recover image resolution and shut down re
     REQUIRE(frontend->ResourceState(target).HasError());
     REQUIRE(frontend->ResourceState(shadowTarget).HasError());
     REQUIRE_FALSE(resources.IsReady());
+}
+
+TEST_CASE("Directional shadow atlas quality publication retains the complete previous generation until ready",
+          "[unit][headless][renderer][resource][shadow]") {
+    ImageResolverFixture resolver;
+    auto frontend = CreateFrontend();
+    auto resources = CreateResources(*frontend);
+    const RenderSceneView scene;
+    SettleResources(resources, *frontend, scene, {64, 64});
+    const auto previousProfile = resources.ActiveDirectionalShadowProfile();
+    const auto previousTarget = resources.ShadowTarget();
+    const auto previousView = resources.ShadowTextureView();
+    const auto previousGeneration = resources.ShadowGeneration();
+    const auto replacement = MakeDirectionalShadowProfile(DirectionalShadowQuality::Low);
+    REQUIRE(resources.RequestDirectionalShadowProfile(replacement).HasValue());
+    REQUIRE(resources.Prepare(scene, {64, 64}).HasValue());
+    CHECK(resources.ActiveDirectionalShadowProfile() == previousProfile);
+    CHECK(resources.ShadowTarget() == previousTarget);
+    CHECK(resources.ShadowTextureView() == previousView);
+    REQUIRE(frontend->ResourceState(previousTarget).HasValue());
+    for (int step = 0; step < MaxResourcePasses && resources.ActiveDirectionalShadowProfile() != replacement; ++step) {
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(resources.Prepare(scene, {64, 64}).HasValue());
+    }
+    CHECK(resources.ActiveDirectionalShadowProfile() == replacement);
+    CHECK(resources.ShadowTarget() != previousTarget);
+    CHECK(resources.ShadowTextureView() != previousView);
+    CHECK(resources.ShadowGeneration() == previousGeneration + 1);
+    const auto extent = ComputeDirectionalShadowAtlasExtent(replacement);
+    REQUIRE(extent.HasValue());
+    CHECK(resources.ShadowExtent() == EditorViewportExtent{extent.Value().width, extent.Value().height});
+    CHECK(frontend->ResourceState(previousTarget).HasError());
+    resources.Shutdown();
+}
+
+TEST_CASE("Directional shadow atlas rejects malformed quality without replacing its last ready binding",
+          "[unit][headless][renderer][resource][shadow]") {
+    ImageResolverFixture resolver;
+    auto frontend = CreateFrontend();
+    auto resources = CreateResources(*frontend);
+    const RenderSceneView scene;
+    SettleResources(resources, *frontend, scene, {64, 64});
+    const auto target = resources.ShadowTarget();
+    const auto active = resources.ActiveDirectionalShadowProfile();
+    auto invalid = active;
+    invalid.cascadeCount = MaximumDirectionalShadowCascades + 1;
+    CHECK(resources.RequestDirectionalShadowProfile(invalid).HasError());
+    REQUIRE(resources.Prepare(scene, {64, 64}).HasValue());
+    CHECK(resources.ShadowTarget() == target);
+    CHECK(resources.ActiveDirectionalShadowProfile() == active);
+    resources.Shutdown();
 }

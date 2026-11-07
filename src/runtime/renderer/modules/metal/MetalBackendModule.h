@@ -96,6 +96,10 @@ namespace Horo::Render {
         /** @brief Returns the active primary render encoder, or nullptr before primary pass encoding. */
         [[nodiscard]] void *CurrentRenderEncoder() const noexcept;
 
+        /** @brief Retains an actual selected atlas view through the current command-buffer transaction.
+         * @param viewInstance Same frontend/runtime view identity. @return Original lifecycle/identity failure or tracked ownership. */
+        [[nodiscard]] Result<void> RetainEditorTextureView(std::uint64_t viewInstance);
+
         /** @brief Waits for submitted Metal work; restricted to teardown and deterministic tests. */
         void WaitUntilIdle() noexcept;
 
@@ -103,6 +107,7 @@ namespace Horo::Render {
         friend struct Detail::MetalEditorGraphicsAccess;
 
         using WaitUntilIdleFunction = void (*)(void *) noexcept;
+        using RetainTextureFunction = Result<void> (*)(void *, std::uint64_t, void *);
 
         void *device_{nullptr};
         void *commandQueue_{nullptr};
@@ -111,6 +116,7 @@ namespace Horo::Render {
         void *renderEncoder_{nullptr};
         void *waitContext_{nullptr};
         WaitUntilIdleFunction waitUntilIdle_{nullptr};
+        RetainTextureFunction retainTexture_{nullptr};
     };
 
     /**

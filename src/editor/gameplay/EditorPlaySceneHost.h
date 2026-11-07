@@ -4,7 +4,8 @@
 /** @file EditorPlaySceneHost.h
  * @brief Non-installed app-injected ownership boundary for isolated Editor Play Scene services.
  */
-#include "Horo/Gameplay/BehaviorRuntime.h"
+#include "EditorPlaySaveSession.h"
+#include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include <filesystem>
@@ -15,6 +16,10 @@
 
 namespace Horo::Gameplay {
     class ComponentRegistry;
+}
+
+namespace Horo::Runtime {
+    class SceneAnimationRuntime;
 }
 
 namespace Horo::Editor {
@@ -70,6 +75,26 @@ namespace Horo::Editor {
          */
         [[nodiscard]] virtual Runtime::RuntimeSceneService &Scenes() noexcept = 0;
 
+        /** @brief Borrows the actual composed Animation owner on its owner lane; never register a second evaluation path.
+         * @return Null when unselected; the Scene host retains lifecycle ownership through shutdown/retirement. */
+        [[nodiscard]] virtual Runtime::SceneAnimationRuntime *AnimationRuntime() noexcept {
+            return nullptr;
+        }
+
+        /** @brief Borrows this activation's explicitly composed save owner; absence grants no save capability. */
+        [[nodiscard]] virtual EditorPlaySaveSession *SaveSession() noexcept {
+            return nullptr;
+        }
+
+        /** @brief Composes actual declared native save sources after the real Play Scene and behaviors are ready.
+         * @param bindings Complete actual module inventory; caller reserved deferred-owner capacity before activation.
+         * @return Original preparation failure, including explicit unsupported when this host has no selected save composition.
+         */
+        [[nodiscard]] virtual Result<void> ConfigureSaveSession(std::vector<PlaySaveGameplayBinding>,
+                                                                std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> = {}) {
+            return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
+        }
+
         /** @brief Resolves explicitly granted gameplay services after aggregate readiness.
          * @return Captured typed services or a failure before behavior creation; default withholds all optional capabilities.
          */
@@ -86,6 +111,16 @@ namespace Horo::Editor {
             return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(nullptr);
         }
 
+        /** @brief Cancels and retires the selected save owner before module replacement, retaining it while work remains.
+         * @return Actual settlement; hosts without save composition have nothing to retire. */
+        [[nodiscard]] virtual bool RetireSaveSession() noexcept {
+            auto *save = SaveSession();
+            if (!save)
+                return true;
+            save->BeginRetirement();
+            return save->IsSettled();
+        }
+
         /** @brief Drives owned pending prefab preparation and the sole Scene safe-point transaction.
          * @param frame Actual owner-lane frame/cancellation boundary. @return Original preparation/commit failure. */
         [[nodiscard]] virtual Result<void> CommitSceneChanges(const Runtime::FrameContext &frame) {
@@ -95,6 +130,12 @@ namespace Horo::Editor {
         /** @brief Advances capability tick admission before behavior fixed callbacks without simulating or blocking.
          * @param delta Actual host fixed quantum. @return Admission failure or success for a host without prefabs. */
         [[nodiscard]] virtual Result<void> BeginFixedUpdate(Gameplay::FixedDeltaTime) {
+            return Result<void>::Success();
+        }
+
+        /** @brief Opens synchronous presentation mutation admission before project callbacks; hosts without save ownership have no extra
+         * work. */
+        [[nodiscard]] virtual Result<void> BeginPresentationUpdate() {
             return Result<void>::Success();
         }
 
@@ -115,6 +156,33 @@ namespace Horo::Editor {
          * @details Called only while playing or for one admitted paused step; never used for load progress.
          */
         [[nodiscard]] virtual Result<void> FixedUpdate(Gameplay::FixedDeltaTime delta) = 0;
+
+        /** @brief Actual host fixed callback after gameplay; legacy native owners retain their existing numeric stepping.
+         * @details An Animation-bearing application composition overrides this boundary to stage its real adapter before Physics.
+         * The legacy default introduces no animation or transactional native-state claim. */
+        [[nodiscard]] virtual Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) {
+            return FixedUpdate(Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
+        }
+
+        /** @brief Arms owned candidates before the actual scheduler fence; default owners have no staged state. */
+        [[nodiscard]] virtual Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &) {
+            return Result<void>::Success();
+        }
+
+        /** @brief Publishes the same prepared attempt without allocation, I/O or cancellation reconsideration. */
+        virtual void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept {}
+
+        /** @brief Discards only staged state, including a retired-before-fence callback. */
+        virtual void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept {}
+
+        /** @brief Observes actual native owner retirement after Shutdown on the same owner lane.
+         * @return True only after native resource owners drain; pending/error retains this host and its providers.
+         * Hosts with synchronous shutdown have no deferred owner. No Scene or worker execution resumes here. */
+        [[nodiscard]] virtual Result<bool> PollShutdown(std::uint32_t maximumNativeRecords) {
+            static_cast<void>(maximumNativeRecords);
+            return Result<bool>::Success(true);
+        }
+
         /** @brief Revokes borrowed native admission before cancelling/joining Scene work and releasing its candidates. */
         virtual void Shutdown() noexcept = 0;
     };

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "@EXAMPLE_ID@",
+  "version": "1.0.0",
+  "displayName": "backend-library-basic",
+  "modules": [
+    {
+      "id": "@EXAMPLE_ID@.backend",
+      "version": "1.0.0",
+      "kind": "native",
+      "entry": "bin/reference_backend@CMAKE_SHARED_MODULE_SUFFIX@",
+      "roles": [
+        "backend-capability",
+        "headless-tooling"
+      ],
+      "abi": {
+        "major": 1,
+        "minimumMinor": 8
+      },
+      "requiredCapabilities": [
+        "extension.services"
+      ],
+      "exports": [
+        {
+          "id": "@EXAMPLE_ID@.arithmetic",
+          "contract": "horo.examples.checked-arithmetic",
+          "version": "1.0.0"
+        }
+      ]
+    }
+  ],
+  "contributions": []
+}

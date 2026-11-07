@@ -4,6 +4,7 @@
  * @brief Durable Character authoring values without backend handles or runtime generation evidence.
  */
 #include "Horo/Physics/CharacterPolicies.h"
+#include "Horo/Physics/SurfaceMaterial.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 
 #include <optional>
@@ -44,6 +45,8 @@ namespace Horo::Runtime {
         std::optional<Physics::CollisionLayerId> requiredLayer;
         std::optional<Physics::CollisionProfileId> requiredProfile;
         std::optional<PhysicsBodyReference> excludedBody;
+        std::optional<Physics::SurfaceMaterialId>
+            defaultSurface; /**< Explicit semantic policy; absence inherits the captured Project policy. */
         [[nodiscard]] constexpr bool operator==(const CharacterSceneCollision &) const noexcept = default;
     };
 

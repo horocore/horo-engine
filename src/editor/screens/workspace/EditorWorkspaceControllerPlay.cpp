@@ -117,10 +117,12 @@ namespace Horo::Editor {
             case Application::GameplayBuildState::Cancelled:
             case Application::GameplayBuildState::TimedOut: {
                 const std::string errorMsg = snapshot->error.has_value() ? snapshot->error->message : "Gameplay build failed.";
-                LOG_ERROR("editor.gameplay", "Gameplay build session #%" PRIu64 " %s: %s", *m_gameplayBuildSession,
-                          snapshot->state == Application::GameplayBuildState::Failed      ? "failed"
-                          : snapshot->state == Application::GameplayBuildState::Cancelled ? "was cancelled"
-                                                                                          : "timed out",
+                const char *outcome = "timed out";
+                if (snapshot->state == Application::GameplayBuildState::Failed)
+                    outcome = "failed";
+                else if (snapshot->state == Application::GameplayBuildState::Cancelled)
+                    outcome = "was cancelled";
+                LOG_ERROR("editor.gameplay", "Gameplay build session #%" PRIu64 " %s: %s", *m_gameplayBuildSession, outcome,
                           errorMsg.c_str());
                 m_gameplayBuildSession.reset();
                 if (m_playAfterGameplayBuild) {
@@ -172,10 +174,11 @@ namespace Horo::Editor {
 
         m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
         LoadDocumentAssetMeshes();  // Cold SAME cache preparation before the XR Scene participant captures exact leases.
+        BindPlaySaveSources();
         const Result<void> started =
             m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(), m_gameplayRegistry->Components(), m_playSceneFactory,
                                 m_triggerBinding,
-                                m_selectedXrPlayHost ? EditorPlayViewSource::SelectedXr : EditorPlayViewSource::AuthoredCamera,
+                                m_selectedXrPlayHost ? m_selectedXrPlayHost->ViewSource() : EditorPlayViewSource::AuthoredCamera,
                                 m_selectedXrPlayHost);
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
@@ -185,21 +188,37 @@ namespace Horo::Editor {
         ExtractPlayViewportScene();
     }
 
+    /** @copydoc EditorWorkspaceController::BindPlaySaveSources */
+    void EditorWorkspaceController::BindPlaySaveSources() {
+        auto bindings = m_gameplayRegistry->AcquireSaveBindings();
+        if (bindings.HasError()) {
+            m_playSession.ConfigureSaveError(bindings.ErrorValue());
+            return;
+        }
+        m_playSession.ConfigureSaveBindings(std::move(bindings).Value());
+    }
+
     void EditorWorkspaceController::StopPlaySession() {
         m_playSession.Stop();
         RefreshCollisionActivation();
         m_nativeGameplayReloadPending = false;
+        FinishStoppedGameplayRegistry();
+        RefreshPlayStateProjection();
+        m_viewModel.activeDocumentPanelId = m_prePlayDocumentPanelId.empty() ? "horo.viewport" : m_prePlayDocumentPanelId;
+        SyncPanelHost(WorkspaceDockArea::Document, m_viewModel.activeDocumentPanelId);
+        m_activeRuntimeRevision = {};
+    }
+
+    /** @copydoc EditorWorkspaceController::FinishStoppedGameplayRegistry */
+    void EditorWorkspaceController::FinishStoppedGameplayRegistry() {
+        if (m_playSession.State() != EditorPlaySessionState::Idle)
+            return;
         if (m_pendingGameplayRegistry && !m_pendingGameplayRegistry->HasBlockingDiagnostics()) {
             m_gameplayRegistry = std::move(m_pendingGameplayRegistry);
             RefreshAvailableBehaviorProjection();
         } else {
             m_pendingGameplayRegistry.reset();
         }
-        m_viewModel.playError.clear();
-        m_viewModel.playState = EditorPlayState::Idle;
-        m_viewModel.activeDocumentPanelId = m_prePlayDocumentPanelId.empty() ? "horo.viewport" : m_prePlayDocumentPanelId;
-        SyncPanelHost(WorkspaceDockArea::Document, m_viewModel.activeDocumentPanelId);
-        m_activeRuntimeRevision = {};
     }
 
     void EditorWorkspaceController::RefreshPlayStateProjection() {
@@ -235,6 +254,8 @@ namespace Horo::Editor {
         if (!std::isfinite(elapsedSeconds) || elapsedSeconds < 0.0F)
             return;
         m_playSession.PresentationUpdate(Gameplay::FrameDeltaTime{static_cast<double>(elapsedSeconds)});
+        FinishStoppedGameplayRegistry();
+        ResumePlaySceneReplacement();
         RefreshPlayStateProjection();
         ExtractPlayViewportScene();
     }
@@ -249,6 +270,32 @@ namespace Horo::Editor {
             LOG_ERROR("editor.play_mode", "Play Mode fixed update failed: %s", updated.ErrorValue().message.c_str());
         RefreshPlayStateProjection();
         ExtractPlayViewportScene();
+    }
+
+    Result<void> EditorWorkspaceController::BindPlayRuntimeDispatch(const Runtime::RuntimeDispatchSource &source) {
+        return m_playSession.BindRuntimeDispatch(source);
+    }
+
+    void EditorWorkspaceController::UpdatePlayFixed(const std::span<const Gameplay::GameplayInputAction> input,
+                                                    const Runtime::FixedStepContext &context) {
+        ApplyNativeGameplayReload();
+        ApplyPendingGameplayRegistry();
+        if (auto updated = m_playSession.OnRuntimeFixedUpdate(input, context); updated.HasError())
+            LOG_ERROR("editor.play_mode", "Play Mode fixed update failed: %s", updated.ErrorValue().message.c_str());
+        // Presentation projection/extraction waits for ordinary update, after the real commit or abort.
+    }
+
+    void EditorWorkspaceController::PreparePlayFixedCommit(const Runtime::FixedStepContext &context) {
+        if (auto prepared = m_playSession.PrepareRuntimeFixedCommit(context); prepared.HasError())
+            LOG_ERROR("editor.play_mode", "Play Mode fixed preparation failed: %s", prepared.ErrorValue().message.c_str());
+    }
+
+    void EditorWorkspaceController::CommitPlayFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        m_playSession.CommitRuntimeFixedUpdate(context);
+    }
+
+    void EditorWorkspaceController::AbortPlayFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        m_playSession.AbortRuntimeFixedUpdate(context);
     }
 
     EditorViewportCamera EditorWorkspaceController::ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const {
@@ -277,27 +324,55 @@ namespace Horo::Editor {
         const auto playScene = m_playSession.SceneView();
         if (!playScene)
             return;
-        if (m_selectedXrPlayHost) {
-            if (const auto updated = m_selectedXrPlayHost->UpdateScene(*playScene); updated.HasError()) {
-                LOG_ERROR("editor.xr", "XR Scene presentation revoked: %s", updated.ErrorValue().message.c_str());
-                StopPlaySession();
-            }
-            return;  // SAME acquired-eye mirror; no independent camera or outgoing Scene borrow escapes.
+        if (!m_selectedXrPlayHost) {
+            ExtractPlayViewportWithCamera(*playScene, ResolvePlayViewportCamera(*playScene));
+            return;
         }
-        const Runtime::RuntimeSceneView runtimeView = *playScene;
-        const EditorViewportCamera camera = ResolvePlayViewportCamera(runtimeView);
+        if (const auto updated = m_selectedXrPlayHost->UpdateScene(*playScene); updated.HasError()) {
+            ClearSimulatorViewport();
+            LOG_ERROR("editor.xr", "XR Scene presentation revoked: %s", updated.ErrorValue().message.c_str());
+            StopPlaySession();
+            return;
+        }
+        if (m_selectedXrPlayHost->ViewSource() != EditorPlayViewSource::Simulator)
+            return;
+        const auto preview = m_selectedXrPlayHost->Preview();
+        if (!preview) {
+            ClearSimulatorViewport();
+            return;
+        }
+        const EditorViewportCamera camera{.position = preview->position,
+                                          .target = preview->position + preview->orientation.Rotate({0, 0, -1}),
+                                          .up = preview->orientation.Rotate({0, 1, 0}),
+                                          .verticalFovRadians = preview->verticalFovRadians,
+                                          .nearPlane = preview->nearPlane,
+                                          .farPlane = preview->farPlane};
+        ExtractPlayViewportWithCamera(*playScene, camera);
+    }
+
+    void EditorWorkspaceController::ClearSimulatorViewport() {
+        m_viewModel.simulatorPreviewAvailable = false;
+        m_viewportScene = {};
+        ++m_viewportSceneRevision;
+    }
+
+    void EditorWorkspaceController::ExtractPlayViewportWithCamera(const Runtime::RuntimeSceneView &runtimeView,
+                                                                  const EditorViewportCamera &camera) {
         LoadDocumentAssetMeshes();
         const SceneDocumentSnapshot document = m_document.Snapshot();
-        Result<EditorViewportSceneSnapshot> extracted =
-            ExtractEditorViewportScene(runtimeView, m_playSession.AuthoringRevision(), camera, m_primitiveMeshCache, &document,
-                                       &m_assetMeshCache, false);
+        auto extracted = ExtractEditorViewportScene(runtimeView, m_playSession.AuthoringRevision(), camera, m_primitiveMeshCache, &document,
+                                                    &m_assetMeshCache, false);
         if (extracted.HasError()) {
+            if (m_selectedXrPlayHost)
+                ClearSimulatorViewport();
             LOG_ERROR("editor.play_mode", "Game viewport extraction failed: %s", extracted.ErrorValue().message.c_str());
             return;
         }
         m_viewportScene = std::move(extracted).Value();
         ++m_viewportSceneRevision;
         m_viewModel.viewportCamera = camera;
+        m_viewModel.simulatorPreviewAvailable =
+            m_selectedXrPlayHost && m_selectedXrPlayHost->ViewSource() == EditorPlayViewSource::Simulator;
         RefreshViewportLightProjection();
     }
 

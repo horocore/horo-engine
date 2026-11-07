@@ -10,6 +10,17 @@
 #include <new>
 
 namespace Horo::Editor {
+    /** @copydoc PrefabDocumentSession::UpdateLimitProfile */
+    Result<void> PrefabDocumentSession::UpdateLimitProfile(const Prefab::PrefabLimitProfile &limits) {
+        if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
+            return admitted;
+        limits_ = limits;
+        const auto checked = source_->ValidateLimits(limits_);
+        if (checked.HasError())
+            return Result<void>::Failure(checked.ErrorValue());
+        return Result<void>::Success();
+    }
+
     namespace {
         /** @brief Hashes the sole canonical source encoding; no preview values enter dirty identity. */
         Result<Sha256Digest> Digest(const Prefab::PrefabDocument &source) {
@@ -104,20 +115,36 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PrefabDocumentSession::Apply */
-    Result<std::shared_ptr<const Prefab::PrefabDocument>> PrefabDocumentSession::Apply(const PrefabSourceEdit &edit) const {
+    Result<std::shared_ptr<const Prefab::PrefabDocument>> PrefabDocumentSession::Apply(const Edit &edit) const {
         auto data = source_->Data();
-        const auto id = std::visit([](const auto &value) {
-            return value.object;
+        auto applied = std::visit([&]<typename T>(const T &value) -> Result<void> {
+            if constexpr (std::is_same_v<T, LayerReplacement>) {
+                if (!data.composition)
+                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::CompositionInvalid));
+                if (!value.placement) {
+                    data.composition->variantAuthoredAgainst = value.revision;
+                    data.composition->variantOverrides = value.overrides;
+                } else {
+                    auto found = std::ranges::find(data.composition->nestedPlacements, *value.placement,
+                                                   &Prefab::NestedPrefabPlacement::placementLocalId);
+                    if (found == data.composition->nestedPlacements.end())
+                        return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
+                    found->authoredAgainst = value.revision;
+                    found->valueOverrides = value.overrides;
+                }
+            } else {
+                auto found = std::ranges::find(data.objects, value.object, &Prefab::PrefabObjectNode::localId);
+                if (found == data.objects.end())
+                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
+                if constexpr (std::is_same_v<T, RenamePrefabObject>)
+                    found->name = value.name;
+                else
+                    found->localTransform = value.transform;
+            }
+            return Result<void>::Success();
         }, edit);
-        auto found = std::ranges::find(data.objects, id, &Prefab::PrefabObjectNode::localId);
-        if (found == data.objects.end())
-            return Result<std::shared_ptr<const Prefab::PrefabDocument>>::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
-        std::visit([&]<typename T>(const T &value) {
-            if constexpr (std::is_same_v<T, RenamePrefabObject>)
-                found->name = value.name;
-            else
-                found->localTransform = value.transform;
-        }, edit);
+        if (applied.HasError())
+            return Result<std::shared_ptr<const Prefab::PrefabDocument>>::Failure(applied.ErrorValue());
         auto validated = Prefab::PrefabDocument::Create(std::move(data), limits_);
         if (validated.HasError())
             return Result<std::shared_ptr<const Prefab::PrefabDocument>>::Failure(validated.ErrorValue());
@@ -129,6 +156,13 @@ namespace Horo::Editor {
     Result<void> PrefabDocumentSession::Execute(const PrefabDocumentFence &fence, const PrefabSourceEdit &edit) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return admitted;
+        return std::visit([&](const auto &value) {
+            return CommitEdit(Edit{value});
+        }, edit);
+    }
+
+    /** @copydoc PrefabDocumentSession::CommitEdit */
+    Result<void> PrefabDocumentSession::CommitEdit(const Edit &edit) {
         if (conflict_)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
         auto candidate = Apply(edit);
@@ -139,17 +173,13 @@ namespace Horo::Editor {
             return Result<void>::Failure(digest.ErrorValue());
         if (digest.Value() == state_)
             return Result<void>::Success();
-        const auto id = std::visit([](const auto &value) {
-            return value.object;
-        }, edit);
-        const auto &prior = *std::ranges::find(source_->Data().objects, id, &Prefab::PrefabObjectNode::localId);
-        PrefabSourceEdit before = std::holds_alternative<RenamePrefabObject>(edit)
-                                      ? PrefabSourceEdit{RenamePrefabObject{id, prior.name}}
-                                      : PrefabSourceEdit{TransformPrefabObject{id, prior.localTransform}};
-        std::size_t bytes = sizeof(Delta);
-        if (const auto *name = std::get_if<RenamePrefabObject>(&edit))
-            bytes += name->name.size() + prior.name.size();
-        auto retained = history_.Prepare(Delta{id, std::move(before), edit, bytes});
+        auto before = Before(edit);
+        if (before.HasError())
+            return Result<void>::Failure(before.ErrorValue());
+        auto bytes = EditBytes(before.Value(), edit);
+        if (bytes.HasError())
+            return Result<void>::Failure(bytes.ErrorValue());
+        auto retained = history_.Prepare(Delta{std::move(before).Value(), edit, bytes.Value()});
         if (!retained)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
         source_ = std::move(candidate).Value();

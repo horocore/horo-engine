@@ -7,13 +7,15 @@ namespace Horo::Animation::GraphCompileDetail {
     namespace {
         using namespace AnimationErrors;
 
-        /** @brief Captures validated compatibility values, not borrowed asset lifetimes. */
+        /** @brief Captures validated compatibility values, not borrowed asset
+         * lifetimes. */
         struct GraphDependencies final {
             GraphSkeletonBinding skeleton{};
             std::vector<AnimationClipDescriptor> clips{};
         };
 
-        /** @brief Requires the exact typed dependency set and one pinned skeleton publication. */
+        /** @brief Requires the exact typed dependency set and one pinned skeleton
+         * publication. */
         Result<GraphDependencies> ValidateDependencies(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context) {
             if (!context.skeleton || !context.skeletonGeneration.IsValid() || context.skeleton->Data().skeleton != program.Skeleton() ||
                 context.skeleton->Data().contractVersion != CurrentSkeletonAssetContractVersion ||
@@ -80,13 +82,16 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Resolves typed writer policy once and charges immutable dense storage. */
+        /** @brief Resolves typed writer policy once and charges immutable dense
+         * storage. */
         Result<void> BindComposition(const GraphNodePayload &payload, GraphInstructionOccurrence &occurrence,
                                      GraphMemoryRequirements &memory, const AnimationGraphCompileContext &context) {
             if (const auto bound = std::visit(
-                    [&occurrence, &context]<typename Payload>(const Payload &payload) {
+                    [&occurrence, &memory, &context]<typename Payload>(const Payload &payload) {
                 if constexpr (std::is_same_v<Payload, GraphBlendNode>)
                     return BindMask(payload, occurrence, context);
+                else if constexpr (std::is_same_v<Payload, GraphBlendTreeNode>)
+                    return BindBlendTree(payload, occurrence, memory, context);
                 else if constexpr (std::is_same_v<Payload, GraphClipNode>)
                     return BindClipCoverage(payload, occurrence, context);
                 else
@@ -100,7 +105,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Allocates one compile-time working slot only within exact captured storage limits. */
+        /** @brief Allocates one compile-time working slot only within exact captured
+         * storage limits. */
         Result<GraphWorkingSlot> AllocateSlot(GraphValueType type, OccurrencePlan &plan, const AnimationGraphCompileContext &context,
                                               std::uint32_t joints) {
             const auto kind = static_cast<std::size_t>(type);
@@ -121,7 +127,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return Result<GraphWorkingSlot>::Success({type, slot});
         }
 
-        /** @brief One bounded compile-time call frame; no process-local pointer is published. */
+        /** @brief One bounded compile-time call frame; no process-local pointer is
+         * published. */
         struct OccurrenceFrame final {
             std::uint32_t definition{};
             std::size_t next{};
@@ -142,7 +149,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return frame;
         }
 
-        /** @brief Resolves all input accesses to earlier producers in this exact call occurrence. */
+        /** @brief Resolves all input accesses to earlier producers in this exact call
+         * occurrence. */
         GraphInstructionOccurrence Occurrence(const GraphInstruction &instruction, const OccurrenceFrame &frame, std::uint32_t index) {
             GraphInstructionOccurrence occurrence;
             occurrence.source = instruction.source;
@@ -150,13 +158,16 @@ namespace Horo::Animation::GraphCompileDetail {
             occurrence.definitionIndex = frame.definition;
             occurrence.instructionIndex = index;
             occurrence.parameterRead = instruction.parameterIndex;
+            occurrence.actionSlot = instruction.actionSlot;
+            occurrence.blendParameters = instruction.blendParameters;
             occurrence.output.type = GraphValueType::Unspecified;
             for (const auto &input : instruction.inputs)
                 occurrence.inputs.emplace_back(input.destination, frame.slots[input.instruction], frame.producers[input.instruction]);
             return occurrence;
         }
 
-        /** @brief Assigns exact working/state slots to a non-call instruction without evaluating animation. */
+        /** @brief Assigns exact working/state slots to a non-call instruction without
+         * evaluating animation. */
         Result<void> AssignOutput(const GraphInstruction &instruction, OccurrenceFrame &frame, GraphInstructionOccurrence &occurrence,
                                   OccurrencePlan &plan, const GraphDependencies &dependencies,
                                   const AnimationGraphCompileContext &context) {
@@ -188,7 +199,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return BindWriterComposition(instruction.payload, occurrence, plan.memory, context);
         }
 
-        /** @brief Creates the callee's interface bindings and stable path from the exact caller operands. */
+        /** @brief Creates the callee's interface bindings and stable path from the
+         * exact caller operands. */
         OccurrenceFrame Callee(const GraphInstruction &instruction, const OccurrenceFrame &caller, GraphInstructionOccurrence occurrence,
                                std::span<const GraphCompiledDefinition> definitions) {
             auto frame = Frame(*instruction.definitionIndex, definitions);
@@ -201,7 +213,8 @@ namespace Horo::Animation::GraphCompileDetail {
             return frame;
         }
 
-        /** @brief Expands bounded occurrence identities and state/access plans with an explicit call stack. */
+        /** @brief Expands bounded occurrence identities and state/access plans with an
+         * explicit call stack. */
         Result<OccurrencePlan> BuildOccurrencePlan(const AnimationGraphProgram &program, const GraphDependencies &dependencies,
                                                    const AnimationGraphCompileContext &context) {
             OccurrencePlan plan;
@@ -262,10 +275,14 @@ namespace Horo::Animation::GraphCompileDetail {
         auto dependencies = ValidateDependencies(program, context);
         if (dependencies.HasError())
             return Result<BoundPlan>::Failure(dependencies.ErrorValue());
+        if (const auto actions = ValidateActionDependencies(program, context); actions.HasError())
+            return Result<BoundPlan>::Failure(actions.ErrorValue());
         for (const auto &definition : program.Definitions())
             for (const auto &instruction : definition.instructions)
                 if (std::holds_alternative<GraphStateMachineNode>(instruction.payload))
-                    return BindStateNodes(program, context, dependencies.Value().skeleton, std::move(dependencies).Value().clips);
+                    return FinalizeActionPlan(BindStateNodes(program, context, dependencies.Value().skeleton,
+                                                             std::move(dependencies).Value().clips),
+                                              program, context);
         auto plan = BuildOccurrencePlan(program, dependencies.Value(), context);
         if (plan.HasError())
             return Result<BoundPlan>::Failure(plan.ErrorValue());
@@ -274,6 +291,6 @@ namespace Horo::Animation::GraphCompileDetail {
         result.memory = plan.Value().memory;
         result.clips = std::move(dependencies).Value().clips;
         result.occurrences = std::move(plan).Value().occurrences;
-        return Result<BoundPlan>::Success(std::move(result));
+        return FinalizeActionPlan(Result<BoundPlan>::Success(std::move(result)), program, context);
     }
 }  // namespace Horo::Animation::GraphCompileDetail

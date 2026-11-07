@@ -50,6 +50,65 @@ namespace Horo::Render {
             return true;
         }
 
+        bool MatchesDepth(const RenderGraphExecutionPass &pass, std::span<const RenderGraphResourceUsage> uses,
+                          const RenderGraphDepthAttachment &value) {
+            using enum RenderGraphAccess;
+
+            return pass.kind == RenderPassKind::Graphics && std::isfinite(value.clearDepth) && value.clearDepth >= 0.0F &&
+                   value.clearDepth <= 1.0F && uses.size() == 1 && uses[0].resource == value.texture &&
+                   uses[0].kind == RenderGraphUsageKind::DepthStencilAttachment && uses[0].access == Write;
+        }
+
+        bool ColorEnvelope(const RenderGraphExecutionPass &pass, std::span<const RenderGraphResourceUsage> uses,
+                           const RenderGraphColorAttachment &value) {
+            return pass.kind == RenderPassKind::Graphics && value.operations.IsValid() && !value.operations.outputColor &&
+                   value.operations.loadOperation != AttachmentLoadOperation::DontCare &&
+                   value.operations.storeOperation == AttachmentStoreOperation::Store && uses.size() == 1;
+        }
+
+        bool MatchesColor(const RenderGraphExecutionPass &pass, std::span<const RenderGraphResourceUsage> uses,
+                          const RenderGraphColorAttachment &value) {
+            using enum RenderGraphAccess;
+
+            if (!ColorEnvelope(pass, uses, value))
+                return false;
+            return uses[0].resource == value.texture && uses[0].kind == RenderGraphUsageKind::ColorAttachment && uses[0].access != Read &&
+                   (value.operations.loadOperation != AttachmentLoadOperation::Load || uses[0].access == ReadWrite);
+        }
+
+        bool MatchesCopyUse(const RenderGraphResourceUsage &use, RenderGraphResourceId resource, RenderGraphUsageKind kind,
+                            RenderGraphAccess access) {
+            return use.resource == resource && use.kind == kind && use.access == access;
+        }
+
+        bool MatchesCopy(const RenderGraphExecutionPass &pass, std::span<const RenderGraphResourceUsage> uses,
+                         const RenderGraphBufferCopy &value) {
+            using enum RenderGraphAccess;
+
+            if (pass.kind != RenderPassKind::Copy || uses.size() != 2 || value.byteCount == 0 || value.source == value.destination)
+                return false;
+            bool source = false;
+            bool destination = false;
+            for (const auto &use : uses) {
+                source |= MatchesCopyUse(use, value.source, RenderGraphUsageKind::CopySource, Read);
+                destination |= MatchesCopyUse(use, value.destination, RenderGraphUsageKind::CopyDestination, Write);
+            }
+            return source && destination;
+        }
+
+        bool ExternallyValidated(const RenderGraphWorkload &workload) {
+            return std::holds_alternative<RenderGraphMaterialRaster>(workload) || std::holds_alternative<RenderGraphMultiview>(workload) ||
+                   std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphExposureGpu>(workload) ||
+                   std::holds_alternative<RenderGraphTextureUpload>(workload);
+        }
+
+        bool MatchesBasic(const RenderGraphExecutionPass &pass, std::span<const RenderGraphResourceUsage> uses,
+                          const RenderGraphWorkload &workload) {
+            if (const auto *primary = std::get_if<PrimaryOutputAttachment>(&workload))
+                return pass.kind == RenderPassKind::Graphics && uses.empty() && primary->IsValid();
+            return std::holds_alternative<std::monostate>(workload) && pass.kind == RenderPassKind::Graphics && uses.empty();
+        }
+
         /** @brief Requires each operation to account for exactly its retained semantic uses. */
         [[nodiscard]] bool MatchesWorkload(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                            const RenderGraphWorkload &workload) {
@@ -57,40 +116,21 @@ namespace Horo::Render {
             const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
             if (const auto *paint = std::get_if<RenderGraphUiPaint>(&workload))
                 return ValidateUiPaintWorkload(request, pass, *paint).HasValue();
-            if (std::holds_alternative<RenderGraphMultiview>(workload))
-                return true;  // The outer admission preserves the original typed multiview failure before recording uses.
-            if (std::holds_alternative<RenderGraphVfx>(workload))
-                return true;  // Exact issued publication and semantic uses are checked before alias recording.
+            if (const auto *particles = std::get_if<RenderGraphVfxGpuCompute>(&workload))
+                return ValidateVfxGpuComputeGraphWorkload(request, pass, *particles).HasValue();
+            if (const auto *particles = std::get_if<RenderGraphVfxGpuDraw>(&workload))
+                return ValidateVfxGpuDrawGraphWorkload(request, pass, *particles).HasValue();
+            if (ExternallyValidated(workload))
+                return true;
             if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
                 return MatchesLightCulling(request, pass, *culling);
-            if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
-                return pass.kind == RenderPassKind::Graphics && std::isfinite(depth->clearDepth) && depth->clearDepth >= 0.0F &&
-                       depth->clearDepth <= 1.0F && uses.size() == 1 && uses[0].resource == depth->texture &&
-                       uses[0].kind == RenderGraphUsageKind::DepthStencilAttachment && uses[0].access == Write;
-            }
-            if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
-                return pass.kind == RenderPassKind::Graphics && color->operations.IsValid() && !color->operations.outputColor &&
-                       color->operations.loadOperation != AttachmentLoadOperation::DontCare &&
-                       color->operations.storeOperation == AttachmentStoreOperation::Store && uses.size() == 1 &&
-                       uses[0].resource == color->texture && uses[0].kind == RenderGraphUsageKind::ColorAttachment &&
-                       uses[0].access != Read &&
-                       (color->operations.loadOperation != AttachmentLoadOperation::Load || uses[0].access == ReadWrite);
-            }
-            if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
-                if (pass.kind != RenderPassKind::Copy || uses.size() != 2 || copy->byteCount == 0 || copy->source == copy->destination)
-                    return false;
-                bool source = false;
-                bool destination = false;
-                for (const auto &use : uses) {
-                    source |= use.resource == copy->source && use.kind == RenderGraphUsageKind::CopySource && use.access == Read;
-                    destination |=
-                        use.resource == copy->destination && use.kind == RenderGraphUsageKind::CopyDestination && use.access == Write;
-                }
-                return source && destination;
-            }
-            if (const auto *primary = std::get_if<PrimaryOutputAttachment>(&workload))
-                return pass.kind == RenderPassKind::Graphics && uses.empty() && primary->IsValid();
-            return std::holds_alternative<std::monostate>(workload) && pass.kind == RenderPassKind::Graphics && uses.empty();
+            if (const auto *value = std::get_if<RenderGraphDepthAttachment>(&workload))
+                return MatchesDepth(pass, uses, *value);
+            if (const auto *value = std::get_if<RenderGraphColorAttachment>(&workload))
+                return MatchesColor(pass, uses, *value);
+            if (const auto *value = std::get_if<RenderGraphBufferCopy>(&workload))
+                return MatchesCopy(pass, uses, *value);
+            return MatchesBasic(pass, uses, workload);
         }
 
         /** @brief Validates exact pass semantics and records retained first/last uses without allocation. */
@@ -275,37 +315,63 @@ namespace Horo::Render {
                 return HasSubmissionDependency(request, dependency.before, dependency.after);
             });
         }
+
+        /** @brief Preserves semantic validator failures instead of collapsing them into a generic boolean graph error. */
+        Result<void> ValidateTypedPass(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
+                                       const RenderGraphWorkload &workload) {
+            if (const auto *upload = std::get_if<RenderGraphTextureUpload>(&workload))
+                return ValidateTextureUploadGraphWorkload(request, pass, *upload);
+            if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&workload))
+                return ValidateMaterialRasterWorkload(request, pass, *raster);
+            if (const auto *vfx = std::get_if<RenderGraphVfx>(&workload))
+                return ValidateVfxGraphWorkload(request, pass, *vfx);
+            if (const auto *exposure = std::get_if<RenderGraphExposureGpu>(&workload))
+                return ValidateExposureGpuGraphWorkload(request, pass, *exposure);
+            return Result<void>::Success();
+        }
+
+        Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request) {
+            std::size_t multiviewCount = 0;
+            for (std::size_t index = 0; index < request.workloads.size(); ++index) {
+                const auto &binding = request.workloads[index];
+                if (auto valid = ValidateTypedPass(request, request.graph.Passes()[index], binding.workload); valid.HasError())
+                    return valid;
+                if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {
+                    if (++multiviewCount > 1)
+                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
+                                                               "One graph admits one complete multiview scene contribution within its "
+                                                               "fixed native scratch envelope."));
+                    if (const auto valid = ValidateMultiviewGraphWorkload(request, request.graph.Passes()[index], *scene); valid.HasError())
+                        return valid;
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        Result<void> ValidateRequestEnvelope(const RenderGraphExecutionRequest &request) {
+            if (request.role > RenderGraphExecutionRole::UiComposition ||
+                (request.role == RenderGraphExecutionRole::UiComposition &&
+                 (request.workloads.empty() || !std::ranges::all_of(request.workloads, [](const auto &binding) {
+                return std::holds_alternative<RenderGraphUiPaint>(binding.workload);
+            }))))
+                return Result<void>::Failure(
+                    MakeError(RenderGraphExecutionErrors::InvalidGraph, "UI composition is one explicit paint-only frame stage."));
+            const auto &graph = request.graph;
+            if (!graph.Owner().IsValid() || graph.Resources().size() > RenderGraphLimits::HardMaxResources ||
+                graph.Passes().size() > RenderGraphLimits::HardMaxPasses || request.workloads.size() != graph.Passes().size() ||
+                request.resources.size() != graph.Resources().size())
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ValidateRenderGraphExecutionRequest */
     Result<void> ValidateRenderGraphExecutionRequest(const RenderGraphExecutionRequest &request) {
-        if (request.role > RenderGraphExecutionRole::UiComposition ||
-            (request.role == RenderGraphExecutionRole::UiComposition &&
-             (request.workloads.empty() || !std::ranges::all_of(request.workloads, [](const auto &binding) {
-            return std::holds_alternative<RenderGraphUiPaint>(binding.workload);
-        }))))
-            return Result<void>::Failure(
-                MakeError(RenderGraphExecutionErrors::InvalidGraph, "UI composition is one explicit paint-only frame stage."));
+        if (auto envelope = ValidateRequestEnvelope(request); envelope.HasError())
+            return envelope;
         const auto &graph = request.graph;
-        if (!graph.Owner().IsValid() || graph.Resources().size() > RenderGraphLimits::HardMaxResources ||
-            graph.Passes().size() > RenderGraphLimits::HardMaxPasses || request.workloads.size() != graph.Passes().size() ||
-            request.resources.size() != graph.Resources().size())
-            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
-        std::size_t multiviewCount = 0;
-        for (std::size_t index = 0; index < request.workloads.size(); ++index) {
-            const auto &binding = request.workloads[index];
-            if (const auto *vfx = std::get_if<RenderGraphVfx>(&binding.workload))
-                if (const auto valid = ValidateVfxGraphWorkload(request, graph.Passes()[index], *vfx); valid.HasError())
-                    return valid;
-            if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {
-                if (++multiviewCount > 1)
-                    return Result<void>::Failure(
-                        MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
-                                  "One graph admits one complete multiview scene contribution within its fixed native scratch envelope."));
-                if (const auto valid = ValidateMultiviewGraphWorkload(request, graph.Passes()[index], *scene); valid.HasError())
-                    return valid;
-            }
-        }
+        if (auto typed = ValidateTypedWorkloads(request); typed.HasError())
+            return typed;
         if (request.submissions.empty() && (!graph.ReleaseTransfers().empty() || !graph.AcquireTransfers().empty()))
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
                                                    "Single-queue workload admission does not implement ownership transfers."));

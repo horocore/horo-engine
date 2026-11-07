@@ -3,18 +3,22 @@
 #include "RuntimeSceneErrors.h"
 
 #include <algorithm>
+#include <map>
 #include <new>
+#include <set>
 #include <tuple>
 #include <type_traits>
 
 namespace Horo::Runtime {
     namespace {
-        /** @brief Retains original typed errors through the Scene-owned composition boundary. */
+        /** @brief Retains original typed errors through the Scene-owned composition
+         * boundary. */
         template <typename T> Result<T> Failure(const ErrorCodeDescriptor &error) {
             return Result<T>::Failure(MakeError(error));
         }
 
-        /** @brief Validates bounded component ownership and canonical schema-local selections before candidate creation. */
+        /** @brief Validates bounded component ownership and canonical schema-local
+         * selections before candidate creation. */
         Result<void> ValidateComponentSelections(SceneRestoreBundleRequest &request) {
             std::size_t bytes{};
             std::size_t selectedReferences{};
@@ -35,6 +39,76 @@ namespace Horo::Runtime {
         }
     }  // namespace
 
+    namespace {
+        Result<std::size_t> ContributedCount(std::span<const StagedRestorePreparedParticipant> participants, std::size_t existing,
+                                             const RestoreReferenceGraphLimits &limits) {
+            if (existing > limits.maximumReferences)
+                return Failure<std::size_t>(SaveErrors::ReferenceResolutionInvalid);
+            auto total = existing;
+            for (const auto &participant : participants) {
+                const auto *source = dynamic_cast<const IRestoreReferenceContributor *>(participant.state);
+                if (!source)
+                    continue;
+                const auto count = source->ReferenceCount();
+                if (count > limits.maximumReferences - total)
+                    return Failure<std::size_t>(SaveErrors::ReferenceResolutionInvalid);
+                total += count;
+            }
+            return Result<std::size_t>::Success(total);
+        }
+
+        Result<void> MergeNodes(std::set<RestoreReferenceTarget> &nodes, const RestoreReferenceContribution &contribution,
+                                const RestoreReferenceGraphLimits &limits) {
+            for (const auto &node : contribution.nodes) {
+                if (nodes.contains(node))
+                    continue;
+                if (nodes.size() >= limits.maximumNodes)
+                    return Failure<void>(SaveErrors::ReferenceResolutionInvalid);
+                nodes.insert(node);
+            }
+            return Result<void>::Success();
+        }
+
+        Result<void> MergeOwner(std::set<RestoreReferenceTarget> &nodes, std::vector<RestoreReferenceRequest> &references,
+                                const RestoreReferenceAuthorities &authorities, const StagedRestorePreparedParticipant &participant,
+                                const RestoreReferenceGraphLimits &limits) {
+            const auto *source = dynamic_cast<const IRestoreReferenceContributor *>(participant.state);
+            if (!source || source->ReferenceCount() == 0)
+                return Result<void>::Success();
+            auto contribution = source->Contribute(authorities, participant.requirement.participant, limits);
+            if (contribution.HasError())
+                return Result<void>::Failure(contribution.ErrorValue());
+            if (contribution.Value().references.size() != source->ReferenceCount())
+                return Failure<void>(SaveErrors::ReferenceResolutionInvalid);
+            for (const auto &reference : contribution.Value().references)
+                if (reference.owner != participant.requirement.participant)
+                    return Failure<void>(SaveErrors::ReferenceResolutionInvalid);
+            if (auto merged = MergeNodes(nodes, contribution.Value(), limits); merged.HasError())
+                return merged;
+            std::ranges::move(contribution.Value().references, std::back_inserter(references));
+            return Result<void>::Success();
+        }
+
+        Result<void> CollectContributedReferences(const RestoreReferenceAuthorities &authorities,
+                                                  std::span<const StagedRestorePreparedParticipant> participants,
+                                                  SceneRestoreBundleRequest &request) {
+            auto total = ContributedCount(participants, request.references.size(), request.graphLimits);
+            if (total.HasError())
+                return Result<void>::Failure(total.ErrorValue());
+            std::set<RestoreReferenceTarget> nodes(request.nodes.begin(), request.nodes.end());
+            if (nodes.size() != request.nodes.size())
+                return Failure<void>(SaveErrors::ReferenceResolutionInvalid);
+            auto references = request.references;
+            references.reserve(total.Value());
+            for (const auto &participant : participants)
+                if (auto merged = MergeOwner(nodes, references, authorities, participant, request.graphLimits); merged.HasError())
+                    return merged;
+            request.nodes.assign(nodes.begin(), nodes.end());
+            request.references = std::move(references);
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     struct SceneRestoreBundle::State final : ISaveableComponentAuthority {
         struct ComponentCandidate final {
             SaveParticipantId owner;
@@ -47,6 +121,28 @@ namespace Horo::Runtime {
               std::shared_ptr<const ISceneRestoreGenerationAuthority> authority) noexcept
             : request(std::move(request)), source(std::move(source)), authority(std::move(authority)) {}
 
+        /** @brief Checks exact private Scene identity before adopting its mutable borrow. */
+        bool AdmitsScene(const RuntimeScene &candidate) const noexcept {
+            return !closed && !scene && candidate.View().DefinitionId() == request.definition &&
+                   candidate.View().DefinitionRevision() == request.revision;
+        }
+
+        /** @brief Requires a complete private candidate and actual current host generation evidence. */
+        Result<void> ValidateOwnerPreparation() const {
+            if (closed || !scene || !identities)
+                return Failure<void>(SaveErrors::RestoreTransitionInvalid);
+            if (!SameGenerations(authority->Current()))
+                return Failure<void>(SaveErrors::RestoreActivationStale);
+            return Result<void>::Success();
+        }
+
+        /** @brief Compares only actual independently owned generation evidence, never a copied source echo. */
+        bool SameGenerations(const StagedRestoreActivationEvidence &evidence) const noexcept {
+            return evidence.registryGeneration == request.context.registryGeneration &&
+                   evidence.sessionGeneration == request.context.sessionGeneration &&
+                   evidence.sceneIncarnation == request.context.sceneIncarnation;
+        }
+
         bool Contains(const EntityRef entity, const Gameplay::ComponentTypeId &type) const noexcept override {
             if (!scene)
                 return false;
@@ -57,31 +153,47 @@ namespace Horo::Runtime {
             });
         }
 
-        /** @brief Applies validated child-first tombstones only to the unpublished Scene. */
-        Result<void> ApplyTombstones() {
-            // Child-first tombstones are applied only to this unpublished candidate. A live child of
-            // a deleted parent remains a typed structural error rather than an implicit reparent.
-            std::vector<std::pair<std::size_t, EntityRef>> tombstones;
-            for (const auto &record : request.entities) {
-                const auto *authored = std::get_if<AuthoredPersistentEntityProvenance>(&record.provenance);
-                if (!authored || authored->scene != request.definition)
-                    return Result<void>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid,
-                                                           "Spawned provenance requires the owning dynamic prefab restore adapter."));
-                const auto entity = scene->View().Find(authored->object);
-                if (record.disposition != PersistentEntityDisposition::Tombstone || !entity)
-                    continue;
-                std::size_t depth{};
-                auto parent = scene->View().Get(*entity).Value().parent;
-                while (parent) {
-                    if (++depth > request.maximumEntities)
-                        return Failure<void>(SaveErrors::RestoreParticipantInvalid);
-                    auto current = scene->View().Get(*parent);
-                    if (current.HasError())
-                        return Result<void>::Failure(current.ErrorValue());
-                    parent = current.Value().parent;
-                }
-                tombstones.emplace_back(depth, *entity);
+        /** @brief Computes current authored depth on the actual private candidate without signed arithmetic or graph guesses. */
+        Result<std::size_t> AuthoredDepth(EntityRef entity) const {
+            std::size_t depth{};
+            auto parent = scene->View().Get(entity).Value().parent;
+            while (parent) {
+                if (++depth > request.maximumEntities)
+                    return Failure<std::size_t>(SaveErrors::RestoreParticipantInvalid);
+                const auto current = scene->View().Get(*parent);
+                if (current.HasError())
+                    return Result<std::size_t>::Failure(current.ErrorValue());
+                parent = current.Value().parent;
             }
+            return Result<std::size_t>::Success(depth);
+        }
+
+        /** @brief Defers spawned existence only to its explicit owner; authored deletions retain exact baseline provenance. */
+        Result<void> CaptureTombstone(const PersistentEntityRecord &record, std::vector<std::pair<std::size_t, EntityRef>> &tombstones) {
+            const auto *authored = std::get_if<AuthoredPersistentEntityProvenance>(&record.provenance);
+            if (!authored)
+                return request.dynamicEntities
+                           ? Result<void>::Success()
+                           : Result<void>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid,
+                                                             "Spawned provenance requires the owning dynamic prefab restore adapter."));
+            if (authored->scene != request.definition)
+                return Failure<void>(SaveErrors::RestoreParticipantInvalid);
+            const auto entity = scene->View().Find(authored->object);
+            if (record.disposition != PersistentEntityDisposition::Tombstone || !entity)
+                return Result<void>::Success();
+            const auto depth = AuthoredDepth(*entity);
+            if (depth.HasError())
+                return Result<void>::Failure(depth.ErrorValue());
+            tombstones.emplace_back(depth.Value(), *entity);
+            return Result<void>::Success();
+        }
+
+        /** @brief Applies validated child-first authored tombstones only to the unpublished Scene. */
+        Result<void> ApplyTombstones() {
+            std::vector<std::pair<std::size_t, EntityRef>> tombstones;
+            for (const auto &record : request.entities)
+                if (auto captured = CaptureTombstone(record, tombstones); captured.HasError())
+                    return captured;
             std::ranges::sort(tombstones, std::greater<>{});
             SceneCommandBuffer commands;
             for (const auto &[depth, entity] : tombstones) {
@@ -96,15 +208,38 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief Pins exact stable-to-runtime entity bindings after tombstone application. */
-        Result<void> BindIdentities() {
-            std::vector<PersistentEntityRuntimeBinding> bindings;
+        /** @brief Runs only the explicitly supplied dynamic domain adapter and bounds
+         * its returned binding inventory. */
+        Result<std::vector<PersistentEntityRuntimeBinding>> PrepareDynamicEntities(SceneRestoreCandidateCommands *commands) {
+            using Outcome = Result<std::vector<PersistentEntityRuntimeBinding>>;
+            if (!request.dynamicEntities)
+                return Outcome::Success({});
+            if (!commands)
+                return Outcome::Failure(MakeError(SaveErrors::RestoreContextInvalid,
+                                                  "Dynamic entities require the Scene service's private-candidate command capability."));
+            auto prepared = request.dynamicEntities->Prepare(*scene, request.entities, request.maximumEntities, *commands);
+            if (prepared.HasError())
+                return prepared;
+            if (prepared.Value().size() > request.entities.size())
+                return Outcome::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
+            return prepared;
+        }
+
+        /** @brief Pins exact stable-to-runtime entity bindings after tombstone
+         * application. */
+        Result<void> BindIdentities(SceneRestoreCandidateCommands *commands) {
+            auto prepared = PrepareDynamicEntities(commands);
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            auto bindings = std::move(prepared).Value();
             bindings.reserve(request.entities.size());
             for (const auto &record : request.entities) {
                 if (record.disposition != PersistentEntityDisposition::Live)
                     continue;
-                const auto &authored = std::get<AuthoredPersistentEntityProvenance>(record.provenance);
-                const auto entity = scene->View().Find(authored.object);
+                const auto *authored = std::get_if<AuthoredPersistentEntityProvenance>(&record.provenance);
+                if (!authored)
+                    continue;
+                const auto entity = scene->View().Find(authored->object);
                 if (!entity)
                     return Failure<void>(SaveErrors::ReferenceResolutionInvalid);
                 bindings.emplace_back(record.identity, record.generation, *entity);
@@ -117,7 +252,8 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief Stages core transform overrides through exact candidate identity bindings. */
+        /** @brief Stages core transform overrides through exact candidate identity
+         * bindings. */
         Result<void> ApplyTransforms() {
             SceneCommandBuffer transforms;
             for (const auto &transform : request.transforms) {
@@ -134,7 +270,8 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief Creates actual inactive component candidates through their existing typed adapters. */
+        /** @brief Creates actual inactive component candidates through their existing
+         * typed adapters. */
         Result<void> PrepareComponents() {
             components.reserve(request.components.size());
             for (const auto &component : request.components) {
@@ -152,7 +289,8 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief Delivers exact component-owned reference subsets after complete graph resolution. */
+        /** @brief Delivers exact component-owned reference subsets after complete
+         * graph resolution. */
         Result<void> FixupComponents(const SaveRestoreReferenceContext &references) {
             for (auto &component : components) {
                 const auto ownerView = references.ForParticipant(component.owner);
@@ -171,7 +309,8 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief Resolves after all owner candidates have applied state, then delivers exact component-owned subsets. */
+        /** @brief Resolves after all owner candidates have applied state, then
+         * delivers exact component-owned subsets. */
         struct Resolver final : IStagedRestoreReferenceResolver {
             explicit Resolver(State &state) noexcept : state(state) {}
 
@@ -197,6 +336,8 @@ namespace Horo::Runtime {
                                                               .serviceLease = state.request.serviceLease,
                                                               .participants = state.request.participants,
                                                               .preparedOwners = owners};
+                if (auto contributed = CollectContributedReferences(authorities, participants, state.request); contributed.HasError())
+                    return Result<SaveRestoreReferenceContext>::Failure(contributed.ErrorValue());
                 auto graph = PreparedRestoreReferenceGraph::Create(authorities, state.request.nodes, state.request.references,
                                                                    state.request.graphLimits);
                 if (graph.HasError())
@@ -214,7 +355,8 @@ namespace Horo::Runtime {
             State &state;
         };
 
-        /** @brief Transfers the sole ready producer into a staged transaction and prepares its reference resolver. */
+        /** @brief Transfers the sole ready producer into a staged transaction and
+         * prepares its reference resolver. */
         Result<bool> PrepareReadyOwners() {
             auto ready = source->TakeReady(scene->View());
             if (ready.HasError())
@@ -242,6 +384,8 @@ namespace Horo::Runtime {
         std::optional<PreparedRestoreReferenceGraph> graph;
         std::vector<ComponentCandidate> components;
         std::optional<StagedRestoreTransaction> transaction;
+        std::vector<SaveParticipantBinding> retainedPublishedBindings;
+        bool transientRetired{};
         bool closed{};
         bool published{};
     };
@@ -288,21 +432,116 @@ namespace Horo::Runtime {
         }
     }
 
+    namespace {
+        /** @brief One temporary validator over the sole admitted Scene identity inventory; no runtime ownership is issued. */
+        struct PartitionInventory final {
+            SaveWorldId world;
+            std::map<PersistentEntityId, const PersistentEntityRecord *> live;
+            std::set<SavePrefabInstanceId> occurrences;
+            std::set<PersistentEntityId> identities;
+            std::set<std::size_t> slots;
+
+            static bool ValidSpawnedRecord(const PersistentEntityRecord &record) noexcept {
+                const auto &origin = std::get<SpawnedPersistentEntityProvenance>(record.provenance);
+                return record.identity.IsValid() && record.generation.IsValid() && origin.definition.IsValid() && origin.prefabInstance &&
+                       origin.prefabInstance->IsValid();
+            }
+
+            Result<void> Index(std::span<const PersistentEntityRecord> records) {
+                for (const auto &record : records) {
+                    if (record.disposition != PersistentEntityDisposition::Live ||
+                        !std::holds_alternative<SpawnedPersistentEntityProvenance>(record.provenance))
+                        continue;
+                    if (!ValidSpawnedRecord(record) || !live.emplace(record.identity, &record).second)
+                        return Failure<void>(SaveErrors::RestoreParticipantInvalid);
+                }
+                return Result<void>::Success();
+            }
+
+            Result<void> Member(const SceneRestoreGroupPartition &partition, const SceneRestorePartitionMember &member,
+                                std::size_t maximumEntries) {
+                const auto found = live.find(member.identity);
+                if (found == live.end() || found->second->generation.value != member.generation || member.entity >= maximumEntries)
+                    return Failure<void>(SaveErrors::RestoreParticipantInvalid);
+                const auto &origin = std::get<SpawnedPersistentEntityProvenance>(found->second->provenance);
+                if (!origin.prefabInstance || *origin.prefabInstance != partition.occurrence ||
+                    !identities.insert(member.identity).second || !slots.insert(member.entity).second)
+                    return Failure<void>(SaveErrors::RestoreParticipantInvalid);
+                return Result<void>::Success();
+            }
+
+            Result<void> Partition(const SceneRestoreGroupPartition &partition, std::size_t maximumEntries) {
+                if (partition.world != world || !partition.occurrence.IsValid() || partition.members.empty() ||
+                    partition.members.size() > maximumEntries || !occurrences.insert(partition.occurrence).second)
+                    return Failure<void>(SaveErrors::RestoreParticipantInvalid);
+                bool hasRoot{};
+                for (const auto &member : partition.members) {
+                    if (auto valid = Member(partition, member, maximumEntries); valid.HasError())
+                        return valid;
+                    hasRoot = hasRoot || member.entity == partition.root;
+                }
+                return hasRoot ? Result<void>::Success() : Failure<void>(SaveErrors::RestoreParticipantInvalid);
+            }
+        };
+    }  // namespace
+
+    /** @copydoc ValidateSceneRestorePartitions */
+    Result<void> ValidateSceneRestorePartitions(SaveWorldId world, std::span<const PersistentEntityRecord> records,
+                                                std::span<const SceneRestoreGroupPartition> partitions, std::size_t maximumEntries) {
+        if (!world.IsValid() || maximumEntries == 0 || maximumEntries > 16'384 || records.size() > maximumEntries ||
+            partitions.size() > maximumEntries)
+            return Failure<void>(SaveErrors::RestoreParticipantInvalid);
+        PartitionInventory inventory{world};
+        if (auto valid = inventory.Index(records); valid.HasError())
+            return valid;
+        for (const auto &partition : partitions)
+            if (auto valid = inventory.Partition(partition, maximumEntries); valid.HasError())
+                return valid;
+        return inventory.identities.size() == inventory.live.size() ? Result<void>::Success()
+                                                                    : Failure<void>(SaveErrors::RestoreParticipantInvalid);
+    }
+
+    /** @copydoc SceneRestoreBundle::ValidateRestorePartitions */
+    Result<void> SceneRestoreBundle::ValidateRestorePartitions(std::span<const SceneRestoreGroupPartition> partitions) const {
+        return ValidateSceneRestorePartitions(state_->request.world, state_->request.entities, partitions, state_->request.maximumEntities);
+    }
+
+    /** @copydoc SceneRestoreBundle::StructuralLimits */
+    SceneRestoreStructuralLimits SceneRestoreBundle::StructuralLimits() const noexcept {
+        const auto &request = state_->request;
+        return {request.maximumEntities,
+                request.graphLimits.maximumNodes,
+                request.graphLimits.maximumReferences,
+                request.graphLimits.maximumReferences,
+                request.maximumEntities * 16,
+                64U << 20U};
+    }
+
     /** @copydoc SceneRestoreBundle::PrepareScene */
     Result<void> SceneRestoreBundle::PrepareScene(RuntimeScene &scene) {
+        return PrepareSceneInternal(scene, nullptr);
+    }
+
+    /** @copydoc SceneRestoreBundle::PrepareScene(RuntimeScene &, SceneRestoreCandidateCommands &) */
+    Result<void> SceneRestoreBundle::PrepareScene(RuntimeScene &scene, SceneRestoreCandidateCommands &commands) {
+        return PrepareSceneInternal(scene, &commands);
+    }
+
+    /** @copydoc SceneRestoreBundle::PrepareSceneInternal */
+    Result<void> SceneRestoreBundle::PrepareSceneInternal(RuntimeScene &scene, SceneRestoreCandidateCommands *commands) {
         auto &state = *state_;
-        if (state.closed || state.scene || scene.View().DefinitionId() != state.request.definition ||
-            scene.View().DefinitionRevision() != state.request.revision)
+        if (!state.AdmitsScene(scene))
             return Failure<void>(SaveErrors::RestoreContextInvalid);
         state.scene = &scene;
         static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
-        // Allocate fallback errors before invoking native owners; catch paths only move owned results.
-        return [&state, allocationFailure = Failure<void>(SaveErrors::RestoreAllocationFailed),
+        // Allocate fallback errors before invoking native owners; catch paths only
+        // move owned results.
+        return [&state, commands, allocationFailure = Failure<void>(SaveErrors::RestoreAllocationFailed),
                 callbackFailure = Failure<void>(SaveErrors::RestoreAdapterContractInvalid)]() mutable noexcept {
             try {
                 if (const auto removed = state.ApplyTombstones(); removed.HasError())
                     return removed;
-                if (const auto mapped = state.BindIdentities(); mapped.HasError())
+                if (const auto mapped = state.BindIdentities(commands); mapped.HasError())
                     return mapped;
                 if (const auto applied = state.ApplyTransforms(); applied.HasError())
                     return applied;
@@ -321,12 +560,8 @@ namespace Horo::Runtime {
     /** @copydoc SceneRestoreBundle::PrepareOwners */
     Result<bool> SceneRestoreBundle::PrepareOwners() {
         auto &state = *state_;
-        if (state.closed || !state.scene || !state.identities)
-            return Failure<bool>(SaveErrors::RestoreTransitionInvalid);
-        if (const auto current = state.authority->Current(); current.registryGeneration != state.request.context.registryGeneration ||
-                                                             current.sessionGeneration != state.request.context.sessionGeneration ||
-                                                             current.sceneIncarnation != state.request.context.sceneIncarnation)
-            return Failure<bool>(SaveErrors::RestoreActivationStale);
+        if (auto valid = state.ValidateOwnerPreparation(); valid.HasError())
+            return Result<bool>::Failure(valid.ErrorValue());
         if (state.transaction) {
             if (state.transaction->State() == StagedRestoreTransactionState::ReadyToActivate)
                 return Result<bool>::Success(true);
@@ -338,7 +573,8 @@ namespace Horo::Runtime {
         static_assert(std::is_nothrow_move_constructible_v<SaveOperationController>);
         static_assert(std::is_nothrow_move_constructible_v<SceneRestorePreparedOwners>);
         static_assert(std::is_nothrow_move_constructible_v<Result<std::optional<SceneRestorePreparedOwners>>>);
-        // Allocate fallback errors before invoking native owners; catch paths only move owned results.
+        // Allocate fallback errors before invoking native owners; catch paths only
+        // move owned results.
         return [&state, allocationFailure = Failure<bool>(SaveErrors::RestoreAllocationFailed),
                 callbackFailure = Failure<bool>(SaveErrors::RestoreAdapterContractInvalid)]() mutable noexcept {
             try {
@@ -355,15 +591,15 @@ namespace Horo::Runtime {
     /** @copydoc SceneRestoreBundle::ValidatePublication */
     Result<void> SceneRestoreBundle::ValidatePublication(const RuntimeSceneView *active) const {
         const auto &state = *state_;
-        if (const auto evidence = state.authority->Current();
-            !state.transaction || state.closed || !state.graph ||
-            state.transaction->State() != StagedRestoreTransactionState::ReadyToActivate ||
-            evidence.registryGeneration != state.request.context.registryGeneration ||
-            evidence.sessionGeneration != state.request.context.sessionGeneration ||
-            evidence.sceneIncarnation != state.request.context.sceneIncarnation ||
-            (active && active->RuntimeId().value != state.request.context.sceneIncarnation))
+        if (!state.transaction || state.closed || !state.graph ||
+            state.transaction->State() != StagedRestoreTransactionState::ReadyToActivate)
             return Failure<void>(SaveErrors::RestoreActivationStale);
-        return Result<void>::Success();
+        const auto evidence = state.authority->Current();
+        if (!state.SameGenerations(evidence))
+            return Failure<void>(SaveErrors::RestoreActivationStale);
+        if (active && active->RuntimeId().value != state.request.context.sceneIncarnation)
+            return Failure<void>(SaveErrors::RestoreActivationStale);
+        return state.request.dynamicEntities ? state.request.dynamicEntities->ValidatePublication() : Result<void>::Success();
     }
 
     /** @copydoc SceneRestoreBundle::Commit */
@@ -375,9 +611,19 @@ namespace Horo::Runtime {
         struct Transfer final : IStagedRestoreAggregatePublication {
             Transfer(State &state, IStagedRestoreAggregatePublication &scene) noexcept : state(state), scene(scene) {}
 
+            Result<void> ValidateAndArm() override {
+                // All outer fallible checks precede the exact final owner claim.
+                if (auto valid = scene.ValidateAndArm(); valid.HasError())
+                    return valid;
+                return state.request.finalPublicationCheck ? state.request.finalPublicationCheck->ValidateAndArm()
+                                                           : Result<void>::Success();
+            }
+
             void PublishPrepared() noexcept override {
                 for (auto &component : state.components)
                     component.candidate->PublishPrepared();
+                if (state.request.dynamicEntities)
+                    state.request.dynamicEntities->PublishPrepared();
                 state.published = true;
                 scene.PublishPrepared();
             }
@@ -391,6 +637,30 @@ namespace Horo::Runtime {
         return state.transaction->Activate(state.authority->Current(), transfer);
     }
 
+    Result<bool> SceneRestoreBundle::RetirePublishedTransient() {
+        auto &state = *state_;
+        if (!state.published || !state.transaction)
+            return Failure<bool>(SaveErrors::RestoreTransitionInvalid);
+        if (state.transientRetired)
+            return Result<bool>::Success(true);
+        auto retired = state.transaction->RetirePublishedTransient();
+        if (retired.HasError())
+            return Result<bool>::Failure(retired.ErrorValue());
+        if (!retired.Value())
+            return Result<bool>::Success(false);
+        std::vector<SaveParticipantBinding> retained;
+        retained.reserve(state.request.participants.Bindings().size());
+        for (const auto &binding : state.request.participants.Bindings())
+            if (std::ranges::find(*retired.Value(), binding.Descriptor().participant) == retired.Value()->end())
+                retained.push_back(binding);
+        if (state.graph)
+            state.graph->RetireTransientParticipantPins(*retired.Value());
+        state.retainedPublishedBindings = std::move(retained);
+        state.request.participants = {};
+        state.transientRetired = true;
+        return Result<bool>::Success(true);
+    }
+
     /** @copydoc SceneRestoreBundle::Rollback */
     void SceneRestoreBundle::Rollback() noexcept {
         auto &state = *state_;
@@ -398,6 +668,8 @@ namespace Horo::Runtime {
             return;
         state.closed = true;
         state.source->Cancel();
+        if (state.request.dynamicEntities)
+            state.request.dynamicEntities->Cancel();
         state.transaction.reset();
         state.components.clear();
         state.graph.reset();

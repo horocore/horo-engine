@@ -22,6 +22,23 @@ namespace Horo::Prefab {
         VariantParent
     };
 
+    /** @brief Explicit authoring capture permission; strict runtime resolution never accepts stale source intent. */
+    enum class PrefabSourceRevisionPolicy : std::uint8_t {
+        RequireExact,
+        PreserveLayerRebase
+    };
+
+    /** @brief Exact original intent and current target revisions retained for one stable semantic source occurrence. */
+    struct PrefabDependencyRevisionSkew final {
+        Assets::AssetId owner;
+        Assets::AssetId target;
+        PrefabDependencyKind kind;
+        std::optional<LocalObjectId> placement;
+        PrefabSourceRevision authored;
+        PrefabSourceRevision actual;
+        [[nodiscard]] bool operator==(const PrefabDependencyRevisionSkew &) const noexcept = default;
+    };
+
     /** @brief One asset captured by a prefab dependency graph snapshot. */
     struct PrefabDependencyNode final {
         Assets::AssetId assetId;                            /**< Stable path-independent asset identity. */
@@ -75,18 +92,27 @@ namespace Horo::Prefab {
          */
         [[nodiscard]] std::vector<Assets::AssetId> InvalidatedPrefabs(std::span<const Assets::AssetId> changedAssets) const;
 
+        /** @brief Reads the explicit capture mode; never grants strict runtime publication. */
+        [[nodiscard]] PrefabSourceRevisionPolicy RevisionPolicy() const noexcept;
+        /** @brief Borrows owned canonical original/current source revision mismatches. */
+        [[nodiscard]] std::span<const PrefabDependencyRevisionSkew> RevisionSkews() const noexcept;
+
     private:
         friend Result<PrefabDependencyGraphSnapshot> BuildPrefabDependencyGraph(const Assets::AssetRegistrySnapshot &,
                                                                                 const std::vector<PrefabDependencySource> &,
-                                                                                const PrefabLimitProfile &);
+                                                                                const PrefabLimitProfile &, const PrefabMetricHandles &,
+                                                                                PrefabSourceRevisionPolicy);
 
         PrefabDependencyGraphSnapshot(Assets::AssetRegistryRevision registryRevision, std::vector<PrefabDependencyNode> nodes,
-                                      std::vector<PrefabDependencyEdge> edges, std::vector<PrefabDependencyEdge> reverseEdges) noexcept;
+                                      std::vector<PrefabDependencyEdge> edges, std::vector<PrefabDependencyEdge> reverseEdges,
+                                      PrefabSourceRevisionPolicy policy, std::vector<PrefabDependencyRevisionSkew> skews) noexcept;
 
         Assets::AssetRegistryRevision registryRevision_{};
         std::vector<PrefabDependencyNode> nodes_;
         std::vector<PrefabDependencyEdge> edges_;
         std::vector<PrefabDependencyEdge> reverseEdges_;
+        PrefabSourceRevisionPolicy revisionPolicy_{PrefabSourceRevisionPolicy::RequireExact};
+        std::vector<PrefabDependencyRevisionSkew> revisionSkews_;
     };
 
     /**
@@ -94,9 +120,10 @@ namespace Horo::Prefab {
      * @param registry Pinned Asset Registry snapshot used for every identity and type lookup.
      * @param sources Borrowed validated prefab documents and their exact semantic revisions.
      * @param limits Captured project policy whose operation budget bounds graph construction.
+     * @param metrics Explicit prebound observer copied only into operation observation.
      * @return Canonical immutable graph, or a typed consistency, availability, type, revision or budget error.
      */
-    [[nodiscard]] Result<PrefabDependencyGraphSnapshot> BuildPrefabDependencyGraph(const Assets::AssetRegistrySnapshot &registry,
-                                                                                   const std::vector<PrefabDependencySource> &sources,
-                                                                                   const PrefabLimitProfile &limits);
+    [[nodiscard]] Result<PrefabDependencyGraphSnapshot> BuildPrefabDependencyGraph(
+        const Assets::AssetRegistrySnapshot &registry, const std::vector<PrefabDependencySource> &sources, const PrefabLimitProfile &limits,
+        const PrefabMetricHandles &metrics = {}, PrefabSourceRevisionPolicy revisionPolicy = PrefabSourceRevisionPolicy::RequireExact);
 }  // namespace Horo::Prefab

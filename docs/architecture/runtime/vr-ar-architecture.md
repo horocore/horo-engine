@@ -935,3 +935,25 @@ Desktop composition may omit the port, while explicitly selected XR failures are
 preserved and forwarded to the existing Play owner. This bridge alone is not
 production XR frame or shipping-runtime qualification; the application must still
 wire real session activation, canonical input cutoff, rendering and retirement.
+
+### Built-in simulator incarnation and synthetic artifact identity
+
+The built-in native application host's bounded discovery-attempt issuer occupies
+runtime-generation values 1 through `UINT32_MAX` (enforced before increment in
+`OpenXRApplicationSession::PrepareDiscovery`). The built-in simulator's shared
+cold factory issuer occupies values `2^32` through `UINT64_MAX-1`. Both simulator
+factories use this one atomic nonwrapping issuer; exhaustion denies construction.
+The atomic protects concurrent cold owner creation only. Prepared steps do not
+issue runtime incarnations or perform atomic operations. Reset/replay retain the
+owner incarnation while the canonical fake lifecycle issues a new session.
+Independent or destroyed/recreated simulator owners therefore cannot admit each
+other's retained tracking/Input evidence. This reserves domains for the built-in
+hosts, not for arbitrary external providers or independently loaded engine copies;
+external providers must coordinate their incarnation namespace with their host.
+
+Synthetic scenario artifacts persist relative controls and semantic binding
+compatibility, never those live incarnations. Replay rebinds through the same
+canonical fake session, tracking publication and actual Input binding coordinator.
+Recorded simulator interaction has fixed simulator-development purpose,
+memory-until-explicit-export retention and synthetic-only export. Native
+pose/history capture remains unavailable through this workflow.

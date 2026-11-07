@@ -150,6 +150,9 @@ namespace Horo::SceneSource::Detail {
             if (!HasFields(entry, {"material"}) || !HasUnsignedFields(entry, {"slot"}) || !entry["material"].is_string())
                 return Result<std::vector<Runtime::PhysicsColliderMaterialBinding>>::Failure(
                     PersistenceError(SceneInvalid, "Collider material is incomplete."));
+            if (entry["slot"].get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+                return Result<std::vector<Runtime::PhysicsColliderMaterialBinding>>::Failure(
+                    PersistenceError(SceneInvalid, "Collider material slot exceeds uint32."));
             auto material = Assets::AssetId::Parse(entry["material"].get<std::string>());
             if (material.HasError())
                 return Result<std::vector<Runtime::PhysicsColliderMaterialBinding>>::Failure(
@@ -157,6 +160,53 @@ namespace Horo::SceneSource::Detail {
             materials.emplace_back(Physics::PhysicsMaterialSlotId::FromValue(entry["slot"].get<std::uint64_t>()), material.Value());
         }
         return Result<std::vector<Runtime::PhysicsColliderMaterialBinding>>::Success(std::move(materials));
+    }
+
+    /** @brief One closed semantic row uses the exact uint32 physical-slot wire domain. */
+    [[nodiscard]] Result<Physics::PhysicsSurfaceBinding> ParseSurfaceBindingRow(const Json &row) {
+        using Return = Result<Physics::PhysicsSurfaceBinding>;
+        if (!HasUnsignedFields(row, {"slot"}) || row.size() != 2 || !row.contains("surface") || !row["surface"].is_string())
+            return Return::Failure(PersistenceError(SceneInvalid, "Collider surface binding is malformed."));
+        if (row["slot"].get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+            return Return::Failure(PersistenceError(SceneInvalid, "Collider surface slot exceeds uint32."));
+        auto id = Physics::SurfaceMaterialId::Parse(row["surface"].get<std::string>());
+        if (id.HasError())
+            return Return::Failure(std::move(id).ErrorValue());
+        return Return::Success({Physics::PhysicsMaterialSlotId::FromValue(row["slot"].get<std::uint32_t>()), id.Value()});
+    }
+
+    /** @brief Decode only the optional schema-2 semantic slot list; legacy absence remains None. */
+    [[nodiscard]] Result<std::vector<Physics::PhysicsSurfaceBinding>> ParseSurfaceBindings(const Json &value) {
+        using Return = Result<std::vector<Physics::PhysicsSurfaceBinding>>;
+        if (!value.contains("surfaceBindings"))
+            return Return::Success({});
+        const auto &rows = value["surfaceBindings"];
+        if (!rows.is_array() || rows.size() > Runtime::MaximumPhysicsColliderSurfaceBindings)
+            return Return::Failure(PersistenceError(SceneInvalid, "Collider surface bindings exceed schema bounds."));
+        std::vector<Physics::PhysicsSurfaceBinding> result;
+        for (const auto &row : rows) {
+            auto binding = ParseSurfaceBindingRow(row);
+            if (binding.HasError())
+                return Return::Failure(std::move(binding).ErrorValue());
+            result.push_back(binding.Value());
+        }
+        return Return::Success(std::move(result));
+    }
+
+    struct ParsedColliderBindings final {
+        std::vector<Runtime::PhysicsColliderMaterialBinding> physical;
+        std::vector<Physics::PhysicsSurfaceBinding> semantic;
+    };
+
+    /** @brief Parse both independent binding domains before constructing the typed collider. */
+    Result<ParsedColliderBindings> ParseColliderBindings(const Json &value) {
+        auto physical = ParsePhysicsMaterials(value["materials"]);
+        if (physical.HasError())
+            return Result<ParsedColliderBindings>::Failure(std::move(physical).ErrorValue());
+        auto semantic = ParseSurfaceBindings(value);
+        if (semantic.HasError())
+            return Result<ParsedColliderBindings>::Failure(std::move(semantic).ErrorValue());
+        return Result<ParsedColliderBindings>::Success({std::move(physical).Value(), std::move(semantic).Value()});
     }
 
     [[nodiscard]] Result<Runtime::ColliderComponent> ParseCollider(const Json &value, const BodyReferenceDomain domain) {
@@ -173,9 +223,10 @@ namespace Horo::SceneSource::Detail {
         auto profile = Physics::CollisionProfileId::Parse(value["collisionProfile"].get<std::string>());
         if (!AllSucceeded({body.HasValue(), source.HasValue(), pose.HasValue(), scale.HasValue(), profile.HasValue()}))
             return Result<Runtime::ColliderComponent>::Failure(PersistenceError(SceneInvalid, "Collider payload is invalid."));
-        auto materials = ParsePhysicsMaterials(value["materials"]);
-        if (materials.HasError())
-            return Result<Runtime::ColliderComponent>::Failure(materials.ErrorValue());
+        auto bindings = ParseColliderBindings(value);
+        if (bindings.HasError())
+            return Result<Runtime::ColliderComponent>::Failure(std::move(bindings).ErrorValue());
+        auto ownedBindings = std::move(bindings).Value();
         Runtime::ColliderComponent collider{.id = {value["id"].get<std::uint64_t>()},
                                             .collider = {value["collider"].get<std::uint64_t>()},
                                             .schemaVersion = value["schemaVersion"].get<std::uint32_t>(),
@@ -185,9 +236,10 @@ namespace Horo::SceneSource::Detail {
                                             .localPose = pose.Value(),
                                             .scale = scale.Value(),
                                             .collisionProfile = profile.Value(),
-                                            .materials = std::move(materials).Value(),
+                                            .materials = std::move(ownedBindings.physical),
                                             .sensor = value.value("sensor", false),
                                             .enabled = value.value("enabled", true)};
+        collider.surfaceBindings = std::move(ownedBindings.semantic);
         if (Runtime::PhysicsValidationDetail::ValidateCollider(collider, domain).HasError())
             return Result<Runtime::ColliderComponent>::Failure(PersistenceError(SceneInvalid, "Collider payload is invalid."));
         return Result<Runtime::ColliderComponent>::Success(std::move(collider));

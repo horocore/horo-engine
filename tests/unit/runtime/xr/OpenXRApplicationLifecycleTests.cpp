@@ -24,6 +24,23 @@ namespace Horo::Tests::OpenXRApplication {
         namespace Host = Horo::Application::Internal;
         using OpenXRProduct::RequireValue;
 
+        /** @brief Limits initialization diagnostics to eight typed causes and bounded message/identity text per cause. */
+        std::string ViewportInitializationError(const Error &error) {
+            std::string text;
+            const auto *current = &error;
+            for (std::size_t depth = 0; current && depth < 8; ++depth) {
+                if (!text.empty())
+                    text += " <- ";
+                text += current->domain.Value().substr(0, 96);
+                text += "/";
+                text += current->code.Value().substr(0, 96);
+                text += ": ";
+                text += current->message.substr(0, 256);
+                current = current->cause.Get();
+            }
+            return text;
+        }
+
         ConfigurationSchema XrSchema() {
             ConfigurationSchema schema;
             for (const auto &descriptor : XR::XRProjectSettingDescriptors())
@@ -102,10 +119,16 @@ namespace Horo::Tests::OpenXRApplication {
                     viewportCook = RequireValue(
                         Editor::LoadEditorVulkanViewportCook(cooked.compiled.payload,
                                                              RequireValue(Render::EncodeReflectedShaderArtifact(cooked.reflected))));
+                    const auto shadow = ApplicationVulkanFixture::CookShadow();
+                    viewportCook.shadow = RequireValue(
+                        Editor::LoadEditorVulkanShadowCook(shadow.compiled.payload,
+                                                           RequireValue(Render::EncodeReflectedShaderArtifact(shadow.reflected))));
                 }
                 viewport = std::make_unique<Editor::EditorViewportRendererVulkan>(*frontend, bridge, std::move(viewportCook));
                 if (render) {
-                    REQUIRE(viewport->Initialize().HasValue());
+                    const auto initialized = viewport->Initialize();
+                    INFO((initialized.HasError() ? ViewportInitializationError(initialized.ErrorValue()) : "Viewport initialized."));
+                    REQUIRE(initialized.HasValue());
                     const auto cooked = ApplicationVulkanFixture::Cook(true);
                     RequireValue(viewport->PrepareXrProgram(RequireValue(
                         Editor::LoadEditorVulkanMultiviewCook(cooked.compiled.payload,

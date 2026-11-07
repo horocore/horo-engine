@@ -295,7 +295,9 @@ def test_xr_bootstrap_coverage_is_selected_without_widening_the_editor_host_root
     selection = host.split("includes=(", 1)[1].split("\n)", 1)[0]
     includes = shlex.split(selection)
     assert "$workspace/apps/HoroEditor/app/EditorOpenXRBootstrap.cpp" in includes
-    assert "$workspace/apps/common/" in includes
+    assert "$workspace/apps/shared/" in includes
+    assert "$workspace/apps/HoroEditor/composition/" in includes
+    assert "$workspace/apps/HoroEditor/tools/shader_cook/" in includes
     assert "$workspace/apps/HoroEditor/app/" not in includes
     assert "$workspace/apps/HoroEditor/" not in includes
     assert "$workspace/apps/" not in includes

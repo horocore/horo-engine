@@ -1,6 +1,6 @@
 #include "Horo/Application/ProjectVersion.h"
 
-#include "ProjectErrors.h"
+#include "ProjectVersionErrors.h"
 
 #include <algorithm>
 #include <charconv>

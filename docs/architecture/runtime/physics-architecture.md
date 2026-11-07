@@ -1413,3 +1413,114 @@ serialize variant indexes. Existing resident queries retain their layout and
 behavior. Ownership stays with `HoroEngine::Physics`, including the
 `CharacterClearanceQuery` adapter; Gameplay owns only permission admission and
 borrows the captured context during the synchronous Character operation.
+
+
+## Canonical completed-tick state contract (PHY-007.3)
+
+`Horo/Physics/PhysicsStateSnapshot.h` owns the single versioned continuation format:
+`PhysicsStateSnapshotVersion == 2` and the closed pinned solver grammar version 1.
+The same canonical codec carries immutable construction recipes, complete body/joint
+solver continuation, completed World policy/publication state, previous contact pairs
+and undrained semantic event delivery. Native Jolt recorder bytes are never the durable
+format. Save, same-topology rollback/rewind and Networking must retain or transport the
+same `PhysicsStateSnapshot::Bytes()` payload held by its opaque lease; none defines a parallel body/solver DTO.
+
+Compatibility binds actual solver/source/patch inputs, compiled compiler/STL/ABI/ISA
+profile, verified executable/static Physics images, immutable World settings, content,
+filter/surface semantics and constructor FP controls. Source metadata cannot authenticate
+a receiving image or create capabilities. The real host binds verified static adapter
+and Jolt addresses and retained image provenance before creating resources under Required
+construction tracking. An unknown/different profile, dynamic ModuleLease, malformed or
+out-of-budget input rejects before live mutation. This is not ADR-088 determinism or
+cross-build migration clearance.
+
+Capture uses cold-prepared finite snapshot slots and caller/owner-admitted scratch.
+Opaque immutable leases retain actual content, code, native record and resource owners;
+foreign copies/drops never collect native resources. Owner retirement is explicit,
+bounded and observable, with Drained only after real World/state/candidate leases have
+settled. Native cold construction retains its existing arbitrary system-OOM policy;
+the admitted retained-byte quota is not claimed to bound allocator bookkeeping, RSS or
+cold transient process peak. Ordinary quota exhaustion is a typed failure, not a native
+assertion.
+
+The construction manifest retains the transitive analytic/compound shape DAG even when
+intermediate logical handles retire, original constructor pose/FP/COM/frame witnesses,
+current immutable mass/DOF/safety policy, exact inverse mass for allocated motion storage,
+and exact Dynamic inverse inertia/rotation. Inactive reserved inertia is deliberately
+omitted because the supported owner reapplies admitted mass/inertia before the next
+dynamic solver access. Historical constructor velocity is deliberately omitted input
+history; complete current native velocity, force/torque, sleep and last-applied policy
+intent restore before a receiving step or event exposure. No private-offset access,
+inverse tensor roundtrip, tolerance or guessed default reconstructs these values.
+Current native restart supports the existing box/sphere/capsule/static-plane primitives
+and analytic compounds. Unimplemented cooked geometry and nonempty Character state remain
+typed unsupported; a format or capability must not fabricate their native realization.
+
+Ordinary live restore remains exact retained-topology restore under one PhysicsWorld
+identity. Preparation constructs only an unpublished native candidate under that same
+owner. Complete validation/recapture and joined-owner fences precede no-fail publication,
+so the result is either a complete restored tick or the previous World. This does not add
+structural-history rollback (PHY-007.4). A cold receiving Scene may explicitly reconstruct
+its private owner from the same typed manifest and authenticated content. Scene ownership
+uses the full persistent UUID/generation/role/slot bijection, including compound body
+roots; transient World/body/collider handles and process epochs are rebound locally.
+Live filter/surface stale fences remain intact. Only process-local filter/mapping epochs
+are excluded from durable semantic fingerprints; material/source revisions are retained.
+Canonical wire row order is independent from semantic event callback order: validated
+unique dense emission ordinals restore the original undrained delivery sequence and
+preserve exit-before-enter behavior.
+
+The existing Save session may select a generic owner-only cold preparation for the SAME
+request before its original capture barrier. It retains request ownership through the
+callback and rechecks actual generation/provenance, cancellation and retirement before
+capture; workers receive only immutable copied canonical bytes. Archive-selected decoded
+chunks have their own owned vector lifetime, which the Physics receipt retains until
+canonical deep decode succeeds. After actual worker settlement the original 1481 producer,
+context, participant registry and source leases enter Scene's existing aggregate restore.
+The actual pending Physics target and its native preparation remain private. The final
+Physics ValidateAndArm check runs at the last fallible point of the existing staged
+transaction, immediately before its canonical BeginCommit; earlier phase checks do not
+claim publication. The existing no-fail aggregate then transfers the Scene/native roots.
+Empty pending Character peers may adopt only the actual restored Physics publication;
+used, nonempty, ticked, foreign, stale or published peers reject before adoption.
+
+### Editor Save profile and completed-tick readiness
+
+Canonical Editor Save setup explicitly selects a captured Physics settings profile
+before creating native resources when the caller has supplied no settings override.
+The profile admits 1,024 bodies, 2,048 collider/shape records, 1,024 constraints,
+4,096 contact pairs/in-flight pairs/events, 1,024 contact constraints, 8 MiB native
+scratch and 16 MiB Scene-plan storage. Construction tracking is Required with
+4,096 recipe nodes/roots, 16,384 edges, depth 128 and 16 MiB recipe storage.
+Caller-selected immutable settings keep their original identity and limits;
+ordinary unselected and Null settings retain their existing defaults.
+
+These limits remain independent from the unchanged 256 MiB Runtime aggregate,
+256 MiB per-capture-owner and 8 MiB actual Save-record ceilings. Admission charges
+the real retained source and candidate capacities, not current occupancy. A larger
+caller profile can therefore reject with its original quota error. The profile is
+not a promise that every combination of maximum occupancy fits every byte ceiling.
+The application binds actual process-static code before resource creation and
+retains the same observable retirement handle until real owner collection drains.
+Platforms without verified image evidence keep state capability unavailable.
+
+A structural publication invalidates the event tick until a real paired fixed step
+publishes a complete Physics/Character tick. Save owner preparation reports
+`ready=false` during this gap, at tick zero or while native work remains outstanding.
+The same admitted request stays pending without cold capture allocation, snapshot
+capture or worker dispatch. The owner re-observes actual generation and provenance
+at a later safe point. Cancellation, retirement, stale-evidence and owner-lane checks
+still take precedence; readiness supplies no publication authority. Save never
+advances simulation itself or fabricates a completed tick. Only a real complete
+publication admits the existing capture barrier and canonical snapshot guard.
+For a selected owner preparation, the quiescence timeout starts after that
+preparation reports ready; the already-started barrier keeps its original deadline.
+Legacy captures without owner preparation retain their immediate barrier request.
+
+The existing Editor PIE namespace remains intentionally ephemeral and its cleanup policy
+is unchanged. PHY-007.3 adds no persistent product namespace. Native same-binary two-process
+codec tests and actual existing Save/archive-reader/1481 tests are separate evidence.
+Networking's `NetworkModeServiceKind::Physics` is an owner-composition declaration, not a
+Physics replication or transport capability. Existing bounded PacketBuffer leases can
+carry the exact canonical bytes; neither that ownership proof nor the native rewind
+primitive implies an absent Networking/rollback driver is implemented.

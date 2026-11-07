@@ -287,6 +287,14 @@ namespace Horo::Render {
         std::vector<CompiledShaderArtifact> artifacts;
     };
 
+    /** @brief Validates the complete bounded immutable compiler input without invoking an adapter or copying the request.
+     * @param request Borrowed complete source, manifest, dependencies, defines and targets.
+     * @param limits Same finite envelope enforced by CompileShaderTargets.
+     * @return The canonical pipeline validation error or success; no source/target authority is inferred.
+     */
+    [[nodiscard]] Result<void> ValidateShaderCompilationRequest(const ShaderCompilationRequest &request,
+                                                                const ShaderCompilerLimits &limits = {});
+
     /**
      * @brief Compiles all requested targets synchronously through one host-owned adapter.
      * @details Validation and adapter calls run on the calling worker. No threads, paths, caches,

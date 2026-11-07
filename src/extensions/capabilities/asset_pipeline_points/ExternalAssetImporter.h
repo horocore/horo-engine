@@ -6,13 +6,16 @@
 #include "Horo/Extensions/ExtensionPlatformProvider.h"
 #include "Horo/Extensions/ExtensionRetirement.h"
 #include "Horo/Platform/DynamicLibrary.h"
+#include "Horo/Security/ArtifactSignature.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
 namespace Horo::Extensions {
+    struct NativeServiceModule;
     struct ExtensionModuleLifetime;
     struct EditorActivitySession;
     class EditorActivityHost;
@@ -48,12 +51,15 @@ namespace Horo::Extensions {
 
         std::unique_ptr<ExtensionNativeClosure> code{std::make_unique<ExtensionNativeClosure>()};
         std::string moduleId;
+        std::optional<Security::VerifiedArtifactEvidence> artifactEvidence; /**< Same verified bytes submitted to the actual native loader;
+                                                                               assigned before publication and never replaced. */
         HoroExtensionModuleApi moduleApi{};
         HoroExtensionUnloadFunc unload{};
         bool loaded{};
         bool teardownFailed{};
         std::thread::id ownerThread{std::this_thread::get_id()};
         std::weak_ptr<ExtensionRetirement> retirement;
+        std::shared_ptr<NativeServiceModule> nativeServices;
         std::vector<std::shared_ptr<EditorActivitySession>> editorActivities;
         std::vector<std::shared_ptr<EditorPageNativeSession>> editorPages;
         std::vector<std::shared_ptr<EditorInspectorNativeSession>> editorInspectors;
@@ -81,6 +87,8 @@ namespace Horo::Extensions {
         std::shared_ptr<EditorViewportHost> viewportHost;
         std::uint64_t viewportGeneration{};
         bool viewportTransportNegotiated{};
+        bool serviceTransportNegotiated{};
+        std::shared_ptr<NativeServiceModule> nativeServices;
     };
 
     /**

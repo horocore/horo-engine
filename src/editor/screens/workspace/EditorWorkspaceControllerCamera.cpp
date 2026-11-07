@@ -43,6 +43,9 @@ namespace Horo::Editor {
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
     EditorWorkspaceController::~EditorWorkspaceController() {
+        static_cast<void>(ShutdownTerrainDocuments(true));
+        ShutdownTerrainCook();
+        static_cast<void>(ShutdownPrefabSettings(true));
         DetachWorldSourceOwner();
         if (m_worldBake)
             m_worldBake->Close();
@@ -59,9 +62,12 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ShutdownGameplayModules */
     Result<void> EditorWorkspaceController::ShutdownGameplayModules() {
-        m_playSession.Stop();
+        m_playSceneReplacement.reset();
+        m_playSession.RetireOnLeave(m_gameplayRegistry);
         m_pendingGameplayRegistry.reset();
         m_gameplayRegistry.reset();
+        if (m_playSaveRetirement && m_playSaveRetirement->HasPending())
+            return Result<void>::Success();  // Application holds the actual module owners until its post-join drain.
         return m_gameplayRetirements->Close();
     }
 

@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
+#include <format>
 #include <limits>
 #include <new>
 #include <type_traits>
@@ -259,7 +260,10 @@ namespace Horo::Runtime {
                 sealed = Result<RuntimeSaveSnapshot>::Success({});
                 MeasureElapsed();
                 snapshot_.captureDuration = lastSample_ - started;
-                return Outcome({}, MakeError(SaveErrors::CaptureBudgetExceeded));
+                return Outcome({},
+                               MakeError(SaveErrors::CaptureBudgetExceeded,
+                                         std::format("Runtime save synchronous capture took {} ns; its declared budget is {} ns.",
+                                                     snapshot_.captureDuration.ToNanoseconds(), policy_.captureBudget.ToNanoseconds())));
             }
             snapshot_.state = SaveBarrierState::Captured;
             return Outcome(std::move(sealed).Value());

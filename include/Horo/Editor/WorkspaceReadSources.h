@@ -12,11 +12,14 @@
 #include <memory>
 
 namespace Horo::Editor {
+    class IXRSimulatorArtifacts;
+
     /** @brief Complete owned source capabilities for one never-reused workspace incarnation, both bound to generation one. */
     struct WorkspaceReadSources final {
         Assets::AssetId owner;
         std::shared_ptr<const Assets::IAssetRegistrySource> registry;
         std::shared_ptr<const Platform::IProjectReadFiles> world;
+        std::shared_ptr<IXRSimulatorArtifacts> simulatorArtifacts; /**< Optional same-root derived artifact capability. */
     };
 
     /** @brief Application-owned selection of native or restricted readers; capture performs no registration or ambient discovery. */

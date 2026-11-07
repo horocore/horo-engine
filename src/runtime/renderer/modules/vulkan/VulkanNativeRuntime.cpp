@@ -236,7 +236,8 @@ namespace Horo::Render {
                     if (candidate.HasError()) {
                         return Result<VulkanAdapterEnumeration>::Failure(std::move(candidate).ErrorValue());
                     }
-                    nativeAdapters_.push_back(NativeAdapter{.id = candidate.Value().id, .device = device});
+                    nativeAdapters_.push_back(
+                        NativeAdapter{.id = candidate.Value().id, .device = device, .shaderDemote = candidate.Value().shaderDemote});
                     enumeration.adapters.push_back(std::move(candidate).Value());
                 }
                 enumeration.revision = Detail::VulkanAdapterRevision(enumeration.adapters);
@@ -262,7 +263,11 @@ namespace Horo::Render {
             }
 
             /** @brief Revalidates the same-instance runtime device and exact required extension request before native creation. */
-            Result<void> ValidateHostDevice(const VkPhysicalDevice device, const VulkanDeviceRequest &request) const {
+            Result<void> ValidateHostDevice(const VkPhysicalDevice device, const VulkanDeviceRequest &request,
+                                            const bool shaderDemoteSupported) const {
+                if (request.enableShaderDemote && !shaderDemoteSupported)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
+                                                           "The selected physical device does not support shader demotion."));
                 const auto allowed = loaderPort_->AcceptPhysicalDevice(instance_, device);
                 if (allowed.HasError())
                     return Result<void>::Failure(allowed.ErrorValue());
@@ -284,7 +289,7 @@ namespace Horo::Render {
                 if (selected == nativeAdapters_.end()) {
                     return Result<void>::Failure(MakeError(VulkanBackendErrors::AdapterNotFound));
                 }
-                if (const auto host = ValidateHostDevice(selected->device, admitted); host.HasError())
+                if (const auto host = ValidateHostDevice(selected->device, admitted, selected->shaderDemote); host.HasError())
                     return host;
                 constexpr float priority{1.0F};
                 std::array<VkDeviceQueueCreateInfo, 3> queueInfos{};
@@ -296,6 +301,7 @@ namespace Horo::Render {
                 VkPhysicalDeviceVulkan13Features features13{
                     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                     .pNext = admitted.enableSwapchainMaintenance ? &maintenance : nullptr,
+                    .shaderDemoteToHelperInvocation = admitted.enableShaderDemote,
                     .synchronization2 = admitted.enabledFeatures.synchronization2,
                     .dynamicRendering = admitted.enabledFeatures.dynamicRendering,
                 };
@@ -339,6 +345,30 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            Result<std::vector<Detail::VulkanCommandQueue>> PrepareCommandQueues(VkPhysicalDevice physical,
+                                                                                 const VulkanDeviceRequest &request) {
+                using Outcome = Result<std::vector<Detail::VulkanCommandQueue>>;
+                const auto queueFacts = EnumerateQueues(physical);
+                if (queueFacts.HasError())
+                    return Outcome::Failure(queueFacts.ErrorValue());
+                std::vector<Detail::VulkanCommandQueue> queues;
+                for (const auto &assignment : request.queueAssignments) {
+                    if (std::ranges::any_of(queues, [&assignment](const Detail::VulkanCommandQueue &queue) {
+                        return queue.identity == assignment.queue;
+                    }))
+                        continue;
+                    const bool graphics =
+                        assignment.role == RenderQueueRole::Graphics || request.transferQueueFamily == request.graphicsQueueFamily;
+                    const auto family = graphics ? request.graphicsQueueFamily : request.transferQueueFamily;
+                    const auto facts = std::ranges::find(queueFacts.Value(), family, &VulkanQueueFamily::index);
+                    if (facts == queueFacts.Value().end())
+                        return Outcome::Failure(MakeError(VulkanBackendErrors::GraphicsQueueUnavailable));
+                    queues.emplace_back(assignment.queue, family, graphics ? graphicsQueue_ : transferQueue_, graphics,
+                                        facts->supportsCompute);
+                }
+                return Outcome::Success(std::move(queues));
+            }
+
             /** @brief Attaches the sole resource registry and shader owner to the selected native device. */
             Result<void> InitializeResources(VkPhysicalDevice physical, const VulkanDeviceRequest &request) {
                 if (auto bound = BindEditorDevice(physical, request); bound.HasError())
@@ -354,32 +384,26 @@ namespace Horo::Render {
                                                                      .pNext = &allocationLimits};
                 VkPhysicalDeviceProperties2 properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &timeline};
                 dispatch_.getPhysicalDeviceProperties2(physical, &properties);
-                std::vector<Detail::VulkanCommandQueue> queues;
-                for (const auto &assignment : request.queueAssignments) {
-                    if (std::ranges::any_of(queues, [&assignment](const Detail::VulkanCommandQueue &queue) {
-                        return queue.identity == assignment.queue;
-                    }))
-                        continue;
-                    const bool graphics =
-                        assignment.role == RenderQueueRole::Graphics || request.transferQueueFamily == request.graphicsQueueFamily;
-                    queues.emplace_back(assignment.queue, graphics ? request.graphicsQueueFamily : request.transferQueueFamily,
-                                        graphics ? graphicsQueue_ : transferQueue_, graphics);
-                }
+                const auto queues = PrepareCommandQueues(physical, request);
+                if (queues.HasError())
+                    return Result<void>::Failure(queues.ErrorValue());
                 const auto incarnation = AcquireRenderDeviceIncarnation();
                 if (incarnation.HasError())
                     return Result<void>::Failure(incarnation.ErrorValue());
-                if (auto shaders = resources_.InitializeShaders(properties.properties, request.adapter, dispatch_.getDeviceProcAddr,
-                                                                incarnation.Value(), request.enableVertexLayerRouting);
+                if (auto shaders =
+                        resources_.InitializeShaders(properties.properties, request.adapter, dispatch_.getDeviceProcAddr,
+                                                     incarnation.Value(), request.enableVertexLayerRouting, request.enableShaderDemote);
                     shaders.HasError())
                     return shaders;
                 if (auto prepared = graph_.Initialize({.device = device_,
-                                                       .queues = queues,
+                                                       .queues = queues.Value(),
                                                        .frames = request.maxFramesInFlight,
                                                        .timelineDifference = timeline.maxTimelineSemaphoreValueDifference,
                                                        .deviceIncarnation = incarnation.Value(),
                                                        .resources = resources_,
                                                        .resolver = dispatch_.getDeviceProcAddr,
-                                                       .vertexLayerEnabled = request.enableVertexLayerRouting});
+                                                       .vertexLayerEnabled = request.enableVertexLayerRouting,
+                                                       .properties = &properties.properties});
                     prepared.HasError())
                     return prepared;
                 if (auto published = PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,
@@ -430,6 +454,35 @@ namespace Horo::Render {
 
             RenderCapabilitySnapshot ResourceCapabilities() const noexcept override {
                 return resourceCapabilities_;
+            }
+
+            Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
+                const VfxGpuSimulationDescriptor &descriptor) const override {
+                return graph_.QueryVfxGpuNativePreparationResources(descriptor);
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs) override {
+                return graph_.RealizeVfxGpuPrograms(programs);
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+                const NativeVfxGpuSimulationPreparation &preparation) override {
+                return graph_.PrepareNativeVfxGpuSimulation(preparation);
+            }
+
+            Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                         std::span<NativeGpuVfxStepReceipt> destination) override {
+                return graph_.PollNativeVfxGpuReceipts(simulation, destination);
+            }
+
+            Result<std::size_t> CopyCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                               const VfxGpuStepIdentity &step, std::span<std::byte> destination) override {
+                return graph_.CopyCompletedVfxGpuObservation(simulation, step, destination);
+            }
+
+            Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                           const VfxGpuStepIdentity &step) override {
+                return graph_.DiscardCompletedVfxGpuObservation(simulation, step);
             }
 
             Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) override {
@@ -578,6 +631,7 @@ namespace Horo::Render {
             struct NativeAdapter {
                 RenderAdapterId id;
                 VkPhysicalDevice device{VK_NULL_HANDLE};
+                bool shaderDemote{false};
             };
 
             /** @brief Intersects actual enabled draw/layer dispatch with the selected device's framebuffer layer limit. */
@@ -609,6 +663,16 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            /** @brief Publishes only the actual initialized forward draw and GPU simulation routes. */
+            void PublishVfxCapabilities() {
+                if (graph_.SupportsVfxForwardInstancing())
+                    resourceCapabilities_.features.Enable(RenderCapability::VfxForwardInstancing);
+                if (graph_.SupportsVfxGpu())
+                    for (const auto capability :
+                         {RenderCapability::VfxGpuSimulation, RenderCapability::VfxGpuDraw, RenderCapability::VfxGpuReadback})
+                        resourceCapabilities_.features.Enable(capability);
+            }
+
             /** @brief Publishes queried device/format facts, intersected with this concrete implementation's resource policy. */
             Result<void> PublishResourceCapabilities(const VkPhysicalDevice device, const VkPhysicalDeviceProperties &properties,
                                                      const VkDeviceSize allocationLimit, const std::uint64_t incarnation) {
@@ -638,7 +702,7 @@ namespace Horo::Render {
                                   "vkGetPhysicalDeviceFormatProperties is required to publish native resource capabilities."));
                 }
                 snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
-                for (const auto format : {Rgba8Unorm, Depth24Stencil8, Depth32Float}) {
+                for (const auto format : {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float}) {
                     using enum RenderTextureUsage;
                     VkFormatProperties native{};
                     query(device, Detail::VulkanResourceConversion::TextureFormat(format), &native);
@@ -654,6 +718,7 @@ namespace Horo::Render {
                         usage = usage | CopyDestination;
                     snapshot.formats.usages[static_cast<std::size_t>(format)] = usage;
                 }
+                PublishVfxCapabilities();
                 return PublishMultiviewCapabilities(device, properties);
             }
 
@@ -780,6 +845,7 @@ namespace Horo::Render {
                     .hostAllowed = hostAllowed.Value(),
                     .vertexLayerRouting = features12.shaderOutputLayer == VK_TRUE,
                     .swapchainMaintenance = hasMaintenance && maintenance.swapchainMaintenance1 == VK_TRUE,
+                    .shaderDemote = features13.shaderDemoteToHelperInvocation == VK_TRUE,
                 });
             }
 
@@ -830,6 +896,7 @@ namespace Horo::Render {
                         .supportsTransfer =
                             properties[index].queueCount > 0 &&
                             (properties[index].queueFlags & (VK_QUEUE_TRANSFER_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0,
+                        .supportsCompute = properties[index].queueCount > 0 && (properties[index].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0,
                     });
                 }
                 return Result<std::vector<VulkanQueueFamily>>::Success(std::move(queues));

@@ -1,3 +1,4 @@
+#include "AnimationClipSceneProgramAccess.h"
 #include "AnimationGraphCompilerInternal.h"
 
 #include <algorithm>
@@ -39,8 +40,22 @@ namespace Horo::Animation {
         using namespace AnimationErrors;
         using namespace GraphCompileDetail;
 
-        /** @brief Canonicalizes semantically unordered authoring collections by stable identities. */
+        /** @brief Canonicalizes the inert action catalog without changing authored
+         * successor/loop semantics. */
+        void CanonicalizeActions(AnimationGraphData &data) {
+            std::ranges::sort(data.actionSlots, {}, &GraphActionSlot::id);
+            std::ranges::sort(data.actions, {}, &GraphActionDefinition::id);
+            for (auto &action : data.actions) {
+                std::ranges::sort(action.sequence.sections, {}, &GraphActionSection::id);
+                std::ranges::sort(action.sequence.loops, {}, &GraphActionLoopRegion::id);
+                std::ranges::sort(action.mask.joints, {}, &GraphBoneWeight::joint);
+            }
+        }
+
+        /** @brief Canonicalizes semantically unordered authoring collections by stable
+         * identities. */
         void Canonicalize(AnimationGraphData &data) {
+            CanonicalizeActions(data);
             const auto byId = [](const auto &left, const auto &right) {
                 return left.id < right.id;
             };
@@ -56,6 +71,8 @@ namespace Horo::Animation {
                         std::ranges::sort(machine->states, byId);
                         std::ranges::sort(machine->transitions, byId);
                     }
+                    if (auto *tree = std::get_if<GraphBlendTreeNode>(&node.payload))
+                        std::ranges::sort(tree->samples, byId);
                     if (auto *blend = std::get_if<GraphBlendNode>(&node.payload))
                         std::ranges::sort(blend->mask.joints, {}, &GraphBoneWeight::joint);
                 }
@@ -69,6 +86,8 @@ namespace Horo::Animation {
                     return !payload.referencePose;
                 else if constexpr (std::is_same_v<Payload, GraphBlendNode>)
                     return payload == GraphBlendNode{};
+                else if constexpr (std::is_same_v<Payload, GraphBlendTreeNode>)
+                    return false;
                 else
                     return true;
             }, node.payload);
@@ -77,14 +96,16 @@ namespace Horo::Animation {
             });
         }
 
-        /** @brief Requires every legacy definition to retain its original opcode defaults. */
+        /** @brief Requires every legacy definition to retain its original opcode
+         * defaults. */
         bool LegacyDefaults(const AnimationGraphData &data) {
             return std::ranges::all_of(data.definitions, [](const GraphDefinition &definition) {
                 return std::ranges::all_of(definition.nodes, LegacyNode);
             });
         }
 
-        /** @brief Checks scalar defaults without interpreting gameplay values or trigger consumption. */
+        /** @brief Checks scalar defaults without interpreting gameplay values or
+         * trigger consumption. */
         bool ValidParameter(const GraphParameter &parameter) {
             const auto asciiLetter = [](const unsigned char c) {
                 return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
@@ -108,7 +129,8 @@ namespace Horo::Animation {
             }
         }
 
-        /** @brief Invocation-local dependency indexes; never retained by the immutable program. */
+        /** @brief Invocation-local dependency indexes; never retained by the immutable
+         * program. */
         struct DefinitionTopology final {
             std::map<GraphNodeId, std::size_t> indexes;
             std::vector<std::vector<std::size_t>> incoming;
@@ -117,7 +139,8 @@ namespace Horo::Animation {
             std::size_t output{};
         };
 
-        /** @brief Validates node shapes, the unique sink and exact definition-input declarations. */
+        /** @brief Validates node shapes, the unique sink and exact definition-input
+         * declarations. */
         Result<void> IndexNodes(const GraphDefinition &definition, const AnimationGraphData &data,
                                 const AnimationGraphCompileContext &context, DefinitionTopology &topology) {
             const GraphSourceLocation location{definition.id, {}, {}};
@@ -152,7 +175,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Indexes one edge only after validating both endpoint directions and its exact type. */
+        /** @brief Indexes one edge only after validating both endpoint directions and
+         * its exact type. */
         Result<void> IndexEdge(const GraphDefinition &definition, std::size_t index, DefinitionTopology &topology,
                                std::set<GraphEndpoint> &destinations) {
             const auto &edge = definition.connections[index];
@@ -174,7 +198,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Builds bounded adjacency tables and rejects every unconnected required input. */
+        /** @brief Builds bounded adjacency tables and rejects every unconnected
+         * required input. */
         Result<void> IndexEdges(const GraphDefinition &definition, const AnimationGraphCompileContext &context,
                                 DefinitionTopology &topology) {
             topology.incoming.resize(definition.nodes.size());
@@ -194,7 +219,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Checks that every node contributes to the sink, without recursive stack growth. */
+        /** @brief Checks that every node contributes to the sink, without recursive
+         * stack growth. */
         Result<void> ValidateReachability(const GraphDefinition &definition, const DefinitionTopology &topology,
                                           const AnimationGraphCompileContext &context) {
             std::vector<bool> reached(definition.nodes.size());
@@ -218,7 +244,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Materializes exact typed operands after their source instructions have been emitted. */
+        /** @brief Materializes exact typed operands after their source instructions
+         * have been emitted. */
         GraphInstruction EmitInstruction(const GraphDefinition &definition, const AnimationGraphData &data,
                                          const DefinitionTopology &topology, std::size_t index,
                                          const std::vector<std::uint32_t> &registers) {
@@ -238,6 +265,13 @@ namespace Horo::Animation {
             if (const auto *parameter = std::get_if<GraphParameterNode>(&node.payload))
                 instruction.parameterIndex =
                     static_cast<std::uint32_t>(Find(data.parameters, parameter->parameter) - data.parameters.data());
+            if (const auto *tree = std::get_if<GraphBlendTreeNode>(&node.payload)) {
+                instruction.blendParameters[0] = static_cast<std::uint32_t>(Find(data.parameters, tree->x) - data.parameters.data());
+                if (tree->dimension == GraphBlendDimension::Two)
+                    instruction.blendParameters[1] = static_cast<std::uint32_t>(Find(data.parameters, tree->y) - data.parameters.data());
+            }
+            if (const auto *slot = std::get_if<GraphActionSlotNode>(&node.payload))
+                instruction.actionSlot = static_cast<std::uint32_t>(Find(data.actionSlots, slot->slot) - data.actionSlots.data());
             if (const auto *call = std::get_if<GraphCallNode>(&node.payload))
                 instruction.definitionIndex =
                     static_cast<std::uint32_t>(Find(data.definitions, call->definition) - data.definitions.data());
@@ -249,7 +283,8 @@ namespace Horo::Animation {
             return instruction;
         }
 
-        /** @brief Builds a stable-id topological schedule and exact operand/source map for one definition. */
+        /** @brief Builds a stable-id topological schedule and exact operand/source map
+         * for one definition. */
         Result<GraphCompiledDefinition> CompileDefinition(const GraphDefinition &definition, const AnimationGraphData &data,
                                                           const AnimationGraphCompileContext &context) {
             DefinitionTopology topology;
@@ -285,13 +320,15 @@ namespace Horo::Animation {
             return Result<GraphCompiledDefinition>::Success(std::move(result));
         }
 
-        /** @brief State branches charge both admitted lanes, control completion and full guarded call provenance. */
+        /** @brief State branches charge both admitted lanes, control completion and
+         * full guarded call provenance. */
         void AccumulateStateBudget(GraphCompiledDefinition &definition, std::span<const GraphCompiledDefinition> definitions) {
             for (const auto &instruction : definition.instructions) {
                 const auto *machine = std::get_if<GraphStateMachineNode>(&instruction.payload);
                 if (!machine)
                     continue;
-                ++definition.evaluationInstructions;  // Control precedes guarded children and pose completion.
+                ++definition.evaluationInstructions;  // Control precedes guarded children
+                                                      // and pose completion.
                 const auto clipStates = static_cast<std::uint64_t>(std::ranges::count_if(machine->states, [](const GraphState &state) {
                     return std::holds_alternative<AnimationClipId>(state.source);
                 }));
@@ -308,7 +345,8 @@ namespace Horo::Animation {
             }
         }
 
-        /** @brief Propagates completed callee costs into one definition under exact captured limits. */
+        /** @brief Propagates completed callee costs into one definition under exact
+         * captured limits. */
         Result<void> AccumulateCallBudget(GraphCompiledDefinition &definition, std::span<const GraphCompiledDefinition> definitions,
                                           const AnimationGraphCompileContext &context) {
             definition.callDepth = 1;
@@ -328,7 +366,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Builds one canonical dependency relation for ordinary calls and every state subgraph. */
+        /** @brief Builds one canonical dependency relation for ordinary calls and every
+         * state subgraph. */
         void IndexCallDependencies(const std::span<const GraphCompiledDefinition> definitions,
                                    std::vector<std::set<std::size_t>> &dependencies, std::vector<std::set<std::size_t>> &callers) {
             for (std::size_t index = 0; index < definitions.size(); ++index)
@@ -344,7 +383,8 @@ namespace Horo::Animation {
                 }
         }
 
-        /** @brief Rejects recursive calls and budgets expanded execution without expanding stored programs. */
+        /** @brief Rejects recursive calls and budgets expanded execution without
+         * expanding stored programs. */
         Result<void> BoundCalls(std::vector<GraphCompiledDefinition> &definitions, const AnimationGraphCompileContext &context) {
             std::vector<std::set<std::size_t>> dependencies(definitions.size());
             std::vector<std::set<std::size_t>> callers(definitions.size());
@@ -373,7 +413,8 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Infers legacy edge types on a detached definition while preserving cancellation and error order. */
+        /** @brief Infers legacy edge types on a detached definition while preserving
+         * cancellation and error order. */
         Result<void> MigrateConnections(GraphDefinition &definition, const AnimationGraphCompileContext &context) {
             for (auto &edge : definition.connections) {
                 if (auto state = Admission(context); state.HasError())
@@ -387,14 +428,16 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Canonical sorted ID tables reject duplicate persistent declarations. */
+        /** @brief Canonical sorted ID tables reject duplicate persistent declarations.
+         */
         Result<void> ValidateCanonicalIdentities(const AnimationGraphData &canonical) {
             if (!UniqueIds(canonical.definitions) || !UniqueIds(canonical.parameters))
                 return Result<void>::Failure(Failure(GraphMalformed));
             return Result<void>::Success();
         }
 
-        /** @brief Resolves the one closed entry definition to its canonical stable program index. */
+        /** @brief Resolves the one closed entry definition to its canonical stable
+         * program index. */
         Result<std::uint32_t> ResolveEntryIndex(const AnimationGraphData &canonical) {
             const auto *entry = Find(canonical.definitions, canonical.entry);
             if (!entry || !entry->inputs.empty())
@@ -402,7 +445,8 @@ namespace Horo::Animation {
             return Result<std::uint32_t>::Success(static_cast<std::uint32_t>(entry - canonical.definitions.data()));
         }
 
-        /** @brief All typed parameter declarations and names are validated before compiling any definition. */
+        /** @brief All typed parameter declarations and names are validated before
+         * compiling any definition. */
         Result<void> ValidateCanonicalParameters(const AnimationGraphData &canonical) {
             std::set<std::string, std::less<>> names;
             for (const auto &parameter : canonical.parameters)
@@ -411,11 +455,15 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
-        /** @brief Projects one typed opcode's direct clips, including every inactive state source. */
+        /** @brief Projects one typed opcode's direct clips, including every inactive
+         * state source. */
         void CollectPayloadClips(const GraphNodePayload &opcode, std::set<AnimationClipId> &clips) {
             std::visit([&clips]<typename Payload>(const Payload &payload) {
                 if constexpr (std::is_same_v<Payload, GraphClipNode>)
                     clips.insert(payload.clip);
+                else if constexpr (std::is_same_v<Payload, GraphBlendTreeNode>)
+                    for (const auto &sample : payload.samples)
+                        clips.insert(sample.clip);
                 else if constexpr (std::is_same_v<Payload, GraphStateMachineNode>)
                     for (const auto &state : payload.states)
                         if (const auto *clip = std::get_if<AnimationClipId>(&state.source))
@@ -423,13 +471,15 @@ namespace Horo::Animation {
             }, opcode);
         }
 
-        /** @brief Collects each compiled definition's immutable dependency set without selecting active branches. */
+        /** @brief Collects each compiled definition's immutable dependency set without
+         * selecting active branches. */
         void CollectClips(const GraphCompiledDefinition &definition, std::set<AnimationClipId> &clips) {
             for (const auto &instruction : definition.instructions)
                 CollectPayloadClips(instruction.payload, clips);
         }
 
-        /** @brief Compiles the complete detached definition set and collects even inactive clip dependencies before publication. */
+        /** @brief Compiles the complete detached definition set and collects even
+         * inactive clip dependencies before publication. */
         Result<std::vector<GraphCompiledDefinition>> CompileDefinitions(const AnimationGraphData &canonical,
                                                                         const AnimationGraphCompileContext &context,
                                                                         std::set<AnimationClipId> &clips) {
@@ -444,7 +494,8 @@ namespace Horo::Animation {
             return Result<std::vector<GraphCompiledDefinition>>::Success(std::move(definitions));
         }
 
-        /** @brief State authoring payloads are not valid in any pre-state source schema. */
+        /** @brief State authoring payloads are not valid in any pre-state source
+         * schema. */
         bool HasStatePayload(const AnimationGraphData &data) {
             for (const auto &definition : data.definitions)
                 for (const auto &node : definition.nodes)
@@ -453,25 +504,223 @@ namespace Horo::Animation {
             return false;
         }
 
-        /** @brief Exact semantic contract corresponding to an already range-admitted authoring schema. */
+        /** @brief Exact semantic contract corresponding to an already range-admitted
+         * authoring schema. */
         AnimationGraphContractVersion SourceContract(const std::uint32_t schema) noexcept {
             if (schema <= 2)
                 return {1, 0, 0};
             if (schema == 3)
                 return {1, 1, 0};
+            if (schema == 4)
+                return {1, 2, 0};
+            if (schema == 5)
+                return {1, 3, 0};
             return CurrentAnimationGraphContractVersion;
         }
 
-        /** @brief Each admitted source schema has exactly one semantic contract; pose policies remain unchanged in schema 3. */
+        /** @brief Action authoring cannot be mislabeled as a legacy contract. */
+        bool HasActionPayload(const AnimationGraphData &data) {
+            if (!data.actions.empty() || !data.actionSlots.empty())
+                return true;
+            for (const auto &definition : data.definitions)
+                for (const auto &node : definition.nodes)
+                    if (std::holds_alternative<GraphActionSlotNode>(node.payload))
+                        return true;
+            return false;
+        }
+
+        /** @brief Blend-space semantics retain their exact introduction version. */
+        bool HasBlendPayload(const AnimationGraphData &data) {
+            for (const auto &definition : data.definitions)
+                for (const auto &node : definition.nodes)
+                    if (std::holds_alternative<GraphBlendTreeNode>(node.payload))
+                        return true;
+            return false;
+        }
+
+        /** @brief Each admitted source schema has exactly one semantic contract; pose
+         * policies remain unchanged in schema 3. */
         bool ValidSourceVersion(const AnimationGraphData &data) {
             if (data.schemaVersion == 0 || data.schemaVersion > CurrentAnimationGraphSchemaVersion)
                 return false;
             if (const auto expected = SourceContract(data.schemaVersion); data.contractVersion != expected)
                 return false;
+            if (data.schemaVersion < 6 && HasActionPayload(data))
+                return false;
+            if (data.schemaVersion < 5 && HasBlendPayload(data))
+                return false;
             return data.schemaVersion >= 4 || !HasStatePayload(data);
         }
 
-        /** @brief Publishes a complete detached schema or bound program only after the final admission/cancellation fence. */
+        /** @brief Validates both typed namespaces before emitting any instruction. */
+        Result<void> ValidateCanonicalCatalog(const AnimationGraphData &data) {
+            if (const auto parameters = ValidateCanonicalParameters(data); parameters.HasError())
+                return parameters;
+            return ValidateActions(data);
+        }
+
+        /** @brief Every immutable action section remains an exact clip dependency, including inactive requests. */
+        void CollectActionClips(const AnimationGraphData &data, std::set<AnimationClipId> &clips) {
+            for (const auto &action : data.actions)
+                for (const auto &section : action.sequence.sections)
+                    clips.insert(section.clip);
+        }
+
+        /** @brief Projects supplied instructions into the existing semantic validator, never selecting an execution order. */
+        GraphDefinition CookedValidationDefinition(const GraphCompiledDefinition &compiled) {
+            GraphDefinition result{.id = compiled.id, .inputs = compiled.inputs};
+            for (const auto &instruction : compiled.instructions) {
+                result.nodes.push_back({instruction.source.node, instruction.payload, instruction.pins});
+                for (const auto &input : instruction.inputs)
+                    result.connections.push_back(
+                        {{input.source.node, input.source.pin}, {instruction.source.node, input.destination}, input.type});
+            }
+            return result;
+        }
+
+        /** @brief Builds bounded validation-only declarations after whole-candidate cold admission. */
+        AnimationGraphData CookedValidationModel(const AnimationGraphCookedData &data) {
+            AnimationGraphData model;
+            model.id = data.id;
+            model.skeleton = data.skeleton;
+            model.entry = data.entry;
+            model.parameters = data.parameters;
+            model.actionSlots = data.actionSlots;
+            model.actions = data.actions;
+            for (const auto &definition : data.definitions)
+                model.definitions.push_back(CookedValidationDefinition(definition));
+            Canonicalize(model);
+            return model;
+        }
+
+        /** @brief Cooked catalogs must already use the same canonical ordering as compiler output. */
+        bool CookedCatalogMatches(const AnimationGraphCookedData &data, const AnimationGraphData &model) {
+            return data.parameters == model.parameters && data.actionSlots == model.actionSlots && data.actions == model.actions;
+        }
+
+        /** @brief Runs the shared semantic topology checks without compiling or replacing the supplied schedule. */
+        Result<void> CookedTopology(const GraphDefinition &definition, const AnimationGraphData &model,
+                                    const AnimationGraphCompileContext &context, DefinitionTopology &topology) {
+            if (auto nodes = IndexNodes(definition, model, context, topology); nodes.HasError())
+                return nodes;
+            if (auto edges = IndexEdges(definition, context, topology); edges.HasError())
+                return edges;
+            return ValidateReachability(definition, topology, context);
+        }
+
+        /** @brief Verifies one stored instruction against the existing canonical operand encoder. */
+        Result<std::size_t> VerifyCookedInstruction(const GraphInstruction &instruction, const GraphDefinition &definition,
+                                                    const AnimationGraphData &model, const DefinitionTopology &topology,
+                                                    const std::vector<std::uint32_t> &registers, const std::set<std::size_t> &ready) {
+            const auto found = topology.indexes.find(instruction.source.node);
+            if (found == topology.indexes.end() || ready.empty() || found->second != *ready.begin())
+                return Result<std::size_t>::Failure(Failure(GraphMalformed, instruction.source));
+            // This checks already supplied code. It neither chooses a schedule nor emits a replacement program.
+            if (EmitInstruction(definition, model, topology, found->second, registers) != instruction)
+                return Result<std::size_t>::Failure(Failure(GraphMalformed, instruction.source));
+            return Result<std::size_t>::Success(found->second);
+        }
+
+        /** @brief Advances the validation frontier only after the exact stored instruction has been checked. */
+        void AdvanceCookedFrontier(DefinitionTopology &topology, const std::size_t node, std::set<std::size_t> &ready) {
+            ready.erase(node);
+            for (const auto next : topology.outgoing[node])
+                if (--topology.indegree[next] == 0)
+                    ready.insert(next);
+        }
+
+        /** @brief Checks source provenance, operand indexes and the deterministic supplied topological order. */
+        Result<void> VerifyCookedSchedule(const GraphCompiledDefinition &compiled, const GraphDefinition &definition,
+                                          const AnimationGraphData &model, const AnimationGraphCompileContext &context) {
+            DefinitionTopology topology;
+            if (auto checked = CookedTopology(definition, model, context, topology); checked.HasError())
+                return checked;
+            std::set<std::size_t> ready;
+            for (std::size_t index = 0; index < topology.indegree.size(); ++index)
+                if (topology.indegree[index] == 0)
+                    ready.insert(index);
+            std::vector<std::uint32_t> registers(definition.nodes.size());
+            for (std::size_t index = 0; index < compiled.instructions.size(); ++index) {
+                if (auto admission = Admission(context); admission.HasError())
+                    return admission;
+                auto node = VerifyCookedInstruction(compiled.instructions[index], definition, model, topology, registers, ready);
+                if (node.HasError())
+                    return Result<void>::Failure(node.ErrorValue());
+                registers[node.Value()] = static_cast<std::uint32_t>(index);
+                AdvanceCookedFrontier(topology, node.Value(), ready);
+            }
+            if (compiled.outputInstruction != registers[topology.output])
+                return Result<void>::Failure(Failure(GraphMalformed));
+            return Result<void>::Success();
+        }
+
+        /** @brief Verifies every canonical definition before any stored index reaches binding or call expansion. */
+        Result<void> VerifyCookedDefinitions(const AnimationGraphCookedData &data, const AnimationGraphData &model,
+                                             const AnimationGraphCompileContext &context) {
+            for (std::size_t index = 0; index < data.definitions.size(); ++index) {
+                const auto &compiled = data.definitions[index];
+                const auto &definition = model.definitions[index];
+                if (compiled.id != definition.id || compiled.inputs != definition.inputs)
+                    return Result<void>::Failure(Failure(GraphMalformed));
+                if (auto checked = VerifyCookedSchedule(compiled, definition, model, context); checked.HasError())
+                    return checked;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Verifies claimed expansion costs against the one existing bounded call-graph accounting path. */
+        Result<void> VerifyCookedCosts(std::vector<GraphCompiledDefinition> &definitions, const AnimationGraphCookedData &data,
+                                       const AnimationGraphCompileContext &context) {
+            for (auto &definition : definitions)
+                definition.sourceMapCallEntries = 0;
+            if (auto bounded = BoundCalls(definitions, context); bounded.HasError())
+                return bounded;
+            for (std::size_t index = 0; index < definitions.size(); ++index) {
+                const auto &actual = definitions[index];
+                const auto &claimed = data.definitions[index];
+                if (actual.callDepth != claimed.callDepth || actual.evaluationInstructions != claimed.evaluationInstructions ||
+                    actual.sourceMapCallEntries != claimed.sourceMapCallEntries)
+                    return Result<void>::Failure(Failure(GraphMalformed));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Admits an exact current contract and canonical semantic namespace without a source compiler call. */
+        Result<AnimationGraphData> ValidateCookedModel(const AnimationGraphCookedData &data, const AnimationGraphCompileContext &context) {
+            if (data.contractVersion != CurrentAnimationGraphContractVersion)
+                return Result<AnimationGraphData>::Failure(Failure(GraphVersionUnsupported));
+            if (auto admitted = PreflightCookedGraph(data, context); admitted.HasError())
+                return Result<AnimationGraphData>::Failure(admitted.ErrorValue());
+            auto model = CookedValidationModel(data);
+            if (auto identities = ValidateCanonicalIdentities(model); identities.HasError())
+                return Result<AnimationGraphData>::Failure(identities.ErrorValue());
+            if (!CookedCatalogMatches(data, model))
+                return Result<AnimationGraphData>::Failure(Failure(GraphMalformed));
+            if (auto catalog = ValidateCanonicalCatalog(model); catalog.HasError())
+                return Result<AnimationGraphData>::Failure(catalog.ErrorValue());
+            if (auto definitions = VerifyCookedDefinitions(data, model, context); definitions.HasError())
+                return Result<AnimationGraphData>::Failure(definitions.ErrorValue());
+            return Result<AnimationGraphData>::Success(std::move(model));
+        }
+
+        /** @brief Defines execution-local operands only; these IDs never claim a persistent graph asset. */
+        AnimationGraphData DirectClipDeclarations(const AnimationClipId clip, const SkeletonId skeleton) {
+            AnimationGraphData model;
+            model.skeleton = skeleton;
+            model.entry = GraphDefinitionId::Create(1).Value();
+            const auto sample = GraphNodeId::Create(1).Value();
+            const auto output = GraphNodeId::Create(2).Value();
+            const auto pin = GraphPinId::Create(1).Value();
+            GraphDefinition definition{.id = model.entry};
+            definition.nodes = {{sample, GraphClipNode{clip, {}}, {{pin, GraphPinRole::Result, GraphValueType::Pose, true}}},
+                                {output, GraphOutputNode{}, {{pin, GraphPinRole::Value, GraphValueType::Pose, false}}}};
+            definition.connections = {{{sample, pin}, {output, pin}, GraphValueType::Pose}};
+            model.definitions.push_back(std::move(definition));
+            return model;
+        }
+
+        /** @brief Publishes a complete detached schema or bound program only after the
+         * final admission/cancellation fence. */
         Result<AnimationGraphProgram> PublishProgram(AnimationGraphProgram program, const AnimationGraphCompileContext &context) {
             if (auto state = Admission(context); state.HasError())
                 return Result<AnimationGraphProgram>::Failure(state.ErrorValue());
@@ -493,9 +742,11 @@ namespace Horo::Animation {
         const auto entry = ResolveEntryIndex(canonical);
         if (entry.HasError())
             return Result<AnimationGraphProgram>::Failure(entry.ErrorValue());
-        if (auto parameters = ValidateCanonicalParameters(canonical); parameters.HasError())
-            return Result<AnimationGraphProgram>::Failure(parameters.ErrorValue());
+        if (const auto catalog = ValidateCanonicalCatalog(canonical); catalog.HasError())
+            return Result<AnimationGraphProgram>::Failure(catalog.ErrorValue());
         AnimationGraphProgram result;
+        result.actionSlots_ = canonical.actionSlots;
+        result.actions_ = canonical.actions;
         result.id_ = canonical.id;
         result.skeleton_ = canonical.skeleton;
         result.parameters_ = canonical.parameters;
@@ -507,6 +758,7 @@ namespace Horo::Animation {
         result.definitions_ = std::move(definitions).Value();
         if (auto calls = BoundCalls(result.definitions_, context); calls.HasError())
             return Result<AnimationGraphProgram>::Failure(calls.ErrorValue());
+        CollectActionClips(canonical, clips);
         result.clips_.assign(clips.begin(), clips.end());
         return PublishProgram(std::move(result), context);
     }
@@ -517,7 +769,12 @@ namespace Horo::Animation {
         auto schema = CompileSchema(data, context);
         if (schema.HasError())
             return schema;
-        auto result = std::move(schema).Value();
+        return BindProgram(std::move(schema).Value(), context);
+    }
+
+    /** @copydoc AnimationGraphProgram::BindProgram */
+    Result<AnimationGraphProgram> AnimationGraphProgram::BindProgram(AnimationGraphProgram result,
+                                                                     const AnimationGraphCompileContext &context) {
         auto bound = GraphCompileDetail::Bind(result, context);
         if (bound.HasError())
             return Result<AnimationGraphProgram>::Failure(bound.ErrorValue());
@@ -528,6 +785,58 @@ namespace Horo::Animation {
         result.occurrences_ = std::move(owned.occurrences);
         result.stateMachines_ = std::move(owned.stateMachines);
         return PublishProgram(std::move(result), context);
+    }
+
+    /** @copydoc AnimationGraphProgram::FromCooked */
+    Result<AnimationGraphProgram> AnimationGraphProgram::FromCooked(const AnimationGraphCookedData &data,
+                                                                    const AnimationGraphCompileContext &context) {
+        auto model = ValidateCookedModel(data, context);
+        if (model.HasError())
+            return Result<AnimationGraphProgram>::Failure(model.ErrorValue());
+        const auto entry = ResolveEntryIndex(model.Value());
+        if (entry.HasError())
+            return Result<AnimationGraphProgram>::Failure(entry.ErrorValue());
+        AnimationGraphProgram result;
+        result.id_ = data.id;
+        result.skeleton_ = data.skeleton;
+        result.entry_ = entry.Value();
+        result.parameters_ = data.parameters;
+        result.actionSlots_ = data.actionSlots;
+        result.actions_ = data.actions;
+        result.definitions_ = data.definitions;
+        if (auto costs = VerifyCookedCosts(result.definitions_, data, context); costs.HasError())
+            return Result<AnimationGraphProgram>::Failure(costs.ErrorValue());
+        std::set<AnimationClipId> clips;
+        for (const auto &definition : result.definitions_)
+            CollectClips(definition, clips);
+        CollectActionClips(model.Value(), clips);
+        result.clips_.assign(clips.begin(), clips.end());
+        return BindProgram(std::move(result), context);
+    }
+
+    /** @copydoc AnimationGraphProgram::PrepareClip */
+    Result<AnimationGraphProgram> AnimationGraphProgram::PrepareClip(const AnimationClipId clip,
+                                                                     const AnimationGraphCompileContext &context) {
+        if (auto admitted = PreflightClipProgram(clip, context); admitted.HasError())
+            return Result<AnimationGraphProgram>::Failure(admitted.ErrorValue());
+        const auto declarations = DirectClipDeclarations(clip, context.skeleton->Data().skeleton);
+        auto definition = CompileDefinition(declarations.definitions.front(), declarations, context);
+        if (definition.HasError())
+            return Result<AnimationGraphProgram>::Failure(definition.ErrorValue());
+        AnimationGraphProgram result;
+        result.sourceClip_ = clip;
+        result.skeleton_ = declarations.skeleton;
+        result.definitions_.push_back(std::move(definition).Value());
+        result.clips_.push_back(clip);
+        if (auto costs = BoundCalls(result.definitions_, context); costs.HasError())
+            return Result<AnimationGraphProgram>::Failure(costs.ErrorValue());
+        return BindProgram(std::move(result), context);
+    }
+
+    /** @copydoc Detail::ClipSceneProgramAccess::Prepare */
+    Result<AnimationGraphProgram> Detail::ClipSceneProgramAccess::Prepare(const AnimationClipId clip,
+                                                                          const AnimationGraphCompileContext &context) {
+        return AnimationGraphProgram::PrepareClip(clip, context);
     }
 
     /** @copydoc MigrateAnimationGraph */

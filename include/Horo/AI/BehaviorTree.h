@@ -6,6 +6,7 @@
  */
 
 #include "Horo/AI/AIIdentity.h"
+#include "Horo/AI/DecisionAssetValidation.h"
 #include "Horo/Foundation/Result.h"
 
 #include <compare>
@@ -16,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -171,8 +173,19 @@ namespace Horo::AI {
         std::vector<BehaviorTreePin> pins;
         std::vector<BehaviorTreeProperty> properties;
         std::optional<BehaviorTreeSubtreeReference> nestedSubtree;
+        DecisionControlParameters control; /**< Explicit executable semantics; Unspecified remains inspectable only. */
+        std::optional<DecisionSubplanCall> call;
+        TaskId task; /**< Persistent task definition for provider task leaves only. */
+        std::vector<DecisionBlackboardRequirement> requirements;
+        SourceLocation source;
 
-        [[nodiscard]] bool operator==(const BehaviorTreeNode &) const noexcept = default;
+        [[nodiscard]] bool operator==(const BehaviorTreeNode &other) const noexcept {
+            return std::tie(id, kind, type, typeVersion, displayName, minimumChildren, maximumChildren, pins, properties, nestedSubtree,
+                            control, call, task, requirements, source.source, source.line, source.column) ==
+                   std::tie(other.id, other.kind, other.type, other.typeVersion, other.displayName, other.minimumChildren,
+                            other.maximumChildren, other.pins, other.properties, other.nestedSubtree, other.control, other.call, other.task,
+                            other.requirements, other.source.source, other.source.line, other.source.column);
+        }
     };
 
     /** @brief Stable directed topology edge; order is semantic child/service order, not layout order. */

@@ -1,5 +1,5 @@
 #pragma once
-
+#include "../runtime/GameplayPersistenceBindingInternal.h"
 #include "Horo/Gameplay/BehaviorRegistry.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
@@ -77,6 +77,7 @@ namespace Horo::Gameplay {
         ~Impl();
 
         /** @brief Freezes contributed metadata and binds exact-generation leases before any runtime activation. */
+        [[nodiscard]] Result<void> CaptureGeneratedContributions(const GeneratedGameplayDescriptorBundle &bundle);
         [[nodiscard]] Result<void> FreezeRegistries(std::span<const GameplayCapabilityId> hostCapabilities);
         [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities,
                                                     const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission);
@@ -87,9 +88,12 @@ namespace Horo::Gameplay {
         /** @brief Expose the already admitted scoped holders only after project service activation succeeds. */
         void PublishRuntimeContext();
         void Shutdown() noexcept;
+        void RevokeRuntimeServices() noexcept;
 
         std::shared_ptr<Detail::GameModuleCodeImage> codeImage;
         Detail::NativeRegistries registries;
+        mutable std::vector<std::shared_ptr<Detail::GameplayPersistenceSourceSlot>> persistenceSourceSlots;
+        [[nodiscard]] std::shared_ptr<Detail::GameplayPersistenceSourceSlot> PersistenceSourceSlot(std::size_t) const;
         std::unique_ptr<GameplayServiceRuntime> projectServices;
         GameRuntimeContext runtimeContext;
         std::shared_ptr<GameplayPhysicsContext> physics;
@@ -102,6 +106,7 @@ namespace Horo::Gameplay {
         std::string moduleId;
         std::string buildFingerprint;
         std::uint64_t descriptorRevision{};
+        std::vector<AI::DecisionNodeRegistration> decisionNodes;
         std::filesystem::path loadedArtifactPath;
         std::atomic_bool runtimeLeaseAdmission{true};
         std::thread::id ownerThread{std::this_thread::get_id()};

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Editor/EditorGuiContext.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Editor/WelcomeController.h"
 
 #include <array>
@@ -9,7 +10,22 @@
 #include <vector>
 
 namespace Horo::Editor {
+    /** @brief Shared route-screen and view localization scope. */
+    inline constexpr GuiLocalizationScope WelcomeTextScope{"welcome"};
     struct GuiContentRegion;
+
+    /** @brief Validated welcome geometry resolved from active design tokens each frame. */
+    struct WelcomeLayout {
+        float sidebarWidth{};
+        float sidebarPaddingX{};
+        float sidebarPaddingY{};
+        float bodyPaddingX{};
+        float bodyPaddingY{};
+        float cardPadding{};
+        float gridGap{};
+        float sectionGap{};
+        std::uint32_t newsColumns{2};
+    };
 
     /** @brief Texture handles required by the welcome view renderer. */
     struct WelcomeViewAssets {
@@ -52,6 +68,12 @@ namespace Horo::Editor {
 
     /** @brief Returns indices into the original project list after search and sort. */
     [[nodiscard]] std::vector<std::size_t> VisibleWelcomeProjectIndices(const WelcomeViewModel &model, const WelcomeViewState &state);
+
+    /** @brief Resolves active theme geometry for the current content region.
+     * @param region Current available content bounds.
+     * @return Finite, bounded geometry shared by measurement and drawing in this frame.
+     */
+    [[nodiscard]] WelcomeLayout ResolveWelcomeLayout(const GuiContentRegion &region);
 
     /**
      * @brief Draws the HoroEditor welcome view using design-system components.

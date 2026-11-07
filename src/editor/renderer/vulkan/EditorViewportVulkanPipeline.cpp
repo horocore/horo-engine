@@ -26,6 +26,10 @@ namespace Horo::Editor {
         if (overlay.HasError())
             return Result<void>::Failure(overlay.ErrorValue());
         program.overlayPipeline = overlay.Value();
+        auto sampler = frontend.CreateSampler({});
+        if (sampler.HasError())
+            return Result<void>::Failure(sampler.ErrorValue());
+        program.shadowSampler = sampler.Value().handle;
         return CreateMaterialLayout(frontend, program, program.metadata.reflection, frames);
     }
 
@@ -109,7 +113,7 @@ namespace Horo::Editor {
         program.parameterBytes = bytes.Value();
         program.uniformBytes = nativeBytes.Value();
         auto materials = MaterialBindingTable::Create(program.pipeline.owner, frontend,
-                                                      {.maximumGenerations = frames * (RenderMaterialPass::MaximumDraws + 1)});
+                                                      {.maximumGenerations = frames * (RenderMaterialPass::MaximumDraws + 1) * 8});
         if (materials.HasError())
             return Result<void>::Failure(materials.ErrorValue());
         program.materials = std::move(materials).Value();
@@ -119,11 +123,13 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateDrawSlots */
     Result<void> EditorViewportRendererVulkan::ProgramResources::CreateDrawSlots(Render::RenderFrontend &frontend,
                                                                                  const ShaderResources &program, std::span<FrameSlot> slots,
-                                                                                 const std::uint32_t frames) {
+                                                                                 const std::uint32_t frames,
+                                                                                 const Render::RenderTextureViewHandle atlas) {
         for (std::uint32_t slot = 0; slot < frames; ++slot)
             for (std::size_t index = 0; index < Render::RenderMaterialPass::MaximumDraws; ++index) {
-                const auto created = CreateUniformSlot(frontend, program, slots[slot].draws[index],
-                                                       slot * (Render::RenderMaterialPass::MaximumDraws + 1) + index + 1, program.pipeline);
+                const auto created =
+                    CreateUniformSlot(frontend, program, slots[slot].draws[index],
+                                      slot * (Render::RenderMaterialPass::MaximumDraws + 1) + index + 1, program.pipeline, atlas);
                 if (created.HasError())
                     return created;
             }
@@ -134,7 +140,8 @@ namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::ProgramResources::CreateUniformSlot(Render::RenderFrontend &frontend,
                                                                                    const ShaderResources &program, DrawSlot &draw,
                                                                                    const std::uint64_t material,
-                                                                                   const Render::RenderPipelineHandle pipeline) {
+                                                                                   const Render::RenderPipelineHandle pipeline,
+                                                                                   const Render::RenderTextureViewHandle atlas) {
         using namespace Render;
         const std::array<std::byte, MaximumUniformBytes> zero{};
         const auto buffer = frontend.CreateBuffer(RenderMemoryScopes::ViewportResources,
@@ -151,17 +158,33 @@ namespace Horo::Editor {
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
         draw.instance = native.Value();
-        const auto published =
-            program.materials->Publish({.material = {material},
-                                        .revision = 1,
-                                        .pipeline = pipeline,
-                                        .layout = program.layout,
-                                        .resources = {{{1}, 0, MaterialBufferBinding{draw.buffer, 0, program.uniformBytes}}}});
+        draw.materialIdentity = material;
+        if (program.shadowSampler.IsValid() && !atlas.IsValid())
+            return Result<void>::Success();
+        return BindUniformSlot(program, draw, pipeline, atlas);
+    }
+
+    Result<void> EditorViewportRendererVulkan::ProgramResources::BindUniformSlot(const ShaderResources &program, DrawSlot &draw,
+                                                                                 Render::RenderPipelineHandle pipeline,
+                                                                                 Render::RenderTextureViewHandle atlas) {
+        using namespace Render;
+        std::vector<MaterialResourceBinding> resources{{{1}, 0, MaterialBufferBinding{draw.buffer, 0, program.uniformBytes}}};
+        if (program.shadowSampler.IsValid()) {
+            resources.push_back({{2}, 0, atlas});
+            resources.push_back({{3}, 0, program.shadowSampler});
+        }
+        const auto published = program.materials->Publish({.material = {draw.materialIdentity},
+                                                           .revision = ++draw.materialRevision,
+                                                           .pipeline = pipeline,
+                                                           .layout = program.layout,
+                                                           .resources = std::move(resources)});
         if (published.HasError())
             return Result<void>::Failure(published.ErrorValue());
         const auto acquired = program.materials->Acquire(published.Value().binding);
         if (acquired.HasError())
             return Result<void>::Failure(acquired.ErrorValue());
+        if (draw.material)
+            static_cast<void>(program.materials->Release(draw.material->Id()));
         draw.material = acquired.Value();
         return Result<void>::Success();
     }

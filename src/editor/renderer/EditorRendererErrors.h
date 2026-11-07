@@ -39,6 +39,15 @@ namespace Horo::Editor::RendererErrors {
     inline const ErrorDomainId SdlOpenGLDomain{"horo.editor.sdl.opengl"};
     inline const ErrorDomainId ViewportDomain{"horo.editor.viewport"};
 
+    inline const ErrorCodeDescriptor
+        ViewportShadowUnsupported{ViewportDomain,
+                                  ErrorCode{"editor.viewport.shadow_unsupported"},
+                                  ErrorSeverity::Error,
+                                  "Selected viewport renderer does not provide the requested directional shadow profile.",
+                                  "Select a renderer with admitted directional shadow support.",
+                                  false,
+                                  false};
+
     inline const ErrorCodeDescriptor GuiInvalidState{GuiOpenGLDomain,
                                                      ErrorCode{"editor.gui.opengl.invalid_state"},
                                                      ErrorSeverity::Error,

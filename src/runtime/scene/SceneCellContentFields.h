@@ -385,7 +385,7 @@ namespace Horo::Runtime::CellCookDetail {
     template <class T>
         requires std::same_as<std::remove_cv_t<T>, CharacterSceneCollision>
     inline auto ContentFields(T &v) {
-        return std::tie(v.profile, v.queryChannel, v.defaultMaterial, v.requiredLayer, v.requiredProfile, v.excludedBody);
+        return std::tie(v.profile, v.queryChannel, v.defaultMaterial, v.requiredLayer, v.requiredProfile, v.excludedBody, v.defaultSurface);
     }
 
     template <class T>

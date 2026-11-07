@@ -19,6 +19,21 @@ namespace {
 
     using namespace Horo::Render::VulkanBackendTest;
 
+    TEST_CASE("Vulkan optional shader demotion follows queried adapter support without changing baseline admission",
+              "[unit][runtime][renderer][vulkan][demote]") {
+        RuntimeState state = DefaultState();
+        SECTION("unsupported optional feature preserves ordinary device admission") {}
+        SECTION("supported optional feature is explicitly requested") {
+            state.enumeration.adapters.front().shaderDemote = true;
+        }
+        FakeRuntimePort port{state};
+        auto backend = CreateBackend(port);
+        REQUIRE(backend->Initialize({}).HasValue());
+        CHECK(state.deviceRequest.enabledFeatures.AreAvailable());
+        CHECK(state.deviceRequest.enableShaderDemote == state.enumeration.adapters.front().shaderDemote);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+    }
+
     TEST_CASE("Vulkan registration is inert and initialization enables the exact baseline", "[unit][runtime][renderer][vulkan]") {
         RuntimeState state = DefaultState();
         FakeRuntimePort port{state};

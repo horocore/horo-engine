@@ -1,5 +1,6 @@
 #include "EditorViewportRendererVulkan.h"
 #include "editor/renderer/EditorRendererErrors.h"
+#include "editor/renderer/EditorViewportMeshReadiness.h"
 
 #include <algorithm>
 
@@ -70,7 +71,7 @@ namespace Horo::Editor {
         }
         if (!output)
             return fail(MakeError(RendererErrors::ViewportInvalidScene));
-        if (const auto prepared = bridge_.Port()->PreparePrimaryOutput(frame.Token(), *output); prepared.HasError())
+        if (const auto prepared = PrepareViewportOutput(frame, *output, viewport); prepared.HasError())
             return fail(prepared.ErrorValue());
         if (!viewport)
             return frame.Execute({});
@@ -94,52 +95,82 @@ namespace Horo::Editor {
         return frame.ExecuteSubmittedGraph(emptyGraph_->graph, emptyGraph_->workloads, std::span{&submission, 1});
     }
 
-    /** @copydoc EditorViewportRendererVulkan::ExecuteViewport */
-    Result<void> EditorViewportRendererVulkan::ExecuteViewport(Render::RenderFrameScope &frame,
-                                                               const Render::StaticMeshPassDescriptor &pass) {
+    Result<std::uint32_t> EditorViewportRendererVulkan::PrepareViewportSlot(Render::FrameToken frame,
+                                                                            const Render::StaticMeshPassDescriptor &pass) {
         using namespace Render;
+        using Output = Result<std::uint32_t>;
         if (!pass.IsValid() || !IsReady() || pass.target != resources_.Target() ||
             pass.extent != FramebufferExtent{resources_.AllocatedExtent().width, resources_.AllocatedExtent().height})
-            return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
-        const auto slot = bridge_.Port()->FrameSlot(frame.Token());
+            return Output::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        const auto slot = bridge_.Port()->FrameSlot(frame);
         if (slot.HasError())
-            return Result<void>::Failure(slot.ErrorValue());
+            return Output::Failure(slot.ErrorValue());
         if (slot.Value().count != device_.frames || slot.Value().index >= device_.frames ||
             pass.scene.instances.size() > preparedDraws_.size())
-            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
-        auto &overlaySlot = slots_[slot.Value().index].overlay;
-        const auto overlay = PrepareOverlay(frame.Token(), overlaySlot, pass);
+            return Output::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        return Output::Success(slot.Value().index);
+    }
+
+    Result<void> EditorViewportRendererVulkan::PrepareShadowFrame(Render::FrameToken frame, std::uint32_t slot,
+                                                                  const Render::StaticMeshPassDescriptor &pass) {
+        auto shadows = Render::BuildDirectionalShadowFrame(pass.scene, static_cast<float>(pass.extent.width) / pass.extent.height,
+                                                           Math::ClipDepthRange::ZeroToOne, resources_.ActiveDirectionalShadowProfile());
+        if (shadows.HasError())
+            return Result<void>::Failure(shadows.ErrorValue());
+        preparedShadow_ = shadows.Value();
+        if (!preparedShadow_)
+            return Result<void>::Success();
+        return PrepareShadowDraws(frame, slot, pass.scene, *preparedShadow_);
+    }
+
+    Result<std::size_t> EditorViewportRendererVulkan::PrepareViewportOverlay(Render::FrameToken frame, std::uint32_t slot,
+                                                                             const Render::StaticMeshPassDescriptor &pass) {
+        const auto overlay = PrepareOverlay(frame, slots_[slot].overlay, pass);
         if (overlay.HasError())
-            return Result<void>::Failure(overlay.ErrorValue());
-        const auto drawCount = pass.scene.instances.size() + (overlay.Value() ? 1 : 0);
-        if (drawCount > preparedDraws_.size())
-            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene,
-                                                   "Viewport mesh and overlay draws exceed the admitted material-pass capacity."));
-        if (drawCount == 0)
-            return ExecuteEmptyViewport(frame, pass.clearColor);
+            return Result<std::size_t>::Failure(overlay.ErrorValue());
+        const auto count = pass.scene.instances.size() + (overlay.Value() ? 1 : 0);
+        if (count > preparedDraws_.size())
+            return Result<std::size_t>::Failure(
+                MakeError(RendererErrors::ViewportInvalidScene, "Viewport mesh and overlay draws exceed material capacity."));
+        if (overlay.Value())
+            preparedDraws_[pass.scene.instances.size()] = {slots_[slot].overlay.mesh, slots_[slot].overlay.uniforms.material};
+        return Result<std::size_t>::Success(count);
+    }
+
+    Result<void> EditorViewportRendererVulkan::PrepareViewportDraws(Render::FrameToken frame, std::uint32_t slot,
+                                                                    const Render::StaticMeshPassDescriptor &pass) {
         for (std::size_t index = 0; index < pass.scene.instances.size(); ++index) {
             const auto &instance = pass.scene.instances[index];
             const auto mesh = resources_.FindMesh(instance.mesh.id.value);
             if (!mesh)
                 return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleMeshResource));
-            const auto &draw = slots_[slot.Value().index].draws[index];
-            if (const auto written =
-                    ProgramResources::WriteDraw(bridge_, shader_, resources_.AllocatedExtent(), frame.Token(), draw, instance, pass.scene);
-                written.HasError())
+            const auto &draw = slots_[slot].draws[index];
+            if (const auto written = WriteForwardDraw(frame, draw, instance, pass.scene); written.HasError())
                 return written;
             preparedDraws_[index] = {mesh->mesh, draw.material};
         }
-        if (overlay.Value())
-            preparedDraws_[pass.scene.instances.size()] = {overlaySlot.mesh, overlaySlot.uniforms.material};
-        const auto reserved = frame.ReserveSubmission(RenderQueueRole::Graphics);
-        if (reserved.HasError())
-            return Result<void>::Failure(reserved.ErrorValue());
-        recordedEver_ = true;
-        return frame.ExecuteMaterialPass({pass.target,
-                                          pass.extent,
-                                          {.clearColor = pass.clearColor},
-                                          1.0F,
-                                          std::span{preparedDraws_}.first(drawCount),
-                                          reserved.Value()});
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ExecuteViewport */
+    Result<void> EditorViewportRendererVulkan::ExecuteViewport(Render::RenderFrameScope &frame,
+                                                               const Render::StaticMeshPassDescriptor &pass) {
+        const auto slot = PrepareViewportSlot(frame.Token(), pass);
+        if (slot.HasError())
+            return Result<void>::Failure(slot.ErrorValue());
+        if (auto ready = ValidateEditorViewportMeshReadiness(resources_, pass.scene.instances); ready.HasError())
+            return ready;
+        if (auto lighting = forwardLighting_.Prepare(pass.scene); lighting.HasError())
+            return lighting;
+        if (auto shadows = PrepareShadowFrame(frame.Token(), slot.Value(), pass); shadows.HasError())
+            return shadows;
+        const auto count = PrepareViewportOverlay(frame.Token(), slot.Value(), pass);
+        if (count.HasError())
+            return Result<void>::Failure(count.ErrorValue());
+        if (count.Value() == 0)
+            return ExecuteEmptyViewport(frame, pass.clearColor);
+        if (auto draws = PrepareViewportDraws(frame.Token(), slot.Value(), pass); draws.HasError())
+            return draws;
+        return ExecuteShadowedViewport(frame, pass, count.Value(), preparedShadow_ ? &*preparedShadow_ : nullptr);
     }
 }  // namespace Horo::Editor

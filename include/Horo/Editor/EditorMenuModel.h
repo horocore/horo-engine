@@ -28,6 +28,9 @@ namespace Horo::Editor {
         ExitApplication,
         CreatePrimitive,
         ManagePackages,
+        OpenBuild,
+        OpenRelease,
+        OpenSaveLoadManager,
     };
 
     /** @brief Typed command emitted by every platform menu adapter. */

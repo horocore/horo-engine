@@ -8,7 +8,8 @@ namespace Horo::Prefab {
     namespace {
         using namespace ValueDetail;
 
-        /** @brief Explicit commands coalesce only the selected occurrence, including preserved source evidence. */
+        /** @brief Explicit commands coalesce only the selected occurrence, including
+         * preserved source evidence. */
         void EraseComponent(PrefabValueOverrideSet &set, const PrefabComponentOverrideTarget &target) {
             std::erase_if(set.componentRecords, [&target](const auto &record) {
                 return ComponentTarget(record) == target;
@@ -21,7 +22,8 @@ namespace Horo::Prefab {
             });
         }
 
-        /** @brief Removing a selected component deliberately removes its property intents, without touching peers. */
+        /** @brief Removing a selected component deliberately removes its property
+         * intents, without touching peers. */
         void EraseProperties(PrefabValueOverrideSet &set, const PrefabComponentOverrideTarget &target) {
             const auto matches = [&target](const PrefabValueOverrideRecord &record) {
                 const auto *property = std::get_if<PrefabPropertyAddress>(&record.target);
@@ -37,8 +39,9 @@ namespace Horo::Prefab {
             });
         }
 
-        /** @brief Capture source preconditions ourselves; removing an instance addition simply coalesces its add record. */
-        Result<void> PrepareRemoval(PrefabValueOverrideSet &set, const EffectivePrefabCandidate &source,
+        /** @brief Capture source preconditions ourselves; removing an instance addition
+         * simply coalesces its add record. */
+        Result<void> PrepareRemoval(PrefabValueOverrideSet &set, const PrefabOverrideBaseline &source,
                                     const PrefabComponentOverrideTarget &target) {
             const auto objects = source.Objects();
             const auto object = std::ranges::find_if(objects, [&target](const auto &entry) {
@@ -66,7 +69,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Add identity cannot reinterpret any retained topology or property intent, even an unavailable one. */
+        /** @brief Add identity cannot reinterpret any retained topology or property
+         * intent, even an unavailable one. */
         Result<void> PrepareAddition(PrefabValueOverrideSet &set, const PrefabAddComponentOverride &add) {
             const PrefabComponentOverrideTarget target{add.object, add.payload.component.typeId, add.payload.instance};
             const auto sameOccurrence = [&target](const PrefabComponentOverrideRecord &record) {
@@ -82,8 +86,9 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Coalescing the last add record must still validate the resulting object's dependencies. */
-        Result<void> ValidateEditedObjects(const EffectivePrefabCandidate &candidate, const PrefabComponentEdit &edit,
+        /** @brief Coalescing the last add record must still validate the resulting
+         * object's dependencies. */
+        Result<void> ValidateEditedObjects(const std::span<const ResolvedPrefabObject> objects, const PrefabComponentEdit &edit,
                                            const PrefabValueSchemaSnapshot &schemas) {
             std::vector<PrefabObjectAddress> targets;
             std::visit([&targets]<typename Edit>(const Edit &value) {
@@ -99,17 +104,18 @@ namespace Horo::Prefab {
             const auto duplicates = std::ranges::unique(targets);
             targets.erase(duplicates.begin(), duplicates.end());
             for (const auto &target : targets) {
-                const auto object = std::ranges::find_if(candidate.Objects(), [&target](const auto &entry) {
+                const auto object = std::ranges::find_if(objects, [&target](const auto &entry) {
                     return entry.key.object == target;
                 });
-                if (object != candidate.Objects().end())
+                if (object != objects.end())
                     if (auto valid = ValidateComponentObject(*object, schemas); valid.HasError())
                         return valid;
             }
             return Result<void>::Success();
         }
 
-        /** @brief Replacement may never overwrite another occurrence's retained addition or preserved evidence. */
+        /** @brief Replacement may never overwrite another occurrence's retained
+         * addition or preserved evidence. */
         bool HasReplacementIdentity(const PrefabValueOverrideSet &set, const PrefabReplaceComponentEdit &edit) {
             const auto matches = [&edit](const PrefabComponentOverrideRecord &record) {
                 const auto target = ComponentTarget(record);
@@ -123,8 +129,9 @@ namespace Horo::Prefab {
             });
         }
 
-        /** @brief Lower atomic commands into the persisted add/remove algebra without an intermediate publication. */
-        Result<void> PrepareIntent(PrefabValueOverrideSet &set, const EffectivePrefabCandidate &source, const PrefabComponentEdit &edit) {
+        /** @brief Lower atomic commands into the persisted add/remove algebra without
+         * an intermediate publication. */
+        Result<void> PrepareIntent(PrefabValueOverrideSet &set, const PrefabOverrideBaseline &source, const PrefabComponentEdit &edit) {
             if (const auto *add = std::get_if<PrefabAddComponentOverride>(&edit))
                 return PrepareAddition(set, *add);
             if (const auto *remove = std::get_if<PrefabRemoveComponentEdit>(&edit))
@@ -142,18 +149,33 @@ namespace Horo::Prefab {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Final edited-object validation preserves the same complete resolution and exact conflict behavior. */
+        Result<PrefabOverrideResolution> ValidateResolvedComponentEdit(Result<PrefabOverrideResolution> resolved,
+                                                                       const PrefabComponentEdit &edit,
+                                                                       const PrefabValueSchemaSnapshot *schemas) {
+            if (resolved.HasValue() && !resolved.Value().effective && !std::holds_alternative<PrefabRevertComponentOverridesEdit>(edit))
+                return Result<PrefabOverrideResolution>::Failure(MakeError(PrefabErrors::OverrideConflict));
+            if (resolved.HasValue() && resolved.Value().effective && schemas)
+                if (auto valid = ValidateEditedObjects(*resolved.Value().effective, edit, *schemas); valid.HasError())
+                    return Result<PrefabOverrideResolution>::Failure(valid.ErrorValue());
+            return resolved;
+        }
+    }  // namespace
+
     /** @copydoc PreparePrefabComponentEdit */
-    Result<PrefabValueOverrideResolution> PreparePrefabComponentEdit(
-        const EffectivePrefabCandidate &source, const std::optional<PrefabValueOverrideSet> &current, const PrefabComponentEdit &edit,
-        const PrefabValueSchemaSnapshot *schemas, const PrefabLimitProfile &limits, const CancellationToken &cancellation) {
+    Result<PrefabOverrideResolution> PreparePrefabComponentEdit(const PrefabOverrideBaseline &source,
+                                                                const std::optional<PrefabValueOverrideSet> &current,
+                                                                const PrefabComponentEdit &edit, const PrefabValueSchemaSnapshot *schemas,
+                                                                const PrefabLimitProfile &limits, const CancellationToken &cancellation) {
         try {
             if (const auto *revert = std::get_if<PrefabRevertComponentOverridesEdit>(&edit);
                 revert && revert->targets.size() > limits.Policy().maximumOverrideRecords)
-                return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
+                return Result<PrefabOverrideResolution>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
             if (edit.valueless_by_exception())
-                return ValueDetail::Invalid<PrefabValueOverrideResolution>();
+                return ValueDetail::Invalid<PrefabOverrideResolution>();
             const PrefabValueOverrideSet empty{source.RootAsset(),
-                                               source.Revision().rootSource,
+                                               source.SourceRevision(),
                                                schemas ? schemas->Revision() : Sha256Digest{},
                                                {},
                                                {},
@@ -166,16 +188,10 @@ namespace Horo::Prefab {
                 return inspected;
             auto next = std::move(inspected).Value().rebased;
             if (auto prepared = PrepareIntent(next, source, edit); prepared.HasError())
-                return Result<PrefabValueOverrideResolution>::Failure(prepared.ErrorValue());
-            auto resolved = ResolvePrefabValueOverrides(source, next, schemas, limits, cancellation);
-            if (resolved.HasValue() && !resolved.Value().effective && !std::holds_alternative<PrefabRevertComponentOverridesEdit>(edit))
-                return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::OverrideConflict));
-            if (resolved.HasValue() && resolved.Value().effective && schemas)
-                if (auto valid = ValidateEditedObjects(*resolved.Value().effective, edit, *schemas); valid.HasError())
-                    return Result<PrefabValueOverrideResolution>::Failure(valid.ErrorValue());
-            return resolved;
+                return Result<PrefabOverrideResolution>::Failure(prepared.ErrorValue());
+            return ValidateResolvedComponentEdit(ResolvePrefabValueOverrides(source, next, schemas, limits, cancellation), edit, schemas);
         } catch (const std::bad_alloc &) {
-            return Result<PrefabValueOverrideResolution>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+            return Result<PrefabOverrideResolution>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
         }
     }
 }  // namespace Horo::Prefab

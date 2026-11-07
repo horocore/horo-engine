@@ -137,11 +137,12 @@ namespace Horo::Application {
             }
         };
 
-        /** @brief Selects the expanded bounds only for the exact application-registered development contract. */
+        /** @brief Admits expanded bounds only for release profiles that explicitly freeze those same limits. */
         bool HasRegisteredExpandedProfile(const ParserState &state) {
-            const auto *decision = BuiltInReleaseCompatibilityRegistry().Find({ParseHoroVersion("0.2.0").Value()});
-            return decision != nullptr && state.release == "0.2.0" &&
-                   state.contract == FormatPersistentContractHash(decision->persistentContract);
+            if (state.release != "0.2.0" && state.release != "0.3.0")
+                return false;
+            const auto *decision = BuiltInReleaseCompatibilityRegistry().Find({ParseHoroVersion(state.release).Value()});
+            return decision != nullptr && state.contract == FormatPersistentContractHash(decision->persistentContract);
         }
 
         /** @brief Parses under the supplied finite callback state without selecting a release profile. */

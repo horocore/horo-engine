@@ -3,6 +3,7 @@
 #include "CliHostCommands.h"
 #include "CliHostErrorTranslation.h"
 #include "CliHostInterrupts.h"
+#include "ExtensionScriptCliHost.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Cli/CliOptionParser.h"
 #include "Horo/Cli/CliOutputPresenter.h"
@@ -95,10 +96,18 @@ namespace Horo::Application::Internal {
             std::shared_ptr<HostObservabilitySession> observability;
             std::unique_ptr<Runtime::SaveTelemetryRegistration> saveTelemetry;
             std::unique_ptr<Extensions::HeadlessExtensionHost> extensions;
+            ExtensionScriptCliHost *script{};
 
             ~HostSession() {
-                if (extensions)
+                if (extensions) {
                     extensions->Shutdown();
+                    if (script) {
+                        try {
+                            script->ObserveShutdown(extensions->Inspect());
+                        } catch (...) { /* Unknown cleanup proof retains this invocation's owned staging. */
+                        }
+                    }
+                }
                 saveTelemetry.reset();
                 if (modules)
                     modules->DeactivateAll();
@@ -130,7 +139,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Starts the existing application session with explicit process-owned dependencies. */
         Result<void> ActivateSession(HostSession &session, HostObservabilityIdentity identity, const DenyToolchainPolicy &toolchain,
-                                     NativeExternalProcessRunner &processes) {
+                                     NativeExternalProcessRunner &processes, ExtensionScriptCliHost &script,
+                                     const CliCommandRequest &request, const CancellationToken &cancellation) {
             auto composed = ComposeHostModules({.host = HostKind::Headless});
             if (composed.HasError())
                 return Result<void>::Failure(composed.ErrorValue());
@@ -147,11 +157,21 @@ namespace Horo::Application::Internal {
             if (saveTelemetry.HasError())
                 return Result<void>::Failure(saveTelemetry.ErrorValue());
             session.saveTelemetry = std::move(saveTelemetry).Value();
-            auto extensions = Extensions::HeadlessExtensionHost::Create({}, toolchain, processes);
+            session.script = &script;
+            auto configuration = script.Prepare(request, cancellation);
+            if (configuration.HasError())
+                return Result<void>::Failure(configuration.ErrorValue());
+            auto extensions = Extensions::HeadlessExtensionHost::Create(std::move(configuration).Value(), toolchain, processes);
             if (extensions.HasError())
                 return Result<void>::Failure(extensions.ErrorValue());
             session.extensions = std::move(extensions).Value();
-            return session.extensions->Start({});
+            if (auto configured = script.ConfigureModuleOperations(*session.extensions); configured.HasError())
+                return configured;
+            script.BeginActivation();
+            auto started = session.extensions->Start(script.Locations());
+            if (started.HasValue())
+                script.ActivationSucceeded();
+            return started;
         }
 
         /** @brief Binds one invocation's explicit package and navigation owners to the admitted adapters. */
@@ -174,6 +194,12 @@ namespace Horo::Application::Internal {
             return adapters;
         }
 
+        /** @brief Explicit product command grants shared by descriptor and executable admission; package trust stays separate. */
+        std::vector<CliCapabilityId> CommandCapabilities() {
+            return {{"horo.extension.module-run"}, {"horo.extension.script-run"}, {"horo.mcp.serve"},
+                    {"horo.observability.smoke"},  {"horo.package.manage"},       {"horo.navigation.bake"}};
+        }
+
         /** @brief Owns a mutable admitted dispatcher before invoking its borrowed application services. */
         int ExecuteCommand(CliCommandRegistry registry, const std::span<const CliCommandDescriptor> descriptors,
                            const CliCommandRequest &request, HostObservabilityIdentity identity, CliOutputPresenter &presenter) {
@@ -185,22 +211,23 @@ namespace Horo::Application::Internal {
             }
             DenyToolchainPolicy toolchain;
             NativeExternalProcessRunner processes;
+            ExtensionScriptCliHost script;
             HostSession session;
             PackageCliHost packages;
             NavigationCliHost navigation;
-            if (const auto activated = ActivateSession(session, std::move(identity), toolchain, processes); activated.HasError())
+            if (const auto activated = ActivateSession(session, std::move(identity), toolchain, processes, script, request, stop.Token());
+                activated.HasError())
                 return CompleteError(presenter, activated.ErrorValue());
             auto configuration = Configuration();
             if (configuration.HasError())
                 return CompleteError(presenter, configuration.ErrorValue());
             auto adapters = CommandAdapters(descriptors, session.observability, packages, navigation);
+            adapters.push_back(MakeExtensionScriptCommandAdapter(script, *session.extensions));
+            adapters.push_back(MakeModuleScriptCommandAdapter(script, *session.extensions));
             auto admitted = CliDispatcher::Create(std::move(registry), std::move(adapters),
                                                   {.activeHost = CliHostKind::HoroEngine,
                                                    .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
-                                                   .grantedCapabilities = {{"horo.mcp.serve"},
-                                                                           {"horo.observability.smoke"},
-                                                                           {"horo.package.manage"},
-                                                                           {"horo.navigation.bake"}}});
+                                                   .grantedCapabilities = CommandCapabilities()});
             if (admitted.HasError())
                 return CompleteError(presenter, admitted.ErrorValue());
             CliDispatcher dispatcher = std::move(admitted).Value();
@@ -228,10 +255,7 @@ namespace Horo::Application::Internal {
         NativePathNormalizer paths;
         auto registry = CliCommandRegistry::Create(descriptors, {.activeHost = CliHostKind::HoroEngine,
                                                                  .supportedContractVersion = {1, 0, 0},
-                                                                 .grantedCapabilities = {{"horo.mcp.serve"},
-                                                                                         {"horo.observability.smoke"},
-                                                                                         {"horo.package.manage"},
-                                                                                         {"horo.navigation.bake"}}});
+                                                                 .grantedCapabilities = CommandCapabilities()});
         const CliCommandDescriptor *selected = nullptr;
         auto parsed = [&]() {
             if (admissionFailure)

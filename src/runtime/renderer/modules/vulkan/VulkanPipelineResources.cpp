@@ -91,13 +91,15 @@ namespace Horo::Render::Detail {
             }
 
             void ConfigureAttachments(const RenderGraphicsPipelineState &state) {
+                blend.attachmentCount = state.depthOnly ? 0U : 1U;
+                blend.pAttachments = state.depthOnly ? nullptr : &attachment;
                 colorFormat = VulkanResourceConversion::TextureFormat(state.colorFormat);
                 depthFormat = state.depthFormat ? VulkanResourceConversion::TextureFormat(*state.depthFormat) : VK_FORMAT_UNDEFINED;
                 const bool stencil = state.depthFormat && (*state.depthFormat == RenderTextureFormat::Depth24Stencil8 ||
                                                            *state.depthFormat == RenderTextureFormat::Depth32FloatStencil8);
                 rendering = VkPipelineRenderingCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-                                                          .colorAttachmentCount = 1,
-                                                          .pColorAttachmentFormats = &colorFormat,
+                                                          .colorAttachmentCount = state.depthOnly ? 0U : 1U,
+                                                          .pColorAttachmentFormats = state.depthOnly ? nullptr : &colorFormat,
                                                           .depthAttachmentFormat = depthFormat,
                                                           .stencilAttachmentFormat = stencil ? depthFormat : VK_FORMAT_UNDEFINED};
             }

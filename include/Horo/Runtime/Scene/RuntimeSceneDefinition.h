@@ -6,6 +6,7 @@
  */
 
 #include "Horo/AI/AISceneComponents.h"
+#include "Horo/Animation/AnimationComponents.h"
 #include "Horo/Assets/AssetDependency.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Sha256.h"
@@ -33,6 +34,8 @@ namespace Horo::Runtime {
      */
     struct RuntimeComponentSet {
         std::optional<CameraComponent> camera;
+        std::optional<Animation::AnimationAuthoringComponent>
+            animation; /**< Durable inert binding; live instance remains Animation-owned. */
         std::optional<LightComponent> light;
         std::optional<AudioSourceComponent> audioSource;
         std::optional<AudioListenerComponent> audioListener;

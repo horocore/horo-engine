@@ -83,50 +83,71 @@ namespace Horo::Prefab::ValueDetail {
         return valid ? Result<void>::Success() : Invalid<void>("Override value is non-finite, out of range, malformed, or oversized.");
     }
 
+    namespace {
+        /** @brief Encodes payload shape once for both the wire envelope and the actual component payload bridge. */
+        Wire EncodePayload(const PrefabOverrideValue &value) {
+            return std::visit([]<class T>(const T &item) -> Wire {
+                if constexpr (std::is_same_v<T, Math::Transform>)
+                    return EncodeTransform(item);
+                else if constexpr (std::is_same_v<T, double>)
+                    return Scalar(item);
+                else if constexpr (std::is_arithmetic_v<T> || std::is_same_v<T, std::string>)
+                    return item;
+                else
+                    return EncodeVector(item);
+            }, value);
+        }
+
+        /** @brief Preserves signed integer range without narrowing unsigned values through floating point. */
+        Result<PrefabOverrideValue> DecodeInteger(const Json &payload) {
+            if (payload.is_number_integer() &&
+                (!payload.is_number_unsigned() || payload.get<std::uint64_t>() <= std::numeric_limits<std::int64_t>::max()))
+                return Result<PrefabOverrideValue>::Success(payload.get<std::int64_t>());
+            return Invalid<PrefabOverrideValue>("Unknown or malformed typed override value.");
+        }
+
+        /** @brief Uses one scalar admission path for wire envelopes and borrowed component values. */
+        Result<PrefabOverrideValue> DecodeScalar(std::string_view kind, const Json &payload) {
+            if (kind == "boolean" && payload.is_boolean())
+                return Result<PrefabOverrideValue>::Success(payload.get<bool>());
+            if (kind == "integer")
+                return DecodeInteger(payload);
+            if (kind == "number" && payload.is_number()) {
+                const auto value = Detail::ReadDouble(payload);
+                return value.HasValue() ? Result<PrefabOverrideValue>::Success(value.Value()) : Invalid<PrefabOverrideValue>();
+            }
+            if (kind == "string" && payload.is_string())
+                return Result<PrefabOverrideValue>::Success(payload.get<std::string>());
+            return Invalid<PrefabOverrideValue>("Unknown or malformed typed override value.");
+        }
+
+        /** @brief Decodes the existing closed value algebra directly from kind plus borrowed payload, never a synthetic DOM. */
+        Result<PrefabOverrideValue> DecodePayload(std::string_view kind, const Json &payload) {
+            if (kind == "vec2")
+                return DecodeVector<Math::Vec2, 2>(payload);
+            if (kind == "vec3")
+                return DecodeVector<Math::Vec3, 3>(payload);
+            if (kind == "quaternion")
+                return DecodeVector<Math::Quaternion, 4>(payload);
+            if (kind == "transform") {
+                const auto value = Detail::ParseTransform(payload);
+                return value.HasValue() ? Result<PrefabOverrideValue>::Success(value.Value()) : Invalid<PrefabOverrideValue>();
+            }
+            return DecodeScalar(kind, payload);
+        }
+    }  // namespace
+
     /** @brief Encode one closed typed value without ambiguous numeric or positional property identity. */
     Wire EncodeValue(const PrefabOverrideValue &value) {
         constexpr std::array names{"boolean", "integer", "number", "string", "vec2", "vec3", "quaternion", "transform"};
-        auto payload = std::visit([]<class T>(const T &item) -> Wire {
-            if constexpr (std::is_same_v<T, Math::Transform>)
-                return EncodeTransform(item);
-            else if constexpr (std::is_same_v<T, double>)
-                return Scalar(item);
-            else if constexpr (std::is_arithmetic_v<T> || std::is_same_v<T, std::string>)
-                return item;
-            else
-                return EncodeVector(item);
-        }, value);
-        return Wire{{"kind", names[value.index()]}, {"value", std::move(payload)}};
+        return Wire{{"kind", names[value.index()]}, {"value", EncodePayload(value)}};
     }
 
-    /** @brief Decode exact numeric kinds without narrowing large integer payloads through floating point. */
+    /** @brief Decode the exact existing envelope through the same borrowed-payload decoder as registered component fields. */
     Result<PrefabOverrideValue> DecodeValue(const Json &value) {
         if (!Foundation::HasAllowedFields(value, {"kind", "value"}) || !value["kind"].is_string())
             return Invalid<PrefabOverrideValue>("Override value envelope is invalid.");
-        const auto &kind = value["kind"].get_ref<const std::string &>();
-        const auto &payload = value["value"];
-        if (kind == "boolean" && payload.is_boolean())
-            return Result<PrefabOverrideValue>::Success(payload.get<bool>());
-        if (kind == "integer" && payload.is_number_integer() &&
-            (!payload.is_number_unsigned() || payload.get<std::uint64_t>() <= std::numeric_limits<std::int64_t>::max()))
-            return Result<PrefabOverrideValue>::Success(payload.get<std::int64_t>());
-        if (kind == "number" && payload.is_number()) {
-            const auto decoded = Detail::ReadDouble(payload);
-            return decoded.HasValue() ? Result<PrefabOverrideValue>::Success(decoded.Value()) : Invalid<PrefabOverrideValue>();
-        }
-        if (kind == "string" && payload.is_string())
-            return Result<PrefabOverrideValue>::Success(payload.get<std::string>());
-        if (kind == "vec2")
-            return DecodeVector<Math::Vec2, 2>(payload);
-        if (kind == "vec3")
-            return DecodeVector<Math::Vec3, 3>(payload);
-        if (kind == "quaternion")
-            return DecodeVector<Math::Quaternion, 4>(payload);
-        if (kind == "transform") {
-            const auto decoded = Detail::ParseTransform(payload);
-            return decoded.HasValue() ? Result<PrefabOverrideValue>::Success(decoded.Value()) : Invalid<PrefabOverrideValue>();
-        }
-        return Invalid<PrefabOverrideValue>("Unknown or malformed typed override value.");
+        return DecodePayload(value["kind"].get_ref<const std::string &>(), value["value"]);
     }
 
     /** @brief Hash schema-canonical semantic value bytes, never JSON presentation text. */
@@ -140,16 +161,30 @@ namespace Horo::Prefab::ValueDetail {
         return EncodeValue(left).dump(0) == EncodeValue(right).dump(0);
     }
 
+    /** @copydoc DecodeComponentPayload */
+    Result<OwnedJson> DecodeComponentPayload(std::span<const std::byte> bytes, std::string_view failure) {
+        Detail::JsonParseGuard guard{PrefabHardLimits::SourceJsonDepth};
+        try {
+            OwnedJson owned{guard.Parse(bytes.begin(), bytes.end())};
+            const auto &json = owned.Get();
+            if (json.is_discarded() || !json.is_object() || guard.HasDuplicate() || guard.IsTooDeep())
+                return Invalid<OwnedJson>(std::string{failure});
+            return Result<OwnedJson>::Success(std::move(owned));
+        } catch (const Json::exception &) {
+            return Invalid<OwnedJson>(std::string{failure});
+        }
+    }
+
     /** @brief Bridge actual canonical component payloads through the registered kind. */
     Result<PrefabOverrideValue> ReadPayloadValue(const Json &value, const Gameplay::ComponentPropertyKind kind) {
         constexpr std::array names{"boolean", "integer", "number", "string", "vec2", "vec3", "quaternion"};
         if (static_cast<std::size_t>(kind) >= names.size())
             return Invalid<PrefabOverrideValue>();
-        return DecodeValue(Json{{"kind", names[static_cast<std::size_t>(kind)]}, {"value", value}});
+        return DecodePayload(names[static_cast<std::size_t>(kind)], value);
     }
 
     /** @brief Write a validated value through its canonical component payload representation. */
-    Json PayloadValue(const PrefabOverrideValue &value) {
-        return EncodeValue(value).ToJson()["value"];
+    OwnedJson PayloadValue(const PrefabOverrideValue &value) {
+        return EncodePayload(value).ToOwnedJson();
     }
 }  // namespace Horo::Prefab::ValueDetail

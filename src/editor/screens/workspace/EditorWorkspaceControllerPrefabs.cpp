@@ -252,7 +252,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::PrepareAndPublishPrefabHierarchy */
     void EditorWorkspaceController::PrepareAndPublishPrefabHierarchy(const SceneDocumentSnapshot &document,
                                                                      const std::uint64_t nextPublication) {
-        auto limits = Prefab::PrefabLimitProfile::Create({});
+        auto limits = PrefabLimits();
         if (limits.HasError())
             return;
         if (EnsureNavigationPrefabSchemas(limits.Value()).HasError())

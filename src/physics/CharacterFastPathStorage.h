@@ -4,6 +4,7 @@
  * @brief Target-private fixed-capacity Character command, query and output storage.
  */
 
+#include "CharacterEventProjectionInternal.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
 #include "Horo/Physics/CharacterWorldSettings.h"
@@ -19,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -36,26 +38,8 @@ namespace Horo::Character::Detail {
         RejectedInvalid,
     };
 
-    /** @brief Physical fact kinds retained by the Character event fast path. */
-    enum class CharacterFastPathEventKind : std::uint8_t {
-        Landed,
-        LeftGround,
-        HitWall,
-        HitCeiling,
-        SurfaceChanged,
-        SlideStart,
-        SlideEnd,
-    };
-
-    /** @brief Target-private bounded physical fact record with a total canonical order. */
-    struct CharacterFastPathEvent final {
-        CharacterControllerHandle controller;
-        std::uint64_t tick{};
-        std::uint64_t ordinal{};
-        CharacterFastPathEventKind kind{CharacterFastPathEventKind::Landed};
-        std::optional<CharacterSurfaceContact> contact;
-        Math::Vec3 impactVelocity{};
-    };
+    using CharacterFastPathEventKind = CharacterMovementEventKind;
+    using CharacterFastPathEvent = CharacterMovementEvent;
 
     /** @brief Target-private staged impulse evidence; Physics owns the eventual mutation. */
     struct CharacterFastPathImpulse final {
@@ -143,6 +127,29 @@ namespace Horo::Character::Detail {
                 contact.materialSource == CharacterMaterialSource::DescriptorFallback);
     }
 
+    /** @brief Require finite optional impact and complete independent semantic provenance before sorting. */
+    [[nodiscard]] inline bool CharacterFastPathContactPayloadIsValid(const CharacterSurfaceContact &contact) noexcept {
+        if (contact.impactVelocityMetersPerSecond && !Math::IsFinite(*contact.impactVelocityMetersPerSecond))
+            return false;
+        if (!contact.surface)
+            return contact.surfaceSource == CharacterSemanticSurfaceSource::None;
+        if (contact.surfaceSource != CharacterSemanticSurfaceSource::Query &&
+            contact.surfaceSource != CharacterSemanticSurfaceSource::DescriptorDefault)
+            return false;
+        const auto &surface = *contact.surface;
+        return surface.surface.IsValid() && surface.catalogRevision != 0 && surface.mappingGeneration != 0 &&
+               surface.catalogFingerprint != Sha256Digest{};
+    }
+
+    /** @brief Complete copied payload tie-break after contact identity/geometry has compared equal. */
+    [[nodiscard]] inline bool CharacterFastPathContactPayloadLess(const CharacterSurfaceContact &left,
+                                                                  const CharacterSurfaceContact &right) noexcept {
+        return std::tie(left.materialSource, left.material.asset, left.material.assetGeneration, left.material.slot, left.surface,
+                        left.surfaceSource, left.impactVelocityMetersPerSecond) <
+               std::tie(right.materialSource, right.material.asset, right.material.assetGeneration, right.material.slot, right.surface,
+                        right.surfaceSource, right.impactVelocityMetersPerSecond);
+    }
+
     /**
      * @brief Owns every fixed-capacity Character hot-path collection for one prepared world.
      *
@@ -171,6 +178,9 @@ namespace Horo::Character::Detail {
             contacts_.reserve(capacities_.contacts);
             hits_.reserve(capacities_.hits);
             events_.reserve(capacities_.events);
+            publishedEvents_.reserve(capacities_.events);
+            terminalStates_.reserve(capacities.maximumControllers);
+            publishedTerminalStates_.reserve(capacities.maximumControllers);
             impulses_.reserve(capacities_.impulses);
             scratch_.resize(capacities_.scratch);
         }
@@ -262,8 +272,64 @@ namespace Horo::Character::Detail {
          * @return Append/replacement/full/invalid disposition without allocation.
          */
         [[nodiscard]] CharacterFastPathAppendStatus TryAppendEvent(const CharacterFastPathEvent &event) noexcept {
-            return AppendReduced(events_, capacities_.events, event, EventLess, counters_.eventCount, counters_.eventOverflowCount,
-                                 IsValidEvent(event));
+            const auto status = AppendReduced(events_, capacities_.events, event, CharacterMovementEventRetainBefore, counters_.eventCount,
+                                              counters_.eventOverflowCount, IsValidEvent(event));
+            if (status != CharacterFastPathAppendStatus::RejectedInvalid)
+                Increment(stagedEmittedEvents_);
+            if (status == CharacterFastPathAppendStatus::RejectedFull || status == CharacterFastPathAppendStatus::ReplacedWorst)
+                Increment(stagedDroppedEvents_);
+            return status;
+        }
+
+        /** @brief Reuse prepared buffers for an attempted stream publication; no failed attempt alters the committed journal. */
+        void BeginEventFrame() noexcept {
+            events_.assign(publishedEvents_.begin(), publishedEvents_.end());
+            terminalStates_.clear();
+            stagedEmittedEvents_ = 0;
+            stagedDroppedEvents_ = 0;
+            counters_.eventCount.store(static_cast<std::uint32_t>(events_.size()));
+        }
+
+        /** @brief Controller capacity admission guarantees this immutable terminal projection can always be retained. */
+        void StageTerminalState(const CharacterEventTerminalState &state) noexcept {
+            terminalStates_.push_back(state);
+        }
+
+        /** @brief Publish only after the entire controller transaction succeeds, using allocation-free prepared swaps. */
+        void PublishEventFrame(CharacterEventCapture frame) noexcept {
+            events_.swap(publishedEvents_);
+            terminalStates_.swap(publishedTerminalStates_);
+            cumulativeDroppedEvents_ +=
+                std::min(stagedDroppedEvents_, std::numeric_limits<std::uint64_t>::max() - cumulativeDroppedEvents_);
+            frame.emittedEvents = stagedEmittedEvents_;
+            frame.droppedEvents = stagedDroppedEvents_;
+            frame.cumulativeDroppedEvents = cumulativeDroppedEvents_;
+            frame.availableTerminalStates = static_cast<std::uint32_t>(publishedTerminalStates_.size());
+            publishedEventFrame_ = frame;
+        }
+
+        /** @brief Copy only unseen retained facts, preserving a complete terminal projection or rejecting before output mutation. */
+        CharacterEventCapture CaptureEvents(std::uint64_t after, std::span<CharacterMovementEvent> output,
+                                            std::span<CharacterEventTerminalState> terminal) const noexcept {
+            auto frame = publishedEventFrame_;
+            if (frame.publicationRevision == 0)
+                return frame;
+            if (after > frame.publicationRevision) {
+                frame.status = CharacterEventCaptureStatus::Stale;
+                return frame;
+            }
+            if (after == frame.publicationRevision) {
+                frame.status = CharacterEventCaptureStatus::NoNewPublication;
+                return frame;
+            }
+            if (terminal.size() < publishedTerminalStates_.size()) {
+                frame.status = CharacterEventCaptureStatus::CapacityLimited;
+                return frame;
+            }
+            std::ranges::copy(publishedTerminalStates_, terminal.begin());
+            frame.copiedTerminalStates = frame.availableTerminalStates;
+            CopyEvents(after, output, frame);
+            return frame;
         }
 
         /**
@@ -310,7 +376,7 @@ namespace Horo::Character::Detail {
         void Canonicalize() noexcept {
             std::ranges::sort(contacts_, ContactLess);
             std::ranges::sort(hits_, Physics::PhysicsQueryHitLess);
-            std::ranges::sort(events_, EventLess);
+            std::ranges::sort(events_, CharacterMovementEventLess);
             std::ranges::sort(impulses_, ImpulseLess);
         }
 
@@ -332,6 +398,10 @@ namespace Horo::Character::Detail {
         void ResetAll() noexcept {
             commands_.clear();
             events_.clear();
+            publishedEvents_.clear();
+            terminalStates_.clear();
+            publishedTerminalStates_.clear();
+            publishedEventFrame_ = {};
             ResetTransient();
             counters_.eventCount.store(0);
         }
@@ -378,6 +448,23 @@ namespace Horo::Character::Detail {
             return RejectedFull;
         }
 
+        static void Increment(std::uint64_t &value) noexcept {
+            if (value != std::numeric_limits<std::uint64_t>::max())
+                ++value;
+        }
+
+        void CopyEvents(std::uint64_t after, std::span<CharacterMovementEvent> output, CharacterEventCapture &frame) const noexcept {
+            for (const auto &event : publishedEvents_) {
+                if (event.streamPublicationRevision <= after)
+                    continue;
+                if (frame.copiedEvents < output.size())
+                    output[frame.copiedEvents++] = event;
+                ++frame.availableEvents;
+            }
+            frame.readDroppedEvents = frame.availableEvents - frame.copiedEvents;
+            frame.status = frame.readDroppedEvents ? CharacterEventCaptureStatus::CapacityLimited : CharacterEventCaptureStatus::Captured;
+        }
+
         static void SaturatingIncrement(std::atomic<std::uint64_t> &counter) noexcept {
             std::uint64_t current = counter.load();
             while (current != std::numeric_limits<std::uint64_t>::max() && !counter.compare_exchange_weak(current, current + 1U)) {
@@ -389,7 +476,8 @@ namespace Horo::Character::Detail {
             return contact.shape.IsValid() && (!contact.body.has_value() || contact.body->IsValid()) &&
                    (!contact.body.has_value() || contact.body->world == contact.shape.world) &&
                    CharacterFastPathIsValidContactGeometry(contact, IsUnit(contact.normal)) &&
-                   CharacterFastPathMaterialIsValid(contact.material) && CharacterFastPathIsValidContactProvenance(contact);
+                   CharacterFastPathMaterialIsValid(contact.material) && CharacterFastPathIsValidContactProvenance(contact) &&
+                   CharacterFastPathContactPayloadIsValid(contact);
         }
 
         [[nodiscard]] static bool IsValidHit(const Physics::PhysicsQueryHit &hit) noexcept {
@@ -401,9 +489,16 @@ namespace Horo::Character::Detail {
                    hit.distanceMeters >= 0.0F;
         }
 
+        /** @brief Correlation fields all identify one actual committed controller/world publication. */
+        [[nodiscard]] static bool IsValidEventCorrelation(const CharacterFastPathEvent &event) noexcept {
+            return event.controller.IsValid() && event.tick != 0 && event.ordinal != 0 && event.sequence != 0 && event.stateRevision != 0 &&
+                   event.publicationRevision != 0 && event.streamPublicationRevision != 0;
+        }
+
         [[nodiscard]] static bool IsValidEvent(const CharacterFastPathEvent &event) noexcept {
-            return event.controller.IsValid() && event.tick != 0 && event.ordinal != 0 &&
-                   event.kind <= CharacterFastPathEventKind::SlideEnd && Math::IsFinite(event.impactVelocity) &&
+            return IsValidEventCorrelation(event) && event.kind <= CharacterFastPathEventKind::SlideEnd &&
+                   Math::IsFinite(event.achievedVelocityMetersPerSecond) &&
+                   (!event.impactVelocity || Math::IsFinite(*event.impactVelocity)) &&
                    (!event.contact.has_value() || IsValidContact(*event.contact));
         }
 
@@ -432,29 +527,7 @@ namespace Horo::Character::Detail {
                 return left.normal < right.normal;
             if (const auto order = left.subshape <=> right.subshape; order != 0)
                 return order < 0;
-            if (left.materialSource != right.materialSource)
-                return left.materialSource < right.materialSource;
-            return CharacterFastPathMaterialLess(left.material, right.material);
-        }
-
-        [[nodiscard]] static bool EventLess(const CharacterFastPathEvent &left, const CharacterFastPathEvent &right) noexcept {
-            if (const auto order = left.controller <=> right.controller; order != 0)
-                return order < 0;
-            if (left.tick != right.tick)
-                return left.tick < right.tick;
-            if (left.kind != right.kind)
-                return left.kind < right.kind;
-            if (left.ordinal != right.ordinal)
-                return left.ordinal < right.ordinal;
-            if (left.contact.has_value() != right.contact.has_value())
-                return !left.contact.has_value();
-            if (left.contact.has_value()) {
-                if (ContactLess(*left.contact, *right.contact))
-                    return true;
-                if (ContactLess(*right.contact, *left.contact))
-                    return false;
-            }
-            return left.impactVelocity < right.impactVelocity;
+            return CharacterFastPathContactPayloadLess(left, right);
         }
 
         [[nodiscard]] static bool ImpulseLess(const CharacterFastPathImpulse &left, const CharacterFastPathImpulse &right) noexcept {
@@ -473,6 +546,10 @@ namespace Horo::Character::Detail {
         std::vector<CharacterSurfaceContact> contacts_;
         std::vector<Physics::PhysicsQueryHit> hits_;
         std::vector<CharacterFastPathEvent> events_;
+        std::vector<CharacterFastPathEvent> publishedEvents_;
+        std::vector<CharacterEventTerminalState> terminalStates_, publishedTerminalStates_;
+        CharacterEventCapture publishedEventFrame_;
+        std::uint64_t stagedEmittedEvents_{}, stagedDroppedEvents_{}, cumulativeDroppedEvents_{};
         std::vector<CharacterFastPathImpulse> impulses_;
         std::vector<std::byte> scratch_;
         CharacterFastPathCapacities capacities_{};

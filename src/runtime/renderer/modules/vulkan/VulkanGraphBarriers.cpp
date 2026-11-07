@@ -29,7 +29,8 @@ namespace Horo::Render::Detail {
         /** @brief Keeps sampled-image and storage access masks distinct. */
         NativeState ShaderState(const RenderGraphLogicalState &state, bool read, bool write) {
             const bool sampled = state.operation == RenderGraphSynchronizationOperation::Sampled;
-            return {VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+            return {state.scope == RenderGraphPipelineScope::Compute ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                                                                     : VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
                     sampled ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
                             : AccessMask(read, write, VK_ACCESS_2_SHADER_STORAGE_READ_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT),
                     sampled ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL,
@@ -83,27 +84,45 @@ namespace Horo::Render::Detail {
             using enum RenderGraphSynchronizationOperation;
             const bool transfer = state.operation == CopySource || state.operation == CopyDestination;
             const bool inputBuffer = state.operation == GraphicsInputBuffer;
+            if (inputBuffer && state.scope != RenderGraphPipelineScope::Graphics)
+                return false;
             return (texture ? state.layout == native.expected && !inputBuffer : state.layout == RenderGraphTextureLayout::NotApplicable) &&
-                   (transfer || state.scope == RenderGraphPipelineScope::Graphics);
+                   (transfer || state.scope == RenderGraphPipelineScope::Graphics || state.scope == RenderGraphPipelineScope::Compute);
         }
 
         /** @brief Admits only native queue scopes implemented by this graphics/transfer command path. */
-        bool ValidExecutionScope(const RenderGraphLogicalState &state) {
+        bool ValidExecutionScope(const RenderGraphLogicalState &state, bool computeAvailable) {
             return state.queue.IsValid() && state.scope != RenderGraphPipelineScope::External &&
-                   state.scope != RenderGraphPipelineScope::Compute;
+                   (state.scope != RenderGraphPipelineScope::Compute || computeAvailable);
+        }
+
+        Result<NativeState> ParticleHandoff(const RenderGraphLogicalState &state, bool texture) {
+            if (texture || state.operation != RenderGraphSynchronizationOperation::Storage ||
+                state.access != RenderGraphSynchronizationAccess::Read || state.layout != RenderGraphTextureLayout::NotApplicable ||
+                !state.queue.IsValid())
+                return Result<NativeState>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+            return Result<NativeState>::Success({VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT});
+        }
+
+        bool KnownAccess(RenderGraphSynchronizationAccess access) {
+            return access == RenderGraphSynchronizationAccess::Read || access == RenderGraphSynchronizationAccess::Write ||
+                   access == RenderGraphSynchronizationAccess::ReadWrite;
         }
 
         /** @brief Rejects unsupported scopes instead of emitting native masks unavailable on a queue. */
-        [[nodiscard]] Result<NativeState> Translate(const RenderGraphLogicalState &state, const bool texture) {
+        [[nodiscard]] Result<NativeState> Translate(const RenderGraphLogicalState &state, const bool texture,
+                                                    const VulkanGraphBarrierOptions &options) {
             using enum RenderGraphSynchronizationAccess;
             if (state.access == None)
                 return UndefinedState(state);
-            if (!ValidExecutionScope(state))
+            if (state.scope == RenderGraphPipelineScope::External && options.particleHandoff)
+                return ParticleHandoff(state, texture);
+            if (!ValidExecutionScope(state, options.computeAvailable))
                 return Result<NativeState>::Failure(
                     MakeError(VulkanBackendErrors::UnsupportedOperation, "Native compute/external access scope is not admitted."));
             const bool read = state.access == Read || state.access == ReadWrite;
             const bool write = state.access == Write || state.access == ReadWrite;
-            if (!read && !write)
+            if (!KnownAccess(state.access))
                 return Result<NativeState>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Unknown native graph access."));
             auto translated = TranslateOperation(state, read, write);
             if (translated.HasError())
@@ -176,10 +195,10 @@ namespace Horo::Render::Detail {
         const bool acquire = options.acquire;
         const bool discardPriorAccess = options.discardPriorAccess;
         const bool texture = resource.kind == RenderGraphResourceKind::Texture;
-        auto oldState = Translate(before, texture);
+        auto oldState = Translate(before, texture, options);
         if (oldState.HasError())
             return Result<VulkanGraphBarrier>::Failure(std::move(oldState).ErrorValue());
-        auto newState = Translate(after, texture);
+        auto newState = Translate(after, texture, options);
         if (newState.HasError())
             return Result<VulkanGraphBarrier>::Failure(std::move(newState).ErrorValue());
         auto source = oldState.Value();

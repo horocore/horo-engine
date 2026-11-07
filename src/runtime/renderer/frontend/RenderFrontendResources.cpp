@@ -25,10 +25,26 @@ namespace Horo::Render {
             Unsupported,
         };
 
+        /** @brief Limits closed GPU workload storage to declared copy/storage roles; the selected adapter validates memory access. */
+        [[nodiscard]] constexpr bool IsStorageCopyBuffer(const RenderBufferDescriptor &descriptor) noexcept {
+            constexpr auto allowed =
+                static_cast<std::uint8_t>(RenderBufferUsage::Storage | RenderBufferUsage::CopySource | RenderBufferUsage::CopyDestination);
+            const auto usage = static_cast<std::uint8_t>(descriptor.usage);
+            return HasBufferUsage(descriptor.usage, RenderBufferUsage::Storage) && (usage & static_cast<std::uint8_t>(~allowed)) == 0;
+        }
+
+        /** @brief Exposure storage does not depend on installing the separate VFX executor. */
+        [[nodiscard]] constexpr bool SupportsClosedGpuStorage(const RenderCapabilitySet &features) noexcept {
+            return features.Supports(RenderCapability::VfxGpuSimulation) || features.Supports(RenderCapability::ExposureGpu);
+        }
+
         [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentBufferDescriptor(const RenderBufferDescriptor &descriptor,
-                                                                                         const bool lightStorageAvailable) noexcept {
+                                                                                         const bool lightStorageAvailable,
+                                                                                         const bool closedGpuStorageAvailable) noexcept {
             using enum RenderBufferUsage;
             using enum ResourceDescriptorAdmission;
+            if (closedGpuStorageAvailable && IsStorageCopyBuffer(descriptor))
+                return Supported;
             if (lightStorageAvailable && descriptor.access == RenderBufferAccess::HostVisible && descriptor.usage == (Storage | CopySource))
                 return Supported;
             constexpr std::byte supportedUsageBits =
@@ -46,6 +62,29 @@ namespace Horo::Render {
                    format == Depth32Float || (uiPaintAvailable && format == Depth32FloatStencil8);
         }
 
+        /** @brief Keeps color transfer admission within the implemented single-subresource 2D path. */
+        [[nodiscard]] constexpr bool IsSingleColorTexture(const RenderTextureDescriptor &descriptor) noexcept {
+            return descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
+                   descriptor.layerCount == 1 && descriptor.sampleCount == 1;
+        }
+
+        /** @brief Closed ordinary color formats; depth, storage and native sRGB are separate contracts. */
+        [[nodiscard]] constexpr bool IsColorPipelineFormat(RenderTextureFormat format) noexcept {
+            constexpr std::array formats{RenderTextureFormat::Rgba8Unorm, RenderTextureFormat::Bgra8Unorm, RenderTextureFormat::R32Float,
+                                         RenderTextureFormat::Rgba16Float, RenderTextureFormat::Rgba32Float};
+            return std::ranges::find(formats, format) != formats.end();
+        }
+
+        /** @brief Requires actual selected-backend format/usage/extent facts before admitting color uploads or readback sources. */
+        [[nodiscard]] constexpr bool AdmitColorTextureDescriptor(const RenderTextureDescriptor &descriptor,
+                                                                 const RenderCapabilitySnapshot &support) noexcept {
+            using enum RenderTextureUsage;
+            constexpr auto allowed = static_cast<std::uint8_t>(Sampled | RenderAttachment | CopySource | CopyDestination);
+            const auto requested = static_cast<std::uint8_t>(descriptor.usage);
+            return IsSingleColorTexture(descriptor) && IsColorPipelineFormat(descriptor.format) &&
+                   (requested & static_cast<std::uint8_t>(~allowed)) == 0 && support.IsValid() && support.Supports(descriptor);
+        }
+
         [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureDescriptor(const RenderTextureDescriptor &descriptor,
                                                                                           const bool uiPaintAvailable) noexcept {
             using enum RenderTextureUsage;
@@ -54,23 +93,57 @@ namespace Horo::Render {
                                                      std::byte{static_cast<std::uint8_t>(RenderAttachment)} |
                                                      std::byte{static_cast<std::uint8_t>(CopyDestination)};
             const auto requested = static_cast<std::byte>(descriptor.usage);
-            const bool supported = descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 &&
-                                   descriptor.mipCount == 1 && descriptor.layerCount == 1 && descriptor.sampleCount == 1 &&
+            const bool supported = IsSingleColorTexture(descriptor) &&
                                    IsCurrentTextureFormatSupported(descriptor.format, uiPaintAvailable) &&
                                    (requested & ~supportedUsageBits) == std::byte{};
             return supported ? Supported : Unsupported;
         }
 
+        /** @brief Identifies the closed single-subresource depth attachment observation contract. */
+        [[nodiscard]] constexpr bool IsDepthCopySourceDescriptor(const RenderTextureDescriptor &descriptor) noexcept {
+            return IsSingleColorTexture(descriptor) && descriptor.format == RenderTextureFormat::Depth32Float &&
+                   descriptor.usage == (RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource);
+        }
+
+        /** @brief Requires selected-backend depth copy facts without admitting depth uploads or other depth roles. */
+        [[nodiscard]] constexpr bool AdmitDepthCopySourceDescriptor(const RenderTextureDescriptor &descriptor,
+                                                                    const RenderCapabilitySnapshot &support) noexcept {
+            return IsDepthCopySourceDescriptor(descriptor) && support.IsValid() && support.Supports(descriptor);
+        }
+
+        /** @brief Keeps legacy admission while requiring complete advertised facts for additional copy roles. */
+        [[nodiscard]] constexpr bool TextureDescriptorAdmitted(const RenderTextureDescriptor &descriptor,
+                                                               const RenderCapabilitySnapshot &support) noexcept {
+            return AdmitCurrentTextureDescriptor(descriptor, support.features.Supports(RenderCapability::UiPaint)) ==
+                       ResourceDescriptorAdmission::Supported ||
+                   AdmitColorTextureDescriptor(descriptor, support) || AdmitDepthCopySourceDescriptor(descriptor, support);
+        }
+
         [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(const RenderTextureViewDescriptor &descriptor,
                                                                                               const bool uiPaintAvailable) noexcept {
             return descriptor.dimension == RenderTextureViewDimension::TwoD &&
-                           IsCurrentTextureFormatSupported(descriptor.format, uiPaintAvailable)
+                           (IsCurrentTextureFormatSupported(descriptor.format, uiPaintAvailable) ||
+                            IsColorPipelineFormat(descriptor.format))
                        ? ResourceDescriptorAdmission::Supported
                        : ResourceDescriptorAdmission::Unsupported;
         }
 
         [[nodiscard]] Error MakeFrontendError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
+        }
+
+        /** @brief Validates compact initialization bytes separately from capability and upload-queue admission. */
+        [[nodiscard]] Result<void> ValidateInitialTextureBytes(const RenderTextureDescriptor &descriptor,
+                                                               std::span<const std::byte> initialData) {
+            if (IsDepthCopySourceDescriptor(descriptor) && !initialData.empty())
+                return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUnsupported,
+                                                               "Depth copy-source attachments do not admit initial upload bytes."));
+            const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
+            if (!bytes || (!initialData.empty() && initialData.size() != *bytes))
+                return Result<void>::Failure(
+                    MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
+                                      "Texture initial data must be empty or contain one complete tightly packed base level."));
+            return Result<void>::Success();
         }
 
         struct AdmittedMemory {
@@ -244,8 +317,9 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
                                   "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
-        if (AdmitCurrentBufferDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::LightCulling)) ==
-            ResourceDescriptorAdmission::Unsupported)
+        const auto &features = backend_->Capabilities().support.features;
+        if (AdmitCurrentBufferDescriptor(descriptor, features.Supports(RenderCapability::LightCulling),
+                                         SupportsClosedGpuStorage(features)) == ResourceDescriptorAdmission::Unsupported)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this buffer usage combination: " +
@@ -365,8 +439,7 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
                                   "The texture descriptor is structurally invalid: " + DescribeRenderTextureRequest(descriptor)));
-        if (AdmitCurrentTextureDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::UiPaint)) ==
-            ResourceDescriptorAdmission::Unsupported)
+        if (!TextureDescriptorAdmitted(descriptor, backend_->Capabilities().support))
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this texture descriptor combination: " +
@@ -376,11 +449,8 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic textures."));
         if (descriptor.format == RenderTextureFormat::Depth32FloatStencil8 && !backend_->Capabilities().support.Supports(descriptor))
             return Result<void>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
-        if (const auto baseLevelBytes = RenderTextureBaseLevelByteSize(descriptor);
-            !baseLevelBytes.has_value() || (!initialData.empty() && initialData.size() != *baseLevelBytes))
-            return Result<void>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
-                                  "Texture initial data must be empty or contain one complete tightly packed base level."));
+        if (auto valid = ValidateInitialTextureBytes(descriptor, initialData); valid.HasError())
+            return valid;
         if (!resourceUploadQueue_->CanEnqueue(initialData.size()))
             return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
                                                            "The bounded upload arena has insufficient staging-byte or request capacity."));
@@ -473,6 +543,7 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The active renderer backend does not support generic texture views."));
         }
+        // New color formats can only refer to their exact already-admitted compatible parent; this grants no new texture usage.
         if (const Result<void> dependency = ValidateTextureViewDependency(descriptor); dependency.HasError())
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(dependency.ErrorValue());
         if (!resourceUploadQueue_->CanEnqueue(0)) {

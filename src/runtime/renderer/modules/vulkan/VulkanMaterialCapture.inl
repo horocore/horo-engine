@@ -27,7 +27,7 @@ template <typename View> bool WholeMaterialView(const View &view) {
 Result<VulkanMaterialTarget> VulkanMaterialCapture::CaptureMaterialTarget(const std::uint64_t identity,
                                                                           VulkanCommandRetention &retention) const {
     const auto found = runtime_.impl_->targets.find(identity);
-    if (found == runtime_.impl_->targets.end() || !found->second->color || retention.resources.size() == retention.resources.capacity())
+    if (found == runtime_.impl_->targets.end() || retention.resources.size() == retention.resources.capacity())
         return Result<VulkanMaterialTarget>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
     const auto &target = *found->second;
     if (!WholeMaterialView(target.color) || !WholeMaterialView(target.depth))
@@ -39,8 +39,10 @@ Result<VulkanMaterialTarget> VulkanMaterialCapture::CaptureMaterialTarget(const 
                                    .textureDescriptor = view->texture->descriptor,
                                    .state = &view->texture->graphState};
     };
-    result.color = capture(target.color);
-    result.colorView = target.color->handle;
+    if (target.color) {
+        result.color = capture(target.color);
+        result.colorView = target.color->handle;
+    }
     if (target.depth) {
         result.depth = capture(target.depth);
         result.depthView = target.depth->handle;

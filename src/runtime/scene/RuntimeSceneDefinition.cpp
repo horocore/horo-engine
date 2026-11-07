@@ -68,12 +68,12 @@ namespace Horo::Runtime {
             return true;
         }
 
-        [[nodiscard]] bool ValidGameplayComponents(const std::span<const Gameplay::SerializedComponent> components) noexcept {
+        [[nodiscard]] bool ValidGameplayComponents(const std::span<const Gameplay::SerializedComponent> components) {
             return Gameplay::ValidateSerializedComponents(components).HasValue();
         }
 
         /** @brief Validates source playback and listener selection values as one audio component contract. */
-        [[nodiscard]] bool ValidAudioComponents(const RuntimeComponentSet &components) noexcept {
+        [[nodiscard]] bool ValidAudioComponents(const RuntimeComponentSet &components) {
             if (components.audioSource && (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
                                            Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError() ||
                                            Audio::ValidateAudioSceneLifecyclePolicy(components.audioSource->sceneLifecycle).HasError()))
@@ -84,34 +84,37 @@ namespace Horo::Runtime {
             return true;
         }
 
-        [[nodiscard]] bool ValidComponents(const RuntimeComponentSet &components) noexcept {
+        /** @brief Preserves presentation validation order while allowing allocation failures to reach the Scene transaction. */
+        [[nodiscard]] bool ValidPresentationPayloads(const RuntimeComponentSet &components) {
             if (components.camera && !ValidCamera(*components.camera))
                 return false;
             if (components.light && !ValidLight(*components.light))
                 return false;
             if (!ValidAudioComponents(components))
                 return false;
-            if (components.uiCanvas && Ui::ValidateUiCanvasAssetReference(components.uiCanvas->canvas).HasError())
-                return false;
-            if (components.navigationSurface && ValidateNavigationSurfaceComponent(*components.navigationSurface).HasError())
-                return false;
-            if (components.navigationRegion && ValidateNavigationRegionComponent(*components.navigationRegion).HasError())
-                return false;
-            if (components.navigationModifier && ValidateNavigationModifierComponent(*components.navigationModifier).HasError())
-                return false;
-            if (components.navigationLink && ValidateNavigationLinkComponent(*components.navigationLink).HasError())
-                return false;
-            if (components.navigationAgent && ValidateNavigationAgentComponent(*components.navigationAgent).HasError())
-                return false;
-            if (components.aiAgent && AI::ValidateAiAgentComponent(*components.aiAgent).HasError())
-                return false;
-            if (components.aiController && AI::ValidateAiControllerComponent(*components.aiController).HasError())
-                return false;
-            if (components.characterController && ValidateCharacterControllerComponent(*components.characterController).HasError())
-                return false;
-            if (!ValidBehaviors(components.behaviors) || !ValidGameplayComponents(components.gameplayComponents))
-                return false;
-            return true;
+            return !components.uiCanvas || Ui::ValidateUiCanvasAssetReference(components.uiCanvas->canvas).HasValue();
+        }
+
+        /** @brief Validates the same optional navigation payloads without claiming their Result construction cannot allocate. */
+        [[nodiscard]] bool ValidNavigationPayloads(const RuntimeComponentSet &components) {
+            return (!components.navigationSurface || ValidateNavigationSurfaceComponent(*components.navigationSurface).HasValue()) &&
+                   (!components.navigationRegion || ValidateNavigationRegionComponent(*components.navigationRegion).HasValue()) &&
+                   (!components.navigationModifier || ValidateNavigationModifierComponent(*components.navigationModifier).HasValue()) &&
+                   (!components.navigationLink || ValidateNavigationLinkComponent(*components.navigationLink).HasValue()) &&
+                   (!components.navigationAgent || ValidateNavigationAgentComponent(*components.navigationAgent).HasValue());
+        }
+
+        /** @brief Preserves AI and Character payload validation ahead of behavior and serialized component validation. */
+        [[nodiscard]] bool ValidAgentPayloads(const RuntimeComponentSet &components) {
+            return (!components.aiAgent || AI::ValidateAiAgentComponent(*components.aiAgent).HasValue()) &&
+                   (!components.aiController || AI::ValidateAiControllerComponent(*components.aiController).HasValue()) &&
+                   (!components.characterController || ValidateCharacterControllerComponent(*components.characterController).HasValue());
+        }
+
+        /** @brief Runs the complete canonical component validators; allocation exceptions belong to the owning Scene transaction. */
+        [[nodiscard]] bool ValidComponents(const RuntimeComponentSet &components) {
+            return ValidPresentationPayloads(components) && ValidNavigationPayloads(components) && ValidAgentPayloads(components) &&
+                   ValidBehaviors(components.behaviors) && ValidGameplayComponents(components.gameplayComponents);
         }
 
         /** @brief Validates navigation identities and cross-component references across the complete scene. */
@@ -232,6 +235,93 @@ namespace Horo::Runtime {
                     return Failure(SceneErrors::HierarchyCycle, "Runtime scene hierarchy contains a cycle.");
             return Result<void>::Success();
         }
+
+        /** @brief Projects navigation requirements through the one canonical Scene dependency builder. */
+        Result<void> RequireNavigationAssets(SceneDefinitionBuilder &builder, std::span<const RuntimeEntityDefinition> entities) {
+            const auto navMeshType = Assets::AssetTypeId::Parse(Assets::NavMeshAssetTypeName);
+            for (const auto &entity : entities) {
+                if (!entity.components.navigationSurface || !entity.components.navigationSurface->enabled)
+                    continue;
+                const auto required = builder.RequireAsset({entity.components.navigationSurface->definition, navMeshType.Value()});
+                if (required.HasError())
+                    return required;
+            }
+
+            return Result<void>::Success();
+        }
+
+        /** @brief Projects the existing explicit Character material requirements without changing disabled semantics. */
+        Result<void> RequireCharacterAssets(SceneDefinitionBuilder &builder, std::span<const RuntimeEntityDefinition> entities) {
+            const auto materialType = Assets::AssetTypeId::Parse("core.physics_material");
+            for (const auto &entity : entities) {
+                const auto &character = entity.components.characterController;
+                if (!character || !character->enabled || !character->collision.defaultMaterial)
+                    continue;
+                if (auto required = builder.RequireAsset({character->collision.defaultMaterial->material, materialType.Value()});
+                    required.HasError())
+                    return required;
+            }
+
+            return Result<void>::Success();
+        }
+
+        /** @brief Requires exact immutable source and optional retarget identities, never a live instance or pose. */
+        Result<void> RequireAnimationAssets(SceneDefinitionBuilder &builder, const Animation::AnimationAuthoringComponent &component) {
+            const auto require = [&builder](Assets::AssetId asset, std::string_view type) {
+                return builder.RequireAsset({asset, Assets::AssetTypeId::Parse(type).Value()});
+            };
+            if (auto skeleton = require(component.skeleton.Asset(), "core.animation.skeleton"); skeleton.HasError())
+                return skeleton;
+            const bool clip = component.source.kind == Animation::AnimationSourceKind::Clip;
+            auto source = require(clip ? component.source.clip.Asset() : component.source.graph.Asset(),
+                                  clip ? "core.animation.clip" : "core.animation.graph");
+            if (source.HasError())
+                return source;
+            if (component.retarget.IsValid())
+                return require(component.retarget.Asset(), "core.animation.retarget_profile");
+            return Result<void>::Success();
+        }
+
+        /** @brief Visits complete inert animation bindings at load time; setup-only assets are required even when initially paused. */
+        Result<void> RequireAnimationAssets(SceneDefinitionBuilder &builder, std::span<const RuntimeEntityDefinition> entities) {
+            for (const auto &entity : entities) {
+                if (!entity.components.animation)
+                    continue;
+                if (auto required = RequireAnimationAssets(builder, *entity.components.animation); required.HasError())
+                    return required;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates unchanged trigger body evidence independently from collider correspondence. */
+        bool MatchingTriggerBody(const RuntimeEntityDefinition &entity, const TriggerVolumeMigrationEvidence &evidence) {
+            const auto &body = entity.components.rigidBody;
+            return body && body->body == evidence.body && body->enabled && body->motion == AuthoredPhysicsMotionType::Static;
+        }
+
+        /** @brief Checks the exact canonical sensor and its sole material binding without changing legacy migration policy. */
+        bool MatchingTriggerCollider(const ColliderComponent &collider, const TriggerVolumeMigrationEvidence &evidence) {
+            return collider.enabled && collider.sensor && collider.body.object == evidence.object && collider.body.body == evidence.body &&
+                   collider.collisionProfile == evidence.binding.profile && collider.materials.size() == 1 &&
+                   collider.materials.front().material == evidence.binding.material.id;
+        }
+
+        /** @brief Validates every retained proof before sorting or publishing the complete immutable Scene definition. */
+        Result<void> ValidateTriggerEvidence(std::span<const RuntimeEntityDefinition> entities,
+                                             std::span<const TriggerVolumeMigrationEvidence> evidenceList) {
+            for (const auto &evidence : evidenceList) {
+                const auto entity = std::ranges::find(entities, evidence.object, &RuntimeEntityDefinition::object);
+                if (entity == entities.end() || !MatchingTriggerBody(*entity, evidence))
+                    return Result<void>::Failure(
+                        MakeError(SceneErrors::InvalidDefinition, "Trigger migration evidence has no corresponding enabled static body."));
+                const auto collider = std::ranges::find(entity->components.colliders, evidence.collider, &ColliderComponent::collider);
+                if (collider == entity->components.colliders.end() || !MatchingTriggerCollider(*collider, evidence))
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidDefinition,
+                                                           "Trigger migration evidence conflicts with its canonical sensor collider."));
+            }
+            return Result<void>::Success();
+        }
+
     }  // namespace
 
     /** @copydoc RuntimeSceneDefinition::RuntimeSceneDefinition */
@@ -325,6 +415,10 @@ namespace Horo::Runtime {
             return Failure(SceneErrors::InvalidEntity, "Runtime entity transform is not finite.");
         if (entity.primitiveMesh && !ValidPrimitive(*entity.primitiveMesh))
             return Failure(SceneErrors::InvalidEntity, "Runtime entity primitive descriptor is invalid.");
+        if (entity.components.animation) {
+            if (auto animation = Animation::ValidateAnimationAuthoringComponent(*entity.components.animation); animation.HasError())
+                return animation;
+        }
         if (!ValidComponents(entity.components))
             return Failure(SceneErrors::InvalidEntity, "Runtime entity component payload is invalid.");
         return Result<void>::Success();
@@ -339,39 +433,15 @@ namespace Horo::Runtime {
         if (const Result<void> valid = ValidateEntityHierarchy(entities_); valid.HasError())
             return Result<RuntimeSceneDefinition>::Failure(valid.ErrorValue());
 
-        // Canonical Scene dependency projection is shared by Editor conversion and packaged definitions.
-        const auto navMeshType = Assets::AssetTypeId::Parse(Assets::NavMeshAssetTypeName);
-        for (const auto &entity : entities_) {
-            if (!entity.components.navigationSurface || !entity.components.navigationSurface->enabled)
-                continue;
-            const auto required = RequireAsset({entity.components.navigationSurface->definition, navMeshType.Value()});
-            if (required.HasError())
-                return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
-        }
+        if (auto assets = RequireNavigationAssets(*this, entities_); assets.HasError())
+            return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
+        if (auto assets = RequireCharacterAssets(*this, entities_); assets.HasError())
+            return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
+        if (auto assets = RequireAnimationAssets(*this, entities_); assets.HasError())
+            return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
+        if (auto evidence = ValidateTriggerEvidence(entities_, triggerVolumeEvidence_); evidence.HasError())
+            return Result<RuntimeSceneDefinition>::Failure(evidence.ErrorValue());
 
-        const auto materialType = Assets::AssetTypeId::Parse("core.physics_material");
-        for (const auto &entity : entities_) {
-            const auto &character = entity.components.characterController;
-            if (!character || !character->enabled || !character->collision.defaultMaterial)
-                continue;
-            if (auto required = RequireAsset({character->collision.defaultMaterial->material, materialType.Value()}); required.HasError())
-                return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
-        }
-
-        for (const auto &evidence : triggerVolumeEvidence_) {
-            const auto entity = std::ranges::find(entities_, evidence.object, &RuntimeEntityDefinition::object);
-            if (entity == entities_.end() || !entity->components.rigidBody || entity->components.rigidBody->body != evidence.body ||
-                !entity->components.rigidBody->enabled || entity->components.rigidBody->motion != AuthoredPhysicsMotionType::Static)
-                return Result<RuntimeSceneDefinition>::Failure(
-                    MakeError(SceneErrors::InvalidDefinition, "Trigger migration evidence has no corresponding enabled static body."));
-            const auto collider = std::ranges::find(entity->components.colliders, evidence.collider, &ColliderComponent::collider);
-            if (collider == entity->components.colliders.end() || !collider->enabled || !collider->sensor ||
-                collider->body.object != evidence.object || collider->body.body != evidence.body ||
-                collider->collisionProfile != evidence.binding.profile || collider->materials.size() != 1 ||
-                collider->materials.front().material != evidence.binding.material.id)
-                return Result<RuntimeSceneDefinition>::Failure(
-                    MakeError(SceneErrors::InvalidDefinition, "Trigger migration evidence conflicts with its canonical sensor collider."));
-        }
         std::ranges::sort(triggerVolumeEvidence_, {}, &TriggerVolumeMigrationEvidence::object);
 
         std::ranges::sort(assetDependencies_, {}, [](const SceneAssetDependency &dependency) {

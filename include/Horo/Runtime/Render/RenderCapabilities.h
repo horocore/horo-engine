@@ -38,30 +38,34 @@ namespace Horo::Render {
         InstancedViewRouting, /**< Enabled native layer routing for the same immutable multiview scene. */
         UiPaint,              /**< Native cooked paint, bounded reusable uploads, clipping/stencil and isolated composition. */
         VfxForwardInstancing, /**< Issued uniform revisions and canonical indexed billboard/mesh forward draws; not shadow/GBuffer. */
+        VfxGpuSimulation,     /**< Actual cooked particle force/integration dispatch with bounded generation/submission journals. */
+        VfxGpuDraw,           /**< Direct vertex consumption of the admitted GPU particle storage ABI. */
+        VfxGpuReadback,       /**< Declared normalized observations with actual asynchronous copy/completion ownership. */
+        ExposureGpu,          /**< Closed native histogram/adaptation family; no CPU meter or generic compute implied. */
         Count,                /**< Number of defined capabilities; not itself a capability bit. */
     };
 
     /** @brief Bounded bitset of backend-neutral renderer capabilities. */
     struct RenderCapabilitySet final {
-        std::uint16_t bits{0}; /**< Enabled capability bits. */
+        std::uint32_t bits{0}; /**< Enabled capability bits; existing bit positions are preserved. */
 
         /** @brief Number of capability values currently defined by the public contract. */
-        static constexpr std::uint16_t CapabilityCount = static_cast<std::uint16_t>(RenderCapability::Count);
+        static constexpr std::uint32_t CapabilityCount = static_cast<std::uint32_t>(RenderCapability::Count);
 
-        static_assert(CapabilityCount <= std::numeric_limits<std::uint16_t>::digits,
+        static_assert(CapabilityCount <= std::numeric_limits<std::uint32_t>::digits,
                       "Render capability count exceeds the capability bitset width.");
 
         /** @brief Mask containing every capability bit defined by the public contract. */
-        static constexpr std::uint16_t KnownBits = static_cast<std::uint16_t>((std::uint32_t{1} << CapabilityCount) - 1U);
+        static constexpr std::uint32_t KnownBits = static_cast<std::uint32_t>((std::uint64_t{1} << CapabilityCount) - 1U);
 
         /**
          * @brief Returns the bit for one capability.
          * @param capability Capability to encode.
          * @return The corresponding single-bit mask.
          */
-        [[nodiscard]] static constexpr std::uint16_t Bit(const RenderCapability capability) noexcept {
+        [[nodiscard]] static constexpr std::uint32_t Bit(const RenderCapability capability) noexcept {
             const auto value = static_cast<std::uint8_t>(capability);
-            return value < CapabilityCount ? static_cast<std::uint16_t>(std::uint32_t{1} << value) : 0;
+            return value < CapabilityCount ? std::uint32_t{1} << value : 0;
         }
 
         /**
@@ -70,7 +74,7 @@ namespace Horo::Render {
          * @return `true` when the capability is enabled.
          */
         [[nodiscard]] constexpr bool Supports(const RenderCapability capability) const noexcept {
-            const std::uint16_t bit = Bit(capability);
+            const std::uint32_t bit = Bit(capability);
             return bit != 0 && (bits & bit) != 0;
         }
 
@@ -79,7 +83,7 @@ namespace Horo::Render {
          * @param capability Capability to enable.
          */
         constexpr void Enable(const RenderCapability capability) noexcept {
-            bits = static_cast<std::uint16_t>(bits | Bit(capability));
+            bits |= Bit(capability);
         }
 
         /**
@@ -87,7 +91,7 @@ namespace Horo::Render {
          * @return `true` when no reserved capability bits are set.
          */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return (bits & static_cast<std::uint16_t>(~KnownBits)) == 0;
+            return (bits & ~KnownBits) == 0;
         }
     };
 

@@ -576,10 +576,21 @@ horo-engine/
 │   ├── HoroEditor/
 │   │   ├── main.cpp
 │   │   ├── app/
+│   │   ├── composition/          # Editor-only adapters and lifecycle wiring
+│   │   ├── tools/                # Offline product preparation
 │   │   └── resources/
 │   ├── horo-engine/
 │   │   ├── main.cpp
-│   │   └── cli_host/
+│   │   ├── cli_host/
+│   │   └── composition/          # Headless/network and script-package wiring
+│   ├── shared/                   # Multi-host composition, grouped by owner
+│   │   ├── animation/
+│   │   ├── modules/
+│   │   ├── navigation/
+│   │   ├── packages/
+│   │   ├── physics/
+│   │   ├── scene/
+│   │   └── security/
 │   └── horopak/
 │       ├── main.cpp
 │       └── package_tool/

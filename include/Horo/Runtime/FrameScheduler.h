@@ -208,6 +208,13 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> RunFixedSteps(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation,
                                                  Duration &droppedSimulationTime);
 
+        /** @brief Attempts one fixed tick without consuming accumulated time on failure. */
+        [[nodiscard]] Result<void> RunOneFixedStep(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation, bool paused);
+        /** @brief Publishes only prevalidated scheduler bookkeeping, before participant publication. */
+        void CommitFixedStep(const FixedStepContext &context, bool paused) noexcept;
+        /** @brief Drops only whole excess quanta after a successful catch-up batch. */
+        void DropExcessFixedTime(Duration &droppedSimulationTime) noexcept;
+
         /** @brief Runs variable update and rendering in canonical order, recording only successful variable publication. */
         [[nodiscard]] Result<void> RunVariablePhases(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation,
                                                      FrameContext &context);
@@ -227,12 +234,25 @@ namespace Horo::Runtime {
             RuntimeDispatchSource &source;
         };
 
+        /** @brief Rolls back an unpublished fixed attempt before its dispatch reservation expires. */
+        struct FixedAttemptGuard final {
+            FixedAttemptGuard(RuntimeLifecycle &lifecycle, const FixedStepContext &context) noexcept;
+            ~FixedAttemptGuard();
+            FixedAttemptGuard(const FixedAttemptGuard &) = delete;
+            FixedAttemptGuard &operator=(const FixedAttemptGuard &) = delete;
+            FixedAttemptGuard(FixedAttemptGuard &&) = delete;
+            FixedAttemptGuard &operator=(FixedAttemptGuard &&) = delete;
+            RuntimeLifecycle &lifecycle;
+            const FixedStepContext &context;
+            bool committed{};
+        };
+
         /** @brief Checks dispatch ownership before any new frame or accumulator mutation. */
         [[nodiscard]] Result<void> AdmitRun() const;
         /** @brief Copies trusted producer values for one actual variable-rate phase. */
         [[nodiscard]] RuntimeDispatchFacts FrameFacts(const FrameContext &context) const noexcept;
         /** @brief Admits one actual fixed dispatch, revokes its proof, and retains the original callback/cancellation failure. */
-        [[nodiscard]] Result<void> DispatchFixedChecked(RuntimeLifecycle &lifecycle, FixedStepContext &context);
+        [[nodiscard]] Result<void> DispatchFixedChecked(RuntimeLifecycle &lifecycle, FixedStepContext &context, bool paused);
 
         RuntimeDispatchSource dispatchSource_;
         std::uint64_t completedVariableUpdateFrame_{};

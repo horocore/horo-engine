@@ -4,6 +4,7 @@
 namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::~EditorWorkspaceScreen */
     EditorWorkspaceScreen::~EditorWorkspaceScreen() {
+        RevokeSimulatorArtifacts();
         if (xr_.attached)
             xr_.host->RevokeInput();
     }

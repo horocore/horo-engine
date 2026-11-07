@@ -1,18 +1,21 @@
-"""Repository tooling has three real implementation files, not hidden modules."""
+"""Public tooling CLIs and explicit offline renderer producers have no hidden modules."""
 import ast
 from pathlib import Path
 import sys
-import threading
+import subprocess
 
 import analyze
+import pytest
+
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
 
-def test_entire_scripts_tree_has_exactly_three_python_files():
+def test_scripts_tree_has_only_declared_clis_and_offline_renderer_producers():
     assert sorted(p.relative_to(SCRIPTS).as_posix() for p in SCRIPTS.rglob("*.py")) == [
-        "analyze.py", "dev.py", "project.py"]
-    for name in ("analyze", "dev", "project"):
+        "analyze.py", "dev.py", "project.py",
+        "renderer/color_look_cook.py", "renderer/color_pipeline_cook.py"]
+    for name in ("analyze", "dev", "project", "renderer/color_look_cook", "renderer/color_pipeline_cook"):
         tree = ast.parse((SCRIPTS / f"{name}.py").read_text(encoding="utf-8"))
         assert sum(isinstance(n, (ast.FunctionDef, ast.ClassDef)) for n in tree.body) >= 5
         assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
@@ -21,18 +24,19 @@ def test_entire_scripts_tree_has_exactly_three_python_files():
     assert not list(SCRIPTS.rglob("*.sh"))
 
 
-def test_unified_analysis_cli_exposes_commands_and_rejects_unverified_ports():
-    result = analyze.native_run([sys.executable, str(SCRIPTS / "analyze.py"), "--help"],
-                                SCRIPTS.parent, 10, None, threading.Event())
+def test_unified_analysis_cli_exposes_commands_and_rejects_unverified_ports(monkeypatch, capsys):
+    result = subprocess.run([sys.executable, str(SCRIPTS / "analyze.py"), "--help"],
+                            cwd=SCRIPTS.parent, capture_output=True, text=True, timeout=10, check=False)
     assert result.returncode == 0, result.stderr
     for command in ("check", "doctor", "stop", "complexity"):
         assert command in result.stdout
+    monkeypatch.setattr(analyze, "default_code_user_data", lambda: SCRIPTS.parent / "unused-code-user-data")
     for args in (["check", "--port", "64120"], ["check", "--files", "x.cpp", "--dirty"],
                  ["complexity", "--files", "x.cpp", "--base", "main"]):
-        result = analyze.native_run([sys.executable, str(SCRIPTS / "analyze.py"), *args],
-                                    SCRIPTS.parent, 10, None, threading.Event())
-        assert result.returncode == 2
-        assert "error:" in result.stderr
+        with pytest.raises(SystemExit) as error:
+            analyze.main(args)
+        assert error.value.code == 2
+        assert "error:" in capsys.readouterr().err
 
 
 def test_dev_setup_uses_native_build_options_without_installing(monkeypatch, tmp_path):

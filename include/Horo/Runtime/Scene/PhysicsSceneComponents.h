@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Physics/SurfaceMaterial.h"
 
 /**
  * @file PhysicsSceneComponents.h
@@ -150,11 +151,15 @@ namespace Horo::Runtime {
         [[nodiscard]] constexpr auto operator<=>(const PhysicsColliderMaterialBinding &) const noexcept = default;
     };
 
+    inline constexpr std::size_t MaximumPhysicsColliderSurfaceBindings =
+        64; /**< Independent semantic binding capacity; legacy physical bounds remain unchanged. */
+    inline constexpr std::uint32_t PhysicsColliderComponentSchemaVersion = 2;
+
     /** @brief Serializable collider contributor bound to one explicit authored body. */
     struct ColliderComponent final {
         PhysicsComponentId id;
         PhysicsColliderSlotId collider;
-        std::uint32_t schemaVersion{PhysicsSceneComponentSchemaVersion};
+        std::uint32_t schemaVersion{PhysicsColliderComponentSchemaVersion};
         std::uint64_t generation{1};
         PhysicsBodyReference body;
         PhysicsColliderSource source{PhysicsAnalyticCollider{PhysicsBoxCollider{}}};
@@ -165,6 +170,8 @@ namespace Horo::Runtime {
         bool sensor{};
         bool enabled{true};
         [[nodiscard]] bool operator==(const ColliderComponent &) const noexcept = default;
+
+        std::vector<Physics::PhysicsSurfaceBinding> surfaceBindings; /**< Explicit collider-slot semantics; omission means None. */
     };
 
     /** @brief Explicit body endpoint and body-local constraint frame. */

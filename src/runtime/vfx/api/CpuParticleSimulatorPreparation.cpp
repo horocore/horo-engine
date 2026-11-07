@@ -45,18 +45,6 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             return true;
         }
 
-        [[nodiscard]] bool ValidForce(const CpuParticleForceModule &force) noexcept {
-            using enum CpuParticleForceKind;
-            if (force.kind >= Count || !Finite(force.vector) || !Finite(force.center) || !Finite(force.strength) ||
-                !Finite(force.falloff) || !Finite(force.frequency) || force.falloff < 0.0F || force.frequency < 0.0F)
-                return false;
-            if (force.kind == Noise)
-                return force.randomChannel >= 10 && Finite(force.strength * force.frequency);
-            if (force.kind == Gravity || force.kind == Wind)
-                return Finite(force.vector * force.strength);
-            return true;
-        }
-
         [[nodiscard]] Result<void> ValidateBasic(const ParticleSystemDescriptorData &data, const CpuParticleSimulatorCreateInfo &info) {
             if (!info.buffer.IsValid() || !info.activation.IsValid() || !data.emitter.IsValid() || info.maximumBurstParticles == 0 ||
                 info.maximumBurstParticles > CpuParticleSimulationHardLimits::BurstParticles || !Finite(info.maximumDeltaSeconds) ||
@@ -73,16 +61,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         }
 
         [[nodiscard]] Result<void> ValidateForces(const std::span<const CpuParticleForceModule> forces) {
-            std::array<bool, 256> noiseChannelSeen{};
-            for (const auto &force : forces) {
-                if (!ValidForce(force))
-                    return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
-                if (force.kind == CpuParticleForceKind::Noise) {
-                    if (noiseChannelSeen[force.randomChannel])
-                        return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
-                    noiseChannelSeen[force.randomChannel] = true;
-                }
-            }
+            if (!ValidateParticleForceModules(forces))
+                return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
             return Result<void>::Success();
         }
 
@@ -322,6 +302,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         const auto &data = descriptor.Data();
         if (auto result = ValidateBasic(data, info); result.HasError())
             return Result<std::unique_ptr<Detail::CpuParticleSimulatorState>>::Failure(result.ErrorValue());
+        if (data.gpuReadback.enabled)
+            return Failure<std::unique_ptr<Detail::CpuParticleSimulatorState>>(VfxErrors::GpuSimulationUnsupported);
         if (auto result = ValidateForces(info.forces); result.HasError())
             return Result<std::unique_ptr<Detail::CpuParticleSimulatorState>>::Failure(result.ErrorValue());
         if (auto result = ValidatePayloadModules(info); result.HasError())

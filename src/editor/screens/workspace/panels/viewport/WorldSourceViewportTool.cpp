@@ -2,7 +2,9 @@
 
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "ViewportOverlay.h"
 #include "WorldSourceShapeControls.h"
 #include "editor/renderer/EditorViewportScene.h"
 
@@ -254,18 +256,26 @@ namespace Horo::Editor {
             (!eligible && dragged_.has_value()))
             Cancel();
         const bool canEdit = eligible && view.playState == EditorPlayState::Idle;
-        ImGui::SetCursorScreenPos({origin.x + Theme::Layout::BodyPadX, origin.y + size.y - ImGui::GetFrameHeightWithSpacing()});
-        ImGui::BeginDisabled(!canEdit);
-        if (Ui::Button({.label = context.localization.Get("editor", "workspace.world_sources.title").c_str(),
-                        .variant = Ui::ButtonVariant::Secondary}))
-            ImGui::OpenPopup("##WorldSources");
-        ImGui::EndDisabled();
-        const bool toolbarHovered = ImGui::IsItemHovered();
+        const auto row = ResolveViewportStatusRow(origin, size, view.objects.size(), context.localization);
+        bool toolbarHovered = false;
+        if (row.actionsWidth >= row.height) {
+            const float scale = Theme::GetActiveTokens().sizes.uiScale;
+            ImGui::SetCursorScreenPos(row.actionsPosition);
+            if (Ui::Button({.label = context.localization.Get("editor", "workspace.content_browser.location.sources").c_str(),
+                            .size = {std::min(row.actionsWidth, 112.0F * scale) / scale, row.height / scale},
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .enabled = canEdit,
+                            .componentSize = Ui::ComponentSize::Small}))
+                ImGui::OpenPopup("##WorldSources");
+            toolbarHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+            if (toolbarHovered)
+                Ui::ShowTooltip(context.localization.Get("editor", "workspace.world_sources.title").c_str(), &context.theme.fonts);
+        }
         bool popup = false;
-        if (ImGui::BeginPopup("##WorldSources")) {
+        if (Ui::BeginMenuPopup("##WorldSources")) {
             popup = true;
             DrawPopup(view, command, context);
-            ImGui::EndPopup();
+            Ui::EndMenuPopup();
         }
         const bool handles =
             view.worldViewport.snapshot && DrawHandles(draw, origin, size, view, command, depth, canEdit && !popup && !toolbarHovered);
@@ -351,7 +361,7 @@ namespace Horo::Editor {
                 previewError_ = position.ErrorValue();
             }
         } else {
-            previewError_ = MakeError(WorldDocumentErrors::Invalid);
+            previewError_ = MakeError(GuiLive::HostSymbol<&WorldDocumentErrors::Invalid>());
         }
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
             if (!previewError_) {

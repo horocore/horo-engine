@@ -1,13 +1,19 @@
+#include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Foundation/Platform.h"
 #include "SourceEditorSession.h"
+#include "SourceEditorTools.h"
 #include "SourceEditorWidget.h"
+#include "SourceSyntax.h"
+#include "SourceWidgetPlatform.h"
+#include "editor/input/EditorInputActions.h"
 #include "helpers/editor_ui/SourceEditorWidgetFixture.h"
 
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cmath>
 #include <imgui_internal.h>
 #include <limits>
@@ -90,19 +96,13 @@ TEST_CASE("Zep clipboard uses the host and rejected edits reconcile to the owner
     static_cast<void>(fixture.Frame(fixture.first));
 }
 
-TEST_CASE("Widget undo is an outward document intent and never changes the local text", "[editor][source][widget]") {
+TEST_CASE("Widget leaves history shortcuts to the host registry without changing text", "[editor][source][widget]") {
     WidgetFixture fixture;
     const auto original = fixture.Open("code.cpp", "abc");
     fixture.first.Publish(original);
     static_cast<void>(fixture.Frame(fixture.first));
-    const auto undo = fixture.Shortcut(fixture.first, ImGuiKey_Z);
-    REQUIRE(undo);
-    const auto *request = std::get_if<SourceHistoryRequest>(&*undo);
-    REQUIRE(request);
-    CHECK(request->instance == original.Identity().instance);
-    CHECK(request->expectedRevision == original.Revision());
-    CHECK(request->direction == SourceHistoryDirection::Undo);
-    CHECK_FALSE(fixture.Frame(fixture.first));
+    CHECK_FALSE(fixture.Shortcut(fixture.first, ImGuiKey_Z));
+    CHECK(fixture.documents.Documents().Snapshot(original.Identity().instance).Value().Revision() == original.Revision());
 }
 
 TEST_CASE("Widget focus disabled and teardown paths do not mutate documents", "[editor][source][widget]") {
@@ -417,4 +417,191 @@ TEST_CASE("Source focus hands pointer input back to a shared text control", "[ed
     CHECK(source.Text() == "unchanged");
     frame(true);
     CHECK(fixture.first.OwnsInput());
+}
+
+TEST_CASE("Dragging through several source lines selects bytes without creating a document edit", "[editor][source][widget]") {
+    WidgetFixture fixture;
+    const auto original =
+        fixture.Open("drag.horo_script",
+                     "alpha bravo charlie\nsecond line here\nthird line here\nfourth line here\nfifth line here\nlast line\n");
+    fixture.first.Publish(original);
+    static_cast<void>(fixture.Frame(fixture.first));
+    auto &io = ImGui::GetIO();
+    io.AddMousePosEvent(110, 50);
+    static_cast<void>(fixture.Frame(fixture.first));
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    CHECK_FALSE(fixture.Frame(fixture.first));
+    io.AddMousePosEvent(220, 110);
+    CHECK_FALSE(fixture.Frame(fixture.first));
+    const auto selected = fixture.first.Selection();
+    REQUIRE(selected.anchor != selected.caret);
+    const auto low = std::min(selected.anchor, selected.caret);
+    const auto high = std::max(selected.anchor, selected.caret);
+    CHECK(original.Text().substr(low, high - low).find('\n') != std::string_view::npos);
+    io.AddMousePosEvent(1100, 700);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    CHECK_FALSE(fixture.Frame(fixture.first));
+    CHECK(fixture.first.Selection().anchor != fixture.first.Selection().caret);
+    CHECK(fixture.documents.Documents().Snapshot(original.Identity().instance).Value().Revision() == original.Revision());
+}
+
+TEST_CASE("Source newline planning follows Horo Script blocks and ignores strings and comments", "[editor][source][widget][syntax]") {
+    WidgetFixture fixture;
+    const auto block = fixture.Open("block.horo_script", "    on_update = function(ctx, dt)");
+    const auto at = block.Text().size();
+    const auto plan = PlanSourceLanguageNewline(block, {at, at, 0, {1}});
+    REQUIRE(plan.HasValue());
+    CHECK(plan.Value().insert == "\n        ");
+    const auto braces = fixture.Open("braces.horo_script", "return horo.behavior {\r\n}");
+    const auto brace = braces.Text().find('{') + 1;
+    const auto bracePlan = PlanSourceLanguageNewline(braces, {brace, brace, 0, {1}});
+    REQUIRE(bracePlan.HasValue());
+    CHECK(bracePlan.Value().insert == "\r\n    ");
+    const auto comment = fixture.Open("comment.horo_script", "    -- function(ctx) {");
+    const auto commentEnd = comment.Text().size();
+    REQUIRE(PlanSourceLanguageNewline(comment, {commentEnd, commentEnd, 0, {1}}).Value().insert == "\n    ");
+    const auto string = fixture.Open("string.horo_script", "    local x = \"function {\"");
+    const auto stringEnd = string.Text().size();
+    REQUIRE(PlanSourceLanguageNewline(string, {stringEnd, stringEnd, 0, {1}}).Value().insert == "\n    ");
+    const auto paired = fixture.Open("paired.horo_script", "local x = {}");
+    const auto inner = paired.Text().find('{') + 1;
+    const auto pairedPlan = PlanSourceLanguageNewline(paired, {inner, inner, 0, {1}});
+    REQUIRE(pairedPlan.HasValue());
+    CHECK(pairedPlan.Value().insert == "\n    \n");
+    CHECK(pairedPlan.Value().after.caret == inner + 5);
+}
+
+TEST_CASE("Source tools resolve Cmd zoom and remapped history through the shared registry", "[editor][source][widget][keymap]") {
+    const bool mac = GENERATE(true, false);
+    Horo::Editor::Tests::EditorGuiContextFixture gui;
+    Horo::Tests::OwnedTestDirectory directory{"source-keymap"};
+    std::ofstream(directory.Path() / "code.cpp") << "hello";
+    SourceFileOpenService documents{directory.Path()};
+    const auto opened = documents.Open({.path = "code.cpp", .mode = SourceOpenMode::EmbeddedOnly});
+    REQUIRE(opened.HasValue());
+    const auto source = *opened.Value().sourceSnapshot;
+    SourceEditorWidget widget{SourceEditingViewId{9}};
+    SourceEditorTools tools;
+    auto &io = ImGui::GetIO();
+    io.ConfigMacOSXBehaviors = mac;
+    const auto modifier = mac ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    const auto frame = [&](const bool enabled = true) {
+        gui.imgui.BeginFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({700, 500});
+        ImGui::Begin("Source commands");
+        widget.Publish(source);
+        auto intent = tools.Draw(widget, source, {.undoEntries = 1}, {}, gui.context);
+        static_cast<void>(
+            widget.Draw({620, 400, 1, true, enabled && !intent, &gui.settings.settings.keymap.profile, 18, tools.HandledShortcut()},
+                        &gui.theme.fonts));
+        ImGui::End();
+        gui.imgui.EndFrame();
+        return intent;
+    };
+    frame();
+    frame();
+    const auto chord = [&](const ImGuiKey key, const bool enabled = true) {
+        io.AddKeyEvent(modifier, true);
+        frame(enabled);
+        io.AddKeyEvent(key, true);
+        auto intent = frame(enabled);
+        io.AddKeyEvent(key, false);
+        io.AddKeyEvent(modifier, false);
+        frame(enabled);
+        frame(enabled);
+        return intent;
+    };
+    CHECK_FALSE(chord(ImGuiKey_Equal));
+    CHECK(widget.FontZoom() == 1);
+    CHECK_FALSE(chord(ImGuiKey_Minus));
+    CHECK(widget.FontZoom() == 0);
+    gui.settings.settings.keymap.profile.overrides.push_back(
+        {Input::ActionId{kActionSourceZoomIn},
+         {{.kind = Input::BindingControlKind::Key, .key = Input::Key::F2, .requiredModifiers = {.control = !mac, .command = mac}}}});
+    CHECK_FALSE(chord(ImGuiKey_Equal));
+    CHECK(widget.FontZoom() == 0);
+    CHECK_FALSE(chord(ImGuiKey_F2));
+    CHECK(widget.FontZoom() == 1);
+    CHECK_FALSE(chord(ImGuiKey_0));
+    CHECK(widget.FontZoom() == 0);
+    gui.settings.settings.keymap.profile.overrides.push_back(
+        {Input::ActionId{kActionUndo},
+         {{.kind = Input::BindingControlKind::Key, .key = Input::Key::U, .requiredModifiers = {.control = !mac, .command = mac}}}});
+    auto &zoomBinding = gui.settings.settings.keymap.profile.overrides.front().bindings.front();
+    zoomBinding.key = Input::Key::Q;
+    zoomBinding.requiredModifiers = {};
+    io.AddKeyEvent(ImGuiKey_Q, true);
+    io.AddInputCharactersUTF8("q");
+    CHECK_FALSE(frame());
+    CHECK(widget.FontZoom() == 1);
+    io.AddKeyEvent(ImGuiKey_Q, false);
+    frame();
+    widget.SetFontZoom(0);
+    CHECK_FALSE(chord(ImGuiKey_Z));
+    const auto undo = chord(ImGuiKey_U);
+    REQUIRE(undo);
+    const auto *request = std::get_if<SourceHistoryRequest>(&*undo);
+    REQUIRE(request);
+    CHECK(request->instance == source.Identity().instance);
+    CHECK(request->direction == SourceHistoryDirection::Undo);
+    frame(false);
+    CHECK_FALSE(chord(ImGuiKey_F2, false));
+    CHECK(widget.FontZoom() == 0);
+    CHECK(documents.Documents().Snapshot(source.Identity().instance).Value().Revision() == source.Revision());
+}
+
+TEST_CASE("Live source display preferences preserve document bytes and selection", "[editor][source][widget][settings]") {
+    WidgetFixture fixture;
+    const auto source = fixture.Open("view.lua", "first  = 1\nsecond = 2\n");
+    fixture.first.Publish(source);
+    REQUIRE(fixture.first.Select({0, 5}));
+    CodeEditorSettings preferences;
+    const auto draw = [&] {
+        fixture.gui.BeginFrame();
+        ImGui::SetNextWindowSize({700, 500});
+        ImGui::Begin("Live source settings");
+        const auto intent = fixture.first.Draw({.width = 620, .height = 400, .preferences = &preferences});
+        ImGui::End();
+        fixture.gui.EndFrame();
+        CHECK_FALSE(intent);
+        CHECK(fixture.first.Selection() == SourceWidgetSelection{0, 5});
+        return ImGui::GetDrawData()->TotalVtxCount;
+    };
+    static_cast<void>(draw());
+    const int ordinary = draw();
+    preferences.showWhitespace = true;
+    static_cast<void>(draw());
+    CHECK(draw() > ordinary);
+    preferences.showWhitespace = false;
+    preferences.showLineNumbers = false;
+    preferences.wordWrap = false;
+    preferences.showScrollBar = false;
+    static_cast<void>(draw());
+    CHECK(draw() < ordinary);
+    CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().Text() == source.Text());
+    CHECK_FALSE(source.Dirty());
+}
+
+TEST_CASE("Source font families select registered atlas faces and fall back without per-frame cache churn", "[editor][source][font]") {
+    WidgetFixture fixture;
+    auto fonts = fixture.gui.Fonts();
+    auto *alternate = ImGui::GetIO().Fonts->AddFontDefault();
+    REQUIRE(ImGui::GetIO().Fonts->Build());
+    fonts.monospace = fonts.sans;
+    fonts.codeFamilies.push_back({"Registered Mono", alternate, alternate});
+    WidgetDisplay display;
+    const auto theme = ResolveSourceEditorTheme(Theme::GetActiveTokens());
+    const auto currentFace = [&]() {
+        return static_cast<Zep::ZepFont_ImGui &>(display.GetFont(Zep::ZepTextType::Text)).GetImFont();
+    };
+    display.Configure(theme, &fonts, "Registered Mono");
+    CHECK(currentFace() == alternate);
+    const auto generation = display.FontGeneration();
+    display.Configure(theme, &fonts, "Registered Mono");
+    CHECK(currentFace() == alternate);
+    CHECK(display.FontGeneration() == generation);
+    display.Configure(theme, &fonts, "Unavailable Mono");
+    CHECK(currentFace() == fonts.monospace);
+    CHECK(display.FontGeneration() > generation);
 }

@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/RenderReadback.h"
 #include "Horo/Runtime/Render/RenderReadbackErrors.h"
+#include "support/AllocationProbe.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -257,5 +258,192 @@ namespace RenderReadbackTests {
         queue.reset();
         REQUIRE(result.Bytes().size() == mapped.size());
         CHECK(result.Bytes().back() == std::byte{1});
+    }
+
+    /** @brief Prepares actual queue-owned CPU storage only; timeline metadata here is not a native execution claim. */
+    std::unique_ptr<RenderReadbackQueue> PreparedQueue(std::uint32_t slots = 2) {
+        auto queue = CreateQueue();
+        const auto prepared = queue->PreparePayloadStorage({slots, 8, 8}, 1024U * 1024U);
+        REQUIRE(prepared.HasValue());
+        CHECK(prepared.Value() == queue->RetainedPayloadBytes());
+        return queue;
+    }
+
+    RenderReadbackId PreparedSubmitted(RenderReadbackQueue &queue) {
+        const auto request = queue.RequestPrepared(Descriptor());
+        REQUIRE(request.status == RenderReadbackPreparedStatus::Complete);
+        REQUIRE(queue.MarkSubmitted(request.id, Completion).HasValue());
+        return request.id;
+    }
+
+    TEST_CASE("Prepared readback charges actual cold storage and rejects impossible pool configuration", "[readback][prepared]") {
+        auto queue = CreateQueue();
+        const auto base = queue->RetainedPayloadBytes();
+        CHECK(queue->PreparePayloadStorage({2, 8, 8}, base).HasError());
+        CHECK(queue->RetainedPayloadBytes() == base);
+        CHECK(queue->PreparePayloadStorage({0, 8, 8}, 1024U * 1024U).HasError());
+        CHECK(queue->PreparePayloadStorage({2, 8, 3}, 1024U * 1024U).HasError());
+        const auto prepared = queue->PreparePayloadStorage({2, 8, 8}, 1024U * 1024U);
+        REQUIRE(prepared.HasValue());
+        CHECK(prepared.Value() > base + 16);
+        CHECK(prepared.Value() == queue->RetainedPayloadBytes());
+        CHECK(queue->PreparePayloadStorage({2, 8, 8}, 1024U * 1024U).HasError());
+    }
+
+    TEST_CASE("Prepared readback completion acquires the same aligned bytes without hot allocation or copy", "[readback][prepared]") {
+        auto queue = PreparedQueue();
+        RenderReadbackResult lease;
+        RenderReadbackPreparedStatus completion{}, acquisition{}, pressure{};
+        RenderReadbackPreparedRequest request;
+        std::uintptr_t address{};
+        std::size_t allocations{};
+        {
+            Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
+            request = queue->RequestPrepared(Descriptor());
+            (void)queue->MarkSubmitted(request.id, Completion);
+            auto writable = queue->WritablePrepared(request.id);
+            address = reinterpret_cast<std::uintptr_t>(writable.bytes.data());
+            if (writable.bytes.size() == 4)
+                writable.bytes[0] = std::byte{0x5a};
+            completion = queue->CompletePrepared(request.id, Completion);
+            acquisition = queue->AcquirePrepared(request.id, lease);
+            const auto second = queue->RequestPrepared(Descriptor());
+            pressure = queue->RequestPrepared(Descriptor()).status;
+            (void)queue->Cancel(second.id);
+            (void)queue->Discard(second.id);
+            allocations = measurement.Snapshot().requests;
+        }
+        REQUIRE(request.status == RenderReadbackPreparedStatus::Complete);
+        CHECK(completion == RenderReadbackPreparedStatus::Complete);
+        CHECK(acquisition == RenderReadbackPreparedStatus::Complete);
+        CHECK(pressure == RenderReadbackPreparedStatus::CapacityExceeded);
+        CHECK(allocations == 0);
+        REQUIRE(lease.Bytes().size() == 4);
+        CHECK(reinterpret_cast<std::uintptr_t>(lease.Bytes().data()) == address);
+        CHECK(address % 8 == 0);
+        CHECK(lease.Bytes()[0] == std::byte{0x5a});
+        CHECK(lease.Id() == request.id);
+        CHECK(lease.Completion() == Completion);
+    }
+
+    TEST_CASE("Prepared readback retains submitted cancellation and timeout charges until exact retirement", "[readback][prepared]") {
+        auto queue = PreparedQueue(1);
+        const auto id = PreparedSubmitted(*queue);
+        SECTION("cancel") {
+            REQUIRE(queue->Cancel(id).HasValue());
+        }
+        SECTION("timeout") {
+            REQUIRE(queue->Timeout(id).HasValue());
+        }
+        CHECK(queue->WritablePrepared(id).status == RenderReadbackPreparedStatus::InvalidTransition);
+        CHECK(queue->Snapshot().pendingBytes == 4);
+        CHECK(queue->RequestPrepared(Descriptor()).status == RenderReadbackPreparedStatus::CapacityExceeded);
+        CHECK(queue->CompletePrepared(id, {{1}, 10}) == RenderReadbackPreparedStatus::InvalidTransition);
+        CHECK(queue->Snapshot().pendingBytes == 4);
+        REQUIRE(queue->Retire(id).HasValue());
+        REQUIRE(queue->Discard(id).HasValue());
+        CHECK(queue->CollectPreparedResults() == 1);
+        const auto next = queue->RequestPrepared(Descriptor());
+        CHECK(next.status == RenderReadbackPreparedStatus::Complete);
+        CHECK(next.id != id);
+        CHECK(queue->WritablePrepared(id).status == RenderReadbackPreparedStatus::InvalidRequest);
+        CHECK(queue->CompletePrepared(id, Completion) == RenderReadbackPreparedStatus::InvalidRequest);
+    }
+
+    TEST_CASE("Prepared readback never exposes pending ready or stale requests as writable", "[readback][prepared]") {
+        auto queue = PreparedQueue();
+        const auto pending = queue->RequestPrepared(Descriptor());
+        REQUIRE(pending.status == RenderReadbackPreparedStatus::Complete);
+        CHECK(queue->WritablePrepared(pending.id).status == RenderReadbackPreparedStatus::InvalidTransition);
+        CHECK(queue->CompletePrepared(pending.id, Completion) == RenderReadbackPreparedStatus::InvalidTransition);
+        RenderReadbackResult output;
+        CHECK(queue->AcquirePrepared(pending.id, output) == RenderReadbackPreparedStatus::ResultPending);
+        REQUIRE(queue->MarkSubmitted(pending.id, Completion).HasValue());
+        CHECK(queue->CompletePrepared(pending.id, {{2}, 9}) == RenderReadbackPreparedStatus::InvalidTransition);
+        CHECK(queue->CompletePrepared(pending.id, Completion) == RenderReadbackPreparedStatus::Complete);
+        CHECK(queue->WritablePrepared(pending.id).status == RenderReadbackPreparedStatus::InvalidTransition);
+        CHECK(queue->CompletePrepared(pending.id, Completion) == RenderReadbackPreparedStatus::InvalidTransition);
+        CHECK(queue->AcquirePrepared(pending.id, output) == RenderReadbackPreparedStatus::Complete);
+        const auto retained = output.Id();
+        CHECK(queue->AcquirePrepared(pending.id, output) == RenderReadbackPreparedStatus::InvalidTransition);
+        CHECK(output.Id() == retained);
+        auto foreign = Descriptor();
+        foreign.source = RenderBufferHandle{OtherRenderer, 1, 1};
+        CHECK(queue->RequestPrepared(foreign).status == RenderReadbackPreparedStatus::InvalidDescriptor);
+    }
+
+    TEST_CASE("Prepared readback lease prevents reuse until consumer release and survives queue destruction", "[readback][prepared]") {
+        auto queue = PreparedQueue(1);
+        const auto id = PreparedSubmitted(*queue);
+        queue->WritablePrepared(id).bytes[0] = std::byte{7};
+        REQUIRE(queue->CompletePrepared(id, Completion) == RenderReadbackPreparedStatus::Complete);
+        RenderReadbackResult lease;
+        REQUIRE(queue->AcquirePrepared(id, lease) == RenderReadbackPreparedStatus::Complete);
+        CHECK(queue->CollectPreparedResults() == 0);
+        CHECK(queue->RetirePreparedResult(id) == RenderReadbackPreparedStatus::ResultPending);
+        CHECK(queue->RetirePreparedResult({OtherRenderer, id.value}) == RenderReadbackPreparedStatus::InvalidRequest);
+        CHECK(queue->RetirePreparedResult({Renderer, id.value + 999}) == RenderReadbackPreparedStatus::InvalidRequest);
+        CHECK(queue->Snapshot().requestCount == 1);
+        CHECK(queue->Snapshot().readyCount == 1);
+        CHECK(queue->RequestPrepared(Descriptor()).status == RenderReadbackPreparedStatus::CapacityExceeded);
+        SECTION("consumer release then owner reuse") {
+            std::size_t allocations{};
+            std::thread consumer([owned = std::move(lease), &allocations]() mutable {
+                Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
+                owned = RenderReadbackResult{};
+                allocations = measurement.Snapshot().requests;
+            });
+            consumer.join();
+            CHECK(allocations == 0);
+            CHECK(queue->CollectPreparedResults() == 0);
+            RenderReadbackPreparedStatus retired{};
+            {
+                Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
+                retired = queue->RetirePreparedResult(id);
+                allocations = measurement.Snapshot().requests;
+            }
+            CHECK(retired == RenderReadbackPreparedStatus::Complete);
+            CHECK(allocations == 0);
+            CHECK(queue->RetirePreparedResult(id) == RenderReadbackPreparedStatus::InvalidRequest);
+            CHECK(queue->Snapshot().retainedResultBytes == 0);
+            CHECK(queue->RequestPrepared(Descriptor()).status == RenderReadbackPreparedStatus::Complete);
+        }
+        SECTION("queue dies first") {
+            queue.reset();
+            CHECK(lease.Bytes()[0] == std::byte{7});
+            CHECK(lease.Id() == id);
+            std::thread consumer([owned = std::move(lease)]() mutable {
+                owned = RenderReadbackResult{};
+            });
+            consumer.join();
+        }
+    }
+
+    TEST_CASE("Prepared readback shares legacy accounting and identity without owner-thread escape", "[readback][prepared]") {
+        auto queue = PreparedQueue();
+        auto legacy = queue->Request(Descriptor());
+        REQUIRE(legacy.HasValue());
+        const auto prepared = queue->RequestPrepared(Descriptor());
+        REQUIRE(prepared.status == RenderReadbackPreparedStatus::Complete);
+        CHECK(prepared.id.value > legacy.Value().value);
+        CHECK(queue->WritablePrepared(legacy.Value()).status == RenderReadbackPreparedStatus::InvalidRequest);
+        RenderReadbackPreparedStatus foreign{};
+        std::thread worker([&] {
+            foreign = queue->RequestPrepared(Descriptor()).status;
+        });
+        worker.join();
+        CHECK(foreign == RenderReadbackPreparedStatus::WrongThread);
+        REQUIRE(queue->MarkSubmitted(prepared.id, Completion).HasValue());
+        CHECK(queue->Complete(prepared.id, std::array<std::byte, 4>{}).HasError());
+        CHECK(queue->CompletePrepared(prepared.id, Completion) == RenderReadbackPreparedStatus::Complete);
+        auto acquired = queue->Acquire(prepared.id);
+        REQUIRE(acquired.HasValue());
+        CHECK(acquired.Value().Id() == prepared.id);
+        CHECK(queue->Acquire(prepared.id).HasError());
+        RenderReadbackResult secondLease;
+        CHECK(queue->AcquirePrepared(prepared.id, secondLease) == RenderReadbackPreparedStatus::InvalidTransition);
+        CHECK(queue->RetirePreparedResult(prepared.id) == RenderReadbackPreparedStatus::ResultPending);
+        queue->StopAdmission();
+        CHECK(queue->RequestPrepared(Descriptor()).status == RenderReadbackPreparedStatus::Stopped);
     }
 }  // namespace RenderReadbackTests

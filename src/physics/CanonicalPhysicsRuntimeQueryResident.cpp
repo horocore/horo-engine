@@ -1,8 +1,29 @@
 #include "CanonicalPhysicsRuntimeInternal.h"
 
+#include <Jolt/Physics/Collision/Shape/CompoundShape.h>
 #include <utility>
 
 namespace Horo::Physics::Detail {
+    /** @copydoc ResolveCanonicalSceneCollider */
+    const PhysicsSceneColliderBinding *ResolveCanonicalSceneCollider(const CanonicalSceneBodyRecord &record,
+                                                                     const JPH::SubShapeID subshape) noexcept {
+        if (!record.collision || !record.shapeEvidence)
+            return nullptr;
+        const auto &colliders = record.collision->colliders;
+        if (record.shapeEvidence->GetType() != JPH::EShapeType::Compound)
+            return colliders.size() == 1 ? &colliders.front() : nullptr;
+        const auto &compound = static_cast<const JPH::CompoundShape &>(*record.shapeEvidence.GetPtr());
+        if (!compound.IsSubShapeIDValid(subshape))
+            return nullptr;
+        JPH::SubShapeID remainder;
+        const auto index = compound.GetSubShapeIndexFromID(subshape, remainder);
+        const auto ordinal = compound.GetCompoundUserData(index);
+        if (ordinal == 0 || ordinal > colliders.size())
+            return nullptr;
+        const auto &collider = colliders[ordinal - 1];
+        return collider.collider != 0 ? &collider : nullptr;
+    }
+
     namespace {
         /** @brief Requires an explicit enabled schema/profile response; missing bindings remain closed. */
         std::optional<PhysicsQueryResponse> ResidentResponse(const CanonicalQueryAccess &access, const PhysicsQueryDescriptor &descriptor,
@@ -52,11 +73,12 @@ namespace Horo::Physics::Detail {
                             .distanceMeters = evidence.distance,
                             .penetrationDepthMeters = evidence.penetrationDepth};
         // A native compound path is not an authored ID or an asset material slot. Ambiguity remains explicit absence.
-        if (record->collision->colliders.size() == 1) {
-            const auto &collider = record->collision->colliders.front();
-            hit.subshape = collider.subshape;
-            if (collider.materials.size() == 1)
-                hit.material = collider.materials.front();
+        if (const auto *collider = ResolveCanonicalSceneCollider(*record, evidence.subshape)) {
+            hit.subshape = collider->subshape;
+            if (collider->materials.size() == 1)
+                hit.material = collider->materials.front();
+            hit.surface = collider->surface;
+            hit.collider = collider->collider;
         }
         if (const auto valid = ValidatePhysicsQueryHit(hit, descriptor); valid.HasError())
             return Result<std::optional<PhysicsQueryHit>>::Failure(valid.ErrorValue());

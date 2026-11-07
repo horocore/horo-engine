@@ -1,4 +1,19 @@
 #include "HoroEditorApp.h"
+
+#include "EditorColorOptions.h"
+#include "EditorDirectionalShadowOptions.h"
+#include "EditorLightingOptions.h"
+#include "Horo/Editor/XRSimulatorModel.h"
+#include "Horo/Platform/NativeProjectIoOwners.h"
+#include "SimulatorPlayHost.h"
+#include "SimulatorProjectArtifacts.h"
+#if defined(HORO_HAS_RENDER_METAL)
+#include "EditorBaselineLightingAssets.h"
+#include "EditorClusteredLightingStartup.h"
+#include "EditorColorPipelineStartup.h"
+#include "Horo/Runtime/Render/SceneColorEncoding.h"
+#endif
+#include "Horo/Runtime/Render/DirectionalShadowErrors.h"
 #if defined(HORO_HAS_OPENXR_HOST)
 #include "EditorOpenXRBootstrap.h"
 #include "EditorOpenXRHostServices.h"
@@ -9,9 +24,13 @@
 #endif
 
 #include "EditorAudioPreviewHost.h"
+#include "EditorFrameAdmission.h"
+#include "EditorGuiLiveReload.h"
+#include "EditorGuiLiveReloadBuildConfig.h"
 #include "EditorNavigationBakeHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
+#include "EditorTerrainPreparation.h"
 #include "EditorUiStylePreparation.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Extensions/EditorSurfaceContext.h"
@@ -21,7 +40,9 @@
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
 #include "EditorSurfaceLifecycleQualification.h"
 #endif
+#include "EditorPlaySaveRetirement.h"
 #include "EditorUserStateMigration.h"
+#include "EditorWindowChrome.h"
 #include "EditorWorkerShutdown.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/HostObservability.h"
@@ -65,29 +86,26 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Platform.h"
-#include "Horo/Platform/NativeProjectReadFiles.h"
-#include "Horo/Platform/SecureRandom.h"
-#include "Horo/Runtime/Save/SaveTelemetry.h"
-#include "PackageHostPolicy.h"
-#include "PackageProjectHost.h"
-#include "RenderGraphInspectionPane.h"
-#if defined(HORO_HAS_OPENTELEMETRY)
-#include "Horo/Foundation/Telemetry/OpenTelemetrySink.h"
-#endif
 #include "Horo/Physics/PhysicsSceneActivation.h"
 #include "Horo/Platform/ExternalProcess.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Runtime/Input.h"
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/RuntimeHost.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "HostModuleComposition.h"
+#include "PackageHostPolicy.h"
+#include "PackageProjectHost.h"
+#include "RenderGraphInspectionPane.h"
 #include "RuntimeUiPaintHost.h"
 #include "RuntimeUiPaintProjectSources.h"
+#include "ShaderHotReloadHost.h"
 #include "editor/EditorServiceErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
-#include "editor/input/EditorScrollSmoother.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
@@ -317,8 +335,14 @@ namespace Horo::Editor {
             std::string cookedRoot;
             std::string cookTarget;
             bool cookOptionsValid{true};
+            std::optional<Render::DirectionalShadowProfile> directionalShadows;
+            std::optional<EditorViewportLightingProfile> lighting;
+            Detail::EditorColorOptions color;
+            std::optional<std::filesystem::path> lightingRoot;
+            bool lightingRootValid{true};
             std::optional<Runtime::SceneObjectId> xrTrackingRoot;
             bool xrTrackingRootValid{true};
+            bool xrSimulator{};
             std::optional<bool> prefabGranted{false};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             bool qualifySurfaceLifecycle = false;
@@ -480,6 +504,28 @@ namespace Horo::Editor {
                                                        Theme::FontPx::Sans, &sansCfg, ranges);
             f.monospaceEmphasis = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-SemiBold.ttf").c_str(),
                                                                Theme::FontPx::Sans, &sansCfg, ranges);
+            f.codeFamilies.push_back({"IBM Plex Mono", f.monospace, f.monospaceEmphasis});
+            // Native font discovery stays in the executable composition root. Only loaded
+            // atlas families are offered; the source widget never probes the filesystem.
+            const auto addFamily = [&](const char *name, const char *path) {
+                std::error_code error;
+                if (!std::filesystem::is_regular_file(path, error))
+                    return;
+                if (auto *face = io.Fonts->AddFontFromFileTTF(path, Theme::FontPx::Sans, &sansCfg, ranges))
+                    f.codeFamilies.push_back({name, face, face});
+            };
+#if defined(__APPLE__)
+            addFamily("Menlo", "/System/Library/Fonts/Menlo.ttc");
+            addFamily("SF Mono", "/System/Library/Fonts/SFNSMono.ttf");
+#elif defined(_WIN32)
+            if (const char *windows = std::getenv("WINDIR")) {
+                const auto font = std::filesystem::path{windows} / "Fonts" / "consola.ttf";
+                addFamily("Consolas", font.string().c_str());
+            }
+#else
+            addFamily("DejaVu Sans Mono", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf");
+            addFamily("Liberation Mono", "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf");
+#endif
             f.icon = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/MaterialSymbolsOutlined.ttf").c_str(), Theme::FontPx::Icon, &iconCfg,
                                                   iconRanges.data());
             if (f.sans)
@@ -530,22 +576,6 @@ namespace Horo::Editor {
             }
         }
 
-#if defined(HORO_HAS_OPENTELEMETRY)
-        [[nodiscard]] std::optional<std::string> ReadEnvironmentVariable(const char *name) {
-#if defined(_MSC_VER)
-            char *value = nullptr;
-            if (std::size_t size = 0; _dupenv_s(&value, &size, name) != 0 || value == nullptr)
-                return std::nullopt;
-            const std::unique_ptr<char, decltype(&std::free)> ownedValue{value, &std::free};
-            return std::string{ownedValue.get()};
-#else
-            if (const char *value = std::getenv(name); value != nullptr)
-                return std::string{value};
-            return std::nullopt;
-#endif
-        }
-#endif
-
         /** @brief Captures explicit host Physics ownership without claiming activation of an unknown world. */
         [[nodiscard]] CollisionActivationEvidence CaptureCollisionActivation(const Physics::PhysicsRuntimeMode mode) {
             CollisionActivationEvidence evidence{.revision = 1};
@@ -564,7 +594,7 @@ namespace Horo::Editor {
 #endif
         }
 
-        /** @brief Composes the editor's single local runtime and optional approved OTLP sink. */
+        /** @brief Composes the editor's single local logging, metrics and profiler runtime. */
         [[nodiscard]] std::unique_ptr<Application::HostObservabilitySession> InitializeEditorObservability() {
             Application::HostObservabilityConfiguration hostConfiguration{.logging = {.logDirectory = "~/.horo/logs",
                                                                                       .baseName = "horo-editor",
@@ -574,20 +604,6 @@ namespace Horo::Editor {
                                                                                        .engineVersion = HORO_ENGINE_VERSION_STRING,
                                                                                        .buildConfiguration = HORO_BUILD_CONFIGURATION,
                                                                                        .sourceRevision = HORO_SOURCE_REVISION}};
-#if defined(HORO_HAS_OPENTELEMETRY)
-            const std::optional<std::string> endpoint = ReadEnvironmentVariable("HORO_OTEL_ENDPOINT");
-            if (const std::optional<std::string> approval = ReadEnvironmentVariable("HORO_OTEL_EXPORT_APPROVED");
-                endpoint.has_value() && approval == "1") {
-                Telemetry::OpenTelemetryConfiguration exporterConfiguration;
-                exporterConfiguration.endpoint = *endpoint;
-                exporterConfiguration.serviceName = "horo-editor";
-                exporterConfiguration.exportApproved = true;
-                if (auto exporter = Telemetry::OpenTelemetrySink::Create(exporterConfiguration); exporter != nullptr)
-                    hostConfiguration.logging.additionalSinks.push_back(std::move(exporter));
-                else
-                    std::fprintf(stderr, "[Observability] approved OTLP configuration was rejected; continuing with local sinks\n");
-            }
-#endif
             hostConfiguration.summaries.push_back(&Runtime::SummarizeSaveTelemetry);
             auto session = Application::HostObservabilitySession::Start(std::move(hostConfiguration));
             if (session == nullptr)
@@ -603,6 +619,7 @@ namespace Horo::Editor {
             Telemetry::Gauge pacingMissedDeadlines;
             Telemetry::Gauge droppedRecords;
             Telemetry::Gauge sinkFailures;
+            Prefab::PrefabMetricHandles prefab;
         };
 
         [[nodiscard]] EditorTelemetry RegisterEditorTelemetry() {
@@ -622,6 +639,7 @@ namespace Horo::Editor {
                     {.name = "horo.observability.records.dropped", .subsystem = "Foundation.Observability", .unit = Count}),
                 .sinkFailures = Telemetry::Runtime::RegisterGauge(
                     {.name = "horo.observability.sink.failures", .subsystem = "Foundation.Observability", .unit = Count}),
+                .prefab = Prefab::RegisterPrefabMetricHandles(Telemetry::MetricCollectionLevel::Detailed, true),
             };
         }
 
@@ -747,9 +765,29 @@ namespace Horo::Editor {
             opts.cookTarget = argument.substr(std::string_view{"--cook-target="}.size());
     }
 
+    /** @brief Reads one explicit Metal lighting family root, independent of executable-relative default assets. */
+    static void ParseEditorLightingRoot(EditorGuiOptions &options, std::span<char *const> arguments) {
+        const auto root = Detail::ReadLightingOption(arguments, "--lighting-root");
+        if (root.state == Detail::LightingOptionState::Invalid) {
+            options.lightingRootValid = false;
+            return;
+        }
+        if (root.state == Detail::LightingOptionState::Value) {
+            options.lightingRoot = std::filesystem::path{root.value};
+            options.lightingRootValid = options.lightingRoot->is_absolute();
+        }
+    }
+
     [[nodiscard]] static EditorGuiOptions ParseOptions(const std::span<char *> args) noexcept {
         using enum PendingEditorOption;
         EditorGuiOptions opts;
+        opts.directionalShadows = Detail::ParseDirectionalShadowArguments(args);
+        opts.lighting = Detail::ParseEditorLightingArguments(args);
+        opts.color = Detail::ParseEditorColorArguments(args);
+        ParseEditorLightingRoot(opts, args);
+        opts.xrSimulator = std::ranges::any_of(args, [](const char *value) {
+            return std::string_view{value} == "--xr-simulator";
+        });
         PendingEditorOption pending = None;
         for (const char *rawArgument : args.subspan(std::min<std::size_t>(1, args.size()))) {
             const std::string_view argument{rawArgument};
@@ -822,6 +860,13 @@ namespace Horo::Editor {
 
         [[nodiscard]] int RelaunchEditorForProject(const char *executable, const EditorRendererRestartRequest &request,
                                                    const EditorGuiOptions &options) {
+            if (options.color.root || options.color.lookRoot || options.color.settingsRequested || options.lightingRoot) {
+                const auto error = MakeError(Render::ColorPipelineErrors::IncompatibleInput,
+                                             "Project restart would replace an explicitly requested color/lighting profile. Start the "
+                                             "project with compatible renderer settings and the complete explicit profile.");
+                std::fprintf(stderr, "[%s/%s] %s\n", error.domain.Value().c_str(), error.code.Value().c_str(), error.message.c_str());
+                return 1;
+            }
             std::vector<std::string> arguments{executable,
                                                "--renderer",
                                                request.backendId,
@@ -899,6 +944,11 @@ namespace Horo::Editor {
         }
 
         void ApplySavedThemePreference() {
+            const char *overridePath = std::getenv("HORO_THEME_OVERRIDE");
+            const int active = Theme::GetActiveThemeIndex();
+            if (overridePath && active >= 0 && static_cast<std::size_t>(active) < Theme::GetThemeList().size() &&
+                Theme::GetThemeList()[static_cast<std::size_t>(active)].sourcePath == overridePath)
+                return;
             auto doc = LoadEditorSettingsDocument();
             if (doc.loadedFromDisk && !doc.parseError) {
                 const auto savedIndex = static_cast<int>(doc.settings.themePreset);
@@ -948,6 +998,8 @@ namespace Horo::Editor {
             EditorViewportRendererVulkan *xrViewport{}; /**< Borrow of the exact selected concrete viewport, never a downcast. */
             std::unique_ptr<Application::Internal::OpenXRPlayHost> xrPlay;
 #endif
+            std::shared_ptr<Application::Internal::SimulatorPlayHost> simulator;
+            std::unique_ptr<XRSimulatorModel> simulatorModel;
             Render::RenderTargetHandle viewportTarget;
             std::optional<Application::Internal::RuntimeUiPaintPort> uiRetirement;
             bool retirementBegun{false};
@@ -984,7 +1036,7 @@ namespace Horo::Editor {
             const auto common = std::gcd(numerator, denominator);
             numerator /= common;
             denominator /= common;
-            if (numerator > std::numeric_limits<std::uint32_t>::max() || denominator > std::numeric_limits<std::uint32_t>::max())
+            if (numerator > (std::numeric_limits<std::uint32_t>::max)() || denominator > (std::numeric_limits<std::uint32_t>::max)())
                 return Scale::Failure(MakeError(Runtime::Ui::UiErrors::CanvasSpaceOverflow));
             return Scale::Success({static_cast<std::uint32_t>(numerator), static_cast<std::uint32_t>(denominator)});
         }
@@ -1014,19 +1066,51 @@ namespace Horo::Editor {
                   inset(width - safe.x - safe.w, pixels.width, width), inset(height - safe.y - safe.h, pixels.height, height)}});
         }
 
+        /** @brief Registers this real viewport once and admits only actual prepared lighting predicates. */
+        [[nodiscard]] Result<void> BindInitialViewportLighting(EditorRenderComposition &composition,
+                                                               const EditorViewportLightingProfile &profile,
+                                                               const Render::RenderLightPreparationReadiness &readiness) {
+            const auto view = composition.frontend->CreateRenderViewIdentity();
+            if (view.HasError())
+                return Result<void>::Failure(view.ErrorValue());
+            const auto bound = composition.viewportRenderer->BindLightingViewIdentity(view.Value());
+            if (bound.HasError())
+                return bound;
+            const auto selected = composition.frontend->ResolveLightPreparation(profile.requested, profile.fallback, readiness);
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            return composition.viewportRenderer->RequestLightingProfile(profile, selected.Value());
+        }
+
+        /** @brief Non-compute peers report no prepared native inputs; the frontend still owns fallback admission. */
+        struct NoClusteredLightingInputs final {
+            Result<Render::RenderLightPreparationReadiness> operator()(IEditorViewportRenderer &, Render::RenderFrontend &,
+                                                                       const EditorViewportLightingProfile &) const {
+                return Result<Render::RenderLightPreparationReadiness>::Success({});
+            }
+        };
+
         /** @brief Retains both native renderer owners before initialization so failures use explicit host retirement. */
-        template <typename GuiRenderer, typename ViewportRenderer>
+        template <typename GuiRenderer, typename ViewportRenderer, typename LightingPreparer = NoClusteredLightingInputs>
         [[nodiscard]] Result<void> InstallEditorRenderers(EditorRenderComposition &composition, std::unique_ptr<GuiRenderer> guiRenderer,
-                                                          std::unique_ptr<ViewportRenderer> viewportRenderer) {
+                                                          std::unique_ptr<ViewportRenderer> viewportRenderer,
+                                                          const Render::DirectionalShadowProfile &shadows,
+                                                          const EditorViewportLightingProfile &lighting,
+                                                          LightingPreparer prepareLighting = {}) {
             ViewportRenderer *viewport = viewportRenderer.get();
             // Publish partial owners before initialization: failure may still leave native uploads in flight.
             composition.guiRenderer = std::move(guiRenderer);
             composition.viewportRenderer = std::move(viewportRenderer);
+            if (auto admitted = viewport->RequestDirectionalShadowProfile(shadows); admitted.HasError())
+                return admitted;
             if (const Result<void> initialized = composition.guiRenderer->Initialize(); initialized.HasError())
                 return initialized;
             if (const Result<void> initialized = viewport->Initialize(); initialized.HasError())
                 return initialized;
-            return Result<void>::Success();
+            const auto readiness = prepareLighting(*viewport, *composition.frontend, lighting);
+            if (readiness.HasError())
+                return Result<void>::Failure(readiness.ErrorValue());
+            return BindInitialViewportLighting(composition, lighting, readiness.Value());
         }
 
         /** @brief Registers only the explicitly selected host backend and retains its native presentation parents. */
@@ -1092,30 +1176,89 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+#if defined(HORO_HAS_RENDER_METAL)
+        /** @brief Loads the exact selected raster family, without substituting a culling kernel in baseline mode. */
+        Result<Render::RenderLightPreparationReadiness> PrepareEditorMetalLighting(EditorViewportRendererMetal &owner,
+                                                                                   Render::RenderFrontend &frontend,
+                                                                                   const EditorViewportLightingProfile &profile,
+                                                                                   const EditorGuiOptions &options, bool color) {
+            using Output = Result<Render::RenderLightPreparationReadiness>;
+            const auto lightingRoot = options.lightingRoot.value_or(EditorAssetRoot());
+            if (color && profile.requested == Render::LightPreparationMode::BaselineForwardCpu) {
+                const auto assets = LoadPackagedMetalBaselineLighting(lightingRoot);
+                if (assets.HasError())
+                    return Output::Failure(assets.ErrorValue());
+                const auto family = assets.Value().ProgramViews();
+                if (const auto prepared = owner.PrepareBaselineLighting(family, profile); prepared.HasError())
+                    return Output::Failure(prepared.ErrorValue());
+                return Output::Success({});
+            }
+            return PreparePackagedMetalViewportLighting(owner, frontend, profile, lightingRoot);
+        }
+
+        /** @brief Loads explicit color data before the actual Metal lighting family, preserving one cold startup boundary. */
+        Result<Render::RenderLightPreparationReadiness> PrepareEditorMetalProducts(EditorViewportRendererMetal &owner,
+                                                                                   Render::RenderFrontend &frontend,
+                                                                                   const EditorViewportLightingProfile &profile,
+                                                                                   const EditorGuiOptions &options) {
+            using Output = Result<Render::RenderLightPreparationReadiness>;
+            const auto root = ResolveEditorColorPipelineRoot(options.color.root, EditorAssetRoot());
+            if (root.HasError())
+                return Output::Failure(root.ErrorValue());
+            if (!root.Value() && (options.color.settingsRequested || options.color.lookRoot))
+                return Output::Failure(
+                    MakeError(Render::ColorPipelineErrors::InvalidTransform,
+                              "Requested exposure/look controls require an installed core color package or --color-pipeline-root."));
+            if (root.Value()) {
+                const auto color = PrepareEditorColorPipeline(owner, *root.Value(), options.color.exposure, options.color.lookRoot);
+                if (color.HasError())
+                    return Output::Failure(color.ErrorValue());
+            }
+            return PrepareEditorMetalLighting(owner, frontend, profile, options, root.Value().has_value());
+        }
+
+        /** @brief Composes only the already-selected Metal GUI/viewport owners and genuine cold product preparation. */
+        Result<void> InstallEditorMetalRenderers(SDL_Window &window, const EditorGuiOptions &options,
+                                                 EditorRenderComposition &composition) {
+            auto &bridge = *composition.metalGraphicsBridge;
+            return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererMetal>(window, bridge, *composition.frontend),
+                                          std::make_unique<EditorViewportRendererMetal>(*composition.frontend, bridge),
+                                          *options.directionalShadows, *options.lighting,
+                                          [&options](EditorViewportRendererMetal &owner, Render::RenderFrontend &frontend,
+                                                     const EditorViewportLightingProfile &profile) {
+                return PrepareEditorMetalProducts(owner, frontend, profile, options);
+            });
+        }
+#endif
+
+        /** @brief Admits explicit color/lighting asset options only on the currently implemented native product route. */
+        Result<void> ValidateColorBackendSelection(const EditorGuiOptions &options) {
+            if ((options.color.root || options.color.lookRoot || options.color.settingsRequested || options.lightingRoot) &&
+                options.rendererBackend != "metal")
+                return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
+            return Result<void>::Success();
+        }
+
         /** @brief Installs the concrete GUI/viewport pair for the already selected and owned frontend. */
         [[nodiscard]] Result<void> InstallSelectedEditorRenderers(SDL_Window &window, const EditorGuiOptions &options,
                                                                   EditorRenderComposition &composition) {
+            if (const auto admitted = ValidateColorBackendSelection(options); admitted.HasError())
+                return admitted;
             if (options.rendererBackend == "opengl") {
 #if defined(HORO_HAS_RENDER_OPENGL)
                 const auto &port = static_cast<const SdlOpenGLPresentationPort &>(*composition.openGlPresentationPort);
                 auto guiRenderer = std::make_unique<EditorGuiRendererOpenGL>(window, port.Context(), *composition.frontend);
                 auto viewportRenderer = std::make_unique<EditorViewportRendererOpenGL>(*composition.frontend);
                 if (const Result<void> initialized =
-                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
+                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer),
+                                               *options.directionalShadows, *options.lighting);
                     initialized.HasError()) {
                     return Result<void>::Failure(initialized.ErrorValue());
                 }
 #endif
             } else if (options.rendererBackend == "metal") {
 #if defined(HORO_HAS_RENDER_METAL)
-                auto &graphicsBridge = *composition.metalGraphicsBridge;
-                auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge, *composition.frontend);
-                auto viewportRenderer = std::make_unique<EditorViewportRendererMetal>(*composition.frontend, graphicsBridge);
-                if (const Result<void> initialized =
-                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
-                    initialized.HasError()) {
-                    return Result<void>::Failure(initialized.ErrorValue());
-                }
+                return InstallEditorMetalRenderers(window, options, composition);
 #endif
             } else if (options.rendererBackend == "vulkan") {
 #if defined(HORO_HAS_RENDER_VULKAN)
@@ -1125,7 +1268,8 @@ namespace Horo::Editor {
                 auto &bridge = *composition.vulkanGraphicsBridge;
                 return InstallEditorRenderers(composition, std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
                                               std::make_unique<EditorViewportRendererVulkan>(*composition.frontend, bridge,
-                                                                                             std::move(cooked).Value()));
+                                                                                             std::move(cooked).Value()),
+                                              *options.directionalShadows, *options.lighting);
 #endif
             }
             return Result<void>::Success();
@@ -1152,7 +1296,7 @@ namespace Horo::Editor {
                 if (const auto installed =
                         InstallEditorRenderers(composition,
                                                std::make_unique<EditorGuiRendererVulkan>(window, *composition.frontend, bridge),
-                                               std::move(viewport));
+                                               std::move(viewport), *options.directionalShadows, *options.lighting);
                     installed.HasError())
                     return installed;
                 return composition.xrViewport->PrepareXrProgram(std::move(multiview).Value());
@@ -1239,6 +1383,7 @@ namespace Horo::Editor {
             OperationStore &operationStore;
             Application::ShaderBuildService &shaderBuild;
             std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
+            Application::Internal::ShaderHotReloadHost *shaderReload{};
         };
 
         struct EditorBackgroundServices {
@@ -1322,10 +1467,11 @@ namespace Horo::Editor {
         public:
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
                                      EditorViewportSceneState &viewportSceneState, EditorSettingsSnapshot &settingsSnapshot,
-                                     std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock,
-                                     const EditorRuntimeAuthorities &authorities) noexcept
+                                     EditorGuiLiveReload &liveGui, std::optional<EditorRendererRestartRequest> &rendererRestart,
+                                     Clock &clock, const EditorRuntimeAuthorities &authorities)
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
-                  rendererRestart_(&rendererRestart), authorities_(authorities), pacing_{clock}
+                  themeReload_(params.background.jobs, params.editorEvents), liveGui_(liveGui), rendererRestart_(&rendererRestart),
+                  authorities_(authorities), pacing_{clock}
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                   ,
                   qualification_{params.options.qualifySurfaceLifecycle}
@@ -1338,6 +1484,10 @@ namespace Horo::Editor {
             }
 
             Result<void> Startup(const CancellationToken &cancellation) override {
+                if (auto bound = screenHost_->BindRuntimeDispatch(authorities_.runtime->DispatchSource()); bound.HasError())
+                    return bound;
+                if (auto liveUi = liveGui_.Start(BuildEditorGuiLiveReloadConfiguration()); liveUi.HasError())
+                    return liveUi;
                 pacing_.hostCancellation = cancellation;
                 const auto timing = p_->presentation.renderFrontend.PollNativePresentTiming();
                 if (timing.HasError() &&
@@ -1383,29 +1533,35 @@ namespace Horo::Editor {
             }
 
             Result<void> OnPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
+                return phase <= Runtime::RuntimePhase::VariableUpdate ? DispatchControlPhase(phase, context)
+                                                                      : DispatchRenderPhase(phase, context);
+            }
+
+            Result<void> DispatchControlPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) {
                 switch (phase) {
                     case Runtime::RuntimePhase::BeginFrame:
+                        PollShaderReload();
+#if !defined(NDEBUG)
+                        themeReload_.Update(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
+#endif
+                        liveGui_.Update(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
                         p_->inputBackend.BeginFrame(frameState_.inputFrameNumber++);
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::PollPlatformEvents:
                         return PollPlatformEvents();
                     case Runtime::RuntimePhase::BuildInputSnapshot:
-#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-                        if (auto *xr = p_->presentation.composition.xrPlay.get()) {
-                            const auto committed = xr->BuildInputSnapshot(context, p_->inputBackend.Commit());
-                            if (committed.HasError())
-                                return committed;
-                        } else
-#endif
-                        {
-                            p_->inputRouter.BeginFrame(p_->inputBackend.Commit());
-                        }
-                        screenHost_->OnInputSnapshot();
-                        return Result<void>::Success();
+                        return BuildEditorInput(context);
                     case Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands:
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::VariableUpdate:
                         return UpdatePresentation(context);
+                    default:
+                        return Result<void>::Success();
+                }
+            }
+
+            Result<void> DispatchRenderPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) {
+                switch (phase) {
                     case Runtime::RuntimePhase::RenderExtraction:
                         return ExtractFrame();
                     case Runtime::RuntimePhase::RenderExecution:
@@ -1423,21 +1579,30 @@ namespace Horo::Editor {
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::EndFrame:
                         return EndRuntimeFrame(context);
-                    case Runtime::RuntimePhase::NetworkPoll:
-                    case Runtime::RuntimePhase::NetworkFlush:
-                    case Runtime::RuntimePhase::FixedUpdate:
-                        break;
+                    default:
+                        return Result<void>::Success();
                 }
-                return Result<void>::Success();
             }
 
             Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
-                screenHost_->OnFixedUpdate(context.simulationTick,
-                                           static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
-                return Result<void>::Success();
+                return screenHost_->OnRuntimeFixedUpdate(context);
+            }
+
+            Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context) override {
+                return screenHost_->PrepareRuntimeFixedCommit(context);
+            }
+
+            void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                screenHost_->CommitRuntimeFixedUpdate(context);
+            }
+
+            void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                screenHost_->AbortRuntimeFixedUpdate(context);
             }
 
             void Shutdown() noexcept override {
+                ShutdownShaderReload();
+                themeReload_.Shutdown();
                 try {
                     static_cast<void>(authorities_.packages->Close());
                 } catch (...) {
@@ -1477,9 +1642,11 @@ namespace Horo::Editor {
                 *rendererRestart_ = screenHost_->RendererRestartRequest();
                 p_->inputRouter.CancelCapture(Input::CaptureCancellationReason::OwnerDestroyed);
                 p_->modalHost.ForceDetachAllForShutdown();
+                auto *playRetirement = screenHost_->Services().TryGet<EditorPlaySaveRetirement>();
                 screenHost_->Shutdown();
                 p_->operationServices.shaderBuild.Shutdown();
                 p_->background.jobs.Shutdown(ShutdownPolicy::Cancel);
+                ClosePlaySaveRetirementAfterJobs(playRetirement);
                 (void)screenHost_->GameplayRetirements()->Close();
                 try {
                     if (authorities_.packages->Close().HasError())
@@ -1527,11 +1694,35 @@ namespace Horo::Editor {
                     p_->telemetry.droppedRecords.Set(static_cast<double>(statistics.droppedRecords));
                     p_->telemetry.sinkFailures.Set(static_cast<double>(statistics.sinkFailures));
                 }
+                RequestBoundedCloseIfReady();
+                return Result<void>::Success();
+            }
+
+            /** @brief Applies only the existing requested bounded-exit policy after actual successful presentations. */
+            void RequestBoundedCloseIfReady() {
                 if ((p_->options.exitAfterFirstFrame && HasPresentedFrame()) ||
                     (p_->options.exitAfterFrames > 0 && presentedFrames_ >= p_->options.exitAfterFrames)) {
+                    ReportColorAtBoundedExit();
                     static_cast<void>(screenHost_->RequestCloseApplication());
                 }
-                return Result<void>::Success();
+            }
+
+            /** @brief Emits one bounded factual owner snapshot at an already-requested bounded exit, never per-frame GPU values. */
+            void ReportColorAtBoundedExit() {
+                if (colorExitReported_)
+                    return;
+                colorExitReported_ = true;
+                const auto color = p_->presentation.viewportRenderer.ColorDiagnostics();
+                const auto scene = viewportSceneState_->View();
+                LOG_INFO("editor.color",
+                         "status=%u active=%d automatic=%d accepted=%llu exposure_generation=%llu settings_generation=%llu reset=%d "
+                         "output_revision=%llu unmanaged_sdr_preview=%d viewport_scene_domain=%llu viewport_instances=%zu",
+                         static_cast<unsigned>(color.status), color.active, color.automatic,
+                         static_cast<unsigned long long>(color.acceptedSubmission),
+                         static_cast<unsigned long long>(color.exposureGeneration),
+                         static_cast<unsigned long long>(color.settingsGeneration), color.resetPending,
+                         static_cast<unsigned long long>(color.outputRevision), color.unmanagedSdrPreview,
+                         static_cast<unsigned long long>(scene.lightSceneDomain), scene.instances.size());
             }
 
             /** @brief Invokes the retained frontend resize only from the frozen surface safe point. */
@@ -1552,6 +1743,26 @@ namespace Horo::Editor {
                 return qualification_.EndFrame(snapshot.Value());
             }
 #endif
+
+            Result<void> BuildEditorInput(const Runtime::FrameContext &context) {
+                auto &composition = p_->presentation.composition;
+                // The router borrows this snapshot through the later GUI/update phases; a local copy would expire on return.
+                const Input::RawInputSnapshot &raw = p_->inputBackend.Commit();
+                if (composition.simulator) {
+                    if (auto built = composition.simulator->BuildInputSnapshot(context, raw); built.HasError())
+                        return built;
+                }
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                else if (composition.xrPlay) {
+                    if (auto built = composition.xrPlay->BuildInputSnapshot(context, raw); built.HasError())
+                        return built;
+                }
+#endif
+                else
+                    p_->inputRouter.BeginFrame(raw);
+                screenHost_->OnInputSnapshot();
+                return Result<void>::Success();
+            }
 
             Result<void> PollPlatformEvents() {
                 while (const std::optional<EditorMenuInvocation> invocation = PollNativeEditorMenuAction()) {
@@ -1582,16 +1793,9 @@ namespace Horo::Editor {
 
             /** @brief Routes one event while retaining window-specific recovery and close ownership. */
             void DispatchPlatformEvent(const SDL_Event &event) {
+                DispatchShaderReloadCommand(event);
                 ObserveSurfaceRecoveryEvent(event);
-                if (const bool smoothWheel = event.type == SDL_EVENT_MOUSE_WHEEL &&
-                                             event.wheel.windowID == SDL_GetWindowID(p_->presentation.window) &&
-                                             (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
-                    smoothWheel) {
-                    scrollSource_ = event.wheel.which == SDL_TOUCH_MOUSEID ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse;
-                    scrollSmoother_.Queue(-event.wheel.x, event.wheel.y);
-                } else {
-                    ImGui_ImplSDL3_ProcessEvent(&event);
-                }
+                ImGui_ImplSDL3_ProcessEvent(&event);
                 p_->inputBackend.ProcessEvent(event);
 
                 // SDL3 drag-and-drop: forward dropped file paths to the active import modal.
@@ -1606,6 +1810,40 @@ namespace Horo::Editor {
                     static_cast<void>(screenHost_->RequestCloseApplication());
                     authorities_.runtime->RequestShutdown();
                 }
+            }
+
+            /** @brief Pumps completed shader work before native frame admission. */
+            void PollShaderReload() {
+                if (!p_->operationServices.shaderReload)
+                    return;
+                const auto pumped = p_->operationServices.shaderReload->Poll();
+                if (pumped.HasError())
+                    LOG_ERROR("editor.shader_reload", "%s", pumped.ErrorValue().message.c_str());
+            }
+
+            /** @brief Drains the optional development producer while its compiler and graphics owners live. */
+            void ShutdownShaderReload() {
+                if (p_->operationServices.shaderReload)
+                    static_cast<void>(p_->operationServices.shaderReload->Shutdown());
+            }
+
+            /** @brief Admits only the nonrepeating developer chord from this host window. */
+            bool IsShaderReloadKeyChord(const SDL_Event &event) const {
+                return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+                       event.key.windowID == SDL_GetWindowID(p_->presentation.window) && (event.key.mod & SDL_KMOD_CTRL) != 0 &&
+                       (event.key.mod & SDL_KMOD_ALT) != 0;
+            }
+
+            /** @brief Explicit developer commands are available only with an injected qualified compiler/recipe. */
+            void DispatchShaderReloadCommand(const SDL_Event &event) {
+                auto *reload = p_->operationServices.shaderReload;
+                if (!reload || !IsShaderReloadKeyChord(event))
+                    return;
+                if (event.key.key != SDLK_R && event.key.key != SDLK_C)
+                    return;
+                const auto result = event.key.key == SDLK_R ? reload->Reload() : reload->Cancel();
+                if (result.HasError())
+                    LOG_ERROR("editor.shader_reload", "%s", result.ErrorValue().message.c_str());
             }
 
             /** @brief Admits one recovery attempt only after an owner-window presentation observation. */
@@ -1623,6 +1861,9 @@ namespace Horo::Editor {
             }
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
+                const auto surface = Theme::Bg0();
+                const auto text = Theme::Text();
+                windowChrome_.Update(*p_->presentation.window, {{surface.x, surface.y, surface.z}, {text.x, text.y, text.z}});
                 if (const auto updated = UpdatePacingSurface(); updated.HasError())
                     return updated;
                 const auto snapshot = pacing_.surface->Snapshot();
@@ -1640,10 +1881,6 @@ namespace Horo::Editor {
                     if (const Result<void> guiBegun = p_->presentation.guiRenderer.BeginFrame(); guiBegun.HasError()) {
                         return guiBegun;
                     }
-                    if (const EditorScrollDelta scrollDelta = scrollSmoother_.Consume(ImGui::GetIO().DeltaTime); !scrollDelta.IsEmpty()) {
-                        ImGui::GetIO().AddMouseSourceEvent(scrollSource_);
-                        ImGui::GetIO().AddMouseWheelEvent(scrollDelta.horizontal, scrollDelta.vertical);
-                    }
                     ImGui::NewFrame();
                     frameState_.guiFrameStarted = true;
 
@@ -1654,6 +1891,12 @@ namespace Horo::Editor {
                 }
 
                 *settingsSnapshot_ = p_->settings.Snapshot();
+                if (settingsSnapshot_->revision != appliedKeymapRevision_) {
+                    const auto applied = p_->inputRouter.SetProfile(BuiltinEditorInputProfile(settingsSnapshot_->settings.keymap.profile));
+                    if (applied.HasError())
+                        LOG_ERROR("editor.input", "Unable to activate editor keymap: %s", applied.ErrorValue().message.c_str());
+                    appliedKeymapRevision_ = settingsSnapshot_->revision;
+                }
                 const float deltaSeconds = static_cast<float>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0F;
                 p_->modalHost.OnUpdate(deltaSeconds);
                 screenHost_->OnUpdate(deltaSeconds);
@@ -1681,13 +1924,25 @@ namespace Horo::Editor {
                 }
             }
 
+            /** @brief Declares the historical linear scene background's version-one ingress separately from the UI backdrop. */
+            Render::ClearColor ViewportSceneClearColor() const {
+                const Render::ClearColor legacy{0.035F, 0.045F, 0.070F, 1.0F};
+                if (!p_->presentation.viewportRenderer.ColorDiagnostics().active)
+                    return legacy;
+                const auto ap1 = Render::ConvertSceneColorToAcesCg({legacy.red, legacy.green, legacy.blue},
+                                                                   {Render::SceneColorEncoding::LegacyLinearRec709D65, 1});
+                if (ap1.HasError())
+                    std::terminate();  // Fixed finite literal and pinned matrix; no fallible external data reaches this policy.
+                return {ap1.Value().x, ap1.Value().y, ap1.Value().z, legacy.alpha};
+            }
+
             Result<void> ExtractFrame() {
                 if (!frameState_.guiFrameStarted)
                     return Result<void>::Success();
 
-                screenHost_->Draw();
+                GuiLive::Invoke<&GuiScreenHost::Draw>(liveGui_.Registry(), *screenHost_);
                 DrawModalBackdrop();
-                p_->modalHost.Draw();
+                p_->modalHost.Draw(liveGui_.Registry());
                 ImGui::Render();
                 frameState_.guiFrameStarted = false;
                 // Draw may synchronously start Play; its cold Scene/UI preparation still precedes native admission.
@@ -1697,7 +1952,7 @@ namespace Horo::Editor {
                 frameState_.preparedPasses.count = 0;
                 const EditorViewportSceneView viewportScene = viewportSceneState_->View();
                 if (const EditorViewportExtent viewportExtent = p_->presentation.viewportRenderer.RequestedExtent();
-                    !UsesXrPresentation() &&
+                    !UsesXrPresentation() && viewportScene.lightSceneDomain != 0 &&
                     frameState_.preparedPasses.viewportMeshResourceGeneration == viewportSceneState_->MeshResourceGeneration() &&
                     CanSubmitViewportPass(viewportExtent)) {
                     if (const Result<void> resized = ResizeLegacyViewportTarget(viewportExtent); resized.HasError())
@@ -1708,16 +1963,19 @@ namespace Horo::Editor {
                                                      .staticMesh = Render::
                                                          StaticMeshPassDescriptor{.target = p_->presentation.viewportTarget,
                                                                                   .extent = {viewportExtent.width, viewportExtent.height},
-                                                                                  .scene =
-                                                                                      Render::RenderSceneView{.camera = ToRenderCamera(
-                                                                                                                  viewportScene.camera),
-                                                                                                              .meshResources =
-                                                                                                                  viewportScene
-                                                                                                                      .meshResources,
-                                                                                                              .instances =
-                                                                                                                  viewportScene.instances,
-                                                                                                              .lights =
-                                                                                                                  viewportScene.lights}}};
+                                                                                  .scene = Render::
+                                                                                      RenderSceneView{.camera = ToRenderCamera(
+                                                                                                          viewportScene.camera),
+                                                                                                      .meshResources =
+                                                                                                          viewportScene.meshResources,
+                                                                                                      .instances = viewportScene.instances,
+                                                                                                      .lights = viewportScene.lights,
+                                                                                                      .lightSceneDomain =
+                                                                                                          viewportScene.lightSceneDomain,
+                                                                                                      .lightSnapshotRevision =
+                                                                                                          viewportScene
+                                                                                                              .lightSnapshotRevision},
+                                                                                  .clearColor = ViewportSceneClearColor()}};
                 }
                 frameState_.preparedPasses.descriptors[frameState_.preparedPasses.count++] =
                     Render::RenderPassDescriptor{.id = Render::RenderPassId{2},
@@ -1825,8 +2083,21 @@ namespace Horo::Editor {
                 return pacing_.pacer.Configure({p_->options.frameRateLimit}, observed.Value().snapshot);
             }
 
-            Result<bool> BeginRenderFrame(const Runtime::FrameContext &context) {
-                // The output was frozen before GUI CPU work. Recheck only availability, never resize/reproject after extraction.
+            /** @brief Uses the exact post-GUI descriptors while frontend resources are still outside a native frame. */
+            Result<void> PrepareViewportLightingFrame() {
+                const auto view = p_->presentation.viewportRenderer.LightingViewIdentity();
+                for (const auto &descriptor : std::span{frameState_.preparedPasses.descriptors}.first(frameState_.preparedPasses.count)) {
+                    if (!descriptor.staticMesh)
+                        continue;
+                    const auto prepared = p_->presentation.viewportRenderer.PrepareLightingFrame(*descriptor.staticMesh, view);
+                    if (prepared.HasError())
+                        return prepared;
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Rechecks only frozen-output availability; extraction and projection remain unchanged. */
+            Result<bool> PollFrozenPresentationFrame() {
                 const auto available = p_->presentation.renderFrontend.PollPresentationAvailability(pacing_.committedOutputExtent);
                 if (available.HasError()) {
                     const auto &error = available.ErrorValue();
@@ -1835,8 +2106,32 @@ namespace Horo::Editor {
                         return Result<bool>::Success(false);
                     return Result<bool>::Failure(error);
                 }
+                return available;
+            }
+
+            /** @brief Preserves unread normalized view time across deferred/canceled attempts without creating a clock. */
+            void PrepareColorClock(const Runtime::FrameContext &context) {
+                colorCandidateTime_ = context.presentationAdmittedDuration;
+                const auto elapsed = colorClockAccepted_ ? (colorCandidateTime_ - colorAcceptedTime_).ToNanoseconds() : 0;
+                const float seconds = std::clamp(static_cast<float>(elapsed) / 1'000'000'000.0F, 0.0F, 1.0F);
+                p_->presentation.viewportRenderer.SetColorFrameDelta(seconds);
+            }
+
+            Result<bool> BeginRenderFrame(const Runtime::FrameContext &context) {
+                const auto available = PollFrozenPresentationFrame();
+                if (available.HasError())
+                    return Result<bool>::Failure(available.ErrorValue());
                 if (!available.Value())
                     return Result<bool>::Success(false);
+                PrepareColorClock(context);
+                const auto preparedLighting = PrepareViewportLightingFrame();
+                if (preparedLighting.HasError()) {
+                    p_->presentation.viewportRenderer.FinishColorFrame(false);
+                    if (preparedLighting.ErrorValue().code.Value() == ViewportColorErrors::Pending.code.Value())
+                        return Result<bool>::Success(false);
+                    return IsDeferredFrameAdmission(preparedLighting.ErrorValue()) ? Result<bool>::Success(false)
+                                                                                   : Result<bool>::Failure(preparedLighting.ErrorValue());
+                }
                 const Render::FramebufferExtent outputExtent = pacing_.committedOutputExtent;
                 pacing_.presentingFrameNumber = context.frameNumber;
 
@@ -1845,6 +2140,10 @@ namespace Horo::Editor {
 #endif
                 auto begun = p_->presentation.renderFrontend.BeginFrame(
                     Render::FrameDescriptor{.frameNumber = context.frameNumber, .outputExtent = outputExtent});
+                if (begun.HasError() && IsDeferredFrameAdmission(begun.ErrorValue())) {
+                    p_->presentation.viewportRenderer.FinishColorFrame(false);
+                    return Result<bool>::Success(false);
+                }
                 if (begun.HasError())
                     return Result<bool>::Failure(begun.ErrorValue());
                 frameState_.frame.emplace(std::move(begun).Value());
@@ -1869,12 +2168,14 @@ namespace Horo::Editor {
 #endif
                 const EditorViewportSceneView viewportScene = viewportSceneState_->View();
                 auto prepared =
-                    p_->presentation.viewportRenderer.PrepareResources(p_->presentation.renderFrontend,
-                                                                       Render::RenderSceneView{.camera =
-                                                                                                   ToRenderCamera(viewportScene.camera),
-                                                                                               .meshResources = viewportScene.meshResources,
-                                                                                               .instances = viewportScene.instances,
-                                                                                               .lights = viewportScene.lights});
+                    p_->presentation.viewportRenderer
+                        .PrepareResources(p_->presentation.renderFrontend,
+                                          Render::RenderSceneView{.camera = ToRenderCamera(viewportScene.camera),
+                                                                  .meshResources = viewportScene.meshResources,
+                                                                  .instances = viewportScene.instances,
+                                                                  .lights = viewportScene.lights,
+                                                                  .lightSceneDomain = viewportScene.lightSceneDomain,
+                                                                  .lightSnapshotRevision = viewportScene.lightSnapshotRevision});
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 frameState_.preparedPasses.viewportMeshResourceGeneration = viewportSceneState_->MeshResourceGeneration();
@@ -1896,6 +2197,7 @@ namespace Horo::Editor {
 
             /** @brief Cancels only this prepared acquisition; the retained teardown owner keeps all native/queue debt. */
             Result<void> CancelPreparedXrFrame() {
+                p_->presentation.viewportRenderer.FinishColorFrame(false);
                 Result<void> canceled = Result<void>::Success();
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 if (std::exchange(frameState_.xrFramePrepared, false))
@@ -1994,10 +2296,16 @@ namespace Horo::Editor {
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Presentation);
 #endif
                 Result<void> result = frameState_.frame->Present(timing);
+                const auto beforeColor = p_->presentation.viewportRenderer.ColorDiagnostics().acceptedSubmission;
+                p_->presentation.viewportRenderer.FinishColorFrame(result.HasValue());
+                if (p_->presentation.viewportRenderer.ColorDiagnostics().acceptedSubmission != beforeColor) {
+                    colorAcceptedTime_ = colorCandidateTime_;
+                    colorClockAccepted_ = true;
+                }
                 if (const auto uiReceipt = authorities_.ui.Presented(pacing_.presentingFrameNumber, result.HasValue());
                     uiReceipt.HasError())
                     return result.HasError() ? Result<void>::Failure(WithCause(uiReceipt.ErrorValue(), result.ErrorValue())) : uiReceipt;
-                if (result.HasValue() && presentedFrames_ != std::numeric_limits<std::uint64_t>::max())
+                if (result.HasValue() && presentedFrames_ != (std::numeric_limits<std::uint64_t>::max)())
                     ++presentedFrames_;
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                 qualification_.RecordPresent(result.HasValue());
@@ -2041,11 +2349,18 @@ namespace Horo::Editor {
             GuiScreenHost *screenHost_{};
             EditorViewportSceneState *viewportSceneState_{};
             EditorSettingsSnapshot *settingsSnapshot_{};
+            std::uint64_t appliedKeymapRevision_{};
+            Theme::LiveReload themeReload_;
+            EditorWindowChrome windowChrome_;
+            EditorGuiLiveReload &liveGui_;
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
             EditorRuntimeAuthorities authorities_;
             EditorPacingState pacing_;
             bool surfaceClosed_{};
             std::uint64_t presentedFrames_{};
+            bool colorExitReported_{};
+            Duration colorAcceptedTime_{}, colorCandidateTime_{};
+            bool colorClockAccepted_{};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             EditorSurfaceLifecycleQualification qualification_;
             bool qualificationPassed_{};
@@ -2065,8 +2380,6 @@ namespace Horo::Editor {
             };
 
             FrameState frameState_;
-            EditorScrollSmoother scrollSmoother_;
-            ImGuiMouseSource scrollSource_{ImGuiMouseSource_Mouse};
             bool nativeMenuInstalled_{false};
         };
 
@@ -2138,14 +2451,24 @@ namespace Horo::Editor {
             auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
             if (registry.HasError())
                 return Result<WorkspaceReadSources>::Failure(registry.ErrorValue());
-            auto world = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
-            if (world.HasError())
-                return Result<WorkspaceReadSources>::Failure(world.ErrorValue());
-            return Result<WorkspaceReadSources>::Success({owner, std::move(registry).Value(), std::move(world).Value()});
+            auto io = Platform::CreateNativeProjectIoOwners(root, owner.ToString(), 1, ".horo/xr-simulator/cache",
+                                                            Application::Internal::SimulatorProjectArtifacts::PublicationDirectory);
+            if (io.HasError())
+                return Result<WorkspaceReadSources>::Failure(io.ErrorValue());
+            auto artifacts = Application::Internal::SimulatorProjectArtifacts::Create(
+                {.source = io.Value().source,
+                 .publication = io.Value().publication,
+                 .context = {.projectIdentity = owner.ToString(), .projectGeneration = 1},
+                 .authorizedRoot = root});
+            if (artifacts.HasError())
+                return Result<WorkspaceReadSources>::Failure(artifacts.ErrorValue());
+            return Result<WorkspaceReadSources>::Success(
+                {owner, std::move(registry).Value(), io.Value().source, std::move(artifacts).Value()});
         }
 
         /** @brief Captures explicit cooked selection and Physics mode before constructing Scene owners. */
-        [[nodiscard]] Result<Application::Internal::EditorProjectScenePolicy> CaptureEditorScenePolicy(const EditorGuiOptions &options) {
+        [[nodiscard]] Result<Application::Internal::EditorProjectScenePolicy> CaptureEditorScenePolicy(
+            const EditorGuiOptions &options, const Runtime::RuntimeDispatchSource &dispatch) {
             Application::Internal::EditorProjectScenePolicy scenePolicy{.physicsMode = options.physicsMode.value(),
                                                                         .prefabGranted = options.prefabGranted.value()};
             if (!options.cookedRoot.empty()) {
@@ -2160,6 +2483,11 @@ namespace Horo::Editor {
                     return Result<Application::Internal::EditorProjectScenePolicy>::Failure(root.ErrorValue());
                 }
                 scenePolicy.cooked.emplace(std::move(root).Value(), std::move(target).Value());
+                scenePolicy.animation = Application::Internal::
+                    SceneAnimationHostSelection{dispatch, scenePolicy.cooked->target,
+                                                std::make_shared<Application::Internal::AnimationRuntimeIdentitySource>(
+                                                    Application::Internal::AnimationRuntimeIdentityRange{1, std::numeric_limits<
+                                                                                                                std::uint64_t>::max()})};
             }
             return Result<Application::Internal::EditorProjectScenePolicy>::Success(std::move(scenePolicy));
         }
@@ -2258,6 +2586,71 @@ namespace Horo::Editor {
         }
 #endif
 
+        bool ComposeEditorSimulator(RunEditorMainLoopParams &p, const Runtime::RuntimeHost &runtime, const Duration fixedStep) {
+            if (!p.options.xrSimulator)
+                return true;
+            auto &composition = p.presentation.composition;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (composition.xrSession) {
+                LOG_ERROR("editor.xr", "Simulator and native XR selection are mutually exclusive.");
+                return false;
+            }
+#endif
+            if (!p.options.xrTrackingRootValid || !p.options.xrTrackingRoot) {
+                LOG_ERROR("editor.xr", "Simulator requires an explicit --xr-tracking-root object in the selected project Scene.");
+                return false;
+            }
+            auto created = Application::Internal::SimulatorPlayHost::Create(
+                {p.inputRouter, runtime.DispatchSource(), fixedStep, *p.options.xrTrackingRoot});
+            if (created.HasError()) {
+                LOG_ERROR("editor.xr", "%s", created.ErrorValue().message.c_str());
+                return false;
+            }
+            composition.simulator = std::move(created).Value();
+            composition.simulatorModel = std::make_unique<XRSimulatorModel>(composition.simulator);
+            return true;
+        }
+
+        Result<std::unique_ptr<Runtime::RuntimeHost>> PrepareEditorRuntime(RunEditorMainLoopParams &p, Clock &clock,
+                                                                           const Runtime::FrameSchedulerConfig &config) {
+            auto created = Runtime::RuntimeHost::Create(clock, config);
+            if (created.HasError())
+                return created;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (!ComposeSelectedEditorXrPlay(p, *created.Value(), config.fixedStep))
+                return Result<std::unique_ptr<Runtime::RuntimeHost>>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+#endif
+            if (!ComposeEditorSimulator(p, *created.Value(), config.fixedStep))
+                return Result<std::unique_ptr<Runtime::RuntimeHost>>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+            return created;
+        }
+
+        IEditorPlayXrHost *SelectedEditorPlayHost(EditorRenderComposition &composition) noexcept {
+            if (composition.simulator)
+                return composition.simulator.get();
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            return composition.xrPlay.get();
+#else
+            return nullptr;
+#endif
+        }
+
+        struct SimulatorInputOwnerScope final {
+            Application::Internal::SimulatorPlayHost *host{};
+
+            ~SimulatorInputOwnerScope() {
+                if (host)
+                    host->ReleaseInputOwner();
+            }
+        };
+
+        void RegisterEditorSimulator(GuiScreenHost &screen, EditorRenderComposition &composition) {
+            if (!composition.simulator)
+                return;
+            screen.Services().Register<IEditorPlayXrHost>(*composition.simulator);
+            screen.Services().Register<XRSimulatorModel>(*composition.simulatorModel);
+        }
+
         /** @brief Keeps an optional fallback host and the selected package service in one startup lifetime. */
         struct EditorPackageComposition final {
             std::unique_ptr<Application::Internal::PackageProjectHost> owned;
@@ -2295,68 +2688,75 @@ namespace Horo::Editor {
             return Output::Success(std::move(packages));
         }
 
-        /** @brief Runs the actual editor startup and reports failures to the process boundary. */
-        std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
-            ThemeContext themeContext{p.fonts};
-            EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
-            EditorGuiContext guiContext{p.engineEvents, p.editorEvents, p.localization, themeContext, settingsSnapshot};
-            std::optional<UpdateExperienceSession> updateSession;
-            ConfigureUpdateExperience(p, guiContext, updateSession);
+        /** @brief Pins the refreshed inventory before the marketplace that borrows it; failed refresh disables both GUI capabilities. */
+        class EditorExtensionSources final {
+        public:
+            explicit EditorExtensionSources(JobSystem &jobs)
+                : available_(Refresh(inventory_)),
+                  marketplace_(jobs, inventory_, Extensions::ExtensionMarketplaceService::DefaultRegistryUrl()) {}
 
-            // Borrowed screen services must outlive the host that invokes screen OnLeave().
-            EditorViewportSceneState viewportSceneState;
-            NativeDurableFileSystem durableFiles;
-            NativeExternalProcessRunner externalProcesses;
-            Application::GameplayBuildService gameplayBuildService{externalProcesses, p.background.jobs, durableFiles,
-                                                                   &p.operationServices.buildOutputStore,
-                                                                   &p.operationServices.operationStore};
-            Application::GameplayBuildEnvironment gameplayBuildEnvironment{
-                .gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR,
-                .cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER},
-            };
-            SystemWallClock wallClock;
-            SteadyClock packageClock;
-            Application::Internal::UnconfiguredPackageTrust packageTrust;
-            auto preparedPackages = PrepareEditorPackages(p, durableFiles, packageClock, wallClock, packageTrust);
-            if (preparedPackages.HasError())
-                return std::nullopt;
-            auto packageComposition = std::move(preparedPackages).Value();
-            auto *packages = packageComposition.selected;
-            ProjectMutationCoordinator mutationCoordinator{durableFiles};
-            ProjectMigrationTransactionService migrationTransactions{durableFiles, wallClock, mutationCoordinator, p.background.jobs};
-            ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
-            RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
-            const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
-            SteadyClock clock;
-            const Runtime::FrameSchedulerConfig schedulerConfig{};
-            auto createdRuntime = Runtime::RuntimeHost::Create(clock, schedulerConfig);
-            if (createdRuntime.HasError()) {
-                LOG_ERROR("editor.runtime", "Runtime host creation failed: %s", createdRuntime.ErrorValue().message.c_str());
-                return std::nullopt;
+            EditorExtensionSources(const EditorExtensionSources &) = delete;
+            EditorExtensionSources &operator=(const EditorExtensionSources &) = delete;
+            EditorExtensionSources(EditorExtensionSources &&) = delete;
+            EditorExtensionSources &operator=(EditorExtensionSources &&) = delete;
+
+            Extensions::ExtensionInventory *Inventory() noexcept {
+                return available_ ? &inventory_ : nullptr;
             }
-#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-            auto &xrComposition = p.presentation.composition;
-            if (!ComposeSelectedEditorXrPlay(p, *createdRuntime.Value(), schedulerConfig.fixedStep))
-                return std::nullopt;
 
-            struct XrInputOwnerScope final {
-                explicit XrInputOwnerScope(Application::Internal::OpenXRPlayHost *owner) noexcept : host(owner) {}
+            Extensions::ExtensionMarketplaceService *Marketplace() noexcept {
+                return available_ ? &marketplace_ : nullptr;
+            }
 
-                XrInputOwnerScope(const XrInputOwnerScope &) = delete;
-                XrInputOwnerScope &operator=(const XrInputOwnerScope &) = delete;
-
-                Application::Internal::OpenXRPlayHost *host;
-
-                ~XrInputOwnerScope() {
-                    if (host)
-                        host->ReleaseInputOwner();
+        private:
+            /** @brief Preserves the original nonfatal inventory error while preventing partially available GUI services. */
+            static bool Refresh(Extensions::ExtensionInventory &inventory) {
+                const auto refreshed = inventory.Refresh();
+                if (refreshed.HasError()) {
+                    LOG_ERROR("editor.extensions", "Unable to refresh extension inventory: %s", refreshed.ErrorValue().message.c_str());
+                    return false;
                 }
-            };
+                return true;
+            }
 
-            XrInputOwnerScope xrInputOwner{xrComposition.xrPlay.get()};
+            Extensions::ExtensionInventory inventory_;
+            const bool available_;
+            Extensions::ExtensionMarketplaceService marketplace_;
+        };
+
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        /** @brief Releases the selected XR input owner only after the screen and RuntimeHost lifetimes end. */
+        struct XrInputOwnerScope final {
+            explicit XrInputOwnerScope(Application::Internal::OpenXRPlayHost *owner) noexcept : host(owner) {}
+
+            XrInputOwnerScope(const XrInputOwnerScope &) = delete;
+            XrInputOwnerScope &operator=(const XrInputOwnerScope &) = delete;
+
+            Application::Internal::OpenXRPlayHost *host;
+
+            ~XrInputOwnerScope() {
+                if (host)
+                    host->ReleaseInputOwner();
+            }
+        };
+
+        /** @brief Publishes only the explicitly composed XR Play capability to the entered screen's services. */
+        void RegisterEditorXrPlayServices(GuiScreenHost &screens, Application::Internal::OpenXRPlayHost *host) {
+            if (host)
+                screens.Services().Register<IEditorPlayXrHost>(*host);
+        }
 #endif
+
+        /** @brief Keeps the canonical paint participant and its shared project source factory in one preparation result. */
+        struct PreparedEditorUi final {
+            Application::Internal::RuntimeUiPaintComposition paint;
+            std::shared_ptr<Application::Internal::RuntimeUiPaintProjectSources> sources;
+        };
+
+        /** @brief Prepares the explicit UI producer, allocator and initial physical output before Scene factories borrow them. */
+        std::optional<PreparedEditorUi> PrepareEditorUi(RunEditorMainLoopParams &p, const Runtime::RuntimeDispatchSource &dispatch) {
             auto uiComposition =
-                Application::Internal::RuntimeUiPaintHost::Compose(p.presentation.renderFrontend, createdRuntime.Value()->DispatchSource(),
+                Application::Internal::RuntimeUiPaintHost::Compose(p.presentation.renderFrontend, dispatch,
                                                                    {.ownership = Runtime::Ui::UiOwnershipGeneration::Create(1).Value(),
                                                                     .maximumInstances = 8,
                                                                     .maximumRetiredInstances = 8,
@@ -2383,11 +2783,41 @@ namespace Horo::Editor {
                                                                             std::move(uiPolicy));
             if (projectUi.HasError())
                 return std::nullopt;
-            auto capturedPolicy = CaptureEditorScenePolicy(p.options);
+            return PreparedEditorUi{std::move(uiComposition).Value(), std::move(projectUi).Value()};
+        }
+
+        /** @brief Owns captured Scene policy and preview authorities until screens and the RuntimeHost have been destroyed. */
+        struct PreparedEditorScenes final {
+            Application::Internal::EditorProjectScenePolicy policy;
+            std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
+            std::filesystem::path projectRoot;
+            Application::Internal::EditorProjectPreviewScene preview;
+
+            /** @brief Registers the explicitly captured cook authority without transferring its lifetime to the screen. */
+            void RegisterWorldBakeDependencies(GuiScreenHost &screens) const {
+                if (worldBakeDependencies)
+                    screens.Services().RegisterConst<Application::WorldBakeDependencySource>(*worldBakeDependencies);
+            }
+
+            /** @brief Projects the actual preview backend into the canonical collision activation evidence. */
+            CollisionActivationEvidence CollisionEvidence() const {
+                CollisionActivationEvidence evidence{.revision = 1};
+                if (preview.physicsMode == Physics::PhysicsRuntimeMode::Null)
+                    evidence.state = CollisionActivationState::NoPhysics;
+                return evidence;
+            }
+        };
+
+        /** @brief Captures one shared Animation issuer and UI namespace for the preview, Play and prefab factories. */
+        std::optional<PreparedEditorScenes> PrepareEditorScenes(
+            RunEditorMainLoopParams &p, const Runtime::RuntimeDispatchSource &dispatch,
+            std::shared_ptr<Application::Internal::RuntimeUiPaintProjectSources> uiSources) {
+            auto capturedPolicy = CaptureEditorScenePolicy(p.options, dispatch);
             if (capturedPolicy.HasError())
                 return std::nullopt;
             auto scenePolicy = std::move(capturedPolicy).Value();
-            scenePolicy.uiSources = std::move(projectUi).Value();
+            scenePolicy.prefabMetrics = p.telemetry.prefab;
+            scenePolicy.uiSources = std::move(uiSources);
             std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
             if (scenePolicy.cooked)
                 worldBakeDependencies.emplace(scenePolicy.cooked->targetRoot, scenePolicy.cooked->target,
@@ -2404,18 +2834,132 @@ namespace Horo::Editor {
             // RuntimeHost receives the sole preview service; captured assets/native authorities
             // remain alive here through RuntimeHost and screen teardown. Play owns distinct services.
             auto preview = std::move(preparedPreview).Value();
+            return PreparedEditorScenes{std::move(scenePolicy), std::move(worldBakeDependencies), std::move(previewProjectRoot),
+                                        std::move(preview)};
+        }
+
+        /** @brief Borrows the screen's longer-lived services while owning the shorter-lived runtime execution and shutdown scope. */
+        struct EditorRuntimeSession final {
+            RunEditorMainLoopParams &p;
+            GuiScreenHost &screenHost;
+            EditorViewportSceneState &viewportSceneState;
+            EditorSettingsSnapshot &settingsSnapshot;
+            EditorGuiLiveReload &liveGui;
+            Clock &clock;
+            Application::Internal::PackageProjectHost *packages;
+            EditorNavigationBakeHost &navigationBakes;
+            std::optional<UpdateExperienceSession> &updateSession;
+
+            /** @brief Transfers the sole Scene/UI participants into the RuntimeHost and retains every borrowed authority through shutdown.
+             */
+            std::optional<EditorRendererRestartRequest> Run(std::unique_ptr<Runtime::RuntimeHost> preparedRuntime,
+                                                            std::unique_ptr<Runtime::RuntimeSceneService> runtimeScene,
+                                                            Application::Internal::RuntimeUiPaintComposition ui) {
+                std::optional<EditorRendererRestartRequest> rendererRestart;
+                // Runtime participants borrow rendererRestart; destroy them before this callback storage.
+                auto runtime = std::move(preparedRuntime);
+                auto runtimeSources = RegisterEditorRuntimeSources(*runtime, std::move(runtimeScene), p.presentation, std::move(ui));
+                if (runtimeSources.HasError()) {
+                    screenHost.RequestFatalShutdown();
+                    screenHost.Shutdown();
+                    return std::nullopt;
+                }
+                if (const auto started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
+                    LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
+                    screenHost.RequestFatalShutdown();
+                    screenHost.Shutdown();
+                    return std::nullopt;
+                }
+                auto participant = std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, liveGui,
+                                                                              rendererRestart, clock,
+                                                                              EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
+                                                                                                       runtimeSources.Value()});
+                participant->BindHost(*runtime);
+                EditorRuntimeParticipant *pacingParticipant = participant.get();
+                Result<void> startup = runtime->AddParticipant(std::move(participant));
+                if (startup.HasValue()) {
+                    startup = runtime->Startup();
+                }
+                if (startup.HasError()) {
+                    LOG_ERROR("editor.runtime", "Runtime host startup failed [%s]: %s", startup.ErrorValue().code.Value().c_str(),
+                              startup.ErrorValue().message.c_str());
+                    screenHost.RequestFatalShutdown();
+                    runtime->Shutdown();
+                    return std::nullopt;
+                }
+
+                const bool healthy = RunEditorFrames(p.options, *pacingParticipant, *runtime, screenHost);
+                p.healthy = CompleteEditorRuntimeShutdown(*runtime, *pacingParticipant, healthy, runtimeSources.Value());
+                RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
+                return rendererRestart;
+            }
+        };
+
+        /** @brief Runs the actual editor startup and reports failures to the process boundary. */
+        std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
+            EditorGuiLiveReload liveGui;
+            ThemeContext themeContext{p.fonts, liveGui.Registry()};
+            EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
+            EditorGuiContext guiContext{p.engineEvents, p.editorEvents, p.localization, themeContext, settingsSnapshot};
+            std::optional<UpdateExperienceSession> updateSession;
+            ConfigureUpdateExperience(p, guiContext, updateSession);
+
+            // Borrowed screen services must outlive the host that invokes screen OnLeave().
+            EditorViewportSceneState viewportSceneState;
+            NativeDurableFileSystem durableFiles;
+            NativeExternalProcessRunner externalProcesses;
+            Application::GameplayBuildService gameplayBuildService{externalProcesses, p.background.jobs, durableFiles,
+                                                                   &p.operationServices.buildOutputStore,
+                                                                   &p.operationServices.operationStore};
+            Application::GameplayBuildEnvironment gameplayBuildEnvironment{
+                .gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR,
+                .cmakeExecutable = HORO_GAMEPLAY_CMAKE_EXECUTABLE,
+                .cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER},
+            };
+            SystemWallClock wallClock;
+            SteadyClock packageClock;
+            Application::Internal::UnconfiguredPackageTrust packageTrust;
+            auto preparedPackages = PrepareEditorPackages(p, durableFiles, packageClock, wallClock, packageTrust);
+            if (preparedPackages.HasError())
+                return std::nullopt;
+            auto packageComposition = std::move(preparedPackages).Value();
+            auto *packages = packageComposition.selected;
+            ProjectMutationCoordinator mutationCoordinator{durableFiles};
+            ProjectMigrationTransactionService migrationTransactions{durableFiles, wallClock, mutationCoordinator, p.background.jobs};
+            ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
+            RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
+            const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
+            SteadyClock clock;
+            const Runtime::FrameSchedulerConfig schedulerConfig{};
+            auto createdRuntime = PrepareEditorRuntime(p, clock, schedulerConfig);
+            if (createdRuntime.HasError()) {
+                LOG_ERROR("editor.runtime", "Runtime host creation failed: %s", createdRuntime.ErrorValue().message.c_str());
+                return std::nullopt;
+            }
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            auto &xrComposition = p.presentation.composition;
+            XrInputOwnerScope xrInputOwner{xrComposition.xrPlay.get()};
+#endif
+            SimulatorInputOwnerScope simulatorInputOwner{p.presentation.composition.simulator.get()};
+            auto preparedUi = PrepareEditorUi(p, createdRuntime.Value()->DispatchSource());
+            if (!preparedUi)
+                return std::nullopt;
+            auto preparedScenes = PrepareEditorScenes(p, createdRuntime.Value()->DispatchSource(), std::move(preparedUi->sources));
+            if (!preparedScenes)
+                return std::nullopt;
+            auto &scenePolicy = preparedScenes->policy;
+            auto &previewProjectRoot = preparedScenes->projectRoot;
+            auto &preview = preparedScenes->preview;
             auto runtimeScene = std::move(preview.scenes);
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
             auto playPolicy = scenePolicy;
-#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-            playPolicy.xrHost = xrComposition.xrPlay.get();
-#endif
+            Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
+                                                                 wallClock);
+            playPolicy.xrHost = SelectedEditorPlayHost(p.presentation.composition);
             auto playSceneFactory = Application::Internal::MakeEditorProjectSceneFactory(p.background.jobs, std::move(playPolicy));
             auto prefabStageFactory = Application::Internal::MakeEditorProjectPrefabStageFactory(p.background.jobs, scenePolicy);
             // Null is explicit; canonical activation needs an exact owner receipt.
-            CollisionActivationEvidence collisionActivation{.revision = 1};
-            if (preview.physicsMode == Physics::PhysicsRuntimeMode::Null)
-                collisionActivation.state = CollisionActivationState::NoPhysics;
+            auto collisionActivation = preparedScenes->CollisionEvidence();
             const EditorPreviewCollisionReceiptSource previewCollisionReceipt{[&preview]() noexcept {
                 return preview.owners->CollisionReceipt();
             }};
@@ -2446,22 +2990,21 @@ namespace Horo::Editor {
             WorkspacePanelRegistry workspacePanelRegistry;
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
             RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
-            Extensions::ExtensionInventory extensionInventory;
-            const Result<void> extensionInventoryRefresh = extensionInventory.Refresh();
-            if (extensionInventoryRefresh.HasError()) {
-                LOG_ERROR("editor.extensions", "Unable to refresh extension inventory: %s",
-                          extensionInventoryRefresh.ErrorValue().message.c_str());
-            }
-            Extensions::ExtensionMarketplaceService extensionMarketplace{p.background.jobs, extensionInventory,
-                                                                         Extensions::ExtensionMarketplaceService::DefaultRegistryUrl()};
+            EditorExtensionSources extensionSources{p.background.jobs};
             PfdNativeDialogs nativeDialogs;
             Application::NetworkDebuggerService networkDebugger;
 
+            auto playSaveRetirement = std::make_shared<EditorPlaySaveRetirement>();
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
-            const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages};
+            const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild,  nullptr,
+                                                            packages,          p.operationServices.shaderReload, playSaveRetirement};
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
             auto uiInspectorResourcesFactory =
                 MakeEditorUiInspectorResourcesFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles);
+            auto terrainCookFactory =
+                MakeEditorTerrainCookFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles,
+                                             p.operationServices.operationStore, p.operationServices.buildOutputStore);
+            auto terrainAssetsFactory = MakeEditorTerrainAssetFactory(assetRegistry, mutationCoordinator, durableFiles);
             WorldStreamingPreviewHost streamingPreview;
             auto streamingPolicy = MakeWorldStreamingPreviewRuntimePolicy();
             if (streamingPolicy.HasError()) {
@@ -2482,10 +3025,8 @@ namespace Horo::Editor {
                                                     .screenRegistry = std::move(screenRegistry),
                                                     .workspacePanelRegistry = std::move(workspacePanelRegistry),
                                                     .logoTexture = p.textures.logo,
-                                                    .extensionInventory =
-                                                        extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
-                                                    .extensionMarketplace =
-                                                        extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
+                                                    .extensionInventory = extensionSources.Inventory(),
+                                                    .extensionMarketplace = extensionSources.Marketplace(),
                                                     .nativeDialogs = &nativeDialogs,
                                                     .extensionSettingsFiles = &durableFiles,
                                                     .extensionUserSettingsRoot = ResolveEditorSettingsPath().parent_path(),
@@ -2512,6 +3053,10 @@ namespace Horo::Editor {
                                                          .availableCapabilities = {{"horo.editor.inspector"},
                                                                                    {"horo.editor.property-drawer"},
                                                                                    Extensions::EditorCustomCompositionCapability}},
+                                                    .extensionServicePolicy = {.revision = 1,
+                                                                               .knownPermissions = {{"extension.services.invoke"}},
+                                                                               .approvedPermissions = {{"extension.services.invoke"}},
+                                                                               .availableCapabilities = {{"horo.extension.services"}}},
                                                     .extensionViewportPolicy = {.revision = 1,
                                                                                 .knownPermissions = {{"editor.viewport-overlay"},
                                                                                                      {"editor.gizmo"}},
@@ -2519,13 +3064,17 @@ namespace Horo::Editor {
                                                                                                         {"editor.gizmo"}},
                                                                                 .availableCapabilities = {{"horo.editor.viewport-overlay"},
                                                                                                           {"horo.editor.gizmo"}}},
-                                                    .gameplayRetirements = gameplayRetirements}};
+                                                    .gameplayRetirements = gameplayRetirements,
+                                                    .terrainCook = terrainCookFactory,
+                                                    .terrainAssets = terrainAssetsFactory}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
-            const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages};
+            const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild,  &screenHost,
+                                                   packages,          p.operationServices.shaderReload, playSaveRetirement};
+            screenHost.Services().Register<EditorPlaySaveRetirement>(*playSaveRetirement);
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-            if (xrComposition.xrPlay)
-                screenHost.Services().Register<IEditorPlayXrHost>(*xrComposition.xrPlay);
+            RegisterEditorXrPlayServices(screenHost, xrComposition.xrPlay.get());
 #endif
+            RegisterEditorSimulator(screenHost, p.presentation.composition);
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
@@ -2534,6 +3083,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             screenHost.Services().Register<EditorProjectPrefabStageFactory>(prefabStageFactory);
+            screenHost.Services().RegisterConst<Prefab::PrefabMetricHandles>(p.telemetry.prefab);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
             screenHost.Services().Register<UiInspectorResourcesFactory>(uiInspectorResourcesFactory);
             screenHost.Services().Register<IAudioComponentPreview>(audioPreview);
@@ -2551,8 +3101,7 @@ namespace Horo::Editor {
             screenHost.Services().RegisterConst<Log::IStructuredLogQuery>(p.logQuery);
             screenHost.Services().RegisterConst<IBuildOutputQuery>(p.operationServices.buildOutputStore);
             screenHost.Services().Register<BuildOutputStore>(p.operationServices.buildOutputStore);
-            if (worldBakeDependencies)
-                screenHost.Services().RegisterConst<Application::WorldBakeDependencySource>(*worldBakeDependencies);
+            preparedScenes->RegisterWorldBakeDependencies(screenHost);
             screenHost.Services().Register<Application::ShaderBuildService>(p.operationServices.shaderBuild);
             screenHost.Services().Register<OperationStore>(p.operationServices.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationServices.operationStore);
@@ -2560,43 +3109,9 @@ namespace Horo::Editor {
             screenHost.Services().Register<Application::NetworkDebuggerService>(networkDebugger);
             screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(networkDebugger);
             screenHost.Services().Register<Application::INetworkDebuggerControl>(networkDebugger);
-            std::optional<EditorRendererRestartRequest> rendererRestart;
-            std::unique_ptr<Runtime::RuntimeHost> runtime = std::move(createdRuntime).Value();
-            auto runtimeSources =
-                RegisterEditorRuntimeSources(*runtime, std::move(runtimeScene), p.presentation, std::move(uiComposition).Value());
-            if (runtimeSources.HasError()) {
-                screenHost.RequestFatalShutdown();
-                screenHost.Shutdown();
-                return std::nullopt;
-            }
-            if (const auto started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
-                LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
-                screenHost.RequestFatalShutdown();
-                screenHost.Shutdown();
-                return std::nullopt;
-            }
-            auto participant =
-                std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, rendererRestart, clock,
-                                                           EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
-                                                                                    runtimeSources.Value()});
-            participant->BindHost(*runtime);
-            EditorRuntimeParticipant *pacingParticipant = participant.get();
-            Result<void> startup = runtime->AddParticipant(std::move(participant));
-            if (startup.HasValue()) {
-                startup = runtime->Startup();
-            }
-            if (startup.HasError()) {
-                LOG_ERROR("editor.runtime", "Runtime host startup failed [%s]: %s", startup.ErrorValue().code.Value().c_str(),
-                          startup.ErrorValue().message.c_str());
-                screenHost.RequestFatalShutdown();
-                runtime->Shutdown();
-                return std::nullopt;
-            }
-
-            const bool healthy = RunEditorFrames(p.options, *pacingParticipant, *runtime, screenHost);
-            p.healthy = CompleteEditorRuntimeShutdown(*runtime, *pacingParticipant, healthy, runtimeSources.Value());
-            RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
-            return rendererRestart;
+            EditorRuntimeSession session{p,     screenHost, viewportSceneState, settingsSnapshot, liveGui,
+                                         clock, packages,   navigationBakes,    updateSession};
+            return session.Run(std::move(createdRuntime).Value(), std::move(runtimeScene), std::move(preparedUi->paint));
         }
     }  // namespace
 
@@ -2613,7 +3128,8 @@ namespace Horo::Editor {
                                                               : "Project version is not compatible with this editor.");
             return false;
         }
-        options.rendererBackend = compatibility.metadata->renderBackend;
+        if (options.rendererBackend.empty())
+            options.rendererBackend = compatibility.metadata->renderBackend;
         projectName = compatibility.metadata->name;
         return true;
     }
@@ -2622,31 +3138,14 @@ namespace Horo::Editor {
     [[nodiscard]] static Result<std::unique_ptr<ModuleHost>> ComposeEditorModules(const Application::Internal::HostRenderer renderer,
                                                                                   const EditorSettings &initialSettings) {
         const std::vector settingsContributions{MakeEditorSettingsContribution(initialSettings)};
-        return Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor,
-                                                          .renderer = renderer,
-#if defined(HORO_HAS_OPENTELEMETRY)
-                                                          .includeOpenTelemetry = true
-#else
-                                                          .includeOpenTelemetry = false
-#endif
-                                                         },
+        return Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor, .renderer = renderer},
                                                          settingsContributions);
     }
 
-    void ConfigureEditorInput(Input::InputRouter &inputRouter) {
-        if (const Result<void> installedInputActions = inputRouter.SetActionMap(BuildEditorInputActions());
-            installedInputActions.HasError())
-            LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installedInputActions.ErrorValue().message.c_str());
-        const std::filesystem::path editorInputProfile = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
-        if (std::error_code inputProfileError; std::filesystem::exists(editorInputProfile, inputProfileError) && !inputProfileError) {
-            const Result<Input::InputBindingProfile> loaded = Input::LoadBindingProfile(editorInputProfile);
-            if (loaded.HasError())
-                LOG_ERROR("editor.input", "Keeping default input bindings; unable to load '%s': %s", editorInputProfile.string().c_str(),
-                          loaded.ErrorValue().message.c_str());
-            else if (const Result<void> applied = inputRouter.SetProfile(loaded.Value()); applied.HasError())
-                LOG_ERROR("editor.input", "Keeping last valid input bindings; profile '%s' is invalid: %s",
-                          editorInputProfile.string().c_str(), applied.ErrorValue().message.c_str());
-        }
+    void ConfigureEditorInput(Input::InputRouter &inputRouter, const EditorSettings &settings) {
+        if (const auto installed = inputRouter.SetActionMap(BuildEditorInputActions(), BuiltinEditorInputProfile(settings.keymap.profile));
+            installed.HasError())
+            LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installed.ErrorValue().message.c_str());
     }
 
     struct PreparedEditorStartup final {
@@ -2682,6 +3181,44 @@ namespace Horo::Editor {
             return false;
         }
         return true;
+    }
+
+    /** @brief Rejects malformed quality arguments before creating native resources. */
+    [[nodiscard]] static bool ValidateEditorShadowOptions(const EditorGuiOptions &options) {
+        if (options.directionalShadows)
+            return true;
+        const auto error =
+            MakeError(Render::DirectionalShadowErrors::InvalidProfile, "Use one --shadow-quality off|low|medium|high|ultra selection.");
+        LOG_CRITICAL("editor.shadows", "%s", error.message.c_str());
+        return false;
+    }
+
+    /** @brief Keeps malformed recipe, fallback and coverage arguments from changing product policy implicitly. */
+    [[nodiscard]] static bool ValidateEditorLightingOptions(const EditorGuiOptions &options) {
+        if (options.lighting)
+            return true;
+        const auto error =
+            MakeError(Render::LightCullingErrors::InvalidInput, "Use --lighting forward|clustered, --lighting-fallback forbid|forward, and "
+                                                                "--lighting-coverage complete|allow-omissions with unique values.");
+        LOG_CRITICAL("editor.lighting", "%s", error.message.c_str());
+        return false;
+    }
+
+    /** @brief Rejects ambiguous color roots and nonfinite/unbounded declared exposure controls before native startup. */
+    static bool ValidateEditorColorOptions(const EditorGuiOptions &options) {
+        if (options.color.valid && options.lightingRootValid)
+            return true;
+        const auto error = MakeError(Render::ExposureErrors::InvalidSettings,
+                                     "Use unique absolute --color-pipeline-root/--lighting-root paths, --exposure-mode manual|automatic, "
+                                     "and finite bounded --exposure-ev/--exposure-compensation values.");
+        LOG_CRITICAL("editor.color", "%s", error.message.c_str());
+        return false;
+    }
+
+    /** @brief Composes independent startup option validation without merging subsystem policy. */
+    [[nodiscard]] static bool ValidateEditorStartupOptions(const EditorGuiOptions &options) {
+        return ValidateEditorColorOptions(options) && ValidateEditorPhysicsOptions(options) && ValidateEditorShadowOptions(options) &&
+               ValidateEditorLightingOptions(options);
     }
 
     /** @brief Canonical configuration/event lifetime pair transferred intact into one prepared startup. */
@@ -2766,55 +3303,93 @@ namespace Horo::Editor {
         return true;
     }
 
-    /** @brief Validates startup inputs and composes the editor's installed modules. */
-    [[nodiscard]] static std::optional<PreparedEditorStartup> PrepareEditorStartup(EditorGuiOptions options,
-                                                                                   const EditorOpenXRHostServices *xrHost,
-                                                                                   const std::span<char *> arguments) {
-        if (!ValidateEditorPhysicsOptions(options))
-            return std::nullopt;
-        std::string projectName;
-        if (!ConfigureStartupProject(options, projectName))
-            return std::nullopt;
+    struct PreparedEditorBootstrap final {
+#if defined(HORO_HAS_OPENXR_HOST)
+        std::unique_ptr<EditorOpenXRBootstrap> owned;
+#endif
+        const EditorOpenXRHostServices *selected{};
+    };
+
+    static bool ValidateXrStartupSelection(const EditorGuiOptions &options, const EditorOpenXRHostServices *host,
+                                           std::span<char *> arguments) {
         if (!options.xrTrackingRootValid) {
             LOG_CRITICAL("editor.xr", "Explicit XR tracking-root selection is malformed or duplicated.");
-            return std::nullopt;
+            return false;
         }
-#if defined(HORO_HAS_OPENXR_HOST)
-        std::unique_ptr<EditorOpenXRBootstrap> bootstrap;
-        if (const bool hostArguments = std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())),
-                                                           [](const char *value) {
+        const bool nativeArguments = std::ranges::any_of(arguments, [](const char *value) {
             return std::string_view{value}.starts_with("--xr-host-");
         });
-            xrHost && hostArguments) {
-            LOG_CRITICAL("editor.xr", "Injected installer services and explicit host bootstrap inputs cannot select two authorities.");
-            return std::nullopt;
+        if (options.xrSimulator && (host || nativeArguments)) {
+            LOG_CRITICAL("editor.xr", "Select Simulator without native XR host services or --xr-host-* arguments.");
+            return false;
         }
-        if (!xrHost) {
+        return true;
+    }
+
+    static std::optional<PreparedEditorBootstrap> PrepareEditorBootstrap(const EditorGuiOptions &options,
+                                                                         const EditorOpenXRHostServices *host,
+                                                                         std::span<char *> arguments) {
+        if (!ValidateXrStartupSelection(options, host, arguments))
+            return {};
+        PreparedEditorBootstrap result;
+        result.selected = host;
+#if defined(HORO_HAS_OPENXR_HOST)
+        const bool nativeArguments =
+            std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())), [](const char *value) {
+            return std::string_view{value}.starts_with("--xr-host-");
+        });
+        if (host && nativeArguments) {
+            LOG_CRITICAL("editor.xr", "Injected installer services and explicit host bootstrap inputs cannot select two authorities.");
+            return {};
+        }
+        if (!host) {
             auto installed = EditorOpenXRBootstrap::Create(arguments, options.projectRoot,
                                                            ResolveEditorSettingsHomeDirectory() / ".cache" / "horo" / "packages",
                                                            options.xrTrackingRoot.value_or(Runtime::SceneObjectId{}));
             if (installed.HasError()) {
                 LOG_CRITICAL("editor.xr", "Installed XR bootstrap failed: %s", installed.ErrorValue().message.c_str());
-                return std::nullopt;
+                return {};
             }
-            bootstrap = std::move(installed).Value();
-            if (bootstrap)
-                xrHost = &bootstrap->Services();
+            result.owned = std::move(installed).Value();
+            if (result.owned)
+                result.selected = &result.owned->Services();
         }
 #else
         if (std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())), [](const char *value) {
             return std::string_view{value}.starts_with("--xr-host-");
         })) {
             LOG_CRITICAL("editor.xr", "This executable contains no installed OpenXR host component.");
-            return std::nullopt;
+            return {};
         }
 #endif
-        const Render::RenderBackendModuleInfo *moduleInfo = ResolveCompiledBackendModuleInfo(options.rendererBackend);
-        if (moduleInfo == nullptr || !moduleInfo->supportsInteractivePresentation) {
+        return result;
+    }
+
+    static const Render::RenderBackendModuleInfo *SelectInteractiveBackend(EditorGuiOptions &options) {
+        const auto *module = ResolveCompiledBackendModuleInfo(options.rendererBackend);
+        if (!module || !module->supportsInteractivePresentation) {
             LOG_CRITICAL("editor.renderer", "Requested renderer component '%s' is unavailable.", options.rendererBackend.c_str());
-            return std::nullopt;
+            return nullptr;
         }
-        options.rendererBackend = moduleInfo->id.Value();
+        options.rendererBackend = module->id.Value();
+        return module;
+    }
+
+    /** @brief Validates startup inputs and composes the editor's installed modules. */
+    [[nodiscard]] static std::optional<PreparedEditorStartup> PrepareEditorStartup(EditorGuiOptions options,
+                                                                                   const EditorOpenXRHostServices *xrHost,
+                                                                                   const std::span<char *> arguments) {
+        if (!ValidateEditorStartupOptions(options))
+            return std::nullopt;
+        std::string projectName;
+        if (!ConfigureStartupProject(options, projectName))
+            return std::nullopt;
+        auto bootstrap = PrepareEditorBootstrap(options, xrHost, arguments);
+        if (!bootstrap)
+            return std::nullopt;
+        const auto *moduleInfo = SelectInteractiveBackend(options);
+        if (!moduleInfo)
+            return std::nullopt;
         const RendererAvailabilitySnapshot rendererAvailability = BuildRendererAvailabilitySnapshot(options.rendererBackend);
         auto selectedRenderer = Application::Internal::HostRendererFromBackendId(options.rendererBackend);
         if (selectedRenderer.HasError()) {
@@ -2828,7 +3403,7 @@ namespace Horo::Editor {
             return std::nullopt;
         }
         std::unique_ptr<ModuleHost> modules = std::move(composedModules).Value();
-        auto configuration = PrepareEditorConfiguration(settings, *modules, xrHost);
+        auto configuration = PrepareEditorConfiguration(settings, *modules, bootstrap->selected);
         if (!configuration)
             return std::nullopt;
         PreparedEditorStartup startup{std::move(options),
@@ -2840,9 +3415,9 @@ namespace Horo::Editor {
                                       std::move(configuration->events),
                                       std::move(configuration->service),
 #if defined(HORO_HAS_OPENXR_HOST)
-                                      std::move(bootstrap),
+                                      std::move(bootstrap->owned),
 #endif
-                                      xrHost};
+                                      bootstrap->selected};
         if (!PrepareEditorXrProduct(startup))
             return std::nullopt;
         return startup;
@@ -2908,7 +3483,10 @@ namespace Horo::Editor {
         return events.Subscribe<EditorSettingsChangedEvent>([&settings, &localization](const EditorSettingsChangedEvent &event) {
             if (event.phase == SettingsChangePhase::Committed || event.phase == SettingsChangePhase::Reverted) {
                 const EditorSettings committed = settings.Snapshot().settings;
-                Theme::SelectThemeByIndex(static_cast<int>(committed.themePreset));
+                if (committed.themeId.empty())
+                    Theme::SelectThemeByIndex(static_cast<int>(committed.themePreset));
+                else if (!Theme::SelectThemeById(committed.themeId))
+                    LOG_WARN("editor.theme", "Selected package theme is unavailable: %s", committed.themeId.c_str());
                 if (const auto loc = LocaleTag::Parse(committed.languageTag);
                     loc.has_value() && localization.ActiveLocale() != *loc && localization.Prepare(*loc)) {
                     (void)localization.ActivatePrepared();
@@ -2919,9 +3497,10 @@ namespace Horo::Editor {
     }
 
     /** @brief Installs editor input actions and a saved profile on the active SDL window. */
-    static void ConfigureEditorInput(SDL_Window &window, Input::SdlInputBackend &backend, Input::InputRouter &router) {
+    static void ConfigureEditorInput(SDL_Window &window, Input::SdlInputBackend &backend, Input::InputRouter &router,
+                                     const EditorSettings &settings) {
         backend.BindWindow(SDL_GetWindowID(&window));
-        ConfigureEditorInput(router);
+        ConfigureEditorInput(router, settings);
     }
 
     /** @brief Chooses the initial persistent route from validated startup options. */
@@ -2945,12 +3524,34 @@ namespace Horo::Editor {
         const EditorUpdateHostServices *updateHost;
         std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler;
         std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
+        const Application::Internal::ShaderHotReloadHostConfiguration *shaderReload;
     };
 
     struct EditorSessionResult final {
         std::optional<EditorRendererRestartRequest> rendererRestart;
         bool healthy;
     };
+
+    /** @brief Creates the explicit developer reload owner using the actual admitted viewport ABI. */
+    [[nodiscard]] static Result<std::unique_ptr<Application::Internal::ShaderHotReloadHost>> CreateEditorShaderReload(
+        const EditorSessionLaunch &launch, Application::ShaderBuildService &shaderBuild, const JobSystem &jobs,
+        const bool hasQualifiedCompiler) {
+        using Host = Application::Internal::ShaderHotReloadHost;
+        using Outcome = Result<std::unique_ptr<Host>>;
+        if (!launch.shaderReload)
+            return Outcome::Success({});
+        auto *target = dynamic_cast<Render::IShaderHotReloadTarget *>(launch.composition.viewportRenderer.get());
+        if (!hasQualifiedCompiler || !target)
+            return Outcome::Failure(MakeError(Application::ShaderHotReloadErrors::InvalidRequest,
+                                              "Development reload requires an explicit compiler and selected reload target."));
+        const auto activeMode = launch.composition.viewportRenderer->LightingDiagnostics().selection.mode;
+        const auto configuration =
+            Application::Internal::MatchEditorViewportHotReloadFamily(*launch.shaderReload,
+                                                                      activeMode == Render::LightPreparationMode::ClusteredForwardNative);
+        if (configuration.HasError())
+            return Outcome::Failure(configuration.ErrorValue());
+        return Host::Create(shaderBuild, jobs, launch.operations, launch.buildOutput, *target, configuration.Value());
+    }
 
     /** @brief Owns runtime services and routes for one graphical editor session. */
     [[nodiscard]] static EditorSessionResult RunEditorSession(EditorSessionLaunch launch) {
@@ -2967,7 +3568,16 @@ namespace Horo::Editor {
             selectedJobs = ownedJobs.get();
         }
         JobSystem &jobSystem = *selectedJobs;
+        const bool hasQualifiedCompiler = static_cast<bool>(launch.shaderCompiler);
         Application::ShaderBuildService shaderBuild{std::move(launch.shaderCompiler), launch.buildOutput};
+        auto createdReload = CreateEditorShaderReload(launch, shaderBuild, jobSystem, hasQualifiedCompiler);
+        if (createdReload.HasError()) {
+            LOG_ERROR("editor.shader_reload", "%s", createdReload.ErrorValue().message.c_str());
+            return {std::nullopt, false};
+        }
+        auto shaderReload = std::move(createdReload).Value();
+        if (shaderReload)
+            LOG_INFO("editor.shader_reload", "Development commands: Ctrl+Alt+R reload; Ctrl+Alt+C cancel.");
         ProjectCreationService projectCreationService{jobSystem, engineEvents};
         EditorDataBus editorEvents;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", launch.startup.settings.languageTag.c_str());
@@ -2981,7 +3591,7 @@ namespace Horo::Editor {
 
         Input::SdlInputBackend inputBackend;
         Input::InputRouter inputRouter;
-        ConfigureEditorInput(launch.window, inputBackend, inputRouter);
+        ConfigureEditorInput(launch.window, inputBackend, inputRouter, launch.startup.settings);
         EditorModalHost modalHost{editorEvents, inputRouter};
         GuiRoute initialRoute = InitialEditorRoute(launch.startup);
         RunEditorMainLoopParams loopParams{launch.startup.options,
@@ -3003,7 +3613,7 @@ namespace Horo::Editor {
                                            inputBackend,
                                            inputRouter,
                                            launch.logs,
-                                           {launch.buildOutput, launch.operations, shaderBuild, launch.uiPaintTarget}};
+                                           {launch.buildOutput, launch.operations, shaderBuild, launch.uiPaintTarget, shaderReload.get()}};
         auto rendererRestart = RunEditorMainLoop(loopParams);
         return {std::move(rendererRestart), loopParams.healthy};
     }
@@ -3012,11 +3622,13 @@ namespace Horo::Editor {
     [[nodiscard]] static bool MigrateStartupUserState() {
         NativeDurableFileSystem files;
         const auto settingsRoot = ResolveEditorSettingsPath().parent_path();
-        if (const auto cacheRoot = ResolveEditorSettingsHomeDirectory() / ".cache" / "horo";
-            MigrateLegacyEditorUserState(settingsRoot, cacheRoot, files).HasValue())
+        const auto cacheRoot = ResolveEditorSettingsHomeDirectory() / ".cache" / "horo";
+        const auto migration = MigrateLegacyEditorUserState(settingsRoot, cacheRoot, files);
+        if (migration.HasValue())
             return true;
-        LOG_ERROR("editor.user_state", "User-state migration needs repair before editor startup.");
-        std::fprintf(stderr, "User-state migration needs repair before editor startup.\n");
+        LOG_ERROR("editor.user_state", "User-state migration needs repair before editor startup: %s",
+                  migration.ErrorValue().message.c_str());
+        std::fprintf(stderr, "User-state migration needs repair before editor startup: %s\n", migration.ErrorValue().message.c_str());
         return false;
     }
 
@@ -3236,8 +3848,8 @@ namespace Horo::Editor {
     /** @copydoc RunEditorGuiApp */
     int RunEditorGuiApp(const int argc, char **argv, const EditorUpdateHostServices *updateHost,
                         std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler,
-                        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget,
-                        const EditorOpenXRHostServices *xrHost) {
+                        std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget, const EditorOpenXRHostServices *xrHost,
+                        const Application::Internal::ShaderHotReloadHostConfiguration *shaderReload) {
         // ── Bootstrap logging before any subsystem ───────────────────────
         auto observabilitySession = InitializeEditorObservability();
         auto saveTelemetryResult = Runtime::SaveTelemetryRegistration::Create();
@@ -3298,7 +3910,7 @@ namespace Horo::Editor {
         EditorSessionResult session =
             RunEditorSession({*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures,
                               presentation->composition, editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost,
-                              std::move(shaderCompiler), std::move(uiPaintTarget)});
+                              std::move(shaderCompiler), std::move(uiPaintTarget), shaderReload});
 
         RetireEditorSessionPresentation(*presentation, session);
         RetireEditorXrStartup(*prepared);

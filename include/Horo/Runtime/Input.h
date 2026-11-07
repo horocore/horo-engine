@@ -88,6 +88,8 @@ namespace Horo::Input {
         F10,
         F11,
         F12,
+        Equal,
+        Minus,
         Count,
     };
 

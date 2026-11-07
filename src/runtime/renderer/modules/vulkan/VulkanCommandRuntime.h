@@ -17,6 +17,7 @@ namespace Horo::Render::Detail {
         std::uint32_t family{VK_QUEUE_FAMILY_IGNORED};
         VkQueue native{VK_NULL_HANDLE};
         bool supportsGraphics{false};
+        bool supportsCompute{false};
     };
 
     /** @brief Non-reused owner-local command identity; no native handle crosses RenderApi. */
@@ -106,6 +107,12 @@ namespace Horo::Render::Detail {
         [[nodiscard]] bool IsActive() const noexcept;
 
     private:
+        friend class VulkanVfxGpuRuntime;
+        /** @brief Polls the actual native counter for a point retained by an exact successful native submission journal.
+         * @pre Private caller proves this point was actually committed, independently of finite global issued-history retention.
+         * This is never exposed as the public arbitrary-point observation operation. */
+        [[nodiscard]] Result<bool> ObserveAcceptedNative(const RenderCpuWait &wait, bool refresh = true);
+
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

@@ -90,6 +90,28 @@ namespace Horo::Packages {
             });
         }
 
+        bool LiveRole(const GameplayRoleState &state) {
+            return !state.retired && !state.failure && state.selectedModule && state.verified.Activation().IsUsable() &&
+                   HasRuntimeGrant(state.verified);
+        }
+
+        bool SelectedRole(const GameplayRoleState &state, const HoroPackageId &package, std::string_view module, std::uint64_t generation) {
+            return state.verified.Identity().package == package && state.verified.Module().id == module &&
+                   state.verified.Identity().generation == generation;
+        }
+
+        std::shared_ptr<GameplayRoleState> FindRole(std::span<const std::weak_ptr<GameplayRoleState>> roles, std::thread::id owner,
+                                                    const HoroPackageId &package, std::string_view module, std::uint64_t generation) {
+            if (std::this_thread::get_id() != owner)
+                return {};
+            for (const auto &weak : roles) {
+                auto state = weak.lock();
+                if (state && LiveRole(*state) && SelectedRole(*state, package, module, generation))
+                    return state;
+            }
+            return {};
+        }
+
         /** @brief Stages and verifies an immutable artifact under the host's private owner-only root. */
         Result<std::filesystem::path> StageGameplayArtifact(GameplayRoleState &state, const GameplayPackageHostConfiguration &configuration,
                                                             const CancellationToken &cancellation) {
@@ -236,13 +258,47 @@ namespace Horo::Packages {
     std::shared_ptr<const Gameplay::LoadedGameModule> GameplayPackageModuleHost::Acquire(const HoroPackageId &package,
                                                                                          const std::string_view selectedModule,
                                                                                          const std::uint64_t generation) const {
-        if (std::this_thread::get_id() != impl_->owner)
-            return {};
-        for (const auto &weak : impl_->roles)
-            if (auto state = weak.lock(); state && !state->retired && !state->failure && state->verified.Identity().package == package &&
-                                          state->verified.Module().id == selectedModule &&
-                                          state->verified.Identity().generation == generation && state->selectedModule)
-                return {state, state->selectedModule.get()};
+        auto state = FindRole(impl_->roles, impl_->owner, package, selectedModule, generation);
+        if (state)
+            return {state, state->selectedModule.get()};
         return {};
+    }
+
+    Result<PackageDecisionNodeGeneration> GameplayPackageModuleHost::AcquireDecisionNodes(const HoroPackageId &package,
+                                                                                          std::string_view module,
+                                                                                          std::uint64_t generation) const {
+        auto state = FindRole(impl_->roles, impl_->owner, package, module, generation);
+        if (!state)
+            return Result<PackageDecisionNodeGeneration>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        auto nodes = state->selectedModule->AcquireDecisionNodes();
+        if (nodes.HasError())
+            return Result<PackageDecisionNodeGeneration>::Failure(nodes.ErrorValue());
+        const auto &locked = state->verified.Package().lock;
+        return Result<PackageDecisionNodeGeneration>::Success(
+            {package, locked.version, locked.artifactDigest, generation, std::move(nodes).Value()});
+    }
+
+    Result<std::unique_ptr<Gameplay::LuaDecisionNodeProgram>> GameplayPackageModuleHost::CompileDecisionNode(
+        const HoroPackageId &package, std::string_view module, std::uint64_t generation, const PackagePath &source,
+        AI::DecisionNodeTypeId type, AI::DecisionProviderId provider, std::uint32_t descriptorVersion,
+        Gameplay::LuaBehaviorLimits limits) const {
+        using Output = Result<std::unique_ptr<Gameplay::LuaDecisionNodeProgram>>;
+        auto state = FindRole(impl_->roles, impl_->owner, package, module, generation);
+        if (!state)
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        if (!source.Value().ends_with(".horo_script"))
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+        auto parent = state->selectedModule->AcquireDecisionNodes();
+        if (parent.HasError())
+            return Output::Failure(parent.ErrorValue());
+        auto bytes = state->verified.ReadDeclaredFile(source, 256U * 1024U);
+        if (bytes.HasError())
+            return Output::Failure(bytes.ErrorValue());
+        const auto &owned = bytes.Value();
+        std::string code(reinterpret_cast<const char *>(owned.data()), owned.size());
+        if (!LiveRole(*state))
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        return Gameplay::LuaDecisionNodeProgram::Compile(std::move(code), type, provider, descriptorVersion, {source.Value(), 0, 0}, limits,
+                                                         std::move(parent).Value());
     }
 }  // namespace Horo::Packages

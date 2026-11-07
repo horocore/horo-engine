@@ -67,9 +67,12 @@ namespace Horo::Runtime {
         bool ChargeComponents(StorageCharge &charge, const RuntimeComponentSet &components) {
             if (!charge.Vector(components.colliders) || !charge.Vector(components.physicsConstraints))
                 return false;
-            for (const auto &collider : components.colliders)
+            for (const auto &collider : components.colliders) {
+                if (!charge.Vector(collider.surfaceBindings))
+                    return false;
                 if (!charge.Vector(collider.materials))
                     return false;
+            }
             if (components.navigationSurface && !charge.Vector(components.navigationSurface->profiles))
                 return false;
             if (components.navigationLink && !charge.Vector(components.navigationLink->profiles))

@@ -62,9 +62,13 @@ namespace Horo::Character::Detail {
         CharacterFastPathEvent Event(const std::uint32_t controllerIndex, const std::uint64_t ordinal) {
             return {.controller = Controller(controllerIndex),
                     .tick = 4,
+                    .sequence = 1,
+                    .stateRevision = 1,
+                    .publicationRevision = 1,
                     .ordinal = ordinal,
+                    .streamPublicationRevision = 1,
                     .kind = CharacterFastPathEventKind::HitWall,
-                    .impactVelocity = {1, 0, 0}};
+                    .impactVelocity = Math::Vec3{1, 0, 0}};
         }
 
         CharacterFastPathImpulse Impulse(const std::uint32_t index, const std::uint64_t sequence) {
@@ -166,4 +170,42 @@ namespace Horo::Character::Detail {
         event.contact->materialSource = static_cast<CharacterMaterialSource>(255);
         REQUIRE(storage.TryAppendEvent(event) == CharacterFastPathAppendStatus::RejectedInvalid);
     }
+
+    TEST_CASE("Character contact retention orders semantic and impact evidence independently of append order",
+              "[physics][character][fast-path][movement-events][ordering]") {
+        auto descriptor = Settings().Values();
+        // Canonical admission requires controllers * per-movement contacts to fit the retained store.
+        descriptor.capacities.maximumControllers = 1;
+        descriptor.capacities.maximumRetainedContacts = 1;
+        const auto settings = CharacterWorldSettings::Capture(descriptor);
+        REQUIRE(settings.HasValue());
+        auto lower = Contact(1, 0.1F);
+        lower.impactVelocityMetersPerSecond = Math::Vec3{1, 0, 0};
+        auto higher = lower;
+        higher.impactVelocityMetersPerSecond = Math::Vec3{2, 0, 0};
+        for (const bool reversed : {false, true}) {
+            CharacterFastPathStorage storage{settings.Value()};
+            static_cast<void>(storage.TryAppendContact(reversed ? higher : lower));
+            static_cast<void>(storage.TryAppendContact(reversed ? lower : higher));
+            REQUIRE(storage.Contacts().size() == 1);
+            CHECK(storage.Contacts()[0].impactVelocityMetersPerSecond == lower.impactVelocityMetersPerSecond);
+            auto invalid = lower;
+            invalid.impactVelocityMetersPerSecond = Math::Vec3{std::numeric_limits<float>::quiet_NaN(), 0, 0};
+            CHECK(storage.TryAppendContact(invalid) == CharacterFastPathAppendStatus::RejectedInvalid);
+        }
+        auto first = lower;
+        first.surface = Physics::PhysicsSurfaceEvidence{Physics::SurfaceMaterialId::FromBytes({1}), 1, {}, 1};
+        first.surface->catalogFingerprint.bytes[0] = 1;
+        first.surfaceSource = CharacterSemanticSurfaceSource::Query;
+        auto second = first;
+        second.surface->surface = Physics::SurfaceMaterialId::FromBytes({2});
+        for (const bool reversed : {false, true}) {
+            CharacterFastPathStorage storage{settings.Value()};
+            CHECK(storage.TryAppendContact(reversed ? second : first) == CharacterFastPathAppendStatus::Appended);
+            static_cast<void>(storage.TryAppendContact(reversed ? first : second));
+            REQUIRE(storage.Contacts().size() == 1);
+            CHECK(storage.Contacts()[0].surface == first.surface);
+        }
+    }
+
 }  // namespace Horo::Character::Detail

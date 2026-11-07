@@ -3,6 +3,7 @@
 #include "Horo/Scene/SceneRuntimeConversion.h"
 #include "NativePublicationFiles.h"
 #include "PrefabHierarchyTestSupport.h"
+#include "animation/SceneAnimationFixture.h"
 #include "editor/screens/workspace/prefab/PrefabCreation.h"
 
 #include <catch2/generators/catch_generators.hpp>
@@ -408,6 +409,53 @@ namespace Horo::Editor {
             REQUIRE(boundaries.size() == 1);
             CHECK(boundaries.front().source == root.id);
             CHECK(boundaries.front().property == behavior.typeId.Value());
+        }
+    }
+
+    TEST_CASE("Selection export preserves animation binding and exact registered dependency closure", "[prefab][creation][animation]") {
+        const auto binding = Tests::SceneAnimation::Binding();
+        const auto snapshot = Capture({SceneObjectSnapshot{.id = {10}, .name = "Animated", .components = {.animation = binding}}});
+        Assets::AssetRegistry registry;
+        const auto source = binding.source.graph.Asset();
+        REQUIRE(registry
+                    .Publish({Record(binding.skeleton.Asset(), "core.animation.skeleton", "assets/skeleton.animationskeleton"),
+                              Record(source, "core.animation.graph", "assets/graph.animationgraph"),
+                              Record(binding.retarget.Asset(), "core.animation.retarget_profile", "assets/profile.retarget")})
+                    .status == Assets::AssetRegistryBuildStatus::Complete);
+        std::vector<PrefabCreationBoundary> boundaries;
+        const auto exported = Export(snapshot, registry, boundaries);
+        REQUIRE(exported.HasValue());
+        CHECK(boundaries.empty());
+        CHECK(exported.Value().Data().referencedAssets == std::vector{binding.skeleton.Asset(), source, binding.retarget.Asset()});
+        REQUIRE(exported.Value().Data().objects.size() == 1);
+        REQUIRE(exported.Value().Data().objects.front().components.size() == 1);
+        const auto encoded = exported.Value().SerializeCanonical();
+        REQUIRE(encoded.HasValue());
+        const auto reread = Prefab::PrefabDocument::Parse(encoded.Value(), Prefab::PrefabLimitProfile::Create({}).Value());
+        REQUIRE(reread.HasValue());
+        Runtime::RuntimeComponentSet projected;
+        std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
+        const auto decoded =
+            SceneSource::ProjectPrefabBuiltinComponent(reread.Value().Data().objects.front().components.front(), projected, primitive);
+        REQUIRE(decoded.HasValue());
+        CHECK(decoded.Value());
+        CHECK(projected.animation == binding);
+    }
+
+    TEST_CASE("Selection animation export rejects missing or mistyped dependency without altering captured source",
+              "[prefab][creation][animation][failure]") {
+        const auto binding = Tests::SceneAnimation::Binding();
+        const auto snapshot = Capture({SceneObjectSnapshot{.id = {10}, .name = "Animated", .components = {.animation = binding}}});
+        for (const bool mistyped : {false, true}) {
+            Assets::AssetRegistry registry;
+            std::vector<Assets::AssetRecord> records;
+            if (mistyped)
+                records.push_back(Record(binding.skeleton.Asset(), "core.mesh", "assets/skeleton.mesh"));
+            REQUIRE(registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
+            std::vector<PrefabCreationBoundary> boundaries;
+            CHECK(Export(snapshot, registry, boundaries).HasError());
+            REQUIRE(snapshot.objects.size() == 1);
+            CHECK(snapshot.objects.front().components.animation == binding);
         }
     }
 }  // namespace Horo::Editor

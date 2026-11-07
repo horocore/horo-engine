@@ -1,5 +1,7 @@
 #include "Horo/Gameplay/SaveGameplayPersistence.h"
 
+#include "GameplayPersistenceBindingInternal.h"
+#include "GameplayRestoreReferencesInternal.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
@@ -11,6 +13,26 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+namespace Horo::Gameplay::Detail {
+    struct BehaviorPersistenceHostAccess {
+        static Result<void> Materialize(IPreparedPersistenceState &state, const BehaviorPersistenceTarget &target) {
+            if (!target.CanUse())
+                return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreActivationStale));
+            auto *actual = dynamic_cast<IInactiveBehaviorPersistenceState *>(&state);
+            if (!actual)
+                return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreAdapterContractInvalid));
+            auto materialized = actual->MaterializeInactive(target);
+            if (materialized.HasValue())
+                target.MarkMaterialized();
+            return materialized;
+        }
+
+        static void Fixed(const BehaviorPersistenceTarget &target) noexcept {
+            target.MarkFixed();
+        }
+    };
+}  // namespace Horo::Gameplay::Detail
 
 namespace Horo::Runtime {
     namespace {
@@ -72,15 +94,48 @@ namespace Horo::Runtime {
         }
 
         /** @brief Opaque prepared-state projection without gameplay payload access. */
-        class PreparedProjection final : public ICanonicalRestorePreparedState {};
+        class PreparedProjection final : public ICanonicalRestorePreparedState, public IRestoreReferenceContributor {
+        public:
+            void Bind(const IPreparedGameplayPersistenceState &state, const std::optional<Gameplay::BehaviorPersistenceTarget> &target) {
+                const auto *actual = dynamic_cast<const Gameplay::IBehaviorPersistenceReferenceInventory *>(&state);
+                if (actual)
+                    inventory_ = actual->RestoreReferences();
+                target_ = target;
+            }
+
+            void Clear() noexcept {
+                inventory_ = {};
+                target_.reset();
+            }
+
+            std::size_t ReferenceCount() const noexcept override {
+                return inventory_.size();
+            }
+
+            Result<RestoreReferenceContribution> Contribute(const RestoreReferenceAuthorities &authorities, const SaveParticipantId &owner,
+                                                            const RestoreReferenceGraphLimits &limits) const override {
+                if (inventory_.empty())
+                    return Result<RestoreReferenceContribution>::Success({});
+                if (!target_)
+                    return Result<RestoreReferenceContribution>::Failure(MakeError(SaveErrors::ReferenceResolutionInvalid));
+                return Gameplay::Detail::ConvertBehaviorRestoreReferences(inventory_, *target_, authorities, owner, limits);
+            }
+
+        private:
+            std::span<const Gameplay::BehaviorRestoreReference> inventory_;
+            std::optional<Gameplay::BehaviorPersistenceTarget> target_;
+        };
 
         /** @brief Detached receipt destroying source and candidate before releasing its module pin. */
-        class GameplayStagedRestore final : public IStagedRestoreParticipant {
+        class GameplayStagedRestore final : public IStagedRestoreParticipant, public IStagedRestoreTransientRetirement {
         public:
             GameplayStagedRestore(GameplayPersistenceDescriptor descriptor, std::shared_ptr<IGameplayPersistenceSource> source,
-                                  std::shared_ptr<void> moduleLease, std::vector<std::byte> encoded) noexcept
+                                  std::shared_ptr<void> moduleLease, std::vector<std::byte> encoded,
+                                  std::optional<Gameplay::BehaviorPersistenceTarget> target,
+                                  std::shared_ptr<Gameplay::Detail::PreparedGameplaySourceBinding> publication,
+                                  GameplayPersistenceRestorePolicy policy) noexcept
                 : descriptor_(std::move(descriptor)), moduleLease_(std::move(moduleLease)), source_(std::move(source)),
-                  encoded_(std::move(encoded)),
+                  encoded_(std::move(encoded)), target_(std::move(target)), publication_(std::move(publication)), policy_(policy),
                   requirement_{descriptor_.participant.participant, descriptor_.participant.schemaVersion, descriptor_.participant.scope} {}
 
             [[nodiscard]] const StagedRestoreParticipantRequirement &Requirement() const noexcept override {
@@ -136,13 +191,7 @@ namespace Horo::Runtime {
                 return [this, payload, allocationFailure = Result<void>::Failure(MakeError(SaveErrors::RestoreAllocationFailed)),
                         callbackFailure = Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed))]() mutable noexcept {
                     try {
-                        auto prepared = source_->PrepareRuntimeState(payload);
-                        if (prepared.HasError())
-                            return Result<void>::Failure(prepared.ErrorValue());
-                        candidate_ = std::move(prepared).Value();
-                        if (!candidate_)
-                            return Result<void>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
-                        return Result<void>::Success();
+                        return PrepareActualCandidate(payload);
                     } catch (const std::bad_alloc &) {
                         return std::move(allocationFailure);
                     } catch (...) {
@@ -167,6 +216,11 @@ namespace Horo::Runtime {
                     try {
                         if (auto fixed = candidate_->FixupRuntimeReferences(references); fixed.HasError())
                             return fixed;
+                        if (target_) {
+                            if (!target_->CanUse())
+                                return Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
+                            Gameplay::Detail::BehaviorPersistenceHostAccess::Fixed(*target_);
+                        }
                         ready_ = true;
                         return Result<void>::Success();
                     } catch (const std::bad_alloc &) {
@@ -180,11 +234,45 @@ namespace Horo::Runtime {
             void PublishPrepared() noexcept override {
                 if (candidate_ && ready_ && !published_) {
                     candidate_->Publish();
+                    if (publication_)
+                        publication_->Publish();
                     published_ = true;
                 }
             }
 
+            Result<bool> RetirePublishedTransient() override {
+                if (!published_)
+                    return Result<bool>::Failure(MakeError(SaveErrors::RestoreTransitionInvalid));
+                if (retired_)
+                    return Result<bool>::Success(true);
+                auto *actual = dynamic_cast<Gameplay::IPublishedGameplayPreparationRetirement *>(candidate_.get());
+                if (!actual)
+                    return Result<bool>::Success(false);
+                // Prepare owned fallback before native callbacks; failure retains every source/code pin.
+                auto allocationFailure = Result<bool>::Failure(MakeError(SaveErrors::RestoreAllocationFailed));
+                auto callbackFailure = Result<bool>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
+                try {
+                    if (auto proof = actual->RetirePreparation(); proof.HasError())
+                        return Result<bool>::Failure(proof.ErrorValue());
+                } catch (const std::bad_alloc &) {
+                    return allocationFailure;
+                } catch (...) {
+                    return callbackFailure;
+                }
+                // Native destruction is outside publication and still protected by moduleLease_.
+                projection_.Clear();
+                candidate_.reset();
+                source_.reset();
+                publication_.reset();
+                target_.reset();
+                encoded_.clear();
+                moduleLease_.reset();
+                retired_ = true;
+                return Result<bool>::Success(true);
+            }
+
             void RollbackPrepared() noexcept override {
+                projection_.Clear();
                 candidate_.reset();
                 encoded_.clear();
                 instantiated_ = false;
@@ -192,10 +280,33 @@ namespace Horo::Runtime {
             }
 
         private:
+            Result<void> PrepareActualCandidate(std::span<const std::byte> payload) {
+                auto prepared = source_->PrepareRuntimeState(payload);
+                if (prepared.HasError())
+                    return Result<void>::Failure(prepared.ErrorValue());
+                candidate_ = std::move(prepared).Value();
+                if (!candidate_)
+                    return Result<void>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
+                if ((target_ || policy_ == GameplayPersistenceRestorePolicy::ReloadableScene) &&
+                    !dynamic_cast<Gameplay::IPublishedGameplayPreparationRetirement *>(candidate_.get()))
+                    return Result<void>::Failure(
+                        MakeError(SaveErrors::RestoreAdapterContractInvalid,
+                                  "Reloadable native restore requires actual published preparation retirement capability."));
+                if (target_) {
+                    if (auto actual = Gameplay::Detail::BehaviorPersistenceHostAccess::Materialize(*candidate_, *target_);
+                        actual.HasError())
+                        return actual;
+                }
+                projection_.Bind(*candidate_, target_);
+                return Result<void>::Success();
+            }
+
             GameplayPersistenceDescriptor descriptor_;
             std::shared_ptr<void> moduleLease_;
             std::shared_ptr<IGameplayPersistenceSource> source_;
             std::vector<std::byte> encoded_;
+            std::optional<Gameplay::BehaviorPersistenceTarget> target_;
+            std::shared_ptr<Gameplay::Detail::PreparedGameplaySourceBinding> publication_;
             StagedRestoreParticipantRequirement requirement_;
             PreparedProjection projection_;
             std::unique_ptr<IPreparedGameplayPersistenceState> candidate_;
@@ -204,6 +315,8 @@ namespace Horo::Runtime {
             bool instantiated_{};
             bool ready_{};
             bool published_{};
+            bool retired_{};
+            GameplayPersistenceRestorePolicy policy_{};
         };
     }  // namespace
 
@@ -232,6 +345,20 @@ namespace Horo::Runtime {
         } catch (const std::bad_alloc &) {
             return Result<std::shared_ptr<GameplayPersistenceAdapter>>::Failure(MakeError(SaveErrors::ParticipantRegistryAllocationFailed));
         }
+    }
+
+    Result<std::shared_ptr<GameplayPersistenceAdapter>> GameplayPersistenceAdapter::CreateBound(
+        GameplayPersistenceDescriptor descriptor, std::shared_ptr<IGameplayPersistenceSource> source, std::shared_ptr<void> moduleLease,
+        Gameplay::BehaviorPersistenceTarget target, std::shared_ptr<Gameplay::Detail::PreparedGameplaySourceBinding> publication) {
+        if (!target.CanUse() || target.generation_.lock().get() != moduleLease.get() ||
+            descriptor.owner != GameplayPersistenceOwner::BehaviorInstance)
+            return Result<std::shared_ptr<GameplayPersistenceAdapter>>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
+        auto created = Create(std::move(descriptor), std::move(source), std::move(moduleLease));
+        if (created.HasError())
+            return created;
+        created.Value()->behaviorTarget_ = std::move(target);
+        created.Value()->bindingPublication_ = std::move(publication);
+        return created;
     }
 
     /** @copydoc GameplayPersistenceAdapter::Capture */
@@ -268,16 +395,32 @@ namespace Horo::Runtime {
     /** @copydoc GameplayPersistenceAdapter::StageRestore */
     Result<std::unique_ptr<IStagedRestoreParticipant>> GameplayPersistenceAdapter::StageRestore(
         const ParticipantSchemaVersion savedSchema, const SaveRecordId savedRecord, const std::span<const std::byte> bytes) const {
+        return StageRestore(savedSchema, savedRecord, bytes, GameplayPersistenceRestorePolicy::PreservePreparedOwnership);
+    }
+
+    Result<std::unique_ptr<IStagedRestoreParticipant>> GameplayPersistenceAdapter::StageRestore(
+        const ParticipantSchemaVersion savedSchema, const SaveRecordId savedRecord, const std::span<const std::byte> bytes,
+        GameplayPersistenceRestorePolicy policy) const {
+        if (behaviorTarget_ && !behaviorTarget_->CanUse())
+            return Result<std::unique_ptr<IStagedRestoreParticipant>>::Failure(MakeError(SaveErrors::RestoreActivationStale));
         if (savedSchema != descriptor_.participant.schemaVersion || savedRecord != descriptor_.record ||
             bytes.size() > descriptor_.participant.limits.maximumPayloadBytes)
             return Result<std::unique_ptr<IStagedRestoreParticipant>>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
         try {
             std::vector<std::byte> owned{bytes.begin(), bytes.end()};
             return Result<std::unique_ptr<IStagedRestoreParticipant>>::Success(
-                std::make_unique<GameplayStagedRestore>(descriptor_, source_, moduleLease_, std::move(owned)));
+                std::make_unique<GameplayStagedRestore>(descriptor_, source_, moduleLease_, std::move(owned), behaviorTarget_,
+                                                        bindingPublication_, policy));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<IStagedRestoreParticipant>>::Failure(MakeError(SaveErrors::RestoreAllocationFailed));
         }
+    }
+
+    Result<GameplayPersistenceInstallation> GameplayPersistenceAdapter::BindRestoreCandidate(
+        Gameplay::BehaviorPersistenceTarget target) const {
+        if (!candidateBinder_)
+            return Result<GameplayPersistenceInstallation>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
+        return candidateBinder_(std::move(target));
     }
 
     /** @copydoc GameplayPersistenceAdapter::Descriptor */

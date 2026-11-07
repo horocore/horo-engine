@@ -3,17 +3,40 @@
 #include "EditorSettingsStoreInternal.h"
 #include "Horo/Editor/Localization/LocalizationTypes.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "editor/input/EditorInputActions.h"
 
 #include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <regex>
 #include <sstream>
 #include <system_error>
+#include <unordered_set>
+#include <vector>
 
 namespace Horo::Editor {
+    /** @copydoc CodeEditorBooleanSettings */
+    std::span<const CodeEditorBooleanSetting> CodeEditorBooleanSettings() noexcept {
+        static constexpr CodeEditorBooleanSetting settings[]{
+            {"codeShowLineNumbers", &CodeEditorSettings::showLineNumbers},
+            {"codeShowWhitespace", &CodeEditorSettings::showWhitespace},
+            {"codeWordWrap", &CodeEditorSettings::wordWrap},
+            {"codeShowScrollBar", &CodeEditorSettings::showScrollBar},
+        };
+        return settings;
+    }
+
+    /** @copydoc CodeEditorIntegerSettings */
+    std::span<const CodeEditorIntegerSetting> CodeEditorIntegerSettings() noexcept {
+        static constexpr CodeEditorIntegerSetting settings[]{
+            {"codeAutoSaveDelaySeconds", &CodeEditorSettings::autoSaveDelaySeconds, 0, 300},
+        };
+        return settings;
+    }
+
     namespace {
         [[nodiscard]] std::string GetEnvVar(const char *name) {
             if (!name || !*name) {
@@ -47,6 +70,63 @@ namespace Horo::Editor {
             std::ostringstream ss;
             ss << in.rdbuf();
             return ss.str();
+        }
+
+        /** @brief Imports the retained legacy profile only while the canonical Settings field is absent. */
+        void ImportLegacyKeymap(EditorSettingsDocument &document) {
+            const auto path = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
+            if (std::error_code error; std::filesystem::exists(path, error) && !error) {
+                const auto profile = Input::LoadBindingProfile(path);
+                if (profile.HasValue())
+                    document.settings.keymap.profile = profile.Value();
+                else
+                    document.error = profile.ErrorValue().message;
+            }
+        }
+
+        /** @brief Reads the canonical typed profile without normalizing duplicate or malformed JSON into valid settings. */
+        bool ReadKeymap(const std::string &text, EditorSettingsDocument &document) {
+            if (text.size() > 2 * 1024 * 1024) {
+                document.error = "Editor settings exceed the supported size.";
+                return false;
+            }
+            std::vector<std::unordered_set<std::string>> objects;
+            bool duplicate = false;
+            const auto parsed = nlohmann::json::parse(text, [&](int, nlohmann::json::parse_event_t event, nlohmann::json &value) {
+                using Event = nlohmann::json::parse_event_t;
+                if (event == Event::object_start)
+                    objects.emplace_back();
+                else if (event == Event::object_end)
+                    objects.pop_back();
+                else if (event == Event::key && !objects.back().insert(value.get<std::string>()).second)
+                    duplicate = true;
+                return true;
+            }, false);
+            if (parsed.is_discarded() || !parsed.is_object() || duplicate) {
+                document.error = "Editor settings contain malformed JSON or duplicate keys.";
+                return false;
+            }
+            if (const auto version = parsed.find("schemaVersion");
+                version != parsed.end() && (!version->is_number_integer() || version->get<std::int64_t>() != 1)) {
+                document.error = "Editor settings schema version is unsupported.";
+                return false;
+            }
+            const auto input = parsed.find("input");
+            if (input == parsed.end() || (input->is_object() && !input->contains("bindingProfile"))) {
+                ImportLegacyKeymap(document);
+                return true;
+            }
+            if (!input->is_object() || !(*input)["bindingProfile"].is_object()) {
+                document.error = "Editor keymap must contain a binding profile object.";
+                return false;
+            }
+            const auto profile = Input::ParseBindingProfile((*input)["bindingProfile"].dump());
+            if (profile.HasError()) {
+                document.error = profile.ErrorValue().message;
+                return false;
+            }
+            document.settings.keymap.profile = profile.Value();
+            return true;
         }
 
         [[nodiscard]] std::string UnescapeJsonString(std::string_view value) {
@@ -216,10 +296,18 @@ namespace Horo::Editor {
         void ApplyAppearanceGroup(const std::string &json, EditorSettings &s) {
             if (auto v = FindStringValue(json, "themePreset"); v.has_value())
                 s.themePreset = ParseThemePreset(*v);
+            if (auto v = FindStringValue(json, "themeId"); v.has_value())
+                s.themeId = *v;
             if (auto v = FindStringValue(json, "accentColorHex"); v.has_value())
                 s.accentColorHex = *v;
             if (auto v = FindIntValue(json, "uiScalePercent"); v.has_value())
                 s.uiScalePercent = *v;
+            for (const auto &entry : CodeEditorBooleanSettings())
+                if (const auto value = FindBoolValue(json, entry.key))
+                    s.codeEditor.*entry.member = *value;
+            for (const auto &entry : CodeEditorIntegerSettings())
+                if (const auto value = FindIntValue(json, entry.key))
+                    s.codeEditor.*entry.member = *value;
             if (auto v = FindIntValue(json, "codeFontSizePx"); v.has_value())
                 s.codeFontSizePx = *v;
             if (auto v = FindStringValue(json, "uiFontFamily"); v.has_value())
@@ -346,6 +434,12 @@ namespace Horo::Editor {
                 settings.languageTag = "en-US";
             }
             clampInt(settings.uiScalePercent, 75, 200, "UI scale must be between 75 and 200 percent.");
+            for (const auto &entry : CodeEditorIntegerSettings())
+                clampInt(settings.codeEditor.*entry.member, entry.minimum, entry.maximum, "Code editor preference is outside its bounds.");
+            if (settings.codeFontFamily.empty() || settings.codeFontFamily.size() > 128) {
+                markInvalid("Code font family must contain between 1 and 128 bytes.");
+                settings.codeFontFamily = "IBM Plex Mono";
+            }
             clampInt(settings.codeFontSizePx, 14, 24, "Code font size must be between 14 and 24 px.");
             clampInt(settings.orbitSensitivity, 10, 300, "Orbit sensitivity must be between 10 and 300.");
             clampInt(settings.panSensitivity, 10, 300, "Pan sensitivity must be between 10 and 300.");
@@ -410,6 +504,16 @@ namespace Horo::Editor {
             }
         };
 
+        const auto bindings = Input::ValidateBindingProfile(EditorKeymapActions(settings.keymap.profile), settings.keymap.profile);
+        if (!bindings.IsValid()) {
+            markInvalid("Editor keymap contains an invalid or conflicting shortcut.");
+            settings.keymap = {};
+        }
+        if (settings.themeId.size() > 256 ||
+            settings.themeId.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789._-") != std::string::npos) {
+            markInvalid("Package theme identity is invalid.");
+            settings.themeId.clear();
+        }
         ValidateCoreEditorSettings(settings, markInvalid);
         ValidateNetworkAndPackages(settings, markInvalid);
         ValidateStutterThreshold(settings, markInvalid);
@@ -425,6 +529,10 @@ namespace Horo::Editor {
 
         if (std::error_code ec; !std::filesystem::exists(out.path, ec)) {
             LOG_DEBUG("editor.settings", "editor_settings.json not found at '%s' — using defaults.", out.path.string().c_str());
+            ImportLegacyKeymap(out);
+            std::string validationError;
+            if (!ValidateEditorSettings(out.settings, &validationError))
+                out.error = std::move(validationError);
             return out;
         }
 
@@ -451,6 +559,10 @@ namespace Horo::Editor {
             return out;
         }
 
+        if (!ReadKeymap(json, out)) {
+            out.parseError = true;
+            return out;
+        }
         ApplyJsonValues(json, out.settings);
         if (std::string validationError; !ValidateEditorSettings(out.settings, &validationError)) {
             LOG_WARN("editor.settings", "editor_settings.json loaded but failed validation: %s", validationError.c_str());

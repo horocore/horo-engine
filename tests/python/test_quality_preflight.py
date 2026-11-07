@@ -10,6 +10,7 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -212,6 +213,63 @@ def test_header_context_follows_transitive_literal_includes(tmp_path: Path):
     missing.write_text("int other;\n")
     with pytest.raises(AnalysisError, match="No translation unit"):
         sonar.header_context([entry], [missing], tmp_path)
+
+
+def test_header_context_prefers_nearby_consumer_without_reading_unrelated_graph(tmp_path: Path):
+    nearby = tmp_path / "panel"
+    nearby.mkdir()
+    header = nearby / "panel.h"
+    source = nearby / "panel.cpp"
+    unrelated = tmp_path / "unrelated.cpp"
+    header.write_text("int value;\n")
+    source.write_text('#include "panel.h"\n')
+    unrelated.write_text("int unrelated;\n")
+    entries = [{"source": path, "includes": [tmp_path], "target": path.stem + ".o"}
+               for path in (unrelated, source)]
+    with patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads:
+        assert sonar.header_context(entries, [header], tmp_path) == {header: entries[1]}
+        assert all(call.args[0] != unrelated for call in reads.call_args_list)
+
+
+def test_header_context_prefers_public_header_counterparts(tmp_path: Path):
+    public = tmp_path / "include"
+    public.mkdir()
+    first, second = public / "first.h", public / "second.h"
+    first.write_text('#include "unrelated.h"\n')
+    second.write_text("int second;\n")
+    unrelated = tmp_path / "unrelated.cpp"
+    unrelated.write_text("int unrelated;\n")
+    sources = [tmp_path / "first.cpp", tmp_path / "second.cpp"]
+    for source in sources:
+        source.write_text(f'#include "{source.stem}.h"\n')
+    entries = [{"source": path, "includes": [public], "target": path.stem + ".o"}
+               for path in [unrelated, *sources]]
+    with patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads:
+        assert sonar.header_context(entries, [first, second], tmp_path) == {first: entries[1], second: entries[2]}
+        assert all(call.args[0] != unrelated for call in reads.call_args_list)
+
+
+def test_header_context_counterpart_fallback_still_follows_selected_headers(tmp_path: Path):
+    source = tmp_path / "owner.cpp"
+    owner, detail = tmp_path / "owner.h", tmp_path / "detail.h"
+    source.write_text('#include "owner.h"\n')
+    owner.write_text('#include "detail.h"\n')
+    detail.write_text("int detail;\n")
+    entry = {"source": source, "includes": [tmp_path], "target": "owner.o"}
+    assert sonar.header_context([entry], [owner, detail], tmp_path) == {owner: entry, detail: entry}
+
+
+def test_header_context_keeps_distant_consumers_as_fallback(tmp_path: Path):
+    public = tmp_path / "include"
+    public.mkdir()
+    header = public / "public.h"
+    header.write_text("int value;\n")
+    nearby, distant = public / "unrelated.cpp", tmp_path / "consumer.cpp"
+    nearby.write_text("int unrelated;\n")
+    distant.write_text('#include "public.h"\n')
+    entries = [{"source": path, "includes": [public], "target": path.stem + ".o"}
+               for path in (distant, nearby)]
+    assert sonar.header_context(entries, [header], tmp_path) == {header: entries[0]}
 
 
 def test_wrong_worktree_compilation_database_is_rejected(tmp_path: Path):
