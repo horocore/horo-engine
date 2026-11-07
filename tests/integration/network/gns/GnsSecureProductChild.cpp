@@ -288,7 +288,8 @@ namespace Horo::Network::NativeQualification {
             if (input.side == 0)
                 std::cout << "NATIVE_READY server\n" << std::flush;
             const auto attempted = owners.observation->outbound;
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+            // The other real process performs cold image verification before it can connect.
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             bool frameFailed{};
             while (std::chrono::steady_clock::now() < deadline) {
                 const auto frame = owners.host->RunFrame();
@@ -323,7 +324,8 @@ namespace Horo::Network::NativeQualification {
             if (input.side == 0) {
                 std::cout << "NATIVE_READY server\n" << std::flush;
             }
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+            // Covers peer cold startup; the canonical admission policy still owns its strict protocol timeouts.
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             bool sent{};
             while (std::chrono::steady_clock::now() < deadline) {
                 auto frame = owners.host->RunFrame();
