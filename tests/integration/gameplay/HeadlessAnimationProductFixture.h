@@ -230,6 +230,8 @@ namespace Horo::Network::AnimationProduct {
                                                                 {project.project.cooked.path, project.project.request.assets.target},
                                                                 project.project.registry.Snapshot()));
             loads = std::make_unique<Assets::AssetLoadService>(project.project.jobs, committed->SceneProvider());
+            // The Scene admission deadline starts after cold asset cooking, not before fixture setup.
+            load.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{60};
             auto composition = Compose();
             retainedFactory = composition.fixedParticipant;
             composition.fixedParticipant =

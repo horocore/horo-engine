@@ -152,6 +152,8 @@ namespace {
         ConfiguredFixture() {
             PrepareProject();
             PreparePrototype();
+            // Cold project/prototype cooking is outside the actual Scene admission operation.
+            load.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{60};
             composition = Compose();
             REQUIRE(composition.fixedParticipant);
             host = Take(RuntimeHost::Create(clock, {.fixedStep = Duration::FromNanoseconds(16'666'667)}));

@@ -35,6 +35,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                 auto character = Character::CharacterWorldSettings::Capture({});
                 REQUIRE(physics.HasValue());
                 REQUIRE(character.HasValue());
+                load.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{60};
                 const std::filesystem::path root{HORO_TEST_SOURCE_ROOT};
                 const Internal::GameplayWorldSelection gameplay{.moduleId = "game.tests",
                                                                 .scriptSource =
