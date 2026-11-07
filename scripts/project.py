@@ -833,7 +833,7 @@ def safe_member_path(member: zipfile.ZipInfo, seen: set[str]) -> PurePosixPath:
     path = PurePosixPath(member.filename)
     mode = member.external_attr >> 16
     components = member.filename.rstrip("/").split("/")
-    if (not member.filename or "\\" in member.filename or path.is_absolute() or
+    if (not member.filename or member.orig_filename != member.filename or "\\" in member.filename or path.is_absolute() or
             any(part in ("", ".", "..") for part in components) or
             ":" in components[0] or path.as_posix() != member.filename.rstrip("/") or
             (mode & 0o170000) not in (0, 0o100000, 0o040000) or member.filename.casefold() in seen):
