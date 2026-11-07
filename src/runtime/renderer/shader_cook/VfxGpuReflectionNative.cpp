@@ -181,10 +181,11 @@ namespace Horo::Render::VfxGpuCookDetail {
                 return;
             const auto body = StructureBody(tokens, type);
             for (std::size_t at = 0; at < body.size();) {
-                const auto end = std::ranges::find(body.subspan(at), ";");
-                if (end == body.end())
+                const auto remaining = body.subspan(at);
+                const auto end = std::ranges::find(remaining, ";");
+                if (end == remaining.end())
                     throw InvalidEvidence{};
-                const auto count = static_cast<std::size_t>(end - body.begin()) + 1 - at;
+                const auto count = static_cast<std::size_t>(end - remaining.begin()) + 1;
                 Interface(body.subspan(at, count), stage, direction, result);
                 if (result.interfaces.size() > 3)
                     throw InvalidEvidence{};

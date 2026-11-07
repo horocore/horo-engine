@@ -74,10 +74,11 @@ namespace Horo::Render::ExposureGpuCookDetail {
             const auto body = StructureBody(tokens, name);
             Layout layout;
             for (std::size_t at = 0; at < body.size();) {
-                const auto end = std::ranges::find(body.subspan(at), ";");
-                if (end == body.end() || layout.fields.size() == 8)
+                const auto remaining = body.subspan(at);
+                const auto end = std::ranges::find(remaining, ";");
+                if (end == remaining.end() || layout.fields.size() == 8)
                     throw EvidenceFailure{__func__, __LINE__};
-                const auto count = static_cast<std::size_t>(end - body.begin()) + 1 - at;
+                const auto count = static_cast<std::size_t>(end - remaining.begin()) + 1;
                 auto field = ReadField(body.subspan(at, count), layout);
                 if (std::ranges::find(layout.fields, field.name, &Field::name) != layout.fields.end())
                     throw EvidenceFailure{__func__, __LINE__};

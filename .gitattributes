@@ -2,3 +2,5 @@
 *.patch text eol=lf
 # The reviewed native patch manifest requires identical bytes on every checkout.
 /cmake/patches/gns/horo-gns-selected-root-v1.patch -text
+# Captured shader evidence is authenticated by its original byte digest.
+/tests/fixtures/shaders/vfx_locked/** -text
