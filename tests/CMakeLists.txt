@@ -2744,8 +2744,13 @@ add_test(NAME HoroGameplayProductLaunchContract
     COMMAND "${CMAKE_COMMAND}" "-DENGINE=$<TARGET_FILE:horo-engine>" "-DMODULE=$<TARGET_FILE:HoroTestGameModule>"
     "-DREVISION_FILE=${HORO_TEST_GAME_MODULE_REVISION_FILE}" "-DSOURCE_ROOT=${PROJECT_SOURCE_DIR}"
     "-DPHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>"
+    "-DPROCESS_TIMEOUT=$<IF:$<BOOL:${HORO_CI_SONAR_COVERAGE}>,120,30>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayProductLaunchContract.cmake")
 set_tests_properties(HoroGameplayProductLaunchContract PROPERTIES LABELS "integration;gameplay;physics;headless;product" TIMEOUT 60)
+if(HORO_CI_SONAR_COVERAGE)
+    # Twenty-five real instrumented CLI launches include cold image hashing and gcov retirement, not a startup benchmark.
+    set_tests_properties(HoroGameplayProductLaunchContract PROPERTIES TIMEOUT 900)
+endif()
 add_executable(HoroGameplayPhysicsPublicHeaderConsumer support/GameplayPhysicsPublicHeaderConsumer.cpp)
 target_compile_features(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration)
