@@ -20,7 +20,8 @@ jobs:
   sonar:
     name: SonarCloud
     runs-on: &sonar_runner ubuntu-26.04
-    timeout-minutes: 180
+    # Cold instrumented builds exceed 100 minutes before the full test and analysis phases.
+    timeout-minutes: 240
     if: ${{ !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     permissions:
       contents: read
@@ -238,7 +239,7 @@ jobs:
   sonar-main:
     name: SonarCloud (main)
     runs-on: *sonar_runner
-    timeout-minutes: 180
+    timeout-minutes: 240
     if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     permissions:
       contents: read
