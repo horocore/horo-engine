@@ -230,8 +230,6 @@ namespace Horo::Network::AnimationProduct {
                                                                 {project.project.cooked.path, project.project.request.assets.target},
                                                                 project.project.registry.Snapshot()));
             loads = std::make_unique<Assets::AssetLoadService>(project.project.jobs, committed->SceneProvider());
-            // The Scene admission deadline starts after cold asset cooking, not before fixture setup.
-            load.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{60};
             auto composition = Compose();
             retainedFactory = composition.fixedParticipant;
             composition.fixedParticipant =
@@ -301,6 +299,8 @@ namespace Horo::Network::AnimationProduct {
             auto character = Take(Character::CharacterWorldSettings::Capture({}));
             auto definition =
                 std::make_shared<const Runtime::RuntimeSceneDefinition>(Take(committed->DecodeScene(project.project.sceneId)));
+            // Each independent composition owns one finite admission budget after its cold setup.
+            load.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{60};
             App::HeadlessSceneActivationInput input{physicsMode,
                                                     {std::move(physics), std::move(character), std::move(simulation)},
                                                     project.project.registry,
@@ -365,7 +365,9 @@ namespace Horo::Network::AnimationProduct {
                                                          std::move(composition.fixedParticipant)},
                                                         std::move(composition.factories)));
             trace->host = host.get();
-            REQUIRE(host->Startup().HasValue());
+            const auto started = host->Startup();
+            INFO((started.HasError() ? started.ErrorValue().code.Value() + ": " + started.ErrorValue().message : "success"));
+            REQUIRE(started.HasValue());
             REQUIRE(host->RunFrame().HasValue());
         }
 
