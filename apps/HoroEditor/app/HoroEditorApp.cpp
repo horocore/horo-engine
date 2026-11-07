@@ -1336,6 +1336,7 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             immediateOutput = immediateOutput || composition.xrSession != nullptr;
 #endif
+            // Two frames of dedicated Vulkan draw/shadow buffers exceed 1024 blocks; match the finite allocation table.
             auto frontendResult =
                 Render::RenderFrontend::Create(registry, Render::RenderBackendId{options.rendererBackend},
                                                Render::RenderBackendConfig{.requirePresentation = true,
@@ -1346,7 +1347,8 @@ namespace Horo::Editor {
                                                Render::RenderResourceUploadLimits{},
                                                Render::RenderFrontendMemoryConfig{.budget = {.hardCapBytes = 1024U * 1024U * 1024U,
                                                                                              .defaultBlockBytes = 16U * 1024U * 1024U,
-                                                                                             .maximumBlockBytes = 128U * 1024U * 1024U},
+                                                                                             .maximumBlockBytes = 128U * 1024U * 1024U,
+                                                                                             .maximumBlocks = 4096},
                                                                                   .defaultResourceScope =
                                                                                       RenderMemoryScopes::HostResources});
             if (frontendResult.HasError()) {
@@ -2486,8 +2488,8 @@ namespace Horo::Editor {
                 scenePolicy.animation = Application::Internal::
                     SceneAnimationHostSelection{dispatch, scenePolicy.cooked->target,
                                                 std::make_shared<Application::Internal::AnimationRuntimeIdentitySource>(
-                                                    Application::Internal::AnimationRuntimeIdentityRange{1, std::numeric_limits<
-                                                                                                                std::uint64_t>::max()})};
+                                                    Application::Internal::AnimationRuntimeIdentityRange{1, (std::numeric_limits<
+                                                                                                                std::uint64_t>::max)()})};
             }
             return Result<Application::Internal::EditorProjectScenePolicy>::Success(std::move(scenePolicy));
         }

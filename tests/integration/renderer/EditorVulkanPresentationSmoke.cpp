@@ -66,7 +66,8 @@ namespace Horo::Tests::VulkanEditor {
             Check(RegisterVulkanRenderBackend(*registry, *port, bridge.get()));
             Check(registry->Seal());
             auto created = RenderFrontend::Create(*registry, RenderBackendId{"vulkan"},
-                                                  {.requirePresentation = true, .enableValidation = true, .maxFramesInFlight = 2});
+                                                  {.requirePresentation = true, .enableValidation = true, .maxFramesInFlight = 2}, {},
+                                                  {.budget = {.maximumBlocks = 4096}});
             Check(created);
             frontend = std::move(created).Value();
             Check(frontend->Resize(extent));

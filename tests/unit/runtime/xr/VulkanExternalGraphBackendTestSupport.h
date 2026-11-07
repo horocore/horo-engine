@@ -35,6 +35,7 @@ namespace Horo::Render::VulkanExternalTest {
             capabilities_.supportsTextureResources = true;
             capabilities_.supportsExplicitGraphSubmissions = true;
             capabilities_.supportsExplicitMaterialSubmissions = true;
+            capabilities_.supportsMaterialPassBatches = true;
             capabilities_.support.synthetic = true;
             if (fixture.graph.MultiviewSupport().instancedTargetRouting)
                 capabilities_.support.features.Enable(RenderCapability::InstancedViewRouting);
