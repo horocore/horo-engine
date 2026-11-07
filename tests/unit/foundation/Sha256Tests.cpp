@@ -71,6 +71,25 @@ namespace {
         REQUIRE((parsed.Value() == digest));
     }
 
+    TEST_CASE("SHA-256 streams unaligned binary blocks after every partial prefix", "[unit][foundation][sha256]") {
+        std::array<std::byte, 1026> storage{};
+        const auto input = std::span{storage}.subspan(1);
+        for (std::size_t index = 0; index < input.size(); ++index)
+            input[index] = static_cast<std::byte>((index * 73U + 19U) & 0xffU);
+        // Independent SHA-256 known answer for this 1025-byte binary sequence.
+        constexpr std::string_view expected = "sha256:722436abc88004bfafe294e3f2ad22f7a2c118cf7917ddf4fc312391b1cf486b";
+        CHECK(Horo::FormatSha256(Horo::ComputeSha256(input)) == expected);
+        for (std::size_t prefix = 0; prefix <= 64; ++prefix) {
+            CAPTURE(prefix);
+            Horo::Sha256Builder builder;
+            REQUIRE(builder.Update({}));
+            REQUIRE(builder.Update(input.first(prefix)));
+            REQUIRE(builder.Update(input.subspan(prefix)));
+            REQUIRE(builder.Update({}));
+            CHECK(Horo::FormatSha256(builder.Finalize()) == expected);
+        }
+    }
+
     TEST_CASE("SHA-256 Parser Rejects Noncanonical Text With Stable Typed Error", "[unit][foundation][sha256]") {
         constexpr std::string_view valid = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
