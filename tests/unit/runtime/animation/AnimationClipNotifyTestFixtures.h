@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <vector>
 
 namespace Horo::Animation::Test::Notifies {
     /** @brief Real immutable schema with a typed foot-contact field; no event-name parsing. */
@@ -55,7 +56,7 @@ namespace Horo::Animation::Test::Notifies {
     /** @brief Actual Evaluate/Commit and immutable value copies in bounded caller storage. */
     struct Tick final {
         GraphInstanceOutcome committed;
-        std::array<AnimationEventOccurrence, 1024> events;
+        std::vector<AnimationEventOccurrence> events = std::vector<AnimationEventOccurrence>(1024);
         std::uint32_t count{};
 
         Tick(AnimationGraphInstance &instance, const std::uint64_t tick, const std::int64_t delta, const GraphPlaybackRate rate = {}) {

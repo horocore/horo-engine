@@ -91,7 +91,7 @@ TEST_CASE("Animation conversion and cooked Scene retain binding and exact typed 
         const auto bytes = SceneCook::EncodeCookedSceneDefinition(scene);
         REQUIRE(bytes.HasValue());
         const auto document = Json::parse(bytes.Value());
-        CHECK(document.at("format") == SceneCook::AnimationCookedSceneFormat);
+        CHECK(document.at("format").get_ref<const std::string &>() == SceneCook::AnimationCookedSceneFormat);
         const auto decoded = SceneCook::DecodeCookedSceneDefinition(bytes.Value(), {11}, {13});
         REQUIRE(decoded.HasValue());
         CHECK(decoded.Value().Entities().front().components.animation == binding);
