@@ -216,6 +216,8 @@ namespace Horo::Network::NativeQualification {
                                                                               NetworkWorldCompositionPurpose::Gameplay,
                                                                               capture->WorldBinding()},
                                                                              std::move(factories));
+            if (created.HasError())
+                ReportError(created.ErrorValue());
             REQUIRE(created.HasValue());
             owners.host = std::move(created).Value();
             StartHost(owners, world[0]);
