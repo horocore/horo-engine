@@ -1746,7 +1746,8 @@ namespace Horo::Editor {
 
             Result<void> BuildEditorInput(const Runtime::FrameContext &context) {
                 auto &composition = p_->presentation.composition;
-                const auto raw = p_->inputBackend.Commit();
+                // The router borrows this snapshot through the later GUI/update phases; a local copy would expire on return.
+                const Input::RawInputSnapshot &raw = p_->inputBackend.Commit();
                 if (composition.simulator) {
                     if (auto built = composition.simulator->BuildInputSnapshot(context, raw); built.HasError())
                         return built;
