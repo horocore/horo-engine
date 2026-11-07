@@ -42,7 +42,7 @@ namespace Horo {
         /**
          * @brief Incorporates one complete SHA-256 message block into the chaining state.
          * @param block Pointer to exactly 64 readable message bytes.
-         * @param state Chaining state updated in place.
+         * @param chainingState Chaining state updated in place.
          */
         void ProcessBlock(const std::uint8_t *block, std::array<std::uint32_t, 8> &chainingState) noexcept {
             constexpr auto WordCount = RoundConstants.size();
