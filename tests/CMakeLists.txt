@@ -280,6 +280,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
             HORO_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
             HORO_GAMEPLAY_SDK_PACKAGE_DIR="${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
             HORO_GAMEPLAY_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+            HORO_TEST_CMAKE_GENERATOR="${CMAKE_GENERATOR}"
     )
     target_link_libraries(HoroEditorUiAutomationTests PRIVATE
             HoroEngine::Gui
