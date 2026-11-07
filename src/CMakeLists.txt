@@ -195,6 +195,14 @@ target_link_libraries(HoroModelProviderAdapters
         PUBLIC HoroEngine::ModelProvider
         PRIVATE nlohmann_json::nlohmann_json CURL::libcurl)
 
+set(HORO_PLATFORM_FILE_API_PATH_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/platform_file_api_path_headers")
+file(MAKE_DIRECTORY "${HORO_PLATFORM_FILE_API_PATH_HEADERS}")
+file(GENERATE OUTPUT "${HORO_PLATFORM_FILE_API_PATH_HEADERS}/NativeFileApiPath.h"
+        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/platform/NativeFileApiPath.h\"\n")
+add_library(HoroPlatformFileApiPathInternal INTERFACE)
+target_compile_features(HoroPlatformFileApiPathInternal INTERFACE cxx_std_20)
+target_include_directories(HoroPlatformFileApiPathInternal INTERFACE "${HORO_PLATFORM_FILE_API_PATH_HEADERS}")
+
 add_library(HoroPlatform STATIC
         platform/Platform.cpp
         platform/PlatformRead.cpp
@@ -1224,6 +1232,8 @@ add_library(HoroAssets STATIC
 add_library(HoroEngine::Assets ALIAS HoroAssets)
 target_compile_features(HoroAssets PUBLIC cxx_std_20)
 target_include_directories(HoroAssets PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(HoroAssets PRIVATE
+        $<TARGET_PROPERTY:HoroPlatformFileApiPathInternal,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(HoroAssets
         PUBLIC HoroEngine::Foundation
         PRIVATE nlohmann_json::nlohmann_json HoroThirdParty::Ufbx

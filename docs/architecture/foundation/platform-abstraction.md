@@ -120,6 +120,12 @@ Rules:
 - symlink traversal is explicit for security-sensitive operations
 - path comparisons are tested on Windows, macOS, and Linux semantics
 
+Native durable I/O converts canonical absolute Windows paths to extended-length
+spelling only inside the platform syscall boundary. Caller-facing paths and
+directory entry names retain their original namespace; bounded reads still
+reject caller-supplied device/extended prefixes and preserve no-follow parent
+checks. This does not depend on the machine-wide long-path policy being enabled.
+
 Project reads retain native directory identities through descendant traversal and
 content capture. `IProjectReadFiles::Text` and `Files` retain their interactive
 1 MiB ceiling. Load-time source payloads use the separate `SourceText` operation

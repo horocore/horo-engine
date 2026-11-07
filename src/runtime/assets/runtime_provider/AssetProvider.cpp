@@ -2,6 +2,7 @@
 
 #include "../AssetErrors.h"
 #include "AssetProviderRead.h"
+#include "NativeFileApiPath.h"
 
 #include <algorithm>
 #include <fstream>
@@ -58,7 +59,7 @@ namespace Horo::Assets {
             return Failure<bool>(AssetErrors::IdentityInvalid);
         const std::filesystem::path path = cookedRoot_ / (id.ToString() + ".cooked");
         std::error_code error;
-        const std::filesystem::file_status status = std::filesystem::symlink_status(path, error);
+        const std::filesystem::file_status status = std::filesystem::symlink_status(PlatformFileInternal::NativeApiPath(path), error);
         if (error == std::errc::no_such_file_or_directory)
             return Result<bool>::Success(false);
         if (error)
@@ -75,12 +76,13 @@ namespace Horo::Assets {
             return Failure<std::vector<std::uint8_t>>(AssetErrors::ProviderNotFound);
         const std::filesystem::path path = cookedRoot_ / (id.ToString() + ".cooked");
         std::error_code error;
-        const std::uintmax_t size = std::filesystem::file_size(path, error);
+        const auto nativePath = PlatformFileInternal::NativeApiPath(path);
+        const std::uintmax_t size = std::filesystem::file_size(nativePath, error);
         if (error)
             return Failure<std::vector<std::uint8_t>>(AssetErrors::ProviderReadFailed, error.message());
         if (size > limits_.maximumAssetBytes)
             return Failure<std::vector<std::uint8_t>>(AssetErrors::ProviderTooLarge);
-        std::ifstream input(path, std::ios::binary);
+        std::ifstream input(nativePath, std::ios::binary);
         if (!input)
             return Failure<std::vector<std::uint8_t>>(AssetErrors::ProviderReadFailed);
         return Internal::ReadExactArtifact(input, size, cancellation);

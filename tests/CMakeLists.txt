@@ -4653,7 +4653,7 @@ add_executable(HoroRuntimeSaveRootResolverTests
         unit/runtime/save/SaveRootResolverTests.cpp
 )
 target_compile_features(HoroRuntimeSaveRootResolverTests PRIVATE cxx_std_20)
-target_link_libraries(HoroRuntimeSaveRootResolverTests PRIVATE HoroEngine::Runtime)
+target_link_libraries(HoroRuntimeSaveRootResolverTests PRIVATE HoroEngine::Runtime HoroEngine::Platform)
 
 add_executable(HoroRuntimeSaveStorageQualificationTests
         unit/runtime/save/SaveStorageQualificationTests.cpp
@@ -4681,7 +4681,7 @@ foreach(header SaveFilesystemPinnedRead.h SaveFilesystemStoragePlatform.h SaveFi
 endforeach()
 target_include_directories(HoroSaveFilesystemReadInternal INTERFACE "${save_read_internal_root}")
 target_link_libraries(HoroSaveFilesystemReadInternal INTERFACE HoroEngine::Runtime)
-target_link_libraries(HoroRuntimeSaveFilesystemLockTests PRIVATE HoroSaveFilesystemReadInternal)
+target_link_libraries(HoroRuntimeSaveFilesystemLockTests PRIVATE HoroSaveFilesystemReadInternal HoroEngine::Platform)
 
 add_executable(HoroRuntimeSaveNamespaceTests
         unit/runtime/save/SaveNamespaceTests.cpp
@@ -5434,7 +5434,7 @@ target_compile_features(HoroAssetProviderTests PRIVATE cxx_std_20)
 target_include_directories(HoroAssetProviderTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/runtime_provider
 )
-target_link_libraries(HoroAssetProviderTests PRIVATE HoroEngine::Assets)
+target_link_libraries(HoroAssetProviderTests PRIVATE HoroEngine::Assets HoroEngine::Platform)
 add_executable(HoroAssetPreviewServiceTests
         unit/runtime/assets/AssetPreviewServiceTests.cpp
         unit/runtime/assets/AssetPreviewRevisionTests.cpp

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "Horo/Foundation/Platform.h"
+#include "NativeFileApiPath.h"
 
 #if !defined(_WIN32)
 #include <fcntl.h>

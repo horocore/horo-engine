@@ -28,10 +28,26 @@ namespace Horo {
     using PlatformFileInternal::FsError;
     using PlatformFileInternal::IoFailed;
     using PlatformFileInternal::LockBusy;
+    using PlatformFileInternal::NativeApiPath;
 #if !defined(_WIN32)
     using PlatformFileInternal::FlushFileDescriptor;
 #endif
     namespace {
+        /** @brief Canonicalizes through native path spelling while retaining the caller's namespace for lock identity. */
+        [[nodiscard]] std::filesystem::path CanonicalLockParent(const std::filesystem::path &path, std::error_code &error) {
+            auto canonical = std::filesystem::weakly_canonical(NativeApiPath(path), error);
+#if defined(_WIN32)
+            if (!path.native().starts_with(L"\\\\?\\")) {
+                const auto &text = canonical.native();
+                if (text.starts_with(L"\\\\?\\UNC\\"))
+                    return std::filesystem::path{std::wstring{L"\\\\"} + text.substr(8)};
+                if (text.starts_with(L"\\\\?\\"))
+                    return std::filesystem::path{text.substr(4)};
+            }
+#endif
+            return canonical;
+        }
+
         struct StringHash {
             using is_transparent = void;
 
@@ -52,7 +68,7 @@ namespace Horo {
 
         [[nodiscard]] std::string LockKey(const std::filesystem::path &path) {
             std::error_code error;
-            const auto parent = std::filesystem::weakly_canonical(path.parent_path(), error);
+            const auto parent = CanonicalLockParent(path.parent_path(), error);
             return (error ? path.lexically_normal() : parent / path.filename()).generic_string();
         }
 
@@ -101,7 +117,7 @@ namespace Horo {
             bool ProtectsPath(const std::filesystem::path &path) const override {
                 if (!path.is_absolute())
                     return false;
-                if (std::error_code error; std::filesystem::weakly_canonical(path.parent_path(), error) != path.parent_path() || error)
+                if (std::error_code error; CanonicalLockParent(path.parent_path(), error) != path.parent_path() || error)
                     return false;
                 return processKey == LockKey(path);
             }
@@ -119,16 +135,16 @@ namespace Horo {
                 ownerMetadata.size() > 4096U)
                 return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
             std::error_code error;
-            const auto canonicalParent = std::filesystem::weakly_canonical(path.parent_path(), error);
+            const auto canonicalParent = CanonicalLockParent(path.parent_path(), error);
             if (error)
                 return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
-            std::filesystem::create_directories(canonicalParent, error);
+            std::filesystem::create_directories(NativeApiPath(canonicalParent), error);
             if (error)
                 return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
-            const auto parent = std::filesystem::canonical(canonicalParent, error);
-            if (error || parent != canonicalParent)
+            const auto parent = std::filesystem::canonical(NativeApiPath(canonicalParent), error);
+            if (error || NativeApiPath(parent) != NativeApiPath(canonicalParent))
                 return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
-            return Result<std::filesystem::path>::Success(parent / path.filename());
+            return Result<std::filesystem::path>::Success(canonicalParent / path.filename());
         }
 
         /** @brief Reserves process exclusion only after allocating the state that will release it. */
@@ -145,7 +161,7 @@ namespace Horo {
 #if defined(_WIN32)
         /** @brief Acquires Windows sharing exclusion and verifies a single-link regular native lock file. */
         [[nodiscard]] Result<void> AcquireNativeExclusiveLock(NativePublicationLockState &state, const std::filesystem::path &path) {
-            state.handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+            state.handle = CreateFileW(NativeApiPath(path).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
                                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
             if (state.handle == INVALID_HANDLE_VALUE)
                 return Result<void>::Failure(FsError(GetLastError() == ERROR_SHARING_VIOLATION ? LockBusy : IoFailed, path));
