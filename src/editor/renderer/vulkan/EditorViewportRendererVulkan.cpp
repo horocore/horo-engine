@@ -247,6 +247,9 @@ namespace Horo::Editor {
             std::terminate();
         for (auto &draw : preparedDraws_)
             draw = {};
+        for (auto &cascade : preparedShadowDraws_)
+            for (auto &draw : cascade)
+                draw = {};
         ProgramResources::ReleaseMaterials(slots_);
         if (shader_.materials)
             static_cast<void>(shader_.materials->Shutdown());
