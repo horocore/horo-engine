@@ -575,7 +575,7 @@ jobs:
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
+        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests HoroFoundationJsonTests HoroGameplayRuntimeTests HoroPrefabPersistenceTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'

@@ -3,6 +3,7 @@
 #include "Horo/Prefab/PrefabRestoreEntities.h"
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 #include "PrefabTemplateProviderTestSupport.h"
+#include "SceneAllocationQualification.h"
 
 namespace Horo::Prefab {
     namespace {
@@ -295,6 +296,7 @@ namespace Horo::Prefab {
 namespace Horo::Prefab {
     TEST_CASE("Every actual dynamic prefab adapter preparation allocation fails without changing installed live state",
               "[prefab][save][restore][allocation]") {
+        Horo::Tests::RequireSupportedSceneAllocationInjection();
         RestoreFixture fixture;
         const auto original = fixture.fixture.scenes.ActiveScene()->RuntimeId();
         Tests::AllocationProbe::Measurement measured;
@@ -329,6 +331,7 @@ namespace Horo::Prefab {
 
     TEST_CASE("Every actual private Scene prefab reconstruction allocation preserves the last published world",
               "[prefab][save][restore][allocation][rollback]") {
+        Horo::Tests::RequireSupportedSceneAllocationInjection();
         RestoreFixture fixture;
         const auto original = fixture.fixture.scenes.ActiveScene()->RuntimeId();
         const auto queue = [&](std::optional<std::size_t> failure, Tests::AllocationProbe::Measurement *measured) {

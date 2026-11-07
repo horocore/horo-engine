@@ -1,5 +1,6 @@
 #include "AllocationProbe.h"
 #include "OwnedJsonReader.h"
+#include "SceneAllocationQualification.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
@@ -83,6 +84,7 @@ TEST_CASE("Owned JSON reader preserves pinned DOM types scalar values and array 
 
 TEST_CASE("Owned JSON reader unwinds every partial valid construction and malformed validation allocation",
           "[foundation][json][allocation]") {
+    Horo::Tests::RequireSupportedSceneAllocationInjection();
     const auto valid = Source();
     RejectEveryAllocation(valid, true);
     auto malformed = valid;
@@ -93,7 +95,8 @@ TEST_CASE("Owned JSON reader unwinds every partial valid construction and malfor
 TEST_CASE("Owned JSON reader retains strict syntax duplicate depth and byte admission", "[foundation][json][owned]") {
     CHECK_FALSE(ReadOwnedJson(R"({"a":1,"a":2})", 1024, 32).has_value());
     CHECK_FALSE(ReadOwnedJson("[1,]", 1024, 32).has_value());
-    CHECK_FALSE(ReadOwnedJson(R"("\ud800")", 1024, 32).has_value());
+    constexpr std::string_view unpairedSurrogate = "\"\\ud800\"";
+    CHECK_FALSE(ReadOwnedJson(unpairedSurrogate, 1024, 32).has_value());
     CHECK_FALSE(ReadOwnedJson("{} trailing", 1024, 32).has_value());
     CHECK_FALSE(ReadOwnedJson("{}", 1, 32).has_value());
     CHECK_FALSE(ReadOwnedJson("{}", 1024, 0).has_value());
@@ -116,6 +119,7 @@ TEST_CASE("JSON guard no-DOM validation preserves original global Parse exceptio
 }
 
 TEST_CASE("Owned parsed JSON retirement allocates nothing with the next allocation armed", "[foundation][json][allocation]") {
+    Horo::Tests::RequireSupportedSceneAllocationInjection();
     auto owned = ReadOwnedJson(Source(), 1U << 20U, 32);
     REQUIRE(owned.has_value());
     Horo::Tests::AllocationProbe::Measurement measured;

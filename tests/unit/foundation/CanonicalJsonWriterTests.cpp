@@ -1,5 +1,6 @@
 #include "AllocationProbe.h"
 #include "CanonicalJsonWriter.h"
+#include "SceneAllocationQualification.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
@@ -100,6 +101,7 @@ TEST_CASE("Canonical writer cross-policy copy sorts only the target and preserve
 }
 
 TEST_CASE("Canonical writer cross-policy conversion unwinds every nested allocation safely", "[foundation][json][allocation]") {
+    Horo::Tests::RequireSupportedSceneAllocationInjection();
     const auto ordered = Source();
     const Sorted sorted{ordered};
     RejectEveryAllocation<Sorted>(ordered);
@@ -107,6 +109,7 @@ TEST_CASE("Canonical writer cross-policy conversion unwinds every nested allocat
 }
 
 TEST_CASE("Canonical DOM bridge preserves exact values and unwinds every conversion allocation safely", "[foundation][json][allocation]") {
+    Horo::Tests::RequireSupportedSceneAllocationInjection();
     const auto ordered = Source();
     const Sorted sorted{ordered};
     const auto expected = sorted.dump(0);
@@ -118,6 +121,7 @@ TEST_CASE("Canonical DOM bridge preserves exact values and unwinds every convers
 
 TEST_CASE("Owned JSON move replacement and nested retirement allocate nothing even with the next allocation armed",
           "[foundation][json][allocation]") {
+    Horo::Tests::RequireSupportedSceneAllocationInjection();
     const auto source = Source();
     Owned first{source.ToOwnedJson()};
     Owned second{source.ToOwnedJson()};

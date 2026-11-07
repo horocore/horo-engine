@@ -1,5 +1,6 @@
 #include "AllocationProbe.h"
 #include "BehaviorRestoreNativeTestSupport.h"
+#include "SceneAllocationQualification.h"
 
 using namespace Horo;
 using namespace Horo::Gameplay;
@@ -330,6 +331,7 @@ namespace {
 
 TEST_CASE("Actual allocation failure during post-publication cleanup cannot roll back committed Scene",
           "[gameplay][save][restore][native][allocation]") {
+    Horo::Tests::RequireSupportedSceneAllocationInjection();
     Fixture fixture;
     fixture.FieldsAt(true);
     auto saved = fixture.Capture();

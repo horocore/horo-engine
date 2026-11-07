@@ -1,5 +1,6 @@
 #include "../runtime/prefab/PrefabValueOverrideTestSupport.h"
 #include "AllocationProbe.h"
+#include "SceneAllocationQualification.h"
 #include "ScenePrefabExpansionTestSupport.h"
 #include "ScenePrefabProjectionContext.h"
 
@@ -56,6 +57,7 @@ namespace Horo::SceneSource {
 
         TEST_CASE("Scene prefab capture allocation failure and cancellation preserve canonical expansion",
                   "[unit][scene][prefab][debug][lifecycle]") {
+            Horo::Tests::RequireSupportedSceneAllocationInjection();
             const auto sources = Sources();
             const auto instance = Prefab::PrefabInstanceId::Create(9).Value();
             ScenePrefabInstanceProjection entry{.authored = {instance, Prefab::PrefabAssetReference::Create(Asset()).Value(), {}, {}},

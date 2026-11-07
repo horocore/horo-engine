@@ -2,6 +2,7 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabPersistentCodec.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "SceneAllocationQualification.h"
 
 #include <algorithm>
 #include <array>
@@ -171,6 +172,7 @@ TEST_CASE("Dynamic prefab record decoding rejects hostile counts trailing data a
 }
 
 TEST_CASE("Dynamic prefab public codec preserves input at every actual decode allocation failure", "[prefab][save][allocation]") {
+    Horo::Tests::RequireSupportedSceneAllocationInjection();
     const auto encoded = EncodePrefabPersistentState(State(), {}, Profile());
     REQUIRE(encoded.HasValue());
     RejectEveryDecodeAllocation({encoded.Value().Bytes().begin(), encoded.Value().Bytes().end()});
@@ -178,6 +180,7 @@ TEST_CASE("Dynamic prefab public codec preserves input at every actual decode al
 
 TEST_CASE("Canonical typed override parser safely retires successful and malformed DOMs under every allocation fault",
           "[prefab][override][allocation]") {
+    Horo::Tests::RequireSupportedSceneAllocationInjection();
     const auto encoded = SerializePrefabValueOverrides(State().instances[0].overrides, Profile());
     REQUIRE(encoded.HasValue());
     RejectEveryOverrideAllocation(encoded.Value(), true);

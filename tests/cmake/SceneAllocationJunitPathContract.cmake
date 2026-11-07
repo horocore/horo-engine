@@ -14,6 +14,17 @@ set(case_names
     "HoroSceneRuntimeConversionTests::Cache pressure after validated worker completion does not discard complete Scene output"
     "HoroSceneRuntimeConversionTests::Cancellation during completion memoization cannot publish a validated definition"
     "HoroSceneDocumentTests::Source layer preparation preserves source revision and history at each injected allocation failure"
+    "HoroFoundationJsonTests::Canonical writer cross-policy conversion unwinds every nested allocation safely"
+    "HoroFoundationJsonTests::Canonical DOM bridge preserves exact values and unwinds every conversion allocation safely"
+    "HoroFoundationJsonTests::Owned JSON move replacement and nested retirement allocate nothing even with the next allocation armed"
+    "HoroFoundationJsonTests::Owned JSON reader unwinds every partial valid construction and malformed validation allocation"
+    "HoroFoundationJsonTests::Owned parsed JSON retirement allocates nothing with the next allocation armed"
+    "HoroPrefabPersistenceTests::Dynamic prefab public codec preserves input at every actual decode allocation failure"
+    "HoroPrefabPersistenceTests::Canonical typed override parser safely retires successful and malformed DOMs under every allocation fault"
+    "HoroPrefabPersistenceTests::Every actual dynamic prefab adapter preparation allocation fails without changing installed live state"
+    "HoroPrefabPersistenceTests::Every actual private Scene prefab reconstruction allocation preserves the last published world"
+    "HoroGameplayRuntimeTests::Actual allocation failure during post-publication cleanup cannot roll back committed Scene"
+    "HoroSceneRuntimeConversionTests::Scene prefab capture allocation failure and cancellation preserve canonical expansion"
 )
 set(test_directory "${TEST_ROOT}/build/ci-audio-release")
 file(MAKE_DIRECTORY "${test_directory}")
