@@ -1781,9 +1781,10 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_compile_features(HoroNavigationNativeCliTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationNativeCliTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationNativeCliTests PRIVATE HoroEngine::NavigationBakeAutomation HoroEngine::Platform HoroEngine::PlatformProjectReadFiles nlohmann_json::nlohmann_json)
+    file(TO_CMAKE_PATH "${Python3_EXECUTABLE}" HORO_NAVIGATION_MCP_PYTHON_EXECUTABLE)
     target_compile_definitions(HoroNavigationNativeCliTests PRIVATE
             HORO_TEST_ENGINE_EXECUTABLE="$<TARGET_FILE:horo-engine>"
-            HORO_TEST_PYTHON_EXECUTABLE="${Python3_EXECUTABLE}"
+            HORO_TEST_PYTHON_EXECUTABLE="${HORO_NAVIGATION_MCP_PYTHON_EXECUTABLE}"
             HORO_TEST_NAVIGATION_MCP_SCRIPT="${PROJECT_SOURCE_DIR}/tests/integration/cli_navigation_mcp_contract.py")
     add_dependencies(HoroNavigationNativeCliTests horo-engine)
     horo_register_catch_test(HoroNavigationNativeCliTests LABELS "unit;navigation;cli;integration;headless;ci-windows;sonar-coverage")

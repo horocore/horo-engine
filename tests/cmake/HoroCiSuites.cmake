@@ -210,6 +210,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiScreenTransitionPublicHeaderConsumer
     HoroInputPublicHeaderConsumer
     HoroExtensionManagerTests
+    HoroReferenceExtensionQualification
     HoroEditorActivityBoundaryTests
 
     HoroPackageLifecycleTests
