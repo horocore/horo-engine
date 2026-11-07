@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <utility>
 
 namespace Horo::Network::NativeQualification {
     namespace {
@@ -24,8 +25,11 @@ namespace Horo::Network::NativeQualification {
             unsigned side{};
         } input;
 
+        std::string publicError;
+
         void ReportError(const Error &error) {
-            std::cout << "NATIVE_ERROR " << error.domain.Value() << ':' << error.code.Value() << '\n' << std::flush;
+            publicError = "NATIVE_ERROR " + error.domain.Value() + ':' + error.code.Value();
+            std::cout << publicError << '\n' << std::flush;
         }
 
         /** @brief Handler only accepts the runtime dispatcher's own active session, never a fixture projection. */
@@ -84,8 +88,12 @@ namespace Horo::Network::NativeQualification {
             using EventListenerBase::EventListenerBase;
 
             void assertionEnded(const Catch::AssertionStats &stats) override {
-                if (!stats.assertionResult.isOk())
+                if (!stats.assertionResult.isOk()) {
+                    // Catch captures test output; listeners run outside that capture boundary.
+                    if (!publicError.empty())
+                        std::cout << std::exchange(publicError, {}) << '\n';
                     std::cout << "NATIVE_ASSERT " << stats.assertionResult.getSourceInfo().line << '\n' << std::flush;
+                }
             }
         };
 
