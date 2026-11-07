@@ -209,7 +209,7 @@ def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
     assert "      packages: read\n" in reader
     assert "packages: write" not in reader
     assert "      packages: write\n" in main
-    timeout = 90 if readonly == "shaders" else 180
+    timeout = {"shaders": 90, "test": 360, "sonar": 180}[readonly]
     assert f"    timeout-minutes: {timeout}\n" in reader
     assert f"    timeout-minutes: {timeout}\n" in main
     for field in fields:

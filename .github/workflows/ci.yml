@@ -1171,7 +1171,7 @@ jobs:
       contents: read
       packages: write
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    timeout-minutes: 360
     defaults: *native_defaults
     env: *native_environment
     strategy: *native_strategy
