@@ -15,8 +15,9 @@ namespace Horo::Packages {
         if (operation.snapshot.outcome != PackageRestoreOutcome::Running)
             return;
 
-        state_->RefreshProgress(operation);
         const auto completedJob = state_->CompletedJob(operation);
+        // Observe completion before the final progress read so Ready cannot retain an earlier worker projection.
+        state_->RefreshProgress(operation);
         if (!completedJob.has_value())
             return;
         const JobSnapshot job = *completedJob;
