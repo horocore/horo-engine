@@ -10,11 +10,16 @@ passing tests in one deterministic path, regardless of host operating system.
 
 | Host OS | Primary Compiler | Secondary Compiler | Notes |
 |---|---|---|---|
-| macOS 14+ | Clang (Apple/Xcode) | Clang 17+ (Homebrew) | Metal-capable GPU recommended for GUI tests |
+| macOS 15.6+ development host | AppleClang (Xcode 26.3) | Clang 21+ (Homebrew) | Full C++20 standard library required; macOS 14+ deployment remains supported |
 | Linux | GCC 13+ | Clang 17+ | Ubuntu 24.04 LTS is the reference distribution |
 | Windows 11 | MSVC 2022 | Clang-CL 17+ | Latest Windows SDK required |
 
 All hosts must support C++20.
+
+Full macOS builds require the stable stop/join APIs in Xcode 26's standard library;
+see [Apple's Xcode 26 release notes](https://developer.apple.com/documentation/xcode-release-notes/xcode-26-release-notes).
+The Intel SDK job selects Xcode 26.3 explicitly and verifies stop-aware waiting and
+joining before restoring compiler caches. Its deployment target remains macOS 14.0.
 
 ## Required Tools
 
@@ -113,14 +118,17 @@ If the script cannot be used, follow these steps manually.
 ### macOS
 
 ```bash
-# Install Xcode Command Line Tools
-xcode-select --install
+# Install full Xcode 26.3, then select it for this shell.
+# Xcode 16.4's standard library does not expose the required C++20 stop/join APIs.
+export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+xcodebuild -version
 
 # Install CMake, Ninja, Python dependencies
 brew install cmake ninja ccache
 
 # Configure
 cmake --preset debug \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
   -DHORO_ENGINE_BUILD_TESTS=ON \
   -DHORO_ENGINE_ENABLE_PCH=ON \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache \

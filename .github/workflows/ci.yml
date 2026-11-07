@@ -1055,6 +1055,9 @@ jobs:
       run:
         shell: bash
     env:
+      # macos-15-intel defaults to Xcode 16.4, whose libc++ hides C++20 stop/join APIs.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
       CC: clang
       CXX: clang++
       HORO_COMPILER_LAUNCHER: ccache
@@ -1067,6 +1070,29 @@ jobs:
           persist-credentials: false
       - name: Setup build tools
         uses: ./.github/actions/setup-build-tools
+      - name: Verify stable C++20 stop and join support
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          probe="$RUNNER_TEMP/horo-cxx20-stop-probe"
+          cat > "$probe.cpp" <<'CPP'
+          #include <condition_variable>
+          #include <mutex>
+          #include <stop_token>
+          #include <thread>
+          int main() {
+              std::mutex mutex;
+              std::condition_variable_any wake;
+              std::jthread worker([&](std::stop_token stop) {
+                  std::unique_lock lock(mutex);
+                  wake.wait(lock, stop, [] { return false; });
+              });
+              worker.request_stop();
+          }
+          CPP
+          xcrun --sdk macosx clang++ -std=c++20 -mmacosx-version-min=14.0 \
+            -Werror=unguarded-availability-new "$probe.cpp" -o "$probe"
+          "$probe"
       - name: Restore compatible main caches
         uses: ./.github/actions/restore-native-cache
         with:
