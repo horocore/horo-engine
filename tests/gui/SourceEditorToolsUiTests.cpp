@@ -196,7 +196,7 @@ TEST_CASE("Project browser reaches native gameplay files through the Sources roo
     std::filesystem::create_directories(assets);
     std::filesystem::create_directories(gameplay);
     std::ofstream(gameplay / "GameModule.cpp") << "// module";
-    std::ofstream(gameplay / "Slide.cpp") << "void slide() {}\n";
+    std::ofstream(gameplay / "Slide.cpp", std::ios::binary) << "void slide() {}\n";
     std::ofstream(gameplay / "Slide.cpp.horo-source.lock");
     const float browserWidth = GENERATE(1100.0F, 420.0F);
     Horo::Editor::EditorWorkspaceViewModel model;

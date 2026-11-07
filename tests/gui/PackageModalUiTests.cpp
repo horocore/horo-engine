@@ -135,12 +135,12 @@ namespace {
         }
     }
 
-    // Four five-second operations at one cooperative frame per five milliseconds, plus UI gestures.
+    // Leaves room for the 350-frame delayed restore and subsequent real operations, including paced native UI frames.
     constexpr std::size_t kPackageAsyncFrameBudget = 5000;
 
     /** @brief Advances owner frames while giving independently scheduled package work a bounded wall-time completion window. */
     bool AwaitCondition(ImGuiTestContext &ui, const auto &ready) {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
         while (std::chrono::steady_clock::now() < deadline) {
             if (ready())
                 return true;

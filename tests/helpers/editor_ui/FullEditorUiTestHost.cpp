@@ -2,6 +2,7 @@
 
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
@@ -156,6 +157,19 @@ namespace Horo::Tests {
             if (!metadata)
                 throw std::runtime_error("Unable to write recent-project E2E metadata.");
             WriteEmptySceneFixture(projectRoot / "assets/scenes/main.horo");
+            Application::ProjectSurfaceSettingsInput surfaceInput;
+            surfaceInput.projectId = "recent-project-e2e";
+            auto surfaces = Application::ProjectSurfaceSettings::Create(std::move(surfaceInput));
+            if (surfaces.HasError())
+                throw std::runtime_error("Unable to create recent-project E2E surface settings.");
+            auto source = Application::EncodeProjectSurfaceSettings(surfaces.Value());
+            if (source.HasError())
+                throw std::runtime_error("Unable to encode recent-project E2E surface settings.");
+            std::ofstream surfaceFile(projectRoot / ".horo/surfaces.json", std::ios::binary);
+            surfaceFile << source.Value();
+            surfaceFile.close();
+            if (!surfaceFile)
+                throw std::runtime_error("Unable to write recent-project E2E surface settings.");
 
             if (!Editor::SaveRecentProjectsToDisk(
                     {Editor::RecentProjectEntry{name, projectRoot.string(), "Just now", "empty", std::nullopt}})) {
