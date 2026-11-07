@@ -86,7 +86,8 @@ namespace {
     /** @brief Owns a genuine scheduler, Scene, canonical participants and ordinary filesystem sandbox. */
     struct Fixture final {
         TemporaryDirectory directory;
-        SteadyClock clock;
+        // Functional consent/publication checks do not measure capture throughput.
+        DeterministicClock clock;
         SystemWallClock wall;
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 16}};
         OperationStore operations{8, 16};
