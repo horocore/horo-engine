@@ -1,6 +1,6 @@
 #pragma once
 
-#include "EditorViewportColorPipeline.h"
+#include "EditorViewportColorTypes.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 
 namespace Horo::Render {

@@ -71,7 +71,8 @@ namespace Horo::Render::Detail {
                                .descriptorType =
                                    i + 1 == count ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                .descriptorCount = 1,
-                               .stageFlags = compute ? VK_SHADER_STAGE_COMPUTE_BIT : VK_SHADER_STAGE_VERTEX_BIT};
+                               .stageFlags =
+                                   static_cast<VkShaderStageFlags>(compute ? VK_SHADER_STAGE_COMPUTE_BIT : VK_SHADER_STAGE_VERTEX_BIT)};
             auto &set = compute ? kernel.computeSet : kernel.drawSet;
             const VkDescriptorSetLayoutCreateInfo info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                                                        .bindingCount = count,

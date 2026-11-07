@@ -32,7 +32,8 @@ namespace Horo::Render::ExposureGpuCookDetail {
         /** @brief Rejects foreign entrypoints and validates their actual local-size evidence. */
         void Entry(const Json &json, ExposureGpuStage stage) {
             const auto &entries = Rows(json, "entryPoints", 1);
-            if (entries.size() != 1 || entries[0].at("name") != EntryName(stage) || entries[0].at("mode") != "comp")
+            if (entries.size() != 1 || entries[0].at("name").get_ref<const std::string &>() != EntryName(stage) ||
+                entries[0].at("mode") != "comp")
                 throw EvidenceFailure{__func__, __LINE__};
             LocalSize(entries[0], stage);
         }
@@ -68,7 +69,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
         const Json &Named(const Json &rows, std::string_view name) {
             const Json *found = nullptr;
             for (const auto &row : rows) {
-                if (row.at("name") != name)
+                if (row.at("name").get_ref<const std::string &>() != name)
                     continue;
                 if (found)
                     throw EvidenceFailure{__func__, __LINE__};

@@ -64,7 +64,8 @@ namespace Horo::Render {
         void Entry(const Json &json, const SpirvReflectionStage &stage, VfxGpuProgramRole role) {
             const auto &rows = Rows(json, "entryPoints", 1);
             const auto mode = stage.stage == ShaderStage::Compute ? "comp" : stage.stage == ShaderStage::Vertex ? "vert" : "frag";
-            if (rows.size() != 1 || rows[0].at("name") != EntryName(role, stage.stage) || rows[0].at("mode") != mode)
+            if (rows.size() != 1 || rows[0].at("name").get_ref<const std::string &>() != EntryName(role, stage.stage) ||
+                rows[0].at("mode") != mode)
                 throw InvalidEvidence{};
             Workgroup(rows[0], stage.stage);
         }
@@ -132,10 +133,10 @@ namespace Horo::Render {
 
         void Storage(const Json &json, const Json &resource, const BinaryEvidence &binary, std::size_t index, VfxGpuProgramRole role) {
             Placement(resource, index, 0);
-            if (resource.at("name") != ResourceNames(role)[index])
+            if (resource.at("name").get_ref<const std::string &>() != ResourceNames(role)[index])
                 throw InvalidEvidence{};
             const auto &member = Members(json, resource, 1)[0];
-            if (member.at("name") != RuntimeMemberName(binary, index) || member.at("type") != "uint" ||
+            if (member.at("name").get_ref<const std::string &>() != RuntimeMemberName(binary, index) || member.at("type") != "uint" ||
                 Unsigned(member.at("offset")) != 0 || Unsigned(member.at("array_stride")) != 4)
                 throw InvalidEvidence{};
             if (Rows(member, "array", 1) != Json::array({0}) || Rows(member, "array_size_is_literal", 1) != Json::array({true}))
@@ -186,8 +187,8 @@ namespace Horo::Render {
             const bool matrix = !Compute(role) && index == 0;
             const bool integer = Compute(role) || index == 4;
             const auto offset = UniformOffset(role, index);
-            if (field.at("name") != UniformNames(role)[index] || field.at("type") != UniformType(role, index) ||
-                Unsigned(field.at("offset")) != offset)
+            if (field.at("name").get_ref<const std::string &>() != UniformNames(role)[index] ||
+                field.at("type") != UniformType(role, index) || Unsigned(field.at("offset")) != offset)
                 throw InvalidEvidence{};
             Plain(field);
             MatrixPacking(field, matrix, rowMajor);

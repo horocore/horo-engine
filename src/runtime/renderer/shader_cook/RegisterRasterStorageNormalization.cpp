@@ -119,7 +119,8 @@ namespace Horo::Render::RegisterRasterCookDetail {
         }
 
         void Field(const Json &member, const NativeStorageMember &native, const StorageElementField &expected) {
-            if (member.at("name") != native.name || member.at("type") != JsonType(expected) || !PlainField(member))
+            if (member.at("name") != native.name || member.at("type").get_ref<const std::string &>() != JsonType(expected) ||
+                !PlainField(member))
                 throw InvalidEvidence{};
             if (native.type != expected.type || native.columns != expected.columns)
                 throw InvalidEvidence{};

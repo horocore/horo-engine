@@ -65,7 +65,8 @@ namespace Horo::Render::VfxGpuCookDetail {
         void Entry(const Json &json, VfxGpuProgramRole role, ShaderStage stage) {
             const auto &entries = Rows(json, "entryPoints", 1);
             const auto mode = stage == ShaderStage::Compute ? "comp" : stage == ShaderStage::Vertex ? "vert" : "frag";
-            if (entries.size() != 1 || entries[0].at("name") != EntryName(role, stage) || entries[0].at("mode") != mode)
+            if (entries.size() != 1 || entries[0].at("name").get_ref<const std::string &>() != EntryName(role, stage) ||
+                entries[0].at("mode") != mode)
                 throw InvalidEvidence{};
             Specialization(entries[0]);
             Workgroup(entries[0], stage);
@@ -140,7 +141,7 @@ namespace Horo::Render::VfxGpuCookDetail {
 
         void Storage(const Json &json, const Json &entry, const Buffer &native, std::size_t index, VfxGpuProgramRole role) {
             const auto names = ResourceNames(role);
-            if (entry.at("name") != names[index] || native.name != names[index] || native.constant)
+            if (entry.at("name").get_ref<const std::string &>() != names[index] || native.name != names[index] || native.constant)
                 throw InvalidEvidence{};
             ResourceShape(entry, static_cast<std::uint32_t>(index), 0);
             const bool readonly = !Compute(role) || index == 0 || index == 2;
@@ -150,10 +151,11 @@ namespace Horo::Render::VfxGpuCookDetail {
         }
 
         void UniformName(const Json &json, const Json &entry, std::string_view canonical, std::string_view binary) {
-            if (entry.at("name") == canonical)
+            if (entry.at("name").get_ref<const std::string &>() == canonical)
                 return;
             const auto &type = json.at("types").at(entry.at("type").get<std::string>());
-            if (binary.empty() || entry.at("name") != binary || type.at("name") != binary)
+            if (binary.empty() || entry.at("name").get_ref<const std::string &>() != binary ||
+                type.at("name").get_ref<const std::string &>() != binary)
                 throw InvalidEvidence{};
         }
 

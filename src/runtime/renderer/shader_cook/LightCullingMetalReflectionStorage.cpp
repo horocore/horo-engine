@@ -40,7 +40,8 @@ namespace Horo::Render::LightCullingMetalCookDetail {
         }
 
         void FieldMatches(const Json &json, const Field &native, const Expected &expected) {
-            if (json.at("name") != native.name || json.at("type") != expected.type || native.jsonType != expected.type)
+            if (json.at("name") != native.name || json.at("type").get_ref<const std::string &>() != expected.type ||
+                native.jsonType != expected.type)
                 throw InvalidEvidence{};
             if (Unsigned(json.at("offset")) != expected.offset || native.offset != expected.offset || !Plain(json))
                 throw InvalidEvidence{};

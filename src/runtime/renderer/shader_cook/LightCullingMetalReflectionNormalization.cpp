@@ -56,7 +56,7 @@ namespace Horo::Render {
         const Json &Named(const Json &entries, std::string_view name) {
             const Json *result = nullptr;
             for (const auto &entry : entries) {
-                if (entry.at("name") != name)
+                if (entry.at("name").get_ref<const std::string &>() != name)
                     continue;
                 if (result)
                     throw InvalidEvidence{};

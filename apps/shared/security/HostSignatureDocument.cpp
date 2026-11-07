@@ -122,8 +122,8 @@ namespace Horo::Application::Internal {
         const auto &value = parsed.Value();
         if (!ExactKeys(value, {"schemaVersion", "algorithm", "publisherId", "keyId", "artifactSha256", "signatureHex"}) ||
             !value["schemaVersion"].is_number_unsigned() || value["schemaVersion"] != 1 || !value["algorithm"].is_string() ||
-            value["algorithm"] != Algorithm || !value["publisherId"].is_string() || !value["keyId"].is_string() ||
-            !value["artifactSha256"].is_string() || !value["signatureHex"].is_string())
+            value["algorithm"].get_ref<const std::string &>() != Algorithm || !value["publisherId"].is_string() ||
+            !value["keyId"].is_string() || !value["artifactSha256"].is_string() || !value["signatureHex"].is_string())
             return Outcome::Failure(MakeError(InvalidSignature, "Detached signature schema is invalid."));
         auto publisher = Packages::PackagePublisherId::Parse(value["publisherId"].get<std::string>());
         auto digest = ParseSha256(value["artifactSha256"].get<std::string>());
@@ -158,7 +158,7 @@ namespace Horo::Application::Internal {
         for (const auto &entry : value["publishers"]) {
             if (!ExactKeys(entry, {"publisherId", "keyId", "algorithm", "publicKeyHex", "expiresAtUnixMilliseconds", "revoked"}) ||
                 !entry["publisherId"].is_string() || !entry["keyId"].is_string() || !entry["algorithm"].is_string() ||
-                entry["algorithm"] != Algorithm || !entry["publicKeyHex"].is_string() ||
+                entry["algorithm"].get_ref<const std::string &>() != Algorithm || !entry["publicKeyHex"].is_string() ||
                 !entry["expiresAtUnixMilliseconds"].is_number_unsigned() || !entry["revoked"].is_boolean())
                 return Outcome::Failure(MakeError(InvalidTrust, "Trust publisher entry is invalid."));
             auto publisher = Packages::PackagePublisherId::Parse(entry["publisherId"].get<std::string>());

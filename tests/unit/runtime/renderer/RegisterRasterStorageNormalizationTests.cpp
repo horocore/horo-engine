@@ -48,6 +48,13 @@ TEST_CASE("Readonly raster storage rejects unknown or mutable actual element and
     CHECK(evidence.Normalize().HasError());
 }
 
+TEST_CASE("Readonly raster storage rejects non-string reflected field types", "[renderer][shader-cook][storage]") {
+    Evidence evidence;
+    const auto type = GENERATE("null", "false", "0", "[]", "{}");
+    Replace(evidence.stages[1].json, "\"type\":\"vec3\"", std::string{"\"type\":"} + type);
+    CHECK(evidence.Normalize().HasError());
+}
+
 TEST_CASE("Readonly raster storage rejects native and reflected aliases and foreign logical members", "[renderer][shader-cook][storage]") {
     using Mutation = void (*)(Evidence &);
     constexpr std::array<Mutation, 7> mutations{{+[](Evidence &e) {

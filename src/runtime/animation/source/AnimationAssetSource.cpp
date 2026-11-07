@@ -20,7 +20,7 @@ namespace Horo::Animation {
             Keys(value, EnvelopeKeys);
             if (Integer<std::uint32_t>(value.at("schemaVersion")) != 1)
                 Reject(AnimationAssetErrors::Unsupported);
-            if (value.at("assetType") != type)
+            if (value.at("assetType").get_ref<const std::string &>() != type)
                 Reject(AnimationAssetErrors::Malformed);
         }
 

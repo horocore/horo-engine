@@ -61,6 +61,16 @@ namespace Horo::Animation {
             value["dependencies"][0]["id"] = Test::Asset<SkeletonId>(99).Asset().ToString();
             source = value.dump();
         }
+        SECTION("wrong asset type") {
+            auto value = nlohmann::json::parse(source);
+            value["assetType"] = "core.animation.skeleton";
+            source = value.dump();
+        }
+        SECTION("nonstring asset type") {
+            auto value = nlohmann::json::parse(source);
+            value["assetType"] = 7;
+            source = value.dump();
+        }
         SECTION("duplicate root key") {
             source.insert(1, "\"schemaVersion\":1,");
         }

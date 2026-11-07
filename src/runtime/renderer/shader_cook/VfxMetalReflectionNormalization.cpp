@@ -269,7 +269,7 @@ namespace Horo::Render {
             const auto role = instances ? index : index + 2;
             const bool matrix = role == 0;
             const std::uint32_t offset = role == 1 ? 8192U : role == 3 ? 16U : 0U;
-            if (member.at("name") != names[role] ||
+            if (member.at("name").get_ref<const std::string &>() != names[role] ||
                 member.at("type") != (matrix      ? "mat4"
                                       : role == 3 ? "float"
                                                   : "vec4") ||
