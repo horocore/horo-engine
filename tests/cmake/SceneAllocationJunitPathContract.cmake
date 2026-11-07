@@ -13,6 +13,7 @@ set(case_names
     "HoroSceneRuntimeConversionTests::Recursive canonical copies preserve source and destination at every allocation failure - SortedWireValue"
     "HoroSceneRuntimeConversionTests::Cache pressure after validated worker completion does not discard complete Scene output"
     "HoroSceneRuntimeConversionTests::Cancellation during completion memoization cannot publish a validated definition"
+    "HoroSceneDocumentTests::Source layer preparation preserves source revision and history at each injected allocation failure"
 )
 set(test_directory "${TEST_ROOT}/build/ci-audio-release")
 file(MAKE_DIRECTORY "${test_directory}")

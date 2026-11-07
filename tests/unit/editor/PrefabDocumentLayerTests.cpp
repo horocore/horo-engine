@@ -1,4 +1,5 @@
 #include "../../support/AllocationProbe.h"
+#include "../../support/SceneAllocationQualification.h"
 #include "../runtime/prefab/PrefabLayerOverrideTestSupport.h"
 #include "PrefabDocumentSessionTestSupport.h"
 
@@ -121,6 +122,7 @@ TEST_CASE("Source layer preparation preserves source revision and history at eac
     using namespace Horo::Editor;
     using namespace Prefab::LayerTest;
     using namespace Prefab::ValueTestSupport;
+    Tests::RequireSupportedSceneAllocationInjection();
     PrefabDocumentSessionTestSupport::Fixture fixture;
     // The shared real-file setup helpers remain in Editor's translation-unit namespace.
     OpenLayer(fixture);
@@ -129,8 +131,23 @@ TEST_CASE("Source layer preparation preserves source revision and history at eac
     const auto before = fixture.document->Snapshot();
     const std::variant<Prefab::PrefabValueEdit, Prefab::PrefabComponentEdit> intent{
         Prefab::PrefabValueEdit{Prefab::PrefabValueEditKind::Assign, Property(), 3.0}};
+    // Standard-library allocation counts differ by platform. Measure the real successful cold operation before injecting every site.
+    const auto allocations = [&] {
+        PrefabDocumentSessionTestSupport::Fixture probe;
+        OpenLayer(probe);
+        std::size_t requests{};
+        const auto result = [&] {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            auto edited = probe.document->ExecuteLayer(probe.document->Snapshot().fence, {}, sources, intent);
+            requests = measurement.Snapshot().requests;
+            return edited;
+        }();
+        REQUIRE(result.HasValue());
+        return requests;
+    }();
+    REQUIRE(allocations < 32768);
     bool completed = false;
-    for (std::size_t failure = 0; failure < 2048; ++failure) {
+    for (std::size_t failure = 0; failure <= allocations * 2; ++failure) {
         INFO("Actual source-layer allocation failure index: " << failure);
         auto result = [&] {
             Tests::AllocationProbe::ScopedFailure allocation(failure);

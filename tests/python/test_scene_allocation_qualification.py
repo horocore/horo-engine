@@ -43,8 +43,8 @@ def junit(tmp_path, names=None):
     return path
 
 
-def test_exact_ten_release_cases_are_accepted(tmp_path):
-    assert len(QUALIFICATION.SCENE_CASES) == 10
+def test_exact_eleven_release_cases_are_accepted(tmp_path):
+    assert len(QUALIFICATION.SCENE_CASES) == 11
     QUALIFICATION.scene_verify_discovery(discovery())
     QUALIFICATION.scene_verify_junit(junit(tmp_path))
 

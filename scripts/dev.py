@@ -1936,7 +1936,9 @@ SCENE_CASES = frozenset(SCENE_PREFIX + name for name in (
     "Recursive canonical copies preserve source and destination at every allocation failure - SortedWireValue",
     "Cache pressure after validated worker completion does not discard complete Scene output",
     "Cancellation during completion memoization cannot publish a validated definition",
-))
+)) | frozenset({
+    "HoroSceneDocumentTests::Source layer preparation preserves source revision and history at each injected allocation failure",
+})
 NAVIGATION_PREFIX = "HoroNavigationProjectSettingsTests::"
 NAVIGATION_PHASES = {
     NAVIGATION_PREFIX + "Every navigation commit allocation failure precedes all owner publication": "commit",

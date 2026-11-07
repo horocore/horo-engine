@@ -369,7 +369,8 @@ jobs:
       contents: read
       packages: read
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    # Cold Debug plus provider/network/XR variants exceed three hours before tests start.
+    timeout-minutes: 360
     defaults: &native_defaults
       run:
         shell: bash
@@ -574,7 +575,7 @@ jobs:
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
+        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -1045,7 +1046,8 @@ jobs:
     needs: [tooling]
     if: ${{ !cancelled() && needs.tooling.result == 'success' }}
     runs-on: macos-15-intel
-    timeout-minutes: 60
+    # The cold Intel host build alone exceeds one hour; retain time for native SDK tests.
+    timeout-minutes: 120
     permissions:
       contents: read
       packages: read
