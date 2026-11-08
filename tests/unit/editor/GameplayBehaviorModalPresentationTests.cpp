@@ -1,6 +1,8 @@
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Foundation/Paths.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
+#include "support/OwnedTestDirectory.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -11,6 +13,12 @@
 #include <string_view>
 
 namespace {
+    /** @brief Serializes the expected picker path as UTF-8 test text. */
+    std::string Utf8Path(const std::filesystem::path &path) {
+        const auto encoded = path.u8string();
+        return {encoded.begin(), encoded.end()};
+    }
+
     /** @brief Finds a rendered modal child without depending on ImGui's generated child-window suffix. */
     ImGuiWindow *FindModalChild(const std::string_view id) {
         for (ImGuiWindow *window : ImGui::GetCurrentContext()->Windows) {
@@ -25,13 +33,15 @@ TEST_CASE("Behavior folder picker starts at its destination or project root with
           "[unit][editor][gui][behavior]") {
     using namespace Horo::Editor;
     const bool destinationExists = GENERATE(true, false);
-    const auto project = std::filesystem::path{HORO_PROJECT_SOURCE_DIR};
+    Horo::Tests::OwnedTestDirectory owned{"behavior-picker"};
+    const auto project = owned.Path() / std::filesystem::path{u8"\u00e7al\u0131\u015fma \u56fe"};
+    std::filesystem::create_directories(project / "assets");
     const auto destination = project / (destinationExists ? "assets" : "missing-behavior-picker-directory");
     Tests::EditorGuiContextFixture gui;
     unsigned browsed{};
     GameplayBehaviorFilenameModal modal{gui.context,
                                         GameplayBehaviorKind::Lua,
-                                        destination.string(),
+                                        Utf8Path(destination),
                                         "NewBehavior",
                                         project,
                                         [&](std::string_view,
@@ -59,9 +69,51 @@ TEST_CASE("Behavior folder picker starts at its destination or project root with
     io.AddMouseButtonEvent(0, false);
     draw();
     CHECK(browsed == 1);
-    CHECK(modal.State().Destination() == destination.string());
+    CHECK(modal.State().Destination() == Utf8Path(destination));
     CHECK(modal.ClosePolicy().allowCloseButton);
     CHECK(modal.ClosePolicy().allowEscape);
+}
+
+TEST_CASE("Behavior folder picker retains selected Unicode native destinations", "[unit][editor][gui][behavior][unicode]") {
+    using namespace Horo::Editor;
+    Horo::Tests::OwnedTestDirectory owned{"behavior-select"};
+    const auto project = owned.Path() / std::filesystem::path{u8"\u00e7al\u0131\u015fma \u56fe"};
+    const auto scripts = Horo::ProjectLayout::ScriptsRoot(project);
+    const auto chosen = scripts / std::filesystem::path{u8"\u56fe behaviors"};
+    std::filesystem::create_directories(chosen);
+    Tests::EditorGuiContextFixture gui;
+    unsigned browsed{};
+    GameplayBehaviorFilenameModal modal{gui.context,
+                                        GameplayBehaviorKind::Lua,
+                                        Utf8Path(scripts),
+                                        "NewBehavior",
+                                        project,
+                                        [&](std::string_view, const std::filesystem::path &initial) {
+        ++browsed;
+        CHECK(initial == scripts);
+        return std::optional{chosen};
+    },
+                                        {}};
+    const auto draw = [&] {
+        gui.imgui.BeginFrame();
+        static_cast<void>(modal.Draw());
+        gui.imgui.EndFrame();
+    };
+    draw();
+    draw();
+    draw();
+    const auto *field = FindModalChild("##GameplayBehaviorDestination");
+    REQUIRE(field != nullptr);
+    auto &io = ImGui::GetIO();
+    io.AddMousePosEvent(field->Pos.x + field->Size.x + Ui::ScaledLayoutValue(15), field->Pos.y + field->Size.y * 0.5F);
+    io.AddMouseButtonEvent(0, true);
+    draw();
+    io.AddMouseButtonEvent(0, false);
+    draw();
+    draw();
+    CHECK(browsed == 1);
+    CHECK(modal.State().Destination() == Utf8Path(std::filesystem::weakly_canonical(chosen)));
+    CHECK(modal.State().Validation().HasValue());
 }
 
 TEST_CASE("Gameplay behavior form keeps validation below an equal-height filename row without scrolling", "[unit][editor][gui][behavior]") {

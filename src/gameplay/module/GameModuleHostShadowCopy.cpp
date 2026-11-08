@@ -35,9 +35,10 @@ namespace Horo::Gameplay {
                                                                    const std::filesystem::path &canonicalRoot) {
             static std::atomic<std::uint64_t> sequence{1};
             const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-            const std::filesystem::path shadowPath =
-                canonicalRoot / std::format("{}.horo_reload_{}_{}{}", libraryPath.stem().string(), timestamp, sequence.fetch_add(1),
-                                            libraryPath.extension().string());
+            auto filename = libraryPath.stem();
+            filename += std::format(".horo_reload_{}_{}", timestamp, sequence.fetch_add(1));
+            filename += libraryPath.extension();
+            const std::filesystem::path shadowPath = canonicalRoot / filename;
             std::error_code error;
             const std::filesystem::path canonicalShadow = std::filesystem::weakly_canonical(shadowPath, error);
             if (const std::filesystem::path relativeShadow = canonicalShadow.lexically_relative(canonicalRoot);

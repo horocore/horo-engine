@@ -72,7 +72,7 @@ namespace Horo::Gameplay {
             auto image = std::make_shared<Detail::GameModuleCodeImage>(std::unique_ptr<Platform::DynamicLibrary>{});
             if (ownedShadow)
                 image->shadowArtifact = libraryPath;
-            auto loaded = Platform::LoadDynamicLibrary(libraryPath.string());
+            auto loaded = Platform::LoadDynamicLibraryAtPath(libraryPath);
             if (loaded.HasError())
                 return Result<std::shared_ptr<Detail::GameModuleCodeImage>>::Failure(loaded.ErrorValue());
             image->library = std::move(loaded).Value();
@@ -125,7 +125,7 @@ namespace Horo::Gameplay {
                                                   const GameModuleLoadExpectation &expectation) const {
         if (!libraryPath.is_absolute())
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor));
-        auto image = Platform::LoadDynamicLibrary(libraryPath.string());
+        auto image = Platform::LoadDynamicLibraryAtPath(libraryPath);
         if (image.HasError())
             return Result<void>::Failure(image.ErrorValue());
         if (auto validated = ReadValidatedExports(*image.Value(), expectation); validated.HasError())

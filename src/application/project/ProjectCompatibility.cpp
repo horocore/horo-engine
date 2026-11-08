@@ -55,7 +55,9 @@ namespace Horo::Application {
                 const bool exists = std::filesystem::exists(path, existsError);
                 const ErrorCodeDescriptor &descriptor =
                     !existsError && !exists ? ProjectErrors::MetadataNotFound : ProjectErrors::MetadataReadFailed;
-                return Result<std::string>::Failure(MetadataError(descriptor, "Unable to inspect " + path.string() + '.'));
+                const auto encoded = path.u8string();
+                return Result<std::string>::Failure(
+                    MetadataError(descriptor, "Unable to inspect " + std::string{encoded.begin(), encoded.end()} + '.'));
             }
             if (size == 0 || size > 1024U * 1024U) {
                 return Result<std::string>::Failure(MetadataError(ProjectErrors::MetadataSizeInvalid));

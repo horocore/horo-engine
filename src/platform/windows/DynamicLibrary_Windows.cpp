@@ -29,9 +29,15 @@ namespace Horo::Platform {
         };
     }  // namespace
 
+    /** @copydoc LoadDynamicLibrary */
     Result<std::unique_ptr<DynamicLibrary>> LoadDynamicLibrary(std::string_view path) {
-        const std::filesystem::path candidate{path};
-        if (!candidate.is_absolute() || std::ranges::any_of(candidate, [](const std::filesystem::path &part) {
+        return LoadDynamicLibraryAtPath(std::filesystem::path{path});
+    }
+
+    /** @copydoc LoadDynamicLibraryAtPath */
+    Result<std::unique_ptr<DynamicLibrary>> LoadDynamicLibraryAtPath(const std::filesystem::path &candidate) {
+        if (!candidate.is_absolute() || candidate.native().find(L'\0') != std::wstring::npos ||
+            std::ranges::any_of(candidate, [](const std::filesystem::path &part) {
             return part == "..";
         }))
             return Result<std::unique_ptr<DynamicLibrary>>::Failure(
@@ -41,8 +47,7 @@ namespace Horo::Platform {
         if (filesystemError || !std::filesystem::is_regular_file(canonicalPath, filesystemError))
             return Result<std::unique_ptr<DynamicLibrary>>::Failure(
                 MakeError(PlatformErrors::InvalidFormat, "Library path does not resolve to a regular file"));
-        const std::string libPath = canonicalPath.string();
-        HMODULE handle = LoadLibraryA(libPath.c_str());
+        HMODULE handle = LoadLibraryW(canonicalPath.c_str());
         if (!handle) {
             DWORD error = GetLastError();
             std::string errorMsg = "LoadLibrary failed with error code: " + std::to_string(error);

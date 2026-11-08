@@ -9,6 +9,8 @@
 
 namespace Horo::Platform {
     namespace {
+        constexpr std::size_t MaximumLibraryPathBytes = 1024;
+
         class PosixDynamicLibrary final : public DynamicLibrary {
         public:
             explicit PosixDynamicLibrary(void *handle) : m_handle(handle) {}  // NOSONAR(cpp:S5008)
@@ -35,27 +37,30 @@ namespace Horo::Platform {
         };
     }  // namespace
 
-    [[nodiscard]] bool IsSafeLibraryPath(const std::string_view path) noexcept {
-        if (path.empty() || path.size() > 1024)
-            return false;
-        const std::filesystem::path candidate{path};
-        return candidate.is_absolute() && std::ranges::none_of(candidate, [](const std::filesystem::path &part) {
-            return part == "..";
-        });
+    /** @copydoc LoadDynamicLibrary */
+    Result<std::unique_ptr<DynamicLibrary>> LoadDynamicLibrary(std::string_view path) {
+        if (path.size() > MaximumLibraryPathBytes)
+            return Result<std::unique_ptr<DynamicLibrary>>::Failure(
+                MakeError(PlatformErrors::InvalidFormat, "Library path exceeds the supported length"));
+        return LoadDynamicLibraryAtPath(std::filesystem::path{path});
     }
 
-    Result<std::unique_ptr<DynamicLibrary>> LoadDynamicLibrary(std::string_view path) {
-        if (!IsSafeLibraryPath(path))
+    /** @copydoc LoadDynamicLibraryAtPath */
+    Result<std::unique_ptr<DynamicLibrary>> LoadDynamicLibraryAtPath(const std::filesystem::path &path) {
+        const auto &native = path.native();
+        if (native.size() > MaximumLibraryPathBytes || native.find('\0') != std::string::npos || !path.is_absolute() ||
+            std::ranges::any_of(path, [](const std::filesystem::path &part) {
+            return part == "..";
+        }))
             return Result<std::unique_ptr<DynamicLibrary>>::Failure(
                 MakeError(PlatformErrors::InvalidFormat, "Library path is invalid or contains traversal"));
         std::error_code error;
-        const std::filesystem::path canonicalPath = std::filesystem::canonical(std::filesystem::path{path}, error);
+        const std::filesystem::path canonicalPath = std::filesystem::canonical(path, error);
         if (error || !canonicalPath.is_absolute() || !std::filesystem::is_regular_file(canonicalPath, error))
             return Result<std::unique_ptr<DynamicLibrary>>::Failure(
                 MakeError(PlatformErrors::InvalidFormat, "Library path does not resolve to a regular file"));
-        const std::string libPath = canonicalPath.string();
         // Loading project-produced native code is an explicit host capability; the path is canonical and absolute.
-        void *handle = dlopen(libPath.c_str(), RTLD_NOW | RTLD_LOCAL);  // NOSONAR
+        void *handle = dlopen(canonicalPath.c_str(), RTLD_NOW | RTLD_LOCAL);  // NOSONAR
         if (!handle) {
             const char *nativeError = dlerror();
             std::string errorMsg = nativeError != nullptr ? nativeError : "Unknown dlopen error";

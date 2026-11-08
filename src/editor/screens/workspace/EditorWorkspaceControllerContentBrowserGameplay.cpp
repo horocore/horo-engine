@@ -30,7 +30,7 @@ namespace Horo::Editor {
         const std::filesystem::path projectRoot = NormalizeAbsolute(ProjectRoot());
         const std::filesystem::path assetsRoot = ProjectLayout::AssetRoot(projectRoot);
         const std::filesystem::path scriptsRoot = ProjectLayout::ScriptsRoot(projectRoot);
-        const std::filesystem::path requestedDirectory = NormalizeAbsolute(request.destination);
+        const std::filesystem::path requestedDirectory = NormalizeAbsolute(WorkspaceNativePath(request.destination));
         std::filesystem::path directory;
         if (nativeBehavior)
             directory = projectRoot / "source" / "gameplay";
@@ -70,7 +70,7 @@ namespace Horo::Editor {
             return;
         }
 
-        const std::filesystem::path source = directory / (request.baseName + (nativeBehavior ? ".cpp" : ".horo_script"));
+        const std::filesystem::path source = directory / WorkspaceNativePath(request.baseName + (nativeBehavior ? ".cpp" : ".horo_script"));
         if (std::filesystem::exists(source, filesystemError) || filesystemError) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.name_exists";
             return;

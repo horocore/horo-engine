@@ -382,9 +382,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             const std::string selected = pfd::select_folder(std::string{title}, WorkspacePathText(initialDirectory)).result();
             return selected.empty() ? std::nullopt : std::optional{WorkspaceNativePath(selected)};
         };
-        Result<void> opened = modalHost_.OpenRoot(
-            std::make_unique<GameplayBehaviorFilenameModal>(context_, kind, destination->string(), baseName, controller_->ProjectRoot(),
-                                                            browse, [this](CreateGameplayBehaviorRequest request) {
+        Result<void> opened =
+            modalHost_.OpenRoot(std::make_unique<GameplayBehaviorFilenameModal>(context_, kind, WorkspacePathText(*destination), baseName,
+                                                                                controller_->ProjectRoot(), browse,
+                                                                                [this](CreateGameplayBehaviorRequest request) {
             if (!controller_) {
                 return;
             }

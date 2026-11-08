@@ -60,6 +60,15 @@ The platform layer includes:
 - deterministic or in-memory test implementations
 - headless implementations where appropriate
 
+### Dynamic library paths
+
+Call `LoadDynamicLibraryAtPath` when the host already has a native filesystem
+path, such as a project gameplay artifact or a shadow copy. The platform
+validates the absolute path and opens the canonical regular file with the native
+loader. Windows uses the wide API so project and library names are independent
+of the active code page. Existing text callers can keep using
+`LoadDynamicLibrary`, which converts its input using the platform path encoding.
+
 ### Desktop file-manager integration
 
 `HoroPlatformDesktop` owns `Horo/Platform/FileManager.h` independently of the

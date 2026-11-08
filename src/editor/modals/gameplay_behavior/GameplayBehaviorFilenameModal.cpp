@@ -15,6 +15,17 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Decodes the modal's UTF-8 text before native filesystem admission. */
+        std::filesystem::path DestinationPath(const std::string_view text) {
+            return std::filesystem::path{std::u8string{text.begin(), text.end()}};
+        }
+
+        /** @brief Preserves native folder names in UTF-8 modal state and presentation. */
+        std::string DestinationText(const std::filesystem::path &path) {
+            const auto encoded = path.u8string();
+            return {encoded.begin(), encoded.end()};
+        }
+
         const char *ExtensionFor(const GameplayBehaviorKind kind) {
             return kind == GameplayBehaviorKind::Lua ? ".horo_script" : ".cpp";
         }
@@ -32,7 +43,7 @@ namespace Horo::Editor {
                                                                  CreateCallback onCreate)
         : EditorModal(kTextScope), context_(context), state_(kind, std::move(destination), std::move(baseName)),
           projectRoot_(std::move(projectRoot)),
-          luaDestination_(kind == GameplayBehaviorKind::Lua ? std::filesystem::path{state_.Destination()}
+          luaDestination_(kind == GameplayBehaviorKind::Lua ? DestinationPath(state_.Destination())
                                                             : ProjectLayout::ScriptsRoot(projectRoot_)),
           onBrowse_(std::move(onBrowse)), onCreate_(std::move(onCreate)) {}
 
@@ -63,7 +74,7 @@ namespace Horo::Editor {
             return;
         std::error_code error;
         const std::filesystem::path source =
-            std::filesystem::path{state_.Destination()} / (state_.BaseName() + ExtensionFor(state_.Kind()));
+            DestinationPath(state_.Destination()) / DestinationPath(state_.BaseName() + ExtensionFor(state_.Kind()));
         nameAvailable_ = !std::filesystem::exists(source, error) && !error;
     }
 
@@ -80,7 +91,7 @@ namespace Horo::Editor {
             const GameplayBehaviorKind kind = selected == 0 ? GameplayBehaviorKind::Lua : GameplayBehaviorKind::Native;
             const std::filesystem::path destination =
                 kind == GameplayBehaviorKind::Lua ? luaDestination_ : projectRoot_ / "source" / "gameplay";
-            state_.SetKind(kind, destination.string());
+            state_.SetKind(kind, DestinationText(destination));
             destinationError_ = false;
             RefreshAvailability();
         }
@@ -132,7 +143,7 @@ namespace Horo::Editor {
         if (!onBrowse_ || state_.Kind() != GameplayBehaviorKind::Lua)
             return;
         std::error_code error;
-        const auto initialDirectory = InitialBrowseDirectory(projectRoot_, state_.Destination());
+        const auto initialDirectory = InitialBrowseDirectory(projectRoot_, DestinationPath(state_.Destination()));
         if (!std::filesystem::is_directory(initialDirectory, error)) {
             destinationError_ = true;
             return;
@@ -146,14 +157,18 @@ namespace Horo::Editor {
             return;
         }
         const std::filesystem::path destination = std::filesystem::weakly_canonical(*chosen, error);
-        if (error || !std::filesystem::is_directory(destination, error) || error ||
-            !Foundation::Paths::HasPathPrefix(scriptsRoot, destination)) {
+        if (error) {
+            destinationError_ = true;
+            return;
+        }
+        const bool directoryExists = std::filesystem::is_directory(destination, error);
+        if (error || !directoryExists || !Foundation::Paths::HasPathPrefix(scriptsRoot, destination)) {
             destinationError_ = true;
             return;
         }
         destinationError_ = false;
         luaDestination_ = destination;
-        state_.SetDestination(destination.string());
+        state_.SetDestination(DestinationText(destination));
         RefreshAvailability();
     }
 
@@ -168,14 +183,14 @@ namespace Horo::Editor {
         }
         const float gap = Ui::ScaledLayoutValue(10.0F);
         const float pathWidth = std::max(Ui::ScaledLayoutValue(130.0F), ImGui::GetContentRegionAvail().x - browseWidth - gap);
-        const std::filesystem::path relative = std::filesystem::path{state_.Destination()}.lexically_relative(projectRoot_);
+        const std::filesystem::path relative = DestinationPath(state_.Destination()).lexically_relative(projectRoot_);
         std::string displayPath = state_.Destination();
         if (!relative.empty()) {
             displayPath.clear();
             for (const auto &component : relative) {
                 if (!displayPath.empty())
                     displayPath += " / ";
-                displayPath += component.string();
+                displayPath += DestinationText(component);
             }
         }
         float pathTextHeight{};
