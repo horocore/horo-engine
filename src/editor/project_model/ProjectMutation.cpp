@@ -41,12 +41,12 @@ namespace Horo::Editor {
 
         DurableFileSystem &files;
         std::mutex mutex;
-        std::unordered_set<std::string> activeRoots;  // NOSONAR(cpp:S6045)
+        std::unordered_set<std::filesystem::path> activeRoots;  // NOSONAR(cpp:S6045)
     };
 
     struct ProjectMutationLease::State {
         std::shared_ptr<ProjectMutationCoordinator::State> owner;
-        std::string rootKey;
+        std::filesystem::path rootKey;
         ExclusiveFileLock native;
 
         ~State() {
@@ -73,7 +73,7 @@ namespace Horo::Editor {
         const auto root = std::filesystem::weakly_canonical(request.projectRoot, error);
         if (error || !std::filesystem::is_directory(root))
             return Result<ProjectMutationLease>::Failure(MakeError(Locked, "Project root is unavailable."));
-        const std::string key = root.generic_string();
+        const std::filesystem::path &key = root;
         {
             std::lock_guard lock(state_->mutex);
             if (!state_->activeRoots.emplace(key).second)

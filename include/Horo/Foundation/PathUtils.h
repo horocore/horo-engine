@@ -36,7 +36,7 @@ namespace Horo::Foundation::Paths {
      * root escape (already enforced by ProjectPath construction).
      *
      * @param projectRoot Absolute path to the open project root.
-     * @param relative A previously-parsed, validated ProjectPath.
+     * @param relative A previously-parsed, validated ProjectPath whose portable text is UTF-8.
      * @return The absolute filesystem path: projectRoot / relative segments.
      */
     [[nodiscard]] std::filesystem::path Resolve(const std::filesystem::path &projectRoot, const ProjectPath &relative);

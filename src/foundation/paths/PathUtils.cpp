@@ -39,7 +39,8 @@ namespace Horo::Foundation::Paths {
 
     std::filesystem::path Resolve(const std::filesystem::path &projectRoot, const ProjectPath &relative) {
         std::filesystem::path result = projectRoot;
-        result /= relative.String();
+        const auto &text = relative.String();
+        result /= std::filesystem::path{std::u8string{text.begin(), text.end()}};
         return result;
     }
 

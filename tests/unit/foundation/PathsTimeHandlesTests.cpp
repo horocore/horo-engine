@@ -6,6 +6,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace {
     struct TextureTag;
@@ -20,6 +22,19 @@ namespace {
     TEST_CASE("Project Path Rejects Root Escape", "[unit][foundation]") {
         const auto result = Horo::ProjectPath::Parse("../../outside.txt");
         REQUIRE((result.HasError()));
+    }
+
+    TEST_CASE("Project Path Resolves Portable UTF-8 To The Exact Native Path", "[unit][foundation]") {
+        const auto root = std::filesystem::temp_directory_path() / u8"\u5de5\u7a0b";
+        const std::u8string_view encoded{u8"assets/\u56fe \u011e/\u6a21\u578b.txt"};
+        const std::string portable{encoded.begin(), encoded.end()};
+        const auto relative = Horo::ProjectPath::Parse(portable);
+        REQUIRE(relative.HasValue());
+        const auto expected = root / std::filesystem::path{encoded};
+        CHECK(Horo::Foundation::Paths::Resolve(root, relative.Value()) == expected);
+        const auto resolved = Horo::Foundation::Paths::Resolve(root, portable);
+        REQUIRE(resolved.HasValue());
+        CHECK(resolved.Value() == expected);
     }
 
     TEST_CASE("Path Prefix Uses Normalized Components", "[unit][foundation]") {

@@ -69,7 +69,8 @@ namespace Horo {
         [[nodiscard]] std::string LockKey(const std::filesystem::path &path) {
             std::error_code error;
             const auto parent = CanonicalLockParent(path.parent_path(), error);
-            return (error ? path.lexically_normal() : parent / path.filename()).generic_string();
+            const auto encoded = (error ? path.lexically_normal() : parent / path.filename()).generic_u8string();
+            return {encoded.begin(), encoded.end()};
         }
 
     }  // namespace
