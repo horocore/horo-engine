@@ -14,6 +14,7 @@
 #include <functional>
 #include <limits>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -78,14 +79,14 @@ namespace Horo::Editor::InspectorFields {
         }
 
         /** @brief Returns metadata with a current-model visibility predicate. */
-        constexpr Field Visible(bool (*predicate)(const Model &)) const {
+        template <typename Predicate> constexpr Field Visible(Predicate predicate) const {
             auto copy = *this;
             copy.visible = predicate;
             return copy;
         }
 
         /** @brief Returns metadata with a presentation-only validation predicate; command validation remains authoritative. */
-        constexpr Field Valid(bool (*predicate)(const Model &)) const {
+        template <typename Predicate> constexpr Field Valid(Predicate predicate) const {
             auto copy = *this;
             copy.valid = predicate;
             return copy;
@@ -109,6 +110,21 @@ namespace Horo::Editor::InspectorFields {
     /** @brief Typed registry specialization point. Define one static field array per supported component model. */
     template <typename Model> struct Schema;
 
+    namespace Detail {
+        /** @brief Checks choice vocabulary without invoking authoring accessors or presentation code. */
+        consteval void CheckChoices(const Control control, const std::span<const Choice> choices) {
+            if (control == Control::Choice && (choices.empty() || choices.size() > 32))
+                throw std::invalid_argument{"Empty Inspector choice list"};
+            for (std::size_t a = 0; a < choices.size(); ++a) {
+                if (!choices[a].labelKey || !*choices[a].labelKey)
+                    throw std::invalid_argument{"Missing Inspector choice label"};
+                for (std::size_t b = 0; b < a; ++b)
+                    if (choices[a].value == choices[b].value)
+                        throw std::invalid_argument{"Duplicate Inspector choice value"};
+            }
+        }
+    }  // namespace Detail
+
     /** @brief Validates static metadata without invoking accessors, predicates or drawing code.
      * @param fields Static definitions in display order. @return The same array; malformed definitions fail compilation.
      */
@@ -117,19 +133,11 @@ namespace Horo::Editor::InspectorFields {
             const auto &field = fields[i];
             if (!field.id || !*field.id || !field.labelKey || !*field.labelKey || !field.draw || !field.defaultValue ||
                 !(field.displayScale > 0.0F) || field.displayScale > std::numeric_limits<float>::max())
-                throw "Invalid Inspector field metadata";
+                throw std::invalid_argument{"Invalid Inspector field metadata"};
             for (std::size_t j = 0; j < i; ++j)
                 if (std::string_view{fields[j].id} == field.id)
-                    throw "Duplicate Inspector field ID";
-            if (field.control == Control::Choice && (field.choices.empty() || field.choices.size() > 32))
-                throw "Empty Inspector choice list";
-            for (std::size_t a = 0; a < field.choices.size(); ++a) {
-                if (!field.choices[a].labelKey || !*field.choices[a].labelKey)
-                    throw "Missing Inspector choice label";
-                for (std::size_t b = 0; b < a; ++b)
-                    if (field.choices[a].value == field.choices[b].value)
-                        throw "Duplicate Inspector choice value";
-            }
+                    throw std::invalid_argument{"Duplicate Inspector field ID"};
+            Detail::CheckChoices(field.control, field.choices);
         }
         return fields;
     }
@@ -157,8 +165,8 @@ namespace Horo::Editor::InspectorFields {
             const auto edit = presentation.draw(presentation, model, context);
             ImGui::EndDisabled();
             if (!field.readOnly) {
-                result.changed |= edit.changed;
-                result.committed |= edit.committed;
+                result.changed = result.changed || edit.changed;
+                result.committed = result.committed || edit.committed;
             }
         }
         return result;
@@ -190,6 +198,26 @@ namespace Horo::Editor::InspectorFields {
         /** @brief Resolves field copy only at draw time, preserving locale changes without catalog rebuilds. */
         template <typename Model> const char *Label(const Field<Model> &field, const EditorGuiContext &context) {
             return field.labelKey ? context.localization.Get("editor", field.labelKey).c_str() : "";
+        }
+
+        /** @brief Draws an explicit enum vocabulary and commits only an admitted selected value. */
+        template <typename Model, typename Value>
+        Ui::PropertyEditResult DrawChoice(const Field<Model> &field, Value &value, const char *label, const EditorGuiContext &context) {
+            std::array<const char *, 32> labels{};
+            if (field.choices.empty() || field.choices.size() > labels.size())
+                return {};
+            int selected = -1;
+            for (std::size_t i = 0; i < field.choices.size(); ++i) {
+                labels[i] = context.localization.Get("editor", field.choices[i].labelKey).c_str();
+                if (static_cast<std::int64_t>(value) == field.choices[i].value)
+                    selected = static_cast<int>(i);
+            }
+            const bool changed =
+                Ui::DrawComboPropRow(label, field.id, selected, std::span<const char *const>{labels.data(), field.choices.size()},
+                                     context.theme.fonts);
+            if (changed && selected >= 0 && static_cast<std::size_t>(selected) < field.choices.size())
+                value = static_cast<std::remove_cvref_t<decltype(value)>>(field.choices[static_cast<std::size_t>(selected)].value);
+            return {changed, changed};
         }
 
         /** @brief Shared typed adapter for ordinary scalar/vector/choice fields. */
@@ -230,28 +258,16 @@ namespace Horo::Editor::InspectorFields {
                     value = static_cast<Value>(std::min(displayed, static_cast<std::uint64_t>(std::numeric_limits<Value>::max())));
                 return edit;
             } else if constexpr (Kind == Control::Choice) {
-                std::array<const char *, 32> labels{};
-                if (field.choices.empty() || field.choices.size() > labels.size())
-                    return {};
-                int selected = -1;
-                for (std::size_t i = 0; i < field.choices.size(); ++i) {
-                    labels[i] = context.localization.Get("editor", field.choices[i].labelKey).c_str();
-                    if (static_cast<std::int64_t>(value) == field.choices[i].value)
-                        selected = static_cast<int>(i);
-                }
-                const bool changed =
-                    Ui::DrawComboPropRow(label, field.id, selected, std::span<const char *const>{labels.data(), field.choices.size()},
-                                         context.theme.fonts);
-                if (changed && selected >= 0 && static_cast<std::size_t>(selected) < field.choices.size())
-                    value = static_cast<std::remove_cvref_t<decltype(value)>>(field.choices[static_cast<std::size_t>(selected)].value);
-                return {changed, changed};
+                return DrawChoice(field, value, label, context);
             } else {
                 std::array components{value.x, value.y, value.z};
                 Ui::PropertyEditResult edit;
                 if constexpr (Kind == Control::Color3)
                     edit = Ui::DrawColor3PropRow(label, field.id, components, context.theme.fonts, !valid);
-                else
-                    edit = Ui::DrawFloat3PropRow(label, field.id, components, context.theme.fonts, field.number.speed);
+                else {
+                    const auto vectorEdit = Ui::DrawFloat3PropRow(label, field.id, components, context.theme.fonts, field.number.speed);
+                    edit = {.changed = vectorEdit.changed, .committed = vectorEdit.committed};
+                }
                 if (edit.changed)
                     value = {components[0], components[1], components[2]};
                 return edit;
