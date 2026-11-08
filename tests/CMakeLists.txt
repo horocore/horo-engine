@@ -4222,8 +4222,7 @@ add_executable(HoroSceneSourceTests
 target_compile_features(HoroSceneSourceTests PRIVATE cxx_std_20)
 target_include_directories(HoroSceneSourceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroSceneSourceTests PRIVATE HoroEngine::SceneSource Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
-catch_discover_tests(HoroSceneSourceTests TEST_PREFIX "HoroSceneSourceTests::"
-        PROPERTIES LABELS "unit;scene;serialization;headless")
+horo_register_catch_test(HoroSceneSourceTests LABELS "unit;scene;serialization;headless")
 add_test(NAME HoroCharacterWirePropertyFuzzTests COMMAND HoroSceneSourceTests "[character-property]")
 set_tests_properties(HoroCharacterWirePropertyFuzzTests PROPERTIES LABELS "unit;scene;character;property;fuzz;headless" TIMEOUT 90 RUN_SERIAL TRUE)
 add_executable(HoroEditorViewportPickingTests
@@ -4331,8 +4330,7 @@ add_executable(HoroColorPipelineTests
 )
 target_compile_features(HoroColorPipelineTests PRIVATE cxx_std_20)
 target_link_libraries(HoroColorPipelineTests PRIVATE HoroEngine::RenderApi Catch2::Catch2WithMain HoroColorOutputShaderRecipeInternal)
-catch_discover_tests(HoroColorPipelineTests TEST_PREFIX "HoroColorPipelineTests::"
-        DISCOVERY_MODE PRE_TEST PROPERTIES LABELS "unit;renderer;color;exposure")
+horo_register_catch_test(HoroColorPipelineTests LABELS "unit;renderer;color;exposure")
 add_executable(HoroColorCreativeLookPackageTests
         unit/runtime/renderer/ColorCreativeLookPackageTests.cpp
         unit/runtime/renderer/ColorCreativeLookProducedPackageTests.cpp)
@@ -4341,8 +4339,7 @@ target_compile_definitions(HoroColorCreativeLookPackageTests PRIVATE
         HORO_CREATIVE_LOOK_FIXTURE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/renderer/color/creative-look-produced")
 target_link_libraries(HoroColorCreativeLookPackageTests PRIVATE
         HoroColorOutputPackageInternal Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
-catch_discover_tests(HoroColorCreativeLookPackageTests TEST_PREFIX "HoroColorCreativeLookPackageTests::"
-        DISCOVERY_MODE PRE_TEST PROPERTIES LABELS "unit;renderer;color;look-package")
+horo_register_catch_test(HoroColorCreativeLookPackageTests LABELS "unit;renderer;color;look-package")
 add_executable(HoroRegisterRasterMultiSampledReflectionTests
         unit/runtime/renderer/RegisterRasterMultiSampledReflectionTests.cpp)
 target_compile_features(HoroRegisterRasterMultiSampledReflectionTests PRIVATE cxx_std_20)

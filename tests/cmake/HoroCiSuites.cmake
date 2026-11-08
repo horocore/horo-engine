@@ -34,6 +34,9 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroLuaScriptModuleRuntimePublicHeaderConsumer
     HoroJavaScriptModuleRuntimePublicHeaderConsumer
     HoroFoundationJsonTests
+    HoroSceneSourceTests
+    HoroColorPipelineTests
+    HoroColorCreativeLookPackageTests
     HoroProjectCollisionSettingsTests
     HoroCollisionSettingsPublicConsumer
     HoroPublicationLockFoundationConsumer
