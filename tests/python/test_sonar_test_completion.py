@@ -186,6 +186,8 @@ def test_workflow_keeps_test_failures_and_pr_fail_fast() -> None:
     collector = steps["Collect fastcov line coverage"]
     assert "steps.python_tests.outcome == 'success'" in collector
     assert collector.index("validate_sonar_test_completion.py") < collector.index("collect_sonar_coverage.sh")
-    assert "steps.coverage.outcome == 'success'" in steps["Install cached Sonar scanner"]
+    assert "steps.coverage.outcome == 'success'" in steps["Capture exact native analysis inputs"]
+    assert "steps.analysis_bundle.outcome == 'success'" in steps["Publish source-bound native analysis inputs"]
+    assert "steps.analysis_restore.outcome == 'success'" in steps["Analyze code and wait for Quality Gate"]
     assert "steps.scanner_install.outcome == 'success'" in steps["Analyze code and wait for Quality Gate"]
     assert "-Dsonar.qualitygate.wait=true" in workflow

@@ -12,10 +12,15 @@ pytest_plugins = ("pytester",)
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def sonar_coverage_job():
+    workflow = (ROOT / '.github/workflows/sonar.yml').read_text()
+    return workflow.split('  sonar:', 1)[1].split('\n  sonar-main:', 1)[0]
+
+
 def test_sonar_cooks_and_verifies_locally_after_build_before_coverage():
     workflow = (ROOT / '.github/workflows/sonar.yml').read_text()
     assert '  viewport-assets:' not in workflow
-    consumer = workflow.split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     assert re.search(r'^    runs-on: (?:&sonar_runner )?ubuntu-26\.04$', consumer, re.MULTILINE)
     assert 'needs:' not in consumer
     assert 'actions: read' not in consumer
@@ -59,7 +64,7 @@ def require_provisioning_failure_policy(consumer):
 
 
 def test_provisioning_failure_policy_accepts_optional_compiler_checkpoints():
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
 
 
@@ -70,7 +75,7 @@ def test_provisioning_failure_policy_accepts_optional_compiler_checkpoints():
     'Verify and select viewport data for coverage', 'Run C++ coverage tests',
 ])
 def test_provisioning_failure_policy_rejects_ignored_required_step(name):
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
     marker = f'      - name: {name}\n'
     mutated = consumer.replace(marker, marker + '        continue-on-error: true\n', 1)
@@ -80,17 +85,17 @@ def test_provisioning_failure_policy_rejects_ignored_required_step(name):
 
 
 def test_provisioning_failure_policy_rejects_ignored_job():
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
-    mutated = consumer.replace('    name: SonarCloud\n',
-                               '    name: SonarCloud\n    continue-on-error: true\n', 1)
+    mutated = consumer.replace('    name: Sonar coverage\n',
+                               '    name: Sonar coverage\n    continue-on-error: true\n', 1)
     assert mutated != consumer
     with pytest.raises(AssertionError):
         require_provisioning_failure_policy(mutated)
 
 
 def test_provisioning_failure_policy_rejects_unrelated_optional_step():
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
     marker = '      - name: Build instrumented targets\n'
     extra = ('      - name: Unrelated optional setup\n'
@@ -107,7 +112,7 @@ def test_provisioning_failure_policy_rejects_unrelated_optional_step():
     ('uses: ./.github/actions/publish-compiler-checkpoint', 'uses: different/action'),
 ])
 def test_provisioning_failure_policy_rejects_repurposed_optional_step(original, replacement):
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
     mutated = consumer.replace(original, replacement, 1)
     assert mutated != consumer

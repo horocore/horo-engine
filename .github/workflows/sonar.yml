@@ -18,9 +18,9 @@ concurrency:
 
 jobs:
   sonar:
-    name: SonarCloud
+    name: Sonar coverage
     runs-on: &sonar_runner ubuntu-26.04
-    # Cold instrumented builds exceed 100 minutes before the full test and analysis phases.
+    # Build and test independently; the cold full CFamily scan has its own job budget.
     timeout-minutes: 240
     if: ${{ !(github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     permissions:
@@ -36,6 +36,9 @@ jobs:
       SONAR_USER_HOME: ${{ github.workspace }}/.sonar/user-home
       SONAR_SCANNER_VERSION: '7.2.0.5079'
       HORO_COMPILER_LAUNCHER: ccache
+
+    outputs: &sonar_coverage_outputs
+      analysis-artifact-id: ${{ steps.analysis_inputs.outputs.artifact-id }}
 
     steps: &sonar_steps
       - name: Checkout source and Git history
@@ -83,15 +86,6 @@ jobs:
         env:
           COMPILER_NAMESPACE: sonar-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.compiler_identity.outputs.c-compiler }}-${{ steps.compiler_identity.outputs.compiler }}-main-
         run: python3 .github/scripts/compiler_registry.py fetch --key "$COMPILER_NAMESPACE"
-
-      - name: Restore Sonar scanner downloads
-        id: scanner_cache
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
-        with:
-          path: |
-            ${{ github.workspace }}/.sonar/user-home/cache
-            ${{ github.workspace }}/.sonar/user-home/sonar-scanner-${{ env.SONAR_SCANNER_VERSION }}-linux-x64
-          key: sonar-v3-scanner-${{ env.SONAR_SCANNER_VERSION }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Setup build tools
         uses: ./.github/actions/setup-build-tools
@@ -198,14 +192,112 @@ jobs:
             build/sonar/coverage-ctest-discovery.json
             build/sonar/python-coverage.xml
 
+      - name: Capture exact native analysis inputs
+        id: analysis_bundle
+        if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
+        run: |
+          python3 .github/scripts/sonar_analysis_inputs.py pack \
+            --workspace "$GITHUB_WORKSPACE" --build "$GITHUB_WORKSPACE/build/sonar" \
+            --sdk-root "$RUNNER_TEMP/horo-dependency-sdk" --source-sha "$GITHUB_SHA" \
+            --bundle "$GITHUB_WORKSPACE/.sonar/analysis-inputs"
+
+      - name: Publish source-bound native analysis inputs
+        id: analysis_inputs
+        if: ${{ !cancelled() && steps.analysis_bundle.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sonar-analysis-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .sonar/analysis-inputs/
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+
+  # Only this canonical producer can publish dependency/compiler checkpoints.
+  sonar-main:
+    name: Sonar coverage (main)
+    runs-on: *sonar_runner
+    timeout-minutes: 240
+    if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+      packages: write
+    env: *sonar_environment
+    outputs: *sonar_coverage_outputs
+    steps: *sonar_steps
+
+  sonar-analysis:
+    name: SonarCloud
+    needs: [sonar, sonar-main]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: *sonar_runner
+    # The first uncached 2627-unit scan needs a full budget after coverage is produced.
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env: *sonar_environment
+    steps:
+      - name: Require completed coverage and native inputs
+        env:
+          INPUT_ARTIFACT: ${{ needs.sonar.outputs.analysis-artifact-id || needs.sonar-main.outputs.analysis-artifact-id }}
+        run: |
+          if [[ -z "$INPUT_ARTIFACT" ]]; then
+            echo '::error::The native coverage producer did not supply complete analysis inputs.'
+            exit 1
+          fi
+
+      - name: Checkout source and Git history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup matching native tools
+        uses: ./.github/actions/setup-build-tools
+
+      - name: Select analysis Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+
+      - name: Receive exact same-run native inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.sonar.outputs.analysis-artifact-id || needs.sonar-main.outputs.analysis-artifact-id }}
+          path: .sonar/analysis-inputs
+          merge-multiple: true
+
+      - name: Verify source and restore original absolute compile inputs
+        id: analysis_restore
+        run: |
+          python3 .github/scripts/sonar_analysis_inputs.py restore \
+            --workspace "$GITHUB_WORKSPACE" --sdk-root "$RUNNER_TEMP/horo-dependency-sdk" \
+            --source-sha "$GITHUB_SHA" --bundle "$GITHUB_WORKSPACE/.sonar/analysis-inputs"
+
+      - name: Check Sonar authentication
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [[ -z "$SONAR_TOKEN" ]]; then
+            echo '::error::Set the repository Actions secret SONAR_TOKEN before running SonarCloud.'
+            exit 1
+          fi
+
+      - name: Restore Sonar scanner downloads
+        id: scanner_cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: |
+            ${{ github.workspace }}/.sonar/user-home/cache
+            ${{ github.workspace }}/.sonar/user-home/sonar-scanner-${{ env.SONAR_SCANNER_VERSION }}-linux-x64
+          key: sonar-v3-scanner-${{ env.SONAR_SCANNER_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
       - name: Install cached Sonar scanner
         id: scanner_install
-        if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         run: bash .github/scripts/install_sonar_scanner.sh
 
       - name: Analyze code and wait for Quality Gate
         id: scan
-        if: ${{ !cancelled() && steps.scanner_install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.analysis_restore.outcome == 'success' && steps.scanner_install.outcome == 'success' }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           # The default ~4-GB heap stopped taint analysis early. Leave room
@@ -234,15 +326,3 @@ jobs:
             ${{ github.workspace }}/.sonar/user-home/cache
             ${{ github.workspace }}/.sonar/user-home/sonar-scanner-${{ env.SONAR_SCANNER_VERSION }}-linux-x64
           key: ${{ steps.scanner_cache.outputs.cache-primary-key }}
-
-  # Share the complete analysis pipeline; only the canonical main job can publish.
-  sonar-main:
-    name: SonarCloud (main)
-    runs-on: *sonar_runner
-    timeout-minutes: 240
-    if: ${{ github.repository == 'horocore/horo-engine' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
-    permissions:
-      contents: read
-      packages: write
-    env: *sonar_environment
-    steps: *sonar_steps
