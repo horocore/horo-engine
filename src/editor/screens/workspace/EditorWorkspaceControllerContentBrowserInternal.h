@@ -3,7 +3,9 @@
 #include "Horo/Assets/AssetReimport.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Utf8.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
@@ -52,8 +54,8 @@ namespace Horo::Editor {
             if (!candidate.is_absolute())
                 return false;
             const std::filesystem::path normalized = NormalizeAbsolute(candidate);
-            const std::filesystem::path root = NormalizeAbsolute(directory.absoluteRootPath);
-            if (const std::filesystem::path current = NormalizeAbsolute(directory.absoluteCurrentPath);
+            const std::filesystem::path root = NormalizeAbsolute(WorkspaceNativePath(directory.absoluteRootPath));
+            if (const std::filesystem::path current = NormalizeAbsolute(WorkspaceNativePath(directory.absoluteCurrentPath));
                 normalized.empty() || root.empty() || current.empty() || normalized.parent_path() != current ||
                 !HasPathPrefix(root, normalized)) {
                 return false;
@@ -120,7 +122,7 @@ namespace Horo::Editor {
             const std::filesystem::directory_iterator end;
             while (!error && iterator != end) {
                 if (iterator->path().lexically_normal() != normalizedIgnored &&
-                    PortableFold(iterator->path().filename().string()) == foldedName) {
+                    PortableFold(WorkspacePathText(iterator->path().filename())) == foldedName) {
                     return true;
                 }
                 iterator.increment(error);
@@ -129,7 +131,8 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] bool IsPortableEntryName(const std::string_view name) {
-            if (name.empty() || name == "." || name == ".." || name.ends_with(' ') || name.ends_with('.')) {
+            if (!IsValidUtf8ScalarSequence(name) || name.empty() || name == "." || name == ".." || name.ends_with(' ') ||
+                name.ends_with('.')) {
                 return false;
             }
             for (const unsigned char character : name) {
@@ -156,8 +159,8 @@ namespace Horo::Editor {
                 std::filesystem::rename(item->second, item->first, error);
                 if (error) {
                     complete = false;
-                    LOG_ERROR("editor.content_browser", "Rollback rename failed: %s -> %s (%s)", item->second.string().c_str(),
-                              item->first.string().c_str(), error.message().c_str());
+                    LOG_ERROR("editor.content_browser", "Rollback rename failed: %s -> %s (%s)", WorkspacePathText(item->second).c_str(),
+                              WorkspacePathText(item->first).c_str(), error.message().c_str());
                 }
             }
             return complete;
@@ -169,7 +172,7 @@ namespace Horo::Editor {
                 std::error_code error;
                 if (!std::filesystem::remove(*item, error) || error) {
                     complete = false;
-                    LOG_ERROR("editor.content_browser", "Copy rollback removal failed: %s (%s)", item->string().c_str(),
+                    LOG_ERROR("editor.content_browser", "Copy rollback removal failed: %s (%s)", WorkspacePathText(*item).c_str(),
                               error.message().c_str());
                 }
             }
@@ -181,7 +184,7 @@ namespace Horo::Editor {
             if (item == source)
                 return destination;
             std::filesystem::path target = destination;
-            target += item.extension().string();
+            target += item.extension();
             return target;
         }
 
@@ -189,7 +192,7 @@ namespace Horo::Editor {
                                                      const std::vector<std::filesystem::path> &companions) {
             return std::ranges::all_of(companions, [&source, &destination](const std::filesystem::path &item) {
                 const std::filesystem::path target = CompanionDestination(item, source, destination);
-                return !DirectoryContainsPortableName(target.parent_path(), target.filename().string());
+                return !DirectoryContainsPortableName(target.parent_path(), WorkspacePathText(target.filename()));
             });
         }
 
@@ -205,10 +208,11 @@ namespace Horo::Editor {
         [[nodiscard]] std::filesystem::path ResolveDuplicateDestination(const std::filesystem::path &source,
                                                                         const std::filesystem::path &destinationDirectory,
                                                                         const std::vector<std::filesystem::path> &companions) {
-            const std::string extension = source.extension().string();
-            const std::string stem = source.stem().string();
+            const std::string extension = WorkspacePathText(source.extension());
+            const std::string stem = WorkspacePathText(source.stem());
             for (std::uint32_t index = 1; index < 10000; ++index) {
-                const std::filesystem::path candidate = destinationDirectory / std::format("{} ({}){}", stem, index, extension);
+                const std::filesystem::path candidate =
+                    destinationDirectory / WorkspaceNativePath(std::format("{} ({}){}", stem, index, extension));
                 if (AssetDestinationAvailable(source, candidate, companions)) {
                     return candidate;
                 }
@@ -251,7 +255,7 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::string BehaviorNamespace(const std::filesystem::path &projectRoot) {
-            std::string result = projectRoot.filename().string();
+            std::string result = WorkspacePathText(projectRoot.filename());
             std::ranges::transform(result, result.begin(), [](const unsigned char value) {
                 return std::isalnum(value) ? static_cast<char>(std::tolower(value)) : '_';
             });
@@ -367,7 +371,7 @@ namespace Horo::Editor {
             for (std::uint32_t attempt = 0; attempt < 1000; ++attempt) {
                 const std::string fileName = attempt == 0 ? "trash.json" : std::format("trash-{}.json", attempt);
                 const bool collides = std::ranges::any_of(sources, [&fileName](const std::filesystem::path &item) {
-                    return PortableFold(item.filename().string()) == PortableFold(fileName);
+                    return PortableFold(WorkspacePathText(item.filename())) == PortableFold(fileName);
                 });
                 if (!collides)
                     return trashDirectory / fileName;
@@ -400,7 +404,7 @@ namespace Horo::Editor {
                 .moduleId = contribution->moduleId,
                 .moduleVersion = contribution->moduleVersion,
                 .providerVersion = contribution->version,
-                .absoluteAssetPath = entry.absolutePath,
+                .absoluteAssetPath = WorkspaceNativePath(entry.absolutePath),
                 .assetType = std::move(assetType).Value(),
                 .width = 128,
                 .height = 128,

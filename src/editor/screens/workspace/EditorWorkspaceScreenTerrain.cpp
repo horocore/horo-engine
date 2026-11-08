@@ -1,6 +1,7 @@
 #include "EditorWorkspaceController.h"
 #include "EditorWorkspaceScreen.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "terrain/TerrainAssetCreationModal.h"
 #include "terrain/TerrainDocumentHost.h"
 
@@ -27,7 +28,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                               ? Application::TerrainAuthoringAssetKind::LayerSet
                               : Application::TerrainAuthoringAssetKind::FoliageType;
         auto opened = modalHost_.OpenRoot(
-            std::make_unique<TerrainAssetCreationModal>(context_, kind, model.projectRoot, std::move(choices).Value(),
+            std::make_unique<TerrainAssetCreationModal>(context_, kind, controller_->ProjectRoot(), std::move(choices).Value(),
                                                         [controller = controller_.get(), captured,
                                                          lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_}](
                                                             Application::TerrainAuthoringAssetRequest request) {

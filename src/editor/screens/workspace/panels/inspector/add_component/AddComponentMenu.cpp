@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Paths.h"
+#include "editor/screens/workspace/WorkspacePathText.h"
 
 #include <type_traits>
 
@@ -64,7 +65,7 @@ namespace Horo::Editor {
                 }
             } else if constexpr (std::is_same_v<T, AddComponentWorkflow>) {
                 command.command = EditorWorkspaceViewCommand::CreateLuaBehavior;
-                command.stringPayload = ProjectLayout::ScriptsRoot(std::filesystem::path{projectRoot}).string();
+                command.stringPayload = WorkspacePathText(ProjectLayout::ScriptsRoot(WorkspaceNativePath(projectRoot)));
             } else {
                 command.command = EditorWorkspaceViewCommand::AttachBehaviorToObject;
                 command.objectPayload = object.id;

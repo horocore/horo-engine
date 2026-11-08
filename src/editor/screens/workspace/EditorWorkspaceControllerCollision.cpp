@@ -92,7 +92,7 @@ namespace Horo::Editor {
         if (!m_mutableAssetRegistry || !m_durableFiles || !m_mutations || !m_collisionInventory || !m_collisionActivation ||
             !m_defaultScenePath.has_value() || !m_assetRegistrySource)
             return Opening::Failure(Unavailable());
-        auto metadata = Application::LoadProjectMetadata(std::filesystem::path{m_viewModel.projectRoot});
+        auto metadata = Application::LoadProjectMetadata(ProjectRoot());
         if (metadata.HasError())
             return Opening::Failure(metadata.ErrorValue());
         if (auto bound = BindCollisionScene(); bound.HasError())
@@ -100,8 +100,7 @@ namespace Horo::Editor {
         RefreshCollisionActivation();
         const CollisionProjectSettingsOwners owners{*m_mutableAssetRegistry, *m_durableFiles,    *m_mutations,        *m_collisionInventory,
                                                     *m_assetRegistrySource,  &*m_collisionScene, *m_defaultScenePath, m_triggerBinding};
-        auto opened = CollisionProjectSettingsSession::Open(std::filesystem::path{m_viewModel.projectRoot}, metadata.Value().projectId,
-                                                            owners, *m_collisionActivation);
+        auto opened = CollisionProjectSettingsSession::Open(ProjectRoot(), metadata.Value().projectId, owners, *m_collisionActivation);
         if (opened.HasError())
             return opened;
         m_collisionSettings = opened.Value();

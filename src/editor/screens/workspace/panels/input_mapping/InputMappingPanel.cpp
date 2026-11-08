@@ -7,6 +7,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/ErrorCode.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/WorkspacePathText.h"
 
 #include <algorithm>
 #include <array>
@@ -152,7 +153,10 @@ namespace Horo::Editor {
 
     void InputMappingPanel::DrawPanel(const ImVec2 &position, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
                                       EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        projectRoot_ = viewModel.projectRoot;
+        if (projectRootText_ != viewModel.projectRoot) {
+            projectRoot_ = WorkspaceNativePath(viewModel.projectRoot);
+            projectRootText_ = viewModel.projectRoot;
+        }
         const std::array labels{
             InputMappingPanel::kTextScope.Text(context.localization, "actions").c_str(),
             InputMappingPanel::kTextScope.Text(context.localization, "devices").c_str(),

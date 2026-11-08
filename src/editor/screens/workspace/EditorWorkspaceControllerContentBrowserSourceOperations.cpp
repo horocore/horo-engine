@@ -1,8 +1,10 @@
+#include "WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 
 #include <algorithm>
+#include <system_error>
 #include <utility>
 
 namespace Horo::Editor {
@@ -37,11 +39,24 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::OpenSourceFile(const SourceOpenRequest &request) {
         m_viewModel.contentBrowserOperationError.clear();
+        try {
+            const auto text = WorkspacePathText(request.path);
+            if (!IsValidUtf8ScalarSequence(text) || text.find('\0') != std::string::npos) {
+                m_viewModel.contentBrowserOperationError = request.origin == SourceOpenOrigin::DiagnosticNavigation
+                                                               ? "workspace.global_dock.build_output.source.invalid"
+                                                               : "workspace.source_open.unsafe";
+                return;
+            }
+        } catch (const std::system_error &) {
+            m_viewModel.contentBrowserOperationError = request.origin == SourceOpenOrigin::DiagnosticNavigation
+                                                           ? "workspace.global_dock.build_output.source.invalid"
+                                                           : "workspace.source_open.unsafe";
+            return;
+        }
         if (TryOpenTerrainDocument(request))
             return;
         if (request.path.extension() == ".horoworld") {
-            const auto relative =
-                request.path.is_absolute() ? request.path.lexically_relative(m_sourceOpenService.ProjectRoot()) : request.path;
+            const auto relative = request.path.is_absolute() ? request.path.lexically_relative(ProjectRoot()) : request.path;
             const auto spelling = relative.generic_u8string();
             const std::string portable{spelling.begin(), spelling.end()};
             const auto current = WorldDocuments().Snapshot();
@@ -119,7 +134,7 @@ namespace Horo::Editor {
             return;
 
         if (auto lease = m_mutations->TryAcquire(ProjectMutationRequest{
-                .projectRoot = m_viewModel.projectRoot,
+                .projectRoot = ProjectRoot(),
                 .owner = ProjectMutationOwner::Asset,
                 .operationId = "content-browser-rename",
             });
@@ -136,8 +151,9 @@ namespace Horo::Editor {
     }
 
     bool EditorWorkspaceController::ResolveContentBrowserRenameSources(ContentBrowserRenamePlan &plan) {
-        const std::filesystem::path projectRoot = NormalizeAbsolute(m_viewModel.projectRoot);
-        const Assets::AssetRecord *record = m_assetRegistry.FindByPath(plan.source.lexically_relative(projectRoot).generic_string());
+        const std::filesystem::path projectRoot = NormalizeAbsolute(ProjectRoot());
+        const Assets::AssetRecord *record =
+            m_assetRegistry.FindByPath(WorkspacePortablePathText(plan.source.lexically_relative(projectRoot)));
         const auto companions = ValidatedAssetCompanions(plan.source, record != nullptr);
         if (!companions.has_value()) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.companion_invalid";
@@ -147,7 +163,7 @@ namespace Horo::Editor {
         if (const bool destinationsAvailable = std::ranges::all_of(plan.sources,
                                                                    [&](const std::filesystem::path &item) {
             const std::filesystem::path target = CompanionDestination(item, plan.source, plan.destination);
-            return !DirectoryContainsPortableName(target.parent_path(), target.filename().string(), item);
+            return !DirectoryContainsPortableName(target.parent_path(), WorkspacePathText(target.filename()), item);
         });
             !destinationsAvailable) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.name_exists";
@@ -163,9 +179,12 @@ namespace Horo::Editor {
             return std::nullopt;
         }
         ContentBrowserRenamePlan plan{.source = NormalizeAbsolute(absolutePath)};
-        std::filesystem::path requestedName{newName};
-        if (!IsDirectContentBrowserEntry(m_viewModel.contentBrowser, plan.source) || requestedName != requestedName.filename() ||
-            !IsPortableEntryName(newName)) {
+        if (!IsPortableEntryName(newName)) {
+            m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_name";
+            return std::nullopt;
+        }
+        std::filesystem::path requestedName = WorkspaceNativePath(newName);
+        if (!IsDirectContentBrowserEntry(m_viewModel.contentBrowser, plan.source) || requestedName != requestedName.filename()) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_name";
             return std::nullopt;
         }
@@ -173,7 +192,7 @@ namespace Horo::Editor {
         std::error_code error;
         const bool regularFile = std::filesystem::is_regular_file(plan.source, error);
         if (regularFile && requestedName.extension().empty())
-            requestedName += plan.source.extension().string();
+            requestedName += plan.source.extension();
         if (regularFile && requestedName.extension() != plan.source.extension()) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_name";
             return std::nullopt;
@@ -181,7 +200,7 @@ namespace Horo::Editor {
         plan.destination = plan.source.parent_path() / requestedName;
         if (plan.destination == plan.source)
             return std::nullopt;
-        if (DirectoryContainsPortableName(plan.source.parent_path(), requestedName.string(), plan.source)) {
+        if (DirectoryContainsPortableName(plan.source.parent_path(), WorkspacePathText(requestedName), plan.source)) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.name_exists";
             return std::nullopt;
         }
@@ -202,7 +221,7 @@ namespace Horo::Editor {
     }
 
     bool EditorWorkspaceController::PublishRenamedContentBrowserEntries(const ContentBrowserPathMoves &moved) {
-        const std::filesystem::path projectRoot = NormalizeAbsolute(m_viewModel.projectRoot);
+        const std::filesystem::path projectRoot = NormalizeAbsolute(ProjectRoot());
         const auto rollback = [this, &moved, &projectRoot]() {
             const bool rollbackComplete = RollbackPathMoves(moved);
             static_cast<void>(RebuildProjectAssetRegistry(projectRoot));
@@ -224,7 +243,7 @@ namespace Horo::Editor {
         }
         m_assetRegistry = rebuiltSnapshot;
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-        RebuildContentBrowserProjection(projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
+        RebuildContentBrowserProjection(projectRoot, WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         return true;
     }
 
@@ -246,7 +265,7 @@ namespace Horo::Editor {
         }
 
         if (auto lease = m_mutations->TryAcquire(ProjectMutationRequest{
-                .projectRoot = m_viewModel.projectRoot,
+                .projectRoot = ProjectRoot(),
                 .owner = ProjectMutationOwner::Asset,
                 .operationId = "content-browser-delete",
             });
@@ -274,13 +293,13 @@ namespace Horo::Editor {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.delete_failed";
             return std::nullopt;
         }
-        ContentBrowserDeletePlan plan{.projectRoot = NormalizeAbsolute(m_viewModel.projectRoot), .source = source};
+        ContentBrowserDeletePlan plan{.projectRoot = NormalizeAbsolute(ProjectRoot()), .source = source};
         if (directory) {
             plan.sources.push_back(source);
             return plan;
         }
 
-        plan.deletedAssetProjectPath = source.lexically_relative(plan.projectRoot).generic_string();
+        plan.deletedAssetProjectPath = WorkspacePortablePathText(source.lexically_relative(plan.projectRoot));
         const Assets::AssetRecord *record = m_assetRegistry.FindByPath(plan.deletedAssetProjectPath);
         if (record != nullptr)
             plan.deletedAssetId = record->id;
@@ -310,11 +329,12 @@ namespace Horo::Editor {
         }
 
         nlohmann::json manifest{{"schemaVersion", 1},
-                                {"originalAbsolutePath", plan.source.string()},
+                                {"originalAbsolutePath", WorkspacePathText(plan.source)},
                                 {"deletedAtUnixMicroseconds", stamp},
                                 {"entries", nlohmann::json::array()}};
         for (const std::filesystem::path &item : plan.sources) {
-            manifest["entries"].push_back({{"originalAbsolutePath", item.string()}, {"trashFileName", item.filename().string()}});
+            manifest["entries"].push_back(
+                {{"originalAbsolutePath", WorkspacePathText(item)}, {"trashFileName", WorkspacePathText(item.filename())}});
         }
         if (const std::optional<std::filesystem::path> manifestPath = SelectTrashManifestPath(*trashDirectory, plan.sources);
             !manifestPath.has_value() || m_durableFiles->WriteDurable(*manifestPath, JsonBytes(manifest)).HasError()) {
@@ -382,10 +402,10 @@ namespace Horo::Editor {
                                                 rebuiltSnapshot.FindByPath(plan.deletedAssetProjectPath) != nullptr)) {
             return rollback();
         }
-        LOG_INFO("editor.content_browser", "Moved asset entry to recoverable project trash: %s", trashDirectory.string().c_str());
+        LOG_INFO("editor.content_browser", "Moved asset entry to recoverable project trash: %s", WorkspacePathText(trashDirectory).c_str());
         m_assetRegistry = rebuiltSnapshot;
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-        RebuildContentBrowserProjection(plan.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
+        RebuildContentBrowserProjection(plan.projectRoot, WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         return true;
     }
 }  // namespace Horo::Editor

@@ -228,6 +228,12 @@ namespace Horo::Editor {
             return m_viewModel;
         }
 
+        /** @brief Returns the captured native project root without reparsing presentation text.
+         * @return Canonical/lexical root retained by this workspace owner. */
+        [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept {
+            return m_projectRoot;
+        }
+
         /** @brief Returns the workspace-owned typed source query/edit capability, independently from widgets.
          * @return Owner-thread document service; workers receive immutable snapshots only.
          */
@@ -567,6 +573,7 @@ namespace Horo::Editor {
         DocumentInstanceId m_terrainCookDocument;
         bool m_terrainCookAdoption{};
         Assets::AssetRegistryRevision m_terrainCookRegistry;
+        std::filesystem::path m_projectRoot;
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
         std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;

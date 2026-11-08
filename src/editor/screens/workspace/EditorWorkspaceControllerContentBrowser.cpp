@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
@@ -81,7 +82,7 @@ namespace Horo::Editor {
                     .moduleVersion = std::to_string(m_assetRegistry.Revision().value),
                     // A fresh directory publication invalidates nested-source cache entries even when identity metadata is unchanged.
                     .providerVersion = std::to_string(m_contentBrowserPreviewGeneration),
-                    .absoluteAssetPath = entry.absolutePath,
+                    .absoluteAssetPath = WorkspaceNativePath(entry.absolutePath),
                     .assetType = *entry.registeredType,
                     .provider = CreatePrefabAssetPreviewProvider(m_assetRegistry, asset.Value(), m_prefabSourceCapture, &limits.Value(),
                                                                  [values = PrefabAssetPreviewValues{.schemas = m_navigationPrefabSchemas,
@@ -170,7 +171,7 @@ namespace Horo::Editor {
         m_viewModel.assetRegistryRevision = assetRegistry.Revision();
         m_contentBrowserRefreshPending = false;
         m_contentBrowserLoadingPresented = false;
-        RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
+        RebuildContentBrowserProjection(ProjectRoot(), WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         ReconcileContentBrowserNavigation();
         RefreshPrefabHierarchy(m_document.Snapshot());
         for (const auto &entry : m_prefabDocuments) {
@@ -200,17 +201,17 @@ namespace Horo::Editor {
         m_contentBrowserRefreshPending = false;
         m_contentBrowserLoadingPresented = false;
         if (m_mutableAssetRegistry != nullptr) {
-            if (auto rebuilt = RebuildProjectAssetRegistry(m_viewModel.projectRoot);
+            if (auto rebuilt = RebuildProjectAssetRegistry(ProjectRoot());
                 rebuilt.HasError() || rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Failed) {
                 m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.registry_failed";
-                RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
+                RebuildContentBrowserProjection(ProjectRoot(), WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
                 ReconcileContentBrowserNavigation();
                 return;
             }
             m_assetRegistry = m_mutableAssetRegistry->Snapshot();
             m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
         }
-        RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
+        RebuildContentBrowserProjection(ProjectRoot(), WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         ReconcileContentBrowserNavigation();
     }
 
@@ -224,8 +225,8 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ReconcileContentBrowserNavigation() {
-        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.projectRoot);
-        const std::filesystem::path current = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteCurrentPath);
+        const std::filesystem::path root = NormalizeAbsolute(ProjectRoot());
+        const std::filesystem::path current = NormalizeAbsolute(WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         const auto isValidHistoryEntry = [&root, &current](const std::filesystem::path &entry) {
             const std::filesystem::path normalized = NormalizeAbsolute(entry);
             return !normalized.empty() && normalized != current && IsProjectContentBrowserDirectoryTargetAllowed(root, normalized);
@@ -241,14 +242,14 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::NavigateContentBrowser(const std::filesystem::path &absoluteDirectory, const bool recordHistory) {
-        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.projectRoot);
+        const std::filesystem::path root = NormalizeAbsolute(ProjectRoot());
         const std::filesystem::path destination = NormalizeAbsolute(absoluteDirectory);
         if (!IsProjectContentBrowserDirectoryTargetAllowed(root, destination)) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_target";
             return;
         }
 
-        const std::filesystem::path current = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteCurrentPath);
+        const std::filesystem::path current = NormalizeAbsolute(WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         if (destination == current)
             return;
 
@@ -258,7 +259,7 @@ namespace Horo::Editor {
             m_contentBrowserBackHistory.push_back(current);
             m_contentBrowserForwardHistory.clear();
         }
-        RebuildContentBrowserProjection(m_viewModel.projectRoot, destination);
+        RebuildContentBrowserProjection(ProjectRoot(), destination);
         m_viewModel.contentBrowserOperationError.clear();
         m_viewModel.contentBrowserCanNavigateBack = !m_contentBrowserBackHistory.empty();
         m_viewModel.contentBrowserCanNavigateForward = !m_contentBrowserForwardHistory.empty();
@@ -267,11 +268,11 @@ namespace Horo::Editor {
     void EditorWorkspaceController::NavigateContentBrowserBack() {
         if (m_contentBrowserBackHistory.empty())
             return;
-        const std::filesystem::path current = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteCurrentPath);
+        const std::filesystem::path current = NormalizeAbsolute(WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         while (!m_contentBrowserBackHistory.empty()) {
             const std::filesystem::path destination = m_contentBrowserBackHistory.back();
             m_contentBrowserBackHistory.pop_back();
-            if (!IsProjectContentBrowserDirectoryTargetAllowed(m_viewModel.projectRoot, destination)) {
+            if (!IsProjectContentBrowserDirectoryTargetAllowed(ProjectRoot(), destination)) {
                 continue;
             }
             if (!current.empty())
@@ -286,11 +287,11 @@ namespace Horo::Editor {
     void EditorWorkspaceController::NavigateContentBrowserForward() {
         if (m_contentBrowserForwardHistory.empty())
             return;
-        const std::filesystem::path current = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteCurrentPath);
+        const std::filesystem::path current = NormalizeAbsolute(WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         while (!m_contentBrowserForwardHistory.empty()) {
             const std::filesystem::path destination = m_contentBrowserForwardHistory.back();
             m_contentBrowserForwardHistory.pop_back();
-            if (!IsProjectContentBrowserDirectoryTargetAllowed(m_viewModel.projectRoot, destination)) {
+            if (!IsProjectContentBrowserDirectoryTargetAllowed(ProjectRoot(), destination)) {
                 continue;
             }
             if (!current.empty())
@@ -303,8 +304,8 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::NavigateContentBrowserUp() {
-        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteRootPath);
-        const std::filesystem::path current = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteCurrentPath);
+        const std::filesystem::path root = NormalizeAbsolute(WorkspaceNativePath(m_viewModel.contentBrowser.absoluteRootPath));
+        const std::filesystem::path current = NormalizeAbsolute(WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         if (!root.empty() && current != root)
             NavigateContentBrowser(current.parent_path(), true);
     }
@@ -326,7 +327,7 @@ namespace Horo::Editor {
         }
         m_viewModel.contentBrowserClipboard = {
             .mode = mode,
-            .absoluteSourcePath = source.string(),
+            .absoluteSourcePath = WorkspacePathText(source),
         };
     }
 
@@ -339,7 +340,7 @@ namespace Horo::Editor {
             return;
         }
 
-        const std::filesystem::path source = NormalizeAbsolute(clipboard.absoluteSourcePath);
+        const std::filesystem::path source = NormalizeAbsolute(WorkspaceNativePath(clipboard.absoluteSourcePath));
         const std::filesystem::path destination = NormalizeAbsolute(absoluteDirectory);
         bool succeeded{};
         if (clipboard.mode == Copy)
@@ -357,8 +358,8 @@ namespace Horo::Editor {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_target";
             return;
         }
-        const std::filesystem::path source = NormalizeAbsolute(request.absoluteSourcePath);
-        const std::filesystem::path destination = NormalizeAbsolute(request.absoluteDestinationDirectory);
+        const std::filesystem::path source = NormalizeAbsolute(WorkspaceNativePath(request.absoluteSourcePath));
+        const std::filesystem::path destination = NormalizeAbsolute(WorkspaceNativePath(request.absoluteDestinationDirectory));
         if (request.mode == ContentBrowserTransferMode::Copy)
             static_cast<void>(CopyContentBrowserAssetTo(source, destination));
         else
@@ -367,7 +368,7 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::CreateContentBrowserFolder(const std::filesystem::path &absoluteDirectory,
                                                                const std::string_view name) {
-        LOG_INFO("editor.asset_actions", "Create folder requested: directory='%s' name='%s'", absoluteDirectory.string().c_str(),
+        LOG_INFO("editor.asset_actions", "Create folder requested: directory='%s' name='%s'", WorkspacePathText(absoluteDirectory).c_str(),
                  std::string{name}.c_str());
         m_viewModel.contentBrowserOperationError.clear();
         if (m_mutations == nullptr || m_durableFiles == nullptr) {
@@ -375,9 +376,13 @@ namespace Horo::Editor {
             return;
         }
         const std::filesystem::path directory = NormalizeAbsolute(absoluteDirectory);
-        const std::filesystem::path requestedName{name};
-        if (!IsContentBrowserDirectoryTargetAllowed(m_viewModel.contentBrowser.absoluteRootPath, directory) ||
-            requestedName != requestedName.filename() || !IsPortableEntryName(name)) {
+        if (!IsPortableEntryName(name)) {
+            m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_name";
+            return;
+        }
+        const std::filesystem::path requestedName = WorkspaceNativePath(name);
+        if (!IsContentBrowserDirectoryTargetAllowed(WorkspaceNativePath(m_viewModel.contentBrowser.absoluteRootPath), directory) ||
+            requestedName != requestedName.filename()) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_name";
             return;
         }
@@ -387,7 +392,7 @@ namespace Horo::Editor {
         }
 
         if (auto lease = m_mutations->TryAcquire(ProjectMutationRequest{
-                .projectRoot = m_viewModel.projectRoot,
+                .projectRoot = ProjectRoot(),
                 .owner = ProjectMutationOwner::Asset,
                 .operationId = "content-browser-create-folder",
             });
@@ -397,12 +402,12 @@ namespace Horo::Editor {
         } else {
             if (std::error_code error; !std::filesystem::create_directory(directory / requestedName, error) || error) {
                 LOG_ERROR("editor.asset_actions", "Create folder failed: path='%s' error='%s'",
-                          (directory / requestedName).string().c_str(), error.message().c_str());
+                          WorkspacePathText(directory / requestedName).c_str(), error.message().c_str());
                 m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.create_folder_failed";
                 return;
             }
             static_cast<void>(m_durableFiles->SyncDirectory(directory));
-            LOG_INFO("editor.asset_actions", "Create folder completed: path='%s'", (directory / requestedName).string().c_str());
+            LOG_INFO("editor.asset_actions", "Create folder completed: path='%s'", WorkspacePathText(directory / requestedName).c_str());
             RefreshContentBrowserAfterMutation();
         }
     }

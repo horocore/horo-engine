@@ -1,3 +1,4 @@
+#include "WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
@@ -8,7 +9,7 @@ namespace Horo::Editor {
                                                                                const std::filesystem::path &source,
                                                                                Assets::AssetId &assetId,
                                                                                std::vector<std::filesystem::path> &companions) {
-        const std::string projectPath = source.lexically_relative(projectRoot).generic_string();
+        const std::string projectPath = WorkspacePortablePathText(source.lexically_relative(projectRoot));
         const Assets::AssetRecord *record = m_assetRegistry.FindByPath(projectPath);
         const auto validatedCompanions = ValidatedAssetCompanions(source, true);
         if (record == nullptr || !validatedCompanions.has_value()) {
@@ -27,7 +28,7 @@ namespace Horo::Editor {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.unavailable";
             return std::nullopt;
         }
-        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteRootPath);
+        const std::filesystem::path root = NormalizeAbsolute(WorkspaceNativePath(m_viewModel.contentBrowser.absoluteRootPath));
         const std::filesystem::path source = NormalizeAbsolute(absoluteSource);
         const std::filesystem::path destinationDirectory = NormalizeAbsolute(absoluteDestinationDirectory);
         std::error_code error;
@@ -42,7 +43,7 @@ namespace Horo::Editor {
             return std::nullopt;
         }
 
-        const std::filesystem::path projectRoot = NormalizeAbsolute(m_viewModel.projectRoot);
+        const std::filesystem::path projectRoot = NormalizeAbsolute(ProjectRoot());
         Assets::AssetId assetId;
         std::vector<std::filesystem::path> companions;
         if (!ResolveContentBrowserAssetTransferMetadata(projectRoot, source, assetId, companions))
@@ -88,7 +89,7 @@ namespace Horo::Editor {
         (*sidecar)["assetId"] = newId.ToString();
 
         if (auto lease = m_mutations->TryAcquire(ProjectMutationRequest{
-                .projectRoot = m_viewModel.projectRoot,
+                .projectRoot = ProjectRoot(),
                 .owner = ProjectMutationOwner::Asset,
                 .operationId = "content-browser-copy",
             });
@@ -145,14 +146,14 @@ namespace Horo::Editor {
             return rollback("workspace.content_browser.operation.registry_failed");
         }
         const Assets::AssetRegistrySnapshot rebuiltSnapshot = m_mutableAssetRegistry->Snapshot();
-        const std::string destinationProjectPath = destination.lexically_relative(projectRoot).generic_string();
+        const std::string destinationProjectPath = WorkspacePortablePathText(destination.lexically_relative(projectRoot));
         if (const Assets::AssetRecord *copiedRecord = rebuiltSnapshot.Find(copiedId);
             copiedRecord == nullptr || copiedRecord->sourcePath.String() != destinationProjectPath) {
             return rollback("workspace.content_browser.operation.registry_failed");
         }
         m_assetRegistry = rebuiltSnapshot;
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-        RebuildContentBrowserProjection(projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
+        RebuildContentBrowserProjection(projectRoot, WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         return true;
     }
 
@@ -170,7 +171,7 @@ namespace Horo::Editor {
             return false;
 
         if (auto lease = m_mutations->TryAcquire(ProjectMutationRequest{
-                .projectRoot = m_viewModel.projectRoot,
+                .projectRoot = ProjectRoot(),
                 .owner = ProjectMutationOwner::Asset,
                 .operationId = "content-browser-move",
             });
@@ -229,14 +230,14 @@ namespace Horo::Editor {
             return rollback("workspace.content_browser.operation.registry_failed");
         }
         const Assets::AssetRegistrySnapshot rebuiltSnapshot = m_mutableAssetRegistry->Snapshot();
-        const std::string newProjectPath = destination.lexically_relative(projectRoot).generic_string();
+        const std::string newProjectPath = WorkspacePortablePathText(destination.lexically_relative(projectRoot));
         if (const Assets::AssetRecord *movedRecord = rebuiltSnapshot.Find(originalId);
             movedRecord == nullptr || movedRecord->sourcePath.String() != newProjectPath) {
             return rollback("workspace.content_browser.operation.registry_failed");
         }
         m_assetRegistry = rebuiltSnapshot;
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-        RebuildContentBrowserProjection(projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
+        RebuildContentBrowserProjection(projectRoot, WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         return true;
     }
 
@@ -261,7 +262,7 @@ namespace Horo::Editor {
         }
 
         if (auto lease = m_mutations->TryAcquire(ProjectMutationRequest{
-                .projectRoot = m_viewModel.projectRoot,
+                .projectRoot = ProjectRoot(),
                 .owner = ProjectMutationOwner::Asset,
                 .operationId = "content-browser-reimport",
             });
@@ -271,7 +272,7 @@ namespace Horo::Editor {
         } else {
             if (auto reimported = Assets::ReimportProjectAsset(
                     Assets::AssetReimportRequest{
-                        .absoluteProjectRoot = NormalizeAbsolute(m_viewModel.projectRoot),
+                        .absoluteProjectRoot = NormalizeAbsolute(ProjectRoot()),
                         .absoluteAssetPath = target,
                         .importerCatalog = m_importerCatalog,
                         .registry = m_mutableAssetRegistry,
@@ -279,7 +280,7 @@ namespace Horo::Editor {
                     },
                     CancellationToken{});
                 reimported.HasError()) {
-                LOG_ERROR("editor.content_browser", "Reimport failed for %s: %s", target.string().c_str(),
+                LOG_ERROR("editor.content_browser", "Reimport failed for %s: %s", WorkspacePathText(target).c_str(),
                           reimported.ErrorValue().message.c_str());
                 if (reimported.ErrorValue().code.Value() == "asset.import.no_importer")
                     m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.reimport_importer_missing";
@@ -291,14 +292,14 @@ namespace Horo::Editor {
             }
             m_assetRegistry = m_mutableAssetRegistry->Snapshot();
             m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-            RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
+            RebuildContentBrowserProjection(ProjectRoot(), WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
         }
     }
 
     void EditorWorkspaceController::RevealContentBrowserEntry(const std::filesystem::path &absolutePath) {
         m_viewModel.contentBrowserOperationError.clear();
         const std::filesystem::path target = NormalizeAbsolute(absolutePath);
-        const std::filesystem::path root = NormalizeAbsolute(m_viewModel.contentBrowser.absoluteRootPath);
+        const std::filesystem::path root = NormalizeAbsolute(WorkspaceNativePath(m_viewModel.contentBrowser.absoluteRootPath));
         std::error_code error;
         if (const auto status = std::filesystem::symlink_status(target, error);
             error || std::filesystem::is_symlink(status) ||

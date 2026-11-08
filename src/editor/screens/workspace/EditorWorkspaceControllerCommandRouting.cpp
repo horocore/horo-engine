@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorWorkspaceEvents.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
@@ -145,11 +146,11 @@ namespace Horo::Editor {
                 break;
             case EditorWorkspaceViewCommand::SaveSceneAs:
                 if (cmd.stringPayload.has_value())
-                    SaveSceneToPath(std::filesystem::path{*cmd.stringPayload}, false);
+                    SaveSceneToPath(WorkspaceNativePath(*cmd.stringPayload), false);
                 break;
             case EditorWorkspaceViewCommand::SaveSceneCopyAs:
                 if (cmd.stringPayload.has_value())
-                    SaveSceneToPath(std::filesystem::path{*cmd.stringPayload}, true);
+                    SaveSceneToPath(WorkspaceNativePath(*cmd.stringPayload), true);
                 break;
             case EditorWorkspaceViewCommand::ReloadExternalScene:
                 ReloadExternalScene();

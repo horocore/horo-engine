@@ -1,5 +1,6 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Platform.h"
+#include "WorkspacePathText.h"
 #include "editor/modals/settings/NavigationSettingsDraft.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -50,7 +51,7 @@ namespace Horo::Editor {
                 continue;
             if (!m_mutations)
                 return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::WriteFailed));
-            const auto saved = canvas.Save(m_viewModel.projectRoot, *m_mutations, files);
+            const auto saved = canvas.Save(ProjectRoot(), *m_mutations, files);
             if (saved.HasError())
                 return Result<void>::Failure(saved.ErrorValue());
             if (saved.Value().status != UiCanvasDocumentSaveStatus::Saved)
@@ -193,7 +194,7 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::SaveSourceDocumentAs:
                 if (command.sourceSave && command.stringPayload)
                     m_sourceSaveOutcome =
-                        m_sourceOpenService.SaveAs(*command.sourceSave, std::filesystem::path{*command.stringPayload}, files);
+                        m_sourceOpenService.SaveAs(*command.sourceSave, WorkspaceNativePath(*command.stringPayload), files);
                 else
                     m_sourceSaveOutcome = Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::Invalid));
                 return true;

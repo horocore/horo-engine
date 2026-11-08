@@ -1,4 +1,5 @@
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -58,12 +59,12 @@ namespace Horo::Editor {
         m_autosaveRetryDelaySeconds = 0.0F;
         m_autosaveSuppressedForDiscard = false;
         RefreshSceneProjections();
-        LOG_INFO("editor.scene_document", "Reloaded externally changed scene '%s'.", m_defaultScenePath->string().c_str());
+        LOG_INFO("editor.scene_document", "Reloaded externally changed scene '%s'.", WorkspacePathText(*m_defaultScenePath).c_str());
     }
 
     /** @copydoc EditorWorkspaceController::ReadExternalSceneForReplacement */
     Result<LoadedProjectScene> EditorWorkspaceController::ReadExternalSceneForReplacement() const {
-        auto loaded = LoadProjectScene(std::filesystem::path{m_viewModel.projectRoot}, *m_defaultScenePath);
+        auto loaded = LoadProjectScene(ProjectRoot(), *m_defaultScenePath);
         if (loaded.HasError())
             return loaded;
         if (!loaded.Value().existed)
@@ -80,7 +81,7 @@ namespace Horo::Editor {
             LOG_ERROR("editor.collision", "Save or discard collision settings before reloading the Scene owner.");
             return false;
         }
-        if (!DiscardSupersededRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_mutations, *m_durableFiles))
+        if (!DiscardSupersededRecovery(ProjectRoot(), *m_mutations, *m_durableFiles))
             return false;
         if (auto closed = ShutdownCollisionSettings(); closed.HasError())
             return false;
@@ -101,8 +102,7 @@ namespace Horo::Editor {
 
         if (!m_defaultScenePath.has_value())
             return;
-        Result<std::optional<ProjectSceneRecoveryRecord>> recovery =
-            InspectProjectSceneRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_defaultScenePath);
+        Result<std::optional<ProjectSceneRecoveryRecord>> recovery = InspectProjectSceneRecovery(ProjectRoot(), *m_defaultScenePath);
         if (recovery.HasError() || !recovery.Value().has_value()) {
             LOG_ERROR("editor.scene_recovery", "Recovery restore failed because no valid record is available.");
             return;
@@ -135,8 +135,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::DiscardSceneRecovery() {
         if (m_mutations == nullptr || m_durableFiles == nullptr)
             return;
-        if (const Result<void> discarded =
-                DiscardProjectSceneRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_mutations, *m_durableFiles);
+        if (const Result<void> discarded = DiscardProjectSceneRecovery(ProjectRoot(), *m_mutations, *m_durableFiles);
             discarded.HasError()) {
             LOG_ERROR("editor.scene_recovery", "Recovery discard failed: %s", discarded.ErrorValue().message.c_str());
             return;

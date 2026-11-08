@@ -1,5 +1,6 @@
 #include "EditorPlayXrHost.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -32,13 +33,13 @@ namespace Horo::Editor {
 
     Application::GameplayBuildRequest EditorWorkspaceController::MakeGameplayBuildRequest() const {
         return Application::GameplayBuildRequest{
-            .projectRoot = m_viewModel.projectRoot,
+            .projectRoot = ProjectRoot(),
             .environment = m_gameplayBuildEnvironment,
         };
     }
 
     bool EditorWorkspaceController::HasNativeGameplaySources() const {
-        const std::filesystem::path sourceRoot = std::filesystem::path{m_viewModel.projectRoot} / "source" / "gameplay";
+        const std::filesystem::path sourceRoot = ProjectRoot() / "source" / "gameplay";
         std::error_code error;
         if (!std::filesystem::is_directory(sourceRoot, error))
             return false;
@@ -49,7 +50,7 @@ namespace Horo::Editor {
             iterator.increment(error);
             if (!entry.is_regular_file(error))
                 continue;
-            const std::string extension = entry.path().extension().string();
+            const std::string extension = WorkspacePathText(entry.path().extension());
             if (extension == ".c" || extension == ".cc" || extension == ".cpp" || extension == ".cxx" || extension == ".ixx" ||
                 extension == ".cppm")
                 return true;
@@ -158,7 +159,7 @@ namespace Horo::Editor {
         StopCameraCutPreview();
         LOG_INFO("editor.play_session", "Beginning play session for '%s'...", m_viewModel.projectRoot.c_str());
         if (m_gameplayRegistry == nullptr)
-            m_gameplayRegistry = ProjectGameplayRegistry::Discover(m_viewModel.projectRoot, m_gameplayRetirements);
+            m_gameplayRegistry = ProjectGameplayRegistry::Discover(ProjectRoot(), m_gameplayRetirements);
         if (m_gameplayRegistry->HasBlockingDiagnostics()) {
             const std::string diagMsg = m_gameplayRegistry->Diagnostics().front().error.message;
             LOG_ERROR("editor.play_session", "Play session blocked by gameplay diagnostic: %s", diagMsg.c_str());

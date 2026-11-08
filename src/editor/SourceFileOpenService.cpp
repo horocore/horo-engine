@@ -25,8 +25,12 @@ namespace Horo::Editor {
 
         /** @brief Rejects malformed or NUL-terminated aliases before native file access or document admission. */
         [[nodiscard]] bool HasValidPathText(const std::filesystem::path &path) {
-            const auto text = Utf8PathText(path);
-            return IsValidUtf8ScalarSequence(text) && text.find('\0') == std::string::npos;
+            try {
+                const auto text = Utf8PathText(path);
+                return IsValidUtf8ScalarSequence(text) && text.find('\0') == std::string::npos;
+            } catch (const std::system_error &) {
+                return false;
+            }
         }
 
         /** @brief Converts a native relative path to the existing UTF-8 identity before any owner publication. */
@@ -116,7 +120,11 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] Error MakePathError(const ErrorCodeDescriptor &descriptor, const std::filesystem::path &path) {
-            return MakeError(descriptor, "Source path '" + Utf8PathText(path) + "' cannot be opened safely.");
+            try {
+                return MakeError(descriptor, "Source path '" + Utf8PathText(path) + "' cannot be opened safely.");
+            } catch (const std::system_error &) {
+                return MakeError(descriptor, "Source path text cannot be represented safely as UTF-8.");
+            }
         }
 
         [[nodiscard]] Result<std::filesystem::path> ResolveCanonicalProjectPath(const std::filesystem::path &projectRoot,

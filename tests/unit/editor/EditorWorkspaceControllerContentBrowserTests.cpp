@@ -1,6 +1,7 @@
 #include "EditorWorkspaceControllerFilesystemTestSupport.h"
 #include "EditorWorkspaceControllerPolicyTestSupport.h"
 #include "Horo/Assets/MeshEditorPayload.h"
+#include "OwnedTestDirectory.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
@@ -165,6 +166,41 @@ namespace {
         controller.ProcessCommand(EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::RedoScene});
         REQUIRE((controller.ViewModel().objects.size() == 2));
         CHECK(controller.ViewModel().objects.back().name == "chair");
+    }
+
+    TEST_CASE("Content browser projects Unicode native paths as round-trippable UTF-8", "[unit][editor][assets]") {
+        Tests::OwnedTestDirectory fixture{"content-browser-utf8"};
+        const auto root = fixture.Path() / u8"工程";
+        const auto folder = root / "assets" / u8"图 Ğ";
+        REQUIRE(std::filesystem::create_directories(folder));
+        const auto source = folder / u8"模型.txt";
+        std::ofstream(source, std::ios::binary) << "source";
+        auto metadata = source;
+        metadata += ".horo";
+        std::ofstream(metadata, std::ios::binary) << "{}";
+        auto lock = source;
+        lock += ".horo-source.lock";
+        std::ofstream(lock, std::ios::binary) << "lock";
+
+        const auto nativePath = [](const std::string &text) {
+            return std::filesystem::path{std::u8string{text.begin(), text.end()}};
+        };
+        const auto assets = BuildContentBrowserDirectory(root, root / "assets", {});
+        REQUIRE(assets.readable);
+        REQUIRE(assets.entries.size() == 1);
+        CHECK(assets.entries.front().displayName == "图 Ğ");
+        CHECK(assets.entries.front().containedItemCount == 1);
+        CHECK(std::filesystem::equivalent(nativePath(assets.entries.front().absolutePath), folder));
+
+        const auto contents = BuildContentBrowserDirectory(root, folder, {});
+        REQUIRE(contents.readable);
+        REQUIRE(contents.entries.size() == 1);
+        CHECK(contents.entries.front().displayName == "模型");
+        CHECK(std::filesystem::equivalent(nativePath(contents.entries.front().absolutePath), source));
+        CHECK(std::filesystem::equivalent(nativePath(contents.absoluteCurrentPath), folder));
+        REQUIRE_FALSE(contents.breadcrumbs.empty());
+        CHECK(contents.breadcrumbs.back().label == "图 Ğ");
+        CHECK(std::filesystem::equivalent(nativePath(contents.breadcrumbs.back().absolutePath), folder));
     }
 
     TEST_CASE("Gameplay behavior creation requests validate Lua and native kinds", "[unit][editor][behavior]") {

@@ -1,5 +1,6 @@
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
@@ -9,10 +10,10 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::RefreshPhysicsProfiles */
     void EditorWorkspaceController::RefreshPhysicsProfiles() {
         m_viewModel.physicsProfiles.clear();
-        const auto metadata = Application::LoadProjectMetadata(m_viewModel.projectRoot);
+        const auto metadata = Application::LoadProjectMetadata(ProjectRoot());
         if (metadata.HasError())
             return;
-        const auto document = Application::LoadProjectCollisionSettings(m_viewModel.projectRoot, metadata.Value().projectId);
+        const auto document = Application::LoadProjectCollisionSettings(ProjectRoot(), metadata.Value().projectId);
         if (document.HasError())
             return;
         for (const auto &profile : document.Value().settings->Input().profiles)
@@ -24,7 +25,8 @@ namespace Horo::Editor {
         m_viewModel.physicsMaterials.clear();
         for (const auto &record : m_assetRegistry.Records())
             if (record.type.Value() == "core.physics_material")
-                m_viewModel.physicsMaterials.push_back({record.id, std::filesystem::path{record.sourcePath.String()}.stem().string()});
+                m_viewModel.physicsMaterials.push_back(
+                    {record.id, WorkspacePathText(WorkspaceNativePath(record.sourcePath.String()).stem())});
     }
 
     /** @copydoc EditorWorkspaceController::RefreshPhysicsInspectorPort */

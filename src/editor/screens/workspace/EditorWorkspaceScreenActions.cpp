@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Paths.h"
+#include "WorkspacePathText.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
 #include "editor/modals/packages/PackageModal.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
@@ -68,7 +69,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             const std::filesystem::path normalizedProjectRoot = NormalizeAbsolutePath(projectRoot);
             const std::filesystem::path assetsRoot = ProjectLayout::AssetRoot(normalizedProjectRoot);
             const std::filesystem::path scriptsRoot = ProjectLayout::ScriptsRoot(normalizedProjectRoot);
-            const std::filesystem::path requested = NormalizeAbsolutePath(requestedDirectory);
+            const std::filesystem::path requested = NormalizeAbsolutePath(WorkspaceNativePath(requestedDirectory));
             std::filesystem::path destination;
             if (kind == Native) {
                 destination = normalizedProjectRoot / "source" / "gameplay";
@@ -206,7 +207,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::SaveSceneAs */
     bool EditorWorkspaceScreen::SaveSceneAs(const bool copyOnly) {
         const auto &currentPath = controller_->CurrentScenePath();
-        const std::filesystem::path projectRoot{controller_->ViewModel().projectRoot};
+        const std::filesystem::path projectRoot{controller_->ProjectRoot()};
         const std::filesystem::path suggestedPath = currentPath.value_or(ProjectLayout::ScenesRoot(projectRoot) / "main.horo");
 
         auto nativeDialogContext =
@@ -215,9 +216,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         // portable-file-dialogs forwards this value to AppleScript's
         // `default name`, where a full path is interpreted as a literal
         // filename and its separators become colons.
-        const std::string dialogDefault = suggestedPath.filename().string();
+        const std::string dialogDefault = WorkspacePathText(suggestedPath.filename());
 #else
-        const std::string dialogDefault = suggestedPath.string();
+        const std::string dialogDefault = WorkspacePathText(suggestedPath);
 #endif
         pfd::save_file dialog(std::string{context_.localization.Get("editor", copyOnly ? "workspace.scene_save_copy_as.title"
                                                                                        : "workspace.scene_save_as.title")},
@@ -229,26 +230,26 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return true;
         }
 
-        std::filesystem::path destination{selected};
+        std::filesystem::path destination = WorkspaceNativePath(selected);
         if (destination.extension().empty()) {
             destination += ".horo";
         }
         if (!destination.is_absolute()) {
             LOG_ERROR("editor.scene_document", "Native scene destination dialog returned a non-absolute path '%s'.",
-                      destination.string().c_str());
+                      WorkspacePathText(destination).c_str());
             return true;
         }
         std::error_code canonicalError;
         const std::filesystem::path normalized = std::filesystem::weakly_canonical(destination, canonicalError);
         if (canonicalError) {
-            LOG_ERROR("editor.scene_document", "Scene destination '%s' could not be normalized: %s", destination.string().c_str(),
+            LOG_ERROR("editor.scene_document", "Scene destination '%s' could not be normalized: %s", WorkspacePathText(destination).c_str(),
                       canonicalError.message().c_str());
             return true;
         }
 
         EditorWorkspaceViewCommandData command;
         command.command = copyOnly ? EditorWorkspaceViewCommand::SaveSceneCopyAs : EditorWorkspaceViewCommand::SaveSceneAs;
-        command.stringPayload = normalized.string();
+        command.stringPayload = WorkspacePathText(normalized);
         controller_->ProcessCommand(command);
         PublishViewportSceneIfChanged();
         return true;
@@ -275,7 +276,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (!controller_ || !packages_.acquire)
             return;
         const auto acquire = packages_.acquire;
-        const std::filesystem::path root{controller_->ViewModel().projectRoot};
+        const std::filesystem::path root{controller_->ProjectRoot()};
         const auto opened = modalHost_.OpenRoot(std::make_unique<PackageModal>(context_, [acquire, root] {
             return acquire(root);
         }));
@@ -290,7 +291,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const auto &model = controller_->ViewModel();
         if (model.playState != EditorPlayState::Idle && model.playState != EditorPlayState::Failed)
             return;
-        const std::filesystem::path root{model.projectRoot};
+        const std::filesystem::path root{controller_->ProjectRoot()};
         auto store =
             std::make_unique<Application::PlayTopologyStore>(*projectServices_.durableFiles, root / "config" / "play_topologies.json",
                                                              root / ".horo" / "local" / "play_topology_overrides.json");
@@ -332,7 +333,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (captured.HasError())
             return;
         auto opened = modalHost_.OpenRoot(
-            std::make_unique<PrefabCreationModal>(context_, captured.Value(), controller_->ViewModel().projectRoot,
+            std::make_unique<PrefabCreationModal>(context_, captured.Value(), controller_->ProjectRoot(),
                                                   [controller = controller_.get(), localization = &context_.localization,
                                                    lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_},
                                                    expired = EditorWorkspaceScreen::kTextScope.Text(context_.localization,
@@ -363,7 +364,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return;
         }
         const std::optional<std::filesystem::path> destination =
-            ResolveGameplayBehaviorDestination(controller_->ViewModel().projectRoot, kind, requestedDirectory);
+            ResolveGameplayBehaviorDestination(controller_->ProjectRoot(), kind, requestedDirectory);
         if (!destination.has_value()) {
             EditorWorkspaceViewCommandData fallback;
             fallback.command = kind == GameplayBehaviorKind::Native ? EditorWorkspaceViewCommand::CreateNativeBehavior
@@ -378,13 +379,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                    const std::filesystem::path &initialDirectory) -> std::optional<std::filesystem::path> {
             auto dialogContext = input_.router.PushContext(Input::InputContextId{"editor.native_dialog.behavior_destination"},
                                                            Input::InputContextKind::NativeDialog);
-            const std::string selected = pfd::select_folder(std::string{title}, initialDirectory.string()).result();
-            return selected.empty() ? std::nullopt : std::optional{std::filesystem::path{selected}};
+            const std::string selected = pfd::select_folder(std::string{title}, WorkspacePathText(initialDirectory)).result();
+            return selected.empty() ? std::nullopt : std::optional{WorkspaceNativePath(selected)};
         };
-        Result<void> opened =
-            modalHost_.OpenRoot(std::make_unique<GameplayBehaviorFilenameModal>(context_, kind, destination->string(), baseName,
-                                                                                controller_->ViewModel().projectRoot, browse,
-                                                                                [this](CreateGameplayBehaviorRequest request) {
+        Result<void> opened = modalHost_.OpenRoot(
+            std::make_unique<GameplayBehaviorFilenameModal>(context_, kind, destination->string(), baseName, controller_->ProjectRoot(),
+                                                            browse, [this](CreateGameplayBehaviorRequest request) {
             if (!controller_) {
                 return;
             }

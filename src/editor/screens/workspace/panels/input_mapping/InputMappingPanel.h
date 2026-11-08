@@ -61,6 +61,7 @@ namespace Horo::Editor {
         std::optional<Input::ActionId> listeningAction_;
         Input::InputContextToken bindingCaptureContext_;
         std::string statusMessage_;
+        std::string projectRootText_;
         std::filesystem::path projectRoot_;
     };
 }  // namespace Horo::Editor

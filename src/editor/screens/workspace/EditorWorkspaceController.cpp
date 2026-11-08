@@ -9,6 +9,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "WorkspacePathText.h"
 #include "editor/document/EditorViewportPicking.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -91,7 +92,7 @@ namespace Horo::Editor {
                                                          const EditorWorkspaceDependencies &dependencies)
         : m_partitionedWorld(dependencies.world.partitionedWorld), m_runtimeScene(runtimeScene),
           m_triggerBinding(dependencies.triggerBinding), m_playSceneFactory(dependencies.gameplay.sceneFactory),
-          m_assetRegistry(assetRegistry), m_sourceOpenService(projectRoot, m_documentRegistry),
+          m_assetRegistry(assetRegistry), m_projectRoot(projectRoot), m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.world.documentSessionOwner,
                          dependencies.procedural.catalog.document, dependencies.mutations, dependencies.durableFiles,
                          dependencies.procedural.migrator),
@@ -142,16 +143,17 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::InitializeProjectState(const std::filesystem::path &absoluteProjectRoot) {
-        m_viewModel.projectRoot = absoluteProjectRoot.string();
+        m_projectRoot = absoluteProjectRoot;
+        m_viewModel.projectRoot = WorkspacePathText(absoluteProjectRoot);
         if (const auto metadata = Application::LoadProjectMetadata(absoluteProjectRoot); metadata.HasValue())
             m_viewModel.projectName = metadata.Value().name;
         RefreshPhysicsProfiles();
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-        RebuildContentBrowserProjection(m_viewModel.projectRoot, {});
+        RebuildContentBrowserProjection(ProjectRoot(), {});
         if (m_durableFiles != nullptr) {
             ProjectIntegrityValidatorService validator{*m_durableFiles};
             if (const Result<void> repaired = validator.Repair(absoluteProjectRoot); repaired.HasError())
-                LOG_ERROR("editor.project_validator", "Project integrity repair failed for '%s': %s", absoluteProjectRoot.string().c_str(),
+                LOG_ERROR("editor.project_validator", "Project integrity repair failed for '%s': %s", m_viewModel.projectRoot.c_str(),
                           repaired.ErrorValue().message.c_str());
         }
         m_gameplayRegistry = ProjectGameplayRegistry::Discover(absoluteProjectRoot, m_gameplayRetirements);
@@ -204,7 +206,7 @@ namespace Horo::Editor {
         m_defaultScenePath = std::move(projectScene.absolutePath);
         m_sceneFingerprint = std::move(projectScene.fingerprint);
         m_history.Clear();
-        LOG_INFO("editor.scene_document", "Loaded default scene '%s'.", m_defaultScenePath->string().c_str());
+        LOG_INFO("editor.scene_document", "Loaded default scene '%s'.", WorkspacePathText(*m_defaultScenePath).c_str());
         return true;
     }
 
@@ -234,7 +236,7 @@ namespace Horo::Editor {
         if (recovery.Value().has_value()) {
             m_viewModel.recoveryAvailable = true;
             LOG_WARN("editor.scene_recovery", "Validated recovery is available for '%s'; canonical scene was not modified.",
-                     m_defaultScenePath->string().c_str());
+                     WorkspacePathText(*m_defaultScenePath).c_str());
         }
     }
 
@@ -247,7 +249,7 @@ namespace Horo::Editor {
             if (update.error.has_value()) {
                 if (!m_sceneFileWatchErrorPresented) {
                     LOG_WARN("editor.scene_document", "Background scene inspection failed for '%s': %s",
-                             m_defaultScenePath->string().c_str(), update.error->message.c_str());
+                             WorkspacePathText(*m_defaultScenePath).c_str(), update.error->message.c_str());
                     m_sceneFileWatchErrorPresented = true;
                 }
                 continue;
@@ -258,7 +260,7 @@ namespace Horo::Editor {
             const bool conflict = *update.fingerprint != *m_sceneFingerprint;
             if (conflict && !m_viewModel.sceneExternalConflict) {
                 LOG_WARN("editor.scene_document", "Canonical scene changed outside this document session: '%s'.",
-                         m_defaultScenePath->string().c_str());
+                         WorkspacePathText(*m_defaultScenePath).c_str());
             }
             m_viewModel.sceneExternalConflict = conflict;
         }
@@ -269,8 +271,7 @@ namespace Horo::Editor {
         if (m_sceneFileWatchElapsedSeconds < 1.0F)
             return;
         m_sceneFileWatchElapsedSeconds = 0.0F;
-        const Result<std::uint64_t> requested =
-            m_sceneFileWatch->Request(std::filesystem::path{m_viewModel.projectRoot}, *m_defaultScenePath);
+        const Result<std::uint64_t> requested = m_sceneFileWatch->Request(ProjectRoot(), *m_defaultScenePath);
         if (requested.HasError() && !m_sceneFileWatchErrorPresented) {
             LOG_WARN("editor.scene_document", "Background scene inspection could not be scheduled: %s",
                      requested.ErrorValue().message.c_str());
@@ -283,7 +284,7 @@ namespace Horo::Editor {
         if (!m_defaultScenePath.has_value())
             return Result<SceneDocumentComparisonRequest>::Failure(MakeError(SceneComparisonUnavailable));
         return Result<SceneDocumentComparisonRequest>::Success({
-            .absoluteProjectRoot = std::filesystem::path{m_viewModel.projectRoot},
+            .absoluteProjectRoot = ProjectRoot(),
             .absoluteScenePath = *m_defaultScenePath,
             .document = m_document.Snapshot(),
         });
@@ -313,20 +314,19 @@ namespace Horo::Editor {
             return;
         m_gameplaySourceWatchElapsedSeconds = 0.0F;
         for (const ProjectGameplayDiagnostic &diagnostic : m_gameplayRegistry->ReloadChangedLuaSources())
-            LOG_ERROR("editor.gameplay", "Lua reload kept the last working revision for '%s': %s", diagnostic.source.string().c_str(),
-                      diagnostic.error.message.c_str());
+            LOG_ERROR("editor.gameplay", "Lua reload kept the last working revision for '%s': %s",
+                      WorkspacePathText(diagnostic.source).c_str(), diagnostic.error.message.c_str());
         if (!m_gameplayRegistry->ConsumeNativeArtifactChange())
             return;
         if (m_playSession.IsActive()) {
             m_nativeGameplayReloadPending = true;
             return;
         }
-        std::unique_ptr<ProjectGameplayRegistry> candidate =
-            ProjectGameplayRegistry::Discover(m_viewModel.projectRoot, m_gameplayRetirements);
+        std::unique_ptr<ProjectGameplayRegistry> candidate = ProjectGameplayRegistry::Discover(ProjectRoot(), m_gameplayRetirements);
         if (candidate->HasBlockingDiagnostics()) {
             for (const ProjectGameplayDiagnostic &diagnostic : candidate->Diagnostics())
-                LOG_ERROR("editor.gameplay", "Native reload kept the last working module for '%s': %s", diagnostic.source.string().c_str(),
-                          diagnostic.error.message.c_str());
+                LOG_ERROR("editor.gameplay", "Native reload kept the last working module for '%s': %s",
+                          WorkspacePathText(diagnostic.source).c_str(), diagnostic.error.message.c_str());
             return;
         }
         m_gameplayRegistry = std::move(candidate);

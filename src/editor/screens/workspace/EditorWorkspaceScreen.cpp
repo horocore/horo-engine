@@ -7,6 +7,7 @@
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/NavigationErrors.h"
 
 #include <imgui.h>
@@ -67,8 +68,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         sourceCommands_.BeginSession();
         workspaceControllerLifetime_ = std::make_shared<int>(0);
         snackbarHost_ = std::make_unique<EditorSnackbarHost>(controller_->DataBus());
-        host_.SetCurrentProjectRoot(controller_->ViewModel().projectRoot);
-        LoadProjectInputProfile(controller_->ViewModel().projectRoot);
+        host_.SetCurrentProjectRoot(controller_->ProjectRoot());
+        LoadProjectInputProfile(controller_->ProjectRoot());
         if (auto attached = AttachXrInput(); attached.HasError()) {
             if (input_.previousProfile) {
                 if (auto restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError())
@@ -121,7 +122,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 const auto boundary = model.playState == EditorPlayState::Idle || model.playState == EditorPlayState::Failed
                                           ? Packages::PackageActivationBoundary::Quiescent
                                           : Packages::PackageActivationBoundary::Running;
-                static_cast<void>(packages_.pump(std::filesystem::path{model.projectRoot}, boundary));
+                static_cast<void>(packages_.pump(controller_->ProjectRoot(), boundary));
             }
             controller_->UpdateNavigationSettingsProjection();
             controller_->UpdateUiCanvasResources();

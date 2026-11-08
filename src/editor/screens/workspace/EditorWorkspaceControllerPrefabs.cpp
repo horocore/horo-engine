@@ -133,7 +133,7 @@ namespace Horo::Editor {
             return outcome;
         }
         auto boundPort = SceneDocumentTransactions::Bind(m_document, m_history, {m_collisionSceneOwner, intent.replacementEpoch + 1});
-        const auto metadata = Application::LoadProjectMetadata(m_viewModel.projectRoot);
+        const auto metadata = Application::LoadProjectMetadata(ProjectRoot());
         if (boundPort.HasError() || metadata.HasError()) {
             outcome.error = boundPort.HasError() ? boundPort.ErrorValue() : metadata.ErrorValue();
             return outcome;
@@ -152,8 +152,8 @@ namespace Horo::Editor {
             return outcome;
         }
         return CreatePrefabFromSelection(port,
-                                         {context, intent.root, m_viewModel.projectRoot, intent.destination,
-                                          GenerateRandomAssetId(m_assetRegistry), metadata.Value().horoVersion.value, m_assetRegistry,
+                                         {context, intent.root, ProjectRoot(), intent.destination, GenerateRandomAssetId(m_assetRegistry),
+                                          metadata.Value().horoVersion.value, m_assetRegistry,
                                           m_gameplayRegistry ? &m_gameplayRegistry->Registry() : nullptr, std::move(sourceFence).Value()},
                                          *m_mutations, *m_durableFiles);
     }
@@ -203,7 +203,7 @@ namespace Horo::Editor {
             m_dataBus.Publish(SceneDocumentChangedEvent{m_document.Revision(), m_document.State(),
                                                         DocumentChangeKind::PrefabInstanceCreated, m_document.IsDirty(),
                                                         std::vector<SceneObjectId>(0)});
-            if (auto rebuilt = RebuildProjectAssetRegistry(m_viewModel.projectRoot); rebuilt.HasError()) {
+            if (auto rebuilt = RebuildProjectAssetRegistry(ProjectRoot()); rebuilt.HasError()) {
                 m_viewModel.prefabPostCommitError = rebuilt.ErrorValue();
             } else {
                 m_assetRegistry = m_mutableAssetRegistry->Snapshot();
