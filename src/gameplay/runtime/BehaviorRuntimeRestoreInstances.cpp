@@ -213,7 +213,8 @@ namespace Horo::Gameplay {
     }
 
     std::vector<BehaviorReloadLifecycle> BehaviorRuntimeRestoreAccess::LiveFlags(const BehaviorRuntime &runtime) {
-        std::vector<BehaviorReloadLifecycle> result;
+        // The size constructor lets MSVC Debug iterator-proxy allocation reach the caller's bad_alloc guard.
+        std::vector<BehaviorReloadLifecycle> result(0);
         result.reserve(runtime.impl_->instances.size());
         for (const auto &instance : runtime.impl_->instances)
             result.push_back({instance.entity, instance.component.instanceId, instance.component.typeId, Flags(instance)});
