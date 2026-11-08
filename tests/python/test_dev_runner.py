@@ -365,6 +365,7 @@ def test_main_build_command_invokes_cmake_build(subprocess_calls: list[list[str]
 
 
 def test_main_cache_lease_covers_configure_and_build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(dev.sys, "platform", "linux")
     events: list[str] = []
     environment = {"CCACHE_CONFIGPATH": "ready.conf"}
     binding = dev.CacheBinding("/tools/ccache", environment, "gen-ready", "a" * 40)
@@ -394,6 +395,7 @@ def test_main_cache_lease_covers_configure_and_build(monkeypatch: pytest.MonkeyP
 
 
 def test_main_cache_releases_after_failed_configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(dev.sys, "platform", "linux")
     events: list[str] = []
 
     @contextmanager
@@ -433,6 +435,7 @@ def test_explicit_cache_configuration_bypasses_discovery(
 def test_cache_prepare_compiles_isolated_main_with_matching_build_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(dev.sys, "platform", "linux")
     source, build = tmp_path / "main source", tmp_path / "main source" / "build" / "dev-cache"
     calls: list[tuple[list[str], object, object]] = []
     binding = dev.CacheBinding("ccache", {"CACHE": "main"}, "candidate", "b" * 40)
@@ -453,6 +456,24 @@ def test_cache_prepare_compiles_isolated_main_with_matching_build_settings(
     assert calls[0][0][2] == str(source)
     assert calls[1][0][-2:] == ["--parallel", "1"]
     assert all(cwd == source and env is binding.env for _, cwd, env in calls)
+
+
+def test_windows_build_uses_no_managed_checkpoint_and_prepare_rejects_it(
+    monkeypatch: pytest.MonkeyPatch, subprocess_calls: list[list[str]], tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(dev.sys, "platform", "win32")
+
+    def unexpected(*_, **__):
+        pytest.fail("Windows must not open a managed main compiler checkpoint")
+
+    monkeypatch.setattr(dev, "automatic_cache", unexpected)
+    monkeypatch.setattr(dev, "prepare_cache", unexpected)
+    assert dev.main(["build", "-B", str(tmp_path)]) == 0
+    assert len(subprocess_calls) == 2
+    assert dev.main(["cache", "prepare", "--offline"]) == 2
+    assert len(subprocess_calls) == 2
+    assert "managed main checkpoints currently require macOS or Linux" in capsys.readouterr().err
 
 
 def test_debug_cache_normalization_preserves_flags_and_handles_spaces(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
