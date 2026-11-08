@@ -46,17 +46,21 @@ namespace Horo::Prefab {
             }, value);
         }
 
-        /** @brief Stable initialization interface order is independent of request arrival order. */
-        Result<void> Initializations(CanonicalValueWriter &writer, std::vector<PrefabInitializationValue> values) {
-            std::ranges::sort(values, {}, [](const auto &value) {
-                return value.id.value;
+        /** @brief Orders borrowed initialization values without copying their allocation-owning variants. */
+        Result<void> Initializations(CanonicalValueWriter &writer, std::span<const PrefabInitializationValue> values) {
+            std::vector<const PrefabInitializationValue *> ordered;
+            ordered.reserve(values.size());
+            for (const auto &value : values)
+                ordered.push_back(&value);
+            std::ranges::sort(ordered, {}, [](const auto *value) {
+                return value->id.value;
             });
             if (auto count = writer.WriteUInt32(static_cast<std::uint32_t>(values.size())); count.HasError())
                 return count;
-            for (const auto &value : values) {
-                const std::array fields{writer.WriteUInt64(value.id.value),
-                                        writer.WriteUInt8(static_cast<std::uint8_t>(value.value.index())),
-                                        InitializationValue(writer, value.value)};
+            for (const auto *value : ordered) {
+                const std::array fields{writer.WriteUInt64(value->id.value),
+                                        writer.WriteUInt8(static_cast<std::uint8_t>(value->value.index())),
+                                        InitializationValue(writer, value->value)};
                 for (const auto &field : fields)
                     if (field.HasError())
                         return field;
