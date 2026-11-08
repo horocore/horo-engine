@@ -182,15 +182,14 @@ namespace Horo::Prefab::MetricTest {
         const auto oldGeneration = Telemetry::Runtime::Generation();
         recorder.Resume();
         REQUIRE(Telemetry::Runtime::Shutdown());
-        auto replacement = std::make_shared<Sink>();
-        REQUIRE(Telemetry::Runtime::Initialize({.metricCollectionLevel = Telemetry::MetricCollectionLevel::Detailed}, replacement));
+        Recorder replacement;
         CHECK(Telemetry::Runtime::Generation() != oldGeneration);
         pending.Complete();
         PrefabMetricOperation stale{recorder.handles, PrefabMetricPhase::Spawn};
         CHECK_FALSE(stale.Enabled());
         stale.Complete();
-        REQUIRE(Telemetry::Runtime::Flush());
-        CHECK(replacement->Spans() == 0);
+        replacement.Flush();
+        CHECK(replacement.sink->Spans() == 0);
         const auto control = [] {
             return Telemetry::Record{.subsystem = "prefab",
                                      .payload = Telemetry::SpanRecord{.operationId = Telemetry::AllocateOperationId(), .name = "control"}};
@@ -198,8 +197,8 @@ namespace Horo::Prefab::MetricTest {
         CHECK_FALSE(Telemetry::Runtime::EmitRecord(control(), 0));
         CHECK_FALSE(Telemetry::Runtime::EmitRecord(control(), oldGeneration));
         CHECK(Telemetry::Runtime::EmitRecord(control()));
-        REQUIRE(Telemetry::Runtime::Flush());
-        CHECK(replacement->Spans() == 1);
+        replacement.Flush();
+        CHECK(replacement.sink->Spans() == 1);
     }
 
     TEST_CASE("Prefab spawn metrics follow actual terminal receipts once across cancellation and shutdown", "[prefab][prefab-metrics]") {
