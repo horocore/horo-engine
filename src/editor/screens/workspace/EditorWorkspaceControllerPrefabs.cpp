@@ -200,11 +200,9 @@ namespace Horo::Editor {
                 m_selection.NotifyTransactionClear();
             m_viewport.ClearTransformPreview();
             m_viewport.ClearLightPreview();
-            m_dataBus.Publish(SceneDocumentChangedEvent{m_document.Revision(),
-                                                        m_document.State(),
-                                                        DocumentChangeKind::PrefabInstanceCreated,
-                                                        m_document.IsDirty(),
-                                                        {}});
+            m_dataBus.Publish(SceneDocumentChangedEvent{m_document.Revision(), m_document.State(),
+                                                        DocumentChangeKind::PrefabInstanceCreated, m_document.IsDirty(),
+                                                        std::vector<SceneObjectId>(0)});
             if (auto rebuilt = RebuildProjectAssetRegistry(m_viewModel.projectRoot); rebuilt.HasError()) {
                 m_viewModel.prefabPostCommitError = rebuilt.ErrorValue();
             } else {
