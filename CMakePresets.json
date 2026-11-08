@@ -264,7 +264,8 @@
       "configurePreset": "ci-linux-debug",
       "targets": [
         "all",
-        "HoroEditorUiPaintShaderCook"
+        "HoroEditorUiPaintShaderCook",
+        "HoroEditorClusteredLightingShaderCook"
       ]
     },
     {
@@ -272,7 +273,8 @@
       "configurePreset": "ci-macos-debug",
       "targets": [
         "all",
-        "HoroEditorUiPaintShaderCook"
+        "HoroEditorUiPaintShaderCook",
+        "HoroEditorClusteredLightingShaderCook"
       ]
     },
     {

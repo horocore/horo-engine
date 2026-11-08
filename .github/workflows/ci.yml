@@ -1003,7 +1003,9 @@ jobs:
       contents: read
       packages: read
     runs-on: macos-latest
-    timeout-minutes: 180
+    # This producer runs the complete Debug and auxiliary native qualification builds.
+    # A cold hosted Debug build alone exceeded the former three-hour budget.
+    timeout-minutes: 360
     defaults: *native_defaults
     env: *native_environment
     strategy: &macos_build_strategy
@@ -1034,7 +1036,7 @@ jobs:
       contents: read
       packages: write
     runs-on: macos-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     defaults: *native_defaults
     env: *native_environment
     strategy: *macos_build_strategy

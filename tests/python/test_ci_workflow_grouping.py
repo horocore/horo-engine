@@ -442,7 +442,9 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
     assert release["execution"] == {"jobs": 1, "timeout": 90}
     for name in ("ci-linux-debug", "ci-macos-debug"):
         # Keep all native/audio targets and build the actual excluded cook required by the registered contract.
-        assert preset("buildPresets", name)["targets"] == ["all", "HoroEditorUiPaintShaderCook"]
+        assert preset("buildPresets", name)["targets"] == [
+            "all", "HoroEditorUiPaintShaderCook", "HoroEditorClusteredLightingShaderCook",
+        ]
         assert preset("testPresets", name)["filter"]["exclude"]["label"] == "gui|tooling"
 
 
