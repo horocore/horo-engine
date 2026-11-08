@@ -575,7 +575,7 @@ jobs:
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests HoroFoundationJsonTests HoroGameplayRuntimeTests HoroPrefabPersistenceTests
+        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests HoroFoundationJsonTests HoroGameplayRuntimeTests HoroPrefabPersistenceTests HoroPrefabMetricsTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -789,6 +789,13 @@ jobs:
           --no-tests=error --timeout 120 -R '^HoroMcpSessionTests::'
           --output-junit build/ci-audio-release/mcp-ctest.xml
 
+      - name: Test Windows Release Prefab metrics allocation qualification
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        run: >-
+          ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
+          --no-tests=error --timeout 90 -R '^HoroPrefabMetricsTests::'
+          --output-junit prefab-metrics-ctest.xml
+
       - name: Test Windows Release restore allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
         run: >-
@@ -978,6 +985,7 @@ jobs:
             build/ci-metal/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
+            build/ci-audio-release/prefab-metrics-ctest.xml
             build/ci-audio-release/collision-allocation-ctest.xml
             build/ci-audio-release/collision-allocation-discovery.json
             build/ci-audio-release/collision-allocation-regex.txt

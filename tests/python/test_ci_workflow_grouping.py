@@ -57,7 +57,7 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroFoundationJsonTests",
-    "HoroSceneSourceTests", "HoroColorPipelineTests", "HoroColorCreativeLookPackageTests",
+    "HoroSceneSourceTests", "HoroColorPipelineTests", "HoroColorCreativeLookPackageTests", "HoroPrefabMetricsTests",
     "HoroWorkspaceLayoutPersistenceTests", "HoroWorkspaceRecoveryPublicHeaderConsumer",
     "HoroNavigationProjectSettingsTests", "HoroNavigationProjectSettingsPublicConsumer",
     "HoroPrefabSceneCookHostTests",
@@ -555,6 +555,19 @@ def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> No
     assert "continue-on-error" not in test.group(1)
     assert "--output-junit build/ci-audio-release/restore-ctest.xml" in test.group(1)
     assert "            build/ci-audio-release/restore-ctest.xml" in WORKFLOW
+
+
+def test_prefab_metrics_debug_selection_retains_mandatory_release_allocation_proof() -> None:
+    assert "HoroPrefabMetricsTests" in targets("HORO_CI_WINDOWS_TARGETS")
+    native = workflow_job("test")
+    build = native.split("id: mcp_release_build", 1)[1].split("\n      - name:", 1)[0]
+    assert "HoroPrefabMetricsTests" in build
+    test = native.split("- name: Test Windows Release Prefab metrics allocation qualification", 1)[1]
+    test = test.split("\n      - name:", 1)[0]
+    for required in ("!cancelled()", "runner.os == 'Windows'", "steps.mcp_release_build.outcome == 'success'",
+                     "--no-tests=error", "'^HoroPrefabMetricsTests::'", "--output-junit prefab-metrics-ctest.xml"):
+        assert required in test
+    assert "continue-on-error" not in test
 
 
 def test_windows_material_binding_has_tests_and_owned_consumer() -> None:

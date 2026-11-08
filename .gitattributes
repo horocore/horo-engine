@@ -6,3 +6,5 @@
 /tests/fixtures/shaders/vfx_locked/** -text
 # Produced color packages authenticate the original manifest and reference bytes.
 /tests/fixtures/renderer/color/creative-look-produced/** -text
+# Prefab reference revisions and canonical artifacts authenticate exact source bytes.
+/tests/fixtures/prefab-reference-corpus/** -text
