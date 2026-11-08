@@ -3809,21 +3809,34 @@ def _gui_live_symbols(path: Path):
         index += 1 + data[offset + storage + 1]
 
 
+def _gui_live_build_file(path: Path, build_root: Path, suffix: str) -> Path:
+    """Resolve an intermediate artifact within the selected CMake build tree."""
+    resolved = path.resolve()
+    if resolved == build_root or not resolved.is_relative_to(build_root) or resolved.suffix.lower() != suffix:
+        raise ValueError(f"GUI bridge requires a {suffix} file within the selected build directory: {path}")
+    return resolved
+
+
 def _generate_gui_live_bridge(database: Path, output: Path, image: str, target_platform: str = "win32"):
+    database = database.resolve(strict=True)
+    build_root = database.parent
+    response_path = _gui_live_build_file(output if target_platform == "darwin" else output.with_suffix(".rsp"), build_root, ".rsp")
+    if target_platform != "darwin":
+        output = _gui_live_build_file(output, build_root, ".def")
     entries = json.loads(database.read_text(encoding='utf-8'))
     gui = [entry for entry in entries
            if 'HoroGui.dir' in (entry.get('command') or ' '.join(entry.get('arguments', [])))]
     if not gui:
         raise ValueError('No HoroGui compile commands in the selected build')
     if target_platform == "darwin":
-        _generate_gui_live_mac_flags(gui[0], output)
+        _generate_gui_live_mac_flags(gui[0], response_path)
         return
     exports = set()
     for entry in gui:
         match = re.search(r'(?:^|\s)/Fo(?:"([^"]+)"|(\S+))', entry['command'])
         if not match:
             raise ValueError(f"Missing MSVC object path for {entry['file']}")
-        obj = Path(entry['directory']) / (match[1] or match[2])
+        obj = _gui_live_build_file(Path(entry['directory']) / (match[1] or match[2]), build_root, '.obj')
         for name, kind, undefined in _gui_live_symbols(obj):
             shared_function = undefined and ('@Horo@@' in name or name.startswith('?Im') or any(owner in name for owner in ('ImGui', 'ImFont', 'ImDraw')))
             if kind == 0x20 and (shared_function or name.startswith('??$HostAddress@')):
@@ -3837,7 +3850,8 @@ def _generate_gui_live_bridge(database: Path, output: Path, image: str, target_p
     definitions = re.findall(r'(?:^|\s)([-/]D(?:"[^"\n]+"|\S+))', gui[0]['command'])
     # RCC++ selects /EHa for its protected runtime calls; do not override it with /EHsc.
     flags = [ '/std:c++20', '/utf-8', '/D_DEBUG', '/DNOMINMAX', '/DHORO_GUI_RUNTIME_COMPILATION=1', '/DIMGUI_API=__declspec(dllimport)', *definitions]
-    output.with_suffix('.rsp').write_text('\n'.join(flags) + '\n', encoding='utf-8')
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    response_path.write_text('\n'.join(flags) + '\n', encoding='utf-8')
     print(f'Generated {len(exports)} private GUI host imports for {image}')
 
 

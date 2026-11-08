@@ -211,9 +211,11 @@ use `GuiLive::HostSymbol<&Namespace::Symbol>()`. This imports a typed address
 getter from the host instead of duplicating data in the replacement module.
 For a function, invoke the returned reference with its normal arguments.
 
-Intermediate objects stay below the build directory, replacement modules use
-the OS temporary directory, and the runtime owns their lifetime until host GUI
-users have stopped. The private Windows compiler patch owns child processes
+The private bridge uses the directory containing the selected CMake compile
+commands as its build root. It rejects object inputs and generated `.def` or
+`.rsp` outputs that resolve outside that root, including through symlinks.
+Replacement modules use the OS temporary directory, and the runtime owns their
+lifetime until host GUI users have stopped. The private Windows compiler patch owns child processes
 and joins its output reader during teardown. The macOS adapter owns a compiler
 process group, terminates/reaps it during teardown, streams its command script through
 an owned temporary input file (avoiding macOS argument-size limits), and collects diagnostics in

@@ -768,6 +768,74 @@ def test_exports_host_functions_without_marking_executable_as_dll(tmp_path):
     assert "-DDEBUG" in flags
 
 
+def _write_gui_bridge_database(build: Path, object_reference: Path) -> Path:
+    build.mkdir(exist_ok=True)
+    database = build / "compile_commands.json"
+    database.write_text(json.dumps([{
+        "directory": str(build), "file": "Gui.cpp",
+        "command": f'cl /Fo"{object_reference}" HoroGui.dir/Gui.cpp',
+    }]), encoding="utf-8")
+    return database
+
+
+@pytest.mark.parametrize("reference", ["absolute", "relative", "symlink"])
+def test_gui_bridge_rejects_objects_outside_selected_build(tmp_path, reference):
+    build = tmp_path / "build"
+    build.mkdir()
+    outside = tmp_path / "outside.obj"
+    outside.write_bytes(_gui_coff([("?Draw@Editor@Horo@@YAXXZ", 0x20)]))
+    if reference == "symlink":
+        object_reference = build / "link.obj"
+        try:
+            object_reference.symlink_to(outside)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                pytest.skip("creating symlinks requires a Windows privilege")
+            raise
+    else:
+        object_reference = outside if reference == "absolute" else Path("..") / outside.name
+    database = _write_gui_bridge_database(build, object_reference)
+    output = build / "host.def"
+
+    with pytest.raises(ValueError, match="within the selected build directory"):
+        dev._generate_gui_live_bridge(database, output, "host.exe")
+    assert not output.exists()
+    assert not output.with_suffix(".rsp").exists()
+
+
+@pytest.mark.parametrize(("platform", "suffix"), [("win32", ".def"), ("darwin", ".rsp")])
+def test_gui_bridge_rejects_output_outside_selected_build(tmp_path, platform, suffix):
+    build = tmp_path / "build"
+    database = _write_gui_bridge_database(build, Path("Gui.obj"))
+    (build / "Gui.obj").write_bytes(_gui_coff([("?Draw@Editor@Horo@@YAXXZ", 0x20)]))
+    outside = tmp_path / f"host{suffix}"
+    outside.write_text("previous output", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="within the selected build directory"):
+        dev._generate_gui_live_bridge(database, outside, "host", platform)
+    assert outside.read_text(encoding="utf-8") == "previous output"
+
+
+def test_gui_bridge_checks_response_output_before_writing_exports(tmp_path):
+    build = tmp_path / "build"
+    database = _write_gui_bridge_database(build, Path("Gui.obj"))
+    (build / "Gui.obj").write_bytes(_gui_coff([("?Draw@Editor@Horo@@YAXXZ", 0x20)]))
+    outside = tmp_path / "outside.rsp"
+    outside.write_text("previous flags", encoding="utf-8")
+    output = build / "host.def"
+    try:
+        output.with_suffix(".rsp").symlink_to(outside)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("creating symlinks requires a Windows privilege")
+        raise
+
+    with pytest.raises(ValueError, match="within the selected build directory"):
+        dev._generate_gui_live_bridge(database, output, "host.exe")
+    assert not output.exists()
+    assert outside.read_text(encoding="utf-8") == "previous flags"
+
+
 def test_rejects_another_targets_compile_database(tmp_path):
     database = tmp_path / "compile_commands.json"
     database.write_text("[]")
