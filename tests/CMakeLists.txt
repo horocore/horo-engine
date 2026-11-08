@@ -2746,11 +2746,9 @@ add_test(NAME HoroGameplayProductLaunchContract
     "-DPHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>"
     "-DPROCESS_TIMEOUT=$<IF:$<BOOL:${HORO_CI_SONAR_COVERAGE}>,120,30>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayProductLaunchContract.cmake")
-set_tests_properties(HoroGameplayProductLaunchContract PROPERTIES LABELS "integration;gameplay;physics;headless;product" TIMEOUT 60)
-if(HORO_CI_SONAR_COVERAGE)
-    # Twenty-five real instrumented CLI launches include cold image hashing and gcov retirement, not a startup benchmark.
-    set_tests_properties(HoroGameplayProductLaunchContract PROPERTIES TIMEOUT 900)
-endif()
+# Twenty-five sequential native CLI launches each retain their own 30-second bound (120 under coverage).
+# The aggregate contract also needs that startup/retirement budget on loaded non-instrumented hosts.
+set_tests_properties(HoroGameplayProductLaunchContract PROPERTIES LABELS "integration;gameplay;physics;headless;product" TIMEOUT 900)
 add_executable(HoroGameplayPhysicsPublicHeaderConsumer support/GameplayPhysicsPublicHeaderConsumer.cpp)
 target_compile_features(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration)
