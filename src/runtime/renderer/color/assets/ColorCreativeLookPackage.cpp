@@ -62,7 +62,9 @@ namespace Horo::Render::Internal {
         /** @brief Binds a hash record to one fixed ordinary file; no manifest-provided path is opened. */
         Sha256Digest Record(const Json &value, std::string_view filename, const Bytes &bytes) {
             Fields(value, {"file", "bytes", "sha256"});
-            Require(value.at("file") == filename);
+            const auto &file = value.at("file");
+            Require(file.is_string());
+            Require(file.get_ref<const std::string &>() == filename);
             Require(!bytes.empty());
             Require(UInt(value.at("bytes")) == bytes.size());
             const auto digest = Digest(value.at("sha256"));

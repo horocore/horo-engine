@@ -9,6 +9,10 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 
+#ifdef _WIN32
+#include <winerror.h>
+#endif
+
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
@@ -185,6 +189,9 @@ TEST_CASE("Creative look package binds fixed paths exact lengths and actual byte
     SECTION("foreign path") {
         fixture.manifest["payload"]["file"] = "../outside.rgb";
     }
+    SECTION("non-string path") {
+        fixture.manifest["payload"]["file"] = 17U;
+    }
     SECTION("incorrect payload size") {
         fixture.manifest["payload"]["bytes"] = fixture.payload.size() - 1;
     }
@@ -277,23 +284,33 @@ TEST_CASE("Creative look package enforces bounded real file storage without trun
     CHECK(std::filesystem::file_size(path) == maximum[selected] + 1);
 }
 
-TEST_CASE("Creative look package rejects missing and statically symbolic source files without touching external targets",
+TEST_CASE("Creative look package rejects missing source files without changing the generation", "[renderer][color][look-package]") {
+    Fixture fixture;
+    fixture.Save();
+    const auto payload = fixture.root / "look.rgb.f32le";
+    REQUIRE(std::filesystem::remove(payload));
+    CHECK(LoadColorCreativeLookPackage(fixture.root).HasError());
+    CHECK_FALSE(std::filesystem::exists(payload));
+    CHECK(Read(fixture.root / "reference.json") == fixture.reference);
+}
+
+TEST_CASE("Creative look package rejects statically symbolic source files without touching external targets",
           "[renderer][color][look-package]") {
     Fixture fixture;
     fixture.Save();
     const auto payload = fixture.root / "look.rgb.f32le";
     REQUIRE(std::filesystem::remove(payload));
-    SECTION("missing payload") {
-        CHECK(LoadColorCreativeLookPackage(fixture.root).HasError());
-        CHECK_FALSE(std::filesystem::exists(payload));
-    }
-    SECTION("symbolic payload") {
-        const auto external = fixture.root / "external bytes";
-        Write(external, fixture.payload);
-        std::filesystem::create_symlink(external, payload);
-        CHECK(LoadColorCreativeLookPackage(fixture.root).HasError());
-        CHECK(std::filesystem::is_symlink(payload));
-        CHECK(Read(external) == fixture.payload);
-    }
+    const auto external = fixture.root / "external bytes";
+    Write(external, fixture.payload);
+    std::error_code error;
+    std::filesystem::create_symlink(external, payload, error);
+#ifdef _WIN32
+    if (error == std::error_code{ERROR_PRIVILEGE_NOT_HELD, std::system_category()})
+        SKIP("This Windows account cannot create symbolic links; native POSIX coverage exercises their rejection.");
+#endif
+    REQUIRE_FALSE(error);
+    CHECK(LoadColorCreativeLookPackage(fixture.root).HasError());
+    CHECK(std::filesystem::is_symlink(payload));
+    CHECK(Read(external) == fixture.payload);
     CHECK(Read(fixture.root / "reference.json") == fixture.reference);
 }

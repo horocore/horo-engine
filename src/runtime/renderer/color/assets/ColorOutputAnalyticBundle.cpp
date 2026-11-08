@@ -9,7 +9,10 @@ namespace Horo::Render::Internal::ColorPackageDetail {
         /** @brief Requires exact byte identity/count/path recorded by the original producer. */
         void CheckFile(const Json &record, std::string_view path, const Bytes &bytes) {
             Require(Foundation::HasAllowedFields(record, {"file", "bytes", "sha256"}));
-            Require(record.at("file") == path && UInt(record.at("bytes")) == bytes.size() && Digest(record.at("sha256")) == Hash(bytes));
+            const auto &file = record.at("file");
+            Require(file.is_string());
+            Require(file.get_ref<const std::string &>() == path && UInt(record.at("bytes")) == bytes.size() &&
+                    Digest(record.at("sha256")) == Hash(bytes));
         }
 
         /** @brief Requires all fixed auxiliary sampler/padding policies before constructing their typed counterparts. */
