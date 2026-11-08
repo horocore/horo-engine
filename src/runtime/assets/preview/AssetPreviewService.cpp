@@ -19,6 +19,12 @@ namespace Horo::Assets {
         constexpr std::size_t kMaximumIdentityBytes = 256;
         constexpr std::size_t kReadChunkBytes = 64U * 1024U;
 
+        /** @brief Encodes native preview paths for the provider's UTF-8 diagnostic text, independently of the OS code page. */
+        [[nodiscard]] std::string PreviewPathText(const std::filesystem::path &path) {
+            const auto encoded = path.u8string();
+            return {encoded.begin(), encoded.end()};
+        }
+
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, std::string message = {}) {
             auto error = MakeError(descriptor, std::move(message));
             return Result<T>::Failure(std::move(error));
@@ -265,7 +271,7 @@ namespace Horo::Assets {
                 return pending->input.provider->GeneratePreview(
                     AssetPreviewInput{
                         .editorPayload = payload,
-                        .absoluteAssetPath = pending->input.absoluteAssetPath.string(),
+                        .absoluteAssetPath = PreviewPathText(pending->input.absoluteAssetPath),
                         .assetType = pending->input.assetType,
                         .width = pending->input.width,
                         .height = pending->input.height,
@@ -282,7 +288,7 @@ namespace Horo::Assets {
             const std::shared_ptr<AssetPreviewHandle::Request> &pending, const std::span<const std::uint8_t> payload,
             const CancellationToken &cancellation) {
             try {
-                const auto path = pending->input.absoluteAssetPath.string();
+                const auto path = PreviewPathText(pending->input.absoluteAssetPath);
                 auto revision = pending->input.provider->CaptureRevision({.editorPayload = payload,
                                                                           .absoluteAssetPath = path,
                                                                           .assetType = pending->input.assetType,
