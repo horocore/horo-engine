@@ -48,6 +48,8 @@ from defusedxml import ElementTree as element_tree
 
 SUPPORTED_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".tpp"})
 TRANSLATION_UNIT_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
+REPOSITORY_INPUT_EXCLUSIONS = frozenset({"deprecated", "vendor", "build", ".git", ".cmake", ".sonar", ".codacy/generated",
+                                        "node_modules", "mock-studio", ".venv", "venv"})
 DEFAULT_BUILD_DIRECTORY = Path("build/sonar-local")
 COMPILE_COMMANDS_FILENAME = "compile_commands.json"
 DEFAULT_COMPILE_COMMANDS = DEFAULT_BUILD_DIRECTORY / COMPILE_COMMANDS_FILENAME
@@ -1065,14 +1067,18 @@ def lock(path: Path, timeout: float = 600):
             unlock(stream)
 
 
+def repository_input_path(path: Path) -> bool:
+    """Use the same first-party path scope for inventory and compiler-context admission."""
+    return not (any(part in REPOSITORY_INPUT_EXCLUSIONS for part in path.parts)
+                or str(path).startswith(".codacy/generated/"))
+
+
 def repository_files(root: Path) -> list[Path]:
     """List first-party inputs with Git's NUL protocol; never follow outside symlinks."""
     paths = paths_from_nul_output(run_git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"))
-    excluded = {"deprecated", "vendor", "build", ".git", ".cmake", ".sonar", ".codacy/generated",
-                "node_modules", "mock-studio", ".venv", "venv"}
     result = []
     for path in sorted(set(paths)):
-        if any(part in excluded for part in path.parts) or str(path).startswith(".codacy/generated/"):
+        if not repository_input_path(path):
             continue
         absolute = root / path
         if absolute.is_file() and absolute.resolve().is_relative_to(root):
@@ -2014,6 +2020,9 @@ def compiler_entries(database: Path, root: Path) -> list[dict]:
             elif arg.startswith(("-I", "/I")) and len(arg) > 2:
                 includes.append((directory / arg[2:]).resolve())
         if output is None or not output.is_relative_to(database.parent):
+            # Excluded dependency caches can own separate binary directories; active project objects remain bounded.
+            if not repository_input_path(source.relative_to(root)):
+                continue
             raise AnalysisError(f"No in-build object target for {source.relative_to(root)}")
         result.append({"source": source, "target": output.relative_to(database.parent).as_posix(), "includes": includes})
     return result
@@ -2027,6 +2036,8 @@ def header_context(entries: list[dict], headers: list[Path], root: Path) -> dict
     The subsequent build and IDE sensor evidence validate the chosen context.
     Headers without a provable include chain are never declared clean.
     """
+    if not headers:
+        return {}
     include_pattern = re.compile(r'^\s*#\s*include\s*[<"]([^">]+)[">]', re.MULTILINE)
     contents = {}
     found = {}
@@ -2037,7 +2048,14 @@ def header_context(entries: list[dict], headers: list[Path], root: Path) -> dict
     header_directories = {header.parent for header in headers}
     header_stems = {header.stem for header in headers}
     counterparts = [entry for entry in entries if entry["source"].stem in header_stems]
-    ordered = sorted(entries, key=lambda item: item["source"].parent not in header_directories)
+
+    def context_distance(entry: dict) -> int:
+        directory = entry["source"].parent
+        return min(len(directory.parts) + len(other.parts)
+                   - 2 * len(Path(os.path.commonpath((directory, other))).parts)
+                   for other in header_directories)
+
+    ordered = sorted(entries, key=context_distance)
     for index, entry in enumerate(counterparts + ordered):
         if CANCELLED.is_set():
             raise AnalysisError("Header context search cancelled")

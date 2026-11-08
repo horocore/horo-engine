@@ -231,6 +231,33 @@ def test_header_context_prefers_nearby_consumer_without_reading_unrelated_graph(
         assert all(call.args[0] != unrelated for call in reads.call_args_list)
 
 
+def test_header_context_prefers_ancestor_directory_consumers(tmp_path: Path):
+    directory = tmp_path / "editor" / "panels"
+    fields = directory / "fields"
+    fields.mkdir(parents=True)
+    header = fields / "schema.h"
+    header.write_text("int field;\n", encoding="utf-8")
+    source = directory / "panel.cpp"
+    source.write_text('#include "fields/schema.h"\n', encoding="utf-8")
+    unrelated = tmp_path / "unrelated.cpp"
+    unrelated.write_text("int unrelated;\n", encoding="utf-8")
+    entries = [{"source": path, "includes": [tmp_path], "target": path.stem + ".o"}
+               for path in (unrelated, source)]
+
+    with patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads:
+        assert sonar.header_context(entries, [header], tmp_path) == {header: entries[1]}
+        assert all(call.args[0] != unrelated for call in reads.call_args_list)
+
+
+def test_header_context_empty_selection_does_not_read_unrelated_sources(tmp_path: Path):
+    source = tmp_path / "unrelated.cpp"
+    source.write_text("int unrelated;\n", encoding="utf-8")
+    entry = {"source": source, "includes": [tmp_path], "target": "unrelated.o"}
+    with patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads:
+        assert sonar.header_context([entry], [], tmp_path) == {}
+        reads.assert_not_called()
+
+
 def test_header_context_prefers_public_header_counterparts(tmp_path: Path):
     public = tmp_path / "include"
     public.mkdir()
@@ -287,6 +314,31 @@ def test_compiler_entries_require_in_build_object_target(tmp_path: Path):
     database.write_text(json.dumps([{"directory": str(tmp_path), "file": "source.cpp", "command": "c++ -c source.cpp"}]))
     with pytest.raises(AnalysisError, match="object target"):
         sonar.compiler_entries(database, tmp_path)
+
+
+@pytest.mark.parametrize("cache_directory", [".cmake/fetchcontent", "vendor", "deprecated"])
+def test_compiler_entries_omit_excluded_dependency_objects_outside_build(tmp_path: Path, cache_directory: str):
+    build = tmp_path / "build"
+    build.mkdir()
+    source = tmp_path / "source.cpp"
+    source.write_text("int value;\n", encoding="utf-8")
+    cache = tmp_path / cache_directory
+    cache.mkdir(parents=True)
+    dependency = cache / "dependency.cpp"
+    dependency.write_text("int dependency;\n", encoding="utf-8")
+    database = build / "compile_commands.json"
+    database.write_text(json.dumps([
+        {"directory": str(build), "file": str(dependency),
+         "arguments": ["c++", "-c", str(dependency)], "output": str(cache / "dependency.o")},
+        {"directory": str(build), "file": str(source),
+         "arguments": ["c++", "-I", str(cache), "-c", str(source)], "output": "source.o"},
+    ]), encoding="utf-8")
+
+    entries = sonar.compiler_entries(database, tmp_path)
+
+    assert [entry["source"] for entry in entries] == [source]
+    assert entries[0]["target"] == "source.o"
+    assert cache in entries[0]["includes"]
 
 
 def test_duplication_retains_unchanged_clone_partner(tmp_path: Path):

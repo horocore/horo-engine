@@ -116,6 +116,11 @@ An existing database must be accompanied by its CMake cache naming the exact
 worktree source root. CMake refreshes configuration, then only the selected
 translation units' object targets are built with Ninja. Make builds use their
 owning targets so CMake dependencies and generated headers are prepared.
+Dependency translation units excluded from the first-party inventory may own
+objects in a separate CMake cache; they do not block selected project contexts.
+Active project objects still require an output inside the selected build.
+Header searches try the nearest consumers first and retain all candidates as
+fallbacks for transitive includes.
 Staged public-header copies are mapped back only when their contents match the
 source header.
 Header-only selections require a literal include chain to a compiled translation
