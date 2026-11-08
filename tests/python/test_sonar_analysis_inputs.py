@@ -157,7 +157,7 @@ def test_unused_generated_binaries_are_not_added_as_fallback_headers(source):
     assert not any(item["path"].endswith("native-executable") for item in manifest(source)["files"])
 
 
-@pytest.mark.parametrize("kind", ["traversal", "symlink", "tracked-source"])
+@pytest.mark.parametrize("kind", ["traversal", "symlink", "tracked-source", "tracked-dot-alias", "tracked-separator-alias"])
 def test_rejects_unsafe_members_before_they_can_replace_files(source, kind):
     pack(source)
     value = manifest(source)
@@ -165,6 +165,10 @@ def test_rejects_unsafe_members_before_they_can_replace_files(source, kind):
     payload = b"unexpected compiler input"
     if kind == "tracked-source":
         item = {"scope": "workspace", "path": "source.cpp"}
+    elif kind == "tracked-dot-alias":
+        item = {"scope": "workspace", "path": "./source.cpp"}
+    elif kind == "tracked-separator-alias":
+        item = {"scope": "workspace", "path": ".//source.cpp"}
     else:
         item = {"scope": "workspace", "path": "../outside" if kind == "traversal" else "build/link.hpp"}
     item.update(size=len(payload), sha256=hashlib.sha256(payload).hexdigest())

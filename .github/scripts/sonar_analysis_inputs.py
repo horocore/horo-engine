@@ -205,6 +205,8 @@ def pack(workspace: Path, build: Path, sdk: Path, bundle: Path, commit: str) -> 
 
 def target(root: Path, relative: str) -> Path:
     value = PurePosixPath(relative)
+    if relative != value.as_posix() or "\\" in relative:
+        raise ValueError("Analysis input paths must use their canonical POSIX spelling")
     if value.is_absolute() or not value.parts or any(part in {"..", ".git"} for part in value.parts):
         raise ValueError("Unsafe analysis input path")
     result = root / value
