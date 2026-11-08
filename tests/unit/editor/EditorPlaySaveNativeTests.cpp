@@ -25,6 +25,9 @@ namespace {
     using namespace Horo::Application::Internal;
     using namespace Horo::Runtime::SaveFilesystemTest;
 
+    // Leave scheduling time to the real worker between immutable readiness observations.
+    constexpr auto NativeSavePollInterval = std::chrono::milliseconds{1};
+
     /** @brief Preserves genuine loader, scheduler, filesystem and canonical operation diagnostics. */
     template <class T> T Take(Result<T> result) {
         INFO((result.HasError() ? result.ErrorValue().message : "Actual operation accepted."));
@@ -290,12 +293,12 @@ namespace {
             });
         }
 
-        /** @brief Drains actual asynchronous owner work without sleeping or manufacturing terminal state. */
+        /** @brief Pumps real asynchronous owner work while allowing the native worker to run between observations. */
         template <class Predicate> void Await(Predicate ready) {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (!ready() && std::chrono::steady_clock::now() < deadline) {
                 play.PresentationUpdate({0});
-                std::this_thread::yield();
+                std::this_thread::sleep_for(NativeSavePollInterval);
             }
             INFO((play.LastError() ? play.LastError()->message : "No controller error."));
             INFO(WaitDiagnostics());
@@ -425,7 +428,7 @@ namespace {
                 DescribeManager(output, *snapshot->manager);
         }
 
-        /** @brief Copies bounded real scheduler and application-operation state only after the unchanged wait. */
+        /** @brief Copies bounded real scheduler and application-operation state after the fixture wait. */
         void DescribeWork(std::ostream &output) const {
             if (const auto snapshot = jobs.SnapshotIfChanged(0)) {
                 for (const auto &job : snapshot->jobs) {
@@ -457,7 +460,8 @@ namespace {
         PlaySaveCommandKind lastCommand{PlaySaveCommandKind::Refresh};
 
         TemporaryDirectory directory;
-        SteadyClock clock;
+        // Functional native lifetime/publication checks do not qualify synchronous capture throughput.
+        DeterministicClock clock;
         SystemWallClock wall;
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 16}};
         OperationStore operations{16, 32};
@@ -577,13 +581,38 @@ namespace {
 
         /** @brief Advances genuine workspace/save state to a bounded condition, without replacing completion authority. */
         template <class Predicate> void Await(Predicate ready) {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (!ready() && std::chrono::steady_clock::now() < deadline) {
                 workspace->UpdatePlayPresentation(0);
-                std::this_thread::yield();
+                std::this_thread::sleep_for(NativeSavePollInterval);
             }
             INFO(workspace->ViewModel().playError);
+            INFO(WaitDiagnostics());
             REQUIRE(ready());
+        }
+
+        /** @brief Preserves the actual save projection and worker state at a failed workspace wait. */
+        std::string WaitDiagnostics() const {
+            std::ostringstream output;
+            output << "saveCommands=" << saveCommands << " playState=" << static_cast<int>(workspace->ViewModel().playState);
+            const auto binding = workspace->PlaySaveBinding().lock();
+            if (binding) {
+                NativeCycle::DescribeError(output, binding->saveError);
+                if (const auto snapshot = binding->save ? binding->save->Snapshot() : nullptr) {
+                    output << " revision=" << snapshot->revision << " availability=" << static_cast<int>(snapshot->availability)
+                           << " pending=" << snapshot->operationPending << " loading=" << snapshot->loading;
+                    NativeCycle::DescribeError(output, snapshot->error);
+                    if (snapshot->manager)
+                        NativeCycle::DescribeManager(output, *snapshot->manager);
+                }
+            }
+            if (const auto snapshot = jobs.SnapshotIfChanged(0)) {
+                for (const auto &job : snapshot->jobs) {
+                    output << " job=" << job.id << ",state=" << static_cast<int>(job.state);
+                    NativeCycle::DescribeError(output, job.error);
+                }
+            }
+            return output.str();
         }
 
         bool Ready() {
@@ -599,6 +628,7 @@ namespace {
             REQUIRE(binding);
             REQUIRE(binding->save);
             binding->saveCommand = PlaySaveCommand{.kind = PlaySaveCommandKind::SaveNew};
+            ++saveCommands;
             workspace->UpdatePlayPresentation(0);
             INFO((binding->saveError ? binding->saveError->message : "Actual save admitted."));
             REQUIRE_FALSE(binding->saveError);
@@ -625,7 +655,8 @@ namespace {
         }
 
         TemporaryDirectory directory;
-        SteadyClock clock;
+        // Keep production capture budgets unchanged; wall-time budget enforcement has dedicated barrier qualification.
+        DeterministicClock clock;
         SystemWallClock wall;
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 16}};
         OperationStore operations{16, 32};
@@ -636,6 +667,7 @@ namespace {
         std::filesystem::path manifest;
         NativePlayHost *active{};
         std::unique_ptr<EditorWorkspaceController> workspace;
+        std::size_t saveCommands{};
     };
 }  // namespace
 
