@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
@@ -98,7 +99,7 @@ namespace Horo::Editor {
         if (kind != PlaySaveCommandKind::Load && kind != PlaySaveCommandKind::Delete)
             return Outcome::Success({});
         if (!snapshot_ || !snapshot_->manager || !selected_)
-            return Outcome::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
+            return Outcome::Failure(MakeError(GuiLive::HostSymbol<&Runtime::SaveErrors::CompositionUnsupported>()));
         const auto consent = snapshot_->manager->Command(kind == PlaySaveCommandKind::Load ? Runtime::SaveManagerCommandKind::Load
                                                                                            : Runtime::SaveManagerCommandKind::Delete,
                                                          *selected_);

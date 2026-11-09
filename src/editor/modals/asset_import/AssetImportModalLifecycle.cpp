@@ -6,6 +6,7 @@
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/AssetImportModal.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/ErrorCode.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -27,10 +28,10 @@ namespace Horo::Editor {
         Result<std::filesystem::path> CanonicalProjectRoot(const std::filesystem::path &root) {
             std::error_code error;
             if (root.empty())
-                return Result<std::filesystem::path>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
+                return Result<std::filesystem::path>::Failure(MakeError(GuiLive::HostSymbol<&Assets::AssetSourceErrors::InvalidPath>()));
             auto canonical = std::filesystem::canonical(root, error);
             if (error || !std::filesystem::is_directory(canonical, error) || error)
-                return Result<std::filesystem::path>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
+                return Result<std::filesystem::path>::Failure(MakeError(GuiLive::HostSymbol<&Assets::AssetSourceErrors::InvalidPath>()));
             return Result<std::filesystem::path>::Success(std::move(canonical));
         }
 
@@ -612,7 +613,7 @@ namespace Horo::Editor {
     Result<void> AssetImportModal::BeginImport(const std::vector<std::filesystem::path> &sourceFiles,
                                                const CancellationToken &cancellation) {
         if (sourceFiles.empty())
-            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Assets::AssetSourceErrors::InvalidPath>()));
         // Walk up from the first file to find the project root (the directory containing .horo/).
         std::filesystem::path projectRoot = sourceFiles.front().parent_path();
         while (!projectRoot.empty() && projectRoot != projectRoot.root_path()) {
@@ -638,7 +639,7 @@ namespace Horo::Editor {
         if (canonical.HasError())
             return Result<void>::Failure(std::move(canonical).ErrorValue());
         if (m_operation && m_projectRoot != canonical.Value())
-            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Assets::AssetSourceErrors::Conflict>()));
         m_projectRoot = std::move(canonical).Value();
 
         // If operation already exists, append files; otherwise start a new one.
@@ -794,7 +795,7 @@ namespace Horo::Editor {
         } else {
             // Commit to project storage
             if (!m_committer) {
-                auto error = MakeError(Assets::AssetSourceErrors::Authority);
+                auto error = MakeError(GuiLive::HostSymbol<&Assets::AssetSourceErrors::Authority>());
                 FailVisibleOperation(error, "commit");
                 return Result<void>::Failure(std::move(error));
             }
@@ -924,7 +925,7 @@ namespace Horo::Editor {
 
         CancellationToken noCancel;
         if (!m_committer) {
-            FailVisibleOperation(MakeError(Assets::AssetSourceErrors::Authority), "commit");
+            FailVisibleOperation(MakeError(GuiLive::HostSymbol<&Assets::AssetSourceErrors::Authority>()), "commit");
             return false;
         }
         if (const auto commitResult = m_committer->Commit(batch, idGen, noCancel); commitResult.HasError()) {

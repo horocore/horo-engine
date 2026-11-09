@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "ViewportPanel.h"
 #include "editor/screens/workspace/terrain/TerrainViewportTool.h"
@@ -79,9 +80,11 @@ namespace Horo::Editor {
                                                  const EditorGuiContext &context) const {
         if (model.terrainDocumentError) {
             const auto &code = model.terrainDocumentError->code.Value();
-            const char *key = code == WorkspaceDocumentErrors::DirtyDocument.code.Value() ? "terrain.tools.dirty_close"
-                              : code == Assets::AssetSourceErrors::Conflict.code.Value()  ? "terrain.tools.conflict"
-                                                                                          : "terrain.tools.failed";
+            const char *key = "terrain.tools.failed";
+            if (code == GuiLive::HostSymbol<&WorkspaceDocumentErrors::DirtyDocument>().code.Value())
+                key = "terrain.tools.dirty_close";
+            else if (code == GuiLive::HostSymbol<&Assets::AssetSourceErrors::Conflict>().code.Value())
+                key = "terrain.tools.conflict";
             const auto cursor = ImGui::GetCursorScreenPos();
             ImGui::SetCursorScreenPos(
                 {layout.origin.x + Ui::ScaledLayoutValue(8), layout.origin.y + layout.height - Ui::ScaledLayoutValue(70)});
