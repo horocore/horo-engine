@@ -236,6 +236,15 @@ def verify_file(path: Path, item: dict) -> None:
         raise ValueError(f"Analysis environment/input differs from the completed build: {path}")
 
 
+def generated_target(root: Path, relative: str, workspace: Path, tracked: set[str]) -> Path:
+    """Admit a generated destination only if neither spelling names tracked source."""
+    destination = target(root, relative)
+    for path, checkout in ((destination, workspace), (destination.resolve(), workspace.resolve())):
+        if path.is_relative_to(checkout) and path.relative_to(checkout).as_posix() in tracked:
+            raise ValueError("Generated inputs cannot replace checked-out source")
+    return destination
+
+
 def restore_inventory(workspace: Path, roots: dict[str, Path], files: list[dict]) -> dict:
     """Verify immutable inputs before accepting any generated-file destinations."""
     tracked = set(git(workspace, "ls-files", "-z").split("\0"))
@@ -252,12 +261,11 @@ def restore_inventory(workspace: Path, roots: dict[str, Path], files: list[dict]
             continue
         if owner not in roots:
             raise ValueError("Unknown analysis input scope")
-        if owner == "workspace" and item["path"] in tracked:
-            raise ValueError("Generated inputs cannot replace checked-out source")
         name = f"{owner}/{item['path']}"
         if name in expected:
             raise ValueError("Duplicate analysis input")
-        expected[name] = (target(roots[owner], item["path"]), item)
+        destination = generated_target(roots[owner], item["path"], workspace, tracked)
+        expected[name] = (destination, item)
     return expected
 
 

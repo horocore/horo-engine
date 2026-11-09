@@ -158,7 +158,7 @@ def test_fallback_headers_skip_linked_worktree_markers_without_losing_headers(so
         assert not any(".git" in Path(member.name).parts for member in archive.getmembers())
 
 
-def create_git_alias(alias, target, *, directory=False):
+def create_path_alias(alias, target, *, directory=False):
     try:
         alias.symlink_to(target, target_is_directory=directory)
     except OSError as error:
@@ -171,11 +171,11 @@ def create_git_alias(alias, target, *, directory=False):
 def test_fallback_headers_do_not_follow_git_metadata_aliases(source, directory):
     git_root = source["workspace"] / ".git"
     alias = source["header"].parent / "GitMetadataAlias"
-    create_git_alias(alias, git_root if directory else git_root / "config", directory=directory)
+    create_path_alias(alias, git_root if directory else git_root / "config", directory=directory)
     fallback_header = alias.with_name("FallbackHeader")
     fallback_header.write_text("#define FALLBACK_VALUE 29\n", encoding="utf-8")
     valid_alias = alias.with_name("AliasHeader")
-    create_git_alias(valid_alias, fallback_header)
+    create_path_alias(valid_alias, fallback_header)
 
     pack(source)
 
@@ -186,7 +186,7 @@ def test_fallback_headers_do_not_follow_git_metadata_aliases(source, directory):
 
 def test_explicit_git_metadata_alias_is_rejected(source, monkeypatch):
     alias = source["header"].parent / "GitConfig.hpp"
-    create_git_alias(alias, source["workspace"] / ".git/config")
+    create_path_alias(alias, source["workspace"] / ".git/config")
     monkeypatch.setattr(INPUTS, "ninja_inputs", lambda unused: {alias})
     with pytest.raises(ValueError, match="Git internals"):
         pack(source)
@@ -207,7 +207,10 @@ def test_unused_generated_binaries_are_not_added_as_fallback_headers(source):
     assert not any(item["path"].endswith("native-executable") for item in manifest(source)["files"])
 
 
-@pytest.mark.parametrize("kind", ["traversal", "symlink", "tracked-source", "tracked-dot-alias", "tracked-separator-alias", "git-metadata-alias"])
+@pytest.mark.parametrize("kind", [
+    "traversal", "symlink", "tracked-source", "tracked-dot-alias", "tracked-separator-alias",
+    "git-metadata-alias", "tracked-symlink-alias",
+])
 def test_rejects_unsafe_members_before_they_can_replace_files(source, kind):
     pack(source)
     value = manifest(source)
@@ -217,8 +220,12 @@ def test_rejects_unsafe_members_before_they_can_replace_files(source, kind):
     original_git_config = git_config.read_bytes()
     if kind == "git-metadata-alias":
         alias = source["build"] / "GitConfig.hpp"
-        create_git_alias(alias, git_config)
+        create_path_alias(alias, git_config)
         item = {"scope": "workspace", "path": "build/GitConfig.hpp"}
+    elif kind == "tracked-symlink-alias":
+        alias = source["build"] / "SourceAlias.hpp"
+        create_path_alias(alias, source["workspace"] / "source.cpp")
+        item = {"scope": "workspace", "path": "build/SourceAlias.hpp"}
     elif kind == "tracked-source":
         item = {"scope": "workspace", "path": "source.cpp"}
     elif kind == "tracked-dot-alias":
