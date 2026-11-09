@@ -158,6 +158,40 @@ def test_fallback_headers_skip_linked_worktree_markers_without_losing_headers(so
         assert not any(".git" in Path(member.name).parts for member in archive.getmembers())
 
 
+def create_git_alias(alias, target, *, directory=False):
+    try:
+        alias.symlink_to(target, target_is_directory=directory)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("creating symlinks requires a Windows privilege")
+        raise
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_fallback_headers_do_not_follow_git_metadata_aliases(source, directory):
+    git_root = source["workspace"] / ".git"
+    alias = source["header"].parent / "GitMetadataAlias"
+    create_git_alias(alias, git_root if directory else git_root / "config", directory=directory)
+    fallback_header = alias.with_name("FallbackHeader")
+    fallback_header.write_text("#define FALLBACK_VALUE 29\n", encoding="utf-8")
+    valid_alias = alias.with_name("AliasHeader")
+    create_git_alias(valid_alias, fallback_header)
+
+    pack(source)
+
+    paths = [Path(item["path"]) for item in manifest(source)["files"]]
+    assert {fallback_header.name, valid_alias.name}.issubset(path.name for path in paths)
+    assert not any(alias.name in path.parts for path in paths)
+
+
+def test_explicit_git_metadata_alias_is_rejected(source, monkeypatch):
+    alias = source["header"].parent / "GitConfig.hpp"
+    create_git_alias(alias, source["workspace"] / ".git/config")
+    monkeypatch.setattr(INPUTS, "ninja_inputs", lambda unused: {alias})
+    with pytest.raises(ValueError, match="Git internals"):
+        pack(source)
+
+
 def test_old_ninja_records_are_not_mistaken_for_current_compiler_inputs(source, monkeypatch):
     monkeypatch.setattr(INPUTS, "executable", lambda name: name)
     output = "obsolete.o: #deps 1, deps mtime 1 (VALID)\n    /removed/obsolete.hpp\n\n"
@@ -173,13 +207,19 @@ def test_unused_generated_binaries_are_not_added_as_fallback_headers(source):
     assert not any(item["path"].endswith("native-executable") for item in manifest(source)["files"])
 
 
-@pytest.mark.parametrize("kind", ["traversal", "symlink", "tracked-source", "tracked-dot-alias", "tracked-separator-alias"])
+@pytest.mark.parametrize("kind", ["traversal", "symlink", "tracked-source", "tracked-dot-alias", "tracked-separator-alias", "git-metadata-alias"])
 def test_rejects_unsafe_members_before_they_can_replace_files(source, kind):
     pack(source)
     value = manifest(source)
     archive = source["bundle"] / "inputs.tar.gz"
     payload = b"unexpected compiler input"
-    if kind == "tracked-source":
+    git_config = source["workspace"] / ".git/config"
+    original_git_config = git_config.read_bytes()
+    if kind == "git-metadata-alias":
+        alias = source["build"] / "GitConfig.hpp"
+        create_git_alias(alias, git_config)
+        item = {"scope": "workspace", "path": "build/GitConfig.hpp"}
+    elif kind == "tracked-source":
         item = {"scope": "workspace", "path": "source.cpp"}
     elif kind == "tracked-dot-alias":
         item = {"scope": "workspace", "path": "./source.cpp"}
@@ -202,6 +242,7 @@ def test_rejects_unsafe_members_before_they_can_replace_files(source, kind):
     with pytest.raises(ValueError):
         restore(source)
     assert (source["workspace"] / "source.cpp").read_bytes() == before
+    assert git_config.read_bytes() == original_git_config
     assert not (source["workspace"].parent / "outside").exists()
 
 

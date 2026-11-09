@@ -98,19 +98,23 @@ def ninja_inputs(build: Path) -> set[Path]:
     return paths
 
 
+def is_git_metadata(path: Path) -> bool:
+    """Detect both literal Git paths and aliases that resolve into them."""
+    return ".git" in path.parts or ".git" in path.resolve().parts
+
+
 def scope(path: Path, roots: dict[str, Path]) -> tuple[str, str]:
+    if is_git_metadata(path):
+        raise ValueError("Git internals are never analysis inputs")
     for name, root in roots.items():
         if path.is_relative_to(root):
-            relative = path.relative_to(root)
-            if ".git" in relative.parts:
-                raise ValueError("Git internals are never analysis inputs")
-            return name, relative.as_posix()
+            return name, path.relative_to(root).as_posix()
     return "environment", str(path)
 
 
 def is_header_candidate(path: Path) -> bool:
     # Linked worktrees and submodules use an extensionless .git marker, not a directory.
-    if path.name == ".git" or path.name in BUILD_OUTPUTS or not path.is_file():
+    if path.name in BUILD_OUTPUTS or not path.is_file() or is_git_metadata(path):
         return False
     if path.suffix in SOURCE_SUFFIXES:
         return True
@@ -124,10 +128,18 @@ def is_header_candidate(path: Path) -> bool:
 def include_files(root: Path):
     """Materialize header aliases as ordinary bytes; never archive Git credentials."""
     for directory, children, names in os.walk(root, followlinks=True):
-        children[:] = [name for name in children if name not in {".git", ".sonar", "__pycache__"}]
         ancestors = {parent.resolve() for parent in (Path(directory), *Path(directory).parents) if parent.is_relative_to(root)}
-        if any((Path(directory) / child).resolve() in ancestors for child in children):
-            raise ValueError("Cyclic include-directory alias")
+        include_children = []
+        for child in children:
+            if child in {".git", ".sonar", "__pycache__"}:
+                continue
+            resolved = (Path(directory) / child).resolve()
+            if ".git" in resolved.parts:
+                continue
+            if resolved in ancestors:
+                raise ValueError("Cyclic include-directory alias")
+            include_children.append(child)
+        children[:] = include_children
         for name in names:
             path = Path(directory) / name
             if is_header_candidate(path):
@@ -211,7 +223,10 @@ def target(root: Path, relative: str) -> Path:
     if value.is_absolute() or not value.parts or any(part in {"..", ".git"} for part in value.parts):
         raise ValueError("Unsafe analysis input path")
     result = root / value
-    if not result.resolve().is_relative_to(root.resolve()):
+    resolved = result.resolve()
+    if ".git" in resolved.parts:
+        raise ValueError("Git internals are never analysis inputs")
+    if not resolved.is_relative_to(root.resolve()):
         raise ValueError("Analysis input escapes its declared root")
     return result
 
@@ -231,6 +246,8 @@ def restore_inventory(workspace: Path, roots: dict[str, Path], files: list[dict]
             path = target(workspace, item["path"]) if owner == "checkout" else Path(item["path"])
             if not path.is_absolute():
                 raise ValueError("Environment inputs must retain their absolute paths")
+            if is_git_metadata(path):
+                raise ValueError("Git internals are never analysis inputs")
             verify_file(path, item)
             continue
         if owner not in roots:
