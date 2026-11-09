@@ -109,7 +109,8 @@ def scope(path: Path, roots: dict[str, Path]) -> tuple[str, str]:
 
 
 def is_header_candidate(path: Path) -> bool:
-    if path.name in BUILD_OUTPUTS or not path.is_file():
+    # Linked worktrees and submodules use an extensionless .git marker, not a directory.
+    if path.name == ".git" or path.name in BUILD_OUTPUTS or not path.is_file():
         return False
     if path.suffix in SOURCE_SUFFIXES:
         return True

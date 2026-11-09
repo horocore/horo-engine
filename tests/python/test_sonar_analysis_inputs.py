@@ -142,6 +142,22 @@ def test_git_internals_cannot_enter_native_payload(source, monkeypatch):
         pack(source)
 
 
+def test_fallback_headers_skip_linked_worktree_markers_without_losing_headers(source):
+    include_root = source["header"].parent
+    linked = include_root / "linked-dependency"
+    git(source["workspace"], "worktree", "add", "--quiet", "--detach", str(linked))
+    assert (linked / ".git").is_file()
+    (linked / "FallbackHeader").write_text("#define FALLBACK_VALUE 29\n", encoding="utf-8")
+
+    pack(source)
+
+    records = manifest(source)["files"]
+    assert any(item["path"].endswith("linked-dependency/FallbackHeader") for item in records)
+    assert not any(".git" in Path(item["path"]).parts for item in records)
+    with tarfile.open(source["bundle"] / "inputs.tar.gz", "r:gz") as archive:
+        assert not any(".git" in Path(member.name).parts for member in archive.getmembers())
+
+
 def test_old_ninja_records_are_not_mistaken_for_current_compiler_inputs(source, monkeypatch):
     monkeypatch.setattr(INPUTS, "executable", lambda name: name)
     output = "obsolete.o: #deps 1, deps mtime 1 (VALID)\n    /removed/obsolete.hpp\n\n"
