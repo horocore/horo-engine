@@ -1702,6 +1702,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/EnvironmentQueryErrors.cpp
         runtime/ai/api/EnvironmentQueryRegistry.cpp
     runtime/ai/api/EnvironmentQueryScoring.cpp
+    runtime/ai/api/UtilitySelector.cpp
         runtime/ai/api/NullAIRuntime.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
         runtime/ai/api/PerceptionEventRouting.cpp

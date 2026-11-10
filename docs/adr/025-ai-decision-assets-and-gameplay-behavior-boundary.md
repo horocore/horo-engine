@@ -168,6 +168,21 @@ These post-1.0 capabilities will plug in via dedicated provider interfaces witho
 - **Extensibility**: Custom tasks, decorators, and considerations can be authored in native C++ or scripts through standard descriptor registration macros without modifying engine core.
 - **Clarity**: Future advanced planning architectures (GOAP/HTN/RL) have clear non-blocking extension seams without complicating the 1.0 release milestone.
 
+## Utility selector implementation
+
+`UtilitySelector` captures scalar blackboard considerations and bounded action
+options. Each input is clamped to its fixed range before applying the authored
+curve. The option priority multiplies weighted responses, with optional
+compensation for multiple considerations. Exact score ties use ascending
+stable option identity. Missing or non-finite inputs make the option ineligible.
+Evaluation reserves the full consideration and option allowance against both
+the agent and global budgets before reading the snapshot.
+
+Callers can capture normalized consideration and option scores in bounded
+storage. The selector returns a stable task identity. Cooked Utility graph
+composition and task dispatch require the corresponding decision runtime entry
+point.
+
 ## Rejected Alternatives
 
 - **Use `imgui-node-editor` data structs directly as the asset format**: Rejected because it introduces editor UI dependencies into headless servers/runtime builds and couples visual rendering to game logic.
