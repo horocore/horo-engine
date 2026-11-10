@@ -105,7 +105,7 @@ namespace Horo::AI {
         /**
          * @brief Reads the frozen position used by candidate gathering and detailed sensing.
          * @param listener Exact listener incarnation in this publication.
-         * @return Captured global position or a typed stale, invalid, or missing-listener failure.
+         * @return Captured global position or a typed invalid/missing-listener failure.
          */
         [[nodiscard]] Result<Math::WorldCoordinate64> ListenerPosition(Runtime::EntityRef listener) const;
         /**
