@@ -196,6 +196,15 @@ visitors with the new alternative. Existing damage, contact, and team producers
 keep their initializers. Raw hearing observations now require the committed
 Gameplay route, so migrate any direct sound writes to that route.
 
+At a structural safe point, the perception owner republishes the complete
+resident participant set. Omitted sources or listeners leave the active index
+and the replaced publication revokes derived read leases. Memory prunes dead
+source and provenance generations on its next owner-side snapshot. Sight
+cancels a pending LOS batch when any captured endpoint retires, even before the
+spatial publication is replaced. Reappearing slots with a new generation must
+pass fresh gain samples. A streamed source with no current Scene entity has no
+eligible memory or LOS result until it is registered again.
+
 - LOD boundary tests cover 25m, 60m, `dormancyDistance`, active relevance pins,
   inactive streaming cells, and immediate LOD3 wake-up from event-driven stimuli.
 - Sustained LOD0 load cannot starve LOD1/LOD2 queues while admission remains
