@@ -26,6 +26,11 @@ namespace Horo::AI {
                         .position = event.lastKnownPosition,
                         .provenance = event.sender};
             }
+
+            /** @brief Projects a heard location without retaining producer-specific acoustic metadata. */
+            [[nodiscard]] PerceptionObservation operator()(const HearingPerceptionEvent &event) const {
+                return {.key = {listener, SenseTypeIds::Hearing, StimulusTypeIds::Sound, event.source}, .position = event.location};
+            }
         };
 
         /** @brief Checks an admitted listener's exact sense and stimulus pair. */

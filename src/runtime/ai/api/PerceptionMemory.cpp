@@ -81,7 +81,8 @@ namespace Horo::AI {
 
     /** @copydoc AIPerceptionMemory::Observe */
     Result<void> AIPerceptionMemory::Observe(const PerceptionObservation &observation, const std::uint64_t simulationTick) {
-        if (observation.key.sense == SenseTypeIds::Team || observation.key.stimulus == StimulusTypeIds::Team)
+        if (observation.key.sense == SenseTypeIds::Team || observation.key.stimulus == StimulusTypeIds::Team ||
+            observation.key.sense == SenseTypeIds::Hearing || observation.key.stimulus == StimulusTypeIds::Sound)
             return Result<void>::Failure(MakeError(AIErrors::PerceptionEventUnauthorized));
         return ObserveAdmitted(observation, simulationTick);
     }

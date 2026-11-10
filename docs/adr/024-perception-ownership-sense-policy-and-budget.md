@@ -180,6 +180,22 @@ Perception evaluation uses a hybrid execution model to maximize responsiveness w
 
 ## Verification Requirements
 
+The committed gameplay delivery boundary admits typed sound events with a
+canonical location, normalized intensity, radius, producer tags, and a lifetime
+in fixed ticks. A producer may explicitly apply its own acoustic policy before
+committing a delivery. The default uses the radius and existing scene visibility
+policy with no mixer or Physics reads. One bounded batch accepts at most 128
+deliveries, and subsequent accepted deliveries for the same listener and source
+refresh one memory entry in delivery order. Only the last-known location and
+weak source enter memory.
+
+The C++ migration adds `HearingPerceptionEvent` to `GameplayPerceptionEvent` so
+hearing uses the same recipient and generation checks as other authoritative
+stimuli. Rebuild consumers of `PerceptionEventDelivery` and extend exhaustive
+visitors with the new alternative. Existing damage, contact, and team producers
+keep their initializers. Raw hearing observations now require the committed
+Gameplay route, so migrate any direct sound writes to that route.
+
 - LOD boundary tests cover 25m, 60m, `dormancyDistance`, active relevance pins,
   inactive streaming cells, and immediate LOD3 wake-up from event-driven stimuli.
 - Sustained LOD0 load cannot starve LOD1/LOD2 queues while admission remains
