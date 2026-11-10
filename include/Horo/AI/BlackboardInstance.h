@@ -262,6 +262,14 @@ namespace Horo::AI {
         [[nodiscard]] Result<BlackboardCanonicalState> CaptureCanonical() const;
         /** @brief Captures an immutable value copy for worker observation. @return Snapshot or stale failure. */
         [[nodiscard]] Result<BlackboardSnapshot> Snapshot() const;
+
+        /** @brief Retains the immutable schema on the owner safe-point thread without copying live values.
+         * @return The current schema lease, or an empty lease after teardown.
+         */
+        [[nodiscard]] std::shared_ptr<const BlackboardSchema> SchemaAtSafePoint() const noexcept {
+            return active_ ? schema_ : nullptr;
+        }
+
         /** @brief Copies one authorized key on the owner safe-point thread without allocating a snapshot.
          * @param key Stable schema key. @return Copied optional value or typed stale/unknown-key failure. */
         [[nodiscard]] Result<std::optional<BlackboardValue>> ReadAtSafePoint(BlackboardKeyId key) const;

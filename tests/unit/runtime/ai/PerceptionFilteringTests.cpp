@@ -247,11 +247,42 @@ namespace Horo::AI {
                     .count == 0);
         }
 
+        TEST_CASE("one perception projection issues one blackboard notification and rejects recursive publication",
+                  "[unit][ai][perception][filter]") {
+            PublicationFixture fixture;
+
+            struct Probe final {
+                PublicationFixture *fixture;
+                std::size_t calls{};
+                std::size_t changedKeys{};
+                bool rejected{};
+            } probe{&fixture};
+
+            const auto notify = [](void *context, const BlackboardNotificationBatch &batch) noexcept {
+                auto &state = *static_cast<Probe *>(context);
+                ++state.calls;
+                state.changedKeys = batch.Changes().size();
+                const auto recursive = state.fixture->Sync();
+                state.rejected =
+                    recursive.HasError() && recursive.ErrorValue().code.Value() == AIErrors::BlackboardReentrantMutation.code.Value();
+            };
+            const auto observer = fixture.blackboard->RegisterObserverAtBlackboardSync(
+                {fixture.agent, {fixture.agent.incarnation, {1, 1}}, fixture.keys.sources, notify, &probe});
+            REQUIRE(observer.HasValue());
+            REQUIRE(fixture.Sync().HasValue());
+            REQUIRE(fixture.Sync().HasValue());
+            CHECK(probe.calls == 1);
+            CHECK(probe.changedKeys == 2);
+            CHECK(probe.rejected);
+            REQUIRE(fixture.blackboard->RemoveObserverAtBlackboardSync(observer.Value()).Value());
+        }
+
         TEST_CASE("17 through 32 admitted records fail without partial blackboard or debug publication", "[unit][ai][perception][filter]") {
             for (std::size_t count = 17; count <= 32; ++count) {
                 INFO("memory entries: " << count);
                 PublicationFixture fixture(count);
                 ExpectError(fixture.Sync(), AIErrors::PerceptionDescriptorLimitExceeded);
+                CHECK(fixture.publication.RejectedByCapacity() == count);
                 CHECK(fixture.Read(fixture.keys.sources).count == 0);
                 CHECK(fixture.Read(fixture.keys.positions).count == 0);
                 CHECK(fixture.blackboard->CaptureCanonical().HasValue());
@@ -262,6 +293,7 @@ namespace Horo::AI {
                 const auto first = fixture.Sync();
                 REQUIRE(first.HasValue());
                 REQUIRE(first.Value().memory.count == 1);
+                CHECK(fixture.publication.RejectedByCapacity() == 0);
                 for (auto &extra : fixture.additional)
                     extra.visibility = PerceptionGameplayVisibility::Everyone;
                 fixture.Publish(3);
@@ -321,6 +353,8 @@ namespace Horo::AI {
             fixture.Publish(2);
             PerceptionPublication wrongProjection;
             const PerceptionBlackboardProjection wrong{fixture.keys.sources, MakeIdentity<BlackboardKeyId>(3)};
+            CHECK(fixture.keys.Validate(*fixture.schema).Value() == MaximumBlackboardCollectionElements);
+            ExpectError(wrong.Validate(*fixture.schema), AIErrors::BlackboardValueTypeMismatch);
             ExpectError(wrongProjection.PublishAtBlackboardSync(*fixture.scene, fixture.broadphase, fixture.listener.entity, fixture.memory,
                                                                 *fixture.blackboard, wrong, 1),
                         AIErrors::BlackboardValueTypeMismatch);

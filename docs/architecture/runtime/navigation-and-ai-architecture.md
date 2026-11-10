@@ -2423,6 +2423,14 @@ schema-approved keys during `SystemPhase::BlackboardSync`. Decision tasks and
 Service nodes consume the committed view and are not alternate writers for this
 seam.
 
+The `PerceptionBlackboardProjection` contract lets composition validate the
+paired source and position collections against the admitted blackboard schema
+before sensing. `PerceptionPublication` rechecks the active schema at publication
+and commits the pair in one batch. The smaller key capacity bounds the pair.
+A capacity rejection preserves the previous committed values and exposes the
+count of rejected, policy-admitted facts on the owner lane. Revoked policy
+authorizations still invalidate reads of the previous values.
+
 ```cpp
 struct AIBlackboard {
     std::optional<EntityId>        target;
