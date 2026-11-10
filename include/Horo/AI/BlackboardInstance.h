@@ -278,6 +278,13 @@ namespace Horo::AI {
             return active_ ? schema_ : nullptr;
         }
 
+        /** @brief Reads owner-thread publication metadata without copying live values.
+         * @return The active revision, or zero after teardown.
+         */
+        [[nodiscard]] std::uint64_t RevisionAtSafePoint() const noexcept {
+            return active_ ? revision_ : 0;
+        }
+
         /** @brief Copies one authorized key on the owner safe-point thread without allocating a snapshot.
          * @param key Stable schema key. @return Copied optional value or typed stale/unknown-key failure. */
         [[nodiscard]] Result<std::optional<BlackboardValue>> ReadAtSafePoint(BlackboardKeyId key) const;

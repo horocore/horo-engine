@@ -153,8 +153,7 @@ namespace Horo::AI {
         if (!current_ || filtering.Current() != filtering_ || !scene.IsCurrent() || scene.RuntimeId() != current_->listener.runtime ||
             scene.Get(current_->listener).HasError() || !blackboard.IsActive() || blackboard.Binding() != binding_)
             return Result<PerceptionPublicationSnapshot>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
-        if (const auto board = blackboard.Snapshot();
-            board.HasError() || board.Value().Revision().HasError() || board.Value().Revision().Value() != current_->blackboardRevision)
+        if (blackboard.RevisionAtSafePoint() != current_->blackboardRevision)
             return Result<PerceptionPublicationSnapshot>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         for (std::size_t index = 0; index < current_->memory.count; ++index) {
             const auto &record = current_->memory.entries[index];
