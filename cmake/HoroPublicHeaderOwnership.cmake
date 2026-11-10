@@ -773,6 +773,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/DecisionAssetValidation.h
     Horo/AI/StateMachine.h
     Horo/AI/EnvironmentQuerySchema.h
+    Horo/AI/EnvironmentQueryScoring.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
     Horo/AI/PerceptionEventRouting.h

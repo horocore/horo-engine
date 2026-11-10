@@ -121,6 +121,16 @@ plan-versioned fixed-point ScoreKeys, then the configured tie-breaker and stable
 item index, with explicit precision/rounding and StageId aggregation order. No
 hash-map/pointer order or non-transitive epsilon comparator is permitted.
 
+`Horo/AI/EnvironmentQueryScoring.h` joins one bounded rule per compiled test
+stage to its declared provider. Scoring consumes captured provider facts in
+stable StageId order. Version-one keys round the normalized score to the nearest
+millionth, with half steps rounded up. A configured signed secondary key
+precedes the final item-index tie break. Missing, incomparable, failed and
+non-finite readings disqualify the candidate and identify the failed stage and
+provider. The owning provider adapter retains the original typed error. The
+scoring interface operates on caller-owned scratch and returns the eligible
+best-N prefix. Provider dispatch belongs to the staged query owner.
+
 ### Threading, Safe Points And Modes
 
 EQS runs on the simulation owner using existing ADR-021/022 phases. BlackboardSync

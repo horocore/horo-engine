@@ -1,5 +1,6 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
+#include "Horo/AI/EnvironmentQueryScoring.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -67,6 +68,87 @@ namespace Horo::AI {
                 return source;
             }
         };
+
+        TEST_CASE("EQS ranks fixed-range test facts without depending on candidate enumeration", "[unit][ai][eqs][scoring]") {
+            const Fixture fixture;
+            auto source = fixture.Asset();
+            const auto first = source.stages[1].id;
+            const auto second = Identity<QueryStageId>(5);
+            auto later = source.stages[1];
+            later.id = second;
+            later.executionOrder = 15;
+            source.stages.push_back(later);
+            const auto registry = fixture.Registry();
+            const auto asset = EnvironmentQueryAsset::Capture(source);
+            REQUIRE(registry.HasValue());
+            REQUIRE(asset.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(asset.Value(), registry.Value());
+            REQUIRE(plan.HasValue());
+            const std::array rules{QueryScoreRule{.stage = second,
+                                                  .score =
+                                                      QueryScoreRange{.maximum = 10, .weight = 3, .curve = QueryScoreCurve::Threshold}},
+                                   QueryScoreRule{.stage = first,
+                                                  .requiredFilterValue = true,
+                                                  .score = QueryScoreRange{.maximum = 10,
+                                                                           .curve = QueryScoreCurve::SmoothStep,
+                                                                           .direction = QueryScoreDirection::Lower}}};
+            const auto scoring = QueryScoringPlan::Capture(plan.Value(), registry.Value(), rules, QueryScoreTieBreak::LowerKey);
+            REQUIRE(scoring.HasValue());
+            std::array samples{QueryTestSample{.stage = first, .filter = true, .metric = 5}, QueryTestSample{.stage = second, .metric = 7}};
+            const auto tiedA = scoring.Value().Evaluate(2, -4, samples);
+            const auto tiedB = scoring.Value().Evaluate(1, -4, samples);
+            const auto tiedC = scoring.Value().Evaluate(0, 4, samples);
+            REQUIRE(tiedA.status == QueryScoreStatus::Eligible);
+            CHECK(tiedA.scoreKey == 875'000);
+            samples[1].metric = std::numeric_limits<double>::quiet_NaN();
+            const auto invalid = scoring.Value().Evaluate(3, -9, samples);
+            REQUIRE(invalid.status == QueryScoreStatus::InvalidScore);
+            CHECK(invalid.failedStage == second);
+            CHECK(invalid.failedProvider == fixture.tests[0].origin.provider);
+            std::array candidates{invalid, tiedA, tiedC, tiedB};
+            const auto winners = scoring.Value().SelectBest(candidates, 2);
+            REQUIRE(winners.HasValue());
+            REQUIRE(winners.Value().size() == 2);
+            CHECK(winners.Value()[0].itemIndex == 1);
+            CHECK(winners.Value()[1].itemIndex == 2);
+            std::array reordered{tiedB, tiedC, tiedA, invalid};
+            const auto repeated = scoring.Value().SelectBest(reordered, 2);
+            REQUIRE(repeated.HasValue());
+            CHECK(repeated.Value()[0].itemIndex == 1);
+            CHECK(repeated.Value()[1].itemIndex == 2);
+        }
+
+        TEST_CASE("EQS filter-only scoring retains typed mandatory test rejection evidence", "[unit][ai][eqs][scoring]") {
+            const Fixture fixture;
+            const auto registry = fixture.Registry();
+            const auto asset = EnvironmentQueryAsset::Capture(fixture.Asset());
+            REQUIRE(registry.HasValue());
+            REQUIRE(asset.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(asset.Value(), registry.Value());
+            REQUIRE(plan.HasValue());
+            const auto stage = plan.Value().Stages()[1].id;
+            QueryScoreRule rule{.stage = stage, .requiredFilterValue = false};
+            const auto scoring =
+                QueryScoringPlan::Capture(plan.Value(), registry.Value(), std::span{&rule, 1}, QueryScoreTieBreak::StableIndex);
+            REQUIRE(scoring.HasValue());
+            QueryTestSample sample{.stage = stage, .filter = true};
+            CHECK(scoring.Value().Evaluate(0, 0, std::span{&sample, 1}).status == QueryScoreStatus::Filtered);
+            sample.filter = false;
+            const auto eligible = scoring.Value().Evaluate(1, 0, std::span{&sample, 1});
+            CHECK(eligible.status == QueryScoreStatus::Eligible);
+            CHECK(eligible.scoreKey == 0);
+            sample.availability = QueryTestAvailability::Failed;
+            const auto failed = scoring.Value().Evaluate(0, 0, std::span{&sample, 1});
+            CHECK(failed.status == QueryScoreStatus::ProviderFailed);
+            CHECK(failed.failedStage == stage);
+            CHECK(failed.failedProvider == fixture.tests[0].origin.provider);
+            CHECK(scoring.Value().Evaluate(0, 0, {}).status == QueryScoreStatus::MissingSample);
+            rule.score = QueryScoreRange{.weight = 0};
+            ExpectError(QueryScoringPlan::Capture(plan.Value(), registry.Value(), std::span{&rule, 1}, QueryScoreTieBreak::StableIndex),
+                        AIErrors::EnvironmentQuerySchemaInvalid);
+            std::array duplicate{eligible, eligible};
+            ExpectError(scoring.Value().SelectBest(duplicate, 1), AIErrors::EnvironmentQueryIdentityConflict);
+        }
 
         TEST_CASE("EQS plan identity and semantic order survive display rename and serialized reorder", "[unit][ai][eqs]") {
             const Fixture fixture;
