@@ -172,22 +172,27 @@ namespace Horo::AI {
         if (Terminal(state.outcome) || state.lastTick == input_->tick)
             return Result<AiTaskState>::Success(state.outcome);
         state.lastTick = input_->tick;
-        if (state.tree) {
-            auto stepped = state.tree->Evaluate(input_->tick, input_->blackboard, input_->current.agent);
-            if (trace_)
-                state.tree->AppendTrace(TraceOccurrence(index), *trace_);
-            if (stepped.HasError())
-                return stepped;
-            state.outcome = stepped.Value();
-        } else {
-            auto stepped = state.machine->Step(input_->tick, input_->current, input_->blackboard, input_->events, state.actions.get());
-            if (stepped.HasError())
-                return Result<AiTaskState>::Failure(stepped.ErrorValue());
-            const auto *terminal = state.machine->TerminalResult();
-            state.outcome = terminal ? terminal->state : AiTaskState::Running;
-            if (trace_)
-                TraceMachine(index, stepped.Value());
-        }
+        if (!state.tree)
+            return AdvanceMachine(index);
+        auto stepped = state.tree->Evaluate(input_->tick, input_->blackboard, input_->current.agent);
+        if (trace_)
+            state.tree->AppendTrace(TraceOccurrence(index), *trace_);
+        if (stepped.HasError())
+            return stepped;
+        state.outcome = stepped.Value();
+        return stepped;
+    }
+
+    /** @copydoc DecisionGraphInstance::AdvanceMachine */
+    Result<AiTaskState> DecisionGraphInstance::AdvanceMachine(const std::size_t index) {
+        auto &state = *occurrences_[index];
+        auto stepped = state.machine->Step(input_->tick, input_->current, input_->blackboard, input_->events, state.actions.get());
+        if (stepped.HasError())
+            return Result<AiTaskState>::Failure(stepped.ErrorValue());
+        const auto *terminal = state.machine->TerminalResult();
+        state.outcome = terminal ? terminal->state : AiTaskState::Running;
+        if (trace_)
+            TraceMachine(index, stepped.Value());
         return Result<AiTaskState>::Success(state.outcome);
     }
 

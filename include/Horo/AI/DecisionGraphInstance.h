@@ -67,6 +67,8 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> BuildOccurrence(std::size_t index);
         [[nodiscard]] Result<void> ResetOccurrence(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Advance(std::size_t index);
+        /** @brief Advances one admitted state-machine occurrence and captures its optional step evidence. */
+        [[nodiscard]] Result<AiTaskState> AdvanceMachine(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Call(std::size_t parent, DecisionNodeId node, bool entering);
         [[nodiscard]] Result<void> BeginCall(std::size_t parent, DecisionNodeId node);
         void EndCall(std::size_t parent, DecisionNodeId node, AiTaskCancellationReason reason) noexcept;

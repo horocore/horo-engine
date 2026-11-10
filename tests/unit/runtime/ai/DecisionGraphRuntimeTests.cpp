@@ -7,6 +7,20 @@ namespace Horo::AI {
     namespace {
         using namespace DecisionGraphTestSupport;
 
+        /** @brief Replays the same deterministic inputs through an independently owned fixture. */
+        void CheckTraceReplay(const std::span<const DecisionGraphSource> sources, const DecisionStepTrace &retained,
+                              const std::vector<TaskHandle> &tracedTasks) {
+            Fixture replay;
+            auto twin = replay.Instance(replay.Compile(sources, 1));
+            const auto replayInput = replay.blackboard->Snapshot();
+            REQUIRE(replayInput.HasValue());
+            DecisionStepTrace replayed;
+            REQUIRE(twin->StepWithTrace({1, replay.binding, replayInput.Value(), {}}, replayed).HasValue());
+            CHECK(replayed.Header().planDigest == retained.Header().planDigest);
+            CHECK(std::ranges::equal(replayed.Records(), retained.Records()));
+            CHECK(replay.probe.tasks == tracedTasks);
+        }
+
         TEST_CASE("BT to HSM to BT executes real independent parallel call occurrences across committed ticks",
                   "[ai][decision-graph-runtime]") {
             Fixture fixture;
@@ -72,15 +86,7 @@ namespace Horo::AI {
             CHECK(instance->StepWithTrace({2, fixture.binding, snapshot.Value(), {}}, trace).HasError());
             CHECK(trace.Header().tick == 2);
 
-            Fixture replay;
-            auto twin = replay.Instance(replay.Compile(sources, 1));
-            const auto replayInput = replay.blackboard->Snapshot();
-            REQUIRE(replayInput.HasValue());
-            DecisionStepTrace replayed;
-            REQUIRE(twin->StepWithTrace({1, replay.binding, replayInput.Value(), {}}, replayed).HasValue());
-            CHECK(replayed.Header().planDigest == retained.Header().planDigest);
-            CHECK(std::ranges::equal(replayed.Records(), retained.Records()));
-            CHECK(replay.probe.tasks == tracedTasks);
+            CheckTraceReplay(sources, retained, tracedTasks);
         }
 
         TEST_CASE("Decision trace truncation leaves graph work and task admission unchanged", "[ai][decision-graph-runtime][trace]") {
