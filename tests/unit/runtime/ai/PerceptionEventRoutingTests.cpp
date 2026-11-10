@@ -324,6 +324,30 @@ namespace Horo::AI {
                 sound.intensity = std::numeric_limits<double>::infinity();
                 ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
             }
+            SECTION("NaN intensity") {
+                sound.intensity = std::numeric_limits<double>::quiet_NaN();
+                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
+            }
+            SECTION("non-positive intensity") {
+                sound.intensity = 0;
+                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
+            }
+            SECTION("excessive intensity") {
+                sound.intensity = 1.01;
+                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
+            }
+            SECTION("non-finite radius") {
+                sound.radiusMeters = std::numeric_limits<double>::quiet_NaN();
+                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
+            }
+            SECTION("non-positive radius") {
+                sound.radiusMeters = 0;
+                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
+            }
+            SECTION("empty lifetime") {
+                sound.lifetimeTicks = 0;
+                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
+            }
             SECTION("outside radius") {
                 sound.radiusMeters = 0.999;
                 ExpectError(deliver(), AIErrors::PerceptionEventFiltered);
