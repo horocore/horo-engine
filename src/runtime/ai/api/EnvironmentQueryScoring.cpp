@@ -167,10 +167,10 @@ namespace Horo::AI {
         std::ranges::sort(candidates, [this](const QueryCandidateScore &left, const QueryCandidateScore &right) {
             return RanksBefore(left, right, tieBreak_);
         });
-        const auto rejected =
-            std::ranges::find_if_not(candidates.first(std::min(bestCount, candidates.size())), [](const QueryCandidateScore &score) {
+        const auto prefix = candidates.first(std::min(bestCount, candidates.size()));
+        const auto rejected = std::ranges::find_if_not(prefix, [](const QueryCandidateScore &score) {
             return score.status == QueryScoreStatus::Eligible;
         });
-        return Selection::Success(candidates.first(static_cast<std::size_t>(rejected - candidates.begin())));
+        return Selection::Success(prefix.first(static_cast<std::size_t>(rejected - prefix.begin())));
     }
 }  // namespace Horo::AI
