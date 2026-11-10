@@ -29,12 +29,12 @@ namespace Horo::AI {
             return score * range.weight;
         }
 
-        /** @brief Checks a mandatory provider reading before it enters numerical aggregation. */
-        [[nodiscard]] QueryScoreStatus Status(const QueryTestSample &sample, const QueryScoreRule &rule) noexcept {
+        /** @brief Translates the provider's availability without exposing runtime provider data. */
+        [[nodiscard]] QueryScoreStatus ProviderStatus(const QueryTestAvailability availability) noexcept {
             using enum QueryTestAvailability;
-            switch (sample.availability) {
+            switch (availability) {
                 case Available:
-                    break;
+                    return QueryScoreStatus::Eligible;
                 case Unavailable:
                     return QueryScoreStatus::ProviderUnavailable;
                 case Failed:
@@ -44,14 +44,21 @@ namespace Horo::AI {
                 default:
                     return QueryScoreStatus::Incomparable;
             }
-            if (rule.requiredFilterValue && !sample.filter)
-                return QueryScoreStatus::MissingSample;
+        }
+
+        /** @brief Checks a mandatory provider reading before it enters numerical aggregation. */
+        [[nodiscard]] QueryScoreStatus Status(const QueryTestSample &sample, const QueryScoreRule &rule) noexcept {
+            const auto available = ProviderStatus(sample.availability);
+            if (available != QueryScoreStatus::Eligible)
+                return available;
             if (rule.requiredFilterValue && rule.requiredFilterValue != sample.filter)
-                return QueryScoreStatus::Filtered;
-            if (rule.score && !sample.metric)
-                return QueryScoreStatus::MissingSample;
-            if (rule.score && !std::isfinite(*sample.metric))
-                return QueryScoreStatus::InvalidScore;
+                return sample.filter ? QueryScoreStatus::Filtered : QueryScoreStatus::MissingSample;
+            if (rule.score) {
+                if (!sample.metric)
+                    return QueryScoreStatus::MissingSample;
+                if (!std::isfinite(*sample.metric))
+                    return QueryScoreStatus::InvalidScore;
+            }
             return QueryScoreStatus::Eligible;
         }
 
@@ -74,6 +81,39 @@ namespace Horo::AI {
         }
     }  // namespace
 
+    /** @copydoc QueryScoringPlan::ResolveRule */
+    Result<QueryScoringPlan::Stage> QueryScoringPlan::ResolveRule(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                                                  const QueryScoreRule &rule) {
+        const auto stage = std::ranges::find(plan.Stages(), rule.stage, &QueryPlanStage::id);
+        if (stage == plan.Stages().end() || stage->kind != QueryStageKind::Test)
+            return Result<Stage>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        const auto *descriptor = registry.Find(stage->test);
+        if (!descriptor)
+            return Result<Stage>::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+        if ((!rule.requiredFilterValue && !rule.score) || (rule.score && !ValidRange(*rule.score)))
+            return Result<Stage>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        return Result<Stage>::Success({rule, descriptor->origin.provider});
+    }
+
+    /** @copydoc QueryScoringPlan::MeasureWeight */
+    Result<double> QueryScoringPlan::MeasureWeight(const std::span<const Stage> stages) {
+        bool scored = false;
+        double weight = 0;
+        QueryStageId previous;
+        for (const auto &stage : stages) {
+            if (stage.rule.stage == previous)
+                return Result<double>::Failure(MakeError(AIErrors::EnvironmentQueryIdentityConflict));
+            previous = stage.rule.stage;
+            if (stage.rule.score) {
+                scored = true;
+                weight += stage.rule.score->weight;
+            }
+        }
+        if (scored && (!std::isfinite(weight) || weight <= 0))
+            return Result<double>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        return Result<double>::Success(weight);
+    }
+
     /** @copydoc QueryScoringPlan::Capture */
     Result<QueryScoringPlan> QueryScoringPlan::Capture(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
                                                        const std::span<const QueryScoreRule> rules, const QueryScoreTieBreak tieBreak) {
@@ -88,32 +128,18 @@ namespace Horo::AI {
         captured.tieBreak_ = tieBreak;
         captured.stages_.reserve(rules.size());
         for (const auto &rule : rules) {
-            const auto stage = std::ranges::find(plan.Stages(), rule.stage, &QueryPlanStage::id);
-            if (stage == plan.Stages().end() || !isTest(*stage))
-                return CaptureResult::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-            const auto *descriptor = registry.Find(stage->test);
-            if (!descriptor)
-                return CaptureResult::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
-            if ((!rule.requiredFilterValue && !rule.score) || (rule.score && !ValidRange(*rule.score)))
-                return CaptureResult::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-            captured.stages_.push_back({rule, descriptor->origin.provider});
+            const auto stage = ResolveRule(plan, registry, rule);
+            if (stage.HasError())
+                return CaptureResult::Failure(stage.ErrorValue());
+            captured.stages_.push_back(stage.Value());
         }
         std::ranges::sort(captured.stages_, {}, [](const Stage &stage) {
             return stage.rule.stage;
         });
-        bool scored = false;
-        QueryStageId previous;
-        for (const auto &stage : captured.stages_) {
-            if (stage.rule.stage == previous)
-                return CaptureResult::Failure(MakeError(AIErrors::EnvironmentQueryIdentityConflict));
-            previous = stage.rule.stage;
-            if (stage.rule.score) {
-                scored = true;
-                captured.totalWeight_ += stage.rule.score->weight;
-            }
-        }
-        if (scored && (!std::isfinite(captured.totalWeight_) || captured.totalWeight_ <= 0))
-            return CaptureResult::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        const auto weight = MeasureWeight(captured.stages_);
+        if (weight.HasError())
+            return CaptureResult::Failure(weight.ErrorValue());
+        captured.totalWeight_ = weight.Value();
         return CaptureResult::Success(std::move(captured));
     }
 

@@ -100,25 +100,13 @@ namespace Horo::AI {
             const auto tiedC = scoring.Value().Evaluate(0, 4, samples);
             REQUIRE(tiedA.status == QueryScoreStatus::Eligible);
             CHECK(tiedA.scoreKey == 875'000);
-            samples[1].metric = std::numeric_limits<double>::quiet_NaN();
-            const auto invalid = scoring.Value().Evaluate(3, -9, samples);
-            REQUIRE(invalid.status == QueryScoreStatus::InvalidScore);
-            CHECK(invalid.failedStage == second);
-            CHECK(invalid.failedProvider == fixture.tests[0].origin.provider);
-            samples[1].metric = std::numeric_limits<double>::infinity();
-            const auto infinite = scoring.Value().Evaluate(4, -9, samples);
-            REQUIRE(infinite.status == QueryScoreStatus::InvalidScore);
-            std::array rejected{invalid, infinite};
-            const auto none = scoring.Value().SelectBest(rejected, 2);
-            REQUIRE(none.HasValue());
-            CHECK(none.Value().empty());
-            std::array candidates{invalid, tiedA, tiedC, tiedB};
+            std::array candidates{tiedA, tiedC, tiedB};
             const auto winners = scoring.Value().SelectBest(candidates, 2);
             REQUIRE(winners.HasValue());
             REQUIRE(winners.Value().size() == 2);
             CHECK(winners.Value()[0].itemIndex == 1);
             CHECK(winners.Value()[1].itemIndex == 2);
-            std::array reordered{tiedB, tiedC, tiedA, invalid};
+            std::array reordered{tiedB, tiedC, tiedA};
             const auto repeated = scoring.Value().SelectBest(reordered, 2);
             REQUIRE(repeated.HasValue());
             CHECK(repeated.Value()[0].itemIndex == 1);
@@ -155,6 +143,33 @@ namespace Horo::AI {
                         AIErrors::EnvironmentQuerySchemaInvalid);
             std::array duplicate{eligible, eligible};
             ExpectError(scoring.Value().SelectBest(duplicate, 1), AIErrors::EnvironmentQueryIdentityConflict);
+        }
+
+        TEST_CASE("EQS excludes non-finite mandatory scores from every winning prefix", "[unit][ai][eqs][scoring]") {
+            const Fixture fixture;
+            const auto registry = fixture.Registry();
+            const auto asset = EnvironmentQueryAsset::Capture(fixture.Asset());
+            REQUIRE(registry.HasValue());
+            REQUIRE(asset.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(asset.Value(), registry.Value());
+            REQUIRE(plan.HasValue());
+            const auto stage = plan.Value().Stages()[1].id;
+            const QueryScoreRule rule{.stage = stage, .score = QueryScoreRange{}};
+            const auto scoring =
+                QueryScoringPlan::Capture(plan.Value(), registry.Value(), std::span{&rule, 1}, QueryScoreTieBreak::StableIndex);
+            REQUIRE(scoring.HasValue());
+            QueryTestSample sample{.stage = stage, .metric = std::numeric_limits<double>::quiet_NaN()};
+            const auto invalid = scoring.Value().Evaluate(0, 0, std::span{&sample, 1});
+            REQUIRE(invalid.status == QueryScoreStatus::InvalidScore);
+            CHECK(invalid.failedStage == stage);
+            CHECK(invalid.failedProvider == fixture.tests[0].origin.provider);
+            sample.metric = std::numeric_limits<double>::infinity();
+            const auto infinite = scoring.Value().Evaluate(1, 0, std::span{&sample, 1});
+            REQUIRE(infinite.status == QueryScoreStatus::InvalidScore);
+            std::array candidates{invalid, infinite};
+            const auto none = scoring.Value().SelectBest(candidates, 2);
+            REQUIRE(none.HasValue());
+            CHECK(none.Value().empty());
         }
 
         TEST_CASE("EQS plan identity and semantic order survive display rename and serialized reorder", "[unit][ai][eqs]") {

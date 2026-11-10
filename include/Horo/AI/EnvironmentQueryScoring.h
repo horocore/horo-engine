@@ -134,6 +134,12 @@ namespace Horo::AI {
             QueryProviderId provider;
         };
 
+        /** @brief Resolves one rule against the compiled test and its declared provider. */
+        [[nodiscard]] static Result<Stage> ResolveRule(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                                       const QueryScoreRule &rule);
+        /** @brief Validates the sorted stage inventory and measures its total scoring weight. */
+        [[nodiscard]] static Result<double> MeasureWeight(std::span<const Stage> stages);
+
         QueryScoringPlan() = default;
         std::vector<Stage> stages_;
         double totalWeight_{};
