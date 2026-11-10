@@ -320,34 +320,6 @@ namespace Horo::AI {
                 record.delivery.simulationTick = 2;
                 ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
             }
-            SECTION("non-finite intensity") {
-                sound.intensity = std::numeric_limits<double>::infinity();
-                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
-            }
-            SECTION("NaN intensity") {
-                sound.intensity = std::numeric_limits<double>::quiet_NaN();
-                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
-            }
-            SECTION("non-positive intensity") {
-                sound.intensity = 0;
-                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
-            }
-            SECTION("excessive intensity") {
-                sound.intensity = 1.01;
-                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
-            }
-            SECTION("non-finite radius") {
-                sound.radiusMeters = std::numeric_limits<double>::quiet_NaN();
-                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
-            }
-            SECTION("non-positive radius") {
-                sound.radiusMeters = 0;
-                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
-            }
-            SECTION("empty lifetime") {
-                sound.lifetimeTicks = 0;
-                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
-            }
             SECTION("outside radius") {
                 sound.radiusMeters = 0.999;
                 ExpectError(deliver(), AIErrors::PerceptionEventFiltered);
@@ -361,6 +333,36 @@ namespace Horo::AI {
                 REQUIRE(fixture.filtering.Publish(fixture.scene->View(), 2, fixture.listeners, fixture.sources).HasValue());
                 ExpectError(deliver(), AIErrors::PerceptionEventFiltered);
             }
+            CHECK(memory.StoredCount() == 0);
+        }
+
+        TEST_CASE("sound delivery rejects malformed acoustic metadata", "[unit][ai][perception][events][hearing]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            auto record = fixture.Sound();
+            auto &sound = std::get<HearingPerceptionEvent>(record.delivery.event);
+            SECTION("non-finite intensity") {
+                sound.intensity = std::numeric_limits<double>::infinity();
+            }
+            SECTION("NaN intensity") {
+                sound.intensity = std::numeric_limits<double>::quiet_NaN();
+            }
+            SECTION("non-positive intensity") {
+                sound.intensity = 0;
+            }
+            SECTION("excessive intensity") {
+                sound.intensity = 1.01;
+            }
+            SECTION("non-finite radius") {
+                sound.radiusMeters = std::numeric_limits<double>::quiet_NaN();
+            }
+            SECTION("non-positive radius") {
+                sound.radiusMeters = 0;
+            }
+            SECTION("empty lifetime") {
+                sound.lifetimeTicks = 0;
+            }
+            ExpectError(fixture.Capture(std::span{&record, 1}).Deliver(0, memory), AIErrors::PerceptionEventInvalid);
             CHECK(memory.StoredCount() == 0);
         }
 
