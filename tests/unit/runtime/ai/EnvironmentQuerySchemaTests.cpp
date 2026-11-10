@@ -105,6 +105,13 @@ namespace Horo::AI {
             REQUIRE(invalid.status == QueryScoreStatus::InvalidScore);
             CHECK(invalid.failedStage == second);
             CHECK(invalid.failedProvider == fixture.tests[0].origin.provider);
+            samples[1].metric = std::numeric_limits<double>::infinity();
+            const auto infinite = scoring.Value().Evaluate(4, -9, samples);
+            REQUIRE(infinite.status == QueryScoreStatus::InvalidScore);
+            std::array rejected{invalid, infinite};
+            const auto none = scoring.Value().SelectBest(rejected, 2);
+            REQUIRE(none.HasValue());
+            CHECK(none.Value().empty());
             std::array candidates{invalid, tiedA, tiedC, tiedB};
             const auto winners = scoring.Value().SelectBest(candidates, 2);
             REQUIRE(winners.HasValue());
