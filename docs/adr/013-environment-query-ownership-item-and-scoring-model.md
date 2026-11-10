@@ -93,6 +93,16 @@ NavMeshProjectionGenerator submits Navigation-owned work; PerceivedEntitiesGener
 reads an authorized perception snapshot. Stable item indices are assigned before
 async dispatch using canonical generation/entity order.
 
+`Horo/AI/EnvironmentQueryGenerators.h` provides the candidate kernels through
+`HoroEngine::AISceneIntegration`. Lattice points use exact global millimeters
+and stable Z/X order. Out-of-range offsets are skipped and counted. Captured
+authored or Navigation-projected points preserve the provider's canonical input
+order. The perception path accepts only the currently authorized revision and
+deduplicates weak entity references. Each successful batch records the stage,
+generator, provider, and revision. Consumers supply bounded output storage and
+link the scene integration target. Navigation request dispatch and staged
+execution are composed separately from these kernels.
+
 GeometryLineOfSightTest measures physical obstruction through Physics.
 PerceivedVisibilityTest asks what an agent senses/remembers through Perception.
 Distance, dot-product, path-cost and cover-exposure tests declare all actual provider

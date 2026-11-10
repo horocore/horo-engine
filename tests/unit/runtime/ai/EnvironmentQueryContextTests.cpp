@@ -1,11 +1,13 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -96,6 +98,65 @@ namespace Horo::AI {
             auto &provider = *static_cast<ProviderState *>(state);
             ++provider.calls;
             return Result<QueryContextValue>::Success(provider.value);
+        }
+
+        TEST_CASE("EQS lattice uses canonical ordering and rejects overflow without writing partial results",
+                  "[unit][ai][eqs][generator]") {
+            QueryFixture fixture;
+            const auto center = BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation);
+            fixture.generator.contexts = {{center, {1, 1}}};
+            const auto registry = fixture.Registry();
+            const auto plan = fixture.Plan(registry);
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry);
+            REQUIRE(providers.HasValue());
+            auto scene = MakeScene();
+            const auto view = scene->View();
+            auto source = Source(view);
+            const auto x = std::numeric_limits<std::int64_t>::max();
+            source.querierLocation = Math::WorldCoordinate64::FromMillimeters(x, 17, 0);
+            QueryContextCapture capture;
+            const auto contexts = capture.Capture(plan, registry, providers.Value(), view, source);
+            REQUIRE(contexts.HasValue());
+            std::array<QueryGeneratedItem, 9> items;
+            const auto untouched = items;
+            QueryGeneratorOutput output{{plan.Stages()[0].id, fixture.generator.id, fixture.generator.origin.provider, 1}, 5, items};
+            const QueryPointLattice grid{.stepMillimeters = 2, .outerSteps = 1};
+            ExpectError(GenerateQueryLattice(*contexts.Value(), center, grid, output), AIErrors::EnvironmentQueryLimitExceeded);
+            CHECK(items == untouched);
+            output.maximumItems = 9;
+            const auto generated = GenerateQueryLattice(*contexts.Value(), center, grid, output);
+            REQUIRE(generated.HasValue());
+            CHECK(generated.Value().provenance.stage == plan.Stages()[0].id);
+            CHECK(generated.Value().invalidCoordinateCount == 3);
+            REQUIRE(generated.Value().itemCount == 6);
+            CHECK(items[0] == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(x - 2, 17, -2)});
+            CHECK(items[5] == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(x, 17, 2)});
+            const auto ring = GenerateQueryLattice(*contexts.Value(), center, {2, 1, 1}, output);
+            REQUIRE(ring.HasValue());
+            CHECK(ring.Value().invalidCoordinateCount == 1);
+            CHECK(ring.Value().itemCount == 3);
+            CHECK(items[0] == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(x, 17, -2)});
+            CHECK(items[1] == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(x - 2, 17, 0)});
+            ++output.provenance.revision;
+            ExpectError(GenerateQueryLattice(*contexts.Value(), center, grid, output), AIErrors::EnvironmentQueryContextStale);
+        }
+
+        TEST_CASE("EQS copies bounded provider points in declared order", "[unit][ai][eqs][generator]") {
+            const std::array points{Math::WorldCoordinate64::FromMillimeters(123, 0, 0),
+                                    Math::WorldCoordinate64::FromMillimeters(-42, 0, 0)};
+            std::array<QueryGeneratedItem, 2> items;
+            QueryGeneratorOutput output{{MakeIdentity<QueryStageId>(1), MakeIdentity<QueryGeneratorId>(2), MakeIdentity<QueryProviderId>(3),
+                                         19},
+                                        1,
+                                        items};
+            ExpectError(GenerateQueryPoints(points, output), AIErrors::EnvironmentQueryLimitExceeded);
+            output.maximumItems = 2;
+            const auto generated = GenerateQueryPoints(points, output);
+            REQUIRE(generated.HasValue());
+            CHECK(generated.Value().itemCount == 2);
+            CHECK(generated.Value().provenance.revision == 19);
+            CHECK(items[0] == QueryGeneratedItem{points[0]});
+            CHECK(items[1] == QueryGeneratedItem{points[1]});
         }
 
         TEST_CASE("EQS contexts capture immutable built-ins once per execution revision", "[unit][ai][eqs][context]") {

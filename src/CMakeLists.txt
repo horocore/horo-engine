@@ -1732,6 +1732,7 @@ add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AISceneRestore.cpp
         runtime/ai/integration/AIScenePerceptionSource.cpp
         runtime/ai/integration/EnvironmentQueryContexts.cpp
+    runtime/ai/integration/EnvironmentQueryGenerators.cpp
         runtime/ai/integration/PerceptionSpatialBroadphase.cpp)
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)

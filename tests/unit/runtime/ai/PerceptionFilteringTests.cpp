@@ -1,5 +1,6 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
@@ -245,6 +246,35 @@ namespace Horo::AI {
                         {.listener = fixture.listener.entity, .sense = SenseTypeIds::Sight, .radiusMillimeters = 1000, .visibleLayers = 1})
                     .Value()
                     .count == 0);
+        }
+
+        TEST_CASE("EQS perceived candidates use only current authorized actors in stable order", "[unit][ai][eqs][generator]") {
+            PublicationFixture fixture(3);
+            auto view = fixture.scene->View();
+            const auto duplicate = ProjectPerceptionSource(fixture.additional.back().entity);
+            REQUIRE(
+                fixture.memory
+                    .Observe({.key = {MakeIdentity<PerceptionListenerTypeId>(2), SenseTypeIds::Sight, StimulusTypeIds::Visual, duplicate}},
+                             1)
+                    .HasValue());
+            fixture.source.visibility = PerceptionGameplayVisibility::Hidden;
+            fixture.Publish(2);
+            const auto published = fixture.Sync();
+            REQUIRE(published.HasValue());
+            REQUIRE(published.Value().memory.count == 3);
+            const QueryPerceivedEntitySource source{view, fixture.publication, fixture.broadphase, *fixture.blackboard};
+            std::array<QueryGeneratedItem, 3> items;
+            const QueryGeneratorOutput output{{MakeIdentity<QueryStageId>(1), MakeIdentity<QueryGeneratorId>(2),
+                                               MakeIdentity<QueryProviderId>(3), published.Value().revision},
+                                              items.size(),
+                                              items};
+            const auto generated = GenerateQueryPerceivedEntities(source, output);
+            REQUIRE(generated.HasValue());
+            REQUIRE(generated.Value().itemCount == 2);
+            CHECK(std::get<Runtime::EntityRef>(items[0]) == fixture.additional[0].entity);
+            CHECK(std::get<Runtime::EntityRef>(items[1]) == fixture.additional[1].entity);
+            fixture.Publish(3);
+            ExpectError(GenerateQueryPerceivedEntities(source, output), AIErrors::PerceptionSpatialStale);
         }
 
         TEST_CASE("one perception projection issues one blackboard notification and rejects recursive publication",
