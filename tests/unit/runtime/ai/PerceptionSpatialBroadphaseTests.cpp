@@ -137,6 +137,7 @@ namespace Horo::AI {
             CHECK(second.Value() == broadphase.Current());
             CHECK(second.Value()->Query(SightQuery(listener.entity)).Value().candidates[0].entity == replacement.entity);
             ExpectError(first.Value()->Query(SightQuery(listener.entity)), AIErrors::PerceptionSpatialStale);
+            ExpectError(first.Value()->ListenerPosition(listener.entity), AIErrors::PerceptionSpatialStale);
         }
 
         TEST_CASE("Perception broadphase rejects malformed and duplicate publications without replacement",

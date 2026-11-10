@@ -225,6 +225,8 @@ namespace Horo::AI {
 
     /** @copydoc PerceptionSpatialSnapshot::ListenerPosition */
     Result<Math::WorldCoordinate64> PerceptionSpatialSnapshot::ListenerPosition(const Runtime::EntityRef listener) const {
+        if (!authorization_->IsCurrent())
+            return Result<Math::WorldCoordinate64>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         if (!listener.IsValid() || listener.runtime != scene_)
             return Result<Math::WorldCoordinate64>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
         const auto found = std::ranges::lower_bound(listeners_, listener, {}, &PerceptionSpatialListener::entity);
