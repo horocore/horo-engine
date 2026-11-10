@@ -1,6 +1,7 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQueryPerception.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
@@ -275,6 +276,39 @@ namespace Horo::AI {
             CHECK(std::get<Runtime::EntityRef>(items[1]) == fixture.additional[1].entity);
             fixture.Publish(3);
             ExpectError(GenerateQueryPerceivedEntities(source, output), AIErrors::PerceptionSpatialStale);
+        }
+
+        TEST_CASE("EQS perception tests fence the authorized listener revision and distinguish lost observations",
+                  "[unit][ai][eqs][perception]") {
+            PublicationFixture fixture;
+            const auto target = fixture.source.entity;
+            REQUIRE(fixture.memory
+                        .MarkLost({MakeIdentity<PerceptionListenerTypeId>(1), SenseTypeIds::Sight, StimulusTypeIds::Visual,
+                                   ProjectPerceptionSource(target)},
+                                  1)
+                        .HasValue());
+            const auto published = fixture.Sync(2);
+            REQUIRE(published.HasValue());
+            const auto view = fixture.scene->View();
+            const QueryPerceivedEntitySource source{view, fixture.publication, fixture.broadphase, *fixture.blackboard};
+            QueryPerceptionTest test{MakeIdentity<QueryStageId>(3), fixture.agent, published.Value().revision,
+                                     QueryPerceptionMatch::Remembered, SenseTypeIds::Sight};
+            const auto remembered = EvaluateQueryPerception(source, test, target);
+            REQUIRE(remembered.HasValue());
+            CHECK(remembered.Value().filter == true);
+            REQUIRE(remembered.Value().metric.has_value());
+            CHECK(*remembered.Value().metric > 0);
+            test.match = QueryPerceptionMatch::CurrentlySensed;
+            const auto sensed = EvaluateQueryPerception(source, test, target);
+            REQUIRE(sensed.HasValue());
+            CHECK(sensed.Value().filter == false);
+            CHECK(sensed.Value().metric == 0);
+            const auto oldRevision = test.revision++;
+            ExpectError(EvaluateQueryPerception(source, test, target), AIErrors::EnvironmentQueryContextStale);
+            test.revision = oldRevision;
+            fixture.source.visibility = PerceptionGameplayVisibility::Hidden;
+            fixture.Publish(2);
+            ExpectError(EvaluateQueryPerception(source, test, target), AIErrors::PerceptionSpatialStale);
         }
 
         TEST_CASE("one perception projection issues one blackboard notification and rejects recursive publication",

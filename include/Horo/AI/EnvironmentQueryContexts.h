@@ -68,6 +68,8 @@ namespace Horo::AI {
 
     private:
         friend class QueryContextCapture;
+        friend class QueryExecution;
+        QueryId query_;
         Runtime::SceneRuntimeId scene_;
         std::uint64_t revision_{};
         std::vector<QueryCapturedContext> values_;

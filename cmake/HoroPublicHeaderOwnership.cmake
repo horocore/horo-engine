@@ -788,6 +788,8 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSpatialBroadphase.h
     Horo/AI/EnvironmentQueryContexts.h
     Horo/AI/EnvironmentQueryGenerators.h
+    Horo/AI/EnvironmentQueryExecution.h
+    Horo/AI/EnvironmentQueryPerception.h
 )
 horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSight.h

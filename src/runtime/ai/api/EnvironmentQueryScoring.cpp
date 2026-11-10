@@ -92,7 +92,7 @@ namespace Horo::AI {
             return Result<Stage>::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
         if ((!rule.requiredFilterValue && !rule.score) || (rule.score && !ValidRange(*rule.score)))
             return Result<Stage>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        return Result<Stage>::Success({rule, descriptor->origin.provider});
+        return Result<Stage>::Success({rule, descriptor->origin.provider, stage->executionOrder});
     }
 
     /** @copydoc QueryScoringPlan::MeasureWeight */
@@ -124,6 +124,15 @@ namespace Horo::AI {
         if (rules.size() != static_cast<std::size_t>(std::ranges::count_if(plan.Stages(), isTest)) || tieBreak >= QueryScoreTieBreak::Count)
             return CaptureResult::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         QueryScoringPlan captured;
+        captured.query_ = plan.Id();
+        if (rules.size() + 1 == plan.Stages().size()) {
+            const auto &generator = plan.Stages().front();
+            if (const auto *descriptor = registry.Find(generator.generator)) {
+                captured.generatorStage_ = generator.id;
+                captured.generator_ = generator.generator;
+                captured.generatorProvider_ = descriptor->origin.provider;
+            }
+        }
         captured.maximumResults_ = plan.ResultSchema().maximumResults;
         captured.tieBreak_ = tieBreak;
         captured.stages_.reserve(rules.size());

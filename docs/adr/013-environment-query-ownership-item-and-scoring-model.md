@@ -250,3 +250,24 @@ are downstream acceptance requirements, not tests implemented by this ADR-only P
   dependencies or chooses an inappropriate accuracy/cache-reuse policy.
 - **Guaranteed physical interruption of every provider job**: Not implementable for
   all providers; cooperative cancellation and safe result suppression are required.
+## Owner-driven adaptive execution
+
+`Horo/AI/EnvironmentQueryExecution.h` admits a single-generator query with
+stable candidate-index tie breaking. The host supplies an exclusive adapter
+that pins the agent, context and provider publications. The adapter owns
+accepted asynchronous work and keeps that work cancellable until it returns a
+completion. Only BlackboardSync consumes provider completions and publishes
+terminal results. AiDecisionEvaluate advances work under the query, agent and
+global allowances supplied by the host. Generation reserves reduction work,
+and scoring is reserved before dispatching the candidate's first test.
+
+At the deadline, an eligible completion can contribute to the result. Partial
+results include only fully evaluated candidates. The host still owns adapter
+composition, provider quotas and scheduling across queries. Deterministic
+execution requires an owning-executor tick contract before it can use this seam.
+
+`EvaluateQueryPerception` reads the exact authorized listener publication for
+one live entity. It distinguishes remembered from currently sensed entities,
+optionally filters by sense and exposes only the match and highest eligible
+confidence. A replaced scene, publication, or candidate generation yields a
+typed stale result.

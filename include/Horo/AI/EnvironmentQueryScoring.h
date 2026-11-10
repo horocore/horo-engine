@@ -129,9 +129,12 @@ namespace Horo::AI {
                                                                               std::size_t bestCount) const;
 
     private:
+        friend class QueryExecution;
+
         struct Stage final {
             QueryScoreRule rule;
             QueryProviderId provider;
+            std::uint32_t executionOrder{};
         };
 
         /** @brief Resolves one rule against the compiled test and its declared provider. */
@@ -142,6 +145,10 @@ namespace Horo::AI {
 
         QueryScoringPlan() = default;
         std::vector<Stage> stages_;
+        QueryId query_;
+        QueryStageId generatorStage_;
+        QueryGeneratorId generator_;
+        QueryProviderId generatorProvider_;
         double totalWeight_{};
         std::uint32_t maximumResults_{};
         QueryScoreTieBreak tieBreak_{};
