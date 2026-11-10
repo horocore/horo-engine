@@ -25,6 +25,14 @@ namespace Horo::AI {
             BlackboardCollectionValue sources{.elementKind = BlackboardValueKind::EntityReference};
             BlackboardCollectionValue positions{.elementKind = BlackboardValueKind::WorldCoordinate};
             std::size_t admittedCount{};
+
+            /** @brief Stages both collections under the same revocable permission. */
+            [[nodiscard]] Result<void> Stage(BlackboardWriteBatch &batch, const PerceptionBlackboardProjection &projection,
+                                             const std::shared_ptr<const BlackboardValueAuthorization> &authorization) const {
+                if (const auto source = batch.Stage({projection.sources, BlackboardValue{sources}, authorization}); source.HasError())
+                    return source;
+                return batch.Stage({projection.positions, BlackboardValue{positions}, authorization});
+            }
         };
 
         /** @brief Resolves one projection key against the stable schema inventory. */
@@ -89,6 +97,15 @@ namespace Horo::AI {
         return Result<std::size_t>::Success(std::min(sourceCapacity.Value(), positionCapacity.Value()));
     }
 
+    /** @copydoc PerceptionPublication::MatchesBinding */
+    bool PerceptionPublication::MatchesBinding(const Runtime::EntityRef listener, const std::uint64_t simulationTick,
+                                               const BlackboardInstanceBinding &binding,
+                                               const PerceptionBlackboardProjection &projection) const noexcept {
+        return !current_ || (current_->agent == binding.agent && current_->listener == listener && binding_ == binding &&
+                             projection_.sources == projection.sources && projection_.positions == projection.positions &&
+                             simulationTick >= current_->simulationTick && current_->revision != std::numeric_limits<std::uint64_t>::max());
+    }
+
     /** @copydoc PerceptionPublication::PublishAtBlackboardSync */
     Result<PerceptionPublicationSnapshot> PerceptionPublication::PublishAtBlackboardSync(
         Runtime::RuntimeScene &scene, const PerceptionSpatialBroadphase &filtering, const Runtime::EntityRef listener,
@@ -102,9 +119,7 @@ namespace Horo::AI {
             blackboard.Binding().agent != memory.Agent() || !projection.sources.IsValid() || !projection.positions.IsValid() ||
             projection.sources == projection.positions)
             return PublicationResult::Failure(MakeError(AIErrors::PerceptionSpatialStale));
-        if (current_ && (current_->agent != memory.Agent() || current_->listener != listener || binding_ != blackboard.Binding() ||
-                         projection_.sources != projection.sources || projection_.positions != projection.positions ||
-                         simulationTick < current_->simulationTick || current_->revision == std::numeric_limits<std::uint64_t>::max()))
+        if (!MatchesBinding(listener, simulationTick, blackboard.Binding(), projection))
             return PublicationResult::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
         if (current_ && filtering_ == spatial && simulationTick == current_->simulationTick)
             return Current(view, filtering, blackboard);
@@ -128,11 +143,7 @@ namespace Horo::AI {
         if (createdBatch.HasError())
             return PublicationResult::Failure(createdBatch.ErrorValue());
         auto batch = std::move(createdBatch).Value();
-        if (const auto staged = batch.Stage({projection.sources, BlackboardValue{next.sources}, spatial->ReadAuthorization()});
-            staged.HasError())
-            return PublicationResult::Failure(staged.ErrorValue());
-        if (const auto staged = batch.Stage({projection.positions, BlackboardValue{next.positions}, spatial->ReadAuthorization()});
-            staged.HasError())
+        if (const auto staged = next.Stage(batch, projection, spatial->ReadAuthorization()); staged.HasError())
             return PublicationResult::Failure(staged.ErrorValue());
         const auto committed = blackboard.CommitAtBlackboardSync(std::move(batch));
         if (committed.HasError())

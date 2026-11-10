@@ -88,6 +88,10 @@ namespace Horo::AI {
         void Reset() noexcept;
 
     private:
+        /** @brief Checks the retained recipient, schema, keys, and monotonic publication fence. */
+        [[nodiscard]] bool MatchesBinding(Runtime::EntityRef listener, std::uint64_t simulationTick,
+                                          const BlackboardInstanceBinding &binding,
+                                          const PerceptionBlackboardProjection &projection) const noexcept;
         std::optional<PerceptionPublicationSnapshot> current_;
         std::shared_ptr<const PerceptionSpatialSnapshot> filtering_;
         BlackboardInstanceBinding binding_;
