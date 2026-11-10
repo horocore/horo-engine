@@ -3,6 +3,7 @@
  * @brief Host-driven BT/HSM composition with independently allocated call occurrences and no scheduler ownership.
  */
 #include "Horo/AI/DecisionGraphCompiler.h"
+#include "Horo/AI/DecisionStepTrace.h"
 
 namespace Horo::AI {
     /** @brief Actual owner-issued range and operation identity; compilation never invents task/provider identities. */
@@ -38,6 +39,12 @@ namespace Horo::AI {
         /** @brief Logical composition-adapter allocation per occurrence; family kernels report their own extents. */
         [[nodiscard]] static std::uint64_t CoreStorageBytes(const DecisionCompiledGraph &graph) noexcept;
         [[nodiscard]] Result<AiTaskState> Step(const DecisionGraphStepInput &input);
+        /** @brief Advances the same runtime with opt-in bounded, redacted decision evidence.
+         * @param input The committed tick and immutable blackboard snapshot used by every occurrence.
+         * @param trace Caller-owned destination. Invalid, off-owner or reentrant admission leaves it untouched.
+         * @return The same lifecycle outcome or original typed failure as Step.
+         */
+        [[nodiscard]] Result<AiTaskState> StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace);
         [[nodiscard]] Result<void> Cancel(AiTaskCancellationReason reason);
         ~DecisionGraphInstance();
 
@@ -45,6 +52,14 @@ namespace Horo::AI {
         struct OccurrenceState;
         struct CallAdapter;
         struct ActionAdapter;
+        /** @brief Shares the exact evaluation path for traced and untraced steps. */
+        [[nodiscard]] Result<AiTaskState> StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
+        /** @brief Runs one admitted step using the existing evaluation and cancellation boundaries. */
+        [[nodiscard]] Result<AiTaskState> StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
+        /** @brief Correlates a record to the exact compiled call and its stable caller. */
+        [[nodiscard]] DecisionTraceOccurrence TraceOccurrence(std::size_t index) const noexcept;
+        /** @brief Copies the state and last transition reported by the actual HSM kernel. */
+        void TraceMachine(std::size_t index, const StateMachineStepResult &step) const noexcept;
         [[nodiscard]] static Result<void> Admit(const std::shared_ptr<const CookedDecisionPlan> &plan,
                                                 const std::shared_ptr<const DecisionNodeGeneration> &providers,
                                                 const DecisionGraphInstanceBinding &binding);
@@ -69,6 +84,7 @@ namespace Horo::AI {
         bool shutdown_{};
         std::uint64_t lastTick_{};
         const DecisionGraphStepInput *input_{};
+        DecisionStepTrace *trace_{};
     };
 
     /** @brief Planned canonical HSM additions, to be placed on the existing source/runner types, not a parallel runner.

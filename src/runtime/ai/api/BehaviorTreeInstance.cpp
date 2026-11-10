@@ -1,6 +1,7 @@
 #include "AITaskMailbox.h"
 #include "BehaviorTreeInstanceState.h"
 #include "Horo/AI/BehaviorTreeRuntime.h"
+#include "Horo/AI/DecisionStepTrace.h"
 
 #include <algorithm>
 #include <limits>
@@ -492,6 +493,23 @@ namespace Horo::AI {
         const bool composite = op == Sequence || op == Selector;
         if (composite ? states_[completed].status == AiTaskState::Running : states_[parent.node].status == AiTaskState::Running)
             parent.nextChild = node.childCount;
+    }
+
+    /** @copydoc BehaviorTreeInstance::AppendTrace */
+    void BehaviorTreeInstance::AppendTrace(const DecisionTraceOccurrence &occurrence, DecisionStepTrace &trace) const noexcept {
+        const auto nodes = plan_->Nodes();
+        for (std::size_t index = 0; index < nodes.size(); ++index) {
+            const auto &state = states_[index];
+            if (state.status == AiTaskState::Idle)
+                continue;
+            const auto &node = nodes[index].execution;
+            const auto *context = state.task ? state.task->Context() : nullptr;
+            trace.Append({.occurrence = occurrence,
+                          .node = node.id,
+                          .task = node.task,
+                          .handle = context ? context->task : TaskHandle{},
+                          .state = state.status});
+        }
     }
 
     /** @copydoc BehaviorTreeInstance::Find */

@@ -193,6 +193,14 @@ namespace Horo::AI {
     public:
         /** @brief Returns the captured revision. @return Revision or typed stale failure after generation expiry. */
         [[nodiscard]] Result<std::uint64_t> Revision() const;
+
+        /** @brief Returns historical correlation identity without checking permission to read snapshot values.
+         * @return Revision captured when the owner created this snapshot.
+         */
+        [[nodiscard]] std::uint64_t CapturedRevision() const noexcept {
+            return revision_;
+        }
+
         /**
          * @brief Reads a typed value without exposing mutable instance storage.
          * @param key Stable schema key.

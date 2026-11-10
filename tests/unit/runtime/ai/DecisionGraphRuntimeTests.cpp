@@ -1,5 +1,6 @@
 #include "DecisionGraphCompilerTestSupport.h"
 
+#include <algorithm>
 #include <thread>
 
 namespace Horo::AI {
@@ -25,6 +26,80 @@ namespace Horo::AI {
             CHECK(fixture.Step(*instance, 3) == AiTaskState::Succeeded);
             CHECK(fixture.probe.resumes == 2);
             CHECK(fixture.probe.cleanups == 2);
+        }
+
+        TEST_CASE("Traced graph steps preserve independent task order and report actual HSM transitions",
+                  "[ai][decision-graph-runtime][trace]") {
+            Fixture fixture;
+            const std::array sources{ParallelCalls(1, 2, DecisionPlanKind::StateMachine),
+                                     CallingMachine(2, 3, DecisionPlanKind::BehaviorTree), TaskTree(3)};
+            const auto plan = fixture.Compile(sources, 1);
+            auto instance = fixture.Instance(plan);
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            DecisionStepTrace trace;
+            const auto first = instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace);
+            REQUIRE(first.HasValue());
+            CHECK(first.Value() == AiTaskState::Running);
+            CHECK(trace.Header().version == 1);
+            CHECK(trace.Header().tick == 1);
+            CHECK(trace.Header().root == plan->Root());
+            CHECK(trace.Header().planDigest == plan->Digest());
+            CHECK(trace.Header().blackboardRevision == snapshot.Value().Revision().Value());
+            CHECK(trace.Header().outcome == first.Value());
+            CHECK(trace.DroppedRecords() == 0);
+            std::vector<TaskHandle> tracedTasks;
+            for (const auto &record : trace.Records()) {
+                if (record.occurrence.graph != Graph(3) || !record.handle.IsValid())
+                    continue;
+                CHECK(record.node == Node(2));
+                CHECK(record.state == AiTaskState::Running);
+                tracedTasks.push_back(record.handle);
+            }
+            REQUIRE(tracedTasks.size() == 2);
+            CHECK(tracedTasks == fixture.probe.tasks);
+            CHECK(tracedTasks[0] != tracedTasks[1]);
+
+            const auto retained = trace;
+            const auto second = instance->StepWithTrace({2, fixture.binding, snapshot.Value(), {}}, trace);
+            REQUIRE(second.HasValue());
+            CHECK(second.Value() == AiTaskState::Succeeded);
+            CHECK(std::ranges::count_if(trace.Records(), [](const DecisionStepRecord &record) {
+                return record.kind == DecisionStepRecordKind::StateMachineStep && record.lastTransition == Node(3) &&
+                       record.transitionCount == 1;
+            }) == 2);
+            CHECK(retained.Header().tick == 1);
+            CHECK(instance->StepWithTrace({2, fixture.binding, snapshot.Value(), {}}, trace).HasError());
+            CHECK(trace.Header().tick == 2);
+
+            Fixture replay;
+            auto twin = replay.Instance(replay.Compile(sources, 1));
+            const auto replayInput = replay.blackboard->Snapshot();
+            REQUIRE(replayInput.HasValue());
+            DecisionStepTrace replayed;
+            REQUIRE(twin->StepWithTrace({1, replay.binding, replayInput.Value(), {}}, replayed).HasValue());
+            CHECK(replayed.Header().planDigest == retained.Header().planDigest);
+            CHECK(std::ranges::equal(replayed.Records(), retained.Records()));
+            CHECK(replay.probe.tasks == tracedTasks);
+        }
+
+        TEST_CASE("Decision trace truncation leaves graph work and task admission unchanged", "[ai][decision-graph-runtime][trace]") {
+            Fixture fixture;
+            std::vector<DecisionGraphSource> sources;
+            for (std::uint64_t graph = 1; graph < 6; ++graph)
+                sources.push_back(ParallelCalls(graph, graph + 1, DecisionPlanKind::BehaviorTree));
+            sources.push_back(TaskTree(6));
+            auto instance = fixture.Instance(fixture.Compile(sources, 1));
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            DecisionStepTrace trace;
+            REQUIRE(instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace).Value() == AiTaskState::Running);
+            CHECK(trace.Records().size() == DecisionStepTrace::MaximumRecords);
+            CHECK(trace.DroppedRecords() > 0);
+            CHECK(fixture.probe.starts == 32);
+            CHECK(fixture.Step(*instance, 2) == AiTaskState::Succeeded);
+            CHECK(fixture.probe.resumes == 32);
+            CHECK(fixture.probe.cleanups == 32);
         }
 
         TEST_CASE("A pure terminal HSM call needs no native provider and preserves its authored result", "[ai][decision-graph-runtime]") {

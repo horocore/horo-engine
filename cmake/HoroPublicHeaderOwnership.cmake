@@ -751,6 +751,7 @@ horo_configure_target_header_boundary(HoroCharacterInput PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/DecisionIdentity.h
+    Horo/AI/DecisionStepTrace.h
     Horo/AI/DecisionControl.h
     Horo/AI/DecisionGraphCompiler.h
     Horo/AI/DecisionGraphInstance.h

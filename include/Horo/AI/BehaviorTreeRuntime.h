@@ -14,6 +14,9 @@
 #include <vector>
 
 namespace Horo::AI {
+    class DecisionStepTrace;
+    struct DecisionTraceOccurrence;
+
     /** @brief Executable core operations, independent of provider/display names. */
     enum class BehaviorTreeOperation : std::uint8_t {
         Sequence,
@@ -287,6 +290,11 @@ namespace Horo::AI {
 
     private:
         friend class BehaviorTreeExecutionPlan;
+        friend class DecisionGraphInstance;
+        /** @brief Copies non-idle node outcomes after evaluation, without task payloads or provider calls.
+         * @param occurrence Exact owning compiled call. @param trace Bounded owner-supplied evidence buffer.
+         */
+        void AppendTrace(const DecisionTraceOccurrence &occurrence, DecisionStepTrace &trace) const noexcept;
         [[nodiscard]] bool ValidEvaluation(std::uint64_t tick, AiTaskResumeReason reason) const noexcept;
         [[nodiscard]] bool EvaluationCancelled(AgentHandle activeAgent) const noexcept;
         [[nodiscard]] Result<AiTaskState> CancelEvaluation(AgentHandle activeAgent);

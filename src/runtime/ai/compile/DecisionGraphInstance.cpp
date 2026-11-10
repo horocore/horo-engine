@@ -39,11 +39,14 @@ namespace Horo::AI {
         struct StepScope final {
             bool &evaluating;
             const DecisionGraphStepInput *&current;
+            DecisionStepTrace *&trace;
 
-            StepScope(bool &flag, const DecisionGraphStepInput *&slot, const DecisionGraphStepInput &input)
-                : evaluating(flag), current(slot) {
+            StepScope(bool &flag, const DecisionGraphStepInput *&slot, DecisionStepTrace *&traceSlot, const DecisionGraphStepInput &input,
+                      DecisionStepTrace *evidence)
+                : evaluating(flag), current(slot), trace(traceSlot) {
                 evaluating = true;
                 current = &input;
+                trace = evidence;
             }
 
             StepScope(const StepScope &) = delete;
@@ -51,6 +54,7 @@ namespace Horo::AI {
 
             ~StepScope() {
                 current = nullptr;
+                trace = nullptr;
                 evaluating = false;
             }
         };
@@ -138,6 +142,29 @@ namespace Horo::AI {
                !binding_.operation.IsCancellationRequested();
     }
 
+    /** @copydoc DecisionGraphInstance::TraceOccurrence */
+    DecisionTraceOccurrence DecisionGraphInstance::TraceOccurrence(const std::size_t index) const noexcept {
+        const auto &occurrence = plan_->Occurrences()[index];
+        return {plan_->Graphs()[occurrence.plan].asset, occurrence.callNode, static_cast<std::uint32_t>(index),
+                static_cast<std::uint32_t>(occurrence.parent)};
+    }
+
+    /** @copydoc DecisionGraphInstance::TraceMachine */
+    void DecisionGraphInstance::TraceMachine(const std::size_t index, const StateMachineStepResult &step) const noexcept {
+        const auto &state = *occurrences_[index];
+        const auto &occurrence = plan_->Occurrences()[index];
+        const auto task = plan_->Graphs()[occurrence.plan].executionTask;
+        const auto slot = binding_.firstTaskSlot + static_cast<std::uint32_t>(occurrence.firstTaskSlot);
+        trace_->Append({.kind = DecisionStepRecordKind::StateMachineStep,
+                        .occurrence = TraceOccurrence(index),
+                        .node = step.activeState,
+                        .task = task,
+                        .handle = {binding_.operation.agent.incarnation, {slot, state.generation}},
+                        .state = state.outcome,
+                        .lastTransition = step.lastTransition,
+                        .transitionCount = static_cast<std::uint32_t>(step.transitions)});
+    }
+
     Result<AiTaskState> DecisionGraphInstance::Advance(std::size_t index) {
         auto &state = *occurrences_[index];
         if (!Available() || !state.active || !input_)
@@ -147,6 +174,8 @@ namespace Horo::AI {
         state.lastTick = input_->tick;
         if (state.tree) {
             auto stepped = state.tree->Evaluate(input_->tick, input_->blackboard, input_->current.agent);
+            if (trace_)
+                state.tree->AppendTrace(TraceOccurrence(index), *trace_);
             if (stepped.HasError())
                 return stepped;
             state.outcome = stepped.Value();
@@ -156,6 +185,8 @@ namespace Horo::AI {
                 return Result<AiTaskState>::Failure(stepped.ErrorValue());
             const auto *terminal = state.machine->TerminalResult();
             state.outcome = terminal ? terminal->state : AiTaskState::Running;
+            if (trace_)
+                TraceMachine(index, stepped.Value());
         }
         return Result<AiTaskState>::Success(state.outcome);
     }
@@ -176,14 +207,41 @@ namespace Horo::AI {
     }
 
     Result<AiTaskState> DecisionGraphInstance::Step(const DecisionGraphStepInput &input) {
+        return StepImpl(input, nullptr);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepWithTrace */
+    Result<AiTaskState> DecisionGraphInstance::StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace) {
+        return StepImpl(input, &trace);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepImpl */
+    Result<AiTaskState> DecisionGraphInstance::StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace) {
         if (auto valid = ValidateStep(input); valid.HasError())
             return Result<AiTaskState>::Failure(valid.ErrorValue());
+        if (trace) {
+            trace->header_ = {.root = plan_->Root(),
+                              .planDigest = plan_->Digest(),
+                              .agent = input.current.agent,
+                              .tick = input.tick,
+                              .blackboardRevision = input.blackboard.CapturedRevision()};
+            trace->count_ = 0;
+            trace->dropped_ = 0;
+        }
+        auto result = StepValidated(input, trace);
+        if (trace)
+            trace->header_.outcome = result.HasValue() ? result.Value() : AiTaskState::Failed;
+        return result;
+    }
+
+    /** @copydoc DecisionGraphInstance::StepValidated */
+    Result<AiTaskState> DecisionGraphInstance::StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace) {
         if (!Available()) {
             const auto previous = occurrences_[0]->outcome;
             static_cast<void>(Cancel(AiTaskCancellationReason::ContextCancelled));
             return Result<AiTaskState>::Success(Terminal(previous) ? previous : AiTaskState::Cancelled);
         }
-        StepScope scope(evaluating_, input_, input);
+        StepScope scope(evaluating_, input_, trace_, input, trace);
         lastTick_ = input.tick;
         auto result = Advance(0);
         if (result.HasError() || !Available()) {
