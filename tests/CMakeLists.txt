@@ -5909,7 +5909,11 @@ add_executable(HoroPlatformProviderAdmissionTests
         fixtures/extensions/PlatformProviderOperationsFixture.c
         unit/platform_services/PlatformProviderAdmissionTests.cpp
         unit/platform_services/PlatformProviderLifecycleTests.cpp)
-target_compile_features(HoroPlatformProviderAdmissionTests PRIVATE cxx_std_20)
+target_compile_features(HoroPlatformProviderAdmissionTests PRIVATE cxx_std_20 c_std_11)
+set_target_properties(HoroPlatformProviderAdmissionTests PROPERTIES C_EXTENSIONS OFF)
+if (MSVC AND CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(HoroPlatformProviderAdmissionTests PRIVATE "$<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>")
+endif ()
 target_include_directories(HoroPlatformProviderAdmissionTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(HoroPlatformProviderAdmissionTests PRIVATE HoroEngine::PlatformServicesExtension Catch2::Catch2WithMain Threads::Threads)
 add_dependencies(HoroPlatformProviderAdmissionTests HoroExtensionAbiFixture10 HoroExtensionAbiFixture11)
