@@ -86,11 +86,12 @@ namespace Horo::PlatformServices {
         RequireError(frontend.QueryFriendsLeaderboard({subject, {}, 0, 1}), FrontendErrors::InvalidRequest);
         RequireError(frontend.WriteStat({subject, {}, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.ReadCloudObject(CloudReadRequest{subject, {}}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), CloudObjectErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), CloudObjectErrors::InvalidRequest);
         const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{1}});
         REQUIRE(key.HasValue());
-        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}),
+                     CloudObjectErrors::PayloadTooLarge);
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 5}), FrontendErrors::InvalidRequest);

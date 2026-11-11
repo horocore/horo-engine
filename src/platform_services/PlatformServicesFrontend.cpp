@@ -257,10 +257,10 @@ namespace Horo::PlatformServices {
         const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, request.subject);
         if (valid.HasError())
             return Result<PlatformRequestHandle<CloudObjectPage>>::Failure(valid.ErrorValue());
-        if (const CloudObjectContractLimits limits{.maxPageEntries = valid.Value()->limits.maxPageEntries,
-                                                   .maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
-            ValidateCloudListRequest(request, limits).HasError())
-            return Failure<PlatformRequestHandle<CloudObjectPage>>(FrontendErrors::InvalidRequest);
+        const CloudObjectContractLimits limits{.maxPageEntries = valid.Value()->limits.maxPageEntries,
+                                               .maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
+        if (const auto requestValid = ValidateCloudListRequest(request, limits); requestValid.HasError())
+            return Result<PlatformRequestHandle<CloudObjectPage>>::Failure(requestValid.ErrorValue());
         return ValidatedDispatch(backend_->ListCloudObjects(std::move(request)));
     }
 
@@ -269,9 +269,9 @@ namespace Horo::PlatformServices {
         const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, request.subject);
         if (valid.HasError())
             return Result<PlatformRequestHandle<CloudBlobReadResult>>::Failure(valid.ErrorValue());
-        if (const CloudObjectContractLimits limits{.maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
-            ValidateCloudBlobReadRequest(request, limits).HasError())
-            return Failure<PlatformRequestHandle<CloudBlobReadResult>>(FrontendErrors::InvalidRequest);
+        const CloudObjectContractLimits limits{.maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
+        if (const auto requestValid = ValidateCloudBlobReadRequest(request, limits); requestValid.HasError())
+            return Result<PlatformRequestHandle<CloudBlobReadResult>>::Failure(requestValid.ErrorValue());
         return ValidatedDispatch(backend_->ReadCloudObject(std::move(request)));
     }
 

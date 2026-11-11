@@ -33,6 +33,8 @@ namespace Horo::PlatformServices::Tests {
     TEST_CASE("Application translation keeps capability, cancellation and timeout distinct", "[platform-services][errors]") {
         CHECK(ClassifyPlatformServiceError(MakeError(BackendErrors::ServiceUnavailable)) ==
               PlatformServiceErrorKind::CapabilityUnavailable);
+        CHECK(ClassifyPlatformServiceError(MakeError(CloudObjectErrors::UnsupportedCapability)) ==
+              PlatformServiceErrorKind::CapabilityUnavailable);
         CHECK(ClassifyPlatformServiceError(MakeError(FrontendErrors::NullProvider)) == PlatformServiceErrorKind::NullProvider);
         CHECK(ClassifyPlatformServiceError(MakeError(PlatformSessionErrors::NoSubject)) ==
               PlatformServiceErrorKind::AuthenticationRequired);
