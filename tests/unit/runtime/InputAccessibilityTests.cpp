@@ -103,6 +103,9 @@ namespace Horo::Input {
         StickyModifierLatch latch;
         const ModifierState control{.control = true};
         latch.Observe(control);
+        REQUIRE(latch.Effective() == ModifierState{});
+        latch.Observe({});
+        latch.Observe(control);
         latch.Observe({});
         latch.Observe({.shift = true});
         latch.Observe({});

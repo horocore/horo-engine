@@ -65,6 +65,7 @@ namespace Horo::Input {
      * @brief Sequential modifier latch owned by one semantic mapping context, never the raw collector.
      * @details Observe once per raw snapshot before matching chords. Consume after an action
      * uses the latched chord. Reset at every context/focus/device/binding lifetime boundary.
+     * New and reset latches require an observed neutral baseline before accepting modifiers.
      * Physically held modifiers remain facts even after the latch is consumed.
      */
     class StickyModifierLatch final {
@@ -81,7 +82,7 @@ namespace Horo::Input {
     private:
         ModifierState physical_;
         ModifierState latched_;
-        bool awaitingNeutral_{};
+        bool awaitingNeutral_{true};
     };
 
     namespace InputAccessibilityErrors {
