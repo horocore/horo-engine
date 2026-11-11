@@ -6,7 +6,7 @@
 - **Scope**: EQS orchestration, typed providers, plans/items/contexts, scoring, safe points, deterministic/adaptive budgets, cache identity and cancellation
 - **Issue**: [GAI-004.1](https://github.com/HoroCore/horo-engine/issues/1346)
 - **Jira**: [HORO-1346](https://horo-engine.atlassian.net/browse/HORO-1346)
-- **Normative document**: [Navigation And AI Architecture â€” EQS](../architecture/runtime/navigation-and-ai-architecture.md#environment-query-system-eqs)
+- **Normative document**: [Navigation And AI Architecture — EQS](../architecture/runtime/navigation-and-ai-architecture.md#environment-query-system-eqs)
 
 ## Context
 
@@ -288,3 +288,28 @@ alive until probe cancellation/retirement, then drains provider jobs through the
 existing Navigation lifecycle. Reachable paths expose finite non-negative cost;
 partial or budget-limited paths remain incomparable, while exact provider errors
 retain their original domain and code.
+
+## Deterministic owner-kernel admission
+
+AdmitDeterministic requires IOwnerQueryExecutionSource. Its final transport
+methods execute bounded native generation/test kernels on the simulation owner,
+charge their captured work-unit limits and retain complete facts for the following
+BlackboardSync. The source cannot override the transport with worker-dependent
+polling. Each kernel consumes a local allowance; exceeding its declaration produces
+SchedulerBudgetExhausted and exposes no tactical winner.
+
+The host reserves the query, agent and global slices before execution. The existing
+deterministic AiTaskScheduler can reserve the complete agent allowance globally;
+the query then charges the same issued allowance once when agent/global references
+alias. Kernels still retain their pinned inputs and any provider-local reservations.
+
+Every consecutive BlackboardSync must precede Advance after submission. A skipped
+owner tick retires the retained result and produces SchedulerPhaseInvalid without
+consuming late facts. Cancellation and input invalidation retain their existing
+precedence. Results carry the admitted mode and actual terminal publication tick.
+
+Current NavigationCoordinator and queued Physics probes remain adaptive sources.
+Their deterministic admission requires a concrete bounded owner-kernel adapter
+and its provider reservation contract. There is no implicit conversion from their
+asynchronous probes into deterministic sources. Query result caching is absent
+from this execution path.

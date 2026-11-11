@@ -84,6 +84,29 @@ namespace Horo::AI {
             new QueryExecution(std::move(inputs), provenance, std::move(scoring), settings, std::move(source))));
     }
 
+    /** @copydoc QueryExecution::AdmitDeterministic */
+    Result<std::unique_ptr<QueryExecution>> QueryExecution::AdmitDeterministic(QueryExecutionInputs inputs,
+                                                                               const QueryGeneratorProvenance provenance,
+                                                                               QueryScoringPlan scoring,
+                                                                               const QueryExecutionSettings settings,
+                                                                               std::unique_ptr<IOwnerQueryExecutionSource> source) {
+        using Admission = Result<std::unique_ptr<QueryExecution>>;
+        if (!source)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
+        const auto work = source->WorkLimits();
+        if (work.generationUnits == 0 || (work.testUnits == 0 && !scoring.stages_.empty()) ||
+            settings.generatorWorkUnits != work.generationUnits || work.testUnits > EnvironmentQuerySchemaLimits::MaximumResults * 16U)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        auto admitted = Admit(std::move(inputs), provenance, std::move(scoring), settings, std::move(source));
+        if (admitted.HasValue()) {
+            auto &execution = *admitted.Value();
+            execution.result_.mode = QueryExecutionMode::DeterministicWorkUnits;
+
+            execution.testWorkUnits_ = work.testUnits;
+        }
+        return admitted;
+    }
+
     /** @copydoc QueryExecution::~QueryExecution */
     QueryExecution::~QueryExecution() {
         StopTest();
@@ -158,7 +181,7 @@ namespace Horo::AI {
                 ScoreCandidate();
                 continue;
             }
-            if (!Charge(budget, 1))
+            if (!Charge(budget, testWorkUnits_))
                 return;
             auto admitted = source_->StartTest(inputs_, scoring_.stages_[testOrder_[nextTest_]].rule.stage, items_[scores_.size()]);
             if (admitted.HasError())
@@ -195,6 +218,7 @@ namespace Horo::AI {
     bool QueryExecution::Sync(const std::uint64_t tick, const bool finishEarly) {
         if (published_ || tick <= settings_.submittedTick || tick <= lastSync_)
             return false;
+        ValidateTickSequence(tick);
         lastSync_ = tick;
         if (cancelled_)
             Publish(QueryExecutionStatus::Cancelled);
@@ -203,6 +227,16 @@ namespace Horo::AI {
         else if (const auto status = TerminalAt(tick, finishEarly))
             Publish(*status);
         return published_;
+    }
+
+    /** @copydoc QueryExecution::ValidateTickSequence */
+    void QueryExecution::ValidateTickSequence(const std::uint64_t tick) {
+        const bool skippedSync = tick != (lastSync_ == 0 ? settings_.submittedTick : lastSync_) + 1;
+        const bool skippedDecision = lastSync_ > settings_.submittedTick && lastAdvance_ != lastSync_;
+        if (result_.mode == QueryExecutionMode::DeterministicWorkUnits && (skippedSync || skippedDecision)) {
+            StopTest();
+            result_.error = MakeError(AIErrors::SchedulerPhaseInvalid);
+        }
     }
 
     /** @copydoc QueryExecution::TerminalAt */
@@ -249,6 +283,7 @@ namespace Horo::AI {
         if (status != QueryExecutionStatus::Failed)
             result_.error.reset();
         result_.status = status;
+        result_.publicationTick = lastSync_;
         published_ = true;
     }
 

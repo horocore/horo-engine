@@ -2,7 +2,7 @@
 
 /**
  * @file EnvironmentQueryExecution.h
- * @brief Owner-thread staged execution of one adaptive tactical query.
+ * @brief Owner-thread staged tactical query execution.
  */
 
 #include "Horo/AI/AITaskScheduler.h"
@@ -53,7 +53,54 @@ namespace Horo::AI {
         virtual void CancelTest() noexcept = 0;
     };
 
-    /** @brief Finite settings for one adaptive query. */
+    /** @brief Source-owned hard bounds for kernels executed synchronously on the simulation owner. */
+    struct QueryOwnerWorkLimits final {
+        std::size_t generationUnits{};
+        std::size_t testUnits{};
+    };
+
+    /** @brief Bounded owner-kernel source for deterministic execution.
+     * @details Native composition pins immutable provider inputs and reserves any provider-local quotas before admission.
+     * Kernels consume their local allowance before each bounded operation and execute only on the scene owner.
+     * Results are retained for the following BlackboardSync. The final transport methods admit no worker jobs.
+     */
+    class IOwnerQueryExecutionSource : public IQueryExecutionSource {
+    public:
+        /** @brief Captures inert finite work bounds. @param limits Native kernel costs validated by deterministic admission. */
+        explicit IOwnerQueryExecutionSource(QueryOwnerWorkLimits limits) noexcept;
+        /** @brief Reads captured kernel costs. @return Exact work-unit bounds. */
+        [[nodiscard]] QueryOwnerWorkLimits WorkLimits() const noexcept;
+
+        /** @copydoc IQueryExecutionSource::Generate */
+        [[nodiscard]] Result<QueryGenerationResult> Generate(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output) final;
+        /** @copydoc IQueryExecutionSource::StartTest */
+        [[nodiscard]] Result<bool> StartTest(const QueryExecutionInputs &inputs, QueryStageId stage, const QueryGeneratedItem &item) final;
+        /** @copydoc IQueryExecutionSource::PollTest */
+        [[nodiscard]] Result<std::optional<QueryTestSample>> PollTest() final;
+        /** @copydoc IQueryExecutionSource::CancelTest */
+        void CancelTest() noexcept final;
+
+    protected:
+        /** @brief Generates from pinned owner inputs under the declared bound.
+         * @param inputs Captured query inputs. @param output Bounded candidate storage. @param budget Local kernel allowance.
+         * @return Generated provenance or an exact typed error.
+         */
+        [[nodiscard]] virtual Result<QueryGenerationResult> GenerateAtOwner(const QueryExecutionInputs &inputs,
+                                                                            const QueryGeneratorOutput &output,
+                                                                            AiWorkBudget &budget) noexcept = 0;
+        /** @brief Evaluates one pinned test with no deferred completion.
+         * @param inputs Captured inputs. @param stage Exact stage. @param item Copied candidate. @param budget Kernel allowance.
+         * @return Complete sample or an exact typed provider error.
+         */
+        [[nodiscard]] virtual Result<QueryTestSample> TestAtOwner(const QueryExecutionInputs &inputs, QueryStageId stage,
+                                                                  const QueryGeneratedItem &item, AiWorkBudget &budget) noexcept = 0;
+
+    private:
+        QueryOwnerWorkLimits limits_;
+        std::optional<Result<QueryTestSample>> completion_;
+    };
+
+    /** @brief Finite settings for one tactical query. */
     struct QueryExecutionSettings final {
         std::uint64_t submittedTick{};
         std::uint64_t deadlineTick{};
@@ -68,6 +115,12 @@ namespace Horo::AI {
         AiWorkBudget &query;
         AiWorkBudget &agent;
         AiWorkBudget &global;
+    };
+
+    /** @brief Explicit timing contract of the admitted source. */
+    enum class QueryExecutionMode : std::uint8_t {
+        AdaptiveRealtime,
+        DeterministicWorkUnits,
     };
 
     /** @brief Terminal outcomes published once at BlackboardSync. */
@@ -89,6 +142,8 @@ namespace Horo::AI {
     /** @brief Owned terminal snapshot. Failed, stale and cancelled results carry no winners. */
     struct QueryExecutionResult final {
         QueryExecutionStatus status{};
+        QueryExecutionMode mode{QueryExecutionMode::AdaptiveRealtime};
+        std::uint64_t publicationTick{};
         AgentHandle agent;
         Runtime::SceneRuntimeId scene;
         std::uint64_t contextRevision{};
@@ -100,7 +155,7 @@ namespace Horo::AI {
         std::optional<Error> error;
     };
 
-    /** @brief Scene-owner execution of one admitted adaptive query with at most one outstanding provider request.
+    /** @brief Scene-owner execution of one admitted tactical query with at most one retained provider result.
      * @details Admit during AiDecisionEvaluate, then call Sync and Advance on later ticks in that order.
      * The caller owns scheduling across queries and issues fresh allowances once per tick. Destruction,
      * cancellation and publication all run on the same owner lane.
@@ -117,6 +172,20 @@ namespace Horo::AI {
         [[nodiscard]] static Result<std::unique_ptr<QueryExecution>> Admit(QueryExecutionInputs inputs, QueryGeneratorProvenance provenance,
                                                                            QueryScoringPlan scoring, QueryExecutionSettings settings,
                                                                            std::unique_ptr<IQueryExecutionSource> source);
+
+        /** @brief Admits a bounded simulation-owner source with one-tick test publication.
+         * @param inputs Pinned owner/context. @param provenance Exact generator identity. @param scoring Captured ranking rules.
+         * @param settings Finite query limits; generationWorkUnits must match the source declaration.
+         * @param source Owner-only kernel and its retained provider quotas/leases.
+         * @return Execution or typed invalid bounds. Async sources cannot enter this factory.
+         * @details The host reserves consecutive per-tick query/agent/global allowances, for example through the deterministic
+         * AiTaskScheduler. Every consecutive BlackboardSync must precede Advance. Missing ticks fail the query.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<QueryExecution>> AdmitDeterministic(QueryExecutionInputs inputs,
+                                                                                        QueryGeneratorProvenance provenance,
+                                                                                        QueryScoringPlan scoring,
+                                                                                        QueryExecutionSettings settings,
+                                                                                        std::unique_ptr<IOwnerQueryExecutionSource> source);
 
         QueryExecution(const QueryExecution &) = delete;
         QueryExecution &operator=(const QueryExecution &) = delete;
@@ -148,6 +217,8 @@ namespace Horo::AI {
         [[nodiscard]] std::optional<QueryExecutionStatus> TerminalAt(std::uint64_t tick, bool finishEarly);
         /** @brief Reduces the eligible prefix and returns its final publication status. */
         [[nodiscard]] QueryExecutionStatus ReduceWinners(QueryExecutionStatus status);
+        /** @brief Enforces the consecutive owner-tick contract before any deterministic completion can be consumed. */
+        void ValidateTickSequence(std::uint64_t tick);
         void Generate();
         void ScoreCandidate();
         void Poll();
@@ -166,6 +237,7 @@ namespace Horo::AI {
         std::uint64_t lastSync_{};
         std::uint64_t lastAdvance_{};
         std::size_t nextTest_{};
+        std::size_t testWorkUnits_{1};
         bool generated_{};
         bool pending_{};
         bool cancelled_{};
