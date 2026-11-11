@@ -29,8 +29,63 @@ namespace Horo::Render::OpenGLSmokeTests {
     using Editor::SdlOpenGLPresentationPort;
     using Editor::ToRenderCamera;
 
+    enum class NativeOutputChange {
+        None,
+        Fullscreen,
+        SecondDisplay
+    };
+
     void Check(const bool condition) {
         REQUIRE((condition));
+    }
+
+    /** @brief Requires a real second display before allocating any native test resources. */
+    void RequireDisplayConfiguration(const NativeOutputChange change) {
+        if (change != NativeOutputChange::SecondDisplay)
+            return;
+        int count = 0;
+        const std::unique_ptr<SDL_DisplayID, decltype(&SDL_free)> displays{SDL_GetDisplays(&count), SDL_free};
+        REQUIRE(displays);
+        if (count < 2) {
+            SDL_Quit();
+            SKIP("Cinematic display migration requires two native displays");
+        }
+    }
+
+    /** @brief Observes an actual native output transition before the next cinematic frame. */
+    FramebufferExtent ChangeNativeOutput(SDL_Window &window, RenderFrontend &frontend, const NativeOutputChange change) {
+        if (change == NativeOutputChange::None)
+            return {640, 480};
+        REQUIRE(SDL_ShowWindow(&window));
+        REQUIRE(SDL_SyncWindow(&window));
+        if (change == NativeOutputChange::Fullscreen) {
+            REQUIRE(SDL_SetWindowFullscreen(&window, true));
+            REQUIRE(SDL_SyncWindow(&window));
+            CHECK((SDL_GetWindowFlags(&window) & SDL_WINDOW_FULLSCREEN) != 0);
+        } else {
+            int count = 0;
+            const std::unique_ptr<SDL_DisplayID, decltype(&SDL_free)> displays{SDL_GetDisplays(&count), SDL_free};
+            REQUIRE(displays);
+            REQUIRE(count >= 2);
+            const auto current = SDL_GetDisplayForWindow(&window);
+            REQUIRE(current != 0);
+            const auto destination = displays.get()[0] == current ? displays.get()[1] : displays.get()[0];
+            REQUIRE(
+                SDL_SetWindowPosition(&window, SDL_WINDOWPOS_CENTERED_DISPLAY(destination), SDL_WINDOWPOS_CENTERED_DISPLAY(destination)));
+            REQUIRE(SDL_SyncWindow(&window));
+            REQUIRE(SDL_GetDisplayForWindow(&window) == destination);
+        }
+        SDL_PumpEvents();
+        int width = 0;
+        int height = 0;
+        REQUIRE(SDL_GetWindowSizeInPixels(&window, &width, &height));
+        REQUIRE(width > 0);
+        REQUIRE(height > 0);
+        const FramebufferExtent extent{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
+        REQUIRE(frontend.Resize(extent).HasValue());
+        std::cout << "Cinematic native output change " << static_cast<int>(change) << ", display " << SDL_GetDisplayForWindow(&window)
+                  << ", pixels " << extent.width << 'x' << extent.height << '\n';
+        return extent;
     }
 
     /** @brief Uses a real SDL OpenGL context while omitting display-server presentation pacing in headless CI. */
@@ -120,7 +175,8 @@ namespace Horo::Render::OpenGLSmokeTests {
     /** @brief Verifies that replacements keep the active viewport usable until publication. */
     void CheckSeamlessResourceTransition(EditorViewportRendererOpenGL &viewport, RenderFrontend &frontend,
                                          const EditorViewportSceneView &scene, const RenderTargetHandle activeTarget,
-                                         const EditorViewportTextureView activeTexture, const RenderCameraView &currentCamera) {
+                                         const EditorViewportTextureView activeTexture, const RenderCameraView &currentCamera,
+                                         const FramebufferExtent outputExtent) {
         constexpr EditorViewportExtent resizedExtent{384, 256};
         std::vector<EditorViewportMeshResourceView> replacementMeshes{scene.meshResources.begin(), scene.meshResources.end()};
         replacementMeshes.front().handle.generation = 2;
@@ -167,7 +223,7 @@ namespace Horo::Render::OpenGLSmokeTests {
                 continue;
             }
 
-            auto begun = frontend.BeginFrame(FrameDescriptor{.frameNumber = 2 + attempt, .outputExtent = {640, 480}});
+            auto begun = frontend.BeginFrame(FrameDescriptor{.frameNumber = 2 + attempt, .outputExtent = outputExtent});
             Check(begun.HasValue());
             RenderFrameScope frame = std::move(begun).Value();
             const std::array passes{RenderPassDescriptor{
@@ -414,11 +470,14 @@ namespace Horo::Render::OpenGLSmokeTests {
 
     TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu]") {
         const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
+        const auto outputChange = GENERATE(NativeOutputChange::None, NativeOutputChange::Fullscreen, NativeOutputChange::SecondDisplay);
         constexpr EditorViewportExtent extent{512, 384};
         Check(SDL_Init(SDL_INIT_VIDEO));
+        RequireDisplayConfiguration(outputChange);
         Check(SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1));
         Check(SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24));
-        SDL_Window *window = SDL_CreateWindow("Horo viewport smoke", 640, 480, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+        SDL_Window *window =
+            SDL_CreateWindow("Horo viewport smoke", 640, 480, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
         REQUIRE(window != nullptr);
 
         HeadlessOpenGLPresentationPort presentationPort{*window};
@@ -476,7 +535,8 @@ namespace Horo::Render::OpenGLSmokeTests {
         const auto resizedCamera = cinematic.Advance(1);
         CHECK(resizedCamera.position.z == 5.0F);
         CHECK(cinematic.Position() == 7);
-        CheckSeamlessResourceTransition(viewport, *frontend, scene, target, textureView, resizedCamera);
+        const auto outputExtent = ChangeNativeOutput(*window, *frontend, outputChange);
+        CheckSeamlessResourceTransition(viewport, *frontend, scene, target, textureView, resizedCamera, outputExtent);
         CHECK(cinematicCamera.position.z == 4.0F);
 
         frontend->DetachStaticMeshPassExecutor(viewport);

@@ -31,7 +31,7 @@ integrated acceptance needs the blend and presentation outcomes.
 | Windows OpenGL camera blend and viewport resize rendering | HoroEditorViewportOpenGLSmoke | The retained Linear/SmoothStep player advances once across resize. Readback checks the new camera silhouette and a non-empty destination image. Pending execution. |
 | Windows OpenGL native surface resize/suspension | HoroOpenGLSurfaceLifecycleSmoke | Existing real SDL surface test; pending execution |
 | Windows Vulkan camera blend rendering | HoroEditorVulkanPresentationSmoke | Windows registration is added for the supported SDL host. The retained player advances across presented/cancelled frames. Execution and packaged shader inputs are pending. |
-| Native display change and fullscreen during cinematic playback | Native GPU smoke | Pending execution |
+| Native display change and fullscreen during cinematic playback | HoroEditorViewportOpenGLSmoke | Added actual SDL fullscreen and second-display movement before rendering the advanced camera and reading its viewport silhouette. Second-display qualification explicitly skips when fewer than two displays exist. Pending execution. |
 | Metal/macOS | Native GPU smoke | Requires a macOS host and Metal device |
 | Admitted dual-view cross-fade and budget exhaustion | Frontend/native composition | Requires an implemented two-view camera compositor and budget contract; CIN-003.3 remains open for this acceptance |
 
@@ -58,7 +58,7 @@ composition. No child or parent acceptance is declared complete by this report.
 |---|---|---|
 | Runtime, public consumer and editor regression execution | Main Windows validation coordinator releases an explicit heavy-work slot | Configure the camera worktree, build the camera targets with one worker, then run their CTest cases under the verified common physical lock. |
 | OpenGL cinematic resize and native surface execution | The same slot and the current Windows display/device | Run the opt-in OpenGL viewport and production surface lifecycle smoke tests. Record camera readback and actual renderer output. |
-| Display migration and fullscreen during playback | Native window-transition fixture and an available display configuration | Add and run the native transition scenarios; viewport-target resize alone does not satisfy these rows. |
+| Display migration and fullscreen during playback | A heavy-work slot and an available display configuration | Run the native OpenGL window-transition scenarios, which briefly show the test window. Record the actual display/extent and camera readback. A skipped second-display case leaves that acceptance unqualified. |
 | Vulkan cinematic execution | Verified cooked viewport/shadow shaders and the required validation layer, then a heavy-work slot | Run the production Vulkan presentation smoke without weakening validation or cook provenance. |
 | Metal matrix | macOS/Metal validation host | Run the same authored camera scenarios on the native peer. Windows cannot establish this evidence. |
 | Real dual-view cross-fade and budget exhaustion | Frontend compositor/capability/budget implementation under CIN-003.3 | Admit and qualify two actual views before claiming cross-fade acceptance. Current typed unsupported/fallback coverage does not establish this capability. |
