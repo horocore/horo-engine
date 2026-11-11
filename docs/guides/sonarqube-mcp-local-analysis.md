@@ -211,6 +211,16 @@ Secret scanner text is not stored because
 it can contain credential values; a finding directs you to inspect it locally.
 Never put tokens in repository files, report output or command arguments.
 
+On Windows, selected paths are submitted in sequential batches that fit the
+native executable or batch launcher's UTF-16 command-line limit, with dispatch
+headroom for CLI child tools and npm-style batch launchers. The same
+provider timeout covers all batches. Every Codacy batch retains its submitted
+paths and independently checked tool execution evidence; any incomplete batch
+keeps the whole provider incomplete. Secrets findings are retained across
+batches without retaining scanner text, and every batch must confirm completion.
+Analyzer runtime identity must remain consistent across batches before it is
+reused for raw complexity measurements, which use the same bounded path handling.
+
 ## Validation and troubleshooting
 
 The report records worktree path, HEAD/base SHAs, configuration hashes, analyzer

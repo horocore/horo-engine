@@ -656,17 +656,64 @@ def _command_executable(argv: list[str], env: dict | None) -> str:
 def _command(argv: list[str], env: dict | None):
     """Resolve executable authority explicitly; never interpolate a shell."""
     executable = _command_executable(argv, env)
+    return _format_command(executable, argv[1:])
+
+
+def _format_command(executable: str, arguments: list[str]):
+    """Format arguments without granting executable authority."""
     if sys.platform != "win32":
-        return [executable, *argv[1:]]
+        return [executable, *arguments]
     if Path(executable).suffix.lower() in {".cmd", ".bat"}:
         # cmd.exe expands even quoted percent/! variables and has no universal
         # argv escaping. Refuse such input instead of silently executing it.
-        values = [executable, *argv[1:]]
+        values = [executable, *arguments]
         if any(any(char in value for char in '&|<>^%!"\r\n()') for value in values):
             raise AnalysisError("Unsafe Windows batch arguments; use the tool's native executable instead")
         interpreter = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/cmd.exe"
         return f'"{interpreter}" /d /v:off /s /c "' + " ".join(f'"{value}"' for value in values) + '"'
-    return [executable, *argv[1:]]
+    return [executable, *arguments]
+
+
+def path_batches(prefix: list[str], paths: list[Path]) -> list[list[Path]]:
+    """Preserve exact Windows inputs within command-line limits."""
+    if sys.platform != "win32" or not paths:
+        return [paths]
+    # Plan size from trusted tools; native_run revalidates authority at launch.
+    try:
+        executable = _command_executable(prefix, None)
+    except AnalysisError:
+        # Missing tools fail closed at launch; never search the source CWD.
+        executable = prefix[0]
+    batch_launcher = Path(executable).suffix.lower() in {".cmd", ".bat"}
+    limit = 8191 if batch_launcher else 32767
+    # Reserve child-dispatch space. A single input may still use the hard limit.
+    batch_limit = limit - 1024
+
+    def fits(batch: list[Path], maximum: int) -> bool:
+        command = _format_command(executable, [*prefix[1:], *map(str, batch)])
+        text = command if isinstance(command, str) else subprocess.list2cmdline(command)
+        return len(text.encode("utf-16-le")) // 2 + 1 <= maximum
+
+    batches = []
+    current = []
+    for path in paths:
+        if not fits([*current, path], batch_limit):
+            if current:
+                batches.append(current)
+                current = []
+            if not fits([path], limit):
+                raise AnalysisError("One analysis input exceeds the Windows command-line limit")
+        current.append(path)
+    batches.append(current)
+    return batches
+
+
+def batch_time_remaining(deadline: float, label: str) -> float:
+    """Share one deadline across all batches."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AnalysisError(f"{label} timed out before all input batches completed")
+    return remaining
 
 
 @dataclass
@@ -1178,6 +1225,83 @@ def snapshot(root: Path, directory: Path) -> Path:
 
 def codacy_check(root: Path, mirror: Path, selected: list[Path], config: dict, info: dict,
                  timeout: float) -> dict:
+    """Run every selected input, retaining each batch's routing and completion evidence."""
+    if any(any(char in str(path) for char in "*?[") for path in selected):
+        raise AnalysisError("Codacy --files cannot safely select paths containing glob metacharacters")
+    prefix = codacy_arguments([item["toolId"] for item in config["tools"]], timeout)
+    batches = path_batches([*prefix, "--files"], selected)
+    if len(batches) == 1:
+        return codacy_batch(root, mirror, selected, config, info, timeout)
+    deadline = time.monotonic() + timeout
+    results = []
+    for batch in batches:
+        remaining = batch_time_remaining(deadline, "Codacy analysis")
+        results.append(codacy_batch(root, mirror, batch, config, info, remaining))
+    return combine_codacy_batches(results, selected)
+
+
+def batch_items(results: list[dict], field: str) -> list:
+    """Collect records while retaining per-batch evidence."""
+    return [item for result in results for item in result.get(field, [])]
+
+
+def capability_items(results: list[dict], field: str) -> list:
+    """Collect each batch's runtime evidence."""
+    return [item for result in results for item in result.get("capability", {}).get(field, [])]
+
+
+def runtime_identity(entry: dict) -> tuple:
+    """Identify the analyzer runtime."""
+    return entry.get("version"), entry.get("installation"), entry.get("runner")
+
+
+def unverified_runtime_ids(results: list[dict]) -> set:
+    """Reject executions without runtime evidence."""
+    return {item["toolId"] for result in results for item in result.get("toolResults", [])
+            if item["toolId"] not in {ready["toolId"] for ready in result.get("capability", {}).get("ready", [])}}
+
+
+def combine_capabilities(results: list[dict], errors: list[dict]) -> dict:
+    """Keep consistent, successfully executed runtimes."""
+    unavailable = capability_items(results, "unavailable")
+    invalid = {item.get("toolId") for item in errors + unavailable} | unverified_runtime_ids(results)
+    ready = {}
+    for item in capability_items(results, "ready"):
+        tool = item["toolId"]
+        if tool in invalid:
+            continue
+        previous = ready.setdefault(tool, {**item, "filesRouted": 0})
+        if runtime_identity(previous) != runtime_identity(item):
+            invalid.add(tool)
+            errors.append({"toolId": tool, "reason": "runtime_changed_between_batches"})
+        previous["filesRouted"] += int(item.get("filesRouted", 0))
+    return {"ready": [item for tool, item in ready.items() if tool not in invalid], "unavailable": unavailable}
+
+
+def combine_codacy_batches(results: list[dict], selected: list[Path]) -> dict:
+    """Merge findings, failures and runtime identities."""
+    errors = batch_items(results, "errors")
+    capability = combine_capabilities(results, errors)
+    incomplete = any(result["status"] not in {"clean", "issues_found"} for result in results)
+    issues = batch_items(results, "issues")
+    return {"status": "incomplete" if incomplete or errors else ("issues_found" if issues else "clean"),
+            "issues": issues, "errors": errors, "capability": capability,
+            "skipped": batch_items(results, "skipped"),
+            "unsupported": list({item["toolId"]: item for item in batch_items(results, "unsupported")}.values()),
+            "submitted": [str(path) for path in selected], "batches": results}
+
+
+def codacy_arguments(tool_ids: list[str], timeout: float) -> list[str]:
+    """Use identical planned and executed CLI flags."""
+    argv = ["codacy-analysis", "analyze", "--output-format", "json", "--no-log", "--no-update-notifier",
+            "--fail-if-missing", "--parallel-tools", "2", "--tool-timeout", str(int(timeout * 1000))]
+    for tool in tool_ids:
+        argv.extend(["--tool", tool])
+    return argv
+
+
+def codacy_batch(root: Path, mirror: Path, selected: list[Path], config: dict, info: dict,
+                 timeout: float) -> dict:
     """Run configured tools and account for every routed path and execution result."""
     extensions = {str(path): language(path) for path in selected}
     tools = []
@@ -1204,10 +1328,7 @@ def codacy_check(root: Path, mirror: Path, selected: list[Path], config: dict, i
         return {"status": "not_applicable", "issues": [], "skipped": [], "unsupported": []}
     if not tools:
         return {"status": "incomplete", "issues": [], "skipped": skipped, "unsupported": unsupported}
-    argv = ["codacy-analysis", "analyze", "--output-format", "json", "--no-log", "--no-update-notifier",
-            "--fail-if-missing", "--parallel-tools", "2", "--tool-timeout", str(int(timeout * 1000))]
-    for tool in tools:
-        argv.extend(["--tool", tool])
+    argv = codacy_arguments(tools, timeout)
     # Literal paths containing glob characters must not be silently expanded by the CLI.
     if any(any(char in str(path) for char in "*?[") for path in selected):
         raise AnalysisError("Codacy --files cannot safely select paths containing glob metacharacters")
@@ -1217,7 +1338,8 @@ def codacy_check(root: Path, mirror: Path, selected: list[Path], config: dict, i
     capability = payload.get("capability", {})
     incomplete = code not in {0, 1} or bool(errors or skipped or unsupported or capability.get("unavailable"))
     payload.update(status="incomplete" if incomplete else ("issues_found" if payload.get("issues") else "clean"),
-                   errors=errors, skipped=skipped, unsupported=unsupported, cliExitCode=code)
+                   errors=errors, skipped=skipped, unsupported=unsupported, cliExitCode=code,
+                   submitted=[str(path) for path in selected])
     return payload
 
 
@@ -1278,21 +1400,29 @@ def complexity(root: Path, files: list[Path], capability: dict, timeout: float) 
     version = quality_run([str(executable), "--version"], root, timeout)
     if version.returncode or version.stdout.strip() != ready.get("version"):
         raise AnalysisError("Complexity Lizard version differs from the Codacy issue analyzer")
-    result = quality_run([str(executable), "--csv", *[str(root / path) for path in files]], root, timeout)
-    if result.returncode != 0 or result.stderr.strip():
-        raise AnalysisError("Lizard could not complete raw complexity analysis")
     totals = {str(path): {"path": str(path), "cyclomaticComplexity": 0, "functions": []} for path in files}
-    for row in csv.reader(io.StringIO(result.stdout)):
+    prefix = [str(executable), "--csv"]
+    deadline = time.monotonic() + timeout
+    for batch in path_batches(prefix, [root / path for path in files]):
+        result = quality_run([*prefix, *map(str, batch)], root, batch_time_remaining(deadline, "Complexity analysis"))
+        if result.returncode != 0 or result.stderr.strip():
+            raise AnalysisError("Lizard could not complete raw complexity analysis")
+        add_complexity_rows(result.stdout, root, totals, {str(path.relative_to(root)) for path in batch})
+    return {"status": "complete", "advisory": True, "version": ready["version"], "files": list(totals.values())}
+
+
+def add_complexity_rows(output: str, root: Path, totals: dict, submitted: set[str]) -> None:
+    """Accumulate validated per-batch Lizard CSV rows."""
+    for row in csv.reader(io.StringIO(output)):
         if len(row) != 11:
             raise AnalysisError("Unsupported Lizard CSV format")
         path = str(Path(row[6]).resolve().relative_to(root))
-        if path not in totals:
+        if path not in totals or path not in submitted:
             raise AnalysisError("Lizard returned a file outside the selected set")
         function = {"name": row[7], "cyclomaticComplexity": int(row[1]), "nloc": int(row[0]),
                     "startLine": int(row[9]), "endLine": int(row[10])}
         totals[path]["functions"].append(function)
         totals[path]["cyclomaticComplexity"] += function["cyclomaticComplexity"]
-    return {"status": "complete", "advisory": True, "version": ready["version"], "files": list(totals.values())}
 
 
 def parse_clones(xml: str, mirror: Path, selected: set[str]) -> list[dict]:
@@ -1363,14 +1493,27 @@ def secrets(root: Path, files: list[Path], timeout: float) -> dict:
     """
     if not files:
         return {"status": "not_applicable", "issues": []}
-    result = quality_run(["sonar", "analyze", "secrets", *[str(root / path) for path in files]], root, timeout)
+    prefix = ["sonar", "analyze", "secrets"]
+    batches = path_batches(prefix, [root / path for path in files])
+    deadline = time.monotonic() + timeout
+    codes = []
+    for batch in batches:
+        remaining = batch_time_remaining(deadline, "Secrets scan")
+        result = quality_run([*prefix, *map(str, batch)], root, remaining)
+        codes.append(secret_batch_exit(result))
+    code = 51 if 51 in codes else 0
+    return {"status": "issues_found" if code else "clean", "submitted": [str(path) for path in files],
+            "issues": [{"message": "Secrets detected; inspect with sonar analyze secrets <selected paths> locally"}]
+            if code else [], "cliExitCode": code, "batchExitCodes": codes}
+
+
+def secret_batch_exit(result: subprocess.CompletedProcess) -> int:
+    """Validate completion and redact scanner text."""
     if result.returncode not in {0, 51}:
         raise AnalysisError(f"Sonar secrets scan failed (exit {result.returncode})")
     if result.returncode == 0 and "No secrets found" not in result.stdout:
         raise AnalysisError("Secrets CLI did not confirm completion")
-    return {"status": "issues_found" if result.returncode else "clean", "submitted": [str(path) for path in files],
-            "issues": [{"message": "Secrets detected; inspect with sonar analyze secrets <selected paths> locally"}]
-            if result.returncode else [], "cliExitCode": result.returncode}
+    return result.returncode
 
 
 # Session
@@ -2139,9 +2282,9 @@ def prepare(root: Path, cache: Path, files: list[Path], existing: Path | None,
         make = "CMAKE_GENERATOR:INTERNAL=Unix Makefiles" in cmake_cache.read_text()
         if make:
             owners = {target.split("CMakeFiles/", 1)[1].split(".dir/", 1)[0] for target in targets}
-            commands = [["cmake", "--build", str(build), "--parallel", "2", "--target", *sorted(owners)]]
+            commands = [["cmake", "--build", str(build), "--parallel", "1", "--target", *sorted(owners)]]
         else:
-            commands = [["cmake", "--build", str(build), "--parallel", "2", "--target", *sorted(targets)]]
+            commands = [["cmake", "--build", str(build), "--parallel", "1", "--target", *sorted(targets)]]
         for command in commands:
             built = quality_run(command, root, timeout)
             if built.returncode:
