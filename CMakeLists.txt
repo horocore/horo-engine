@@ -133,8 +133,9 @@ set_target_properties(HoroGameplayApi PROPERTIES EXPORT_NAME GameplayApi POSITIO
 set_target_properties(HoroAI PROPERTIES EXPORT_NAME AI POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroVisualAccessibility PROPERTIES EXPORT_NAME VisualAccessibility POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroCaptionTransport PROPERTIES EXPORT_NAME CaptionTransport)
+set_target_properties(HoroGameplayAccessibility PROPERTIES EXPORT_NAME GameplayAccessibility POSITION_INDEPENDENT_CODE ON)
 export(TARGETS HoroFoundation HoroSecurityEnvelope HoroNetworkApi HoroSaveApi HoroGameplayApi HoroAI
-       HoroVisualAccessibility HoroCaptionTransport
+       HoroVisualAccessibility HoroGameplayAccessibility HoroCaptionTransport
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayTargets.cmake")
 # Physics is an explicit SDK component. The minimal gameplay export remains solver-free;

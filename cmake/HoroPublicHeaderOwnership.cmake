@@ -32,6 +32,10 @@ horo_configure_target_header_boundary(HoroVisualAccessibility PUBLIC_HEADERS
     Horo/Accessibility/VisualSafety.h
 )
 
+horo_configure_target_header_boundary(HoroGameplayAccessibility PUBLIC_HEADERS
+    Horo/Gameplay/GameplayAccessibility.h
+)
+
 horo_configure_target_header_boundary(HoroPlatformAccessibility PUBLIC_HEADERS
     Horo/Platform/AccessibilityBridge.h
     Horo/Platform/AccessibilitySettings.h
