@@ -21,6 +21,7 @@ namespace Horo::AI {
         BehaviorNode,
         StateMachineStep,
         UtilityScore,
+        StateMachineTransition, /**< Committed edge identity and ordinal; state/lastTransition are unused. */
     };
 
     /** @brief One occurrence address in the exact cooked closure identified by the trace digest. */
@@ -42,7 +43,7 @@ namespace Horo::AI {
         TaskHandle handle;
         AiTaskState state{AiTaskState::Idle};
         DecisionNodeId lastTransition;
-        std::uint32_t transitionCount{};
+        std::uint32_t transitionCount{};    /**< Total for StateMachineStep; one-based commit ordinal for StateMachineTransition. */
         BlackboardKeyId key;                /**< Utility consideration identity; invalid identifies the option total. */
         std::optional<double> utilityScore; /**< Bounded normalized evidence, never a raw blackboard value. */
 
@@ -51,7 +52,7 @@ namespace Horo::AI {
 
     /** @brief Correlation with the exact immutable plan and frozen blackboard input, without copying input values. */
     struct DecisionTraceHeader final {
-        std::uint32_t version{2};
+        std::uint32_t version{3};
         DecisionGraphAssetId root;
         Sha256Digest planDigest;
         AgentHandle agent;

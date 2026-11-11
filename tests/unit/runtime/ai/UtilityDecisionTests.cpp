@@ -99,7 +99,7 @@ namespace Horo::AI {
             CHECK(fixture.Tick(*instance, 2, agent, global, &trace) == AiTaskState::Succeeded);
             CHECK(agent.Remaining() == 0);
             CHECK(global.Remaining() == 8);
-            CHECK(trace.Header().version == 2);
+            CHECK(trace.Header().version == 3);
             CHECK(trace.Header().blackboardRevision == snapshot.Value().CapturedRevision());
             CHECK(std::ranges::count(trace.Records(), DecisionStepRecordKind::UtilityScore, &DecisionStepRecord::kind) == 4);
             CHECK(trace.Records().size() == 5);

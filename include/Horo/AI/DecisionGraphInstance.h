@@ -63,6 +63,8 @@ namespace Horo::AI {
         [[nodiscard]] DecisionTraceOccurrence TraceOccurrence(std::size_t index) const noexcept;
         /** @brief Copies the state and last transition reported by the actual HSM kernel. */
         void TraceMachine(std::size_t index, const StateMachineStepResult &step) const noexcept;
+        /** @brief Copies the complete bounded committed transition chain, including before a later failure. */
+        void TraceMachineTransitions(std::size_t index) const noexcept;
         [[nodiscard]] static Result<void> Admit(const std::shared_ptr<const CookedDecisionPlan> &plan,
                                                 const std::shared_ptr<const DecisionNodeGeneration> &providers,
                                                 const DecisionGraphInstanceBinding &binding);
@@ -72,11 +74,11 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> BuildOccurrence(std::size_t index);
         [[nodiscard]] Result<void> ResetOccurrence(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Advance(std::size_t index);
-        /** @brief Advances one admitted state-machine occurrence and captures its optional step evidence. */
         /** @brief Advances one Utility occurrence using its canonical task kernel and host allowances. */
         [[nodiscard]] Result<AiTaskState> AdvanceUtility(std::size_t index);
         /** @brief Prepares Utility action runners with disjoint owner-issued task slots. */
         [[nodiscard]] Result<void> BuildUtility(std::size_t index);
+        /** @brief Advances one admitted state-machine occurrence and captures its optional step evidence. */
         [[nodiscard]] Result<AiTaskState> AdvanceMachine(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Call(std::size_t parent, DecisionNodeId node, bool entering);
         [[nodiscard]] Result<void> BeginCall(std::size_t parent, DecisionNodeId node);

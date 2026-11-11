@@ -171,6 +171,22 @@ namespace Horo::AI {
                         .transitionCount = static_cast<std::uint32_t>(step.transitions)});
     }
 
+    /** @copydoc DecisionGraphInstance::TraceMachineTransitions */
+    void DecisionGraphInstance::TraceMachineTransitions(const std::size_t index) const noexcept {
+        const auto &state = *occurrences_[index];
+        const auto &occurrence = plan_->Occurrences()[index];
+        const auto slot = binding_.firstTaskSlot + static_cast<std::uint32_t>(occurrence.firstTaskSlot);
+        std::uint32_t ordinal = 0;
+        for (const auto transition : state.machine->CommittedTransitions()) {
+            trace_->Append({.kind = DecisionStepRecordKind::StateMachineTransition,
+                            .occurrence = TraceOccurrence(index),
+                            .node = transition,
+                            .task = plan_->Graphs()[occurrence.plan].executionTask,
+                            .handle = {binding_.operation.agent.incarnation, {slot, state.generation}},
+                            .transitionCount = ++ordinal});
+        }
+    }
+
     Result<AiTaskState> DecisionGraphInstance::Advance(std::size_t index) {
         auto &state = *occurrences_[index];
         if (!Available() || !state.active || !input_)
@@ -195,6 +211,8 @@ namespace Horo::AI {
     Result<AiTaskState> DecisionGraphInstance::AdvanceMachine(const std::size_t index) {
         auto &state = *occurrences_[index];
         auto stepped = state.machine->Step(input_->tick, input_->current, input_->blackboard, input_->events, state.actions.get());
+        if (trace_)
+            TraceMachineTransitions(index);
         if (stepped.HasError())
             return Result<AiTaskState>::Failure(stepped.ErrorValue());
         const auto *terminal = state.machine->TerminalResult();

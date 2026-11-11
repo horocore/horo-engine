@@ -219,3 +219,23 @@ identities and optional normalized scores. The bounded caller trace retains the
 existing graph digest, occurrence and blackboard revision. Raw inputs remain in
 the blackboard owner. Trace capture uses the same selector and task path as an
 untraced step; it cannot change action order or scheduler admission.
+
+## Complete HSM transition evidence
+
+StateMachineInstance retains a fixed-size sequence of committed transition IDs
+for the last admitted step. The sequence follows execution order, includes a
+transition into a terminal state and preserves earlier commits if a later action
+fails. Cycle-rejected edges and failed transition actions are excluded; the
+existing step summary still identifies the last considered edge. Rejected tick or
+event admission leaves the prior evidence intact. The next admitted step or successful
+Restart clears it. No callback, allocation or second transition evaluator is added.
+
+DecisionStepTrace version 3 adds StateMachineTransition records before each HSM
+step summary, with the exact occurrence, task handle and one-based commit ordinal.
+The graph copies committed evidence even when that HSM step returns an error.
+Readers of earlier trace versions must reject version 3 or migrate to recognize
+the new record kind. Existing BT/HSM Step callers and step summary fields remain
+source-compatible. The kernel's existing measured instance storage includes the
+fixed evidence array; incompatible cooked storage declarations require recooking.
+All records share the existing caller-owned limit and dropped-record count;
+truncation cannot affect transition execution or independent child results.

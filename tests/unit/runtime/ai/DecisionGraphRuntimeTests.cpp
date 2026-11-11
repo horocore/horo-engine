@@ -7,6 +7,21 @@ namespace Horo::AI {
     namespace {
         using namespace DecisionGraphTestSupport;
 
+        /** @brief Uses descending transition identities to distinguish execution order from registry order. */
+        DecisionGraphSource TransitionChain(const std::uint64_t graph) {
+            auto source = TerminalMachine(graph);
+            StateMachineAssetDescriptor machine{.initial = Node(1)};
+            for (std::uint64_t index = 1; index <= StateMachineLimits::TransitionsPerStep + 1; ++index)
+                machine.states.push_back({.id = Node(index), .source = Location()});
+            machine.states.back().terminal = DecisionStateTerminal::Succeeded;
+            for (std::uint64_t index = 0; index < StateMachineLimits::TransitionsPerStep; ++index)
+                machine.transitions.push_back(
+                    {.id = Node(200 - index), .source = Node(index + 1), .target = Node(index + 2), .location = Location()});
+            machine.maximumTransitionsPerStep = StateMachineLimits::TransitionsPerStep;
+            source.body = std::move(machine);
+            return source;
+        }
+
         /** @brief Replays the same deterministic inputs through an independently owned fixture. */
         void CheckTraceReplay(const std::span<const DecisionGraphSource> sources, const DecisionStepTrace &retained,
                               const std::vector<TaskHandle> &tracedTasks) {
@@ -19,6 +34,65 @@ namespace Horo::AI {
             CHECK(replayed.Header().planDigest == retained.Header().planDigest);
             CHECK(std::ranges::equal(replayed.Records(), retained.Records()));
             CHECK(replay.probe.tasks == tracedTasks);
+        }
+
+        TEST_CASE("HSM traces retain the complete committed chain and replay its execution order", "[ai][decision-graph-runtime][trace]") {
+            Fixture fixture;
+            const std::array sources{TransitionChain(1)};
+            auto instance = fixture.Instance(fixture.Compile(sources, 1));
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            DecisionStepTrace trace;
+            REQUIRE(instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace).Value() == AiTaskState::Succeeded);
+            REQUIRE(trace.Records().size() == StateMachineLimits::TransitionsPerStep + 1);
+            for (std::uint32_t index = 0; index < StateMachineLimits::TransitionsPerStep; ++index) {
+                const auto &record = trace.Records()[index];
+                CHECK(record.kind == DecisionStepRecordKind::StateMachineTransition);
+                CHECK(record.node == Node(200 - index));
+                CHECK(record.transitionCount == index + 1);
+                CHECK(record.occurrence.graph == Graph(1));
+            }
+            CHECK(trace.DroppedRecords() == 0);
+            CheckTraceReplay(sources, trace, {});
+        }
+
+        TEST_CASE("HSM chain trace overflow preserves all independent call outcomes", "[ai][decision-graph-runtime][trace]") {
+            Fixture fixture;
+            const std::array sources{ParallelCalls(1, 2, DecisionPlanKind::BehaviorTree),
+                                     ParallelCalls(2, 3, DecisionPlanKind::BehaviorTree),
+                                     ParallelCalls(3, 4, DecisionPlanKind::BehaviorTree),
+                                     ParallelCalls(4, 5, DecisionPlanKind::StateMachine), TransitionChain(5)};
+            auto instance = fixture.Instance(fixture.Compile(sources, 1));
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            DecisionStepTrace trace;
+            REQUIRE(instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace).Value() == AiTaskState::Succeeded);
+            CHECK(trace.Records().size() == DecisionStepTrace::MaximumRecords);
+            CHECK(trace.DroppedRecords() > 0);
+            Fixture untraced;
+            auto twin = untraced.Instance(untraced.Compile(sources, 1));
+            CHECK(untraced.Step(*twin, 1) == AiTaskState::Succeeded);
+            CHECK(fixture.probe.factories == 0);
+        }
+
+        TEST_CASE("HSM traces retain committed evidence when a later entry provider fails", "[ai][decision-graph-runtime][trace]") {
+            Fixture fixture;
+            auto source = TransitionChain(1);
+            auto &state = std::get<StateMachineAssetDescriptor>(source.body).states[2];
+            state.entry = MakeIdentity<TaskId>(6001);
+            state.entryProvider = StateMachineProviderAction{{.id = Node(500), .type = Type(501), .source = Location()}, {}};
+            const std::array sources{source};
+            auto instance = fixture.Instance(fixture.Compile(sources, 1));
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            DecisionStepTrace trace;
+            REQUIRE(instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace).HasError());
+            REQUIRE(trace.Records().size() == 1);
+            CHECK(trace.Records()[0].kind == DecisionStepRecordKind::StateMachineTransition);
+            CHECK(trace.Records()[0].node == Node(200));
+            CHECK(trace.Header().outcome == AiTaskState::Failed);
+            CHECK(fixture.probe.aborts == 1);
+            CHECK(fixture.probe.cleanups == 1);
         }
 
         TEST_CASE("BT to HSM to BT executes real independent parallel call occurrences across committed ticks",
@@ -55,7 +129,7 @@ namespace Horo::AI {
             const auto first = instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace);
             REQUIRE(first.HasValue());
             CHECK(first.Value() == AiTaskState::Running);
-            CHECK(trace.Header().version == 2);
+            CHECK(trace.Header().version == 3);
             CHECK(trace.Header().tick == 1);
             CHECK(trace.Header().root == plan->Root());
             CHECK(trace.Header().planDigest == plan->Digest());
