@@ -6,17 +6,6 @@
 #include "Horo/Runtime/Input.h"
 
 namespace Horo::Input {
-    /** @brief Deterministic mapping policy; durations use the owner's monotonic microsecond clock. */
-    struct DigitalAffordancePolicy final {
-        bool toggle{};
-        std::uint64_t holdMicroseconds{};
-        bool repeat{};
-        std::uint64_t repeatDelayMicroseconds{400000};
-        std::uint64_t repeatIntervalMicroseconds{100000};
-        /** @brief Checks bounded hold/delay and positive bounded repeat interval. @return True when admitted. */
-        [[nodiscard]] bool IsValid() const noexcept;
-    };
-
     /** @brief One semantic mapping result; repeat is separate from the activation press edge. */
     struct DigitalAffordanceValue final {
         ButtonState button;

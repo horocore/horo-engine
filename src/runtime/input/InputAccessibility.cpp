@@ -1,6 +1,16 @@
 #include "Horo/Runtime/InputAccessibility.h"
 
 namespace Horo::Input {
+    /** @copydoc BindingAccessibilityPolicy::IsValid */
+    bool BindingAccessibilityPolicy::IsValid() const noexcept {
+        return digital.IsValid();
+    }
+
+    /** @copydoc BindingAccessibilityPolicy::IsEnabled */
+    bool BindingAccessibilityPolicy::IsEnabled() const noexcept {
+        return stickyModifiers || digital.toggle || digital.holdMicroseconds != 0 || digital.repeat;
+    }
+
     /** @copydoc DigitalAffordancePolicy::IsValid */
     bool DigitalAffordancePolicy::IsValid() const noexcept {
         constexpr std::uint64_t maximum = 60000000;

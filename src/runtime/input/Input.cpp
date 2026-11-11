@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Input.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "InputAccessibilityProfile.h"
 #include "InputErrors.h"
 #include "InputRouterInternal.h"
 
@@ -86,6 +87,23 @@ namespace Horo::Input {
             return binding.chordSize <= binding.chord.size();
         }
 
+        /** @brief Determines whether physically held modifiers can be extended by a sequential latch. */
+        bool ContainsModifiers(const ModifierState &superset, const ModifierState &subset) noexcept {
+            return (!subset.control || superset.control) && (!subset.shift || superset.shift) && (!subset.alt || superset.alt) &&
+                   (!subset.command || superset.command);
+        }
+
+        /** @brief Includes sticky-versus-physical overlap without treating two distinct exact sticky chords as equal. */
+        bool RequiredModifiersOverlap(const InputBinding &left, const InputBinding &right) noexcept {
+            if (left.requiredModifiers == right.requiredModifiers)
+                return true;
+            if (left.accessibility.stickyModifiers && !right.accessibility.stickyModifiers)
+                return ContainsModifiers(left.requiredModifiers, right.requiredModifiers);
+            if (right.accessibility.stickyModifiers && !left.accessibility.stickyModifiers)
+                return ContainsModifiers(right.requiredModifiers, left.requiredModifiers);
+            return false;
+        }
+
         bool SameTransition(const InputBinding &left, const InputBinding &right) noexcept {
             if (!HasValidChordSize(left) || !HasValidChordSize(right))
                 return false;
@@ -101,7 +119,7 @@ namespace Horo::Input {
                 return false;
             if (left.kind != right.kind || left.key != right.key || left.pointerButton != right.pointerButton ||
                 left.gamepadButton != right.gamepadButton || left.gamepadAxis != right.gamepadAxis || left.rawControl != right.rawControl ||
-                left.requiredModifiers != right.requiredModifiers)
+                !RequiredModifiersOverlap(left, right))
                 return false;
             const auto contains = [](const InputBinding &larger, const InputBinding &smaller) {
                 return std::all_of(smaller.chord.begin(), smaller.chord.begin() + smaller.chordSize, [&](const Key key) {
@@ -113,7 +131,7 @@ namespace Horo::Input {
         }
 
         bool SameAnalogAxis(const InputBinding &left, const InputBinding &right) noexcept {
-            if (left.kind != right.kind || left.requiredModifiers != right.requiredModifiers || left.chordSize != 0 || right.chordSize != 0)
+            if (left.kind != right.kind || !RequiredModifiersOverlap(left, right) || left.chordSize != 0 || right.chordSize != 0)
                 return false;
             using enum BindingControlKind;
             if (left.kind == GamepadAxis)
@@ -239,6 +257,9 @@ namespace Horo::Input {
                              std::string_view invalidDeadzoneMessage, std::string_view unsupportedControlMessage,
                              std::string_view reservedShortcutMessage) {
             using enum BindingDiagnosticCode;
+            if (!binding.accessibility.IsValid())
+                report.diagnostics.emplace_back(InvalidAccessibility, action,
+                                                "Binding accessibility policy has invalid bounded durations.");
             if (!std::isfinite(binding.deadzone) || binding.deadzone < 0.0F || binding.deadzone >= 1.0F)
                 report.diagnostics.emplace_back(InvalidDeadzone, action, std::string(invalidDeadzoneMessage));
             if (binding.chordSize > binding.chord.size())
@@ -258,11 +279,15 @@ namespace Horo::Input {
             std::optional<std::string> message;
             for (std::size_t i = 0; i + 1 < bindings.size(); ++i) {
                 for (std::size_t j = i + 1; j < bindings.size(); ++j) {
-                    if (!SameTransition(bindings[i], bindings[j]))
+                    const bool same = SameTransition(bindings[i], bindings[j]);
+                    const bool stickyOverlap =
+                        bindings[i].requiredModifiers != bindings[j].requiredModifiers && ChordsOverlap(bindings[i], bindings[j]);
+                    if (!same && !stickyOverlap)
                         continue;
                     if (!message)
                         message = std::forward<MessageFn>(makeMessage)();
-                    report.diagnostics.emplace_back(BindingDiagnosticCode::DuplicateBinding, action, *message);
+                    report.diagnostics.emplace_back(same ? BindingDiagnosticCode::DuplicateBinding : BindingDiagnosticCode::AmbiguousChord,
+                                                    action, *message);
                 }
             }
         }
@@ -305,6 +330,9 @@ namespace Horo::Input {
                                                 std::format("Required action '{}' has no binding in context '{}'.", action.id.Value(),
                                                             action.context.Value()));
             for (const InputBinding &binding : bindings) {
+                if (binding.accessibility.IsEnabled() && action.valueType != ActionValueType::Digital)
+                    report.diagnostics.emplace_back(InvalidAccessibility, action.id,
+                                                    "Accessibility toggle, hold, repeat and sticky policies require a digital action.");
                 ValidateBinding(report, action.id, binding, "Action binding deadzone must be in [0, 1).",
                                 "Action references an unsupported control.", "Action uses an operating-system-reserved shortcut.");
                 if ((action.valueType == ActionValueType::Digital || action.valueType == ActionValueType::Axis1D) && binding.component != 0)
@@ -388,7 +416,7 @@ namespace Horo::Input {
 
     BindingValidationReport ValidateBindingProfile(const std::span<const ActionDescriptor> actions, const InputBindingProfile &profile) {
         BindingValidationReport report;
-        if (profile.schemaVersion != 1)
+        if (profile.schemaVersion != CurrentInputBindingProfileSchema)
             report.diagnostics.emplace_back(BindingDiagnosticCode::InvalidSchema, ActionId{}, "Unsupported input profile schema.");
         ValidateOverrides(report, profile, actions);
         ValidateEffectiveBindings(report, profile, actions);
@@ -396,7 +424,7 @@ namespace Horo::Input {
     }
 
     Result<InputBindingProfile> MergeBindingProfiles(const InputBindingProfile &lower, const InputBindingProfile &higher) {
-        if (lower.schemaVersion != 1 || higher.schemaVersion != 1)
+        if (lower.schemaVersion != CurrentInputBindingProfileSchema || higher.schemaVersion != CurrentInputBindingProfileSchema)
             return Result<InputBindingProfile>::Failure(
                 MakeError(Errors::ProfileInvalidSchema, "Cannot merge profiles with an unsupported schema."));
         InputBindingProfile merged = lower;
@@ -415,7 +443,7 @@ namespace Horo::Input {
         InputBinding BindingFromJson(const nlohmann::json &json);
 
         /** @brief Parses the overrides array of a profile document, enforcing per-entry shape limits. */
-        Result<std::vector<BindingOverride>> ParseOverrides(const nlohmann::json &json) {
+        Result<std::vector<BindingOverride>> ParseOverrides(const nlohmann::json &json, const std::uint32_t sourceSchema) {
             constexpr std::size_t maximumOverrides = 4096;
             constexpr std::size_t maximumBindingsPerAction = 64;
             const auto &overrides = json.at("overrides");
@@ -430,8 +458,14 @@ namespace Horo::Input {
                 if (!bindings.is_array() || bindings.size() > maximumBindingsPerAction)
                     return Result<std::vector<BindingOverride>>::Failure(
                         MakeError(Errors::ProfileMalformed, "Input profile binding count is invalid."));
-                for (const auto &binding : bindings)
-                    overrideValue.bindings.push_back(BindingFromJson(binding));
+                for (const auto &binding : bindings) {
+                    auto accessibility = Detail::DecodeBindingAccessibility(binding, sourceSchema);
+                    if (accessibility.HasError())
+                        return Result<std::vector<BindingOverride>>::Failure(accessibility.ErrorValue());
+                    auto parsedBinding = BindingFromJson(binding);
+                    parsedBinding.accessibility = std::move(accessibility).Value();
+                    overrideValue.bindings.push_back(std::move(parsedBinding));
+                }
                 parsed.push_back(std::move(overrideValue));
             }
             return Result<std::vector<BindingOverride>>::Success(std::move(parsed));
@@ -439,6 +473,7 @@ namespace Horo::Input {
     }  // namespace
 
     namespace {
+        /** @brief Encodes the canonical typed binding, including all accessibility policy fields. */
         void to_json(nlohmann::json &json, const InputBinding &binding) {
             json = {{"kind", static_cast<int>(binding.kind)},
                     {"key", static_cast<int>(binding.key)},
@@ -451,6 +486,7 @@ namespace Horo::Input {
                     {"deadzoneKind", static_cast<int>(binding.deadzoneKind)},
                     {"deadzone", binding.deadzone},
                     {"digitalThreshold", binding.digitalThreshold},
+                    {"accessibility", Detail::EncodeBindingAccessibility(binding.accessibility)},
                     {"chordSize", binding.chordSize},
                     {"modifiers",
                      {{"control", binding.requiredModifiers.control},
@@ -488,6 +524,7 @@ namespace Horo::Input {
         }
     }  // namespace
 
+    /** @copydoc ParseBindingProfile */
     Result<InputBindingProfile> ParseBindingProfile(const std::string_view value) {
         if (constexpr std::size_t maximumProfileBytes = 1024U * 1024U; value.empty() || value.size() > maximumProfileBytes)
             return Result<InputBindingProfile>::Failure(
@@ -516,13 +553,16 @@ namespace Horo::Input {
                 return Result<InputBindingProfile>::Failure(
                     MakeError(Errors::ProfileMalformed, "Input profile contains duplicate keys or is not an object."));
             InputBindingProfile profile;
-            profile.schemaVersion = json.at("schemaVersion").get<std::uint32_t>();
+            const auto &wireSchema = json.at("schemaVersion");
+            if (!wireSchema.is_number_integer() || (wireSchema != 1 && wireSchema != CurrentInputBindingProfileSchema))
+                return Result<InputBindingProfile>::Failure(MakeError(Errors::ProfileInvalidSchema, "Invalid input profile schema."));
+            const auto sourceSchema = wireSchema.get<std::uint32_t>();
             profile.profileId = json.at("profileId").get<std::string>();
-            if (Result<std::vector<BindingOverride>> overrides = ParseOverrides(json); overrides.HasError())
+            if (Result<std::vector<BindingOverride>> overrides = ParseOverrides(json, sourceSchema); overrides.HasError())
                 return Result<InputBindingProfile>::Failure(overrides.ErrorValue());
             else
                 profile.overrides = std::move(overrides).Value();
-            if (profile.schemaVersion != 1 || profile.profileId.empty() || profile.profileId.size() > 256)
+            if (profile.profileId.empty() || profile.profileId.size() > 256)
                 return Result<InputBindingProfile>::Failure(MakeError(Errors::ProfileInvalidSchema, "Invalid input profile schema."));
             return Result<InputBindingProfile>::Success(std::move(profile));
         } catch (const nlohmann::json::exception &exception) {
@@ -530,8 +570,9 @@ namespace Horo::Input {
         }
     }
 
+    /** @copydoc SerializeBindingProfile */
     Result<std::string> SerializeBindingProfile(const InputBindingProfile &profile) {
-        if (profile.schemaVersion != 1 || profile.profileId.empty())
+        if (profile.schemaVersion != CurrentInputBindingProfileSchema || profile.profileId.empty())
             return Result<std::string>::Failure(MakeError(Errors::ProfileInvalidSchema, "Invalid input profile schema."));
         nlohmann::json json{{"schemaVersion", profile.schemaVersion},
                             {"profileId", profile.profileId},
@@ -539,6 +580,9 @@ namespace Horo::Input {
         for (const BindingOverride &overrideValue : profile.overrides) {
             nlohmann::json entry{{"action", overrideValue.action.Value()}, {"bindings", nlohmann::json::array()}};
             for (const InputBinding &binding : overrideValue.bindings) {
+                if (!binding.accessibility.IsValid())
+                    return Result<std::string>::Failure(
+                        MakeError(Errors::ProfileValidationFailed, "Input accessibility policy is invalid."));
                 nlohmann::json bindingJson;
                 to_json(bindingJson, binding);
                 entry["bindings"].push_back(std::move(bindingJson));

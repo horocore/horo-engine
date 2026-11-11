@@ -4,6 +4,7 @@
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Runtime/Input.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -133,8 +134,11 @@ namespace {
         REQUIRE((compatibility.metadata->persistentContract == decision->persistentContract));
         REQUIRE((compatibility.metadata->projectVersion == "0.1.0"));
         REQUIRE((Read(root / ".horo/plugins.json") == "{\n  \"schemaVersion\": 1,\n  \"requestedPlugins\": []\n}\n"));
-        REQUIRE((Read(root / ".horo/input.json") ==
-                 "{\n  \"schemaVersion\": 1,\n  \"profileId\": \"project-default\",\n  \"overrides\": []\n}\n"));
+        const auto inputProfile = Horo::Input::ParseBindingProfile(Read(root / ".horo/input.json"));
+        REQUIRE(inputProfile.HasValue());
+        REQUIRE(inputProfile.Value().schemaVersion == Horo::Input::CurrentInputBindingProfileSchema);
+        REQUIRE(inputProfile.Value().profileId == "project-default");
+        REQUIRE(inputProfile.Value().overrides.empty());
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 

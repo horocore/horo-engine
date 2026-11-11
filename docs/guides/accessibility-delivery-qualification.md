@@ -15,7 +15,7 @@ ACC-001.1 / HORO-1805 is already delivered and is not reimplemented.
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Added bounded SPSC cue/catalog transport, timeline, frame-captured appearance, safe-area arrangement and canonical paint extraction; regression cases written, not executed | Host localization/shaping/presentation composition, settings activation and actual native rendered evidence |
 | ACC-001.3 color | HORO-1807 / #1851 | Added independent numeric target, validated matrices and snapshot-backed synchronous query; regression cases written, not executed | Complete-image GPU pass and real backend evidence; existing ColorPipelinePlan explicitly provides cold admission only |
-| ACC-001.4 input | HORO-1808 / #1852 | Added standalone mapping-owned digital/sticky affordance state and deterministic boundary tests, not executed | Connect to router cancellation/release ownership and existing conflict validator; persistence depends on INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
+| ACC-001.4 input | HORO-1808 / #1852 | Added digital/sticky state, typed binding policy, canonical profile-v2 codec migration and sticky/physical conflict validation; regression sources not executed | Connect to router time/cancellation/release ownership and rebinding UI; integrate scoped persistence from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
 | ACC-001.5 visual | HORO-1809 / #1853 | Added UI scale/contrast snapshot with readable typography floor, visual-safety snapshot and typed effect suppression seam; regression cases written, not executed | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Existing Runtime UI semantics; added optional platform transport interface, honest no-op Unsupported adapter and opt-in bounded semantic QA journal; tests written, not executed | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Added inert domain contribution, typed tick snapshot for all seven preferences and revision-only hint adapter; lost/stale hint tests written, not executed | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
@@ -164,6 +164,12 @@ Input's new `DigitalAffordance` and `StickyModifierLatch` are narrow mapping
 helpers, not another router/profile/persistence authority. Owning router wiring
 must cancel the old incarnation and deliver its release before replacement. That
 wiring and the external persistence work remain acceptance gaps.
+The later [binding migration](input-accessibility-binding-migration.md) adds the
+policy to the canonical typed binding/profile path and extends conflict validation.
+It also fixes the manual Input accessibility consumer to move the successful
+Result before invoking mutable `Cancel`; the earlier const `Value()` call could
+not compile. Native validation remains pending rather than inferred from that
+static correction.
 
 UI's own contribution declares `accessibility.visual.ui.*`; safety owns only
 `accessibility.visual.safety.*`. The UI view projects readable text sizes with a

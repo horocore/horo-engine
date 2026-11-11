@@ -5,6 +5,88 @@
 #include <limits>
 
 namespace Horo::Input {
+    namespace {
+        /** @brief Builds a complete wire document while letting malformed policy values reach the real parser unchanged. */
+        std::string AccessibilityProfileJson(const std::string_view policy,
+                                             const std::uint32_t version = CurrentInputBindingProfileSchema) {
+            return std::string{"{\"schemaVersion\":"} + std::to_string(version) +
+                   R"(,"profileId":"accessibility","overrides":[{"action":"game.action","bindings":[{"kind":0,"key":1,"accessibility":)" +
+                   std::string{policy} + "}]}]}";
+        }
+    }  // namespace
+
+    TEST_CASE("Binding accessibility persists through the canonical profile codec and legacy input upgrades once",
+              "[input][accessibility][profile]") {
+        const auto legacy = ParseBindingProfile(
+            R"({"schemaVersion":1,"profileId":"legacy","overrides":[{"action":"game.action","bindings":[{"kind":0,"key":1}]}]})");
+        REQUIRE(legacy.HasValue());
+        REQUIRE(legacy.Value().schemaVersion == CurrentInputBindingProfileSchema);
+        REQUIRE_FALSE(legacy.Value().overrides[0].bindings[0].accessibility.IsEnabled());
+        auto profile = legacy.Value();
+        auto &policy = profile.overrides[0].bindings[0].accessibility;
+        policy.stickyModifiers = true;
+        policy.digital = {.toggle = true,
+                          .holdMicroseconds = 250000,
+                          .repeat = true,
+                          .repeatDelayMicroseconds = 500000,
+                          .repeatIntervalMicroseconds = 75000};
+        const auto encoded = SerializeBindingProfile(profile);
+        REQUIRE(encoded.HasValue());
+        const auto decoded = ParseBindingProfile(encoded.Value());
+        REQUIRE(decoded.HasValue());
+        REQUIRE(decoded.Value().overrides[0].bindings[0].accessibility == policy);
+        REQUIRE(decoded.Value().schemaVersion == CurrentInputBindingProfileSchema);
+        auto higher = profile;
+        higher.overrides[0].bindings[0].accessibility.digital.holdMicroseconds = 100000;
+        const auto merged = MergeBindingProfiles(profile, higher);
+        REQUIRE(merged.HasValue());
+        REQUIRE(merged.Value().overrides[0].bindings[0].accessibility.digital.holdMicroseconds == 100000);
+        profile.schemaVersion = 1;
+        REQUIRE(SerializeBindingProfile(profile).HasError());
+        REQUIRE(ParseBindingProfile(AccessibilityProfileJson("{}", 1)).HasError());
+        REQUIRE(ParseBindingProfile(AccessibilityProfileJson("{}", 3)).HasError());
+    }
+
+    TEST_CASE("Accessibility profile fields reject floating negative oversized unknown and coerced values",
+              "[input][accessibility][profile]") {
+        for (const std::string_view value : {"-1", "1.5", "true", "18446744073709551615", "1e100", "\"30\""}) {
+            const auto document = AccessibilityProfileJson(std::string{"{\"holdMicroseconds\":"} + std::string{value} + "}");
+            REQUIRE(ParseBindingProfile(document).HasError());
+        }
+        for (const std::string_view policy : {R"({"toggle":1})", R"({"stickyModifiers":"true"})", R"({"repeatIntervalMicroseconds":0})",
+                                              R"({"unknown":true})", "[]", "null"})
+            REQUIRE(ParseBindingProfile(AccessibilityProfileJson(policy)).HasError());
+        REQUIRE(ParseBindingProfile(AccessibilityProfileJson(R"({"holdMicroseconds":60000000})")).HasValue());
+        REQUIRE(ParseBindingProfile(AccessibilityProfileJson(R"({"holdMicroseconds":60000001})")).HasError());
+        auto invalidSchema = AccessibilityProfileJson("{}");
+        const auto number = invalidSchema.find(":2");
+        REQUIRE(number != std::string::npos);
+        invalidSchema.replace(number, 2, ":2.0");
+        REQUIRE(ParseBindingProfile(invalidSchema).HasError());
+    }
+
+    TEST_CASE("Sticky physical overlap and modified digital policies cannot bypass the standard binding conflict validator",
+              "[input][accessibility][validation]") {
+        InputBinding sticky{.kind = BindingControlKind::Key, .key = Key::K, .requiredModifiers = {.control = true}};
+        sticky.accessibility.stickyModifiers = true;
+        const InputBinding plain{.kind = BindingControlKind::Key, .key = Key::K};
+        const InputContextId context{"gameplay"};
+        std::array actions{ActionDescriptor{ActionId{"game.sticky"}, ActionValueType::Digital, context, true, {sticky}},
+                           ActionDescriptor{ActionId{"game.plain"}, ActionValueType::Digital, context, true, {plain}}};
+        REQUIRE_FALSE(ValidateBindingProfile(actions, {}).IsValid());
+        actions[0].defaultBindings[0].accessibility.stickyModifiers = false;
+        REQUIRE(ValidateBindingProfile(actions, {}).IsValid());
+        actions[0].defaultBindings[0].accessibility.digital.toggle = true;
+        actions[0].valueType = ActionValueType::Axis1D;
+        REQUIRE_FALSE(ValidateBindingProfile(actions, {}).IsValid());
+        actions[0].valueType = ActionValueType::Digital;
+        actions[0].defaultBindings[0].accessibility.digital.repeatIntervalMicroseconds = 0;
+        REQUIRE_FALSE(ValidateBindingProfile(actions, {}).IsValid());
+        actions[0].defaultBindings[0] = plain;
+        actions[0].defaultBindings[0].accessibility.digital.toggle = true;
+        REQUIRE_FALSE(ValidateBindingProfile(actions, {}).IsValid());
+    }
+
     TEST_CASE("Input affordances process deterministic randomized transitions without allocation", "[input][accessibility][allocation]") {
         auto state =
             DigitalAffordance::Create(

@@ -426,6 +426,29 @@ namespace Horo::Input {
         Threshold
     };
 
+    /** @brief Deterministic mapping policy; durations use the owner's monotonic microsecond clock. */
+    struct DigitalAffordancePolicy final {
+        bool toggle{};
+        std::uint64_t holdMicroseconds{};
+        bool repeat{};
+        std::uint64_t repeatDelayMicroseconds{400000};
+        std::uint64_t repeatIntervalMicroseconds{100000};
+        /** @brief Checks bounded hold/delay and positive bounded repeat interval. @return True when admitted. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] bool operator==(const DigitalAffordancePolicy &) const noexcept = default;
+    };
+
+    /** @brief Inert per-binding semantic accessibility policy; never rewrites raw input facts. */
+    struct BindingAccessibilityPolicy final {
+        DigitalAffordancePolicy digital;
+        bool stickyModifiers{};
+        /** @brief Checks the bounded digital policy. @return Whether all policy fields are admitted. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        /** @brief Reports whether semantic interpretation is requested. @return True for toggle, hold, repeat or sticky modifiers. */
+        [[nodiscard]] bool IsEnabled() const noexcept;
+        [[nodiscard]] bool operator==(const BindingAccessibilityPolicy &) const noexcept = default;
+    };
+
     /** @brief Typed binding from one control, modifiers, or chord into an action component. */
     struct InputBinding {
         BindingControlKind kind{BindingControlKind::Key};
@@ -442,6 +465,7 @@ namespace Horo::Input {
         DeadzoneKind deadzoneKind{DeadzoneKind::None};
         float deadzone{0.0F};
         float digitalThreshold{0.5F};
+        BindingAccessibilityPolicy accessibility; /**< Digital-action semantic interpretation, persisted by the canonical profile codec. */
         [[nodiscard]] friend bool operator==(const InputBinding &, const InputBinding &) noexcept = default;
     };
 
@@ -529,9 +553,12 @@ namespace Horo::Input {
         std::vector<InputBinding> bindings;
     };
 
+    /** @brief Single canonical profile wire/in-memory version; legacy version one is upgraded only by ParseBindingProfile. */
+    inline constexpr std::uint32_t CurrentInputBindingProfileSchema = 2;
+
     /** @brief Schema-versioned collection of per-action binding overrides. */
     struct InputBindingProfile {
-        std::uint32_t schemaVersion{1};
+        std::uint32_t schemaVersion{CurrentInputBindingProfileSchema};
         std::string profileId{"default"};
         std::vector<BindingOverride> overrides;
     };
@@ -549,6 +576,7 @@ namespace Horo::Input {
         MalformedProfile,
         DeviceExclusivityViolation,
         AmbiguousContext,
+        InvalidAccessibility,
     };
 
     /** @brief One actionable profile validation diagnostic. */
@@ -580,9 +608,20 @@ namespace Horo::Input {
      * @return A schema-compatible merged profile, or an error without partial application.
      */
     [[nodiscard]] Result<InputBindingProfile> MergeBindingProfiles(const InputBindingProfile &lower, const InputBindingProfile &higher);
-    /** @brief Parses one complete schema-versioned profile without partial recovery. */
+    /** @brief Parses one complete profile and returns the single canonical version-two model without partial recovery.
+     * @param json Bounded complete JSON document; legacy version one must not contain accessibility policy fields.
+     * @return Canonical profile or typed malformed/version failure. No file is rewritten and no router state changes.
+     * @details Legacy neutral bindings migrate on read; new accessibility fields require exact booleans and bounded integer
+     * microseconds. Floating versions, unknown policy fields and unsupported versions are rejected before numeric narrowing.
+     * @throws std::bad_alloc When owned parse/model storage cannot be allocated.
+     */
     [[nodiscard]] Result<InputBindingProfile> ParseBindingProfile(std::string_view json);
-    /** @brief Serializes a structurally valid schema profile to deterministic JSON. */
+    /** @brief Serializes a canonical profile and its typed accessibility policies to deterministic version-two JSON.
+     * @param profile Canonical in-memory version and domain-valid binding policies.
+     * @return Complete JSON or typed schema/policy failure; legacy in-memory versions are not silently reinterpreted.
+     * @details Call ValidateBindingProfile with the real action map before live installation; serialization does not own that map.
+     * @throws std::bad_alloc When output/model storage cannot be allocated.
+     */
     [[nodiscard]] Result<std::string> SerializeBindingProfile(const InputBindingProfile &profile);
     /** @brief Loads and parses a bounded profile file. */
     [[nodiscard]] Result<InputBindingProfile> LoadBindingProfile(const std::filesystem::path &path);
