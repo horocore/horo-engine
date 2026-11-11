@@ -144,6 +144,11 @@ records, counts overwritten diagnostics and omits oversized text whole. Content
 recording is separately explicit; changing recording policy scrubs previous rows.
 It consumes publisher changes rather than polling elements and never acknowledges
 speech. A journal row is not evidence of native delivery.
+The additive `UiAccessibilityChangePublisher::IsCurrentSnapshot` contract checks
+the exact adopted immutable storage lease. Equal numeric descriptors from another
+extractor do not establish publication identity. The journal uses this check before
+mutation; existing publisher callers require no migration. New regression coverage
+includes independent snapshots with equal revisions, copied leases and retirement.
 
 Input's new `DigitalAffordance` and `StickyModifierLatch` are narrow mapping
 helpers, not another router/profile/persistence authority. Owning router wiring

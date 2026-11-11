@@ -49,7 +49,7 @@ namespace Horo::Runtime::Ui {
                                                          const UiAccessibilityChangePublisher &publisher) {
         if (!enabled_)
             return Result<std::size_t>::Success(0);
-        if (!snapshot.IsValid() || snapshot.Descriptor().semanticRevision != publisher.Revision())
+        if (!publisher.IsCurrentSnapshot(snapshot))
             return Result<std::size_t>::Failure(MakeError(UiErrors::AccessibilitySnapshotSourceStale));
         for (const auto &change : publisher.Changes()) {
             if (change.kind != UiAccessibilityChangeKind::Removed && change.node.IsValid() && snapshot.Get(change.node).HasError())

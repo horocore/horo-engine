@@ -2,6 +2,34 @@
 #include "UiAccessibilityTestUtils.h"
 
 namespace Horo::Runtime::Ui {
+    TEST_CASE("Accessibility QA journal requires the exact adopted publication even when revisions and nodes match",
+              "[runtime_ui][accessibility][review]") {
+        auto tree = MakeTree();
+        auto extractor = MakeExtractor(tree);
+        auto independentExtractor = MakeExtractor(tree);
+        auto publisher = MakePublisher(tree);
+        ProjectionFixture fixture;
+        const auto published = extractor.Extract(tree, Descriptor(tree), fixture.View()).Value();
+        fixture.nodes[0].name = {"Different publication", UiAccessibilityTextSource::UserContent};
+        const auto independent = independentExtractor.Extract(tree, Descriptor(tree), fixture.View()).Value();
+        REQUIRE_FALSE(publisher.IsCurrentSnapshot(published));
+        REQUIRE(publisher.Publish(published).HasValue());
+        REQUIRE(publisher.IsCurrentSnapshot(published));
+        const auto copiedLease = published;
+        REQUIRE(publisher.IsCurrentSnapshot(copiedLease));
+        REQUIRE_FALSE(publisher.IsCurrentSnapshot(independent));
+        UiAccessibilityReviewLog log;
+        log.SetEnabled(true, true);
+        REQUIRE(log.Record(independent, publisher).HasError());
+        REQUIRE(log.Size() == 0);
+        REQUIRE(log.Record(copiedLease, publisher).HasValue());
+        REQUIRE(log.Entry(0)->Name() == "Main menu");
+        publisher.Retire();
+        REQUIRE_FALSE(publisher.IsCurrentSnapshot(copiedLease));
+        REQUIRE(log.Record(copiedLease, publisher).HasError());
+        REQUIRE(log.Size() == 4);
+    }
+
     TEST_CASE("Accessibility QA log rejects moved snapshot leases and omits oversized text without UTF-8 truncation",
               "[runtime_ui][accessibility][review]") {
         auto tree = MakeTree();
