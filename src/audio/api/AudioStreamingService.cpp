@@ -561,7 +561,7 @@ namespace Horo::Audio {
         return Result<void>::Success();
     }
 
-    /** @copydoc AudioStreamingService::Snapshot */
+    /** @copydoc AudioStreamingService::Snapshot(AudioStreamHandle) const */
     Result<AudioStreamSnapshot> AudioStreamingService::Snapshot(const AudioStreamHandle handle) const {
         const auto *state = Find(handle);
         if (state == nullptr)
@@ -579,7 +579,7 @@ namespace Horo::Audio {
              StarvationCause(*state, slots_[handle.slot - 1].fill.has_value(), buffered, (publication & EndMarker) != 0, ready)});
     }
 
-    /** @copydoc AudioStreamingService::Snapshot */
+    /** @copydoc AudioStreamingService::Snapshot() const */
     AudioStreamingSnapshot AudioStreamingService::Snapshot() const noexcept {
         const auto active = static_cast<std::uint32_t>(std::ranges::count_if(slots_, [](const auto &slot) {
             return slot.state != nullptr;
