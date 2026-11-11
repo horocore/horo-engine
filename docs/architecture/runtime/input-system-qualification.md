@@ -39,7 +39,7 @@ already captured `GameplayInputFrame`; no new raw-device access was introduced.
 |---|---|
 | Frame-local press/release, short taps and ownership-loss neutralization | `HoroInputTests`, including `InputTests.cpp` |
 | Context priority, focus, pointer capture and central modal ownership | `HoroInputTests`, `HoroEditorModalHostTests`, `HoroGuiScreenHostLifecycleTests` |
-| Text/IME delivery and window-local adapter filtering | `HoroInputTests`, `HoroInputSdlTests`, `HoroRuntimeUiInputTests` |
+| Text/IME delivery and window-local adapter filtering | `HoroInputTests`, `HoroInputSdlTests`, `HoroAndroidInputTests`, `HoroRuntimeUiInputTests` |
 | Tick-assigned commands, zero-tick presentation frames, catch-up and recorded command replay | `HoroInputTests`, including `GameplayInputFrameTests.cpp` |
 | Strict schema integers/chords, bounded reads, last-valid profile retention and failed publication | `HoroInputTests`, including `InputTests.cpp` |
 | Project/global/project-user precedence, scoped keyboard/pointer/gamepad commits and new-session reload | `HoroInputTests`, including `InputTests.cpp` and `InputRebindingTests.cpp` |
@@ -65,6 +65,43 @@ English and Turkish catalog key structures were compared locally and match.
 `git diff --check` passed during implementation. Final post-edit results belong
 in the delivery validation summary together with the Sonar IDE, CLI secrets and
 Codacy report paths and completion states.
+
+## Reproducible Targeted Qualification
+
+These commands describe the required runs, not successful execution. On the
+shared Windows host, an explicit slot and the verified physical repository
+heavy-build lock are prerequisites. Keep one build/test worker. Dependency source
+overrides may reuse admitted source caches, but compilation databases and build
+outputs belong to this worktree.
+
+First configure the headless composition with the SDL adapter, then build and
+execute its affected consumers:
+
+```sh
+cmake -S . -B build/skeleton -DBUILD_TESTING=ON -DHORO_BUILD_EDITOR_GUI=OFF -DHORO_BUILD_INPUT_SDL3=ON -DHORO_BUILD_RENDER_OPENGL=OFF
+cmake --build build/skeleton --parallel 1 --target HoroInputTests HoroAndroidInputTests HoroInputSdlTests HoroRuntimeUiInputTests HoroEditorSettingsStoreTests HoroInputPublicHeaderConsumer HoroRuntimeUiNavigationPublicHeaderConsumer
+ctest --test-dir build/skeleton --parallel 1 --no-tests=error --output-on-failure -R '^(HoroInputTests|HoroAndroidInputTests|HoroInputSdlTests|HoroRuntimeUiInputTests|HoroEditorSettingsStoreTests|HoroInputPublicHeaderConsumer|HoroRuntimeUiNavigationPublicHeaderConsumer)(::|$)'
+```
+
+Reconfigure for the editor composition before its integration pass:
+
+```sh
+cmake -S . -B build/skeleton -DBUILD_TESTING=ON -DHORO_BUILD_EDITOR_GUI=ON -DHORO_BUILD_INPUT_SDL3=ON -DHORO_BUILD_RENDER_OPENGL=ON
+cmake --build build/skeleton --parallel 1 --target HoroEditor HoroGlobalDockPanelRenderTests HoroEditorWorkspaceControllerTests HoroEditorModalHostTests HoroGuiScreenHostLifecycleTests HoroEditorSettingsStoreTests HoroXRActionBindingTests
+ctest --test-dir build/skeleton --parallel 1 --no-tests=error --output-on-failure -R '^(HoroGlobalDockPanelRenderTests|HoroEditorWorkspaceControllerTests|HoroEditorModalHostTests|HoroGuiScreenHostLifecycleTests|HoroEditorSettingsStoreTests|HoroXRActionBindingTests)(::|$)'
+```
+
+Catch tests are registered with `Target::case` names; ordinary consumer tests
+use the target name. The regular expressions deliberately admit both. An empty
+selection is an error. Native Android-device execution is separate from the
+headless Android adapter contract suite above.
+
+After final source fixes, run `python3 scripts/analyze.py check --base
+codex/editor-improvements --compile-commands build/skeleton/compile_commands.json`
+inside the assigned analysis slot and physical lock. Use the worktree's actual
+VS Code profile/extension overrides when required. Review freshness, submitted
+and skipped files, sensor execution and errors; report Sonar IDE, CLI secrets and
+Codacy independently. An incomplete/authentication result is not a clean gate.
 
 ## Platform And Device Matrix
 
