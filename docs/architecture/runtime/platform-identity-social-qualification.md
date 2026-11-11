@@ -72,11 +72,19 @@ Restoring the exact fixed source and rebuilding produced these Windows Debug res
 The native lifecycle RED baseline build stopped before test execution in
 `PlatformProviderOperationsFixture.c`: MSVC reported C1189, `C atomics require C11
 or later`. The `HoroPlatformProviderAdmissionTests` target's C compile command did
-not select C11 on the current base. Both temporary baseline sources were restored
+not select C11 on the previous `f51e0c0f4` base. Both temporary baseline sources were restored
 byte-for-byte; the shared lock was released and independently reacquired without
 starting another job. Native RED/GREEN, the full request suite and final managed
 Sonar IDE, CLI secrets and Codacy checks remain incomplete. No native test pass is
 inferred from compilation of dependencies or the successful focused group.
+
+The delivery is now rebased onto local parent `5d0aff9d6`, which selects C11,
+disables C extensions and enables native MSVC C atomics for that fixture target.
+`git range-diff` confirmed all seven delivery patches remained equivalent; the
+resulting source tree differs from the pre-rebase checkpoint only by this parent
+CMake fix. The execution results above precede that integration. Native retry,
+reconfiguration and final validation still require a new shared heavy-build slot;
+no test result on the rebased tree is inferred from patch equivalence.
 
 `clang-format` and `git diff --check` have run on the changed sources. The portable
 VS Code profile with installed CMake/Ninja passes the local preflight prerequisite
