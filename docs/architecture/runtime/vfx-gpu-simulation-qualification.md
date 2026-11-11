@@ -35,8 +35,10 @@ For finite binary32 values, a property passes when
 Particle identity, packed color, custom flags, alive state and reserved observation
 words compare exactly. Nonfinite actual or reference values fail. Headless tests
 exercise mismatch detection, absolute-boundary inclusion, the next representable
-value beyond the boundary and nonfinite inputs for every property. Changing the
-formula or limits requires a policy version change and renewed native evidence.
+value beyond the boundary, reference-relative contributions for positive and
+negative reference values, exact-property rejection and nonfinite inputs for
+every property. Changing the formula or limits requires a policy version change
+and renewed native evidence.
 
 Missing native compute produces a visible Catch skip containing the existing typed
 capability error. Known unavailable Vulkan loader/adapter results retain their
@@ -111,3 +113,35 @@ package selected by `HORO_VFX_GPU_ASSET_ROOT`.
 
 Native and headless execution results, exact commands and local analysis status
 will be recorded after the shared Windows heavy-build queue permits validation.
+
+## Acceptance audit on 2026-11-11
+
+| Work item | Existing implementation or added coverage | Remaining acceptance evidence |
+| --- | --- | --- |
+| VFX-003 / HORO-1716 / #1759 | Child pipeline and qualification sources are present | Available native backends must pass force equivalence and the stated high-count budget; authored fallback outcomes must execute successfully |
+| VFX-003.1 / HORO-1708 / #1751 | Closed/Done decision is present in the base; normative VFX documentation specifies opt-in bounded asynchronous observation and CPU fallback | Native and headless runtime evidence is tracked by the implementation and qualification children |
+| VFX-003.2 / HORO-1731 / #1774 | Shared SoA-equivalent layout, logical preparation, native force/integration and cooked readback-policy paths are present; unsupported-source and readback-policy regressions exist | Execute logical, frontend, backend and native regression entry points on this worktree; check affected consumers and compute-less composition |
+| VFX-003.3 / HORO-1732 / #1775 | Version-one property tolerances, independent CPU oracle, twelve-step native force cases, finite-value and mismatch regression coverage are present | Compile and run headless comparison-policy cases; run real Vulkan parity on both inventoried Windows devices; obtain compatible macOS Metal evidence |
+| VFX-003.4 / HORO-1733 / #1776 | Four-profile unavailable/unqualified-compute matrix and the 65,536-particle budget entry exist | Execute fallback cases and native budget runs; record device, driver, build mode, timing distribution, threshold and outcome; retain explicit unavailable-platform gaps |
+
+The local checkpoint was rebased onto parent `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`.
+The targeted Python CI contract checks passed 39 tests after that rebase. Format
+and diff checks passed. These checks leave the C++ and native rows above pending.
+
+The full-scope quality check against this parent recorded clean CLI
+secrets, incomplete Sonar IDE because the worktree compile database was absent,
+and incomplete Codacy coverage for CMake and Objective-C++ inputs. It retained the
+Metal fixture's `Lizard_file-nloc-medium` Warning and eight advisory duplication
+groups. Fresh full-scope analysis remains required after the final fixes and
+compiler context preparation.
+
+The primary Windows CI coordinator retains the next heavy slot. The next bounded
+VFX slot needs Release configuration and the `HoroVfxGpuSimulationTests`,
+`HoroGpuParticleSimulatorTests`, `HoroVfxApiTests`, `HoroGpuParticleLayoutTests`
+and `HoroVfxGpuGraphTests` builds and corresponding CTest entries. Subsequent slots
+cover native Vulkan parity/budget runs for the exact NVIDIA and AMD names,
+affected option/consumer checks and final analysis. Every heavy child must hold the canonical repository
+lock with its actual open-file handle verified before launch and use one worker.
+The current analysis helper's hardcoded two-worker preparation commands also need
+the coordinator-owned correction before an analysis build can run. Metal evidence
+requires an accessible compatible macOS host, native device and genuine package.
