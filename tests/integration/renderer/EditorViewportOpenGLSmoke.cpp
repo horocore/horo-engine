@@ -1,3 +1,4 @@
+#include "CameraCutNativeTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
 #include "OpenGLBackendModule.h"
@@ -9,6 +10,7 @@
 #include <SDL3/SDL.h>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cmath>
 #include <glad/gl.h>
 #include <imgui.h>
@@ -83,17 +85,52 @@ namespace Horo::Render::OpenGLSmokeTests {
         return {};
     }
 
+    /** @brief Performs the smoke test's explicit synchronous native texture readback. */
+    std::vector<std::uint8_t> ReadViewportPixels(const EditorViewportTextureView view, const std::uint32_t width,
+                                                 const std::uint32_t height) {
+        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(view.textureId));
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return pixels;
+    }
+
+    /** @brief Detects a stale pre-resize camera using the qualification scene's central box silhouette. */
+    void CheckResizedCameraPixels(const EditorViewportTextureView view, const EditorViewportExtent extent, const RenderSceneView &scene) {
+        const auto &box = scene.instances.front();
+        const float halfWidth = box.localBounds.maximum.x * box.localToWorld.At(0, 0);
+        const float frontDepth = scene.camera.position.z - box.localBounds.maximum.z * box.localToWorld.At(2, 2);
+        const float pixelRadius = halfWidth * static_cast<float>(extent.height) /
+                                  (2.0F * frontDepth * std::tan(scene.camera.projection.verticalFovRadians * 0.5F));
+        const auto column = extent.width / 2 + static_cast<std::uint32_t>(std::ceil(pixelRadius)) + 2;
+        REQUIRE(column < extent.width);
+        const auto pixels = ReadViewportPixels(view, extent.width, extent.height);
+        const auto offset = (static_cast<std::size_t>(extent.height / 2) * extent.width + column) * 4;
+        const auto background = (static_cast<std::size_t>(extent.height - 1) * extent.width + extent.width - 1) * 4;
+        const auto center = (static_cast<std::size_t>(extent.height / 2) * extent.width + extent.width / 2) * 4;
+        CHECK((pixels[center] != pixels[background] || pixels[center + 1] != pixels[background + 1] ||
+               pixels[center + 2] != pixels[background + 2]));
+        // This pixel lies outside the destination box and inside its stale, closer-camera silhouette.
+        CHECK(pixels[offset] == pixels[background]);
+        CHECK(pixels[offset + 1] == pixels[background + 1]);
+        CHECK(pixels[offset + 2] == pixels[background + 2]);
+    }
+
     /** @brief Verifies that replacements keep the active viewport usable until publication. */
     void CheckSeamlessResourceTransition(EditorViewportRendererOpenGL &viewport, RenderFrontend &frontend,
                                          const EditorViewportSceneView &scene, const RenderTargetHandle activeTarget,
-                                         const EditorViewportTextureView activeTexture) {
+                                         const EditorViewportTextureView activeTexture, const RenderCameraView &currentCamera) {
         constexpr EditorViewportExtent resizedExtent{384, 256};
         std::vector<EditorViewportMeshResourceView> replacementMeshes{scene.meshResources.begin(), scene.meshResources.end()};
         replacementMeshes.front().handle.generation = 2;
         std::vector<EditorViewportInstance> replacementInstances{scene.instances.begin(), scene.instances.end()};
         replacementInstances.front().mesh.generation = 2;
-        const EditorViewportSceneView replacementScene{scene.camera, replacementMeshes,      replacementInstances,
-                                                       scene.lights, scene.lightSceneDomain, scene.lightSnapshotRevision};
+        auto replacementCamera = scene.camera;
+        replacementCamera.position = currentCamera.position;
+        replacementCamera.target = currentCamera.target;
+        replacementCamera.up = currentCamera.up;
+        const EditorViewportSceneView replacementScene{replacementCamera, replacementMeshes,      replacementInstances,
+                                                       scene.lights,      scene.lightSceneDomain, scene.lightSnapshotRevision};
         const RenderSceneView renderScene{ToRenderCamera(replacementScene.camera),
                                           replacementScene.meshResources,
                                           replacementScene.instances,
@@ -147,6 +184,7 @@ namespace Horo::Render::OpenGLSmokeTests {
         Check(deferredGeneration);
         Check(viewport.RequestedExtent() == resizedExtent);
         Check(viewport.TextureView().textureId != activeTexture.textureId);
+        CheckResizedCameraPixels(viewport.TextureView(), resizedExtent, renderScene);
     }
 
     struct CallerOpenGLState {
@@ -303,10 +341,7 @@ namespace Horo::Render::OpenGLSmokeTests {
     }
 
     void CheckViewportPixels(const EditorViewportTextureView view, const std::uint32_t width, const std::uint32_t height) {
-        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
-        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(view.textureId));
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-        glBindTexture(GL_TEXTURE_2D, 0);
+        const auto pixels = ReadViewportPixels(view, width, height);
         std::size_t coloredPixels = 0;
         for (std::size_t offset = 0; offset < pixels.size(); offset += 4) {
             const bool differsFromBackground = pixels[offset] > 20 || pixels[offset + 1] > 24 || pixels[offset + 2] > 32;
@@ -377,6 +412,7 @@ namespace Horo::Render::OpenGLSmokeTests {
     }
 
     TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu]") {
+        const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
         constexpr EditorViewportExtent extent{512, 384};
         Check(SDL_Init(SDL_INIT_VIDEO));
         Check(SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1));
@@ -408,7 +444,13 @@ namespace Horo::Render::OpenGLSmokeTests {
         Check(viewport.RequestLightingProfile(lighting, {}).HasValue());
         Check(viewport.Initialize().HasValue());
         ViewportSceneFixture fixture = CreateViewportScene();
-        const EditorViewportSceneView scene = fixture.View();
+        auto scene = fixture.View();
+        Tests::CameraCuts::NativeCameraPlayback cinematic{curve};
+        const auto cinematicCamera = cinematic.Advance(0);
+        CHECK(cinematicCamera.position.z == 4.0F);
+        scene.camera.position = cinematicCamera.position;
+        scene.camera.target = cinematicCamera.target;
+        scene.camera.up = cinematicCamera.up;
         Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
         const RenderTargetHandle target = PrepareViewportTarget(viewport, *frontend, scene, extent);
         viewport.RequestExtent(extent);
@@ -424,7 +466,11 @@ namespace Horo::Render::OpenGLSmokeTests {
         CheckViewportPixels(textureView, extent.width, extent.height);
         CheckGuiComposition(gui, frame, textureView, callerState);
         Check(frame.Present().HasValue());
-        CheckSeamlessResourceTransition(viewport, *frontend, scene, target, textureView);
+        const auto resizedCamera = cinematic.Advance(1);
+        CHECK(resizedCamera.position.z == 5.0F);
+        CHECK(cinematic.Position() == 7);
+        CheckSeamlessResourceTransition(viewport, *frontend, scene, target, textureView, resizedCamera);
+        CHECK(cinematicCamera.position.z == 4.0F);
 
         frontend->DetachStaticMeshPassExecutor(viewport);
         // Keep the owner and current context alive until the actual closing fence drains.

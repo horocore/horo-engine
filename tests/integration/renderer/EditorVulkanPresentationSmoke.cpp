@@ -1,5 +1,6 @@
 /** @file EditorVulkanPresentationSmoke.cpp
  * @brief Real SDL/Vulkan GUI and cooked viewport composition; no simulated native admission. */
+#include "CameraCutNativeTestSupport.h"
 #include "EditorVulkanShaderAssets.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "VulkanBackendModule.h"
@@ -11,6 +12,7 @@
 #include <SDL3/SDL.h>
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstdlib>
 #include <exception>
@@ -18,6 +20,7 @@
 #include <imgui.h>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -236,6 +239,11 @@ namespace Horo::Tests::VulkanEditor {
 
     TEST_CASE("Native Vulkan grid selected light and mixed lighting retire together across presented and cancelled frames",
               "[native-smoke][vulkan][gui][viewport]") {
+        const auto curve = GENERATE(std::optional<Cinematic::CameraBlendCurve>{}, std::optional{Cinematic::CameraBlendCurve::Linear},
+                                    std::optional{Cinematic::CameraBlendCurve::SmoothStep});
+        std::optional<CameraCuts::NativeCameraPlayback> cinematic;
+        if (curve)
+            cinematic.emplace(*curve);
         const std::array vertices{MeshVertex{{-1, -1, 0}, {0, 0, 1}, {0, 0}}, MeshVertex{{1, -1, 0}, {0, 0, 1}, {1, 0}},
                                   MeshVertex{{0, 1, 0}, {0, 0, 1}, {0.5F, 1}}};
         const std::array<std::uint32_t, 3> indices{0, 1, 2};
@@ -245,18 +253,22 @@ namespace Horo::Tests::VulkanEditor {
         const std::array lights{RenderLight{.stableIdentity = 1},
                                 RenderLight{.kind = RenderLightKind::Point, .position = {2, 3, 4}, .stableIdentity = 2},
                                 RenderLight{.kind = RenderLightKind::Spot, .position = {0, 0, 3}, .stableIdentity = 3}};
-        const RenderSceneView scene{.camera = {.position = {0, 2, 5}, .target = {0, 0, 0}},
-                                    .meshResources = meshes,
-                                    .instances = instances,
-                                    .lights = lights,
-                                    .lightSceneDomain = 1,
-                                    .lightSnapshotRevision = 1};
+        RenderSceneView scene{.camera = {.position = {0, 2, 5}, .target = {0, 0, 0}},
+                              .meshResources = meshes,
+                              .instances = instances,
+                              .lights = lights,
+                              .lightSceneDomain = 1,
+                              .lightSnapshotRevision = 1};
+        if (cinematic)
+            scene.camera = cinematic->Advance(0);
         REQUIRE(scene.IsValid());
         Host host;
         host.CreateViewport(scene);
         host.viewport->RequestGrid({.visible = true});
         host.viewport->RequestLightVisualizer({lights[1]});
         for (std::uint64_t number = 1; number <= 6; ++number) {
+            if (number == 2 && cinematic)
+                scene.camera = cinematic->Advance(1);
             auto frame = host.Frame(number);
             host.ExecuteSceneAndGui(frame, scene);
             if (number % 2 == 0)
@@ -264,6 +276,8 @@ namespace Horo::Tests::VulkanEditor {
             else
                 Check(frame.Present());
         }
+        if (cinematic)
+            CHECK(cinematic->Position() == 7);
         REQUIRE(host.Drain());
         CHECK_FALSE(host.viewport->IsReady());
         CHECK(host.frontend->MemorySnapshot().allocationCount == 0);

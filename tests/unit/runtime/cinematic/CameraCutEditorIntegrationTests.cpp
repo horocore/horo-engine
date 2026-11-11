@@ -35,6 +35,28 @@ namespace Horo::Editor {
         };
     }  // namespace
 
+    TEST_CASE("Controller scrubbing and runtime blend evaluation publish matching camera values", "[unit][cinematic][camera][editor]") {
+        PreviewFixture fixture;
+        const auto scene = *fixture.scene.ActiveScene();
+        auto runtime = Take(Cinematic::CinematicRuntimeService::Create({{1, 1}}));
+        auto camera = Take(Runtime::CameraService::Create({{2, 1}, scene.RuntimeId(), Runtime::CameraViewDomain::Runtime}));
+        auto playback =
+            Take(Cinematic::CinematicCameraPlayback::Activate(runtime, camera, TransitionActivation(), fixture.Settings(), scene));
+        REQUIRE(runtime.Play(playback.Player()).HasValue());
+        REQUIRE(fixture.controller.StartCameraCutPreview(TransitionActivation(), fixture.Settings(), {1, 1}).HasValue());
+        std::array<Cinematic::SequenceFrameCameraCutRequest, 64> crossings{};
+        for (Cinematic::SequenceTime time = 2; time <= 8; ++time) {
+            REQUIRE(playback.Evaluate(time == 2 ? 2 : 1, scene, {{}, {}, crossings}, {}).HasValue());
+            REQUIRE(fixture.controller.SeekCameraCutPreview(time).HasValue());
+            const auto selection = Take(camera.Commit(static_cast<std::uint64_t>(time), std::nullopt));
+            CHECK(fixture.controller.ViewportScene().camera.position == selection.selected.values.position);
+            CHECK(fixture.controller.ViewportScene().camera.target == selection.selected.values.target);
+            CHECK(fixture.controller.ViewportScene().camera.up == selection.selected.values.up);
+        }
+        fixture.controller.StopCameraCutPreview();
+        CHECK(fixture.controller.ViewportScene().camera.IsValid());
+    }
+
     TEST_CASE("Controller extraction uses runtime hard cuts and hands off to the current authoring owner",
               "[unit][cinematic][camera][editor]") {
         PreviewFixture fixture;

@@ -6112,6 +6112,7 @@ if (HORO_BUILD_RENDER_OPENGL)
         target_link_libraries(HoroEditorViewportOpenGLSmoke
                 PRIVATE
                 Catch2::Catch2WithMain
+                HoroEngine::CinematicCameraRuntime
                 HoroEngine::EditorViewportOpenGL
                 HoroEngine::RenderFrontend
                 HoroThirdParty::Glad
@@ -6444,14 +6445,15 @@ endif ()
 
 # Native editor qualification consumes the same host-owned Vulkan GUI/viewport pair.
 # Platform admission remains intact; macOS cannot qualify this backend via a guard bypass.
-if (HORO_ENABLE_GPU_SMOKE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET HoroEditorVulkanGuiInternal)
+if (HORO_ENABLE_GPU_SMOKE_TESTS AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND TARGET HoroEditorVulkanGuiInternal)
     add_executable(HoroEditorVulkanPresentationSmoke
         integration/renderer/EditorVulkanPresentationSmoke.cpp
         ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorVulkanShaderAssets.cpp)
     target_include_directories(HoroEditorVulkanPresentationSmoke PRIVATE
-        ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app)
+        ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app ${PROJECT_SOURCE_DIR}/tests/support)
     target_link_libraries(HoroEditorVulkanPresentationSmoke PRIVATE
-        HoroEditorVulkanGuiInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
+        HoroEditorVulkanGuiInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET}
+        HoroEngine::CinematicCameraRuntime)
     horo_register_catch_test(HoroEditorVulkanPresentationSmoke LABELS "native;renderer;vulkan;gui;qualification")
 endif ()
 
