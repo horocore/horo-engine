@@ -1,5 +1,6 @@
 #include "AllocationProbe.h"
 #include "Horo/Foundation/Telemetry/Operation.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabExpansionCache.h"
 #include "Horo/Prefab/PrefabSceneExpansion.h"
 #include "Horo/Prefab/PrefabTemplateCook.h"
@@ -7,9 +8,13 @@
 #include "PrefabMetricsTestSupport.h"
 #include "PrefabSpawnTestSupport.h"
 
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
+#include <optional>
 #include <set>
 
 namespace Horo::Prefab::MetricTest {
@@ -136,6 +141,75 @@ namespace Horo::Prefab::MetricTest {
             }
         }
         CHECK(series.size() <= 54);
+    }
+
+    TEST_CASE("Prefab in-flight cancellation bounds cold maximum-object resolution work",
+              "[prefab][prefab-metrics][qualification][cancellation]") {
+        Sources sources{PrefabMetricHandles{}};
+        auto data = sources.documents.back().document.Data();
+        data.objects.clear();
+        for (std::uint32_t index = 0; index < PrefabHardLimits::SourceObjectCount; ++index) {
+            data.objects.push_back({.localId = {index},
+                                    .parentLocalId = index == 0 ? std::nullopt : std::optional{LocalObjectId{0}},
+                                    .name = "Qualification object"});
+        }
+        const auto document = PrefabDocument::Create(std::move(data), Limits());
+        REQUIRE(document.HasValue());
+        const auto bytes = document.Value().SerializeCanonical();
+        REQUIRE(bytes.HasValue());
+        sources.documents.back() = {document.Value(),
+                                    {document.Value().Data().projectVersion, ComputeSha256(std::as_bytes(std::span{bytes.Value()}))}};
+        const auto resolver = sources.Resolver({});
+        const auto instance = PrefabInstanceId::Create(41).Value();
+        Tests::AllocationProbe::Measurement baseline;
+        const auto accepted = [&] {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            auto result = resolver.Resolve(Test::Asset(2), instance, Limits());
+            baseline = measurement.Snapshot();
+            return result;
+        }();
+        REQUIRE(accepted.HasValue());
+        REQUIRE(accepted.Value().Objects().size() == PrefabHardLimits::SourceObjectCount);
+        REQUIRE(baseline.requests > 1);
+        CancellationSource cancellation;
+
+        struct CancelAtAllocation final {
+            const CancellationSource *source;
+            std::size_t remaining;
+            bool fired{};
+            std::chrono::steady_clock::time_point requestedAt;
+        } state{&cancellation, baseline.requests / 2};
+
+        Tests::AllocationProbe::Measurement interrupted;
+        const auto rejected = [&] {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            Tests::AllocationProbe::ScopedObserver observer{+[](std::size_t, void *context) noexcept {
+                auto &state = *static_cast<CancelAtAllocation *>(context);
+                if (state.remaining > 0 && --state.remaining == 0) {
+                    state.fired = true;
+                    state.requestedAt = std::chrono::steady_clock::now();
+                    state.source->RequestCancellation();
+                }
+            }, &state};
+            auto result = resolver.Resolve(Test::Asset(2), instance, Limits(), cancellation.Token());
+            interrupted = measurement.Snapshot();
+            return result;
+        }();
+        const auto returnedAt = std::chrono::steady_clock::now();
+        REQUIRE(state.fired);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::Cancelled.code.Value());
+        CHECK(interrupted.requests < baseline.requests);
+        CHECK(returnedAt - state.requestedAt < std::chrono::milliseconds{250});
+        CHECK(accepted.Value().Objects().size() == PrefabHardLimits::SourceObjectCount);
+        REQUIRE(resolver.Resolve(Test::Asset(2), instance, Limits()).HasValue());
+        std::cout << "prefab-cancellation-qualification objects=" << PrefabHardLimits::SourceObjectCount
+                  << " source_bytes=" << bytes.Value().size()
+                  << " cache=cold instrumentation=disabled baseline_cpp_requests=" << baseline.requests
+                  << " baseline_cpp_requested_bytes=" << baseline.requestedBytes << " interrupted_cpp_requests=" << interrupted.requests
+                  << " interrupted_cpp_requested_bytes=" << interrupted.requestedBytes
+                  << " cancellation_us=" << std::chrono::duration_cast<std::chrono::microseconds>(returnedAt - state.requestedAt).count()
+                  << '\n';
     }
 
     TEST_CASE("Prefab disabled measurements allocate no producer-side memory", "[prefab][prefab-metrics]") {
