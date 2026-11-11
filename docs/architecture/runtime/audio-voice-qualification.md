@@ -95,8 +95,11 @@ of source type, policy, device format and operating system.
 
 ## Validation record
 
-Worktree base: `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`, verified against actual
-`origin` branch advertisement on 2026-11-11. Delivery branch:
+Initial base: `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`, verified against actual
+`origin` branch advertisement on 2026-11-11. The three Audio commits were later
+rebased without content changes onto the unpublished local parent
+`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08` (C11 admission fixture correction).
+`git range-diff` confirmed all three patches were preserved. Delivery branch:
 `feat/HORO-559_voice_lifecycle_qualification`.
 
 Build/test and quality results must be recorded after execution. Required targets
