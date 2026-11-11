@@ -117,8 +117,8 @@ This work does not copy their credential-provider or lifecycle implementation.
 Local mock fences are regression fixtures, not proof of those integrated lifecycles.
 PLS-005.6 and the parent must remain unqualified until that evidence is available.
 
-The PLS-006 owner reports an in-progress cancellation-provenance fix on
-`feat/HORO-1872_platform_identity_lifecycle`, based on `f51e0c0`. It will bind
+The PLS-006 owner reports a cancellation-provenance fix on
+`feat/HORO-1872_platform_identity_lifecycle`, based on `f51e0c0`. It binds
 frontend-issued handles to a weak issuance authority so equal numeric request IDs
 from different backend stores cannot cancel each other's requests. Handles returned
 by a frontend must be cancelled through that same frontend; direct backend/store
@@ -127,8 +127,9 @@ lifetime lease, and the request-store/native C ABI is unchanged in the reported 
 This worktree's scripted cancellation fixture already calls its issuing backend.
 Frontend cloud mutation coverage also retains and moves each returned handle, then
 cancels through the issuing frontend. That compatibility regression is pending native
-execution. The external fix has no reported test/quality/push evidence and is not
-present in this worktree's base; it does not discharge #1916's qualification blocker.
+execution. External focused test evidence is recorded below; final quality/push
+evidence is pending and the fix is not present in this worktree's base. It does not
+discharge #1916's full qualification blocker.
 
 The same owner also reports a candidate `PlatformSessionBinding.h` seam with
 `ProviderAccountBindingId`, `PlatformSessionBindingEvidence` and a move-only
@@ -145,11 +146,29 @@ cloud journal. The coordinator retains its existing protected durable partition.
 Authenticated stable-binding resolution remains a private-broker precondition and
 provider qualification gate. No seam implementation is copied or consumed here.
 The owner reports `4e718b2` as a frontend const-view compile correction only. The
-candidate seam is now recorded in local commit `b7a4587c7`; both its public header
-and implementation are present in that Git object. No compile/test/quality or push
-evidence is reported, and that commit is not integrated here. After issuer restart,
+candidate seam is recorded in local commit `b7a4587c7`; both its public header
+and implementation are present in that Git object. That commit is not integrated
+here. After issuer restart,
 the trusted mapping owner must resolve the expected binding again for the existing
 durable partition. A local source SHA does not discharge the qualification gate.
+
+The external owner subsequently recorded bounded Windows evidence in
+`9b01ed358`, covering binding source `b7a4587c7` and friends-recovery source
+`f67fb91f5`. Its evidence document reports successful MSVC 19.44 Debug builds,
+83 focused identity/session/frontend/friends/presence/request/completion-queue
+test cases with zero failures, three focused CTest entries passed, and successful
+staged-header consumer builds. The selected group includes six binding cases and
+foreign-issuer, reauthentication and weak-lifetime checks. A frontend guard-bypass
+RED reproduced the numeric-ID collision, and restoring the fixed source passed
+GREEN. These are external-worktree results, not execution of this cloud branch or
+the complete request suite.
+
+Native lifecycle RED/GREEN did not reach test execution: the C fixture stopped
+with MSVC C1189 because its target did not select C11. Native authentication and
+qualification, the full request suite and final Sonar IDE/secrets/Codacy evidence
+remain open. The owner reports exact temporary-source restoration and canonical
+lock release; its bounded slot was returned to the main validation work. There
+is no reported push or provider certification, and no source is imported here.
 
 ADR-134's header currently says **Proposed**, while the normative platform-services
 architecture references it as the ratified baseline. This delivery follows the
