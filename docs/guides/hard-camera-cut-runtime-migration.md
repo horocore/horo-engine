@@ -58,9 +58,12 @@ integer duration fitting inside the sequence and the camera track, an earlier
 source key, and completion by the next key. Invalid vocabulary, overlapping
 windows and missing sources fail activation before a lease or player is retained.
 Rebuild consumers of Cinematic Runtime and Camera Runtime together because the
-in-process key and owner layouts and the `Create` signature have changed. The
-additional fields make transition intent part of the canonical immutable key.
+in-process key, crossing-request and owner layouts and the `Create` signature
+have changed. The additional fields make transition intent part of the canonical
+immutable key.
 No persisted sequence-asset encoding is changed by this frame-plan API extension.
+Frame camera hooks receive the same authored transition fields copied from the
+canonical key, preserving intent across staging and host adapter boundaries.
 
 `CameraService::Create` accepts the host's `CameraTransitionSupport`. Its default
 admits the implemented CPU `SingleViewBlend`; hosts selecting the baseline product

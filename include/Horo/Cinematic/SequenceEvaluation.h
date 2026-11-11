@@ -121,7 +121,7 @@ namespace Horo::Cinematic {
         constexpr auto operator<=>(const SequenceFrameEventOccurrence &) const noexcept = default;
     };
 
-    /** @brief Backend-neutral camera-cut request emitted after event staging. */
+    /** @brief Backend-neutral camera crossing with canonical authored transition metadata, emitted after event staging. */
     struct SequenceFrameCameraCutRequest final {
         SequencePlayerHandle player;
         TrackId track;
@@ -130,6 +130,10 @@ namespace Horo::Cinematic {
         SequenceTime time{};
         std::uint64_t traversal{};
         SequenceTraversalDirection direction{SequenceTraversalDirection::Forward};
+        CameraTransitionTier transitionTier{CameraTransitionTier::HardCut};
+        CameraTransitionFallback fallback{CameraTransitionFallback::Fail};
+        SequenceTime transitionDuration{};
+        CameraBlendCurve transitionCurve{CameraBlendCurve::Linear};
         constexpr auto operator<=>(const SequenceFrameCameraCutRequest &) const noexcept = default;
     };
 
