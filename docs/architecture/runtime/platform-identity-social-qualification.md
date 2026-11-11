@@ -21,6 +21,50 @@ session model, observer and presence sources of truth. They are not reimplemente
 by this delivery. Public test fixtures use synthetic Horo-only values, not real
 accounts or native identifiers.
 
+## Acceptance audit and remaining work
+
+The 2026-11-11 audit read the parent and all seven GitHub issues, their current
+Jira work items and local Git ancestry. An issue's closed state, an old test pass
+or a clean worktree does not establish integrated completion. The parent
+HORO-1828 / #1872 remains open; its old-session commit, denial-vs-empty-success
+and privacy criteria require the combined evidence below.
+
+| Child | Current tracker evidence | Implemented evidence | Remaining acceptance evidence |
+| --- | --- | --- | --- |
+| PLS-006.1 / HORO-1847 / #1891 | GitHub closed; Jira Done | Identity/privacy/consent architecture commit `0a8f4a203` is an ancestor; ADR-135 still says Proposed | Preserve its identity boundaries in the integrated lifecycle/provider tests; do not silently change ADR status or reimplement the decision |
+| PLS-006.2 / HORO-1865 / #1909 | GitHub closed; Jira In Review | Merged #2706 (`b48b7f578`), opaque handles, immutable snapshots, stale access and transactional replacement tests | Rerun current-tree consumers and regression scope; provider-native privacy evidence belongs to qualification |
+| PLS-006.3 / HORO-1866 / #1910 | GitHub closed; Jira To Do | Merged #3015 (`b1d437646`), deferred engine-thread dispatch, bounded revisions, reentry and subscription lifetime tests | Current-tree integrated dispatch/shutdown validation; tracker reconciliation is not performed by this delivery |
+| PLS-006.4 / HORO-1872 / #1916 | GitHub open; Jira To Do | Local stale-session terminal fence, once-only native cancellation, frontend provenance and protected binding handoff; frontend RED/GREEN and binding cases passed on the prior base | Native RED/GREEN after the C11 parent fix; verified integration of provider Close fixes; full relevant regressions and final quality check |
+| PLS-006.5 / HORO-1871 / #1915 | GitHub closed; Jira To Do | Merged #3016 (`62217cafa`), registry-only mapping, bounded coalescing/rate gate, stale completion and sign-out invalidation tests | Current-tree integrated regression and private native Set/Clear/restriction conformance; preserve existing implementation |
+| PLS-006.6 / HORO-1869 / #1913 | GitHub open; Jira To Do | Local bounded approved pages, distinct social handles, all denied access states, malformed-data rejection, cache invalidation, cancellation and offline recovery coverage | Rebased-tree tests/consumers and final quality check; real provider consent/child/region evidence remains external |
+| PLS-006.7 / HORO-1870 / #1914 | GitHub open; Jira To Do | Public matrix, synthetic rapid-switch/offline/delayed-result tests and explicit execution records below | Converged provider/configuration dependencies, current-tree native/full regression, separate Sonar IDE/secrets/Codacy evidence and actual supported-platform/native qualification |
+
+All four cited architecture/model/observer/presence commits were independently
+checked with `git merge-base --is-ancestor <commit> HEAD`; each returned zero.
+Existing implementation is retained rather than recreated to reconcile trackers.
+Jira's recorded dependency edges remain distinct from code availability: for
+example PLS-006.7 still records the model, observer, lifecycle, presence, friends
+and provider qualification as prerequisites. No Jira transition, GitHub checkbox
+or issue relationship was changed during this audit.
+
+The audit checkpoint is local branch
+`feat/HORO-1872_platform_identity_lifecycle` at `f4bc46fe2`, with eight local commits
+above parent `5d0aff9d6` and zero dirty files before this audit update. A remote
+head query returned no branch and GitHub's exact-head PR search returned no PR.
+Local checkpoints therefore are not a pushed or reviewed delivery. Subsequent
+audit-only updates do not replace executable validation.
+
+The remaining work is tracked by an active persistent PLS-006 goal covering all
+seven children, not just the next checkpoint. The next requested bounded heavy
+slot is native baseline RED with CTest timeout 300, exact source restoration,
+fixed native admission/lifecycle build and test, then current-tree focused
+identity/composition/public-consumer verification. The full request suite also
+needs the separately owned Windows allocation-failure prerequisite; the earlier
+selected subset is not a replacement for that suite. A separate final
+`scripts/analyze.py check --base codex/editor-improvements` scope must run after
+final edits with current compilation context and separate IDE/secrets/Codacy
+results. No heavy job is queued while the main CI owner holds priority.
+
 ## Public evidence matrix
 
 | Invariant | Executable coverage |
@@ -110,6 +154,10 @@ closure or drain fails. Native leases and callback context must remain retained
 until successful drain. The provider workstream has prepared separate fixes and
 regressions; their integration and execution evidence are still pending. Existing
 BUSY lifetime tests alone do not establish these stronger delivery guarantees.
+The local provider-workstream candidate `c77b2c33d` contains both Close fixes and
+separate package lifecycle fixtures/regressions. Its relevant Host source diff
+was inspected during this audit; the commit has not been integrated into this
+delivery and that inspection supplies no executed conformance result.
 
 Private providers must still demonstrate native account-change and forced-logout
 callbacks, protected stable-subject/profile binding, real OS/provider versus
