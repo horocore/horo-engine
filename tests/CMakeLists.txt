@@ -221,6 +221,14 @@ add_executable(HoroCaptionTransportContractConsumer support/CaptionTransportPubl
 target_link_libraries(HoroCaptionTransportContractConsumer PRIVATE HoroEngine::CaptionTransport)
 add_test(NAME HoroCaptionTransportContractConsumer COMMAND HoroCaptionTransportContractConsumer)
 set_tests_properties(HoroCaptionTransportContractConsumer PROPERTIES LABELS "unit;accessibility;headless;public_headers")
+add_executable(HoroInputAccessibilityTests unit/runtime/InputAccessibilityTests.cpp support/AllocationProbe.cpp)
+target_include_directories(HoroInputAccessibilityTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroInputAccessibilityTests PRIVATE HoroEngine::Input)
+horo_register_catch_test(HoroInputAccessibilityTests LABELS "unit;input;accessibility;headless")
+add_executable(HoroInputAccessibilityPublicHeaderConsumer support/InputAccessibilityPublicHeaderConsumer.cpp)
+target_link_libraries(HoroInputAccessibilityPublicHeaderConsumer PRIVATE HoroEngine::Input)
+add_test(NAME HoroInputAccessibilityPublicHeaderConsumer COMMAND HoroInputAccessibilityPublicHeaderConsumer)
+set_tests_properties(HoroInputAccessibilityPublicHeaderConsumer PROPERTIES LABELS "unit;input;accessibility;headless;public_headers")
 add_executable(HoroVisualAccessibilityTests
         unit/runtime/VisualAccessibilityTests.cpp
 )

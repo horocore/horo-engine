@@ -692,6 +692,7 @@ horo_configure_target_header_boundary(HoroAndroidInputIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
+    Horo/Runtime/InputAccessibility.h
     Horo/Runtime/InputCollection.h
 )
 horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS

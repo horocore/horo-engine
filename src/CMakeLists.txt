@@ -2792,6 +2792,7 @@ target_compile_features(HoroPrefabSceneExpansion PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefabSceneExpansion PUBLIC HoroEngine::PrefabAuthoring HoroEngine::RuntimeScene)
 
 add_library(HoroInput STATIC
+        runtime/input/InputAccessibility.cpp
         runtime/input/RawInputCollector.cpp
         runtime/input/Input.cpp
         runtime/input/InputCollection.cpp
