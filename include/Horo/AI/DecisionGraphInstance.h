@@ -1,6 +1,6 @@
 #pragma once
 /** @file DecisionGraphInstance.h
- * @brief Host-driven BT/HSM composition with independently allocated call occurrences and no scheduler ownership.
+ * @brief Host-driven BT/HSM/Utility composition with independently allocated call occurrences and no scheduler ownership.
  */
 #include "Horo/AI/DecisionGraphCompiler.h"
 #include "Horo/AI/DecisionStepTrace.h"
@@ -24,9 +24,11 @@ namespace Horo::AI {
         BlackboardInstanceBinding current;
         const BlackboardSnapshot &blackboard;
         std::span<const StateMachineEventId> events;
+        AiWorkBudget *utilityAgentBudget{};  /**< Required for closures containing Utility. Borrowed for this Step only. */
+        AiWorkBudget *utilityGlobalBudget{}; /**< Host-issued global allowance, shared across all evaluated occurrences. */
     };
 
-    /** @brief One complete executable allocation; actual BT/HSM kernels own their existing traversal/task semantics.
+    /** @brief One complete executable allocation; actual decision kernels own their existing traversal/task semantics.
      * @details Create preallocates every possible call occurrence, including mutually exclusive HSM states and
      * parallel repeated references. Only selected occurrences enter execution. The host calls Step at its existing
      * AI decision boundary; this object creates no jobs, frame callbacks, Scene authority or task manager.
@@ -52,6 +54,7 @@ namespace Horo::AI {
         struct OccurrenceState;
         struct CallAdapter;
         struct ActionAdapter;
+        struct UtilityAdapter;
         /** @brief Shares the exact evaluation path for traced and untraced steps. */
         [[nodiscard]] Result<AiTaskState> StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
         /** @brief Runs one admitted step using the existing evaluation and cancellation boundaries. */
@@ -63,11 +66,17 @@ namespace Horo::AI {
         [[nodiscard]] static Result<void> Admit(const std::shared_ptr<const CookedDecisionPlan> &plan,
                                                 const std::shared_ptr<const DecisionNodeGeneration> &providers,
                                                 const DecisionGraphInstanceBinding &binding);
+        /** @brief Requires host allowances only for closures that contain Utility. */
+        [[nodiscard]] bool UtilityBudgetsAvailable(const DecisionGraphStepInput &input) const noexcept;
         [[nodiscard]] Result<void> ValidateStep(const DecisionGraphStepInput &input) const;
         [[nodiscard]] Result<void> BuildOccurrence(std::size_t index);
         [[nodiscard]] Result<void> ResetOccurrence(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Advance(std::size_t index);
         /** @brief Advances one admitted state-machine occurrence and captures its optional step evidence. */
+        /** @brief Advances one Utility occurrence using its canonical task kernel and host allowances. */
+        [[nodiscard]] Result<AiTaskState> AdvanceUtility(std::size_t index);
+        /** @brief Prepares Utility action runners with disjoint owner-issued task slots. */
+        [[nodiscard]] Result<void> BuildUtility(std::size_t index);
         [[nodiscard]] Result<AiTaskState> AdvanceMachine(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Call(std::size_t parent, DecisionNodeId node, bool entering);
         [[nodiscard]] Result<void> BeginCall(std::size_t parent, DecisionNodeId node);
@@ -82,6 +91,7 @@ namespace Horo::AI {
         DecisionGraphInstanceBinding binding_;
         std::vector<std::unique_ptr<OccurrenceState>> occurrences_;
         std::thread::id owner_;
+        bool usesUtility_{};
         bool evaluating_{};
         bool shutdown_{};
         std::uint64_t lastTick_{};

@@ -33,6 +33,14 @@ namespace Horo::AI::Detail {
     [[nodiscard]] std::optional<DecisionSubplanCall> ReadCall(DecisionReader &reader);
     void WriteTree(DecisionWriter &writer, const BehaviorTreeAsset &tree);
     [[nodiscard]] Result<std::shared_ptr<const BehaviorTreeAsset>> ReadTree(DecisionReader &reader);
+    /** @brief Writes canonical bounded Utility source with stable option ordering. */
+    void WriteUtility(DecisionWriter &writer, const UtilityDecisionSource &source);
+    /** @brief Reads a bounded Utility family payload, retaining sticky transport errors. */
+    [[nodiscard]] UtilityDecisionSource ReadUtility(DecisionReader &reader);
+    /** @brief Writes bounded provider metadata and properties with canonical field ordering. */
+    void WriteProviderNode(DecisionWriter &writer, const DecisionAssetNode &node, std::span<const BehaviorTreeProperty> properties);
+    /** @brief Reads the shared bounded task-provider representation. */
+    void ReadProviderNode(DecisionReader &reader, DecisionAssetNode &node, std::vector<BehaviorTreeProperty> &properties);
     void WriteMachine(DecisionWriter &writer, const StateMachineAssetDescriptor &machine);
     [[nodiscard]] StateMachineAssetDescriptor ReadMachine(DecisionReader &reader);
 }  // namespace Horo::AI::Detail

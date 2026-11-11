@@ -8,42 +8,14 @@ namespace Horo::AI::Detail {
             writer.Unsigned(action.has_value(), 1);
             if (!action)
                 return;
-            if (action->properties.size() > BehaviorTreeAssetHardLimits::PropertiesPerNode) {
-                writer.Reject();
-                return;
-            }
-            const auto &node = action->binding;
-            writer.IdentityValue(node.id);
-            writer.IdentityValue(node.type);
-            writer.Unsigned(node.descriptorVersion.minimum, 4);
-            writer.Unsigned(node.descriptorVersion.maximum, 4);
-            writer.Enumeration(node.intrinsic);
-            WriteRequirements(writer, node.requirements);
-            WriteLocation(writer, node.source);
-            std::vector<const BehaviorTreeProperty *> properties;
-            for (const auto &property : action->properties)
-                properties.push_back(&property);
-            std::ranges::sort(properties, {}, [](const auto *property) {
-                return property->id;
-            });
-            writer.Count(properties.size(), BehaviorTreeAssetHardLimits::PropertiesPerNode);
-            for (const auto *property : properties)
-                WriteProperty(writer, *property);
+            WriteProviderNode(writer, action->binding, action->properties);
         }
 
         std::optional<StateMachineProviderAction> ReadProvider(DecisionReader &reader) {
             if (!reader.Boolean())
                 return {};
             StateMachineProviderAction action;
-            auto &node = action.binding;
-            node.id = reader.IdentityValue<DecisionNodeId>();
-            node.type = reader.IdentityValue<DecisionNodeTypeId>();
-            node.descriptorVersion = {static_cast<std::uint32_t>(reader.Unsigned(4)), static_cast<std::uint32_t>(reader.Unsigned(4))};
-            node.intrinsic = reader.Enumeration(DecisionControlKind::Count);
-            node.requirements = ReadSequence<DecisionBlackboardRequirement>(reader, DecisionAssetValidationHardLimits::RequirementsPerNode,
-                                                                            ReadRequirement);
-            node.source = ReadLocation(reader);
-            action.properties = ReadSequence<BehaviorTreeProperty>(reader, BehaviorTreeAssetHardLimits::PropertiesPerNode, ReadProperty);
+            ReadProviderNode(reader, action.binding, action.properties);
             return action;
         }
 

@@ -1670,6 +1670,11 @@ add_library(HoroAI STATIC
         runtime/ai/compile/DecisionProviderAdmission.cpp
         runtime/ai/compile/DecisionSourceCodec.cpp
         runtime/ai/compile/DecisionSourceMachine.cpp
+        runtime/ai/compile/DecisionSourceUtility.cpp
+        runtime/ai/compile/DecisionSourceProvider.cpp
+        runtime/ai/compile/DecisionUtilityLowering.cpp
+        runtime/ai/compile/UtilityDecision.cpp
+        runtime/ai/compile/DecisionUtilityRuntime.cpp
         runtime/ai/compile/DecisionSourceReachability.cpp
         runtime/ai/compile/DecisionSourceTree.cpp
         runtime/ai/compile/DecisionSourceValues.cpp

@@ -16,7 +16,7 @@ namespace Horo::AI::Detail {
             }
             if (std::ranges::find(source.services, node, &BehaviorTreeExecutionService::id) != source.services.end())
                 return Result<DecisionNodeRole>::Success(DecisionNodeRole::Service);
-            if (source.stateMachine)
+            if (source.stateMachine || source.utility)
                 return Result<DecisionNodeRole>::Success(DecisionNodeRole::Task);
             return Result<DecisionNodeRole>::Failure(MakeError(AIErrors::DecisionAssetDescriptorIncompatible));
         }

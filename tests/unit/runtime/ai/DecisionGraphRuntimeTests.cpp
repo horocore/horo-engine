@@ -55,7 +55,7 @@ namespace Horo::AI {
             const auto first = instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace);
             REQUIRE(first.HasValue());
             CHECK(first.Value() == AiTaskState::Running);
-            CHECK(trace.Header().version == 1);
+            CHECK(trace.Header().version == 2);
             CHECK(trace.Header().tick == 1);
             CHECK(trace.Header().root == plan->Root());
             CHECK(trace.Header().planDigest == plan->Digest());

@@ -178,4 +178,17 @@ namespace Horo::AI {
         }
         return Evaluation::Success(result);
     }
+
+    /** @copydoc UtilitySelector::Options */
+    std::span<const UtilityOption> UtilitySelector::Options() const noexcept {
+        return options_;
+    }
+
+    /** @copydoc UtilitySelector::Storage */
+    DecisionKernelStorage UtilitySelector::Storage() const noexcept {
+        DecisionKernelStorage storage{.compiledBytes = sizeof(UtilitySelector) + options_.capacity() * sizeof(UtilityOption)};
+        for (const auto &option : options_)
+            storage.compiledBytes += option.considerations.capacity() * sizeof(UtilityConsideration);
+        return storage;
+    }
 }  // namespace Horo::AI

@@ -7,7 +7,7 @@
 
 #include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/BlackboardInstance.h"
-#include "Horo/AI/DecisionIdentity.h"
+#include "Horo/AI/DecisionControl.h"
 
 #include <memory>
 #include <optional>
@@ -89,6 +89,11 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<UtilityEvaluation> Evaluate(const BlackboardSnapshot &snapshot, AgentHandle agent, AiWorkBudget &agentBudget,
                                                          AiWorkBudget &globalBudget, std::span<UtilityScoreRecord> evidence = {}) const;
+
+        /** @brief Returns validated options in the declared stable order. @return Immutable policies. */
+        [[nodiscard]] std::span<const UtilityOption> Options() const noexcept;
+        /** @brief Measures owned selector storage without counting its borrowed schema lease. @return Logical storage. */
+        [[nodiscard]] DecisionKernelStorage Storage() const noexcept;
 
     private:
         UtilitySelector() = default;

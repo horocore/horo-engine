@@ -101,6 +101,15 @@ namespace Horo::AI {
             DecisionClosureAdmission admission, std::shared_ptr<const DecisionAssetPlan> bindings, DecisionNodeId root,
             std::span<const BehaviorTreeExecutionNode> nodes, std::span<const BehaviorTreeExecutionService> services = {},
             const BehaviorTreeExecutionLimits &limits = {});
+        /** @brief Reuses the canonical task kernel for one compiler-admitted Utility action.
+         * @param admission Complete closure
+         * proof. @param bindings Utility graph's exact binding plan.
+         * @param node Stable option/provider identity. @param task
+         * Authored task definition.
+         * @return One immutable task plan or typed invalid/storage failure.
+         */
+        [[nodiscard]] static Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> CompileUtilityAction(
+            DecisionClosureAdmission admission, std::shared_ptr<const DecisionAssetPlan> bindings, DecisionNodeId node, TaskId task);
         [[nodiscard]] DecisionKernelStorage Storage() const noexcept;
         [[nodiscard]] std::size_t TaskSlots() const noexcept;
 

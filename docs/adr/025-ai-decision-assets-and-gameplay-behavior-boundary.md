@@ -189,3 +189,33 @@ point.
 - **Make AI decision graphs a general-purpose visual scripting language**: Rejected because general visual scripting requires arbitrary dataflow and execution branching, whereas AI decision trees/state machines require hierarchical priority selection, reactive decorators, and periodic services.
 - **Create an independent AI thread pool / task manager**: Rejected because out-of-band AI task threads violate deterministic fixed-step simulation, complicate save/load state capture, and risk race conditions with ECS components.
 - **Include HTN and GOAP in the 1.0 milestone**: Rejected due to delivery risk and complexity; standard BTs, HSMs, and Utility scoring satisfy 95%+ of game AI requirements while leaving clean extension points for future planners.
+
+## Utility graph runtime and transport migration
+
+DecisionGraphSource now admits UtilityDecisionSource as family tag 2 alongside
+the existing BT tag 0 and HSM tag 1. Existing version-one source and cooked
+envelopes keep their family tags and wire fields. The Utility extension is
+rejected by older readers that do not recognize its family. The normal cooker
+regenerates compiled layout declarations and digests; an old cooked layout that
+differs from the current measured storage is rejected by canonical admission.
+
+Utility source declares its selector's scalar blackboard requirements and actual
+provider bindings. Compilation checks every consideration against those bindings,
+validates finite bounded policies and prepares one canonical task kernel per
+option. The task kernels retain the shared admitted binding/schema plan and
+reuse existing provider factories, continuation mailboxes, task generations,
+cancellation and exactly-once cleanup. Runtime selects once per activation;
+a running action keeps its selection until completion or owner cancellation.
+Independent or repeated graph calls receive disjoint task slots and runners.
+
+DecisionGraphStepInput carries borrowed agent/global Utility allowances for
+closures containing Utility. Existing BT/HSM callers keep their current inputs.
+Utility step admission rejects missing allowances before task callbacks or changing
+trace storage. Selection reserves its full allowance before reading values.
+A budget yield starts no task and can resume at a later decision tick.
+
+DecisionStepTrace version 2 adds UtilityScore records with stable option/key
+identities and optional normalized scores. The bounded caller trace retains the
+existing graph digest, occurrence and blackboard revision. Raw inputs remain in
+the blackboard owner. Trace capture uses the same selector and task path as an
+untraced step; it cannot change action order or scheduler admission.

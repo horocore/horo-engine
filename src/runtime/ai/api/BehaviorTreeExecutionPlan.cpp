@@ -181,6 +181,27 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc BehaviorTreeExecutionPlan::CompileUtilityAction */
+    Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> BehaviorTreeExecutionPlan::CompileUtilityAction(
+        DecisionClosureAdmission, std::shared_ptr<const DecisionAssetPlan> bindings, const DecisionNodeId node, const TaskId task) {
+        using Plan = Result<std::shared_ptr<const BehaviorTreeExecutionPlan>>;
+        if (!bindings || bindings->Kind() != DecisionPlanKind::Utility || !node.IsValid() || !task.IsValid())
+            return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::BehaviorTreeSchemaInvalid);
+        const auto found = std::ranges::find(bindings->Nodes(), node, &DecisionPlanNode::id);
+        if (found == bindings->Nodes().end() || found->intrinsic != DecisionControlKind::Unspecified)
+            return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::DecisionAssetDescriptorMissing);
+        try {
+            auto plan = std::make_shared<BehaviorTreeExecutionPlan>(ConstructionKey{});
+            plan->bindings_ = std::move(bindings);
+            const BehaviorTreeExecutionNode action{.id = node, .operation = BehaviorTreeOperation::Task, .task = task};
+            if (auto built = plan->BuildTopology(node, std::span{&action, 1}, {.maximumNodes = 1, .maximumDepth = 1}); built.HasError())
+                return Plan::Failure(built.ErrorValue());
+            return Plan::Success(std::move(plan));
+        } catch (const std::bad_alloc &) {
+            return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::BehaviorTreeStorageUnavailable);
+        }
+    }
+
     /** @copydoc BehaviorTreeExecutionPlan::BuildTopology */
     Result<void> BehaviorTreeExecutionPlan::BuildTopology(const DecisionNodeId root, const std::span<const BehaviorTreeExecutionNode> nodes,
                                                           const BehaviorTreeExecutionLimits &limits) {

@@ -12,13 +12,15 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace Horo::AI {
-    /** @brief Evidence types produced by the two admitted decision kernels. */
+    /** @brief Evidence types produced by admitted decision kernels. */
     enum class DecisionStepRecordKind : std::uint8_t {
         BehaviorNode,
         StateMachineStep,
+        UtilityScore,
     };
 
     /** @brief One occurrence address in the exact cooked closure identified by the trace digest. */
@@ -41,13 +43,15 @@ namespace Horo::AI {
         AiTaskState state{AiTaskState::Idle};
         DecisionNodeId lastTransition;
         std::uint32_t transitionCount{};
+        BlackboardKeyId key;                /**< Utility consideration identity; invalid identifies the option total. */
+        std::optional<double> utilityScore; /**< Bounded normalized evidence, never a raw blackboard value. */
 
         bool operator==(const DecisionStepRecord &) const = default;
     };
 
     /** @brief Correlation with the exact immutable plan and frozen blackboard input, without copying input values. */
     struct DecisionTraceHeader final {
-        std::uint32_t version{1};
+        std::uint32_t version{2};
         DecisionGraphAssetId root;
         Sha256Digest planDigest;
         AgentHandle agent;

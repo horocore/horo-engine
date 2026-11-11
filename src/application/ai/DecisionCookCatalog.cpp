@@ -64,7 +64,7 @@ namespace Horo::Application::DecisionCookDetail {
                 return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(registered.ErrorValue());
         }
         const auto strategy = std::make_shared<Strategy>(state);
-        for (const auto type : {DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType}) {
+        for (const auto type : {DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType, DecisionUtilitySourceType}) {
             auto parsed = Assets::AssetTypeId::Parse(type);
             if (parsed.HasError())
                 return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(parsed.ErrorValue());

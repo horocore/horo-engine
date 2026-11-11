@@ -71,6 +71,9 @@ namespace Horo::AI {
             result->plan_ = std::move(plan);
             result->providers_ = std::move(providers);
             result->binding_ = std::move(binding);
+            result->usesUtility_ = std::ranges::any_of(result->plan_->Graphs(), [](const auto &graph) {
+                return std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(graph.execution);
+            });
             result->occurrences_.reserve(result->plan_->Occurrences().size());
             for (std::size_t index = 0; index < result->plan_->Occurrences().size(); ++index) {
                 result->occurrences_.push_back(std::make_unique<OccurrenceState>());
@@ -121,6 +124,9 @@ namespace Horo::AI {
             if (instance.HasError())
                 return Result<void>::Failure(instance.ErrorValue());
             state.tree = std::move(instance).Value();
+        } else if (std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(graph.execution)) {
+            if (auto built = BuildUtility(index); built.HasError())
+                return built;
         } else {
             auto callbacks = providers_->CreateExecutor(providers_, *graph.bindings, plan_->Capabilities(), graph.providerProperties);
             if (callbacks.HasError())
@@ -172,6 +178,8 @@ namespace Horo::AI {
         if (Terminal(state.outcome) || state.lastTick == input_->tick)
             return Result<AiTaskState>::Success(state.outcome);
         state.lastTick = input_->tick;
+        if (state.utility)
+            return AdvanceUtility(index);
         if (!state.tree)
             return AdvanceMachine(index);
         auto stepped = state.tree->Evaluate(input_->tick, input_->blackboard, input_->current.agent);
@@ -196,12 +204,19 @@ namespace Horo::AI {
         return Result<AiTaskState>::Success(state.outcome);
     }
 
+    /** @copydoc DecisionGraphInstance::UtilityBudgetsAvailable */
+    bool DecisionGraphInstance::UtilityBudgetsAvailable(const DecisionGraphStepInput &input) const noexcept {
+        return !usesUtility_ || (input.utilityAgentBudget && input.utilityGlobalBudget);
+    }
+
     Result<void> DecisionGraphInstance::ValidateStep(const DecisionGraphStepInput &input) const {
         if (std::this_thread::get_id() != owner_ || evaluating_ || shutdown_ || input.tick == 0 || input.tick <= lastTick_)
             return Invalid<void>(AIErrors::TaskTransitionInvalid);
         const auto schema = plan_->Graphs()[plan_->Occurrences()[0].plan].bindings->BlackboardSchema();
         if (!MatchesBlackboard(input, binding_.blackboard, schema))
             return Invalid<void>(AIErrors::BlackboardInstanceStale);
+        if (!UtilityBudgetsAvailable(input))
+            return Invalid<void>(AIErrors::TaskContextInvalid);
         if (input.events.size() > StateMachineLimits::EventsPerStep)
             return Invalid<void>();
         if (!std::ranges::all_of(input.events, [](auto event) {
@@ -275,6 +290,12 @@ namespace Horo::AI {
             if (state.tree) {
                 if (auto restarted = state.tree->Restart(); restarted.HasError())
                     return restarted;
+            } else if (state.utility) {
+                for (auto &action : state.utility->actions) {
+                    if (auto restarted = action->Restart(); restarted.HasError())
+                        return restarted;
+                }
+                state.utility->selected.reset();
             } else {
                 if (state.generation == std::numeric_limits<std::uint32_t>::max())
                     return Invalid<void>(AIErrors::GenerationExhausted);
@@ -325,6 +346,12 @@ namespace Horo::AI {
         }
         if (state.machine)
             static_cast<void>(state.machine->Cancel(reason, state.actions.get()));
+        if (state.utility) {
+            const auto &utility =
+                *std::get<std::shared_ptr<const CookedUtilityPlan>>(plan_->Graphs()[plan_->Occurrences()[index].plan].execution);
+            for (std::size_t action = 0; action < state.utility->actions.size(); ++action)
+                static_cast<void>(state.utility->actions[action]->AbortSubtree(utility.Actions()[action]->Nodes()[0].execution.id, reason));
+        }
         state.active = false;
         if (!Terminal(state.outcome))
             state.outcome = AiTaskState::Cancelled;
@@ -358,6 +385,8 @@ namespace Horo::AI {
         auto bytes = sizeof(OccurrenceState) + sizeof(std::unique_ptr<OccurrenceState>);
         if (std::holds_alternative<std::shared_ptr<const BehaviorTreeExecutionPlan>>(graph.execution))
             return bytes + sizeof(CallAdapter);
+        if (const auto *utility = std::get_if<std::shared_ptr<const CookedUtilityPlan>>(&graph.execution))
+            return bytes + sizeof(UtilityAdapter) + (*utility)->Actions().size() * sizeof(std::unique_ptr<BehaviorTreeInstance>);
         bytes += sizeof(ActionAdapter);
         for (const auto &node : graph.bindings->Nodes())
             if (node.intrinsic == DecisionControlKind::Unspecified)

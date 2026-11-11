@@ -2185,6 +2185,7 @@ add_executable(HoroDecisionGraphCompilerTests
         unit/runtime/ai/DecisionGraphCompilerTests.cpp
         unit/runtime/ai/DecisionGraphRuntimeTests.cpp
         unit/runtime/ai/DecisionPlanCodecTests.cpp
+        unit/runtime/ai/UtilityDecisionTests.cpp
         unit/runtime/ai/DecisionGraphProviderTests.cpp
 )
 target_compile_features(HoroDecisionGraphCompilerTests PRIVATE cxx_std_20)
