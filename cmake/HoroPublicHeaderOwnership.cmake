@@ -281,6 +281,8 @@ horo_configure_target_header_boundary(HoroPackageContentStagingInternal)
 horo_configure_target_header_boundary(HoroPackageGameplayHost PUBLIC_HEADERS
     Horo/Packages/GameplayPackageModuleHost.h
 )
+# Package host configuration owns the optional neutral Extensions provider handoff;
+# it must not expose Platform Services implementations or private SDK headers.
 horo_configure_target_header_boundary(HoroPackageLifecycle PUBLIC_HEADERS
     Horo/Packages/PackageLifecycle.h
     Horo/Packages/PackageLifecycleErrors.h

@@ -5954,6 +5954,23 @@ target_compile_definitions(HoroPlatformProviderAdmissionTests PRIVATE
         HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture11>")
 add_test(NAME HoroPlatformProviderAdmissionTests COMMAND HoroPlatformProviderAdmissionTests)
 
+add_library(HoroPlatformPackageFixture MODULE fixtures/extensions/PlatformPackageFixture.c)
+target_compile_features(HoroPlatformPackageFixture PRIVATE c_std_11)
+set_target_properties(HoroPlatformPackageFixture PROPERTIES C_EXTENSIONS OFF)
+target_link_libraries(HoroPlatformPackageFixture PRIVATE HoroEngine::Extensions)
+
+add_executable(HoroPlatformProviderPackageTests unit/packages/PackagePlatformProviderLifecycleTests.cpp)
+target_compile_features(HoroPlatformProviderPackageTests PRIVATE cxx_std_20)
+target_include_directories(HoroPlatformProviderPackageTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests/helpers)
+target_link_libraries(HoroPlatformProviderPackageTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::PlatformServicesExtension
+    HoroEngine::Platform nlohmann_json::nlohmann_json miniz Catch2::Catch2WithMain)
+add_dependencies(HoroPlatformProviderPackageTests HoroPlatformPackageFixture HoroExtensionAbiFixture0 HoroExtensionAbiFixture4)
+target_compile_definitions(HoroPlatformProviderPackageTests PRIVATE
+    HORO_PACKAGE_PROVIDER_FIXTURE="$<TARGET_FILE:HoroPlatformPackageFixture>"
+    HORO_PACKAGE_NATIVE_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture4>"
+    HORO_PACKAGE_EMPTY_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture0>")
+horo_register_catch_test(HoroPlatformProviderPackageTests LABELS "packages;platform-services;extensions;headless")
+
 add_executable(HoroBackendOperationRegistryTests
         unit/extensions/BackendOperationRegistryTests.cpp
 )
