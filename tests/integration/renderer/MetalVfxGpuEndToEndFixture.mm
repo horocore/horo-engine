@@ -9,6 +9,7 @@
 #include "editor/renderer/metal/SdlMetalPresentationPort.h"
 #include "runtime/renderer/frontend/RenderFrontendResourceAccess.h"
 #include "runtime/renderer/modules/metal/MetalResourceInstances.h"
+#include "support/VfxGpuQualification.h"
 #include "support/VfxTestSupport.h"
 
 #import <Metal/Metal.h>
@@ -104,7 +105,7 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Defines authored seed inputs shared by two real CPU simulators and the actual GPU preparation. */
-        ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}) {
+        ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}, bool variedSeed = false) {
             auto d = Vfx::Tests::ValidParticleDescriptorData();
             d.maximumParticles = Count;
             d.shape = ParticleEmitterShape::Point;
@@ -121,6 +122,12 @@ namespace Horo::Render::Test {
             d.sortMode = ParticleSortMode::None;
             d.simulationPreference = preference;
             d.gpuReadback = readback;
+            if (variedSeed) {
+                d.shape = ParticleEmitterShape::Box;
+                d.initialSpeed = {.1, .3};
+                d.initialSize = {.2, .4};
+                d.lifetimeSeconds = {9, 10};
+            }
             return Vfx::Tests::ParticleDescriptor(d);
         }
 
@@ -175,12 +182,13 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Creates the genuine canonical CPU oracle; it never produces runtime GPU output. */
-        CpuParticleSimulator Cpu() {
-            return Value(CpuParticleSimulator::Create(Source(SimulationPreference::RequireCPU), {.buffer = Buffer(),
-                                                                                                 .activation = Effect(),
-                                                                                                 .effectSeed = 0x123456789abcdef0ULL,
-                                                                                                 .maximumBurstParticles = Count,
-                                                                                                 .forces = Forces}));
+        CpuParticleSimulator Cpu(std::span<const CpuParticleForceModule> forces = Forces, bool variedSeed = false) {
+            return Value(
+                CpuParticleSimulator::Create(Source(SimulationPreference::RequireCPU, {}, variedSeed), {.buffer = Buffer(),
+                                                                                                        .activation = Effect(),
+                                                                                                        .effectSeed = 0x123456789abcdef0ULL,
+                                                                                                        .maximumBurstParticles = Count,
+                                                                                                        .forces = forces}));
         }
 
         /** @brief Projects complete CPU seed streams, without private slot layout or native pointers. */
@@ -242,7 +250,9 @@ namespace Horo::Render::Test {
         /** @brief Owns one separate unfocused SDL/native fixture and every real frontend/world lifetime. */
         class Fixture final {
         public:
-            explicit Fixture(const std::filesystem::path &root) : family_(LoadFamily(root)), oracle_(Cpu()) {}
+            explicit Fixture(const std::filesystem::path &root, std::span<const CpuParticleForceModule> forces = Forces,
+                             bool variedSeed = false)
+                : family_(LoadFamily(root)), forces_(forces), variedSeed_(variedSeed), oracle_(Cpu(forces, variedSeed)) {}
 
             ~Fixture() {
                 ReleaseGate();
@@ -288,7 +298,7 @@ namespace Horo::Render::Test {
             void Prepare(bool observe, std::chrono::nanoseconds timeout = 5s) {
                 if (observe)
                     PrepareReadback(timeout);
-                auto seed = Cpu();
+                auto seed = Cpu(forces_, variedSeed_);
                 Value(seed.Advance({.deltaSeconds = 0, .burstCount = Count, .tick = 0}));
                 const auto view = Value(seed.Extract());
                 std::array<ParticleSimulationId, Count> ids;
@@ -304,7 +314,7 @@ namespace Horo::Render::Test {
                 info.initialization = GpuParticleInitialization::PreparedParticles;
                 info.requiredFeatures = GpuParticleRequiredFeature::None;
                 info.initial = {SeedView(view), ids};
-                info.forces = Forces;
+                info.forces = forces_;
                 info.layoutLimits = {1024U * 1024U, frontend_->Capabilities().support.limits.maxBufferBytes};
                 info.maximumRetainedBytes = 6U * 1024U * 1024U;
                 info.maximumPendingSteps = 2;
@@ -314,7 +324,7 @@ namespace Horo::Render::Test {
                 if (observe)
                     policy = {true, 1,     VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
                               1,    Count, Count * VfxGpuObservationWords::Bytes,     1};
-                const auto source = Source(SimulationPreference::RequireGPU, policy);
+                const auto source = Source(SimulationPreference::RequireGPU, policy, variedSeed_);
                 CHECK(source.Data().gpuReadback.enabled == observe);
                 INFO("Cold GPU logical admission: actual selected domain, finite PreparedParticles state, shared policy and payload "
                      "ledger.");
@@ -709,8 +719,12 @@ namespace Horo::Render::Test {
                 const std::array expected{cpu.positionX[index], cpu.positionY[index],       cpu.positionZ[index], cpu.velocityX[index],
                                           cpu.velocityY[index], cpu.velocityZ[index],       cpu.sizeX[index],     cpu.sizeY[index],
                                           cpu.rotation[index],  cpu.angularVelocity[index], cpu.age[index],       cpu.maximumAge[index]};
-                for (std::size_t i = 0; i < expected.size(); ++i)
-                    CHECK(std::bit_cast<float>(words[i + 2]) == Catch::Approx(expected[i]).margin(.00002F).epsilon(.0002F));
+                for (std::size_t i = 0; i < expected.size(); ++i) {
+                    const auto tolerance = Vfx::Tests::GpuPropertyTolerances[i];
+                    INFO("policy=" << Vfx::Tests::GpuQualificationPolicyVersion << " property=" << tolerance.name << " particle=" << index
+                                   << " tick=" << step_.tick);
+                    CHECK(Vfx::Tests::GpuPropertyMatches(std::bit_cast<float>(words[i + 2]), expected[i], tolerance));
+                }
                 CHECK(words[VfxGpuObservationWords::PackedColor] == cpu.packedColor[index]);
                 CHECK(words[VfxGpuObservationWords::CustomFlags] == cpu.customFlags[index]);
                 CHECK(words[VfxGpuObservationWords::Alive] == 1);
@@ -720,6 +734,8 @@ namespace Horo::Render::Test {
             }
 
             CookedVfxGpuPrograms family_;
+            std::span<const CpuParticleForceModule> forces_;
+            bool variedSeed_;
             CpuParticleSimulator oracle_;
             SDL_Window *window_{};
             std::unique_ptr<Editor::SdlMetalPresentationPort> presentation_;
@@ -737,6 +753,30 @@ namespace Horo::Render::Test {
             __strong id<MTLSharedEvent> gate_{nil};
         };
     }  // namespace
+
+    void RunEquivalentMetalVfxGpu(const std::filesystem::path &root) {
+        if (MTLCreateSystemDefaultDevice() == nil)
+            SKIP(VfxErrors::UnsupportedCapability.code.Value() << ": no native Metal compute device is available");
+        for (std::size_t scenario = 0; scenario < 4; ++scenario) {
+            INFO("force scenario=" << scenario);
+            const auto forces = scenario < 3 ? std::span{Forces}.subspan(scenario, 1) : std::span{Forces};
+            Fixture fixture(root, forces, true);
+            fixture.Initialize();
+            REQUIRE_FALSE(fixture.Frontend().Capabilities().support.synthetic);
+            if (!fixture.Frontend().Capabilities().support.features.Supports(RenderCapability::VfxGpuSimulation))
+                SKIP(VfxErrors::UnsupportedCapability.code.Value() << ": selected native device has no qualified VFX compute support");
+            fixture.Prepare(true);
+            for (unsigned step = 0; step < 12; ++step) {
+                fixture.Pump();
+                fixture.PrepareStep();
+                fixture.Submit();
+                fixture.AwaitAccepted();
+                fixture.WaitComplete();
+                auto result = fixture.Acquire();
+                fixture.CheckOracle(result);
+            }
+        }
+    }
 
     void RunDisabledMetalVfxGpu(const std::filesystem::path &root) {
         Fixture fixture(root);

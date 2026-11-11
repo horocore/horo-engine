@@ -6,6 +6,7 @@
 #include "Horo/Vfx/VfxWorld.h"
 #include "VfxGpuVulkanCook.h"
 #include "VulkanVfxInstancedReadback.h"
+#include "support/VfxGpuQualification.h"
 #include "support/VfxTestSupport.h"
 
 #include <VulkanBackendModule.h>
@@ -16,15 +17,22 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <fstream>
+#include <iostream>
 #include <memory>
 
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
 
-    /** @brief Explicit Linux qualification host opens only the installed system loader, never a project library or API fallback. */
+    /** @brief Qualification host leases the installed system Vulkan loader for native execution. */
     class SystemLoader final : public IVulkanLoaderPort {
     public:
         ~SystemLoader() override {
@@ -34,6 +42,12 @@ namespace {
         Result<void> AcquireLoader() override {
             if (library_ != nullptr)
                 return Result<void>::Success();
+#ifdef _WIN32
+            library_ = LoadLibraryExW(L"vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+            if (library_ == nullptr)
+                return Failure("The installed Windows Vulkan loader is unavailable.");
+            resolver_ = std::bit_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(library_, "vkGetInstanceProcAddr"));
+#else
 #if defined(__aarch64__)
             constexpr std::array paths{"/usr/lib/aarch64-linux-gnu/libvulkan.so.1", "/lib/aarch64-linux-gnu/libvulkan.so.1"};
 #elif defined(__x86_64__)
@@ -49,6 +63,7 @@ namespace {
             if (library_ == nullptr)
                 return Failure("The installed Linux Vulkan loader is unavailable.");
             resolver_ = std::bit_cast<PFN_vkGetInstanceProcAddr>(dlsym(library_, "vkGetInstanceProcAddr"));
+#endif
             if (resolver_ == nullptr) {
                 ReleaseLoader();
                 return Failure("The installed loader has no vkGetInstanceProcAddr.");
@@ -69,6 +84,22 @@ namespace {
 
         Result<bool> SupportsPresentation(VkPhysicalDevice, std::uint32_t) override {
             return Result<bool>::Success(false);
+        }
+
+        /** @brief Restricts qualification to the exact requested native adapter when the host supplies its name. */
+        Result<bool> AcceptPhysicalDevice(VkInstance instance, VkPhysicalDevice physical) override {
+            const auto *required = std::getenv("HORO_VULKAN_TEST_DEVICE");
+            if (required == nullptr || *required == '\0')
+                return Result<bool>::Success(true);
+            const auto properties = std::bit_cast<PFN_vkGetPhysicalDeviceProperties>(resolver_(instance, "vkGetPhysicalDeviceProperties"));
+            if (properties == nullptr)
+                return Result<bool>::Failure(Failure("Native adapter properties entry point is unavailable.").ErrorValue());
+            VkPhysicalDeviceProperties actual{};
+            properties(physical, &actual);
+            const bool admitted = std::strcmp(required, actual.deviceName) == 0;
+            if (admitted)
+                std::cout << "VFX native adapter=" << actual.deviceName << " driverRaw=" << actual.driverVersion << '\n';
+            return Result<bool>::Success(admitted);
         }
 
         Result<bool> IsDriverAllowed(const VkPhysicalDeviceProperties &) override {
@@ -102,7 +133,11 @@ namespace {
             submit_ = nullptr;
             resolver_ = nullptr;
             if (library_ != nullptr)
+#ifdef _WIN32
+                FreeLibrary(std::exchange(library_, nullptr));
+#else
                 dlclose(std::exchange(library_, nullptr));
+#endif
         }
 
     private:
@@ -152,7 +187,11 @@ namespace {
                                                {}});
         }
 
+#ifdef _WIN32
+        HMODULE library_{};
+#else
         void *library_{};
+#endif
         PFN_vkGetInstanceProcAddr resolver_{};
     };
 

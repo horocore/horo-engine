@@ -6385,7 +6385,7 @@ if (HORO_BUILD_RENDER_VULKAN)
         endif()
     endif()
     horo_register_catch_test(HoroRenderVulkanTests LABELS "native;renderer;vulkan;qualification")
-    if (HORO_ENABLE_GPU_SMOKE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if (HORO_ENABLE_GPU_SMOKE_TESTS AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
         add_executable(HoroVulkanCommandExecutionSmoke integration/renderer/VulkanCommandExecutionSmoke.cpp)
         target_compile_features(HoroVulkanCommandExecutionSmoke PRIVATE cxx_std_20)
         target_include_directories(HoroVulkanCommandExecutionSmoke PRIVATE
@@ -6398,7 +6398,11 @@ if (HORO_BUILD_RENDER_VULKAN)
                 HoroEngine::VfxApi HoroVfxGpuVulkanCookInternal Vulkan::Headers ${CMAKE_DL_LIBS})
         add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)
         set_tests_properties(HoroVulkanCommandExecutionSmoke PROPERTIES
-                LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE
+                LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE SKIP_RETURN_CODE 4
+                FAIL_REGULAR_EXPRESSION "Validation Error;VUID-")
+        add_test(NAME HoroVulkanVfxGpuBudget COMMAND HoroVulkanCommandExecutionSmoke "[vfx-budget]")
+        set_tests_properties(HoroVulkanVfxGpuBudget PROPERTIES
+                LABELS "gpu;vulkan;renderer;vfx;qualification;performance" TIMEOUT 120 RUN_SERIAL TRUE SKIP_RETURN_CODE 4
                 FAIL_REGULAR_EXPRESSION "Validation Error;VUID-")
     endif ()
 endif ()

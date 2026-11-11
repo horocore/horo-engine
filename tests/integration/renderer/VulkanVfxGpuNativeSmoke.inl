@@ -28,6 +28,16 @@ namespace VulkanVfxGpuSmoke {
         input.seekg(0);
         input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         REQUIRE(input.good());
+        // Locked text digests use LF. Preserve binary shader payloads byte for byte.
+        if (path.extension() == ".json" || path.extension() == ".hlsl") {
+            std::size_t written = 0;
+            for (std::size_t index = 0; index < bytes.size(); ++index) {
+                if (bytes[index] == '\r' && index + 1 < bytes.size() && bytes[index + 1] == '\n')
+                    continue;
+                bytes[written++] = bytes[index];
+            }
+            bytes.resize(written);
+        }
         return bytes;
     }
 
@@ -93,15 +103,15 @@ namespace VulkanVfxGpuSmoke {
     }
 
     /** @brief Authors source readback policy before canonical asset validation; CPU oracle calls retain disabled defaults. */
-    ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}) {
+    ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}, std::uint32_t count = Count) {
         auto d = Vfx::Tests::ValidParticleDescriptorData();
-        d.maximumParticles = Count;
-        d.shape = ParticleEmitterShape::Point;
+        d.maximumParticles = count;
+        d.shape = ParticleEmitterShape::Box;
         d.spawnRate = {0, 0};
-        d.initialSpeed = {0, 0};
-        d.initialSize = {.3, .3};
+        d.initialSpeed = {.1, .3};
+        d.initialSize = {.2, .4};
         d.initialOpacity = {1, 1};
-        d.lifetimeSeconds = {10, 10};
+        d.lifetimeSeconds = {9, 10};
         // This authored fixture is the PreparedParticles force/integration subset, not the generic source helper's SceneDepth recipe.
         d.collisionMode = ParticleCollisionMode::None;
         d.lifetimeKind = ParticleLifetimeKind::Finite;
@@ -130,7 +140,7 @@ namespace VulkanVfxGpuSmoke {
      * or native material qualification. Native GPU program/resource evidence is exercised independently below.
      */
     ParticleCookAdmission CookAdmission(const ParticleSystemDescriptor &source) {
-        const auto profile = Value(GetParticleCookProfile(ParticleCookTier::Compact));
+        const auto profile = Value(GetParticleCookProfile(ParticleCookTier::Standard));
         const ParticleMaterialEvidence material{source.Data().material, ParticleMaterialAvailability::Available};
         auto cooked = Value(BuildParticleSystemCookPlan(source, profile, material, Vfx::Tests::ParticleErrorRegistry(),
                                                         "native-vfx-prepared-particles-fixture"));
@@ -159,12 +169,12 @@ namespace VulkanVfxGpuSmoke {
     }
 
     /** @brief Creates the genuine canonical CPU oracle; it never produces runtime GPU output. */
-    CpuParticleSimulator Cpu() {
-        return Value(CpuParticleSimulator::Create(Source(SimulationPreference::RequireCPU), {.buffer = Buffer(),
-                                                                                             .activation = Effect(),
-                                                                                             .effectSeed = 0x123456789abcdef0ULL,
-                                                                                             .maximumBurstParticles = Count,
-                                                                                             .forces = Forces}));
+    CpuParticleSimulator Cpu(std::span<const CpuParticleForceModule> forces = Forces, std::uint32_t count = Count) {
+        return Value(CpuParticleSimulator::Create(Source(SimulationPreference::RequireCPU, {}, count), {.buffer = Buffer(),
+                                                                                                        .activation = Effect(),
+                                                                                                        .effectSeed = 0x123456789abcdef0ULL,
+                                                                                                        .maximumBurstParticles = count,
+                                                                                                        .forces = forces}));
     }
 
     /** @brief Projects complete CPU seed streams, without private slot layout or native pointers. */
@@ -188,7 +198,7 @@ namespace VulkanVfxGpuSmoke {
     }
 
     /** @brief Requires actual selected frontend feature admission before constructing the host's immutable resolver facts. */
-    VfxResolution Resolution(const RenderFrontend &frontend) {
+    VfxResolution Resolution(const RenderFrontend &frontend, std::uint32_t count = Count) {
         const auto &support = frontend.Capabilities().support;
         REQUIRE(support.features.Supports(RenderCapability::VfxGpuSimulation));
         REQUIRE(support.features.Supports(RenderCapability::VfxGpuDraw));
@@ -197,11 +207,11 @@ namespace VulkanVfxGpuSmoke {
             facts[i] = {static_cast<VfxCapability>(i), VfxCapabilitySupport::Unsupported};
         facts[static_cast<std::size_t>(VfxCapability::CpuSimulation)].support = VfxCapabilitySupport::Available;
         facts[static_cast<std::size_t>(VfxCapability::GpuSimulation)].support = VfxCapabilitySupport::Available;
-        const VfxResourceLimits limits{Count, 0, 0, 0, 8U * 1024U * 1024U, 10, 10};
+        const VfxResourceLimits limits{count, 0, 0, 0, 128U * 1024U * 1024U, 10, 10};
         const auto caps = Value(VfxCapabilities::Create(Value(VfxCapabilityRevision::Create(support.deviceIncarnation)), facts, limits));
         // Product policy requires positive ceilings for every category. Actual capability counts stay zero and
         // unsupported above, so a policy ceiling never invents usable decals, lights or volumes.
-        const VfxResourceLimits policyLimits{Count, 1, 1, 1, 8U * 1024U * 1024U, 10, 10};
+        const VfxResourceLimits policyLimits{count, 1, 1, 1, 128U * 1024U * 1024U, 10, 10};
         const auto policy =
             Value(VfxQualityPolicy::Create({Value(VfxQualityPolicyRevision::Create(1)), VfxQualityProfile::Standard, policyLimits, 1}));
         VfxResolutionRequest request{.hostMode = VfxHostMode::Interactive,
@@ -211,9 +221,9 @@ namespace VulkanVfxGpuSmoke {
                                      .requirements = {.category = VfxEffectCategory::Particle,
                                                       .preference = SimulationPreference::RequireGPU,
                                                       .requirementClass = VfxRequirementClass::Cosmetic,
-                                                      .requestedCount = Count,
-                                                      .minimumAuthoredCount = Count,
-                                                      .bytesPerElement = 1024U * 1024U,
+                                                      .requestedCount = count,
+                                                      .minimumAuthoredCount = count,
+                                                      .bytesPerElement = (128U * 1024U * 1024U) / count,
                                                       .cpuWorkMilliseconds = 1,
                                                       .gpuWorkMilliseconds = 1,
                                                       .hasCpuKernel = true,
@@ -224,7 +234,9 @@ namespace VulkanVfxGpuSmoke {
 
     class Unit final {
     public:
-        Unit(NativeOwner &owner, const std::filesystem::path &root) : owner_(owner), family_(Family(root)), oracle_(Cpu()) {}
+        Unit(NativeOwner &owner, const std::filesystem::path &root, std::span<const CpuParticleForceModule> forces = Forces,
+             std::uint32_t count = Count)
+            : owner_(owner), family_(Family(root)), forces_(forces), count_(count), oracle_(Cpu(forces, count)) {}
 
         ~Unit() {
             if (world_)
@@ -237,45 +249,46 @@ namespace VulkanVfxGpuSmoke {
         }
 
         /** @brief Prepares real Vulkan execution exclusively from the validated asset's authored observation policy. */
-        void Prepare() {
+        void Prepare(bool observe = true) {
             auto &frontend = *owner_.frontend;
-            const auto bytes = Count * VfxGpuObservationWords::Bytes;
-            Value(frontend.PrepareVfxGpuReadbackStorage({bytes, bytes, bytes, 16, 1}, {1, bytes, 16}, 1024U * 1024U, 5s));
-            auto seed = Cpu();
-            Value(seed.Advance({.deltaSeconds = 0, .burstCount = Count, .tick = 0}));
+            const auto bytes = count_ * VfxGpuObservationWords::Bytes;
+            if (observe)
+                Value(frontend.PrepareVfxGpuReadbackStorage({bytes, bytes, bytes, 16, 1}, {1, bytes, 16}, 1024U * 1024U, 5s));
+            auto seed = Cpu(forces_, count_);
+            Value(seed.Advance({.deltaSeconds = 0, .burstCount = count_, .tick = 0}));
             const auto view = Value(seed.Extract());
-            std::array<ParticleSimulationId, Count> ids;
-            for (std::uint32_t i = 0; i < Count; ++i)
+            std::vector<ParticleSimulationId> ids(count_);
+            for (std::uint32_t i = 0; i < count_; ++i)
                 ids[i] = Value(seed.HandleAtDenseIndex(i)).particle;
             GpuParticleSimulatorCreateInfo info;
             info.scene = Effect().scope;
             info.activation = Effect();
             info.buffer = Buffer();
             info.effectSeed = 0x123456789abcdef0ULL;
-            info.resolution = Resolution(frontend);
+            info.resolution = Resolution(frontend, count_);
             info.initialization = GpuParticleInitialization::PreparedParticles;
             info.requiredFeatures = GpuParticleRequiredFeature::None;
             info.initial = {SeedView(view), ids};
-            info.forces = Forces;
-            info.layoutLimits = {1024U * 1024U, frontend.Capabilities().support.limits.maxBufferBytes};
-            info.maximumRetainedBytes = 6U * 1024U * 1024U;
+            info.forces = forces_;
+            info.layoutLimits = {128U * 1024U * 1024U, frontend.Capabilities().support.limits.maxBufferBytes};
+            info.maximumRetainedBytes = 64U * 1024U * 1024U;
             info.maximumPendingSteps = 2;
-            info.maximumSteps = 16;
+            info.maximumSteps = 128;
             info.maximumDeltaSeconds = Delta;
             const VfxGpuReadbackDescriptor
-                policy{true, 1,     VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
-                       1,    Count, Count * VfxGpuObservationWords::Bytes,     1};
-            const auto source = Source(SimulationPreference::RequireGPU, policy);
+                policy{true, 1,      VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
+                       1,    count_, count_ * VfxGpuObservationWords::Bytes,    1};
+            const auto source = Source(SimulationPreference::RequireGPU, observe ? policy : VfxGpuReadbackDescriptor{}, count_);
             const auto admission = CookAdmission(source);
             auto logical = Value(GpuParticleSimulator::Create(admission, info));
             CheckReadbackPolicy(logical->Preparation().descriptor.readback, source.Data().gpuReadback);
             PrepareNative(*logical);
             CheckReadbackPolicy(receipt_.Descriptor().readback, source.Data().gpuReadback);
-            CHECK(receipt_.Readback() == VfxGpuReadbackAdmission::Available);
+            CHECK(receipt_.Readback() == (observe ? VfxGpuReadbackAdmission::Available : VfxGpuReadbackAdmission::Disabled));
             Accepted(logical->Activate(receipt_));
             std::array<VfxGpuEmitterPreparation, 1> gpu;
             gpu[0] = {Effect(), source.Data().emitter, std::move(logical)};
-            world_ = Value(VfxWorld::Prepare(Effect().scope, {}, gpu, {4, Count, 4, 4, 1024U * 1024U}));
+            world_ = Value(VfxWorld::Prepare(Effect().scope, {}, gpu, {4, count_, 4, 4, 128U * 1024U * 1024U}));
             Accepted(world_->Play(Effect()));
             auto color = Value(frontend.CreateTexture(
                 {.extent = Extent, .format = RenderTextureFormat::Rgba8Unorm, .usage = RenderTextureUsage::RenderAttachment}));
@@ -304,10 +317,10 @@ namespace VulkanVfxGpuSmoke {
             return world_->Extract(++snapshot_, {}, 1).snapshot;
         }
 
-        void Step(bool partialFailure = false) {
+        void Step(bool partialFailure = false, float deltaSeconds = Delta) {
             // Retire the prior acquired CPU result after its consumer lease was released, outside a live frame.
             Pump();
-            REQUIRE(world_->PrepareGpuSteps(Delta).status == GpuParticleStepStatus::Complete);
+            REQUIRE(world_->PrepareGpuSteps(deltaSeconds).status == GpuParticleStepStatus::Complete);
             auto snapshot = Capture();
             REQUIRE(snapshot.GpuBatches().size() == 1);
             const auto &batch = snapshot.GpuBatches()[0];
@@ -396,6 +409,7 @@ namespace VulkanVfxGpuSmoke {
         void Submit(RenderFrameScope &frame, const CompiledRenderGraphExecution &compiled,
                     std::span<const RenderGraphPassWorkload> workloads, const VfxGpuGraphSchedule &contribution, bool partialFailure) {
             const auto first = Value(frame.ReserveSubmission(RenderQueueRole::Graphics, contribution.RequiredWaits()));
+            completion_ = first.signal;
             if (!partialFailure) {
                 const std::array submissions{RenderGraphQueueSubmission{first, {0, compiled.Passes().size()}}};
                 Accepted(frame.ExecuteSubmittedGraph(compiled, workloads, submissions));
@@ -412,6 +426,13 @@ namespace VulkanVfxGpuSmoke {
             const std::array submissions{RenderGraphQueueSubmission{first, {0, split}},
                                          RenderGraphQueueSubmission{second, {split, compiled.Passes().size() - split}}};
             Accepted(frame.ExecuteSubmittedGraph(compiled, workloads, submissions));
+        }
+
+        /** @brief Observes completion only at the bounded native qualification boundary. */
+        void Complete() {
+            RequireCompletion(*owner_.frontend, completion_);
+            Pump();
+            CHECK(Capture().GpuBatches()[0].generation == step_.targetGeneration);
         }
 
         void Pump() {
@@ -451,8 +472,12 @@ namespace VulkanVfxGpuSmoke {
             const std::array expected{cpu.positionX[index], cpu.positionY[index],       cpu.positionZ[index], cpu.velocityX[index],
                                       cpu.velocityY[index], cpu.velocityZ[index],       cpu.sizeX[index],     cpu.sizeY[index],
                                       cpu.rotation[index],  cpu.angularVelocity[index], cpu.age[index],       cpu.maximumAge[index]};
-            for (std::size_t i = 0; i < expected.size(); ++i)
-                CHECK(std::bit_cast<float>(words[i + 2]) == Catch::Approx(expected[i]).margin(.00002F).epsilon(.0002F));
+            for (std::size_t i = 0; i < expected.size(); ++i) {
+                const auto tolerance = Vfx::Tests::GpuPropertyTolerances[i];
+                INFO("policy=" << Vfx::Tests::GpuQualificationPolicyVersion << " property=" << tolerance.name << " particle=" << index
+                               << " tick=" << step_.tick);
+                CHECK(Vfx::Tests::GpuPropertyMatches(std::bit_cast<float>(words[i + 2]), expected[i], tolerance));
+            }
             CHECK(words[VfxGpuObservationWords::PackedColor] == cpu.packedColor[index]);
             CHECK(words[VfxGpuObservationWords::CustomFlags] == cpu.customFlags[index]);
             CHECK(words[VfxGpuObservationWords::Alive] == 1);
@@ -462,10 +487,10 @@ namespace VulkanVfxGpuSmoke {
         }
 
         void CheckOracle(RenderReadbackResult &result) {
-            Value(oracle_.Advance({.deltaSeconds = Delta, .burstCount = step_.tick == 0 ? Count : 0, .tick = step_.tick}));
+            Value(oracle_.Advance({.deltaSeconds = Delta, .burstCount = step_.tick == 0 ? count_ : 0, .tick = step_.tick}));
             const auto cpu = Value(oracle_.Extract());
-            REQUIRE(result.Bytes().size() == Count * VfxGpuObservationWords::Bytes);
-            for (std::uint32_t i = 0; i < Count; ++i)
+            REQUIRE(result.Bytes().size() == count_ * VfxGpuObservationWords::Bytes);
+            for (std::uint32_t i = 0; i < count_; ++i)
                 CheckParticle(result.Bytes().subspan(i * VfxGpuObservationWords::Bytes, VfxGpuObservationWords::Bytes), cpu, i);
             CHECK(Capture().GpuBatches()[0].generation == step_.targetGeneration);
         }
@@ -473,28 +498,60 @@ namespace VulkanVfxGpuSmoke {
     private:
         NativeOwner &owner_;
         CookedVfxGpuPrograms family_;
+        std::span<const CpuParticleForceModule> forces_;
+        std::uint32_t count_;
         CpuParticleSimulator oracle_;
         std::unique_ptr<VfxWorld> world_;
         RenderTextureHandle color_;
         VfxGpuPreparationReceipt receipt_;
         VfxGpuStepIdentity step_;
+        RenderTimelinePoint completion_;
         std::uint64_t snapshot_{}, frame_{};
     };
+
+    /** @brief Retains original unavailable-device evidence and distinguishes absent compute from a qualification failure. */
+    void InitializeCompute(NativeOwner &owner) {
+        const auto initialized = owner.Initialize(false);
+        if (initialized.HasError()) {
+            const auto &error = initialized.ErrorValue();
+            const auto &code = error.code.Value();
+            if (code == "render.test.system_loader_unavailable" || code == "render.vulkan.loader_version_unsupported" ||
+                code == "render.vulkan.adapter_not_found" || code == "render.vulkan.adapter_requirements_unsupported")
+                SKIP(code << ": " << error.message);
+        }
+        Accepted(initialized);
+        REQUIRE_FALSE(owner.frontend->Capabilities().support.synthetic);
+        if (!owner.frontend->Capabilities().support.features.Supports(RenderCapability::VfxGpuSimulation))
+            SKIP(VfxErrors::UnsupportedCapability.code.Value() << ": selected native device has no qualified VFX compute support");
+    }
 
     TEST_CASE("Vulkan actual registered backend executes genuine PreparedParticles compute draw and normalized CPU parity",
               "[integration][renderer][vulkan][gpu][vfx]") {
         const auto package = Package();
         if (package.empty() || !std::filesystem::is_directory(package))
             SKIP("Genuine portable Vulkan cooked fixture is absent; no runtime cooking or native substitute.");
+        std::span<const CpuParticleForceModule> forces = Forces;
+        SECTION("gravity") {
+            forces = std::span{Forces}.subspan(0, 1);
+        }
+        SECTION("wind") {
+            forces = std::span{Forces}.subspan(1, 1);
+        }
+        SECTION("simple attraction") {
+            forces = std::span{Forces}.subspan(2, 1);
+        }
+        SECTION("ordered composition with noise") {
+            forces = Forces;
+        }
         NativeOwner owner;
-        Accepted(owner.Initialize(false));
+        InitializeCompute(owner);
         REQUIRE(owner.frontend->Capabilities().support.features.Supports(RenderCapability::VfxGpuSimulation));
         REQUIRE(owner.frontend->Capabilities().support.features.Supports(RenderCapability::VfxGpuDraw));
         REQUIRE(owner.frontend->Capabilities().support.features.Supports(RenderCapability::VfxGpuReadback));
         {
-            Unit unit{owner, package};
+            Unit unit{owner, package, forces};
             unit.Prepare();
-            for (unsigned step = 0; step < 2; ++step) {
+            for (unsigned step = 0; step < 12; ++step) {
                 unit.Step();
                 auto result = unit.Observe();
                 unit.CheckOracle(result);
@@ -518,6 +575,48 @@ namespace VulkanVfxGpuSmoke {
             unit.CheckOracle(first);
             unit.RequireFrameAdmissionClosed();
         }
+        Horo::Render::Test::RequireDrainedOwner(*owner.frontend);
+    }
+
+    TEST_CASE("Vulkan high-count VFX meets the versioned native frame budget", "[.][integration][renderer][vulkan][gpu][vfx][vfx-budget]") {
+        const auto package = Package();
+        if (package.empty() || !std::filesystem::is_directory(package))
+            SKIP("render.test.cooked_fixture_unavailable: genuine Vulkan package is absent");
+        const auto *device = std::getenv("HORO_VULKAN_TEST_DEVICE");
+        if (device == nullptr || *device == '\0')
+            SKIP("render.test.adapter_selection_required: set HORO_VULKAN_TEST_DEVICE to the exact device name");
+        constexpr std::uint32_t particles = 65'536;
+        constexpr unsigned warmup = 8;
+        constexpr unsigned samples = 64;
+        constexpr double budgetMilliseconds = 16.667;
+        constexpr float deltaSeconds = 1.0F / 60.0F;
+        NativeOwner owner;
+        InitializeCompute(owner);
+        std::array<double, samples> milliseconds{};
+        {
+            Unit unit{owner, package, std::span{Forces}.first(3), particles};
+            unit.Prepare(false);
+            for (unsigned step = 0; step < warmup + samples; ++step) {
+                const auto started = std::chrono::steady_clock::now();
+                unit.Step(false, deltaSeconds);
+                unit.Complete();
+                const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+                if (step >= warmup)
+                    milliseconds[step - warmup] = elapsed;
+            }
+            const auto diagnostics = Value(owner.frontend->GpuReadbackDiagnostics());
+            CHECK(diagnostics.preparedCpuBytes == 0);
+            CHECK(diagnostics.reservedSlots == 0);
+            CHECK(diagnostics.observationCopyCalls == 0);
+            CHECK(diagnostics.copiedBytes == 0);
+        }
+        std::ranges::sort(milliseconds);
+        const auto p95 = milliseconds[60];
+        std::cout << "VFX budgetPolicy=1 backend=vulkan device=" << device << " particles=" << particles
+                  << " forces=gravity,wind,attraction extent=64x64 deltaSeconds=" << deltaSeconds << " warmup=" << warmup
+                  << " samples=" << samples << " metric=CPU-wall-compute-draw-completion p50Ms=" << milliseconds[31] << " p95Ms=" << p95
+                  << " maxMs=" << milliseconds.back() << " budgetP95Ms=" << budgetMilliseconds << '\n';
+        CHECK(p95 <= budgetMilliseconds);
         Horo::Render::Test::RequireDrainedOwner(*owner.frontend);
     }
 }  // namespace VulkanVfxGpuSmoke

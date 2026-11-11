@@ -212,6 +212,50 @@ namespace Horo::Vfx {
         CheckError(ResolveSimulationDomain(capabilities, policy, Request(capabilities, policy, requirements)), VfxErrors::MissingKernel);
     }
 
+    TEST_CASE("Every product tier records the authored CPU substitute when compute is absent or unqualified",
+              "[unit][vfx][quality][gpu-qualification]") {
+        constexpr std::array profiles{VfxQualityProfile::Baseline, VfxQualityProfile::Standard, VfxQualityProfile::High,
+                                      VfxQualityProfile::Ultra};
+        constexpr std::array supportStates{VfxCapabilitySupport::Unsupported, VfxCapabilitySupport::Unknown};
+        for (const auto profile : profiles) {
+            for (const auto support : supportStates) {
+                INFO("profile=" << static_cast<unsigned>(profile) << " compute=" << static_cast<unsigned>(support));
+                auto facts = Facts(false);
+                facts[static_cast<std::size_t>(VfxCapability::GpuSimulation)].support = support;
+                const auto capabilities = VfxCapabilities::Create(CapabilityRevision(), facts, Limits()).Value();
+                const auto policy = Policy(Limits(), 17, profile);
+                auto requirements = Requirements(SimulationPreference::PreferGPU, 2048);
+                requirements.hasCpuKernel = false;
+                requirements.minimumAuthoredCount = 512;
+                VfxFallbackVariant fallback{.stableId = 73,
+                                            .category = VfxEffectCategory::Particle,
+                                            .degradation = VfxDegradation::CompatibleCpu,
+                                            .domain = ResolvedSimulationDomain::CPU,
+                                            .selectedCount = 512,
+                                            .bytesPerElement = 64,
+                                            .workMilliseconds = 4.0};
+                const auto resolve = [&] {
+                    return ResolveSimulationDomain(capabilities, policy, Request(capabilities, policy, requirements, {&fallback, 1}));
+                };
+                const auto selected = resolve();
+                REQUIRE(selected.HasValue());
+                CHECK(selected.Value().domain == ResolvedSimulationDomain::CPU);
+                CHECK(selected.Value().degradation == VfxDegradation::CompatibleCpu);
+                CHECK(selected.Value().selectedVariantId == 73);
+                CHECK(selected.Value().selectedCount == 512);
+                CHECK(selected.Value().selectedMemoryBytes == 512 * 64);
+                CHECK(selected.Value().capabilityRevision == capabilities.Revision());
+                CHECK(selected.Value().policyRevision == policy.Revision());
+
+                fallback.workMilliseconds = 4.0001;
+                CheckError(resolve(), VfxErrors::MissingVariant);
+                fallback.workMilliseconds = 4.0;
+                requirements.preference = SimulationPreference::RequireGPU;
+                CheckError(resolve(), VfxErrors::MissingVariant);
+            }
+        }
+    }
+
     TEST_CASE("Every effect category accepts its exact limit and rejects one beyond", "[unit][vfx][quality]") {
         const auto capabilities = Capabilities();
         const auto policy = Policy();
