@@ -118,7 +118,8 @@ namespace Horo::Runtime {
          * @param lease Exact live override lease. @param from Current source in the same scene epoch.
          * @param to Current destination in the same scene epoch, including its discontinuity revision.
          * @param weight Finite destination weight in [0,1].
-         * @return Success or typed invalid lease/target/unsupported/incompatible transition, without partial replacement. */
+         * @return Success or typed invalid lease/target, stale scene revision, unsupported or incompatible transition,
+         * without partial replacement. */
         [[nodiscard]] Result<void> SubmitBlend(const CameraOverrideLease &lease, const CameraProposal &from, const CameraProposal &to,
                                                float weight);
         /** @brief Retains a live lease while removing its current proposal before first-key/end-policy handoff.
