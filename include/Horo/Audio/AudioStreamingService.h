@@ -263,7 +263,7 @@ namespace Horo::Audio {
                                                                  const AudioStreamRequest &request);
         /**
          * @brief Makes a verified, prefetched replacement eligible for a new callback port on control.
-         * @param previous Still-live exact predecessor identity.
+         * @param previous Still-live, non-stopped exact predecessor identity; completed worker failures are reconciled before admission.
          * @param candidate Candidate returned by StageReplacement for this predecessor.
          * @return Success only after lookahead or a complete short stream is available; failures preserve the predecessor.
          * @details Does not retarget any existing port or release media. The voice owner explicitly publishes a new port.

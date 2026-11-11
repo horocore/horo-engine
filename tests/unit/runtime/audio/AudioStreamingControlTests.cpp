@@ -115,6 +115,29 @@ namespace Horo::Audio::StreamingTests {
         CHECK(service->Snapshot().budgetRejections == 1);
     }
 
+    TEST_CASE("Stopped predecessor rejects late stream replacement publication", "[unit][audio][streaming][reload]") {
+        JobSystem jobs({.workerCount = 1});
+        PackageFixture old;
+        auto service = Service(jobs, old);
+        const auto previous = service->Admit(Request()).Value();
+        auto port = std::move(service->RenderPort(previous)).Value();
+        REQUIRE(PumpUntil(*service, previous, 4));
+        auto generation = std::make_shared<PackageFixture>();
+        const auto candidate =
+            service->StageReplacement(previous, {BorrowedCallbackContext{generation.get()}, &Open, generation}, Request()).Value();
+        REQUIRE(PumpUntil(*service, candidate, 4));
+        REQUIRE(service->Stop(previous).HasValue());
+        const auto committed = service->CommitReplacement(previous, candidate);
+        REQUIRE(committed.HasError());
+        CHECK(committed.ErrorValue().code.Value() == AudioErrors::HandleStale.code.Value());
+        CHECK(service->RenderPort(candidate).HasError());
+        CallbackBlock output;
+        CHECK(output.Render(port, 2).stopped);
+        CHECK(old.releases.load() == 0);
+        REQUIRE(service->Retire(candidate).HasValue());
+        REQUIRE(service->Retire(previous).HasValue());
+    }
+
     TEST_CASE("Stream replacement preserves active old media through prepare failure and publication", "[unit][audio][streaming][reload]") {
         JobSystem jobs({.workerCount = 1});
         PackageFixture old;

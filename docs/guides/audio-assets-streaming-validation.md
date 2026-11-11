@@ -43,6 +43,12 @@ for an explicitly selected fade/restart and eventual callback detachment. Candid
 cancellation and failure preserve the old stream. No extra registry, publication
 cache or scheduler is introduced.
 
+Stage and commit both reconcile completed predecessor work and require that exact
+predecessor to remain active. Stopping, cancellation or worker failure during
+candidate preparation closes replacement publication, even if the old handle is
+still retained for safe callback retirement. The late-commit regression verifies
+that the unpublished candidate remains ineligible for a render port.
+
 Starvation causes are current control observations, not retrospective attribution.
 The callback publishes only bounded counters and PCM consumption; control reads
 snapshots and rate-limited reports. Scheduler rejection counts rejected work, not

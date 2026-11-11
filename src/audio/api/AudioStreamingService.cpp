@@ -21,6 +21,8 @@ namespace Horo::Audio {
         std::uint64_t generation{1};
         /** @brief Reaps a proved terminal job; returns whether its storage is still in use. */
         bool Reap();
+        /** @brief Reconciles completed work before admitting replacement of an active predecessor. */
+        bool CanReplace();
         /** @brief Tests whether this idle stream needs a prioritized lookahead fill. */
         bool NeedsFill() const;
         /** @brief Selects the highest-priority eligible slot, retaining stable ties. */
@@ -334,7 +336,7 @@ namespace Horo::Audio {
     Result<AudioStreamHandle> AudioStreamingService::StageReplacement(const AudioStreamHandle previous, AudioStreamPackageSource source,
                                                                       const AudioStreamRequest &request) {
         const auto *old = Find(previous);
-        if (!old || old->staged || old->failed || old->cancelled || old->stopped.load())
+        if (!old || !slots_[previous.slot - 1].CanReplace())
             return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::HandleStale));
         if (old->request.asset != request.asset || old->request.decoder.outputFormat != request.decoder.outputFormat ||
             !source.context.IsValid() || source.open == nullptr || !source.ownerLease)
@@ -350,7 +352,7 @@ namespace Horo::Audio {
 
     /** @copydoc AudioStreamingService::CommitReplacement */
     Result<void> AudioStreamingService::CommitReplacement(const AudioStreamHandle previous, const AudioStreamHandle candidate) {
-        if (!Find(previous))
+        if (!Find(previous) || !slots_[previous.slot - 1].CanReplace())
             return Result<void>::Failure(MakeError(AudioErrors::HandleStale));
         auto *state = Find(candidate);
         if (!state || !state->staged || state->replacementOf != previous)
@@ -460,6 +462,13 @@ namespace Horo::Audio {
         }
         fill.reset();
         return false;
+    }
+
+    /** @copydoc AudioStreamingService::Slot::CanReplace */
+    bool AudioStreamingService::Slot::CanReplace() {
+        (void)Reap();
+        return state && !state->staged && !state->failed && !state->cancelled && !state->stopped.load() &&
+               !state->cancellation.Token().IsCancellationRequested();
     }
 
     /** @copydoc AudioStreamingService::Slot::NeedsFill */
