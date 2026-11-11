@@ -5,7 +5,9 @@ initiative. An entry remains incomplete until its integrated acceptance criteria
 and required platform evidence exist. Existing Runtime UI semantic tests do not
 qualify native assistive technology.
 
-Baseline: `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`. GitHub and Jira bodies
+Original baseline: `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`.
+Current local parent: `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08` (C11 admission
+fixture correction), supplied by the main coordinator before its origin push. GitHub and Jira bodies
 were read on 2026-11-11; all seven implementation children were Open / To Do.
 ACC-001.1 / HORO-1805 is already delivered and is not reimplemented.
 
@@ -205,12 +207,15 @@ No branch push or pull request has been performed.
 
 | Slice | Local commit |
 |---|---|
-| Caption transport/settings/layout | `e9569d27e`, `46f566e78` |
-| Color query/reference transforms | `976045472` |
-| Input affordance state and neutral-boundary fix | `18eb491a2`, `354147029` |
-| UI and visual safety preferences | `0f2941c69` |
-| Bridge capability and semantic journal | `ea116ea8e` |
-| Gameplay preference snapshots and revision hints | `821018e75` |
+| Caption transport/settings/layout | `8d4dd2b2a`, `2a478e471` |
+| Color query/reference transforms | `22e402137` |
+| Input affordance state and neutral-boundary fix | `21823b65b`, `8b4329747` |
+| UI and visual safety preferences | `1a6aff479` |
+| Bridge capability and semantic journal | `cca891531` |
+| Gameplay preference snapshots and revision hints | `293d86528` |
+| Contrast evaluator / qualification matrix | `929b465e7` |
+| Exact semantic publication QA journal check | `456758017` |
+| Editor contrast workspace panel | `bd5e7134a` |
 
 The tooling slice also corrects the semantic journal header registration, so the
 canonical Runtime UI public-header consumer includes that new public contract.
@@ -236,3 +241,14 @@ They require the GUI test composition; headless skeleton configuration alone
 cannot run them. Compilation, execution and manual popup/focus interaction remain
 pending. A lightweight paired-catalog Python check plus the SDK metadata tests
 completed with **25 passed** after the panel integration.
+
+## Local parent integration
+
+The coordinator explicitly authorized rebasing onto the unpublished local parent
+`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`. The clean-worktree rebase replayed all
+12 ACC commits without conflicts. `git range-diff` against the previous stack at
+`cc109b4b3` showed every patch unchanged (`=` for all 12 entries). The paired-copy
+and offline SDK metadata tests repeated after rebase: **25 passed**. Native ACC
+compilation, GUI interaction and full local quality analysis remain unexecuted.
+No heavy slot was granted by that integration message; the main regression queue
+retains priority. No remote fetch or push was used to locate the local parent.
