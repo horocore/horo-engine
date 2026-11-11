@@ -1,8 +1,37 @@
 # Input System Qualification
 
-This matrix tracks INP-001.6, INP-001.7 and INP-001.8 against the integrated
-INP-001 capability. The delivery base is `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`.
+This matrix tracks all eight INP-001 children against the integrated capability.
+The delivery base is `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`.
 Source/test coverage and executed qualification are recorded independently.
+
+## Full Capability Audit
+
+The 2026-11-11 audit read the live GitHub parent/sub-issue relationships and Jira
+summaries/statuses. A closed issue, existing source or clean worktree does not
+qualify the current integrated build. No issue or workflow state was changed.
+
+| Child | Existing implementation or decision evidence | Remaining qualification |
+|---|---|---|
+| INP-001.1 / #1834 / HORO-1790 | `input-layer-ownership.md` records the ratified collector/snapshot/router, context, modal and bus boundaries; original delivery `286d9003c` | Preserve these contracts through the integrated regression pass |
+| INP-001.2 / #1835 / HORO-1791 | Typed conflict validation in `Input.cpp`, required-action checks and Settings authoring rejection | Run current map/profile/conflict tests after final edits |
+| INP-001.3 / #1836 / HORO-1792 | Central `EditorModalHost`/`GuiScreenHost` dispatch gating and context/capture cancellation tests | Run current editor/runtime modal, focus and capture matrices |
+| INP-001.4 / #1837 / HORO-1793 | Focused text delivery, composition retirement, SDL window filtering and text-input-area hooks | Run headless adapter suites; native IME and supported-OS interaction evidence remains external |
+| INP-001.5 / #1838 / HORO-1794 | Recorded command/cadence tests; workspace `OnInputSnapshot` captures routed values and fixed callbacks consume tick commands | Run current replay/catch-up and workspace lifecycle tests |
+| INP-001.6 / #1839 / HORO-1795 | Shared typed capture, complete scoped per-action edits, layered recovery and atomic persistence | Compile and run current core, Settings and Input Mapping regressions |
+| INP-001.7 / #1840 / HORO-1796 | Generation-safe collector/SDL lifecycle, mixed ownership, canonical/raw devices, mapping/glyph fallback and rumble capability boundary | Run current core/SDL/Runtime UI suites; physical-device evidence remains external |
+| INP-001.8 / #1841 / HORO-1797 | This matrix, public consumers, allocation/lifecycle coverage and ACC-001 readiness evidence | Complete integrated execution, final local quality checks and remaining OS/device evidence |
+
+GitHub children .1 through .5 were closed at audit time. Jira .1/.2 were Done,
+while .3/.4/.5 remained In Review. Both systems still had .6/.7/.8 open or To Do.
+These workflow differences are recorded as delivery metadata, not test evidence.
+
+The source audit found no `DataBus`, `EngineDataBus` or `EditorDataBus` reference
+in `src/runtime/input` or its public `Input.h` contract. `HoroInput` links
+Foundation and the private JSON parser; it has no editor dependency or bus
+injection point. The normative collector prohibition and dependency/public-header
+reviews are the enforcement approach; this audit does not claim a dedicated
+automated bus-exclusion test. The workspace fixed callbacks consume only the
+already captured `GameplayInputFrame`; no new raw-device access was introduced.
 
 ## Executable Coverage
 
