@@ -314,6 +314,12 @@ namespace Horo::Cli {
                 diagnostics.Add("cli.option_unknown", "Unknown option.", index);
                 return;
             }
+            if (descriptor->sensitive) {
+                diagnostics.Add("cli.sensitive_argument_forbidden", "Sensitive values require a protected credential channel.", index);
+                if (!inlineValue.has_value() && index + 1 < arguments.size() && arguments[index + 1] != "--")
+                    ++index;
+                return;
+            }
             ParseOptionValue(arguments, index, inlineValue, *FindState(states, descriptor), diagnostics, normalizer);
         }
 

@@ -293,6 +293,39 @@ namespace Horo::Cli {
         REQUIRE(parsed.ErrorValue().diagnostics.size() == 2);
     }
 
+    TEST_CASE("CLI parser rejects sensitive argv before normalization or stdin reads", "[unit][cli][parser][security]") {
+        auto descriptor = Descriptor();
+        descriptor.options.push_back({.name = "credential",
+                                      .shortName = 's',
+                                      .summary = "Protected credential input.",
+                                      .valueKind = CliOptionValueKind::Path,
+                                      .sensitive = true});
+        descriptor.stdinPolicy = CliStdinPolicy::JsonDocument;
+        const auto registry = Registry(descriptor);
+        TestPathNormalizer paths;
+        TestInputReader input;
+        input.payload = Bytes("{}");
+        const std::array<std::vector<std::string_view>, 4> cases{{{"--credential", "fake-cli-secret-731"},
+                                                                  {"--credential=fake-cli-secret-731"},
+                                                                  {"-s", "fake-cli-secret-731"},
+                                                                  {"-s=fake-cli-secret-731"}}};
+        for (const auto &suffix : cases) {
+            std::vector<std::string_view> arguments{"project", "validate", "--count", "2"};
+            arguments.insert(arguments.end(), suffix.begin(), suffix.end());
+            const auto parsed = CliOptionParser::Parse(arguments, registry,
+                                                       {.pathNormalizer = &paths,
+                                                        .inputReader = &input,
+                                                        .stdinSelected = true,
+                                                        .selectedStdinPolicy = CliStdinPolicy::JsonDocument});
+            RequireError(parsed, CliErrors::ParseFailed);
+            REQUIRE(parsed.ErrorValue().diagnostics.size() == 1);
+            REQUIRE(parsed.ErrorValue().diagnostics.front().code.Value() == "cli.sensitive_argument_forbidden");
+            REQUIRE(parsed.ErrorValue().diagnostics.front().message.find("fake-cli-secret-731") == std::string::npos);
+        }
+        REQUIRE(paths.calls == 0);
+        REQUIRE(input.calls == 0);
+    }
+
     TEST_CASE("CLI shared options have one deterministic backend-neutral schema", "[unit][cli][parser]") {
         const auto common = CliOptionParser::CommonOptions();
         REQUIRE(common.size() == 4);

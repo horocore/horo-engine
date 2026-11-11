@@ -143,17 +143,20 @@ namespace Horo::Application::Internal {
             /** @brief Calls the same diagnostic bundle service used by other application hosts. */
             Result<Cli::CliCommandResult> BundleResult(const Cli::CliCommandRequest &request, Cli::CliExecutionContext &context) const {
                 const auto option = std::ranges::find(request.options, "output-path", &Cli::CliParsedOption::name);
-                if (option == request.options.end() || option->values.empty())
+                if (option == request.options.end() || option->values.size() != 1 ||
+                    option->values.front().source != Cli::CliValueSource::Invocation)
                     return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::ParseFailed));
                 const auto *path = std::get_if<Cli::CliPathValue>(&option->values.front().value);
                 if (path == nullptr)
                     return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::ParseFailed));
+                const auto outputPath = std::filesystem::path{std::u8string{path->value.begin(), path->value.end()}};
+                if (const auto destination = Diagnostics::ValidateDiagnosticBundleDestination(outputPath); destination.HasError())
+                    return Result<Cli::CliCommandResult>::Failure(destination.ErrorValue());
                 if (const auto progress =
                         context.ReportProgress({.phase = "bundle", .completion = 0.0F, .message = "Collecting diagnostics"});
                     progress.HasError())
                     return Result<Cli::CliCommandResult>::Failure(progress.ErrorValue());
-                const auto result = session_->GenerateDiagnosticBundle(
-                    {.outputPath = std::filesystem::path{std::u8string{path->value.begin(), path->value.end()}}});
+                const auto result = session_->GenerateDiagnosticBundle({.outputPath = outputPath});
                 if (result.HasError())
                     return Result<Cli::CliCommandResult>::Failure(result.ErrorValue());
                 return Result<Cli::CliCommandResult>::Success(

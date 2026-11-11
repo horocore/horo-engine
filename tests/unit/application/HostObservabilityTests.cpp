@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 
 namespace {
     class TemporaryDirectory final {
@@ -61,10 +62,14 @@ TEST_CASE("Graphical and headless hosts share one deterministic observability li
     REQUIRE(editor != nullptr);
     REQUIRE(Horo::Application::HostObservabilitySession::Start(MakeConfiguration(temporary.path, "cli")) == nullptr);
     Horo::Log::Logger::Write("Editor.Project", Horo::Log::Level::Info, "editor lifecycle");
-    {
+    const auto acceptedBefore = Horo::Log::Logger::Statistics().acceptedRecords;
+    // Completion describes the operation. The nonblocking telemetry queue can reject its diagnostic record.
+    for (unsigned attempt = 0; attempt < 1000 && Horo::Log::Logger::Statistics().acceptedRecords == acceptedBefore; ++attempt) {
         Horo::Telemetry::OperationSpan operation{"Editor.Project", "Project.Validate"};
         REQUIRE(operation.Complete(Horo::Telemetry::SpanStatus::Succeeded));
+        std::this_thread::yield();
     }
+    REQUIRE(Horo::Log::Logger::Statistics().acceptedRecords > acceptedBefore);
     editor.reset();
     REQUIRE(std::filesystem::is_regular_file(temporary.path / "test-host.shutdown.json"));
     const auto history = temporary.path / "operations" / "test-host.jsonl";
@@ -134,4 +139,25 @@ TEST_CASE("Invalid host composition fails without leaving an active runtime", "[
     configuration.logging.baseName.clear();
     REQUIRE(Horo::Application::HostObservabilitySession::Start(std::move(configuration)) == nullptr);
     REQUIRE_FALSE(Horo::Telemetry::Runtime::IsEnabled());
+}
+
+TEST_CASE("Host bundle rejects its destination before collecting summaries", "[application][observability][host][bundle][security]") {
+    Horo::Log::Logger::Shutdown();
+    TemporaryDirectory temporary;
+    static unsigned summaryCalls{};
+    summaryCalls = 0;
+    auto configuration = MakeConfiguration(temporary.path, "cli");
+    configuration.summaries.push_back([](std::span<const std::filesystem::path>) {
+        ++summaryCalls;
+        return Horo::Result<std::pair<std::string, std::string>>::Success({"test.summary", "safe"});
+    });
+    auto session = Horo::Application::HostObservabilitySession::Start(std::move(configuration));
+    REQUIRE(session != nullptr);
+    const auto rejected = session->GenerateDiagnosticBundle({.outputPath = "relative.zip"});
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == "observability.bundle.invalid_request");
+    CHECK(summaryCalls == 0);
+    const auto accepted = session->GenerateDiagnosticBundle({.outputPath = temporary.path / "support.zip"});
+    REQUIRE(accepted.HasValue());
+    CHECK(summaryCalls == 1);
 }

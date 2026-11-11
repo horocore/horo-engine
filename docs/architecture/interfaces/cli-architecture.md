@@ -737,6 +737,22 @@ Arguments are redacted before logging. Diagnostic bundles may include the safe
 effective command configuration but not credentials or arbitrary environment
 variables.
 
+The parser rejects ordinary argv values for any option marked `sensitive`.
+This closes the previous path that retained such values in a typed request.
+Production commands declare no sensitive argv options. Credential-consuming
+adapters must migrate to protected provider inputs when CFG-001.6 supplies the
+Configuration reference contract. Sensitive positionals, defaults and ordinary
+configuration bindings remain rejected at registry admission.
+
+Diagnostic export requires an invocation-owned output destination. The CLI
+calls Foundation's `ValidateDiagnosticBundleDestination` before reporting
+collection progress. HostObservability repeats that check before collecting
+summaries, and the existing producer checks again before filesystem mutation.
+An occupied output or temporary output is an invalid request. Callers retry
+with a fresh destination or resolve their owned staging artifact. This
+additive API preserves the existing Foundation header ownership and export
+allowlist. It performs no destination reservation against concurrent changes.
+
 ## Migration from Legacy Ad-Hoc Parsing
 
 The migration path removes legacy ad-hoc parsing in `apps/horo-engine/main.cpp`

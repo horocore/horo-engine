@@ -85,7 +85,7 @@ namespace Horo::Cli {
         CliOptionValueKind valueKind{};              /**< Typed value grammar. */
         bool required{};                             /**< Whether callers must provide the option. */
         bool repeatable{};                           /**< Whether more than one occurrence is accepted. */
-        bool sensitive{};                            /**< Whether presentation layers must redact its value. */
+        bool sensitive{};                            /**< Protected-channel input only. Ordinary argv values are rejected. */
         std::optional<std::string> defaultValue;     /**< Canonical default spelling, when present. */
         std::vector<std::string> enumerationValues;  /**< Closed value set for `Enumeration` options. */
         CliNumericRange numericRange;                /**< Optional range for numeric values. */
