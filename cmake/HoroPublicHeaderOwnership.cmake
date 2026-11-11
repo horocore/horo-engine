@@ -32,6 +32,11 @@ horo_configure_target_header_boundary(HoroVisualAccessibility PUBLIC_HEADERS
     Horo/Accessibility/VisualSafety.h
 )
 
+horo_configure_target_header_boundary(HoroPlatformAccessibility PUBLIC_HEADERS
+    Horo/Platform/AccessibilityBridge.h
+    Horo/Platform/AccessibilitySettings.h
+)
+
 horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/FoundationErrorDomains.h
     Horo/Foundation/AssetCookTargetId.h

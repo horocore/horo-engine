@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Ui/UiAccessibilityChanges.h"
+#include "Horo/Runtime/Ui/UiAccessibilityReview.h"
 #include "Horo/Runtime/Ui/UiCaptionSettings.h"
 #include "Horo/Runtime/Ui/UiCaptions.h"
 #include "Horo/Runtime/Ui/UiVisualAccessibility.h"

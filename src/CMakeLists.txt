@@ -21,6 +21,12 @@ add_library(HoroEngine::VisualAccessibility ALIAS HoroVisualAccessibility)
 target_compile_features(HoroVisualAccessibility PUBLIC cxx_std_20)
 target_link_libraries(HoroVisualAccessibility PUBLIC HoroEngine::Foundation)
 
+# Optional adapter boundary; the baseline Platform target acquires no UI dependency.
+add_library(HoroPlatformAccessibility STATIC platform/NullAccessibilityBridge.cpp platform/AccessibilitySettings.cpp)
+add_library(HoroEngine::PlatformAccessibility ALIAS HoroPlatformAccessibility)
+target_compile_features(HoroPlatformAccessibility PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformAccessibility PUBLIC HoroEngine::Foundation HoroEngine::RuntimeUi)
+
 target_compile_features(HoroFoundation PUBLIC cxx_std_20)
 target_compile_definitions(HoroFoundation PUBLIC HORO_ENABLE_TELEMETRY=$<BOOL:${HORO_ENABLE_TELEMETRY}>)
 target_include_directories(HoroFoundation
@@ -761,6 +767,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiDiagnostics.cpp
         runtime/ui/UiDiagnosticDescriptors.cpp
         runtime/ui/UiAccessibility.cpp
+        runtime/ui/UiAccessibilityReview.cpp
         runtime/ui/UiAccessibilityReading.cpp
         runtime/ui/UiAccessibilityInteraction.cpp
         runtime/ui/UiAccessibilityChanges.cpp
