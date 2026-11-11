@@ -15,6 +15,7 @@ target_compile_features(HoroCaptionTransport INTERFACE cxx_std_20)
 add_library(HoroVisualAccessibility STATIC
         runtime/accessibility/VisualAccessibility.cpp
         runtime/accessibility/VisualAccessibilitySettings.cpp
+        runtime/accessibility/VisualSafetySettings.cpp
 )
 add_library(HoroEngine::VisualAccessibility ALIAS HoroVisualAccessibility)
 target_compile_features(HoroVisualAccessibility PUBLIC cxx_std_20)
@@ -736,6 +737,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiLocalization.cpp
         runtime/ui/UiCaptions.cpp
         runtime/ui/UiCaptionSettings.cpp
+        runtime/ui/UiVisualAccessibility.cpp
         runtime/ui/UiElementPresentation.cpp
         runtime/ui/UiElementAuthoringProjection.cpp
         runtime/ui/UiStyleAssetValidation.cpp

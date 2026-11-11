@@ -29,6 +29,7 @@ horo_configure_target_header_boundary(HoroCaptionTransport PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroVisualAccessibility PUBLIC_HEADERS
     Horo/Accessibility/VisualAccessibility.h
+    Horo/Accessibility/VisualSafety.h
 )
 
 horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
@@ -362,6 +363,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiAccessibilityChanges.h
       Horo/Runtime/Ui/UiCaptions.h
       Horo/Runtime/Ui/UiCaptionSettings.h
+      Horo/Runtime/Ui/UiVisualAccessibility.h
     Horo/Runtime/Ui/UiIdentity.h
     Horo/Runtime/Ui/UiBinding.h
     Horo/Runtime/Ui/UiBindingStore.h

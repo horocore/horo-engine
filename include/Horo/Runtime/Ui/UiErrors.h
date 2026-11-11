@@ -8,6 +8,8 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::Runtime::Ui::UiErrors {
+    /** @brief UI visual preferences or typography projection violate finite readable bounds. */
+    extern const ErrorCodeDescriptor VisualAccessibilityInvalid;
     /** @brief Caption session, catalog, appearance or presentation input is malformed. */
     extern const ErrorCodeDescriptor CaptionInvalid;
     /** @brief Caption setup could not reserve its bounded owned storage. */

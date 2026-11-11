@@ -231,6 +231,7 @@ add_test(NAME HoroInputAccessibilityPublicHeaderConsumer COMMAND HoroInputAccess
 set_tests_properties(HoroInputAccessibilityPublicHeaderConsumer PROPERTIES LABELS "unit;input;accessibility;headless;public_headers")
 add_executable(HoroVisualAccessibilityTests
         unit/runtime/VisualAccessibilityTests.cpp
+        unit/runtime/VisualSafetyTests.cpp
 )
 target_link_libraries(HoroVisualAccessibilityTests PRIVATE HoroEngine::VisualAccessibility)
 horo_register_catch_test(HoroVisualAccessibilityTests LABELS "unit;accessibility;headless")
@@ -4933,6 +4934,7 @@ add_executable(HoroRuntimeUiDiagnosticsTests
 target_compile_features(HoroRuntimeUiDiagnosticsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiDiagnosticsTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiAccessibilityTests
+        unit/runtime/ui/UiVisualAccessibilityTests.cpp
         unit/runtime/ui/UiCaptionTests.cpp
         unit/runtime/ui/UiAccessibilityTests.cpp
         unit/runtime/ui/UiAccessibilityChangesTests.cpp
