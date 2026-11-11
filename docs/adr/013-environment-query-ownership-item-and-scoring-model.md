@@ -250,6 +250,7 @@ are downstream acceptance requirements, not tests implemented by this ADR-only P
   dependencies or chooses an inappropriate accuracy/cache-reuse policy.
 - **Guaranteed physical interruption of every provider job**: Not implementable for
   all providers; cooperative cancellation and safe result suppression are required.
+
 ## Owner-driven adaptive execution
 
 `Horo/AI/EnvironmentQueryExecution.h` admits a single-generator query with

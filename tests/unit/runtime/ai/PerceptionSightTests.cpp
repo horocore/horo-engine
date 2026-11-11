@@ -128,15 +128,17 @@ namespace Horo::AI {
         }
 
 #if HORO_TEST_PHYSICS_NATIVE
-        TEST_CASE("EQS Physics probes preserve blocking evidence and retire stale or cancelled work", "[unit][ai][sight][eqs]") {
+        /** @brief Captures the exact Physics test world publication. */
+        QueryPhysicsPublication ProbePublication(const SightWorld &physics) {
+            const auto tick = physics.world->PublishedTick();
+            return {physics.capability.Identity(), 7, tick.publicationRevision, tick.completedTick};
+        }
+
+        TEST_CASE("EQS Physics ray and capsule probes preserve blocking evidence", "[unit][ai][sight][eqs]") {
             SightWorld physics;
             const auto fixture = physics.Box(-5);
             physics.Advance();
-            const auto tick = physics.world->PublishedTick();
-            const QueryPhysicsPublication publication{.identity = physics.capability.Identity(),
-                                                      .sceneGeneration = 7,
-                                                      .revision = tick.publicationRevision,
-                                                      .completedTick = tick.completedTick};
+            const auto publication = ProbePublication(physics);
             const auto stage = QueryStageId::Create(1).Value();
             const Physics::PhysicsRayQuery ray{.origin = {0, 0, 0}, .maximumDistanceMeters = 10};
             Physics::PhysicsQueryFilter filter{.channel = VisibilityChannel()};
@@ -171,7 +173,20 @@ namespace Horo::AI {
             REQUIRE(clear.Value().has_value());
             CHECK(clear.Value()->filter == true);
             CHECK(clear.Value()->metric == 1.0);
+        }
 
+        TEST_CASE("EQS Physics probe releases backpressure and retires stale or cancelled work", "[unit][ai][sight][eqs]") {
+            SightWorld physics;
+            const auto publication = ProbePublication(physics);
+            const auto stage = QueryStageId::Create(1).Value();
+            const Physics::PhysicsRayQuery ray{.origin = {0, 0, 0}, .maximumDistanceMeters = 10};
+            const Physics::PhysicsQueryFilter filter{.channel = VisibilityChannel()};
+            QueryPhysicsProbe probe;
+            REQUIRE(probe.Start(physics.capability, publication, stage, ray, filter).Value());
+            QueryPhysicsProbe competing;
+            CHECK_FALSE(competing.Start(physics.capability, publication, stage, ray, filter).Value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            REQUIRE(probe.Poll(publication).Value().has_value());
             REQUIRE(competing.Start(physics.capability, publication, stage, ray, filter).Value());
             auto replaced = publication;
             ++replaced.identity.capabilityGeneration;
