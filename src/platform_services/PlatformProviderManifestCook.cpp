@@ -1,5 +1,6 @@
 #include "Horo/PlatformServices/PlatformProviderManifestCook.h"
 
+#include "Horo/Foundation/Utf8.h"
 #include "PlatformDefinitionRegistryDetail.h"
 
 #include <algorithm>
@@ -103,9 +104,9 @@ namespace Horo::PlatformServices {
 
         [[nodiscard]] Result<void> CheckMappingRow(const PlatformProviderManifestCookInput &input, const PlatformProviderId selected,
                                                    const PlatformCookMapping &row) {
-            if (row.source.empty() || row.source.size() > MaximumSourceBytes)
+            if (row.source.empty() || row.source.size() > MaximumSourceBytes || !IsValidUtf8ScalarSequence(row.source))
                 return Result<void>::Failure(MakeDiagnostic(PlatformProviderManifestCookErrors::InvalidInput, "mappings.source",
-                                                            "Mapping source must be nonempty and bounded."));
+                                                            "Mapping source must be nonempty, bounded UTF-8."));
             const auto &mapping = row.evidence;
             if (mapping.mappingRevision != input.mappingRevision || mapping.provider != selected ||
                 mapping.registryFingerprint != input.stableIds.Fingerprint())

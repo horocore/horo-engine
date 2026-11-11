@@ -7,12 +7,16 @@
 #include "Horo/Application/ProjectCompatibility.h"
 
 namespace Horo::Application {
-    /** @brief Owned metadata and optional persisted Network source from one strictly parsed root document.
-     * Network source is not admission or completeness proof; its owning codec must validate it before use.
+    /** @brief Owned metadata and optional module authoring sources from one strictly parsed root document.
+     * Captured source is not admission or completeness proof; each owning codec validates it before use.
      */
     struct ProjectSourceDocument final {
         ProjectMetadata metadata;
         std::optional<std::string> networkSettingsSource; /**< Canonical JSON value bytes, or absence without fabricated policy. */
+        std::optional<std::string>
+            platformServicesIdSaltSource; /**< Root-owned JSON value; only the Platform Services codec interprets it. */
+        std::optional<std::string>
+            platformServicesSettingsSource; /**< Project policy JSON value; no host profile or private provider state. */
     };
 
     /** @brief Decodes bounded project source without I/O, migration, service discovery or policy defaults.

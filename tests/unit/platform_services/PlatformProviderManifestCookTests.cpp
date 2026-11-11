@@ -158,6 +158,19 @@ namespace Horo::PlatformServices {
                         fixture.mappings.front().source);
     }
 
+    TEST_CASE("Cook output is independent of diagnostic paths across checkout locations", "[platform-services][manifest-cook]") {
+        Fixture fixture;
+        const auto original = CookPlatformProviderManifest(fixture.Input());
+        REQUIRE(original.HasValue());
+        for (auto &mapping : fixture.mappings)
+            mapping.source = "C:/project data/\xc4\xb0stanbul/private-provider-fixture.mapping";
+        const auto relocated = CookPlatformProviderManifest(fixture.Input());
+        REQUIRE(relocated.HasValue());
+        CHECK(relocated.Value().neutralBytes == original.Value().neutralBytes);
+        CHECK(relocated.Value().mappingBytes == original.Value().mappingBytes);
+        CHECK(relocated.Value().generationFingerprint == original.Value().generationFingerprint);
+    }
+
     TEST_CASE("Cook reports missing mapping at stable source and rejects invalid mapping rows", "[platform-services][manifest-cook]") {
         Fixture fixture;
         fixture.mappings.erase(fixture.mappings.begin());
@@ -167,6 +180,10 @@ namespace Horo::PlatformServices {
         invalid.mappings.front().evidence.id = invalid.retired.storedId;
         CheckFieldError(CookPlatformProviderManifest(invalid.Input()), PlatformProviderManifestCookErrors::InvalidMapping,
                         invalid.mappings.front().source);
+        Fixture invalidEncoding;
+        invalidEncoding.mappings.front().source = std::string(1, static_cast<char>(0xff));
+        CheckFieldError(CookPlatformProviderManifest(invalidEncoding.Input()), PlatformProviderManifestCookErrors::InvalidInput,
+                        "mappings.source");
         Fixture duplicate;
         duplicate.mappings.push_back(duplicate.mappings.front());
         CheckError(CookPlatformProviderManifest(duplicate.Input()), PlatformProviderManifestCookErrors::InvalidMapping);

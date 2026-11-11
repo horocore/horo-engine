@@ -291,6 +291,7 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformProgressionErrors.cpp
         platform_services/PlatformProgressionIdempotency.cpp
         platform_services/PlatformProjectConfiguration.cpp
+        platform_services/PlatformProjectSettings.cpp
         platform_services/PlatformProviderManifestCook.cpp
         platform_services/PlatformRequest.cpp
         platform_services/PlatformRequestCompletion.cpp
@@ -305,11 +306,17 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformStatCacheErrors.cpp
         platform_services/PlatformStatCacheCoordinator.cpp
         platform_services/PlatformStableIdRegistry.cpp
+        platform_services/PlatformStableIdRegistryEncoding.cpp
         platform_services/PlatformUserSession.cpp
 )
 add_library(HoroEngine::PlatformServices ALIAS HoroPlatformServices)
 target_compile_features(HoroPlatformServices PUBLIC cxx_std_20)
-target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEngine::Platform)
+target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEngine::Platform PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroPlatformServicesAuthoring STATIC application/project/PlatformServicesLedgerCodec.cpp)
+add_library(HoroEngine::PlatformServicesAuthoring ALIAS HoroPlatformServicesAuthoring)
+target_compile_features(HoroPlatformServicesAuthoring PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformServicesAuthoring PUBLIC HoroEngine::PlatformServices HoroEngine::Application PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroPackages STATIC
         packages/cache/PackageCache.cpp

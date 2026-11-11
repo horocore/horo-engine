@@ -357,7 +357,14 @@ namespace Horo::Application {
             // inspection must not start rejecting previously ignored settings members.
             network = settings["network"].dump();
         }
-        return Result<ProjectSourceDocument>::Success({std::move(metadata).Value(), std::move(network)});
+        std::optional<std::string> platformSalt;
+        if (parsed.Value().contains("platformServicesIdSalt"))
+            platformSalt = parsed.Value()["platformServicesIdSalt"].dump();
+        std::optional<std::string> platformSettings;
+        if (const auto &settings = parsed.Value()["settings"]; settings.contains("platformServices"))
+            platformSettings = settings["platformServices"].dump();
+        return Result<ProjectSourceDocument>::Success(
+            {std::move(metadata).Value(), std::move(network), std::move(platformSalt), std::move(platformSettings)});
     }
 
     /** @copydoc LoadProjectSourceDocument */

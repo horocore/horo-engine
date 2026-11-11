@@ -1,5 +1,6 @@
 #include "Horo/PlatformServices/PlatformProjectConfiguration.h"
 
+#include "Horo/Foundation/Utf8.h"
 #include "PlatformDefinitionRegistryDetail.h"
 
 #include <algorithm>
@@ -81,9 +82,10 @@ namespace Horo::PlatformServices {
             if (candidate.schemaVersion != PlatformProjectConfigurationSchemaVersion)
                 return Result<void>::Failure(FieldError(PlatformProjectConfigurationErrors::UnsupportedVersion, "schemaVersion",
                                                         "Only Platform Services project configuration schema version 1 is supported."));
-            if (candidate.projectId.empty() || candidate.projectId.size() > limits.maximumProjectIdBytes)
+            if (candidate.projectId.empty() || candidate.projectId.size() > limits.maximumProjectIdBytes ||
+                !IsValidUtf8ScalarSequence(candidate.projectId))
                 return Result<void>::Failure(FieldError(PlatformProjectConfigurationErrors::InvalidConfiguration, "projectId",
-                                                        "Project identity must match the bounded nonempty root project identity."));
+                                                        "Project identity must match the bounded nonempty UTF-8 root project identity."));
             if (!IsKnown(candidate.profile) || !IsKnown(candidate.provider.mode))
                 return Result<void>::Failure(FieldError(PlatformProjectConfigurationErrors::InvalidConfiguration, "profile",
                                                         "Host profile and provider selection mode must be recognized."));

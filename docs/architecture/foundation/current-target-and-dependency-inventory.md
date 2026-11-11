@@ -44,6 +44,18 @@ include directories do not enforce those ownership boundaries, as documented in
 
 ### Foundation, Platform, Application, And Runtime
 
+Platform Services authoring follow-up (2026-11-11):
+`HoroPlatformServicesAuthoring` (`HoroEngine::PlatformServicesAuthoring`) owns
+`Application/PlatformServicesAuthoring.h` and bounded project ledger/policy codecs.
+Its direct public dependencies are PlatformServices and Application; JSON is a
+private dependency. Application retains the canonical root parser and captures
+optional module source values without depending on PlatformServices. The lower
+PlatformServices target owns its canonical ledger encoder/fingerprint and its
+inert Foundation settings contribution; it gains no Application dependency.
+Both targets have generated public-header consumers. Host Settings and migration
+adoption remain tracked in the
+[PLS-003 qualification ledger](../../guides/platform-services-authoring-qualification.md).
+
 Shader reload follow-up (2026-11-01): `HoroShaderHotReload`
 (`HoroEngine::ShaderHotReload`) owns `Application/ShaderHotReloadService.h` and
 the bounded job/mailbox/publication implementation. Its sole direct dependency

@@ -1,11 +1,13 @@
 #include "Horo/PlatformServices/PlatformStableIdRegistry.h"
 
+#include "Horo/Foundation/Utf8.h"
+
 #include <algorithm>
 
 namespace Horo::PlatformServices {
     namespace {
         constexpr std::string_view AlgorithmDomain = "horo.platform-services.stable-id.v1";
-        constexpr std::string_view FingerprintDomain = "horo.platform-services.registry-fingerprint.v1";
+        constexpr std::string_view FingerprintDomain = "horo.platform-services.registry-fingerprint.v2";
         constexpr std::size_t MaxEntries = 4096;
         constexpr std::size_t MaxAliasesPerEntry = 16;
         constexpr std::size_t MaxProjectIdBytes = 128;
@@ -35,16 +37,6 @@ namespace Horo::PlatformServices {
             return std::ranges::all_of(digest.bytes, [](const std::uint8_t byte) {
                 return byte == 0;
             });
-        }
-
-        void AppendUint64(std::vector<std::byte> &bytes, const std::uint64_t value) {
-            for (int shift = 56; shift >= 0; shift -= 8)
-                bytes.push_back(static_cast<std::byte>((value >> shift) & 0xffU));
-        }
-
-        void AppendUint32(std::vector<std::byte> &bytes, const std::uint32_t value) {
-            for (int shift = 24; shift >= 0; shift -= 8)
-                bytes.push_back(static_cast<std::byte>((value >> shift) & 0xffU));
         }
 
         void AppendString(std::vector<std::byte> &bytes, const std::string_view value) {
@@ -78,7 +70,8 @@ namespace Horo::PlatformServices {
 
         [[nodiscard]] bool HasValidEntryShape(const PlatformStableIdDeclaration &entry) noexcept {
             return IsKnown(entry.kind) && IsKnown(entry.state) && IsCanonicalKey(entry.canonicalKey) &&
-                   entry.aliases.size() <= MaxAliasesPerEntry && entry.removalProvenance.size() <= MaxRemovalProvenanceBytes;
+                   entry.aliases.size() <= MaxAliasesPerEntry && entry.removalProvenance.size() <= MaxRemovalProvenanceBytes &&
+                   IsValidUtf8ScalarSequence(entry.removalProvenance);
         }
 
         [[nodiscard]] Result<void> CanonicalizeEntry(PlatformStableIdDeclaration &entry) {
@@ -98,18 +91,40 @@ namespace Horo::PlatformServices {
 
         [[nodiscard]] bool HasValidCandidateMetadata(const PlatformStableIdRegistryCandidate &candidate) noexcept {
             return candidate.schemaVersion == PlatformStableIdRegistrySchemaVersion && !candidate.projectId.empty() &&
-                   candidate.projectId.size() <= MaxProjectIdBytes && candidate.salt.IsValid() && candidate.entries.size() <= MaxEntries;
+                   candidate.projectId.size() <= MaxProjectIdBytes && IsValidUtf8ScalarSequence(candidate.projectId) &&
+                   candidate.entries.size() <= MaxEntries;
         }
 
         [[nodiscard]] Result<void> ValidateNumericIds(const std::vector<PlatformStableIdDeclaration> &entries,
                                                       const PlatformServicesIdSalt &salt) {
-            std::vector<std::uint64_t> numericIds;
+            std::vector<const PlatformStableIdDeclaration *> numericIds;
             numericIds.reserve(entries.size());
             for (const auto &entry : entries)
-                numericIds.push_back(entry.storedId.value);
-            std::ranges::sort(numericIds);
-            if (std::ranges::adjacent_find(numericIds) != numericIds.end())
-                return Result<void>::Failure(MakeError(StableIdErrors::HashCollision));
+                numericIds.push_back(&entry);
+            std::ranges::sort(numericIds, [](const auto *left, const auto *right) {
+                if (left->storedId != right->storedId)
+                    return left->storedId < right->storedId;
+                if (left->kind != right->kind)
+                    return left->kind < right->kind;
+                return left->canonicalKey < right->canonicalKey;
+            });
+            for (std::size_t index = 1; index < numericIds.size(); ++index) {
+                const auto &left = *numericIds[index - 1];
+                const auto &right = *numericIds[index];
+                if (left.storedId != right.storedId)
+                    continue;
+                auto error = MakeError(StableIdErrors::HashCollision,
+                                       std::string{AlgorithmDomain} + " collision at " + FormatPlatformServiceStableId(left.storedId));
+                for (const auto *entry : {&left, &right})
+                    error.diagnostics.push_back({.code = DiagnosticCode{StableIdErrors::HashCollision.code.Value()},
+                                                 .severity = DiagnosticSeverity::Error,
+                                                 .message = "Conflicting kind " + std::to_string(static_cast<unsigned>(entry->kind)) +
+                                                            " primary " + entry->canonicalKey + "; " +
+                                                            std::string{StableIdErrors::HashCollision.remediationHint},
+                                                 .location = {.source = ".horo/platform_services.ids.json"},
+                                                 .path = entry->canonicalKey});
+                return Result<void>::Failure(std::move(error));
+            }
             for (const auto &entry : entries) {
                 const auto derived = DerivePlatformServiceStableId(salt, entry.kind, entry.canonicalKey);
                 if (derived.HasError() || derived.Value() != entry.storedId)
@@ -138,34 +153,23 @@ namespace Horo::PlatformServices {
                     continue;
                 const bool tombstoned =
                     previous.state == PlatformStableIdState::Tombstoned || current.state == PlatformStableIdState::Tombstoned;
-                return Result<void>::Failure(MakeError(tombstoned ? StableIdErrors::Tombstoned : StableIdErrors::DuplicateKey));
+                const auto &descriptor = tombstoned ? StableIdErrors::Tombstoned : StableIdErrors::DuplicateKey;
+                auto error = MakeError(descriptor, "Kind " + std::to_string(static_cast<unsigned>(current.kind)) + " key " +
+                                                       std::string{current.key} + ": " + std::string{descriptor.summary});
+                error.diagnostics.push_back({.code = DiagnosticCode{descriptor.code.Value()},
+                                             .message = std::string{descriptor.remediationHint},
+                                             .location = {.source = ".horo/platform_services.ids.json"},
+                                             .path = std::string{current.key}});
+                return Result<void>::Failure(std::move(error));
             }
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Sha256Digest ComputeRegistryFingerprint(const std::uint32_t schemaVersion, const std::string_view projectId,
-                                                              const std::vector<PlatformStableIdDeclaration> &entries) {
-            std::vector<std::byte> canonical;
-            canonical.reserve(64U + entries.size() * 32U);
-            for (const char character : FingerprintDomain)
-                canonical.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
-            canonical.push_back(std::byte{});
-            AppendUint32(canonical, schemaVersion);
-            for (const char character : AlgorithmDomain)
-                canonical.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
-            canonical.push_back(std::byte{});
-            AppendString(canonical, projectId);
-            for (const auto &entry : entries) {
-                canonical.push_back(static_cast<std::byte>(entry.kind));
-                AppendUint64(canonical, entry.storedId.value);
-                canonical.push_back(static_cast<std::byte>(entry.state));
-                AppendString(canonical, entry.canonicalKey);
-                canonical.push_back(static_cast<std::byte>(entry.aliases.size()));
-                for (const auto &alias : entry.aliases)
-                    AppendString(canonical, alias);
-                AppendString(canonical, entry.removalProvenance);
-            }
-            return ComputeSha256(std::span<const std::byte>{canonical});
+        [[nodiscard]] Sha256Digest ComputeRegistryFingerprint(const std::string_view document) {
+            constexpr std::array separator{std::byte{}};
+            const std::array fragments{std::as_bytes(std::span{FingerprintDomain.data(), FingerprintDomain.size()}),
+                                       std::span<const std::byte>{separator}, std::as_bytes(std::span{document.data(), document.size()})};
+            return ComputeSha256Fragments(fragments);
         }
 
         [[nodiscard]] bool IsValidProviderMapping(const PlatformStableIdRegistry &registry, const PlatformProviderId provider,
@@ -222,7 +226,7 @@ namespace Horo::PlatformServices {
                                                    ErrorCode{"platform.identity.stored_id_mismatch"},
                                                    ErrorSeverity::Error,
                                                    "Stored Platform Services ID does not match deterministic derivation.",
-                                                   "Restore the reviewed project ledger value.",
+                                                   "Restore the matching committed project salt and ledger; never rewrite IDs as a repair.",
                                                    false,
                                                    false};
         const ErrorCodeDescriptor HashCollision{Domain,
@@ -260,6 +264,21 @@ namespace Horo::PlatformServices {
                                                          "Regenerate mappings from the captured registry generation.",
                                                          false,
                                                          false};
+        const ErrorCodeDescriptor StaleReplacement{Domain,
+                                                   ErrorCode{"platform.identity.draft_stale"},
+                                                   ErrorSeverity::Error,
+                                                   "The Platform Services ledger changed after this edit began.",
+                                                   "Reload the current ledger and review the edit before retrying.",
+                                                   false,
+                                                   true};
+        const ErrorCodeDescriptor
+            InvalidTransition{Domain,
+                              ErrorCode{"platform.identity.invalid_transition"},
+                              ErrorSeverity::Error,
+                              "The edit would discard or reinterpret Platform Services identity history.",
+                              "Preserve primaries, aliases and tombstones; use an explicit migration for namespace changes.",
+                              false,
+                              true};
     }  // namespace StableIdErrors
 
     /** @copydoc PlatformServicesIdSalt::IsValid */
@@ -295,11 +314,14 @@ namespace Horo::PlatformServices {
 
     /** @copydoc BuildPlatformStableIdRegistry */
     Result<PlatformStableIdRegistry> BuildPlatformStableIdRegistry(const PlatformStableIdRegistryCandidate &candidate) {
+        if (!candidate.salt.IsValid())
+            return Result<PlatformStableIdRegistry>::Failure(MakeError(StableIdErrors::InvalidSalt));
         if (!HasValidCandidateMetadata(candidate))
             return Result<PlatformStableIdRegistry>::Failure(MakeError(StableIdErrors::InvalidLedger));
 
         PlatformStableIdRegistry registry;
         registry.projectId_ = candidate.projectId;
+        registry.salt_ = candidate.salt;
         registry.entries_ = candidate.entries;
         std::ranges::sort(registry.entries_, [](const auto &left, const auto &right) {
             if (left.kind != right.kind)
@@ -312,12 +334,44 @@ namespace Horo::PlatformServices {
             if (canonicalized.HasError())
                 return Result<PlatformStableIdRegistry>::Failure(canonicalized.ErrorValue());
         }
-        if (const auto numericIds = ValidateNumericIds(registry.entries_, candidate.salt); numericIds.HasError())
-            return Result<PlatformStableIdRegistry>::Failure(numericIds.ErrorValue());
         if (const auto keys = ValidateKeys(registry.entries_); keys.HasError())
             return Result<PlatformStableIdRegistry>::Failure(keys.ErrorValue());
-        registry.fingerprint_ = ComputeRegistryFingerprint(candidate.schemaVersion, registry.projectId_, registry.entries_);
+        if (const auto numericIds = ValidateNumericIds(registry.entries_, candidate.salt); numericIds.HasError())
+            return Result<PlatformStableIdRegistry>::Failure(numericIds.ErrorValue());
+        const auto document = registry.CanonicalDocument();
+        if (document.HasError())
+            return Result<PlatformStableIdRegistry>::Failure(document.ErrorValue());
+        registry.fingerprint_ = ComputeRegistryFingerprint(document.Value());
         return Result<PlatformStableIdRegistry>::Success(std::move(registry));
+    }
+
+    /** @copydoc BuildPlatformStableIdRegistryReplacement */
+    Result<PlatformStableIdRegistry> BuildPlatformStableIdRegistryReplacement(const PlatformStableIdRegistry &previous,
+                                                                              const Sha256Digest &baseFingerprint,
+                                                                              const PlatformStableIdRegistryCandidate &candidate) {
+        using Output = Result<PlatformStableIdRegistry>;
+        if (baseFingerprint != previous.Fingerprint())
+            return Output::Failure(MakeError(StableIdErrors::StaleReplacement));
+        if (candidate.projectId != previous.projectId_ || candidate.salt != previous.salt_)
+            return Output::Failure(MakeError(StableIdErrors::InvalidTransition));
+        auto replacement = BuildPlatformStableIdRegistry(candidate);
+        if (replacement.HasError())
+            return replacement;
+        const auto entries = replacement.Value().Entries();
+        for (const auto &old : previous.Entries()) {
+            const auto found = std::ranges::lower_bound(entries, old, [](const auto &left, const auto &right) {
+                if (left.kind != right.kind)
+                    return left.kind < right.kind;
+                return left.storedId < right.storedId;
+            });
+            if (found == entries.end() || found->kind != old.kind || found->storedId != old.storedId ||
+                found->canonicalKey != old.canonicalKey || !std::ranges::includes(found->aliases, old.aliases))
+                return Output::Failure(MakeError(StableIdErrors::InvalidTransition));
+            if (old.state == PlatformStableIdState::Tombstoned &&
+                (found->state != PlatformStableIdState::Tombstoned || found->removalProvenance != old.removalProvenance))
+                return Output::Failure(MakeError(StableIdErrors::Tombstoned));
+        }
+        return replacement;
     }
 
     /** @copydoc PlatformStableIdRegistry::ProjectId */

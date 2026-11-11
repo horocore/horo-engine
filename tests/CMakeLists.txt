@@ -4103,6 +4103,7 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/PlatformOfflineQueueTests.cpp
         unit/platform_services/PlatformOfflineQueueLifecycleTests.cpp
         unit/platform_services/PlatformProjectConfigurationTests.cpp
+        unit/platform_services/PlatformProjectSettingsTests.cpp
         unit/platform_services/PlatformProviderManifestCookTests.cpp
         unit/platform_services/PlatformRequestTests.cpp
         unit/platform_services/PlatformCompletionQueueTests.cpp
@@ -4122,6 +4123,13 @@ add_executable(HoroPlatformRequestTests
 target_compile_features(HoroPlatformRequestTests PRIVATE cxx_std_20)
 target_include_directories(HoroPlatformRequestTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroPlatformRequestTests PRIVATE HoroEngine::PlatformServices Threads::Threads)
+add_executable(HoroPlatformServicesAuthoringTests unit/application/PlatformServicesAuthoringTests.cpp)
+target_compile_features(HoroPlatformServicesAuthoringTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPlatformServicesAuthoringTests PRIVATE HoroEngine::PlatformServicesAuthoring Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
+add_test(NAME HoroPlatformServicesAuthoringTests COMMAND HoroPlatformServicesAuthoringTests)
+set_tests_properties(HoroPlatformServicesAuthoringTests PROPERTIES LABELS "unit;platform-services;project;headless")
+target_sources(HoroPlatformServicesPublicHeaderConsumer PRIVATE support/PlatformStableIdReplacementPublicContract.cpp)
+
 add_executable(HoroPlatformServicesCompositionTests unit/platform_services/PlatformServicesCompositionTests.cpp)
 target_compile_features(HoroPlatformServicesCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPlatformServicesCompositionTests PRIVATE HoroEngine::PlatformServices Catch2::Catch2WithMain Threads::Threads)
