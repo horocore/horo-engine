@@ -10,6 +10,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace Horo::PlatformServices {
     /** @brief Frozen product policy that may deny otherwise available service operations. */
@@ -160,9 +161,11 @@ namespace Horo::PlatformServices {
 
         /** @brief Binds a successful backend handle to this frontend's cancellation lifetime without duplicating request state. */
         template <typename T> [[nodiscard]] Result<PlatformRequestHandle<T>> BindDispatch(Result<PlatformRequestHandle<T>> result) const {
-            if (result.HasValue() && result.Value().IsValid())
-                result.Value().frontendAuthority_ = requestAuthority_;
-            return result;
+            if (result.HasError() || !result.Value().IsValid())
+                return result;
+            auto handle = std::move(result).Value();
+            handle.frontendAuthority_ = requestAuthority_;
+            return Result<PlatformRequestHandle<T>>::Success(std::move(handle));
         }
 
         PlatformServicesFrontend(std::shared_ptr<IPlatformServicesBackend> backend, PlatformServiceCapabilitySnapshot capabilities,
