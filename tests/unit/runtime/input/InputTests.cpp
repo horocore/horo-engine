@@ -826,6 +826,37 @@ namespace {
         REQUIRE(router.ReadAction(context, action).down);
     }
 
+    TEST_CASE("Gamepad chords retain exact modifier policy and keyboard ownership", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        InputRouter router;
+        const ActionId action{"chord"};
+        const InputContextId contextId{"gameplay"};
+        REQUIRE(router
+                    .SetActionMap({{action,
+                                    ActionValueType::Digital,
+                                    contextId,
+                                    false,
+                                    {{.kind = BindingControlKind::GamepadButton, .chord = {Key::A}, .chordSize = 1}}}})
+                    .HasValue());
+        auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+        collector.BeginFrame(1);
+        const auto pad = collector.ConnectGamepad("chord controller");
+        collector.SetKey(Key::A, true);
+        collector.SetModifiers({.control = true});
+        REQUIRE(collector.SetGamepadButton(pad, GamepadButton::South, true));
+        router.BeginFrame(collector.Commit());
+        REQUIRE(router.AssignGamepad(1, pad));
+        router.AssignKeyboardMouse(1);
+        CHECK_FALSE(router.ReadAction(context, action, 1).down);
+        collector.BeginFrame(2);
+        collector.SetModifiers({});
+        router.BeginFrame(collector.Commit());
+        CHECK(router.ReadAction(context, action, 1).down);
+        router.AssignKeyboardMouse(0);
+        CHECK_FALSE(router.ReadAction(context, action, 1).down);
+        CHECK(router.ReadAction(context, action).down);
+    }
+
     TEST_CASE("Hot plug storms never transfer assignment to a reused gamepad slot", "[unit][runtime][input]") {
         RawInputCollector collector;
         InputRouter router;

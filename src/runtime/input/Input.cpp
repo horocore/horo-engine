@@ -1180,7 +1180,8 @@ namespace Horo::Input {
         }
 
         [[nodiscard]] bool IsBindingActive(const InputBinding &binding, const RawInputSnapshot &snapshot) {
-            if ((binding.kind <= BindingControlKind::PointerWheelY || binding.requiredModifiers != ModifierState{}) &&
+            if ((binding.kind <= BindingControlKind::PointerWheelY || binding.chordSize != 0 ||
+                 binding.requiredModifiers != ModifierState{}) &&
                 !ModifiersMatch(snapshot.modifiers, binding.requiredModifiers))
                 return false;
             for (std::size_t index = 0; index < binding.chordSize; ++index)
