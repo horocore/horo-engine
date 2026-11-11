@@ -53,6 +53,7 @@ namespace Horo::Runtime {
         std::uint64_t discontinuityRevision{}; /**< Producer-owned cut/seek revision; zero denotes ordinary continuous motion. */
         CameraTransitionResolution transitionResolution{
             CameraTransitionResolution::Requested}; /**< Copied admission outcome for history invalidation. */
+        std::uint64_t sceneRevision{};              /**< Exact committed RuntimeSceneView structural revision sampled by this proposal. */
     };
 
     /** @brief Owner-issued generation fence for one bounded cinematic override slot. */
@@ -85,7 +86,8 @@ namespace Horo::Runtime {
      * @brief Final camera selector owned by a runtime/PIE session or editor viewport controller.
      * @details Single owner thread only. No jobs, scene borrows or source references are retained.
      * Commit is the cutoff after VariableUpdate and before RenderExtraction. Repeated commits of
-     * the same frame return its immutable decision; later submissions affect the next frame.
+     * the same frame and Scene revision return its immutable decision. Later submissions affect the next frame.
+     * A Scene mutation rejects re-extraction of an already committed frame with StaleFrame.
      * The owner must outlive every adapter holding a lease and must not move while leases exist.
      */
     class CameraService final {
@@ -125,11 +127,14 @@ namespace Horo::Runtime {
         /** @brief Removes an override at the owner safe point; committed snapshots remain intact.
          * @param lease Exact live lease. @return Success or typed stale lease failure. */
         [[nodiscard]] Result<void> Release(const CameraOverrideLease &lease);
-        /** @brief Re-resolves current proposals and publishes exactly one camera for this frame.
+        /** @brief Validates the current Scene fence and publishes exactly one camera for this frame.
          * @param renderedFrame Non-zero monotonically increasing extraction frame.
+         * @param scene Current scene at the extraction safe point; no scene borrow is retained.
          * @param base Current gameplay or editor authoring proposal; never a saved pre-playback pointer.
-         * @return Immutable owned selection or typed suspended/revision failure when no valid proposal exists. */
-        [[nodiscard]] Result<CameraSelectionSnapshot> Commit(std::uint64_t renderedFrame, const std::optional<CameraProposal> &base);
+         * @return Immutable owned selection or typed suspended/stale/revision failure. A Scene change after this frame's
+         * first commit rejects re-extraction for that frame, preserving its immutable decision. */
+        [[nodiscard]] Result<CameraSelectionSnapshot> Commit(std::uint64_t renderedFrame, RuntimeSceneView scene,
+                                                             const std::optional<CameraProposal> &base);
         /** @brief Closes admission and releases all overrides; already copied frames remain readable. */
         void Shutdown() noexcept;
 
@@ -170,6 +175,7 @@ namespace Horo::Runtime {
 
     /** @brief Copies one enabled scene camera's current hierarchy pose and lens.
      * @param scene Current scene borrow, used only during this call. @param camera Exact generation-checked target.
-     * @return Complete camera proposal or typed target/stale/hierarchy failure. No source pointers are retained. */
+     * @return Complete camera proposal carrying the current structural revision, or typed target/stale/hierarchy failure.
+     * No source pointers are retained. */
     [[nodiscard]] Result<CameraProposal> ResolveSceneCamera(RuntimeSceneView scene, EntityRef camera);
 }  // namespace Horo::Runtime

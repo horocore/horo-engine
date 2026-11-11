@@ -35,7 +35,7 @@ namespace Horo::Tests::CameraCuts {
 
         Render::RenderCameraView Advance(const Cinematic::SequenceTime delta) {
             REQUIRE(playback_.Evaluate(delta, scene_->View(), {{}, {}, crossings_}, {}).HasValue());
-            return Take(camera_.Commit(++frame_, std::nullopt)).selected.values;
+            return Take(camera_.Commit(++frame_, scene_->View(), std::nullopt)).selected.values;
         }
 
         Cinematic::SequenceTime Position() const {

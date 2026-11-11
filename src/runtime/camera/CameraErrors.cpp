@@ -21,4 +21,5 @@ namespace Horo::Runtime::CameraErrors {
         Describe("UnsupportedCameraTransition", "Requested camera transition is unavailable.");
     const ErrorCodeDescriptor IncompatibleTransition =
         Describe("IncompatibleCameraTransition", "Camera transition cannot produce a valid compatible view.");
+    const ErrorCodeDescriptor StaleFrame = Describe("CameraStaleFrame", "Camera selection does not match the current scene revision.");
 }  // namespace Horo::Runtime::CameraErrors

@@ -69,8 +69,8 @@ namespace Horo::Runtime {
     }
 
     bool CameraService::ValidProposal(const CameraProposal &proposal, const bool isOverride) const noexcept {
-        if (proposal.transitionResolution >= CameraTransitionResolution::Count || !proposal.values.IsValid() ||
-            Math::TryLookAt(proposal.values.position, proposal.values.target, proposal.values.up).HasError())
+        if (proposal.sceneRevision == 0 || proposal.transitionResolution >= CameraTransitionResolution::Count ||
+            !proposal.values.IsValid() || Math::TryLookAt(proposal.values.position, proposal.values.target, proposal.values.up).HasError())
             return false;
         if (!proposal.camera.IsValid())
             return proposal.camera == EntityRef{} && !isOverride && context_.domain == CameraViewDomain::EditorPreview;
@@ -98,6 +98,8 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(CameraErrors::UnsupportedTransition));
         if (!ValidProposal(from, true) || !ValidProposal(to, true) || !std::isfinite(weight) || weight < 0.0F || weight > 1.0F)
             return Result<void>::Failure(MakeError(CameraErrors::InvalidTarget));
+        if (from.sceneRevision != to.sceneRevision)
+            return Result<void>::Failure(MakeError(CameraErrors::StaleFrame));
         if (from.values.projection.kind != to.values.projection.kind)
             return Result<void>::Failure(MakeError(CameraErrors::IncompatibleTransition));
         const auto source = CameraRotation(from.values);
@@ -189,16 +191,25 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc CameraService::Commit */
-    Result<CameraSelectionSnapshot> CameraService::Commit(const std::uint64_t renderedFrame, const std::optional<CameraProposal> &base) {
+    Result<CameraSelectionSnapshot> CameraService::Commit(const std::uint64_t renderedFrame, const RuntimeSceneView scene,
+                                                          const std::optional<CameraProposal> &base) {
         if (const auto valid = ValidateFrame(renderedFrame); valid.HasError())
             return Result<CameraSelectionSnapshot>::Failure(valid.ErrorValue());
-        if (HasCommittedFrame(renderedFrame))
+        if (!scene.IsCurrent() || scene.RuntimeId() != context_.scene)
+            return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::InvalidContext));
+        const auto sceneRevision = scene.StructuralRevision();
+        if (HasCommittedFrame(renderedFrame)) {
+            if (committed_->selected.sceneRevision != sceneRevision)
+                return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::StaleFrame));
             return Result<CameraSelectionSnapshot>::Success(*committed_);
+        }
         const Slot *winner = WinningProposal();
         if (!winner && !EligibleBase(base))
             return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::CameraUnavailable));
         const auto claim = winner ? std::optional{winner->request->claim} : std::nullopt;
         const auto &selected = winner ? *winner->proposal : *base;
+        if (selected.sceneRevision != sceneRevision)
+            return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::StaleFrame));
         const bool changed = ChangesSelection(selected, claim);
         if (!CanAdvanceEpoch(changed))
             return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::InvalidFrame));

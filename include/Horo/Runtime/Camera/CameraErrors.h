@@ -16,4 +16,5 @@ namespace Horo::Runtime::CameraErrors {
     extern const ErrorCodeDescriptor InvalidFrame;           /**< Frame ordering or epoch cannot advance safely. */
     extern const ErrorCodeDescriptor UnsupportedTransition;  /**< Requested transition lacks an admitted implementation. */
     extern const ErrorCodeDescriptor IncompatibleTransition; /**< Camera projection or pose cannot be interpolated. */
+    extern const ErrorCodeDescriptor StaleFrame;             /**< Camera values and extraction Scene revision disagree. */
 }  // namespace Horo::Runtime::CameraErrors

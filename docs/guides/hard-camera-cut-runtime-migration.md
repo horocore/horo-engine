@@ -42,6 +42,19 @@ returns the same decision; late proposals apply to the next frame. The owner
 requires the current gameplay base proposal at each commit. With no eligible base
 or override it returns `CameraUnavailable`; it never picks an arbitrary entity.
 
+`Commit(frame, scene, base)` now requires the current `RuntimeSceneView` at that
+extraction safe point. `ResolveSceneCamera` stamps `CameraProposal::sceneRevision`
+with `scene.StructuralRevision()`. Manually composed editor authoring proposals
+must carry that same non-zero revision. Both endpoints of a geometric blend must
+come from the same revision. This fence prevents a rebase or other Scene mutation
+from pairing new model transforms with older camera values.
+
+An old pending proposal or an already committed frame from another Scene revision
+returns `CameraStaleFrame`. Republish from the current Scene and use a new rendered
+frame. The owner retains the earlier immutable decision for its original paired
+frame consumers. Runtime, PIE and editor callers migrate together to the required
+Scene argument; the previous two-argument commit contract is replaced.
+
 The adapter samples the final player position, including direct seek, reverse,
 loop and ping-pong traversal. Before the first key it withdraws its proposal. The
 default `HoldLastUntilPlayerEnd` retains the final camera until player completion;

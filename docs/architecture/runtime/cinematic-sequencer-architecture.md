@@ -443,6 +443,12 @@ result. Its explicit hard-cut fallback preserves the authored destination.
 True cross-fade admission still requires frontend compositor and resource-budget
 implementation and qualification.
 
+Camera proposals carry the exact Scene structural revision sampled by their
+producer. Camera commit requires the current Scene view and rejects stale pending
+proposals or same-frame re-extraction after a Scene mutation. Hosts republish
+camera values for a new rendered frame after a rebase, preserving immutable
+decisions already paired with older frame-owned model transforms.
+
 ### 4. Event Track
 
 Cook resolves authoring event names into typed bindings and immutable payloads:

@@ -48,7 +48,7 @@ namespace Horo::Editor {
         for (Cinematic::SequenceTime time = 2; time <= 8; ++time) {
             REQUIRE(playback.Evaluate(time == 2 ? 2 : 1, scene, {{}, {}, crossings}, {}).HasValue());
             REQUIRE(fixture.controller.SeekCameraCutPreview(time).HasValue());
-            const auto selection = Take(camera.Commit(static_cast<std::uint64_t>(time), std::nullopt));
+            const auto selection = Take(camera.Commit(static_cast<std::uint64_t>(time), scene, std::nullopt));
             CHECK(fixture.controller.ViewportScene().camera.position == selection.selected.values.position);
             CHECK(fixture.controller.ViewportScene().camera.target == selection.selected.values.target);
             CHECK(fixture.controller.ViewportScene().camera.up == selection.selected.values.up);

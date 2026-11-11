@@ -56,7 +56,7 @@ namespace Horo::Cinematic {
 
             CameraSelectionSnapshot Commit() {
                 const auto base = Take(ResolveSceneCamera(scene->View(), *scene->View().Find({3})));
-                return Take(camera.Commit(++frame, base));
+                return Take(camera.Commit(++frame, scene->View(), base));
             }
         };
     }  // namespace
@@ -88,14 +88,15 @@ namespace Horo::Cinematic {
             leases[index] = Take(owners[index].Acquire({owners[index].Context(), {1, 1}, 1}));
             const auto proposal = Take(ResolveSceneCamera(fixture.scene->View(), *fixture.scene->View().Find({index + 1})));
             REQUIRE(owners[index].Submit(leases[index], proposal).HasValue());
-            CHECK(Take(owners[index].Commit(1, std::nullopt)).selected.values.position.x == static_cast<float>((index + 1) * 10));
+            CHECK(Take(owners[index].Commit(1, fixture.scene->View(), std::nullopt)).selected.values.position.x ==
+                  static_cast<float>((index + 1) * 10));
         }
         const auto base = Take(ResolveSceneCamera(fixture.scene->View(), *fixture.scene->View().Find({3})));
         CHECK(owners[0].Submit(leases[1], base).HasError());
         REQUIRE(owners[0].Release(leases[0]).HasValue());
-        CHECK_FALSE(Take(owners[0].Commit(2, base)).overrideOwner.has_value());
-        CHECK(Take(owners[1].Commit(2, base)).overrideOwner.has_value());
-        CHECK(Take(owners[2].Commit(2, base)).overrideOwner.has_value());
+        CHECK_FALSE(Take(owners[0].Commit(2, fixture.scene->View(), base)).overrideOwner.has_value());
+        CHECK(Take(owners[1].Commit(2, fixture.scene->View(), base)).overrideOwner.has_value());
+        CHECK(Take(owners[2].Commit(2, fixture.scene->View(), base)).overrideOwner.has_value());
     }
 
     TEST_CASE("Production blend publication and frame commit allocate no storage", "[unit][cinematic][camera][allocation]") {
@@ -105,7 +106,7 @@ namespace Horo::Cinematic {
         const auto base = Take(ResolveSceneCamera(fixture.scene->View(), *fixture.scene->View().Find({3})));
         const auto before = Tests::AllocationProbe::Count();
         const auto published = fixture.playback->Publish(fixture.scene->View());
-        const auto committed = fixture.camera.Commit(1, base);
+        const auto committed = fixture.camera.Commit(1, fixture.scene->View(), base);
         const auto after = Tests::AllocationProbe::Count();
         REQUIRE(published.HasValue());
         REQUIRE(committed.HasValue());
@@ -208,7 +209,7 @@ namespace Horo::Cinematic {
         REQUIRE(fixture.runtime.Play(playback.Player()).HasValue());
         REQUIRE(fixture.runtime.Seek(playback.Player(), 6).HasValue());
         REQUIRE(playback.Publish(fixture.scene->View()).HasValue());
-        CHECK(Take(baseline.Commit(1, std::nullopt)).selected.values.position.x == 20.0F);
+        CHECK(Take(baseline.Commit(1, fixture.scene->View(), std::nullopt)).selected.values.position.x == 20.0F);
     }
 
     TEST_CASE("Camera transition plans reject malformed duration and enum values before activation", "[unit][cinematic][camera]") {
@@ -453,6 +454,46 @@ namespace Horo::Cinematic {
         CHECK(fixture.Commit().selected.values.position.x == 20.0F);
     }
 
+    TEST_CASE("Camera extraction rejects a stale scene epoch and resumes from republished values", "[unit][cinematic][camera][rebase]") {
+        Fixture fixture;
+        fixture.StartTransition();
+        fixture.Seek(6);
+        const auto before = fixture.Commit();
+        SceneCommandBuffer commands;
+        for (std::uint64_t id = 1; id <= 3; ++id)
+            commands.SetLocalTransform(*fixture.scene->View().Find({id}), {{static_cast<float>(id * 10) - 100.0F, 0.0F, 0.0F}});
+        REQUIRE(fixture.scene->Commit(commands).HasValue());
+        const auto scene = fixture.scene->View();
+        const auto base = Take(ResolveSceneCamera(scene, *scene.Find({3})));
+        const auto staleFrame = fixture.camera.Commit(before.renderedFrame, scene, base);
+        REQUIRE(staleFrame.HasError());
+        CHECK(staleFrame.ErrorValue().code.Value() == CameraErrors::StaleFrame.code.Value());
+        const auto staleProposal = fixture.camera.Commit(before.renderedFrame + 1, scene, base);
+        REQUIRE(staleProposal.HasError());
+        CHECK(staleProposal.ErrorValue().code.Value() == CameraErrors::StaleFrame.code.Value());
+        REQUIRE(fixture.playback->Publish(scene).HasValue());
+        CHECK(fixture.camera.Commit(before.renderedFrame, scene, base).HasError());
+        const auto after = fixture.Commit();
+        CHECK(after.selected.values.position.x == -85.0F);
+        CHECK(after.selected.sceneRevision == scene.StructuralRevision());
+        CHECK(before.selected.sceneRevision != after.selected.sceneRevision);
+        CHECK(before.selected.values.position.x == 15.0F);
+    }
+
+    TEST_CASE("The camera owner rejects interpolation between different scene epochs without replacement", "[unit][cinematic][camera]") {
+        Fixture fixture;
+        const auto old = Take(ResolveSceneCamera(fixture.scene->View(), *fixture.scene->View().Find({1})));
+        SceneCommandBuffer commands;
+        commands.SetLocalTransform(*fixture.scene->View().Find({2}), {{25.0F, 0.0F, 0.0F}});
+        REQUIRE(fixture.scene->Commit(commands).HasValue());
+        const auto current = Take(ResolveSceneCamera(fixture.scene->View(), *fixture.scene->View().Find({2})));
+        const auto lease = Take(fixture.camera.Acquire({fixture.camera.Context(), {9, 1}, 1}));
+        const auto rejected = fixture.camera.SubmitBlend(lease, old, current, 0.5F);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == CameraErrors::StaleFrame.code.Value());
+        CHECK_FALSE(fixture.Commit().overrideOwner.has_value());
+    }
+
     TEST_CASE("Hard cuts select one exact camera at the frame boundary and ignore blend windows", "[unit][cinematic][camera]") {
         Fixture fixture;
         fixture.Start();
@@ -500,7 +541,7 @@ namespace Horo::Cinematic {
         base.values.position.x = 100.0F;
         base.values.target.x = 100.0F;
         REQUIRE(fixture.playback->Cancel().HasValue());
-        CHECK(Take(fixture.camera.Commit(++fixture.frame, base)).selected.values.position.x == 100.0F);
+        CHECK(Take(fixture.camera.Commit(++fixture.frame, fixture.scene->View(), base)).selected.values.position.x == 100.0F);
     }
 
     TEST_CASE("Missing camera admission and target replacement never leave partial authority", "[unit][cinematic][camera]") {
@@ -530,23 +571,24 @@ namespace Horo::Cinematic {
         const auto right = Take(ResolveSceneCamera(fixture.scene->View(), *fixture.scene->View().Find({2})));
         REQUIRE(fixture.camera.Submit(first, left).HasValue());
         REQUIRE(fixture.camera.Submit(second, right).HasValue());
-        const auto committed = Take(fixture.camera.Commit(1, std::nullopt));
+        const auto committed = Take(fixture.camera.Commit(1, fixture.scene->View(), std::nullopt));
         CHECK(committed.selected.camera == right.camera);
         REQUIRE(fixture.camera.Release(second).HasValue());
-        CHECK(Take(fixture.camera.Commit(1, std::nullopt)).selected.camera == right.camera);
-        CHECK(Take(fixture.camera.Commit(2, std::nullopt)).selected.camera == left.camera);
+        CHECK(Take(fixture.camera.Commit(1, fixture.scene->View(), std::nullopt)).selected.camera == right.camera);
+        CHECK(Take(fixture.camera.Commit(2, fixture.scene->View(), std::nullopt)).selected.camera == left.camera);
         CHECK(fixture.camera.Submit(second, right).HasError());
         fixture.camera.Shutdown();
-        CHECK(fixture.camera.Commit(3, right).HasError());
+        CHECK(fixture.camera.Commit(3, fixture.scene->View(), right).HasError());
         CHECK(committed.selected.camera == right.camera);
     }
 
     TEST_CASE("Camera contexts reject foreign scene ownership and suspend instead of inventing a camera", "[unit][cinematic][camera]") {
         Fixture fixture;
-        CHECK(fixture.camera.Commit(1, std::nullopt).ErrorValue().code.Value() == CameraErrors::CameraUnavailable.code.Value());
+        CHECK(fixture.camera.Commit(1, fixture.scene->View(), std::nullopt).ErrorValue().code.Value() ==
+              CameraErrors::CameraUnavailable.code.Value());
         auto invalid = Take(ResolveSceneCamera(fixture.scene->View(), *fixture.scene->View().Find({1})));
         invalid.camera.runtime = {99};
-        CHECK(fixture.camera.Commit(1, invalid).HasError());
+        CHECK(fixture.camera.Commit(1, fixture.scene->View(), invalid).HasError());
         auto context = fixture.camera.Context();
         context.view.generation++;
         CHECK(fixture.camera.Acquire({context, {1, 1}, 0}).HasError());
