@@ -9,6 +9,7 @@
 #include "Horo/PlatformServices/PlatformRequest.h"
 #include "Horo/PlatformServices/PlatformUserSession.h"
 
+#include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -157,6 +158,7 @@ namespace Horo::PlatformServices {
     struct FriendsQuery final {
         PlatformSubjectHandle subject;
         std::uint32_t pageSize{};
+        std::uint32_t startIndex{}; /**< Zero-based provider page offset; bounded before admission. */
     };
 
     /** @brief Immutable owned cloud object payload. */
@@ -165,9 +167,35 @@ namespace Horo::PlatformServices {
         std::vector<std::byte> bytes;
     };
 
-    /** @brief Privacy-safe friend presentation; display text is never durable identity. */
+    /** @brief Equality-only social capability scoped to one requesting subject and access revision; never serializable. */
+    class PlatformSocialSubjectHandle final {
+    public:
+        PlatformSocialSubjectHandle() = default;
+        /** @brief Checks representation without granting access. @return True for a bound nonzero social nonce. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        /** @brief Checks the exact requesting session/access scope. @param session Current published authority.
+         * @return True only while the requesting subject and friends grant remain current. */
+        [[nodiscard]] bool IsCurrent(const PlatformSessionSnapshot &session) const noexcept;
+        [[nodiscard]] bool operator==(const PlatformSocialSubjectHandle &) const noexcept = default;
+
+    private:
+        friend Result<PlatformSocialSubjectHandle> BuildPlatformSocialSubjectHandle(const PlatformSessionSnapshot &,
+                                                                                    const PlatformSubjectNonce &);
+        PlatformSubjectHandle requester_;
+        PlatformAccessPolicyRevision accessRevision_;
+        std::array<std::byte, 16> nonce_{};
+    };
+
+    /** @brief Binds broker-provided random social evidence to an approved friends scope.
+     * @param session Current requesting session with friends access Granted.
+     * @param nonce Cryptographic random social nonce; never a native ID, display hash or credential.
+     * @return Opaque social capability or typed session/access/invalid evidence failure. */
+    [[nodiscard]] Result<PlatformSocialSubjectHandle> BuildPlatformSocialSubjectHandle(const PlatformSessionSnapshot &session,
+                                                                                       const PlatformSubjectNonce &nonce);
+
+    /** @brief Consent-scoped friend presentation; display text is never durable identity. */
     struct FriendPresentation final {
-        PlatformSubjectHandle subject;
+        PlatformSocialSubjectHandle subject;
         std::string displayName;
     };
 
@@ -175,6 +203,7 @@ namespace Horo::PlatformServices {
     struct FriendsPage final {
         std::vector<FriendPresentation> entries;
         bool hasMore{};
+        std::uint32_t startIndex{}; /**< Exact offset captured by the admitted query. */
     };
 
     /** @brief Ranked score row with no provider or account identifier. */

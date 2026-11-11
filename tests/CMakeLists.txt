@@ -4098,6 +4098,7 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/PlatformAchievementCoordinatorTests.cpp
         unit/platform_services/PlatformDefinitionRegistriesTests.cpp
         unit/platform_services/PlatformPresenceCoordinatorTests.cpp
+        unit/platform_services/PlatformFriendsCoordinatorTests.cpp
         unit/platform_services/PlatformOfflineQueueStorageTests.cpp
         unit/platform_services/PlatformProgressionIdempotencyTests.cpp
         unit/platform_services/PlatformOfflineQueueTests.cpp
@@ -4126,6 +4127,11 @@ add_executable(HoroPlatformServicesCompositionTests unit/platform_services/Platf
 target_compile_features(HoroPlatformServicesCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPlatformServicesCompositionTests PRIVATE HoroEngine::PlatformServices Catch2::Catch2WithMain Threads::Threads)
 add_test(NAME HoroPlatformServicesCompositionTests COMMAND HoroPlatformServicesCompositionTests)
+add_executable(HoroPlatformFriendsPublicConsumer public_headers/PlatformFriendsConsumer.cpp)
+target_compile_features(HoroPlatformFriendsPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPlatformFriendsPublicConsumer PRIVATE HoroEngine::PlatformServices)
+add_test(NAME HoroPlatformFriendsPublicConsumer COMMAND HoroPlatformFriendsPublicConsumer)
+set_tests_properties(HoroPlatformFriendsPublicConsumer PROPERTIES LABELS "unit;platform-services;headless;public_headers")
 set_tests_properties(HoroPlatformServicesCompositionTests PROPERTIES LABELS "unit;platform-services;headless")
 add_executable(HoroGameplayBuildServiceTests
         unit/application/GameplayLibraryBuildTests.cpp

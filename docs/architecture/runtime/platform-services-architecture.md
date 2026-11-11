@@ -1125,6 +1125,25 @@ ephemeral, scoped to the requesting session/access revision and distinct from th
 local subject capability. Display/avatar fields are bounded consent-scoped
 presentation, never account, gameplay or durable storage identity.
 
+The read-only `PlatformFriendsCoordinator` owns the bounded in-memory page and
+validates every complete result before presentation. Composition supplies the
+policy-projected capability snapshot and matching published session authority;
+provider replacement requires a new coordinator. The owner forwards session/access
+updates before admitting or exposing work. Updates discard pending query authority
+and retained personal data. Cancellation invalidates its query token before native
+cancellation is requested; late evidence cannot republish it. `ReadPage` revalidates
+the caller's subject/access revision and expires retained data by monotonic time.
+There is no durable cache or implicit retry/prompt loop.
+
+`FriendPresentation::subject` uses `PlatformSocialSubjectHandle`, which cannot be
+converted into the local subject capability. The broker supplies random social
+nonces, never account IDs or display-derived hashes. Page offset, count, total name
+bytes, per-name UTF-8 and duplicate social handles are validated atomically.
+See [friends API migration](../../guides/platform-friends-migration.md) for affected
+callers and presentation-owner obligations. These public contracts and scripted
+tests do not qualify native account, consent or restriction callbacks in private
+provider packages.
+
 ## Stable ID Registries
 
 Runtime and gameplay never pass strings for achievement, leaderboard, stat or

@@ -341,7 +341,8 @@ namespace Horo::PlatformServices {
         const auto valid = ValidateSubjectService(PlatformServiceKind::Friends, query.subject);
         if (valid.HasError())
             return RejectRequest<FriendsPage>(valid.ErrorValue());
-        if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries)
+        if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries ||
+            query.startIndex > std::numeric_limits<std::uint32_t>::max() - query.pageSize)
             return RejectRequest<FriendsPage>(MakeError(FrontendErrors::InvalidRequest));
         return RecordDispatch(BindDispatch(backend_->QueryFriends(std::move(query))));
     }

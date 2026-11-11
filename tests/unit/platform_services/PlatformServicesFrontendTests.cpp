@@ -94,6 +94,7 @@ namespace Horo::PlatformServices {
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryFriends({subject, 1, std::numeric_limits<std::uint32_t>::max()}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 5}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, std::numeric_limits<std::uint32_t>::max(), 1}),
