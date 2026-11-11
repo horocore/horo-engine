@@ -117,6 +117,19 @@ This work does not copy their credential-provider or lifecycle implementation.
 Local mock fences are regression fixtures, not proof of those integrated lifecycles.
 PLS-005.6 and the parent must remain unqualified until that evidence is available.
 
+The PLS-006 owner reports an in-progress cancellation-provenance fix on
+`feat/HORO-1872_platform_identity_lifecycle`, based on `f51e0c0`. It will bind
+frontend-issued handles to a weak issuance authority so equal numeric request IDs
+from different backend stores cannot cancel each other's requests. Handles returned
+by a frontend must be cancelled through that same frontend; direct backend/store
+handles remain with their issuing owner. The weak token is not a provider/request
+lifetime lease, and the request-store/native C ABI is unchanged in the reported plan.
+This worktree's scripted cancellation fixture already calls its issuing backend.
+Frontend cloud mutation coverage also retains and moves each returned handle, then
+cancels through the issuing frontend. That compatibility regression is pending native
+execution. The external fix has no reported test/quality/push evidence and is not
+present in this worktree's base; it does not discharge #1916's qualification blocker.
+
 ADR-134's header currently says **Proposed**, while the normative platform-services
 architecture references it as the ratified baseline. This delivery follows the
 normative contract and records the inconsistency without changing ADR status.

@@ -326,7 +326,11 @@ namespace Horo::PlatformServices {
         auto created = PlatformServicesFrontend::Create(backend, backend->snapshot, session);
         REQUIRE(created.HasValue());
         auto enabled = std::move(created).Value();
-        REQUIRE(enabled.WriteCloudObject(MutationWrite(subject)).HasValue());
+        auto submittedWrite = enabled.WriteCloudObject(MutationWrite(subject));
+        REQUIRE(submittedWrite.HasValue());
+        auto writeHandle = std::move(submittedWrite).Value();
+        REQUIRE(enabled.RequestCancel(writeHandle).HasValue());
+        CHECK(backend->requests.Query(writeHandle).Value().state == PlatformRequestState::Cancelling);
         auto write = MutationWrite(subject);
         const auto revision = ProviderObjectRevision::Copy(std::array{std::byte{5}});
         REQUIRE(revision.HasValue());
@@ -334,7 +338,12 @@ namespace Horo::PlatformServices {
                                       .key = write.key,
                                       .expectedRevision = revision.Value(),
                                       .mutation = write.mutation};
-        REQUIRE(enabled.DeleteCloudObject(remove).HasValue());
+        auto submittedDelete = enabled.DeleteCloudObject(remove);
+        REQUIRE(submittedDelete.HasValue());
+        auto deleteHandle = std::move(submittedDelete).Value();
+        REQUIRE(enabled.RequestCancel(deleteHandle).HasValue());
+        CHECK(backend->requests.Query(deleteHandle).Value().state == PlatformRequestState::Cancelling);
+        CHECK(backend->cancelCalls == 2);
         REQUIRE(enabled.QueryCloudQuota(subject).HasValue());
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 3);
         write.mutation = {};
