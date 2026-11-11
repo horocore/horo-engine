@@ -97,6 +97,10 @@ the legacy object-ID read method. All five new opaque operations return the exac
 `UnsupportedCapability` error without invoking that older route. This compatibility
 fixture proves the default unsupported boundary without claiming an actual private
 SDK adapter is installed or qualified; its native execution is still pending.
+The same suite now explicitly covers the opposite cancellation race: an eligible
+provider commit observed alongside cancellation and deadline expiry wins once,
+while the later duplicate cannot rewrite success or notify the observer twice.
+This additional regression has not yet been compiled or executed.
 
 ## Execution evidence
 

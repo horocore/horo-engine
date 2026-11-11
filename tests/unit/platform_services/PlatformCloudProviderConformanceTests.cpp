@@ -180,6 +180,46 @@ namespace Horo::PlatformServices::TestSupport {
         CHECK(backend.Calls().size() == MockPlatformServicesBackend::MaximumCloudTransfers + 3);
     }
 
+    TEST_CASE("Cloud commit wins eligible cancellation and deadline races exactly once", "[platform-services][cloud][conformance]") {
+        MockPlatformServicesBackend backend;
+        Prepare(backend, {Operation::WriteCloudObject, Operation::RequestCancel});
+        const auto write = CloudWrite();
+        const auto committed = CloudCommit(write);
+        MockPlatformServicesResponse response;
+        response.payload = committed;
+        response.timeoutAfter = 0ms;
+        response.duplicateDelay = 1ms;
+        REQUIRE(backend.SetResponse(Operation::WriteCloudObject, response).HasValue());
+        const auto pending = backend.WriteCloudObject(CloudBlobWriteRequest{write});
+        REQUIRE(pending.HasValue());
+        std::uint32_t notifications{};
+        auto subscription =
+            backend.Requests().OnComplete<CloudMutationResult>(pending.Value(),
+                                                               [&notifications](
+                                                                   const PlatformRequestSnapshot<CloudMutationResult> &snapshot) {
+            ++notifications;
+            CHECK(snapshot.state == PlatformRequestState::Succeeded);
+        });
+        REQUIRE(subscription.HasValue());
+        REQUIRE(backend.RequestCancel(pending.Value().Id(), pending.Value().Generation()).HasValue());
+        CHECK(backend.Requests().Query(pending.Value()).Value().state == PlatformRequestState::Cancelling);
+        CHECK(backend.DispatchDueCompletions() == 3);
+        const auto terminal = backend.Requests().Query(pending.Value());
+        REQUIRE(terminal.HasValue());
+        REQUIRE(terminal.Value().terminal.has_value());
+        REQUIRE(terminal.Value().terminal->Value());
+        CHECK(terminal.Value().terminal->Value()->mutation == write.mutation);
+        CHECK(terminal.Value().terminal->Value()->committedObject->revision == committed.committedObject->revision);
+        CHECK(notifications == 0);
+        CHECK(backend.Requests().DispatchCompletions() == 1);
+        REQUIRE(backend.AdvanceClock(1ms).HasValue());
+        CHECK(backend.DispatchDueCompletions() == 1);
+        CHECK(backend.Requests().Query(pending.Value()).Value().state == PlatformRequestState::Succeeded);
+        CHECK(backend.Requests().DispatchCompletions() == 0);
+        CHECK(notifications == 1);
+        CHECK(backend.VerifyExpectations().HasValue());
+    }
+
     TEST_CASE("Cloud account replacement fences delayed results including provider failures", "[platform-services][cloud][conformance]") {
         MockPlatformServicesBackend backend;
         Prepare(backend, {Operation::WriteCloudObject});
