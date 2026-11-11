@@ -32,6 +32,39 @@ already expired admission deadline retains timeout precedence, and already
 terminal results remain immutable. Cancellation rejection is never permission to
 release provider code or callback state early.
 
+## Native completion observers
+
+The native lifecycle host also captures its exact weak issuing lifetime and native
+session-observation revision in each admitted handle. These are immutable admission
+evidence, not another current-account state or a durable identity. Moves transfer
+both fields; they retain no provider, request record or native code lease. The
+existing host state control block supplies provenance without a new allocation.
+
+`PlatformProviderLifecycleHost::OnComplete` now rejects foreign store/host handles
+with `platform.request.stale` and an old admission revision with
+`platform.session.stale`. It checks revision again immediately before each deferred
+user callback, outside request-store locking. An earlier callback that advances the
+session therefore withdraws the remaining old-scope callbacks in that turn. User
+callbacks run outside the host lock and still revalidate their semantic owner's
+profile/access authority before committing user state.
+
+An already retained terminal success or timeout remains the original result when
+queried with its owning handle. Session replacement withdraws delivery authority;
+it does not rewrite that result or roll back an actual provider effect. This also
+withdraws old-scope failure callbacks, including stale-session and timeout failures.
+Consumers must retire account-bound presentation/lifetimes from the canonical
+session observer rather than waiting for an old request's failure callback. Native
+callback/code ownership still retires through callback completion or safe drain.
+
+The affected callers are native-host observers and code attempting to subscribe
+through a raw store handle. Ordinary same-session host-issued subscriptions remain
+deferred, including late subscription to a retained terminal result. Rebuild C++
+consumers for the private handle-layout change; no C ABI change or SDK dependency
+is introduced. The two staged header consumer targets listed above cover this
+surface. Lifecycle regression coverage distinguishes immutable results, rejected
+late subscription, withdrawn queued delivery, callback-triggered account changes,
+move provenance and successful new-session delivery.
+
 ## Protected binding handoff
 
 `PlatformSessionBinding.h` adds the identity-owned handoff needed by explicit

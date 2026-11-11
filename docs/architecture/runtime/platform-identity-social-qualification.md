@@ -73,6 +73,7 @@ results. No heavy job is queued while the main CI owner holds priority.
 | Deferred owner-thread observers, stale revision filtering, reentry and subscription/close lifetime | `PlatformSessionObserverTests.cpp` in `HoroPlatformRequestTests` |
 | Old native work terminates on session invalidation without waiting for a callback; native cancellation is issued once even on rejection; delayed old completion cannot change new work | `PlatformProviderLifecycleTests.cpp` in `HoroPlatformProviderAdmissionTests` |
 | Native partial-start rollback and BUSY shutdown retain callback/code ownership | `PlatformProviderLifecycleTests.cpp` in `HoroPlatformProviderAdmissionTests` |
+| Retained old success stays immutable but cannot authorize late or already queued observer delivery after replacement; each callback is fenced independently; moved native handles retain provenance and foreign store handles fail stale | `Native session observers*` cases in `PlatformProviderLifecycleTests.cpp` (new source, execution pending) |
 | Composition replacement closes retained old frontends before new factory activation; failed replacement cannot reopen old admission | `HoroPlatformServicesCompositionTests` |
 | A retired frontend's handle cannot cancel a new account's request even when numeric ID/generation collide; frontend moves preserve valid cancellation | `PlatformServicesFrontendTests.cpp` in `HoroPlatformRequestTests` |
 | Same protected binding requires fresh evidence after reauthentication; another account/environment cannot retarget an old partition and restrictions/capability absence remain failures | `PlatformSessionBindingTests.cpp` in `HoroPlatformRequestTests` |
@@ -129,6 +130,21 @@ resulting source tree differs from the pre-rebase checkpoint only by this parent
 CMake fix. The execution results above precede that integration. Native retry,
 reconfiguration and final validation still require a new shared heavy-build slot;
 no test result on the rebased tree is inferred from patch equivalence.
+
+The all-child acceptance audit found a further old-scope observer gap: the native
+host delegated `OnComplete` directly to its retained request store. A retained
+success could therefore be subscribed after replacement, or a second old callback
+could run after the first callback advanced the account. The local source fix now
+captures immutable weak host/revision evidence at admission, checks late observer
+admission and checks each deferred delivery without invoking user code under a
+lock. Three new regression cases cover retained/queued success, reentrant account
+replacement and move/foreign-store provenance. Existing invalidation/timeout tests
+now assert withdrawn old-scope observer delivery while preserving exact terminal
+results and native lease/cancellation assertions, as required by ADR-135.
+This source/test/migration change has not yet compiled or executed; the previous
+83-case run does not validate the changed handle header. The next bounded native
+RED/GREEN scope must include both terminal invalidation and observer withdrawal,
+followed by the affected current-tree consumers and final quality scope.
 
 `clang-format` and `git diff --check` have run on the changed sources. The portable
 VS Code profile with installed CMake/Ninja passes the local preflight prerequisite

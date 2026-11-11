@@ -173,7 +173,16 @@ namespace Horo::PlatformServices {
                                                  std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
         /** @brief Returns the frontend-owned terminal or active request snapshot. */
         [[nodiscard]] Result<PlatformRequestSnapshot<void>> Query(const RequestHandle &request) const;
-        /** @brief Registers one deferred completion observer. */
+        /**
+         * @brief Registers one deferred observer in the request's exact native host/session scope.
+         * @param request Handle admitted by this host, retaining its immutable admission revision.
+         * @param observer Nonempty owner-lane completion callback, never invoked under the host lock.
+         * @return Subscription, typed foreign/stale/closed failure, or request-store admission failure.
+         * @throws std::bad_alloc If observer or subscription storage cannot be allocated.
+         * @details Session replacement withdraws old observer delivery, including retained terminal successes and callbacks
+         * queued behind a callback that changes session. Query retains the original immutable terminal result. The semantic
+         * owner must still revalidate its own profile/access authority before mutating user state inside a callback.
+         */
         [[nodiscard]] Result<PlatformRequestSubscription> OnComplete(const RequestHandle &request,
                                                                      std::function<void(const PlatformRequestSnapshot<void> &)> observer);
         /** @brief Returns the latest copied provider session observation. */

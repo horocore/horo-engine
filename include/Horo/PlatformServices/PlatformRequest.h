@@ -151,13 +151,16 @@ namespace Horo::PlatformServices {
 
         PlatformRequestHandle(PlatformRequestHandle &&other) noexcept
             : id_(std::exchange(other.id_, {})), generation_(std::exchange(other.generation_, {})),
-              frontendAuthority_(std::move(other.frontendAuthority_)) {}
+              frontendAuthority_(std::move(other.frontendAuthority_)), providerAuthority_(std::move(other.providerAuthority_)),
+              providerSessionRevision_(std::exchange(other.providerSessionRevision_, 0)) {}
 
         PlatformRequestHandle &operator=(PlatformRequestHandle &&other) noexcept {
             if (this != &other) {
                 id_ = std::exchange(other.id_, {});
                 generation_ = std::exchange(other.generation_, {});
                 frontendAuthority_ = std::move(other.frontendAuthority_);
+                providerAuthority_ = std::move(other.providerAuthority_);
+                providerSessionRevision_ = std::exchange(other.providerSessionRevision_, 0);
             }
             return *this;
         }
@@ -189,6 +192,9 @@ namespace Horo::PlatformServices {
         PlatformRequestGeneration generation_;
         // A weak issuance capability never keeps frontend/backend/request state alive.
         std::weak_ptr<const void> frontendAuthority_;
+        // Native-host admission evidence survives terminal record retention without retaining the provider.
+        std::weak_ptr<const void> providerAuthority_;
+        std::uint64_t providerSessionRevision_{};
     };
 
     /** @brief Outcome of an idempotent request-state mutation. */

@@ -282,6 +282,8 @@ namespace Horo::PlatformServices {
         if (admitted.HasError())
             return SubmitResult::Failure(admitted.ErrorValue());
         auto handle = std::move(admitted).Value();
+        handle.providerAuthority_ = state_;
+        handle.providerSessionRevision_ = sessionRevision;
         const auto admittedAt = state.requests.Query(handle).Value().timing.admittedAt;
         state.inFlight.emplace_back(handle.Id(), handle.Generation(), sessionRevision, service, operation,
                                     admittedAt + state.requestPolicy.timeouts[serviceIndex]);
@@ -326,7 +328,33 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformProviderLifecycleHost::OnComplete */
     Result<PlatformRequestSubscription> PlatformProviderLifecycleHost::OnComplete(  // NOSONAR(cpp:S5817) Mutates owned request store.
         const RequestHandle &request, std::function<void(const PlatformRequestSnapshot<void> &)> observer) {
-        return state_->requests.OnComplete(request, std::move(observer));
+        using SubscriptionResult = Result<PlatformRequestSubscription>;
+        if (state_->stages.closing || state_->stages.closed)
+            return SubscriptionResult::Failure(MakeError(RequestErrors::FrontendUnavailable));
+        if (request.providerAuthority_.owner_before(state_) || state_.owner_before(request.providerAuthority_))
+            return SubscriptionResult::Failure(MakeError(RequestErrors::Stale));
+        const auto revision = request.providerSessionRevision_;
+        {
+            std::scoped_lock lock{state_->mutex};
+            if (!state_->callbackOpen)
+                return SubscriptionResult::Failure(MakeError(RequestErrors::FrontendUnavailable));
+            if (revision == 0 || revision != state_->session.revision)
+                return SubscriptionResult::Failure(MakeError(PlatformSessionErrors::StaleSession));
+        }
+        if (!observer)
+            return state_->requests.OnComplete(request, std::move(observer));
+        const std::weak_ptr<PlatformProviderLifecycleState> weakState = state_;
+        return state_->requests.OnComplete(request, [weakState, revision, observer = std::move(observer)](const auto &snapshot) {
+            const auto state = weakState.lock();
+            if (!state)
+                return;
+            {
+                std::scoped_lock lock{state->mutex};
+                if (!state->callbackOpen || state->session.revision != revision)
+                    return;
+            }
+            observer(snapshot);
+        });
     }
 
     /** @copydoc PlatformProviderLifecycleHost::Session */
