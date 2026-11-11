@@ -1,6 +1,8 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "support/CameraCutTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace Horo::Editor {
     namespace {
         using namespace Tests::CameraCuts;
@@ -36,14 +38,20 @@ namespace Horo::Editor {
     }  // namespace
 
     TEST_CASE("Controller scrubbing and runtime blend evaluation publish matching camera values", "[unit][cinematic][camera][editor]") {
+        const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
         PreviewFixture fixture;
         const auto scene = *fixture.scene.ActiveScene();
         auto runtime = Take(Cinematic::CinematicRuntimeService::Create({{1, 1}}));
         auto camera = Take(Runtime::CameraService::Create({{2, 1}, scene.RuntimeId(), Runtime::CameraViewDomain::Runtime}));
         auto playback =
-            Take(Cinematic::CinematicCameraPlayback::Activate(runtime, camera, TransitionActivation(), fixture.Settings(), scene));
+            Take(Cinematic::CinematicCameraPlayback::Activate(runtime, camera,
+                                                              TransitionActivation(Cinematic::CameraTransitionTier::SingleViewBlend, curve),
+                                                              fixture.Settings(), scene));
         REQUIRE(runtime.Play(playback.Player()).HasValue());
-        REQUIRE(fixture.controller.StartCameraCutPreview(TransitionActivation(), fixture.Settings(), {1, 1}).HasValue());
+        REQUIRE(fixture.controller
+                    .StartCameraCutPreview(TransitionActivation(Cinematic::CameraTransitionTier::SingleViewBlend, curve),
+                                           fixture.Settings(), {1, 1})
+                    .HasValue());
         std::array<Cinematic::SequenceFrameCameraCutRequest, 64> crossings{};
         for (Cinematic::SequenceTime time = 2; time <= 8; ++time) {
             REQUIRE(playback.Evaluate(time == 2 ? 2 : 1, scene, {{}, {}, crossings}, {}).HasValue());
@@ -52,9 +60,46 @@ namespace Horo::Editor {
             CHECK(fixture.controller.ViewportScene().camera.position == selection.selected.values.position);
             CHECK(fixture.controller.ViewportScene().camera.target == selection.selected.values.target);
             CHECK(fixture.controller.ViewportScene().camera.up == selection.selected.values.up);
+            const auto &previewLens = fixture.controller.ViewportScene().camera.projection;
+            const auto &runtimeLens = selection.selected.values.projection;
+            CHECK(previewLens.kind == runtimeLens.kind);
+            CHECK(previewLens.verticalFovRadians == runtimeLens.verticalFovRadians);
+            CHECK(previewLens.orthographicHeight == runtimeLens.orthographicHeight);
+            CHECK(previewLens.nearPlane == runtimeLens.nearPlane);
+            CHECK(previewLens.farPlane == runtimeLens.farPlane);
         }
         fixture.controller.StopCameraCutPreview();
         CHECK(fixture.controller.ViewportScene().camera.IsValid());
+    }
+
+    TEST_CASE("Controller blend extraction refreshes camera poses without a scene definition change",
+              "[unit][cinematic][camera][editor][rebase]") {
+        const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
+        PreviewFixture fixture;
+        REQUIRE(fixture.controller
+                    .StartCameraCutPreview(TransitionActivation(Cinematic::CameraTransitionTier::SingleViewBlend, curve),
+                                           fixture.Settings(), {1, 1})
+                    .HasValue());
+        REQUIRE(fixture.controller.SeekCameraCutPreview(6).HasValue());
+        const auto before = fixture.controller.ViewportScene();
+        CHECK(before.camera.position.x == 15.0F);
+        const auto scene = *fixture.scene.ActiveScene();
+        const auto definition = scene.DefinitionRevision();
+        const auto revision = scene.StructuralRevision();
+        Runtime::SceneCommandBuffer commands;
+        for (std::uint64_t id = 1; id <= 3; ++id)
+            commands.SetLocalTransform(*scene.Find({id}), {{static_cast<float>(id * 10) - 100.0F, 0.0F, 0.0F}});
+        REQUIRE(fixture.scene.QueueStructuralCommands(std::move(commands)).HasValue());
+        fixture.CommitScene();
+        const auto current = *fixture.scene.ActiveScene();
+        CHECK(current.DefinitionRevision() == definition);
+        CHECK(current.StructuralRevision() != revision);
+        CHECK_FALSE(scene.IsCurrent());
+        const auto after = fixture.controller.ViewportScene();
+        CHECK(after.camera.position.x == -85.0F);
+        CHECK(before.camera.position.x == 15.0F);
+        REQUIRE(fixture.controller.AdvanceCameraCutPreview(0).HasValue());
+        CHECK(fixture.controller.ViewportScene().camera.position == after.camera.position);
     }
 
     TEST_CASE("Controller extraction uses runtime hard cuts and hands off to the current authoring owner",

@@ -26,7 +26,7 @@ integrated acceptance needs the blend and presentation outcomes.
 | Host denies single-view blend, explicit hard fallback, required dual-view denial | HoroCameraCutRuntimeTests | Pending execution |
 | Compatible lens interpolation and rotation, incompatible projection rejection | HoroCameraCutRuntimeTests | Pending execution |
 | Anchor-relative root/child scene publication during a blend | HoroCameraCutRuntimeTests | Pending execution |
-| Actual editor controller extraction versus runtime selection | HoroCameraCutEditorIntegrationTests | Pending execution |
+| Actual editor controller extraction versus runtime selection | HoroCameraCutEditorIntegrationTests | Linear and SmoothStep pose/lens parity and refreshed poses with an unchanged definition revision are covered in source. Pending execution. |
 | Public header boundary and legacy initializer compatibility | HoroCameraCutPublicHeaderConsumer | Pending execution |
 | Windows OpenGL camera blend and viewport resize rendering | HoroEditorViewportOpenGLSmoke | The retained Linear/SmoothStep player advances once across resize. Readback checks the new camera silhouette and a non-empty destination image. Pending execution. |
 | Windows OpenGL native surface resize/suspension | HoroOpenGLSurfaceLifecycleSmoke | Existing real SDL surface test; pending execution |
@@ -47,6 +47,28 @@ the intended seams. Native resize, display and fullscreen execution remains
 required for CIN-003.4 and CIN-003.5 acceptance.
 
 ## Local validation
+
+### Outstanding acceptance and required owners
+
+The 2026-11-11 acceptance audit reread the parent and all five children in
+GitHub and Jira. Closed tracker state is not execution evidence for the changed
+composition. No child or parent acceptance is declared complete by this report.
+
+| Remaining evidence | Required input or owner | Next bounded action |
+|---|---|---|
+| Runtime, public consumer and editor regression execution | Main Windows validation coordinator releases an explicit heavy-work slot | Configure the camera worktree, build the camera targets with one worker, then run their CTest cases under the verified common physical lock. |
+| OpenGL cinematic resize and native surface execution | The same slot and the current Windows display/device | Run the opt-in OpenGL viewport and production surface lifecycle smoke tests. Record camera readback and actual renderer output. |
+| Display migration and fullscreen during playback | Native window-transition fixture and an available display configuration | Add and run the native transition scenarios; viewport-target resize alone does not satisfy these rows. |
+| Vulkan cinematic execution | Verified cooked viewport/shadow shaders and the required validation layer, then a heavy-work slot | Run the production Vulkan presentation smoke without weakening validation or cook provenance. |
+| Metal matrix | macOS/Metal validation host | Run the same authored camera scenarios on the native peer. Windows cannot establish this evidence. |
+| Real dual-view cross-fade and budget exhaustion | Frontend compositor/capability/budget implementation under CIN-003.3 | Admit and qualify two actual views before claiming cross-fade acceptance. Current typed unsupported/fallback coverage does not establish this capability. |
+| Final source quality | A camera compilation database and authenticated/trusted managed IDE and Codacy configuration | Run the full final-base preflight. Report Sonar IDE, CLI secrets and Codacy separately. |
+
+GitHub search found no separate camera compositor issue in this audit. The
+unimplemented dual-view acceptance remains recorded against existing
+[CIN-003.3](https://github.com/horocore/horo-engine/issues/1724) /
+[HORO-1683](https://horo-engine.atlassian.net/browse/HORO-1683), without creating
+or changing external work items.
 
 Formatting and `git diff --check` have run. Native build/test work is deferred
 while the main Windows validation owns heavy-work priority. All later builds
