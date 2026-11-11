@@ -228,6 +228,25 @@ namespace Horo::Audio {
         CHECK(sink.samples.empty());
     }
 
+    TEST_CASE("Audio source corpus rejects unsupported loop semantics and truncated Vorbis headers", "[unit][audio][import]") {
+        for (const auto fieldOffset : {84U, 96U, 100U}) {
+            auto bytes = WaveFixture(true);
+            StoreLittle32(bytes, fieldOffset, 1);
+            SampleSink sink;
+            CHECK(HasErrorCode(Import(bytes, sink), AudioErrors::SourceUnsupported));
+            CHECK(sink.samples.empty());
+        }
+        const auto ogg = DecodeBase64(TestFixtures::OggVorbisSilenceBase64);
+        for (const auto size : {0U, 4U, 26U, 27U, 28U, 29U, 45U, 57U, 63U, 128U}) {
+            auto bytes = std::vector<std::byte>(ogg.begin(), ogg.begin() + size);
+            SampleSink sink;
+            const auto imported = Import(bytes, sink);
+            REQUIRE(imported.HasError());
+            CHECK(imported.ErrorValue().domain.Value() == "horo.audio");
+            CHECK(sink.samples.empty());
+        }
+    }
+
     TEST_CASE("Audio import measures gated LUFS short-term loudness and inter-sample true peak", "[unit][audio][import]") {
         auto bytes = SineFixture();
         SampleSink sink;

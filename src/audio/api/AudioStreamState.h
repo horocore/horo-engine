@@ -39,6 +39,9 @@ namespace Horo::Audio {
      */
     struct AudioStreamState final {
         AudioStreamRequest request;
+        AudioStreamPackageSource source;
+        AudioStreamHandle replacementOf;
+        bool staged{}; /**< Control gates candidate ports until prepared publication. */
         std::vector<AudioSample> ring;
         std::vector<AudioSample> decodeBuffer;
         std::vector<std::byte> scratch;
@@ -49,6 +52,9 @@ namespace Horo::Audio {
         AudioVoiceLoop workerLoop;
         std::atomic<std::uint64_t> underrunFrames{};
         std::atomic<std::uint64_t> underrunCallbacks{};
+        std::atomic<std::uint64_t> decodeNanoseconds{}; /**< Serialized worker writes; control observes atomically. */
+        std::uint64_t fillSubmissionRejections{};       /**< Control-owned scheduler rejection count. */
+        bool schedulerRejected{};
         std::atomic<bool> stopped{false};
         bool failed{};
         bool cancelled{};
@@ -60,8 +66,8 @@ namespace Horo::Audio {
         std::size_t chargedBytes{};
 
         // Copy bounded decoder facts inside admission's allocation boundary before publishing any slot.
-        explicit AudioStreamState(const AudioStreamRequest &value, const std::size_t bytes)
-            : request(value),
+        explicit AudioStreamState(const AudioStreamRequest &value, AudioStreamPackageSource binding, const std::size_t bytes)
+            : request(value), source(std::move(binding)),
               ring(static_cast<std::size_t>(request.ringFrames) * request.decoder.outputFormat.layout.orderedChannels.size()),
               decodeBuffer(static_cast<std::size_t>(request.decoder.maximumFramesPerDecode) *
                            request.decoder.outputFormat.layout.orderedChannels.size()),

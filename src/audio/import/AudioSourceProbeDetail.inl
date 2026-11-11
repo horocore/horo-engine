@@ -80,6 +80,10 @@ struct WaveEncoding final {
             return Result<std::vector<AudioLoopRegion>>::Failure(read.ErrorValue());
         const auto start = ReadLittle<std::uint32_t>(std::span{loop}.subspan(8));
         const auto inclusiveEnd = ReadLittle<std::uint32_t>(std::span{loop}.subspan(12));
+        // The schema represents forward, integer-frame, indefinite loops only.
+        if (ReadLittle<std::uint32_t>(std::span{loop}.subspan(4)) != 0 || ReadLittle<std::uint32_t>(std::span{loop}.subspan(16)) != 0 ||
+            ReadLittle<std::uint32_t>(std::span{loop}.subspan(20)) != 0)
+            return Result<std::vector<AudioLoopRegion>>::Failure(MakeImportError(AudioErrors::SourceUnsupported));
         if (inclusiveEnd < start || inclusiveEnd == std::numeric_limits<std::uint32_t>::max())
             return Result<std::vector<AudioLoopRegion>>::Failure(MakeImportError(AudioErrors::SourceInvalid));
         loops.push_back({AudioAssetElementId{index + 1}, start, static_cast<std::uint64_t>(inclusiveEnd) + 1});

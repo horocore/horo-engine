@@ -70,7 +70,8 @@ namespace Horo::Audio {
                 return Result<void>::Failure(MakeError(AudioErrors::CookProfileInvalid));
             if (settings.container != AudioContainerIds::HoroCooked || settings.codec != AudioCodecIds::Pcm ||
                 settings.compression != AudioCookCompression::None || settings.quality != AudioCookQuality::Float32Exact ||
-                settings.encoderDelayFrames != 0 || settings.encoderPaddingFrames != 0)
+                settings.encoderDelayFrames != 0 || settings.encoderPaddingFrames != 0 || settings.preRollFrames != 0 ||
+                settings.loopCrossfadeFrames != 0)
                 return Result<void>::Failure(MakeError(AudioErrors::CookCombinationUnsupported));
             return Result<void>::Success();
         }
@@ -132,6 +133,8 @@ namespace Horo::Audio {
         Append32(bytes, settings.streamChunkFrames);
         Append32(bytes, settings.encoderDelayFrames);
         Append32(bytes, settings.encoderPaddingFrames);
+        Append32(bytes, settings.preRollFrames);
+        Append32(bytes, settings.loopCrossfadeFrames);
         return Result<Sha256Digest>::Success(ComputeSha256(std::as_bytes(std::span{bytes})));
     }
 
