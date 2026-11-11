@@ -83,6 +83,14 @@ now includes CMake 4.3.1 and Ninja 1.13.2. This prerequisite success still does 
 prove connected-mode authentication, Workspace Trust, C++ sensor execution,
 CLI secrets results, Codacy findings or cloud drift. Those remain final-check work.
 
+The subsequent online `doctor --timeout 45 --code-user-data <existing-portable-profile>`
+still reported local prerequisites ready and exit 0, but its independent
+`cloudConfiguration` was **incomplete**: cloud configuration read failed (exit 2),
+requiring Codacy authentication verification. Cloud drift is therefore unverified;
+the top-level exit 0 is not treated as cloud success. The cached report is
+`1794386611801302300-fa4293c8.json` in this worktree's external quality-report cache.
+No credentials, trust policy, rules or cloud configuration were changed.
+
 The baseline `scripts/analyze.py` prepares compiler context with a hard-coded
 `--parallel 2`, even when reusing a database. The current machine policy requires
 every native build to use `--parallel 1`, under the verified physical shared lock.
