@@ -147,7 +147,9 @@ namespace Horo::Cinematic {
         fixture.StartTransition(
             TransitionActivation(CameraTransitionTier::DualViewCrossFade, CameraBlendCurve::Linear, CameraTransitionFallback::HardCut));
         fixture.Seek(5);
-        CHECK(fixture.Commit().selected.values.position.x == 20.0F);
+        const auto selected = fixture.Commit();
+        CHECK(selected.selected.values.position.x == 20.0F);
+        CHECK(selected.selected.transitionResolution == CameraTransitionResolution::HardCutFallback);
     }
 
     TEST_CASE("The camera owner interpolates rotation and lens and rejects incompatible projection atomically",
@@ -382,8 +384,11 @@ namespace Horo::Cinematic {
         commands.SetLocalTransform(*fixture.scene->View().Find({2}), destination);
         REQUIRE(fixture.scene->Commit(commands).HasValue());
         fixture.StartTransition(TransitionActivation(CameraTransitionTier::SingleViewBlend, CameraBlendCurve::Linear, fallback));
-        REQUIRE(fixture.runtime.Seek(fixture.playback->Player(), 6).HasValue());
-        const auto published = fixture.playback->Publish(fixture.scene->View());
+        fixture.Seek(5);
+        fixture.Advance(0);
+        const auto before = fixture.Commit();
+        CHECK(before.selected.transitionResolution == CameraTransitionResolution::Requested);
+        const auto published = fixture.playback->Evaluate(1, fixture.scene->View(), {{}, {}, fixture.crossings}, {});
         if (fallback == CameraTransitionFallback::Fail) {
             REQUIRE(published.HasError());
             CHECK(published.ErrorValue().code.Value() == CameraErrors::IncompatibleTransition.code.Value());
@@ -394,6 +399,14 @@ namespace Horo::Cinematic {
             CHECK(selected.overrideOwner.has_value());
             CHECK(selected.selected.camera == *fixture.scene->View().Find({2}));
             CHECK(selected.selected.values.target.z > 0.9F);
+            CHECK(selected.selected.transitionResolution == CameraTransitionResolution::HardCutFallback);
+            CHECK(selected.selected.discontinuityRevision == before.selected.discontinuityRevision);
+            CHECK(selected.selectionEpoch == before.selectionEpoch + 1);
+            CHECK(selected.discontinuity);
+            REQUIRE(fixture.playback->Publish(fixture.scene->View()).HasValue());
+            const auto repeated = fixture.Commit();
+            CHECK(repeated.selectionEpoch == selected.selectionEpoch);
+            CHECK_FALSE(repeated.discontinuity);
         }
     }
 

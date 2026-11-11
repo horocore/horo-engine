@@ -60,8 +60,8 @@ windows and missing sources use an authored hard-cut fallback or fail typed
 activation before a lease or player is retained. Invalid vocabulary and malformed
 numeric durations fail frame-plan validation.
 Rebuild consumers of Cinematic Runtime and Camera Runtime together because the
-in-process key, crossing-request and owner layouts and the `Create` signature
-have changed. The additional fields make transition intent part of the canonical
+in-process key, crossing-request, proposal and owner layouts and the `Create`
+signature have changed. The additional fields make transition intent part of the canonical
 immutable key.
 No persisted sequence-asset encoding is changed by this frame-plan API extension.
 Frame camera hooks receive the same authored transition fields copied from the
@@ -95,6 +95,10 @@ scene borrows and callback lifetimes follow the existing runtime plan contract.
 Exceptional interpolation/fallback diagnostics use the existing owned error
 representation. A finite camera pair whose intermediate pose cannot be represented
 returns `IncompatibleCameraTransition` and uses its authored fallback.
+`CameraProposal::transitionResolution` records the requested transition or its
+admitted hard-cut fallback. Changing the selected outcome increments the final owner's
+selection epoch, including a fallback inside one camera key. Repeated publication
+of the same outcome retains that epoch and the committed frame stays immutable.
 
 The editor viewport controller owns a distinct preview context and stable-address
 session state. Its programmatic Start/Advance/Seek/Stop camera-preview entry points

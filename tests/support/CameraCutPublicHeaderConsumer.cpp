@@ -8,6 +8,7 @@ static_assert(!std::is_copy_constructible_v<Horo::Cinematic::CinematicCameraPlay
 static_assert(Horo::Cinematic::SequenceFrameCameraCutKey{}.transitionTier == Horo::Cinematic::CameraTransitionTier::HardCut);
 static_assert(Horo::Cinematic::SequenceFrameCameraCutKey{}.fallback == Horo::Cinematic::CameraTransitionFallback::Fail);
 static_assert(Horo::Cinematic::SequenceFrameCameraCutRequest{}.transitionTier == Horo::Cinematic::CameraTransitionTier::HardCut);
+static_assert(Horo::Runtime::CameraProposal{}.transitionResolution == Horo::Runtime::CameraTransitionResolution::Requested);
 static_assert(
     std::is_same_v<Horo::Cinematic::SequenceCameraCutHook,
                    void (*)(const Horo::BorrowedCallbackContext &, const Horo::Cinematic::SequenceFrameCameraCutRequest &) noexcept>);

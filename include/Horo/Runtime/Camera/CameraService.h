@@ -31,6 +31,13 @@ namespace Horo::Runtime {
         Count
     };
 
+    /** @brief Owner-visible outcome of the producer's admitted camera transition. */
+    enum class CameraTransitionResolution : std::uint8_t {
+        Requested,
+        HardCutFallback,
+        Count
+    };
+
     /** @brief Host-issued complete context fence, immutable for the owner's lifetime. */
     struct CameraViewContext final {
         CameraViewContextId view;
@@ -44,6 +51,8 @@ namespace Horo::Runtime {
         EntityRef camera; /**< Scene camera identity; empty only for an editor authoring camera. */
         Render::RenderCameraView values;
         std::uint64_t discontinuityRevision{}; /**< Producer-owned cut/seek revision; zero denotes ordinary continuous motion. */
+        CameraTransitionResolution transitionResolution{
+            CameraTransitionResolution::Requested}; /**< Copied admission outcome for history invalidation. */
     };
 
     /** @brief Owner-issued generation fence for one bounded cinematic override slot. */

@@ -100,6 +100,7 @@ namespace Horo::Cinematic {
             CameraTransitionFallback fallback{CameraTransitionFallback::Fail};
             SequenceTime duration{};
             CameraBlendCurve curve{CameraBlendCurve::Linear};
+            Runtime::CameraTransitionResolution resolution{Runtime::CameraTransitionResolution::Requested};
         };
 
         CinematicCameraPlayback(CinematicRuntimeService &runtime, Runtime::CameraService &camera, const SequencePlayerHandle &player,
@@ -116,6 +117,10 @@ namespace Horo::Cinematic {
          * @return Owner submission outcome or typed interpolation failure after the authored fallback is considered. */
         [[nodiscard]] Result<void> SubmitPosition(Runtime::RuntimeSceneView scene, std::size_t key, SequenceTime position,
                                                   const Runtime::CameraProposal &destination);
+        /** @brief Publishes an authored hard-cut fallback with copied outcome evidence for camera history invalidation.
+         * @param destination Current validated destination and producer revision.
+         * @return Exact final owner submission outcome. */
+        [[nodiscard]] Result<void> SubmitFallback(const Runtime::CameraProposal &destination);
         [[nodiscard]] bool IsSeekDiscontinuity(const SequencePlayerSnapshot &state) const noexcept;
         CinematicRuntimeService *runtime_{};
         Runtime::CameraService *camera_{};

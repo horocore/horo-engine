@@ -69,7 +69,8 @@ namespace Horo::Runtime {
     }
 
     bool CameraService::ValidProposal(const CameraProposal &proposal, const bool isOverride) const noexcept {
-        if (!proposal.values.IsValid() || Math::TryLookAt(proposal.values.position, proposal.values.target, proposal.values.up).HasError())
+        if (proposal.transitionResolution >= CameraTransitionResolution::Count || !proposal.values.IsValid() ||
+            Math::TryLookAt(proposal.values.position, proposal.values.target, proposal.values.up).HasError())
             return false;
         if (!proposal.camera.IsValid())
             return proposal.camera == EntityRef{} && !isOverride && context_.domain == CameraViewDomain::EditorPreview;
@@ -109,6 +110,7 @@ namespace Horo::Runtime {
         if (rotation.HasError())
             return Result<void>::Failure(WithCause(MakeError(CameraErrors::IncompatibleTransition), rotation.ErrorValue()));
         auto blended = to;
+        blended.transitionResolution = CameraTransitionResolution::Requested;
         auto &values = blended.values;
         values.position = from.values.position * (1.0F - weight) + to.values.position * weight;
         values.target = values.position + rotation.Value().Rotate({0.0F, 0.0F, -1.0F});
@@ -170,7 +172,8 @@ namespace Horo::Runtime {
 
     bool CameraService::ChangesSelection(const CameraProposal &proposal, const std::optional<CameraClaimId> &claim) const noexcept {
         return !committed_ || committed_->overrideOwner != claim || committed_->selected.camera != proposal.camera ||
-               committed_->selected.discontinuityRevision != proposal.discontinuityRevision;
+               committed_->selected.discontinuityRevision != proposal.discontinuityRevision ||
+               committed_->selected.transitionResolution != proposal.transitionResolution;
     }
 
     bool CameraService::CanAdvanceEpoch(const bool changed) const noexcept {

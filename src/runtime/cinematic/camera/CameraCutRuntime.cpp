@@ -137,6 +137,8 @@ namespace Horo::Cinematic {
             if (admitted.HasError())
                 return Result<CinematicCameraPlayback>::Failure(admitted.ErrorValue());
             bound[index] = {key.time, entity.Value(), admitted.Value(), key.fallback, key.transitionDuration, key.transitionCurve};
+            if (admitted.Value() != key.transitionTier)
+                bound[index].resolution = Runtime::CameraTransitionResolution::HardCutFallback;
             previous = entity.Value();
         }
         const auto player = activation.player.handle;
@@ -248,6 +250,7 @@ namespace Horo::Cinematic {
             return Result<void>::Failure(proposal.ErrorValue());
         }
         auto selected = proposal.Value();
+        selected.transitionResolution = cuts_[key].resolution;
         selected.discontinuityRevision = discontinuityRevision_ + static_cast<std::uint64_t>(changed);
         const auto submitted = SubmitPosition(scene, key, position, selected);
         if (submitted.HasError()) {
@@ -273,7 +276,7 @@ namespace Horo::Cinematic {
             return Result<void>::Failure(source.ErrorValue());
         if (cut.fallback == CameraTransitionFallback::HardCut &&
             source.Value().values.projection.kind != destination.values.projection.kind)
-            return camera_->Submit(*lease_, destination);
+            return SubmitFallback(destination);
         auto weight = static_cast<double>(elapsed) / static_cast<double>(cut.duration);
         if (cut.curve == CameraBlendCurve::SmoothStep)
             weight = weight * weight * (3.0 - 2.0 * weight);
@@ -281,8 +284,15 @@ namespace Horo::Cinematic {
         if (blended.HasError() && cut.fallback == CameraTransitionFallback::HardCut &&
             (blended.ErrorValue().code.Value() == Runtime::CameraErrors::IncompatibleTransition.code.Value() ||
              blended.ErrorValue().code.Value() == Runtime::CameraErrors::UnsupportedTransition.code.Value()))
-            return camera_->Submit(*lease_, destination);
+            return SubmitFallback(destination);
         return blended;
+    }
+
+    /** @copydoc CinematicCameraPlayback::SubmitFallback */
+    Result<void> CinematicCameraPlayback::SubmitFallback(const Runtime::CameraProposal &destination) {
+        auto fallback = destination;
+        fallback.transitionResolution = Runtime::CameraTransitionResolution::HardCutFallback;
+        return camera_->Submit(*lease_, fallback);
     }
 
     /** @copydoc CinematicCameraPlayback::Evaluate */
