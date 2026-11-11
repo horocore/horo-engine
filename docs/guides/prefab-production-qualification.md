@@ -15,13 +15,13 @@ remaining children remain To Do in Jira and open in GitHub.
 
 | Jira / GitHub / alias | Existing implementation and executable evidence | Added qualification or remaining acceptance evidence |
 | --- | --- | --- |
-| HORO-1076 / #1076 / PFB-008.1 | `PrefabDiagnostics.cpp`, `PrefabDiagnosticsTests.cpp` cover stable descriptors, typed foreign causes, identity, exact bounded context and Build Output projection. | Retain the merged implementation. A closed GitHub issue does not resolve the Jira status discrepancy. |
+| HORO-1076 / #1076 / PFB-008.1 | `PrefabDiagnostics.cpp`, `PrefabDiagnosticsTests.cpp` cover stable descriptors, typed foreign causes, identity, exact bounded context and Build Output projection. | A new regression covers deep resolver failures crossing the message budget. Long composition/source-chain messages now summarize omitted intermediate entries while retaining endpoints and the originating error. Native execution is pending. A closed GitHub issue does not resolve the Jira status discrepancy. |
 | HORO-1077 / #1077 / PFB-008.2 | `PrefabMetricsTests.cpp`, `PrefabMetricCookHostTests.cpp` cover bounded tags, real parse/resolve/cache/cook, zero-allocation disabled producers, terminal receipt and retired telemetry generations. | Run the existing metrics and host targets. Logical span events qualify only the implemented telemetry boundary. |
 | HORO-1078 / #1078 / PFB-008.3 | `PrefabDebugSnapshot.cpp`, `PrefabDebugSnapshotTests.cpp`, `ScenePrefabDebugSnapshotTests.cpp` cover immutable owned evidence, provenance, cancellation and explicit zero/exact-prefix truncation. | Run both model and scene targets. |
 | HORO-1079 / #1079 / PFB-008.4 | `PrefabDiagnosticsTests.cpp` projects bounded source hints to Build Output. `SourceFileOpenService` and workspace source operations own containment, routing and localized failures. | New source-service test checks Prefab routing/focus, a moved source hint and missing handler. Current-revision AssetId/member/property/edge navigation remains unqualified. |
 | HORO-1080 / #1080 / PFB-008.5 | Frozen `tests/fixtures/prefab-reference-corpus`, `PrefabReferenceCorpusTests.cpp`, `ScenePrefabExpansionQualificationTests.cpp`, `PrefabSceneCookQualificationTests.cpp` cover deterministic graph/override/nested/cook/runtime semantics. | Reuse the committed corpus and independent semantic oracles. |
 | HORO-1081 / #1081 / PFB-008.6 | `PrefabParserFuzzTests.cpp` and `PrefabParserPersistenceFuzzTests.cpp` cover deterministic malformed recipes, shrinking/replay, native recovery publication and exact retained state. | Run both dedicated CTest entries. See `tests/unit/runtime/prefab/PrefabParserFuzzMatrix.md` for input and recipe bounds. |
-| HORO-1082 / #1082 / PFB-008.7 | `PrefabLimitProfile`, existing graph work exhaustion, parser byte admission, override bounds and Scene expansion boundary tests. | New shared graph stress and nested fanout tests exercise exact admission, overflow, ordering, retained results and pre-cancellation. Mid-work cancellation latency and peak allocated bytes still need measurements. |
+| HORO-1082 / #1082 / PFB-008.7 | `PrefabLimitProfile`, existing graph work exhaustion, parser byte admission, override bounds and Scene expansion boundary tests. | New shared graph stress and nested fanout tests exercise exact admission, overflow, ordering and retained results. A deterministic in-flight cancellation test records allocation requests/bytes and enforces fewer requests than uninterrupted resolution plus a 250 ms cancellation-return ceiling. Execution and peak allocated bytes remain unverified. |
 | HORO-1083 / #1083 / PFB-008.8 | Prefab document/session/workspace tests cover separate histories, explicit external conflict decisions, recovery, preview source drift and joined worker shutdown. | New deferred-stage test covers edit/reload/close before completion. Publication reentrancy now also probes reload/close/save. Full cross-document apply/rebase transaction races depend on their owning product contracts. |
 | HORO-1084 / #1084 / PFB-008.9 | Cook generation/template provider, release executor/package and project migration tests already exist. | New host test removes authored scene/root/nested sources, reloads the published scene and verifies a failed recook retains that generation. OS, GUI and distribution execution remains a matrix obligation. |
 | HORO-1085 / #1085 / PFB-008.10 | Existing reference corpus, Gameplay host, Editor product, cook/release and migration suites exercise real subsystem entry points. | Run the supported journeys below. Integrated create-through-package evidence and measured parse/expand/cook/spawn allocation/latency ceilings remain required for final acceptance. |
@@ -39,13 +39,17 @@ cache reuse). Their actual callers and tests are part of this qualification.
 | Nested fanout | One root mounts 64 occurrences of a two-object leaf, giving 129 expanded objects from two source assets. Object limit 129 admits all occurrence identities. Limit 128 rejects three attempts with `ObjectCountExceeded` while the earlier candidate stays readable. Pre-cancelled resolution returns `Cancelled`. | Cold source resolver, nested depth policy 1, no expansion cache. |
 | Variant chain | A ten-source chain admits eight inheritance edges and rejects the ninth with `HierarchyDepthExceeded`. Retained and subsequent eight-edge resolutions still succeed. | Canonical source resolver at the engine hard variant depth of eight. |
 | Work counter | A `size_t` maximum charge rejects with `WorkBudgetExceeded` while preserving the complete remaining budget. Zero-work charges succeed before and after exact exhaustion. | Operation-local checked arithmetic with no source/cache dependency. |
+| Deep failure diagnostic | Eighteen nested sources exceed the sixteen-edge depth policy. The originating `HierarchyDepthExceeded` must still translate into a structured diagnostic and Build Output record within 512 message bytes, with root and last admitted source IDs retained. Long source/composition paths explicitly report omitted intermediate entries. | Immutable graph/source input, no cache, native execution pending. |
+| In-flight cancellation | A single 256-object source is resolved normally while measuring owner-thread C++ allocations. An allocation observer requests cancellation halfway through that measured request count during a second cold resolution. The result must be `Cancelled`, allocate fewer times than the uninterrupted baseline and return within 250 ms of cancellation. The retained complete candidate and a subsequent resolution must remain valid. | Instrumentation disabled, cold source resolver. Output includes source bytes, object count, baseline/interrupted cumulative allocation requests/bytes and cancellation microseconds. These counts exclude native C allocation, other threads and process RSS. Native execution pending. |
 | Deferred editor stage | A real RuntimeSceneService host deliberately defers commit. Edit, external reload and close each retire the pending host before release. A later completion poll cannot publish a preview or fixed update. | Deterministic owner-thread lifecycle interleavings, no wall-clock sleep or scheduling lottery. |
 | Source-free cooked reload | Eight scene placements expand to 41 entities. The real host publishes the generation before the authored scene and both prefab sources are removed. Reloaded canonical scene bytes remain identical and failed recook retains the selector. | Native files, real source capture/cook/generation decoder, cold first cook. |
 
 These workloads bound generated data explicitly. Object/edge counts and typed
-overflow checks establish structural admission. Allocation peaks and mid-operation
-cancellation latency require separate observed measurements. The pre-cancelled
-case proves admission cancellation only.
+overflow checks establish structural admission. The in-flight cancellation case
+adds a measured latency and cumulative C++ allocation gate whose values must be
+captured on each actual platform/build invocation. Allocation peaks remain a
+separate measurement obligation. The pre-cancelled case proves admission
+cancellation only.
 
 ## Execution matrix
 
@@ -87,6 +91,14 @@ packaged-player/OS execution and measured performance gates. Existing headless
 release-stage tests alone cannot establish that full distribution matrix.
 
 ## Local validation record
+
+A persistent goal was created on 11 November 2026 for the complete HORO-1007
+parent and all ten children. It remains active. GitHub and Jira status/identity
+reads were repeated, and no remote delivery branch or pull request was found.
+The previously idle state came from the main CI heavy-work reservation. An
+independent follow-up found and fixed the overlong deep-failure message path and
+added in-flight cancellation qualification. Those C++ changes are also pending
+native execution and final preflight.
 
 Initial worktree was clean and detached at
 `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`. The dedicated branch was created
