@@ -5180,7 +5180,8 @@ add_executable(HoroRuntimeSaveCloudRevisionMetadataTests
         unit/runtime/save/SaveCloudRevisionMetadataTests.cpp
 )
 target_compile_features(HoroRuntimeSaveCloudRevisionMetadataTests PRIVATE cxx_std_20)
-target_link_libraries(HoroRuntimeSaveCloudRevisionMetadataTests PRIVATE HoroEngine::Runtime)
+target_link_libraries(HoroRuntimeSaveCloudRevisionMetadataTests PRIVATE HoroEngine::Runtime HoroEngine::PlatformServices)
+target_include_directories(HoroRuntimeSaveCloudRevisionMetadataTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit/platform_services)
 add_executable(HoroRuntimeSaveManagerProjectionTests
         unit/runtime/save/SaveManagerProjectionTests.cpp
 )

@@ -7,6 +7,18 @@ namespace Horo::PlatformServices::TestSupport {
         using Operation = MockPlatformServicesOperation;
         using namespace std::chrono_literals;
 
+        /** @brief Models an older adapter implementing only the legacy read surface. */
+        class LegacyCloudProvider final : public ICloudService {
+        public:
+            std::uint32_t legacyReads{};
+
+            /** @brief Records any fallback into the older object-ID route. */
+            Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest) override {
+                ++legacyReads;
+                return Result<PlatformRequestHandle<CloudReadResult>>::Failure(MakeError(BackendErrors::ServiceUnavailable));
+            }
+        };
+
         /** @brief Activates one network-free provider with an explicit session and exact operation script. */
         void Prepare(MockPlatformServicesBackend &backend, std::vector<Operation> sequence) {
             REQUIRE(backend.ExpectSequence(std::move(sequence)).HasValue());
@@ -40,6 +52,20 @@ namespace Horo::PlatformServices::TestSupport {
             CHECK(backend.VerifyExpectations().HasValue());
         }
     }  // namespace
+
+    TEST_CASE("Legacy cloud adapters reject opaque operations without implicit fallback", "[platform-services][cloud][conformance]") {
+        LegacyCloudProvider legacy;
+        ICloudService &cloud = legacy;
+        const auto write = CloudWrite();
+        const auto commit = CloudCommit(write);
+        RequireError(cloud.ListCloudObjects({.subject = write.subject, .pageSize = 1}), CloudObjectErrors::UnsupportedCapability);
+        RequireError(cloud.ReadCloudObject(CloudBlobReadRequest{write.subject, write.key, 1}), CloudObjectErrors::UnsupportedCapability);
+        RequireError(cloud.WriteCloudObject(CloudBlobWriteRequest{write}), CloudObjectErrors::UnsupportedCapability);
+        RequireError(cloud.DeleteCloudObject({write.subject, write.key, commit.committedObject->revision, write.mutation}),
+                     CloudObjectErrors::UnsupportedCapability);
+        RequireError(cloud.QueryCloudQuota(write.subject), CloudObjectErrors::UnsupportedCapability);
+        CHECK(legacy.legacyReads == 0);
+    }
 
     TEST_CASE("Cloud providers expose precise Null or complete scripted opaque operations", "[platform-services][cloud][conformance]") {
         const auto write = CloudWrite();

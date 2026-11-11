@@ -74,6 +74,30 @@ No cloud mutation enters `PlatformOfflineQueue`. `CloudSaveCoordinator` under
 ADR-115 remains the sole durable intent owner. Timeout, cancellation, cleanup-pending
 or late provider evidence never acknowledges an unknown remote outcome as success.
 
+The parent acceptance audit also identified missing Save/transport compatibility
+fixtures. `SaveCloudRevisionMetadataTests.cpp` now exercises actual public Save
+metadata and transport request-store types together in
+`HoroRuntimeSaveCloudRevisionMetadataTests`. It explicitly copies a coordinator-owned
+mutation identity and exact opaque revision into a transport intent. Successful,
+cancelled, timed-out and quota-failed requests cannot rewrite the paired local
+generation/archive/confirmed-mutation metadata; late evidence cannot overwrite a
+terminal result. The fixture also rejects Save metadata keys/revisions that fit
+Save's wider metadata bound but exceed transport bounds, preserving the source
+evidence rather than truncating it. Cloud mutation types remain structurally
+unrepresentable in `PlatformOfflineOperation`.
+
+Only this test target gains a private link to Platform Services and its narrow test
+support include directory. Production Runtime/Platform Services dependencies and
+header ownership are unchanged. This is an executable compatibility fixture, not a
+durable coordinator implementation or private-provider qualification. Its native
+execution remains pending the shared heavy-work slot.
+
+The cloud conformance suite also exercises an older adapter that implements only
+the legacy object-ID read method. All five new opaque operations return the exact
+`UnsupportedCapability` error without invoking that older route. This compatibility
+fixture proves the default unsupported boundary without claiming an actual private
+SDK adapter is installed or qualified; its native execution is still pending.
+
 ## Execution evidence
 
 Windows MSVC Debug configure and the `HoroPlatformRequestTests` build completed on
@@ -115,6 +139,21 @@ An initialized-shell doctor subsequently found CMake 4.3.1 and Ninja 1.13.2;
 Codacy cloud-drift comparison remained incomplete because its disposable mirror
 could not be indexed. A later read-only Git dry-run could enumerate that mirror;
 the transient indexing failure is not a clean drift check.
+The later full-capability audit found an existing portable VS Code source profile.
+Running `scripts/analyze.py doctor --offline --code-user-data <existing-profile>`
+with the initialized tool PATH reported `ready_for_local_check` in report
+`1794391219402139100-3d726185.json`. No profile/security setting was changed.
+This prerequisite result does not verify connected-mode authentication, Workspace
+Trust, C++ sensor execution, secrets, Codacy findings or cloud configuration drift.
+
+The renewed acceptance audit confirmed all six native GitHub children and the Jira
+identities in the delivery table. Architecture/metadata/mutation children are merged
+but the metadata and mutation Jira states still differ from GitHub. Transport,
+scripted providers and qualification remain open. A persistent active goal now
+tracks every remaining child acceptance item, including the two newly identified
+compatibility fixtures and final native/quality execution. Clean local commits do
+not establish group completion. No heavy helper or background queue was started
+during this audit; the main validation owner must grant the next bounded slot.
 
 ## External evidence and blockers
 
