@@ -32,6 +32,20 @@ namespace Horo::Cli {
         REQUIRE(nonTty.ShouldPresent({"link", 0.5F, {}}, start + std::chrono::seconds{2}));
     }
 
+    TEST_CASE("CLI progress bounds retained text while a consumer is stalled", "[unit][cli][progress][qualification]") {
+        CliProgressMailbox mailbox;
+        const std::string oversized(8192, 'x');
+        for (unsigned index = 0; index < 65'536; ++index)
+            mailbox.Report({oversized, 0.5F, oversized});
+        mailbox.Report({oversized, 1.0F, oversized});
+        const auto final = mailbox.Take();
+        REQUIRE(final);
+        CHECK(final->phase.size() == 4096);
+        CHECK(final->message.size() == 4096);
+        CHECK(final->completion == 1.0F);
+        CHECK_FALSE(mailbox.Take());
+    }
+
     TEST_CASE("CLI progress presentation isolates streams and human cadence", "[unit][cli][progress]") {
         const auto start = std::chrono::steady_clock::now();
         CliProgressMailbox mailbox;
@@ -111,5 +125,14 @@ namespace Horo::Cli {
         REQUIRE(updated.has_value());
         REQUIRE(updated->phase == "cook");
         REQUIRE(updated->completion == 0.5F);
+    }
+
+    TEST_CASE("CLI invocation deadline avoids overflow at the largest duration", "[unit][cli][timeout]") {
+        CliInvocationStopController stop{std::chrono::milliseconds::max()};
+        REQUIRE(stop.Deadline());
+        CHECK(*stop.Deadline() == std::chrono::steady_clock::time_point::max());
+        CHECK_FALSE(stop.Token().IsCancellationRequested());
+        stop.Shutdown();
+        CHECK(stop.Token().IsCancellationRequested());
     }
 }  // namespace Horo::Cli

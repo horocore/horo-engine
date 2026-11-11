@@ -1,3 +1,4 @@
+#include "CliOutputContractFixture.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "navigation/NavigationProjectBakeInputFixture.h"
 
@@ -54,6 +55,7 @@ namespace Horo::Application {
                 REQUIRE(result.Value().exitCode == exitCode);
                 REQUIRE_FALSE(truncated);
                 const auto envelope = nlohmann::json::parse(output);
+                Horo::Tests::CliContract::ValidateEnvelope(envelope);
                 CHECK(envelope.at("exitCode") == exitCode);
                 return envelope;
             }

@@ -328,11 +328,33 @@ namespace Horo::Cli {
 
     TEST_CASE("CLI shared options have one deterministic backend-neutral schema", "[unit][cli][parser]") {
         const auto common = CliOptionParser::CommonOptions();
-        REQUIRE(common.size() == 4);
+        REQUIRE(common.size() == 5);
         REQUIRE(common[0].name == "log-level");
         REQUIRE(common[1].name == "non-interactive");
         REQUIRE(common[2].name == "output");
         REQUIRE(common[3].name == "project");
+        REQUIRE(common[4].name == "timeout-ms");
         REQUIRE(common[2].configurationKey == "cli.output.format");
+    }
+
+    TEST_CASE("CLI parser admits only supported positive bounded invocation timeouts before stdin", "[unit][cli][parser][timeout]") {
+        auto descriptor = Descriptor();
+        descriptor.stdinPolicy = CliStdinPolicy::JsonDocument;
+        const auto registry = Registry(descriptor);
+        TestInputReader input;
+        input.payload = Bytes("{}");
+        const auto accepted = std::to_array<std::string_view>({"project", "validate", "--count", "2", "--timeout-ms", "250"});
+        REQUIRE(CliOptionParser::Parse(accepted, registry).HasValue());
+        for (const auto milliseconds : {"0", "-1", "5001", "86400001", "9223372036854775807"}) {
+            const std::array<std::string_view, 6> arguments{"project", "validate", "--count", "2", "--timeout-ms", milliseconds};
+            RequireError(CliOptionParser::Parse(arguments, registry,
+                                                {.inputReader = &input,
+                                                 .stdinSelected = true,
+                                                 .selectedStdinPolicy = CliStdinPolicy::JsonDocument}),
+                         CliErrors::ParseFailed);
+        }
+        CHECK(input.calls == 0);
+        descriptor.timeout = {};
+        RequireError(CliOptionParser::Parse(accepted, Registry(descriptor)), CliErrors::ParseFailed);
     }
 }  // namespace Horo::Cli

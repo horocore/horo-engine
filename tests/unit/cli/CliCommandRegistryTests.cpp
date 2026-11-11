@@ -301,6 +301,15 @@ namespace Horo::Cli {
         RequireError(CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy()), CliErrors::DescriptorInvalid);
     }
 
+    TEST_CASE("CLI registry admits opt-in deadlines while preserving the disabled default", "[unit][cli][registry][timeout]") {
+        auto descriptor = Descriptor({"project", "validate"});
+        descriptor.timeout = {.maximumMilliseconds = 5000};
+        const auto registry = CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy());
+        REQUIRE(registry.HasValue());
+        CHECK(registry.Value().Commands().front().timeout.defaultMilliseconds == 0);
+        CHECK(registry.Value().Commands().front().timeout.maximumMilliseconds == 5000);
+    }
+
     TEST_CASE("CLI registry policy validates host contract and capability grants", "[unit][cli][registry]") {
         const CliCommandDescriptor descriptor = Descriptor({"project", "validate"});
         CliCommandRegistryPolicy policy = Policy();
@@ -384,6 +393,11 @@ namespace Horo::Cli {
         descriptor = Descriptor({"project", "validate"});
         descriptor.options.push_back(
             {.name = "project", .summary = "Conflicts with shared project.", .valueKind = CliOptionValueKind::Path});
+        RequireError(CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy()), CliErrors::OptionNameDuplicate);
+
+        descriptor = Descriptor({"project", "validate"});
+        descriptor.options.push_back(
+            {.name = "timeout-ms", .summary = "Conflicts with the shared deadline.", .valueKind = CliOptionValueKind::SignedInteger});
         RequireError(CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy()), CliErrors::OptionNameDuplicate);
 
         descriptor = Descriptor({"project", "validate"});

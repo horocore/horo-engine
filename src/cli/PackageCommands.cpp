@@ -176,6 +176,7 @@ namespace Horo::Cli {
             descriptor.ownerId = "horo.package.cli";
             descriptor.requiredCapabilities = {{"horo.package.manage"}};
             descriptor.cancellation = CliCancellationPolicy::Cooperative;
+            descriptor.timeout.maximumMilliseconds = 86'400'000;
             descriptor.interactive = CliInteractivePolicy::Forbidden;
             descriptor.sideEffects = CliSideEffectPolicy::WritesFiles;
             for (const char *path : {"package-cache-root", "package-temporary-root"})

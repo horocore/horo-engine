@@ -38,6 +38,7 @@ namespace Horo::Application::Internal {
         descriptor.contractVersion = {1, 0, 0};
         descriptor.sideEffects = CliSideEffectPolicy::WritesFiles;
         descriptor.cancellation = CliCancellationPolicy::Cooperative;
+        descriptor.timeout.maximumMilliseconds = 86'400'000;
         descriptor.ownerId = "horo.host.cli";
         for (const auto *name : {"extension-root", "host-trust", "temporary-root"})
             descriptor.options.push_back(

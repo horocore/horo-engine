@@ -154,7 +154,7 @@ namespace Horo::Cli {
 
     /** @brief Bounded default and maximum execution deadline declared by a command. */
     struct CliTimeoutPolicy final {
-        std::uint64_t defaultMilliseconds{}; /**< Default host deadline; zero disables timeouts. */
+        std::uint64_t defaultMilliseconds{}; /**< Default host deadline; zero leaves the deadline opt-in. */
         std::uint64_t maximumMilliseconds{}; /**< Largest caller-selected deadline; zero disables overrides. */
 
         [[nodiscard]] auto operator<=>(const CliTimeoutPolicy &) const = default;

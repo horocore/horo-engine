@@ -24,7 +24,7 @@ def run(executable, project, definition):
     """Inspect real process registration, strict input and normal host approval barriers."""
     cli = NativeCli(executable)
     checks = unittest.TestCase()
-    with cli.start(["mcp", "serve", "--project", project, "--definition", definition]) as process:
+    with cli.start(["mcp", "serve", "--project", project, "--definition", definition, "--output", "jsonl"]) as process:
         try:
             listed = exchange(process, checks, 1, "tools/list", {})
         except (json.JSONDecodeError, BrokenPipeError) as error:

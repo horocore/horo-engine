@@ -425,6 +425,17 @@ namespace Horo::Cli {
             return state != nullptr && !state->values.empty();
         }
 
+        /** @brief Checks the parsed explicit deadline against command policy before any input or application work. */
+        void ValidateRequestedTimeout(const CliCommandDescriptor &command, const std::span<const OptionState> states,
+                                      DiagnosticCollector &diagnostics) {
+            const auto *timeout = FindOptionState(states, "timeout-ms");
+            if (timeout == nullptr || timeout->values.empty())
+                return;
+            const auto milliseconds = static_cast<std::uint64_t>(std::get<std::int64_t>(timeout->values.front().value));
+            if (milliseconds > command.timeout.maximumMilliseconds)
+                diagnostics.Add("cli.timeout_not_admitted", "Requested timeout exceeds the command's admitted deadline policy.", 0);
+        }
+
         [[nodiscard]] bool IsInputModeAdmitted(const CliCommandDescriptor &command, const CliParserContext &context) noexcept {
             using enum CliStdinPolicy;
             return command.stdinPolicy != None && context.selectedStdinPolicy != None &&
@@ -539,6 +550,7 @@ namespace Horo::Cli {
         CliCommandRequest request{.command = command->path};
         ParsePositionals(positionals, *command, request, diagnostics, context.pathNormalizer);
         ResolveFallbacks(states, context.configuration, diagnostics, context.pathNormalizer);
+        ValidateRequestedTimeout(*command, states, diagnostics);
         if (const Result<void> interaction = ApplyInteractionPolicy(*command, states, context, request); interaction.HasError())
             return Result<CliCommandRequest>::Failure(interaction.ErrorValue());
         if (!diagnostics.Empty())

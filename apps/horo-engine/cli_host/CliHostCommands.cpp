@@ -225,6 +225,7 @@ namespace Horo::Application::Internal {
             descriptor.contractVersion = {1, 0, 0};
             descriptor.ownerId = "horo.host.cli";
             descriptor.cancellation = CliCancellationPolicy::Cooperative;
+            descriptor.timeout.maximumMilliseconds = 86'400'000;
             descriptor.interactive = CliInteractivePolicy::Forbidden;
             descriptor.sideEffects = CliSideEffectPolicy::ReadsState;
             if (SelectCommand(path) == HostCommand::Smoke)
