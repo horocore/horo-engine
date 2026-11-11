@@ -2715,6 +2715,10 @@ wait, or unbounded scan is added by the instrumentation itself.
 
 ## Testing
 
+The [Voice Playback Qualification](audio-voice-qualification.md) ledger maps
+AUD-003 source/test coverage and records its remaining device-recovery evidence
+gates. A listed test is not a claim that its hardware/platform lane has passed.
+
 The following is the cumulative contract catalogue. The 1.0 qualification gate
 requires the AUD-001 through AUD-011 items that are implemented by that checkpoint.
 Capture, procedural, advanced-propagation, adaptive-music and middleware items
