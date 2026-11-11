@@ -90,6 +90,8 @@ protocol stdout. The new progress worker owns presentation until join and
 samples the existing bounded mailbox during synchronous application dispatch.
 Its slow-writer regression holds output blocked while 65,537 producer reports
 complete, then verifies bounded retained text and ordered final presentation.
+A separate 4,096-invocation projection stress regression checks two-record
+terminal retention and release of each operation's cancellation callback owner.
 Final native run evidence for these additions remains pending.
 
 The current application source tree and selected build contain no `horopak`
@@ -130,3 +132,76 @@ They require the canonical machine-wide lock handle and stop on a mismatch.
 
 Final source, consumer and quality verification is pending the shared heavy
 validation queue. The parent and both children retain their open acceptance.
+
+## Whole-parent acceptance audit
+
+The audit refreshed GitHub #1857–#1866 and Jira HORO-1813–HORO-1822 on
+2026-11-11. GitHub closes .1–.7, but Jira records .1 as Done, .2–.6 as
+In Review, and .7–.9 as To Do. These workflow states do not establish acceptance.
+The persistent CLI-001 goal covers all nine children. No issue state was changed.
+
+Criterion numbers below follow each issue's acceptance list in order. A source
+or regression listed here is implementation evidence, not a passing final run.
+All affected execution evidence must be refreshed after the final edits.
+ADR-019 still says Proposed; the current normative CLI architecture is the
+contract authority. No ratification or missing composition is inferred from a
+closed decision issue.
+
+| Child / Jira | Criterion | Implementation or missing evidence |
+| --- | --- | --- |
+| [CLI-001.1 #1858](https://github.com/horocore/horo-engine/issues/1858) / HORO-1814 | A1. Every CLI contract type and runtime service has one documented owner and dependency direction. | CLI architecture ownership table and HoroDependencyPolicy |
+| [CLI-001.1 #1858](https://github.com/horocore/horo-engine/issues/1858) / HORO-1814 | A2. The migration path removes ad hoc parsing without preserving two competing command sources of truth. | NormalizeArguments plus registry-generated discovery/help |
+| [CLI-001.1 #1858](https://github.com/horocore/horo-engine/issues/1858) / HORO-1814 | A3. `horopak` is limited to approved packaging capabilities and cannot expose the complete engine host. | Normative boundary only; horopak and HoroEngine::Archive targets are absent |
+| [CLI-001.1 #1858](https://github.com/horocore/horo-engine/issues/1858) / HORO-1814 | A4. Domain modules contribute adapters but cannot place business rules in CLI handlers. | NavigationCommands and PackageCommands delegate application services |
+| [CLI-001.1 #1858](https://github.com/horocore/horo-engine/issues/1858) / HORO-1814 | A5. CLI, MCP, and debug-console boundaries are explicit and protected by dependency tests. | CliHost dependency allowlist and MCP boundary configure tests |
+| [CLI-001.2 #1859](https://github.com/horocore/horo-engine/issues/1859) / HORO-1815 | A1. Duplicate command paths, option names, incompatible schemas, unauthorized capabilities, and unsupported hosts fail activation with typed diagnostics. | CliCommandRegistryTests duplicate/schema/capability/host cases |
+| [CLI-001.2 #1859](https://github.com/horocore/horo-engine/issues/1859) / HORO-1815 | A2. Built-in and contributed commands use the same descriptor shape and validation path. | Same registry Create admission for built-in and extension contributions |
+| [CLI-001.2 #1859](https://github.com/horocore/horo-engine/issues/1859) / HORO-1815 | A3. Help and discovery contain only accepted descriptors and have no parallel handwritten command inventory. | GenerateHelp/Discover plus production command-inventory fixture |
+| [CLI-001.2 #1859](https://github.com/horocore/horo-engine/issues/1859) / HORO-1815 | A4. Registry ordering and generated output are deterministic across supported platforms. | Registry permutation/order tests; native platform runs outstanding |
+| [CLI-001.2 #1859](https://github.com/horocore/horo-engine/issues/1859) / HORO-1815 | A5. Contract-version compatibility is validated before a contribution becomes executable. | Registry contract-version compatibility tests |
+| [CLI-001.3 #1860](https://github.com/horocore/horo-engine/issues/1860) / HORO-1816 | A1. Unknown options, missing values, invalid ranges, conflicting sources, and unsupported input modes fail before execution. | Parser aggregated diagnostics and timeout-before-stdin tests |
+| [CLI-001.3 #1860](https://github.com/horocore/horo-engine/issues/1860) / HORO-1816 | A2. Explicit command options, environment indirection, and persisted configuration resolve according to the shared configuration contract. | Configuration provenance and invocation-over-snapshot tests |
+| [CLI-001.3 #1860](https://github.com/horocore/horo-engine/issues/1860) / HORO-1816 | A3. `StdinPolicy::None` commands cannot block on piped or inherited stdin. | Never-read-inherited-stdin parser regression |
+| [CLI-001.3 #1860](https://github.com/horocore/horo-engine/issues/1860) / HORO-1816 | A4. Non-interactive execution never opens an implicit prompt and every prompt has a deterministic option alternative. | Required deterministic interaction alternative regression |
+| [CLI-001.3 #1860](https://github.com/horocore/horo-engine/issues/1860) / HORO-1816 | A5. Paths, JSON, JSONL, and binary inputs are normalized and bounded before dispatch. | Path normalizer and bounded JSON/JSONL/binary regressions |
+| [CLI-001.4 #1861](https://github.com/horocore/horo-engine/issues/1861) / HORO-1817 | A1. JSON mode emits exactly one schema-valid result document on success and failure. | Presenter one-document cases and native output fixture |
+| [CLI-001.4 #1861](https://github.com/horocore/horo-engine/issues/1861) / HORO-1817 | A2. JSONL commands emit only declared records and a valid terminal summary contract. | Declared JSONL progress and one terminal summary cases |
+| [CLI-001.4 #1861](https://github.com/horocore/horo-engine/issues/1861) / HORO-1817 | A3. TTY detection changes presentation only in human mode and never changes structured schemas. | TTY versus pipe schema equality cases |
+| [CLI-001.4 #1861](https://github.com/horocore/horo-engine/issues/1861) / HORO-1817 | A4. Equivalent application errors preserve meaning across GUI, CLI, and MCP translations. | Shared GUI/CLI/MCP error projection comparisons |
+| [CLI-001.4 #1861](https://github.com/horocore/horo-engine/issues/1861) / HORO-1817 | A5. Exit codes distinguish usage, validation, unavailable capability, operation failure, security, cancellation, timeout, and unexpected host failure. | Versioned exit-category fixture and host-failure regression |
+| [CLI-001.5 #1862](https://github.com/horocore/horo-engine/issues/1862) / HORO-1818 | A1. Commands receive only their declared capabilities and cannot obtain an omnibus mutable engine object. | Explicit execution context capability span and scoped adapter construction |
+| [CLI-001.5 #1862](https://github.com/horocore/horo-engine/issues/1862) / HORO-1818 | A2. Missing or unauthorized capabilities fail before domain mutation begins. | Dispatcher registration and invocation admission regressions |
+| [CLI-001.5 #1862](https://github.com/horocore/horo-engine/issues/1862) / HORO-1818 | A3. Domain handlers call the same application use cases as GUI and MCP adapters. | Navigation application/CLI/MCP publication equivalence regressions |
+| [CLI-001.5 #1862](https://github.com/horocore/horo-engine/issues/1862) / HORO-1818 | A4. Invocation, operation, job, and safe project context remain correlated through terminal result production. | Invocation/operation/job/project correlation tests |
+| [CLI-001.5 #1862](https://github.com/horocore/horo-engine/issues/1862) / HORO-1818 | A5. One-shot commands leave no subscriptions, services, or background work alive after host teardown. | Adapter destruction ordering plus native service/host shutdown tests; repeated lifecycle evidence pending |
+| [CLI-001.6 #1863](https://github.com/horocore/horo-engine/issues/1863) / HORO-1819 | A1. Slow or disconnected progress consumers cannot delay the underlying operation. | One-slot progress mailbox and stalled-writer producer stress |
+| [CLI-001.6 #1863](https://github.com/horocore/horo-engine/issues/1863) / HORO-1819 | A2. Cancellation, timeout, signalled termination, forced termination, and ordinary failure remain distinct stable terminal outcomes. | Stop controller, dispatcher reason translation and external process tests |
+| [CLI-001.6 #1863](https://github.com/horocore/horo-engine/issues/1863) / HORO-1819 | A3. POSIX process groups follow the documented graceful-to-forced sequence and leave no descendant running. | POSIX external process group tests; Linux/macOS native evidence missing |
+| [CLI-001.6 #1863](https://github.com/horocore/horo-engine/issues/1863) / HORO-1819 | A4. Windows process groups and Job Objects follow the documented graceful-to-forced sequence and leave no descendant running. | Windows external process tests and private-console interrupt fixture; final run pending |
+| [CLI-001.6 #1863](https://github.com/horocore/horo-engine/issues/1863) / HORO-1819 | A5. Output pipes are drained within bounds before the terminal result is published. | External process bounded drain contracts and native output test |
+| [CLI-001.6 #1863](https://github.com/horocore/horo-engine/issues/1863) / HORO-1819 | A6. Process and cancellation tests run on Linux, macOS, and Windows and prove equivalent Horo-level outcomes. | Linux/macOS/Windows equivalence remains unqualified |
+| [CLI-001.7 #1864](https://github.com/horocore/horo-engine/issues/1864) / HORO-1820 | A1. Headless commands link and run without editor, ImGui, window, or interactive-renderer targets. | Native headless graph plus negative dependency fixture; final configure/run pending |
+| [CLI-001.7 #1864](https://github.com/horocore/horo-engine/issues/1864) / HORO-1820 | A2. A command requiring an unavailable optional capability fails explicitly without silent fallback. | Registry host/capability denial and optional-capability native failures |
+| [CLI-001.7 #1864](https://github.com/horocore/horo-engine/issues/1864) / HORO-1820 | A3. `mcp serve` does not duplicate MCP protocol, registry, authorization, or session behavior. | McpServe composes MCP-owned controller/session/registry |
+| [CLI-001.7 #1864](https://github.com/horocore/horo-engine/issues/1864) / HORO-1820 | A4. Logs and ordinary CLI presentation cannot corrupt MCP framing. | Native MCP JSONL protocol isolation and project navigation fixture |
+| [CLI-001.7 #1864](https://github.com/horocore/horo-engine/issues/1864) / HORO-1820 | A5. Startup failure, disconnect, cancellation, and shutdown release sessions and application services exactly once. | McpServe lifecycle unit tests, native EOF/partial-input/interrupt/timeout cases; final run pending |
+| [CLI-001.8 #1865](https://github.com/horocore/horo-engine/issues/1865) / HORO-1821 | A1. Secrets never appear in argv, stdout, stderr, logs, command previews, diagnostic records, or exported bundles. | Sensitive argv rejection and isolated synthetic environment/bundle tests; provider integration blocked |
+| [CLI-001.8 #1865](https://github.com/horocore/horo-engine/issues/1865) / HORO-1821 | A2. Non-interactive execution cannot prompt or imply destructive confirmation. | Parser non-interactive deterministic alternatives and package trust denial |
+| [CLI-001.8 #1865](https://github.com/horocore/horo-engine/issues/1865) / HORO-1821 | A3. Untrusted paths, oversized payloads, and unauthorized side effects fail before mutation. | Parser bounds, side-effect admission and navigation path/authority regressions |
+| [CLI-001.8 #1865](https://github.com/horocore/horo-engine/issues/1865) / HORO-1821 | A4. CLI diagnostic export uses the existing HostObservability and DiagnosticBundle allowlist and adds no environment or file discovery. | Existing HostObservability producer/redactor reused; native ZIP entries checked |
+| [CLI-001.8 #1865](https://github.com/horocore/horo-engine/issues/1865) / HORO-1821 | A5. Bundle destination and explicit user intent are validated before export starts. | Invocation-source output path and destination preflight tests |
+| [CLI-001.8 #1865](https://github.com/horocore/horo-engine/issues/1865) / HORO-1821 | A6. Security regression tests cover malicious arguments, path escapes, symlinks, environment leakage, redaction, and credential-provider failure. | Malicious argv/path/link/environment/redaction regressions; credential-provider failure blocked by CFG-001.6 |
+| [CLI-001.9 #1866](https://github.com/horocore/horo-engine/issues/1866) / HORO-1822 | A1. Versioned fixtures protect every public structured command contract and stable exit category. | Thirteen versioned schemas cover invocation and twelve commands; production inventory discovery; final execution pending |
+| [CLI-001.9 #1866](https://github.com/horocore/horo-engine/issues/1866) / HORO-1822 | A2. Linux, macOS, and Windows suites cover normal, malformed, unavailable-capability, cancellation, timeout, process-tree, and shutdown paths. | Windows suites pending slot; Linux/macOS native evidence missing |
+| [CLI-001.9 #1866](https://github.com/horocore/horo-engine/issues/1866) / HORO-1822 | A3. Headless dependency tests fail if GUI or renderer targets enter commands that do not declare them. | Headless negative dependency fixture; horopak actual composition absent |
+| [CLI-001.9 #1866](https://github.com/horocore/horo-engine/issues/1866) / HORO-1822 | A4. Credential, argument, environment, output, log, and diagnostic-export redaction tests pass. | Security fixtures present; final native run pending and provider integration blocked |
+| [CLI-001.9 #1866](https://github.com/horocore/horo-engine/issues/1866) / HORO-1822 | A5. Equivalent GUI, CLI, and MCP requests produce equivalent domain results and exactly one authoritative mutation. | Real navigation application/CLI/MCP digests/build counts and approval replay test; final run pending |
+| [CLI-001.9 #1866](https://github.com/horocore/horo-engine/issues/1866) / HORO-1822 | A6. Stress tests prove bounded memory, progress, input, output, subscription, and operation retention behavior. | Parser/dispatch/output/progress bounds covered; new 4,096-invocation projection test checks two-record retention and cancellation-owner release; final execution and aggregate subscription lifecycle evidence pending |
+
+The immediate required slot is the owned `build/validate_cli.py core` pass,
+then its `broader` pass, each with the canonical physical lock verified and
+one compiler/test worker. Full `scripts/analyze.py check --base` follows final
+fixes with the same lock. No heavy work is queued in the background while
+allocation is missing. Native Linux/macOS runners, CFG-001.6's typed provider
+contract, and the missing packaging composition remain external acceptance
+requirements; they cannot be replaced by mocks or a renamed SDK utility.

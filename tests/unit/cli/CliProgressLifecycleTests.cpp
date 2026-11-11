@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -125,6 +126,40 @@ namespace Horo::Cli {
         REQUIRE(updated.has_value());
         REQUIRE(updated->phase == "cook");
         REQUIRE(updated->completion == 0.5F);
+    }
+
+    TEST_CASE("CLI progress projections preserve bounded operation retention and release cancellation owners",
+              "[unit][cli][progress][qualification]") {
+        OperationStore operations{1, 2};
+        constexpr unsigned Invocations = 4096;
+        for (unsigned invocation = 1; invocation <= Invocations; ++invocation) {
+            auto owner = std::make_shared<unsigned>(0);
+            const std::weak_ptr<unsigned> lifetime = owner;
+            const auto id = operations.Begin({.kind = OperationKind::Validation,
+                                              .title = "Validate",
+                                              .phase = "prepare",
+                                              .progress = 0.0F,
+                                              .cancellable = true,
+                                              .requestCancel = [owner] {
+                ++*owner;
+            }});
+            REQUIRE(id);
+            owner.reset();
+            REQUIRE_FALSE(lifetime.expired());
+            CliProgressProjection projection{&operations, nullptr, {.invocation = {invocation}, .operation = CliOperationId{*id}}};
+            REQUIRE(projection.Poll());
+            REQUIRE(operations.Update(*id, {.state = OperationState::Succeeded, .phase = "done", .progress = 1.0F}));
+            CHECK(lifetime.expired());
+            const auto terminal = projection.Poll();
+            REQUIRE(terminal);
+            CHECK(terminal->completion == 1.0F);
+            CHECK_FALSE(projection.Poll());
+        }
+        const auto retained = operations.SnapshotIfChanged(0);
+        REQUIRE(retained);
+        CHECK(retained->operations.size() == 2);
+        CHECK(retained->droppedTerminalCount == Invocations - 2);
+        CHECK_FALSE(operations.RequestCancel(1));
     }
 
     TEST_CASE("CLI invocation deadline avoids overflow at the largest duration", "[unit][cli][timeout]") {
