@@ -242,6 +242,49 @@ namespace Horo::Editor {
         CHECK(probe->shutdowns == 2);
     }
 
+    TEST_CASE("Prefab pending stage retires at edit reload and close fences before deferred completion",
+              "[editor][prefab][session][qualification]") {
+        Fixture fixture;
+        const auto initial = fixture.document->Snapshot();
+        auto sources = fixture.Capture();
+        auto probe = std::make_shared<StageProbe>();
+        EditorPlaySceneFactory factory = [probe](Runtime::SceneRuntimeId id,
+                                                 const Runtime::RuntimeSceneDefinition &) -> Result<std::unique_ptr<EditorPlaySceneHost>> {
+            return Result<std::unique_ptr<EditorPlaySceneHost>>::Success(std::make_unique<StageHost>(id, probe));
+        };
+        REQUIRE(fixture.document->ActivateStage(fixture.project.registry.Snapshot(), sources.sources.resolver, {91}, factory).HasValue());
+        REQUIRE_FALSE(fixture.document->AdvanceStage().Value());
+        REQUIRE(fixture.document->HasStage());
+        bool closed{};
+        SECTION("local edit retires the pending source revision") {
+            fixture.Rename("Local intent");
+            CHECK(fixture.document->Snapshot().dirty);
+            CHECK(fixture.document->Snapshot().source->Data().objects.front().name == "Local intent");
+        }
+        SECTION("external reload replaces the pending source revision") {
+            fixture.project.WriteSource("External replacement");
+            REQUIRE(fixture.document->Reload(initial.fence, false).HasValue());
+            CHECK(fixture.document->Snapshot().source->Data().objects.front().name == "External replacement");
+            CHECK_FALSE(fixture.document->Snapshot().dirty);
+        }
+        SECTION("close revokes the pending session") {
+            REQUIRE(fixture.document->Close(initial.fence, false).HasValue());
+            closed = true;
+            CHECK(fixture.document->Execute(initial.fence, RenamePrefabObject{{0}, "Late edit"}).HasError());
+        }
+        CHECK(probe->shutdowns == 1);
+        CHECK_FALSE(fixture.document->HasStage());
+        probe->hold = false;
+        const auto advanced = fixture.document->AdvanceStage();
+        CHECK(advanced.HasError() == closed);
+        if (advanced.HasValue())
+            CHECK_FALSE(advanced.Value());
+        CHECK_FALSE(fixture.document->StageView().has_value());
+        CHECK(fixture.document->Snapshot().previewRevision == initial.previewRevision);
+        CHECK(probe->fixedUpdates == 0);
+        CHECK(probe->shutdowns == 1);
+    }
+
     TEST_CASE("Prefab save publishes canonical source and external conflicts retain local history", "[editor][prefab][session]") {
         Fixture fixture;
         fixture.Rename("Saved");
@@ -422,6 +465,15 @@ namespace Horo::Editor {
             const auto result = fixture.document->Execute(fence, RenamePrefabObject{{0}, "Reentrant"});
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == SourceDocumentErrors::Busy.code.Value());
+            const auto reloaded = fixture.document->Reload(fence, true);
+            REQUIRE(reloaded.HasError());
+            CHECK(reloaded.ErrorValue().code.Value() == SourceDocumentErrors::Busy.code.Value());
+            const auto closed = fixture.document->Close(fence, true);
+            REQUIRE(closed.HasError());
+            CHECK(closed.ErrorValue().code.Value() == SourceDocumentErrors::Busy.code.Value());
+            const auto savedAgain = fixture.document->Save(fence, mutations, files);
+            REQUIRE(savedAgain.HasError());
+            CHECK(savedAgain.ErrorValue().code.Value() == SourceDocumentErrors::Busy.code.Value());
             ++rejected;
         };
         auto saved = fixture.document->Save(fence, mutations, files);
