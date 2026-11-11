@@ -23,6 +23,12 @@ namespace Horo::Input {
     using SimulationTick = std::uint64_t;
     using PlayerId = std::uint8_t;
     inline constexpr std::size_t MaximumConsumedGamepadTransitions = 4'096;
+    /** @brief Maximum effective binding count for an action opting into semantic accessibility mapping. */
+    inline constexpr std::size_t MaximumAccessibilityBindingsPerAction = 64;
+    /** @brief Maximum typed action-name byte count for an action opting into semantic accessibility mapping. */
+    inline constexpr std::size_t MaximumAccessibilityActionIdBytes = 256;
+    /** @brief Maximum live/retiring (context, binding, player) incarnations; consumed identities retire at an owner frame boundary. */
+    inline constexpr std::size_t MaximumAccessibilityMappings = 1024;
 
     /** @brief Stable physical-key identity independent of a native window API. */
     enum class Key : std::uint16_t {
@@ -500,6 +506,7 @@ namespace Horo::Input {
         bool down{false};
         bool pressed{false};
         bool released{false};
+        bool repeated{false}; /**< Semantic mapping repeat, separate from the activation press edge. */
     };
 
     /** @brief Presentation modality derived from eligible semantic input, never device assignment. */
@@ -531,7 +538,8 @@ namespace Horo::Input {
     enum class ActionReadStatus : std::uint8_t {
         Resolved,
         Unavailable,
-        CapacityExceeded
+        CapacityExceeded,
+        ClockUnavailable /**< A timed mapping has no explicit host sample clock; its old active state is withdrawn. */
     };
 
     /** @brief Semantic value with post-filter, routing-eligible modality evidence. Releases are never meaningful. */
@@ -540,6 +548,16 @@ namespace Horo::Input {
         std::optional<ActionSource> source;
         bool meaningful{};
         ActionReadStatus status{ActionReadStatus::Unavailable};
+    };
+
+    /** @brief Owned semantic withdrawal emitted when a context ends before its action reader can drain release.
+     * @details The immutable typed name lease survives profile/map replacement and router destruction. The record names
+     * only its original context/player; it never authorizes delivery to a replacement context or invokes a dead owner.
+     */
+    struct RetiredInputActionRelease final {
+        std::uint64_t contextIdentity{};
+        std::shared_ptr<const ActionId> action;
+        std::optional<PlayerId> player;
     };
 
     /** @brief Glyph realization availability, independent of navigation capability. */
@@ -755,11 +773,21 @@ namespace Horo::Input {
          * No XR/native dependency or alternate commit owner is introduced. */
         [[nodiscard]] Result<InputActionCollection> ActionCollection(const InputContextToken &context,
                                                                      std::optional<GamepadDeviceId> assignedDevice = std::nullopt) const;
-        /** @brief Cancels any capture still held after its initiating button release was delivered to handlers. */
+        /** @brief Cancels released pointer capture and reclaims drained semantic mapping identities.
+         * @details Pending old-owner releases remain until delivered. The next committed sample also performs this cleanup.
+         */
         void EndFrame() noexcept;
-        /** @brief Registers a context until the returned move-only token is destroyed. */
+        /** @brief Registers a context until the returned move-only token is destroyed.
+         * @param id Host-owned context category. @param kind Routing priority and interaction role.
+         * @return New non-reusable context incarnation, or an empty token if routing identities are exhausted.
+         * @details Preempted semantic mappings withdraw to their original owner before a replacement can read.
+         */
         [[nodiscard]] InputContextToken PushContext(InputContextId id, InputContextKind kind);
-        /** @brief Acquires exclusive pointer capture for the currently eligible context. */
+        /** @brief Acquires exclusive pointer capture for the currently eligible context.
+         * @param context Exact eligible live owner. @param button Initiating pointer button.
+         * @param owner Capture callback owner, which must obey its existing lifetime contract.
+         * @return Exclusive capture or a typed inactive, busy or routing-identity-exhausted error.
+         */
         [[nodiscard]] Result<PointerCaptureToken> CapturePointer(const InputContextToken &context, PointerButton button,
                                                                  IInputCaptureOwner &owner);
         /** @brief Cancels active capture synchronously and notifies its owner once. */
@@ -802,18 +830,29 @@ namespace Horo::Input {
         /**
          * @brief Resolves and consumes the same action as ReadAction, including canonical source evidence.
          * @param context Exact live matching context.
-         * @param action Registered action identity.
+         * @param action Registered action identity, or an old identity awaiting withdrawal after configuration replacement.
          * @param player Optional exact gamepad assignment filter.
          * @return Neutral evidence when blocked/missing. CapacityExceeded atomically refuses this action's transitions;
-         *         previously admitted consumers are preserved. Meaningful evidence comes only from unconsumed press edges.
+         *         previously admitted consumers are preserved. ClockUnavailable refuses timed mapping without explicit sample time.
+         *         Meaningful evidence comes only from unconsumed press edges.
          * @details Call this or ReadAction once per action per frame. Exact simultaneous sources prefer keyboard/mouse,
-         *          then gamepad in snapshot order. This does not poll a backend or change assignment.
+         *          then gamepad in snapshot order. Accessibility activation/release/repeat edges are delivered once per committed
+         *          sample; subsequent reads preserve held state. Repeat is distinct from pressed. A still-live preempted owner may
+         *          drain its pending cancellation release even while routing is blocked. Missing-clock reads can carry that release.
+         *          New mappings require neutral physical input before a fresh press. This does not poll a backend or change assignment.
          */
         [[nodiscard]] ActionEvidence ReadActionEvidence(const InputContextToken &context, const ActionId &action,
                                                         std::optional<PlayerId> player = std::nullopt);
         /** @brief Returns the last ReadAction/ReadActionEvidence outcome for legacy value-only consumers. @return Typed
          * unavailable/admission result. */
         [[nodiscard]] ActionReadStatus LastActionStatus() const noexcept;
+        /** @brief Drains one bounded old-context withdrawal without allocation or invoking gameplay/UI callbacks.
+         * @param release Output written only on success; its immutable action-name lease may outlive this router.
+         * @return True for one retired-owner release, false leaves output unchanged.
+         * @details The host drains at its ordinary input/owner cutoff. Live but preempted owners consume their own release
+         * through ReadActionEvidence instead. Undrained retired withdrawals retain a fixed mapping slot; exhaustion is explicit.
+         */
+        [[nodiscard]] bool TryDequeueRetiredActionRelease(RetiredInputActionRelease &release) noexcept;
         /** @brief Copies context identity, configuration/assignment generations and current/previous scan sizes.
          * @param context Borrowed token; a foreign/removed token yields zero identity.
          * @return Routing evidence without retaining a snapshot or context borrow. */

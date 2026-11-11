@@ -223,14 +223,18 @@ namespace Horo::Input {
         BindingEvaluationResult EvaluateGamepadBinding(const InputBinding &binding, const RawInputSnapshot &snapshot,
                                                        const RawInputSnapshot *previousSnapshot, const InputDeviceAssignments &assignments,
                                                        const std::optional<PlayerId> &player,
-                                                       GamepadTransitions &consumedGamepadTransitions) {
+                                                       GamepadTransitions &consumedGamepadTransitions, const bool consume = true,
+                                                       const std::optional<GamepadDeviceId> preferred = std::nullopt) {
             BindingEvaluationResult result;
             for (const GamepadState &pad : snapshot.gamepads) {
+                if (preferred && pad.id != *preferred)
+                    continue;
                 if (player.has_value() && assignments.PlayerFor(pad.id) != player)
                     continue;
                 result = EvaluateBindingOnPad(binding, pad, previousSnapshot);
                 result.device = pad.id;
-                if (result.state.pressed && !consumedGamepadTransitions.Consume({pad.id, binding.kind, GamepadControlId(binding)}))
+                if (consume && result.state.pressed &&
+                    !consumedGamepadTransitions.Consume({pad.id, binding.kind, GamepadControlId(binding)}))
                     result.state.pressed = false;
                 if (result.axis != 0.0F || result.state.pressed || result.state.released)
                     break;
@@ -325,6 +329,13 @@ namespace Horo::Input {
         void AppendEffectiveBindings(BindingValidationReport &report, std::vector<EffectiveBinding> &effective,
                                      const ActionDescriptor &action, const std::vector<InputBinding> &bindings) {
             using enum BindingDiagnosticCode;
+            const bool usesAccessibility = std::ranges::any_of(bindings, [](const auto &binding) {
+                return binding.accessibility.IsEnabled();
+            });
+            if (usesAccessibility &&
+                (bindings.size() > MaximumAccessibilityBindingsPerAction || action.id.Value().size() > MaximumAccessibilityActionIdBytes))
+                report.diagnostics.emplace_back(InvalidAccessibility, action.id,
+                                                "Accessibility mapping exceeds its bounded action identity or binding inventory.");
             if (action.required && bindings.empty())
                 report.diagnostics.emplace_back(RequiredActionUnbound, action.id,
                                                 std::format("Required action '{}' has no binding in context '{}'.", action.id.Value(),
@@ -445,7 +456,7 @@ namespace Horo::Input {
         /** @brief Parses the overrides array of a profile document, enforcing per-entry shape limits. */
         Result<std::vector<BindingOverride>> ParseOverrides(const nlohmann::json &json, const std::uint32_t sourceSchema) {
             constexpr std::size_t maximumOverrides = 4096;
-            constexpr std::size_t maximumBindingsPerAction = 64;
+            constexpr std::size_t maximumBindingsPerAction = MaximumAccessibilityBindingsPerAction;
             const auto &overrides = json.at("overrides");
             if (!overrides.is_array() || overrides.size() > maximumOverrides)
                 return Result<std::vector<BindingOverride>>::Failure(
@@ -650,6 +661,48 @@ namespace Horo::Input {
         }
     }  // namespace
 
+    /** @copydoc Detail::PeekAccessibilityPhysical */
+    ButtonState Detail::PeekAccessibilityPhysical(const InputBinding &binding, const RawInputSnapshot &raw,
+                                                  const RawInputSnapshot *previous, const std::optional<GamepadDeviceId> device) noexcept {
+        switch (binding.kind) {
+            case BindingControlKind::Key:
+                return raw.State(binding.key);
+            case BindingControlKind::PointerButton:
+                return raw.State(binding.pointerButton);
+            case BindingControlKind::PointerWheelX:
+                return {raw.pointer.wheelX != 0, raw.pointer.wheelX != 0, false};
+            case BindingControlKind::PointerWheelY:
+                return {raw.pointer.wheelY != 0, raw.pointer.wheelY != 0, false};
+            default:
+                if (device)
+                    if (const auto *pad = raw.FindGamepad(*device))
+                        return EvaluateBindingOnPad(binding, *pad, previous).state;
+                return {};
+        }
+    }
+
+    /** @copydoc InputRouter::Impl::ContextEligible */
+    bool InputRouter::Impl::ContextEligible(const std::uint64_t token, const bool requireRouting) const noexcept {
+        if ((requireRouting && !collection->routingAllowed) || (snapshot && !snapshot->window.focused))
+            return false;
+        const auto found = std::ranges::find(contexts, token, &Context::token);
+        if (found == contexts.end() || (modalBarrier && Priority(found->kind) < Priority(InputContextKind::ModalRoot)))
+            return false;
+        return std::ranges::none_of(contexts, [&](const Context &candidate) {
+            return Priority(candidate.kind) > Priority(found->kind) || (candidate.kind == found->kind && candidate.token > found->token);
+        });
+    }
+
+    /** @copydoc InputRouter::Impl::CancelIneligibleAccessibility */
+    void InputRouter::Impl::CancelIneligibleAccessibility() noexcept {
+        for (auto &context : contexts) {
+            if (!ContextEligible(context.token, false)) {
+                accessibility.CancelContext(context.token);
+                context.sticky.Reset();
+            }
+        }
+    }
+
     InputRouter::InputRouter() : impl_(std::make_unique<Impl>()) {
         impl_->collection = std::make_shared<InputCollectionLifetime>(*this);
     }
@@ -693,6 +746,14 @@ namespace Horo::Input {
         impl_->consumed.wheelX = false;
         impl_->consumed.wheelY = false;
         impl_->assignments.RetainConnected(snapshot.gamepads);
+        const bool resetModifiers = impl_->accessibility.BeginFrame(snapshot, impl_->previousSnapshot, impl_->assignments);
+        if (resetModifiers)
+            for (auto &context : impl_->contexts)
+                context.sticky.Reset();
+        impl_->CancelIneligibleAccessibility();
+        for (auto &context : impl_->contexts)
+            if (impl_->ContextEligible(context.token, false))
+                context.sticky.Observe(snapshot.modifiers);
         if (impl_->capture && !snapshot.window.focused)
             CancelCapture(CaptureCancellationReason::FocusLost);
         else if (impl_->capture && !snapshot.window.pointerDeviceAvailable)
@@ -704,11 +765,15 @@ namespace Horo::Input {
     void InputRouter::EndFrame() noexcept {
         if (impl_->capture && impl_->snapshot && impl_->snapshot->State(impl_->capture->button).released)
             CancelCapture(CaptureCancellationReason::Released);
+        impl_->accessibility.EndFrame();
     }
 
     InputContextToken InputRouter::PushContext(InputContextId id, const InputContextKind kind) {
         using enum InputContextKind;
-        const std::uint64_t token = impl_->nextToken++;
+        if (impl_->nextToken == 0)
+            return {};
+        const std::uint64_t token = impl_->nextToken;
+        AdvanceRevision(impl_->nextToken);
         if (impl_->textFocus.focusToken != 0) {
             const auto focused = std::ranges::find(impl_->contexts, impl_->textFocus.focusToken, &Impl::Context::token);
             if (focused != impl_->contexts.end() && Priority(kind) >= Priority(focused->kind)) {
@@ -731,6 +796,9 @@ namespace Horo::Input {
                 CancelCapture(CaptureCancellationReason::ContextPreempted);
         }
         impl_->contexts.emplace_back(token, std::move(id), kind);
+        impl_->CancelIneligibleAccessibility();
+        if (impl_->ContextEligible(token, false))
+            impl_->contexts.back().sticky.Observe(Snapshot().modifiers);
         return InputContextToken(this, token);
     }
 
@@ -786,7 +854,10 @@ namespace Horo::Input {
             return Result<PointerCaptureToken>::Failure(MakeError(Errors::CaptureBusy, "Pointer is already captured."));
         if (impl_->snapshot && (!impl_->snapshot->window.focused || !impl_->snapshot->window.pointerDeviceAvailable))
             return Result<PointerCaptureToken>::Failure(MakeError(Errors::CaptureInactiveContext, "Pointer device is unavailable."));
-        const std::uint64_t token = impl_->nextToken++;
+        if (impl_->nextToken == 0)
+            return Result<PointerCaptureToken>::Failure(MakeError(Errors::RoutingIdentityExhausted));
+        const std::uint64_t token = impl_->nextToken;
+        AdvanceRevision(impl_->nextToken);
         impl_->capture = Impl::Capture{token, context.token_, button, &owner};
         owner.capturingRouter_ = this;
         return Result<PointerCaptureToken>::Success(PointerCaptureToken(this, token));
@@ -813,15 +884,7 @@ namespace Horo::Input {
     }
 
     bool InputRouter::IsContextActive(const InputContextToken &context) const noexcept {
-        if (!impl_->collection->routingAllowed || context.router_ != this || !TokenActive(context.token_))
-            return false;
-        const auto found = std::ranges::find(impl_->contexts, context.token_, &Impl::Context::token);
-        if ((impl_->snapshot && !impl_->snapshot->window.focused) ||
-            (found != impl_->contexts.end() && impl_->modalBarrier && Priority(found->kind) < Priority(InputContextKind::ModalRoot)))
-            return false;
-        return found != impl_->contexts.end() && std::ranges::none_of(impl_->contexts, [&](const Impl::Context &candidate) {
-            return Priority(candidate.kind) > Priority(found->kind) || (candidate.kind == found->kind && candidate.token > found->token);
-        });
+        return context.router_ == this && impl_->ContextEligible(context.token_);
     }
 
     const RawInputSnapshot &InputRouter::Snapshot() const noexcept {
@@ -831,8 +894,15 @@ namespace Horo::Input {
     Result<void> InputRouter::SetActionMap(std::vector<ActionDescriptor> actions, InputBindingProfile profile) {
         if (const BindingValidationReport validation = ValidateBindingProfile(actions, profile); !validation.IsValid())
             return Result<void>::Failure(MakeError(Errors::ActionMapValidationFailed, validation.diagnostics.front().message));
+        auto identities = Detail::PrepareAccessibilityIdentities(actions, profile);
+        if (identities.HasError())
+            return Result<void>::Failure(identities.ErrorValue());
+        impl_->accessibility.CancelAll();
+        for (auto &context : impl_->contexts)
+            context.sticky.Reset();
         impl_->actions = std::move(actions);
         impl_->profile = std::move(profile);
+        impl_->accessibilityActions = std::move(identities).Value();
         AdvanceRevision(impl_->configurationRevision);
         impl_->collection->Reconfigure();
         return Result<void>::Success();
@@ -849,7 +919,14 @@ namespace Horo::Input {
     Result<void> InputRouter::SetProfile(InputBindingProfile profile) {
         if (const BindingValidationReport validation = ValidateBindingProfile(impl_->actions, profile); !validation.IsValid())
             return Result<void>::Failure(MakeError(Errors::ProfileValidationFailed, validation.diagnostics.front().message));
+        auto identities = Detail::PrepareAccessibilityIdentities(impl_->actions, profile);
+        if (identities.HasError())
+            return Result<void>::Failure(identities.ErrorValue());
+        impl_->accessibility.CancelAll();
+        for (auto &context : impl_->contexts)
+            context.sticky.Reset();
         impl_->profile = std::move(profile);
+        impl_->accessibilityActions = std::move(identities).Value();
         AdvanceRevision(impl_->configurationRevision);
         impl_->collection->Reconfigure();
         return Result<void>::Success();
@@ -882,21 +959,31 @@ namespace Horo::Input {
 
         template <typename ImplType>
         [[nodiscard]] BindingEvaluationResult EvaluateControlBinding(const InputBinding &binding, const RawInputSnapshot &snapshot,
-                                                                     const std::optional<PlayerId> player, ImplType &impl) {
+                                                                     const std::optional<PlayerId> player, ImplType &impl,
+                                                                     const bool consume = true,
+                                                                     const std::optional<GamepadDeviceId> preferred = std::nullopt) {
             using enum BindingControlKind;
             switch (binding.kind) {
                 case Key:
-                    return EvaluateDigital(snapshot.State(binding.key), impl.consumed.keys, Index(binding.key));
+                    if (consume)
+                        return EvaluateDigital(snapshot.State(binding.key), impl.consumed.keys, Index(binding.key));
+                    return {snapshot.State(binding.key).down ? 1.0F : 0.0F, snapshot.State(binding.key)};
                 case PointerButton:
+                    if (!consume)
+                        return {snapshot.State(binding.pointerButton).down ? 1.0F : 0.0F, snapshot.State(binding.pointerButton)};
                     return EvaluateDigital(snapshot.State(binding.pointerButton), impl.consumed.pointerButtons,
                                            Index(binding.pointerButton));
                 case PointerWheelX:
+                    if (!consume)
+                        return {snapshot.pointer.wheelX, {snapshot.pointer.wheelX != 0, snapshot.pointer.wheelX != 0, false}};
                     return EvaluateWheel(snapshot.pointer.wheelX, impl.consumed.wheelX);
                 case PointerWheelY:
+                    if (!consume)
+                        return {snapshot.pointer.wheelY, {snapshot.pointer.wheelY != 0, snapshot.pointer.wheelY != 0, false}};
                     return EvaluateWheel(snapshot.pointer.wheelY, impl.consumed.wheelY);
                 default: {
                     return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, player,
-                                                  impl.consumed.gamepadTransitions);
+                                                  impl.consumed.gamepadTransitions, consume, preferred);
                 }
             }
         }
@@ -913,9 +1000,7 @@ namespace Horo::Input {
             }
         }
 
-        [[nodiscard]] bool IsBindingActive(const InputBinding &binding, const RawInputSnapshot &snapshot) {
-            if (!ModifiersMatch(snapshot.modifiers, binding.requiredModifiers))
-                return false;
+        [[nodiscard]] bool IsBindingChordActive(const InputBinding &binding, const RawInputSnapshot &snapshot) {
             for (std::size_t index = 0; index < binding.chordSize; ++index)
                 if (!snapshot.State(binding.chord[index]).down)
                     return false;
@@ -955,11 +1040,33 @@ namespace Horo::Input {
 
         template <typename ImplType>
         void AccumulateBinding(const InputBinding &binding, const ActionDescriptor &descriptor, const RawInputSnapshot &snapshot,
-                               const std::optional<PlayerId> player, ImplType &impl, BindingAccumulationTarget &target) {
-            if (!IsBindingActive(binding, snapshot))
+                               const std::optional<PlayerId> player, ImplType &impl, BindingAccumulationTarget &target,
+                               const std::uint64_t context, const std::size_t actionIndex, const std::size_t bindingIndex,
+                               const ModifierState sticky, Detail::InputAccessibilityRouter::Transaction *transaction) {
+            const bool accessible = binding.accessibility.IsEnabled();
+            const bool chordEligible = IsBindingChordActive(binding, snapshot);
+            const bool eligible = chordEligible && ModifiersMatch(binding.accessibility.stickyModifiers ? sticky : snapshot.modifiers,
+                                                                  binding.requiredModifiers);
+            if (!accessible && !eligible)
                 return;
-
-            const auto evaluated = EvaluateControlBinding(binding, snapshot, player, impl);
+            const Detail::AccessibilityMappingKey mappingKey{context, impl.accessibilityActions[actionIndex], bindingIndex, player};
+            std::optional<GamepadDeviceId> preferred;
+            if (accessible && transaction)
+                preferred = transaction->PreferredDevice(mappingKey);
+            auto evaluated = EvaluateControlBinding(binding, snapshot, player, impl, eligible, preferred);
+            if (accessible && transaction) {
+                bool deviceHadNeutral = false;
+                if (evaluated.device && impl.previousSnapshot && impl.previousSnapshot->FindGamepad(*evaluated.device)) {
+                    const auto previous = Detail::PeekAccessibilityPhysical(binding, *impl.previousSnapshot, nullptr, evaluated.device);
+                    deviceHadNeutral = !previous.down && !previous.pressed;
+                }
+                const Detail::AccessibilityMappingSample sample{evaluated.device, evaluated.state, snapshot.sampleTime,
+                                                                eligible,         chordEligible,   deviceHadNeutral};
+                const auto interpreted = transaction->Process(mappingKey, binding, sample);
+                evaluated.state = interpreted.button;
+                evaluated.axis = interpreted.button.down ? 1.0F : 0.0F;
+                target.value.repeated = target.value.repeated || interpreted.repeated;
+            }
             const auto state = evaluated.state;
             const float axis = evaluated.axis * binding.scale;
             AccumulateSource(binding, evaluated, target.evidence);
@@ -990,6 +1097,13 @@ namespace Horo::Input {
         ActionEvidence evidence;
         impl_->lastActionStatus = ActionReadStatus::Unavailable;
         ActionValue &value = evidence.value;
+        if (context.router_ != this || !TokenActive(context.token_))
+            return evidence;
+        if (impl_->accessibility.TakeReleases(context.token_, actionId, player)) {
+            value.released = true;
+            evidence.status = impl_->lastActionStatus = ActionReadStatus::Resolved;
+            return evidence;
+        }
         if (!IsContextActive(context))
             return evidence;
         const auto descriptor = std::ranges::find(impl_->actions, actionId, &ActionDescriptor::id);
@@ -1003,6 +1117,21 @@ namespace Horo::Input {
             overrideValue != impl_->profile.overrides.end())
             bindings = &overrideValue->bindings;
         const RawInputSnapshot &snapshot = Snapshot();
+        const bool requiresClock = std::ranges::any_of(*bindings, [](const auto &binding) {
+            return binding.accessibility.digital.holdMicroseconds != 0 || binding.accessibility.digital.repeat;
+        });
+        if (requiresClock && !snapshot.sampleTime) {
+            impl_->accessibility.CancelAction(context.token_, actionId, player);
+            value.released = impl_->accessibility.TakeReleases(context.token_, actionId, player);
+            evidence.status = impl_->lastActionStatus = ActionReadStatus::ClockUnavailable;
+            return evidence;
+        }
+        const auto actionIndex = static_cast<std::size_t>(descriptor - impl_->actions.begin());
+        std::optional<Detail::InputAccessibilityRouter::Transaction> transaction;
+        if (impl_->accessibilityActions[actionIndex])
+            transaction.emplace(impl_->accessibility);
+        const auto contextEntry = std::ranges::find(impl_->contexts, context.token_, &Impl::Context::token);
+        const auto sticky = contextEntry->sticky.Effective();
         const auto keysBefore = impl_->consumed.keys;
         const auto pointerBefore = impl_->consumed.pointerButtons;
         const auto gamepadCountBefore = impl_->consumed.gamepadTransitions.count;
@@ -1012,9 +1141,10 @@ namespace Horo::Input {
         bool radial2D = false;
         float radialDeadzone = 0.0F;
         BindingAccumulationTarget target{value, radial2D, radialDeadzone, evidence};
-        for (const InputBinding &binding : *bindings)
-            AccumulateBinding(binding, *descriptor, snapshot, player, *impl_, target);
-        if (impl_->consumed.gamepadTransitions.capacityExceeded) {
+        for (std::size_t index = 0; index < bindings->size(); ++index)
+            AccumulateBinding((*bindings)[index], *descriptor, snapshot, player, *impl_, target, context.token_, actionIndex, index, sticky,
+                              transaction ? &*transaction : nullptr);
+        if (impl_->consumed.gamepadTransitions.capacityExceeded || (transaction && transaction->CapacityFailed())) {
             impl_->consumed.keys = keysBefore;
             impl_->consumed.pointerButtons = pointerBefore;
             impl_->consumed.gamepadTransitions.count = gamepadCountBefore;
@@ -1025,7 +1155,12 @@ namespace Horo::Input {
             impl_->lastActionStatus = evidence.status;
             return evidence;
         }
-        impl_->collection->Accumulate(static_cast<std::size_t>(descriptor - impl_->actions.begin()), player, value);
+        if (transaction) {
+            transaction->Commit();
+            if (transaction->ConsumesSticky())
+                contextEntry->sticky.Consume();
+        }
+        impl_->collection->Accumulate(actionIndex, player, value);
         FinalizeAction(evidence, radial2D, radialDeadzone);
         impl_->lastActionStatus = evidence.status;
         return evidence;
@@ -1034,6 +1169,11 @@ namespace Horo::Input {
     /** @copydoc InputRouter::LastActionStatus */
     ActionReadStatus InputRouter::LastActionStatus() const noexcept {
         return impl_->lastActionStatus;
+    }
+
+    /** @copydoc InputRouter::TryDequeueRetiredActionRelease */
+    bool InputRouter::TryDequeueRetiredActionRelease(RetiredInputActionRelease &release) noexcept {
+        return impl_->accessibility.TryDequeueRetired(release);
     }
 
     /** @copydoc InputRouter::RoutingState */
@@ -1089,11 +1229,17 @@ namespace Horo::Input {
         if (Snapshot().FindGamepad(gamepad) == nullptr || !impl_->assignments.Assign(player, gamepad))
             return false;
         AdvanceRevision(impl_->assignmentRevision);
+        impl_->accessibility.CancelDevices();
+        for (auto &context : impl_->contexts)
+            context.sticky.Reset();
         return true;
     }
 
     void InputRouter::UnassignGamepad(const GamepadDeviceId gamepad) noexcept {
         impl_->assignments.Unassign(gamepad);
+        impl_->accessibility.CancelDevices();
+        for (auto &context : impl_->contexts)
+            context.sticky.Reset();
         AdvanceRevision(impl_->assignmentRevision);
     }
 
@@ -1102,6 +1248,7 @@ namespace Horo::Input {
     }
 
     void InputRouter::RemoveContext(const std::uint64_t token) noexcept {
+        impl_->accessibility.CancelContext(token, true);
         if (impl_->textFocus.focusToken == token) {
             impl_->textFocus.focusToken = 0;
             impl_->textFocus.blockedFrame = true;

@@ -1,5 +1,6 @@
 #pragma once
 #include "Horo/Runtime/InputCollection.h"
+#include "InputAccessibilityRouter.h"
 #include "InputCollectionInternal.h"
 
 #include <algorithm>
@@ -41,6 +42,7 @@ namespace Horo::Input {
             std::uint64_t token;
             InputContextId id;
             InputContextKind kind;
+            StickyModifierLatch sticky;
         };
 
         struct Capture {
@@ -67,6 +69,12 @@ namespace Horo::Input {
         std::optional<Capture> capture;
         std::vector<ActionDescriptor> actions;
         InputBindingProfile profile;
+        std::vector<Detail::AccessibilityActionIdentity> accessibilityActions;
+        Detail::InputAccessibilityRouter accessibility;
+        /** @brief Tests actual owner eligibility; publication-only routing suspension is optional for lifecycle cancellation. */
+        [[nodiscard]] bool ContextEligible(std::uint64_t token, bool requireRouting = true) const noexcept;
+        /** @brief Cancels preempted/focus-lost contexts before any replacement action can be read. */
+        void CancelIneligibleAccessibility() noexcept;
 
         /** @brief Frame-local admission ledger shared by direct reads and action evaluation/rollback. */
         struct ConsumptionState final {

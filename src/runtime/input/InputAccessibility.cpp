@@ -108,6 +108,14 @@ namespace Horo::Input {
     }
 
     namespace InputAccessibilityErrors {
+        /** @copydoc CapacityExceeded */
+        const ErrorCodeDescriptor CapacityExceeded{ErrorDomainId{"horo.input"},
+                                                   ErrorCode{"input.accessibility.capacity_exceeded"},
+                                                   ErrorSeverity::Error,
+                                                   "Input accessibility mapping storage is exhausted.",
+                                                   "Retire old mapping incarnations before admitting additional bindings.",
+                                                   false,
+                                                   false};
         /** @copydoc InvalidPolicy */
         const ErrorCodeDescriptor InvalidPolicy{ErrorDomainId{"horo.input"},
                                                 ErrorCode{"input.accessibility.policy_invalid"},

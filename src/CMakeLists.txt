@@ -2809,6 +2809,7 @@ target_link_libraries(HoroPrefabSceneExpansion PUBLIC HoroEngine::PrefabAuthorin
 
 add_library(HoroInput STATIC
         runtime/input/InputAccessibility.cpp
+        runtime/input/InputAccessibilityRouter.cpp
         runtime/input/InputAccessibilityProfile.cpp
         runtime/input/RawInputCollector.cpp
         runtime/input/Input.cpp

@@ -233,7 +233,8 @@ add_executable(HoroGameplayAccessibilityContractConsumer support/GameplayAccessi
 target_link_libraries(HoroGameplayAccessibilityContractConsumer PRIVATE HoroEngine::GameplayAccessibility)
 add_test(NAME HoroGameplayAccessibilityContractConsumer COMMAND HoroGameplayAccessibilityContractConsumer)
 set_tests_properties(HoroGameplayAccessibilityContractConsumer PROPERTIES LABELS "unit;gameplay;accessibility;headless;public_headers")
-add_executable(HoroInputAccessibilityTests unit/runtime/InputAccessibilityTests.cpp support/AllocationProbe.cpp)
+add_executable(HoroInputAccessibilityTests unit/runtime/InputAccessibilityTests.cpp
+        unit/runtime/InputAccessibilityRouterTests.cpp support/AllocationProbe.cpp)
 target_include_directories(HoroInputAccessibilityTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(HoroInputAccessibilityTests PRIVATE HoroEngine::Input)
 horo_register_catch_test(HoroInputAccessibilityTests LABELS "unit;input;accessibility;headless")

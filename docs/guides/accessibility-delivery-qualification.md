@@ -15,7 +15,7 @@ ACC-001.1 / HORO-1805 is already delivered and is not reimplemented.
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Added bounded SPSC cue/catalog transport, timeline, frame-captured appearance, safe-area arrangement and canonical paint extraction; regression cases written, not executed | Host localization/shaping/presentation composition, settings activation and actual native rendered evidence |
 | ACC-001.3 color | HORO-1807 / #1851 | Added independent numeric target, validated matrices and snapshot-backed synchronous query; regression cases written, not executed | Complete-image GPU pass and real backend evidence; existing ColorPipelinePlan explicitly provides cold admission only |
-| ACC-001.4 input | HORO-1808 / #1852 | Added digital/sticky state, typed binding policy, canonical profile-v2 codec migration and sticky/physical conflict validation; regression sources not executed | Connect to router time/cancellation/release ownership and rebinding UI; integrate scoped persistence from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
+| ACC-001.4 input | HORO-1808 / #1852 | Added bounded router digital/sticky interpretation, explicit sample time, owned cancellation releases, profile-v2 migration and conflict validation; regression sources not executed | Compile/run router regressions and consumers; compose host withdrawal and rebinding UI; integrate scoped persistence from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
 | ACC-001.5 visual | HORO-1809 / #1853 | Added UI scale/contrast snapshot with readable typography floor, visual-safety snapshot and typed effect suppression seam; regression cases written, not executed | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Existing Runtime UI semantics; added optional platform transport interface, honest no-op Unsupported adapter and opt-in bounded semantic QA journal; tests written, not executed | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Added inert domain contribution, typed tick snapshot for all seven preferences and revision-only hint adapter; lost/stale hint tests written, not executed | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
@@ -161,9 +161,12 @@ mutation; existing publisher callers require no migration. New regression covera
 includes independent snapshots with equal revisions, copied leases and retirement.
 
 Input's new `DigitalAffordance` and `StickyModifierLatch` are narrow mapping
-helpers, not another router/profile/persistence authority. Owning router wiring
-must cancel the old incarnation and deliver its release before replacement. That
-wiring and the external persistence work remain acceptance gaps.
+helpers, not another router/profile/persistence authority. The existing router now
+owns bounded per-incarnation interpretation and old-owner cancellation delivery.
+Ended contexts expose owned scoped withdrawals through an explicit host drain,
+whose application teardown composition and the external persistence work remain
+acceptance gaps. The [migration guide](input-accessibility-binding-migration.md)
+records bounds, public consumer changes and unexecuted lifecycle regressions.
 The later [binding migration](input-accessibility-binding-migration.md) adds the
 policy to the canonical typed binding/profile path and extends conflict validation.
 It also fixes the manual Input accessibility consumer to move the successful
@@ -305,3 +308,24 @@ existing caller removal. Animated hosts must pass the actual canonical frame lea
 the presenter forwards it to the existing extractor's lineage/pinning overload,
 preserving queued-reader retirement. It never fabricates a frame or completion
 receipt. Existing non-animated extraction remains explicit and separately bounded.
+
+## Input router integration checkpoint
+
+The Input-owned router now applies the profile's typed affordance policy through
+bounded transactional mapping, explicit host sample time and scoped cancellation
+delivery. The migration guide records the added repeat/status/withdrawal API,
+non-reusable identities, neutral admission and fixed limits. Actual router test
+sources cover holds/repeat, sticky chords, skipped reads, configuration changes,
+focus/modal/time/device/player lifetimes, owned withdrawals, capacity rollback
+and allocation-free reads. The staged consumer exercises the new public drain.
+None of these C++ tests or consumers has compiled or run yet.
+
+After these edits, the paired localization and SDK Python command recorded above
+passed again: **25 passed**. `git diff --check` passed and changed C++ was formatted.
+These checks do not validate C++ behavior. The first requested native slice remains
+Input tests and its two staged consumers; the main CI board grants another owner
+the sole heavy slot. No ACC heavy process or background waiter was launched.
+Full Sonar IDE, CLI secrets and Codacy preflight remains incomplete pending the
+serialized analysis slot and supported preparation path; cloud configuration
+authentication remains a separate previously recorded gap. Host withdrawal,
+rebinding UI, scoped persistence integration and gyro are still acceptance work.

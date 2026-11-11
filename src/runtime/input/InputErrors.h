@@ -15,6 +15,8 @@ namespace Horo::Input::Errors {
     extern const ErrorCodeDescriptor ProfilePromotionFailed;
     extern const ErrorCodeDescriptor CaptureInactiveContext;
     extern const ErrorCodeDescriptor CaptureBusy;
+    /** @brief The shared non-reusable routing-token sequence cannot issue another context or capture identity. */
+    extern const ErrorCodeDescriptor RoutingIdentityExhausted;
     extern const ErrorCodeDescriptor ActionMapValidationFailed;
     extern const ErrorCodeDescriptor ProfileValidationFailed;
 }  // namespace Horo::Input::Errors

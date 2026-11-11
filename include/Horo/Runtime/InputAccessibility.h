@@ -39,6 +39,7 @@ namespace Horo::Input {
         [[nodiscard]] DigitalAffordanceValue Cancel() noexcept;
 
     private:
+        /** @brief Stores the already validated immutable per-binding policy. @param policy Validated digital policy. */
         explicit DigitalAffordance(DigitalAffordancePolicy policy) noexcept;
         DigitalAffordancePolicy policy_;
         std::uint64_t lastTime_{};
@@ -77,5 +78,7 @@ namespace Horo::Input {
     namespace InputAccessibilityErrors {
         /** @brief Hold/repeat policy exceeds deterministic mapping bounds. */
         extern const ErrorCodeDescriptor InvalidPolicy;
+        /** @brief Fixed semantic mapping inventory or setup identity storage cannot admit this request. */
+        extern const ErrorCodeDescriptor CapacityExceeded;
     }  // namespace InputAccessibilityErrors
 }  // namespace Horo::Input

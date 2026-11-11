@@ -12,9 +12,13 @@ int main() {
     const auto &raw = input.CommitFrame();
     Horo::Input::InputBinding binding;
     binding.accessibility.digital.toggle = true;
+    Horo::Input::RetiredInputActionRelease release;
+    const bool unexpectedRelease = input.Router().TryDequeueRetiredActionRelease(release);
+    const Horo::Input::ActionValue neutral;
     return binding.accessibility.IsEnabled() &&
                    Horo::Input::InputBindingProfile{}.schemaVersion == Horo::Input::CurrentInputBindingProfileSchema &&
-                   raw.sampleTime == Horo::Input::InputSampleTime{1000} && !state.Cancel().button.down
+                   raw.sampleTime == Horo::Input::InputSampleTime{1000} && !state.Cancel().button.down && !unexpectedRelease &&
+                   !neutral.repeated
                ? 0
                : 1;
 }

@@ -86,17 +86,65 @@ An invalid negative runtime duration yields unavailable metadata rather than an
 unsigned wrap. Mapping itself performs no system-clock call. New regression
 sources cover legacy/no-time collection, equality/maximum timestamps, clearing
 missing time, the canonical action-collection commit and native SDL publication.
-They do not yet qualify timed router consumption or device hardware.
+These collection checks alone do not qualify timed router consumption or device hardware.
 
 Regression sources cover legacy read/current write, policy round trip, layered
 profile replacement, malformed numeric and boolean types, unknown fields,
 duration bounds, version skew and sticky/physical conflict detection. They have
 not yet compiled or run under the allocated shared native build slot.
 
-Router consumption, explicit monotonic hold/repeat time, synthetic cancellation
-release ownership, rebinding UI exposure and gyro support still require their
-integrated implementations and tests. This wire/model checkpoint does not qualify
-ACC-001.4. Input's independently owned scoped persistence/capture work must be
+## Router ownership and source migration
+
+The existing `InputRouter` now applies each enabled policy after canonical physical
+interpretation and routing admission. State is keyed by exact context incarnation,
+typed action-name lease, binding index and optional player. Held device mappings
+remain pinned to the exact device generation. Raw snapshots are never rewritten;
+already semantic action-collection sources retain their existing interpretation.
+Multiple binding values keep the router's existing OR aggregation of digital facts.
+
+Hold and repeat use only the host's explicit sample time. Missing time refuses the
+whole timed action with `ActionReadStatus::ClockUnavailable`; reverse time retires
+old state. Repeat is the trailing `ActionValue::repeated` field, separate from a
+fresh activation's `pressed`. The router advances accessibility state at most once
+per committed sample, so repeated reads preserve held state without replaying
+synthetic edges. These public layout and enum additions require consumer rebuilds.
+
+Focus loss, context preemption/removal, accepted configuration replacement,
+device disconnect/reassignment and reversed time retire the old incarnation.
+Rejected candidates preserve the active map and state. Live owners drain their
+pending release through their original token and action name, even while
+preempted or after the name is removed from the map. An ended context emits an
+owned `RetiredInputActionRelease`, drained through `TryDequeueRetiredActionRelease`
+at the host's ordinary input/owner cutoff. Matching old context/action/player
+withdrawals coalesce; they never invoke dead callbacks or become replacement-context
+input. The host must route these records to its existing teardown authority;
+that application composition is still pending. The immutable action-name lease
+may outlive the router. Shutdown must drain before destroying that owner.
+
+Setup prepares identity storage before publishing a configuration. Mapping reads
+use a fixed 1,024-slot inventory and at most 64 effective bindings per opted-in
+action with an action-name limit of 256 bytes. Pending releases retain their slot
+until drained. Capacity refusal rolls back this action's physical consumption,
+candidate state and sticky consumption. `EndFrame`, or the next committed sample
+for hosts without that call, reclaims drained identities at an owner boundary.
+No action read allocates name storage, polls a clock or invokes a callback.
+
+New/reset mappings require observed neutral input before a fresh press. Sticky
+modifiers are context-owned and consumed only after a successful admitted chord;
+physical modifiers remain raw facts. Focus, configuration, context and device
+inventory/assignment boundaries reset the latch. An admitted hold retains its
+chord until physical release, without granting another fresh press the used latch.
+Routing and capture identities now stop at exhaustion instead of wrapping;
+`PushContext` returns an empty token and `CapturePointer` returns a typed failure.
+
+Regression sources exercise actual router reads, repeat timing, skipped reads,
+modal/focus/time cancellation, accepted and rejected rebinding, scoped name
+lifetimes, ended-owner coalescing, device/player generations, sticky reset,
+capacity rollback, owner-boundary reclamation and allocation-free action reads.
+They remain **uncompiled and unexecuted** pending the shared native build slot.
+Rebinding UI exposure, host withdrawal integration and gyro support still require
+implementation and tests. This checkpoint does not qualify ACC-001.4.
+Input's independently owned scoped persistence/capture work must be
 integrated without replacing its strengthened validation or adding another save
 path. That work and this version-two change currently live in separate unpushed
 worktrees; merge conflicts in the common codec must preserve both contracts.
