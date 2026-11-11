@@ -17,7 +17,7 @@ ACC-001.1 / HORO-1805 is already delivered and is not reimplemented.
 | ACC-001.5 visual | HORO-1809 / #1853 | Added UI scale/contrast snapshot with readable typography floor, visual-safety snapshot and typed effect suppression seam; regression cases written, not executed | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Existing Runtime UI semantics; added optional platform transport interface, honest no-op Unsupported adapter and opt-in bounded semantic QA journal; tests written, not executed | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Added inert domain contribution, typed tick snapshot for all seven preferences and revision-only hint adapter; lost/stale hint tests written, not executed | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
-| ACC-001.8 tooling | HORO-1812 / #1856 | Added unrounded sRGB AA/AAA contrast evaluator and numeric tests, not executed | Four functioning tools, display-independent CI theme checks, platform evidence and documented qualification gaps; depends on all above |
+| ACC-001.8 tooling | HORO-1812 / #1856 | Added unrounded sRGB AA/AAA evaluator, registered editor contrast panel and paired localized copy; numeric/headless UI tests written, not executed | Qualify the four tools and execute the new display-independent primary-text theme checks, platform evidence and documented qualification gaps; depends on all above |
 
 ## Interpretation of issue wording
 
@@ -206,3 +206,25 @@ No branch push or pull request has been performed.
 
 The tooling slice also corrects the semantic journal header registration, so the
 canonical Runtime UI public-header consumer includes that new public contract.
+
+## Editor contrast tool integration
+
+The default workspace registry now exposes `horo.accessibility_contrast` in the
+right dock. Its shared color controls inspect exact opaque #RRGGBB custom drafts;
+invalid intermediate text has no cached passing result. Theme inspection reads
+current primary-text and root-surface tokens without 8-bit quantization, and
+rejects non-opaque/invalid pairs with a localized composition diagnostic. The
+standard/large category is explicit and documents the actual-font-metric rule.
+Visible ratios are rounded for display; pass/fail comparisons are not.
+
+`HoroGui` gains a private dependency on `HoroVisualAccessibility`; no public GUI
+header or public dependency is added. Regression cases cover invalid edits,
+unquantized theme inputs, unknown composition, default registry integration, and
+English/Turkish narrow/wide headless rendering. A headless test checks standard AA
+for primary text on the four opaque built-in panel surfaces and native ImGui text
+on WindowBg. Those deliberately bounded pairs do not qualify dim/muted text,
+interactive states, arbitrary project themes, or complete editor WCAG compliance.
+They require the GUI test composition; headless skeleton configuration alone
+cannot run them. Compilation, execution and manual popup/focus interaction remain
+pending. A lightweight paired-catalog Python check plus the SDK metadata tests
+completed with **25 passed** after the panel integration.

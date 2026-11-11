@@ -4,6 +4,7 @@
 #include "Horo/Editor/XRSimulatorPanel.h"
 #include "editor/navigation/NavigationTab.h"
 #include "editor/screens/workspace/PCGWorkspace.h"
+#include "editor/screens/workspace/panels/accessibility/AccessibilityContrastPanel.h"
 #include "editor/screens/workspace/panels/game/GamePanel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "editor/screens/workspace/panels/hierarchy/HierarchyPanel.h"
@@ -28,6 +29,7 @@ namespace Horo::Editor {
                                         const std::span<const GlobalDockPaneFactory> globalDockPaneFactories) {
         registry.RegisterPanel(std::make_shared<HierarchyPanel>());
         registry.RegisterPanel(std::make_shared<InspectorPanel>());
+        registry.RegisterPanel(std::make_shared<AccessibilityContrastPanel>());
         registry.RegisterPanel(std::make_shared<FoliagePaletteTab>());
         auto globalDock = std::make_shared<GlobalDockPanel>();
         for (const GlobalDockPaneFactory &factory : globalDockPaneFactories) {

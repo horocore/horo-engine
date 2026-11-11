@@ -3067,6 +3067,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/AssetImportSourcePreviewTests.cpp
             unit/editor/ScreenViewPresentationTests.cpp
             unit/editor/EditorThemeBehaviorTests.cpp
+            unit/editor/AccessibilityContrastPanelTests.cpp
             unit/editor/EditorGuiCompositionTests.cpp
     )
     target_compile_features(HoroEditorPresentationTests PRIVATE cxx_std_20)
@@ -3077,6 +3078,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditorPresentationTests
             PRIVATE
             HoroEngine::Gui
+            HoroEngine::VisualAccessibility
             HoroEngine::EditorServices
             HoroEngine::Extensions
             HoroThirdParty::ImGui
