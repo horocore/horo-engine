@@ -1,7 +1,30 @@
 #include "AllocationProbe.h"
+#include "AudioStreamState.h"
 #include "AudioStreamingTestFixture.h"
 
+#include <limits>
+
 namespace Horo::Audio::StreamingTests {
+    TEST_CASE("Rate-limited stream reports retain late callback facts and saturated frame totals", "[unit][audio][streaming]") {
+        UnderrunReporting reporting;
+        const auto cause = AudioStreamStarvationCause::WorkerPending;
+        const auto framesOnly = reporting.Take(2, 0, 100, 10, cause);
+        REQUIRE(framesOnly.has_value());
+        CHECK(framesOnly->missingFrames == 2);
+        CHECK_FALSE(reporting.Take(2, 1, 105, 10, cause).has_value());
+        const auto callbackOnly = reporting.Take(2, 1, 110, 10, cause);
+        REQUIRE(callbackOnly.has_value());
+        CHECK(callbackOnly->missingFrames == 0);
+        CHECK(callbackOnly->callbackCount == 1);
+        constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+        REQUIRE(reporting.Take(maximum, 2, 120, 10, cause).has_value());
+        const auto saturated = reporting.Take(maximum, 3, 130, 10, cause);
+        REQUIRE(saturated.has_value());
+        CHECK(saturated->missingFrames == 0);
+        CHECK(saturated->callbackCount == 1);
+        CHECK_FALSE(reporting.Take(maximum, 3, 140, 10, cause).has_value());
+    }
+
     TEST_CASE("Scheduler rejection is retained separately from budget rejection and coalesced starvation", "[unit][audio][streaming]") {
         JobSystemConfig configuration;
         configuration.workerCount = 1;

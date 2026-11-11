@@ -18,6 +18,21 @@ namespace Horo::Audio {
         std::uint64_t frames{};
         std::uint64_t callbacks{};
         std::uint64_t sampleFrame{};
+
+        /** @brief Coalesce both independently published monotonic counters, including saturated frame totals. */
+        std::optional<AudioStreamUnderrunReport> Take(const std::uint64_t observedFrames, const std::uint64_t observedCallbacks,
+                                                      const std::uint64_t observedSampleFrame, const std::uint64_t interval,
+                                                      const AudioStreamStarvationCause cause) noexcept {
+            if ((observedFrames == frames && observedCallbacks == callbacks) ||
+                (reported && observedSampleFrame >= sampleFrame && observedSampleFrame - sampleFrame < interval))
+                return std::nullopt;
+            const AudioStreamUnderrunReport report{observedFrames - frames, observedCallbacks - callbacks, observedSampleFrame, cause};
+            frames = observedFrames;
+            callbacks = observedCallbacks;
+            sampleFrame = observedSampleFrame;
+            reported = true;
+            return report;
+        }
     };
 
     /** @brief Ring publication and position handoff between the sole callback and serialized worker.

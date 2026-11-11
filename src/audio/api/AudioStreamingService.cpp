@@ -597,18 +597,9 @@ namespace Horo::Audio {
         if (minimumIntervalFrames == 0)
             return Result<std::optional<AudioStreamUnderrunReport>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
         const auto frames = state->underrunFrames.load(std::memory_order_seq_cst);
-        auto &reporting = state->reporting;
-        if (frames == reporting.frames ||
-            (reporting.reported && sampleFrame >= reporting.sampleFrame && sampleFrame - reporting.sampleFrame < minimumIntervalFrames))
-            return Result<std::optional<AudioStreamUnderrunReport>>::Success(std::nullopt);
         const auto callbacks = state->underrunCallbacks.load(std::memory_order_seq_cst);
-        AudioStreamUnderrunReport report{frames - reporting.frames, callbacks - reporting.callbacks, sampleFrame,
-                                         Snapshot(handle).Value().starvationCause};
-        reporting.frames = frames;
-        reporting.callbacks = callbacks;
-        reporting.sampleFrame = sampleFrame;
-        reporting.reported = true;
-        return Result<std::optional<AudioStreamUnderrunReport>>::Success(report);
+        return Result<std::optional<AudioStreamUnderrunReport>>::Success(
+            state->reporting.Take(frames, callbacks, sampleFrame, minimumIntervalFrames, Snapshot(handle).Value().starvationCause));
     }
 
     /** @copydoc AudioStreamingService::Shutdown */
