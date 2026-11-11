@@ -130,6 +130,23 @@ cancels through the issuing frontend. That compatibility regression is pending n
 execution. The external fix has no reported test/quality/push evidence and is not
 present in this worktree's base; it does not discharge #1916's qualification blocker.
 
+The same owner also reports a candidate `PlatformSessionBinding.h` seam with
+`ProviderAccountBindingId`, `PlatformSessionBindingEvidence` and a move-only
+host/private-broker-owned `PlatformSessionBindingIssuer`. That header is absent
+from this worktree. Its proposed access-validation route receives current provider
+capabilities, the published session, captured evidence, an explicit expected binding
+and the service. Cloud integration must obtain that expected binding from a trusted
+host association; a subject handle, cloud object key or ordinary consumer cannot
+manufacture the association. The issuer remains outside ordinary consumers, and its
+close/destruction revokes weak captured evidence without extending provider lifetime.
+
+This proposed seam is neither a mutable session owner nor credential storage or a
+cloud journal. The coordinator retains its existing protected durable partition.
+Authenticated stable-binding resolution remains a private-broker precondition and
+provider qualification gate. No seam implementation is copied or consumed here.
+The owner reports `4e718b2` as a frontend const-view compile correction only; no
+subsequent successful compile/test result or qualified integration SHA is available.
+
 ADR-134's header currently says **Proposed**, while the normative platform-services
 architecture references it as the ratified baseline. This delivery follows the
 normative contract and records the inconsistency without changing ADR status.
