@@ -1549,6 +1549,25 @@ Durable intent stores a protected pseudonymous subject-binding partition and pol
 requirements, never a live handle. Replay first verifies the same binding under a new
 active session and reauthorizes the operation. “Current account” cannot retarget it.
 
+The private broker hands off this association as immutable
+`PlatformSessionBindingEvidence`, built from a protected `ProviderAccountBindingId`,
+the exact selected provider capabilities and the already published Active snapshot.
+`ValidatePlatformSessionBindingAccess` checks current provider availability, exact
+subject/session/access generations and the durable owner's explicit expected binding
+before replay or commit. Product/environment scope participates in opaque binding
+equality. Old evidence is stale after session/access replacement; verified same-binding
+reauthentication requires fresh evidence. These inert builders/validators retain no
+mutable current account, storage, scheduler or independent session authority. Native
+authentication and stable-subject mapping remain private broker preconditions and
+require provider conformance evidence. The semantic owner still reauthorizes its own
+profile/policy/intent and keeps durable partition ownership.
+The private broker alone owns `PlatformSessionBindingIssuer`; both binding builders
+require it. Weak issuer provenance prevents ordinary consumers or another issuer
+from minting an association for an expected binding. Issuer revocation invalidates
+captured bindings/evidence without extending native lifetimes. The public binding
+is a process-local issuer-bound view; the protected store retains canonical durable
+inputs and re-resolves expected partitions under a new issuer after broker restart.
+
 ### Sign-in, sign-out and account switch
 
 Sign-in prepares provider authentication, stable-subject/private profile mapping,

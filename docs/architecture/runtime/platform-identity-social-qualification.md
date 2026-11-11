@@ -31,6 +31,8 @@ accounts or native identifiers.
 | Native partial-start rollback and BUSY shutdown retain callback/code ownership | `PlatformProviderLifecycleTests.cpp` in `HoroPlatformProviderAdmissionTests` |
 | Composition replacement closes retained old frontends before new factory activation; failed replacement cannot reopen old admission | `HoroPlatformServicesCompositionTests` |
 | A retired frontend's handle cannot cancel a new account's request even when numeric ID/generation collide; frontend moves preserve valid cancellation | `PlatformServicesFrontendTests.cpp` in `HoroPlatformRequestTests` |
+| Same protected binding requires fresh evidence after reauthentication; another account/environment cannot retarget an old partition and restrictions/capability absence remain failures | `PlatformSessionBindingTests.cpp` in `HoroPlatformRequestTests` |
+| A foreign issuer cannot forge association from an expected binding; moving preserves provenance and issuer close/destruction invalidates weak evidence | `PlatformSessionBindingTests.cpp` in `HoroPlatformRequestTests` |
 | Presence registry validation, coalescing, rate limits and session/access token invalidation | `PlatformPresenceCoordinatorTests.cpp` in `HoroPlatformRequestTests` |
 | Friends capability absence, explicit Null and all denied access states are distinct failures | `PlatformFriendsCoordinatorTests.cpp` and `PlatformServicesFrontendTests.cpp` in `HoroPlatformRequestTests` |
 | Friends pages reject mismatched offset/scope, oversized/malformed UTF-8, NUL, duplicate handles and invalid continuation before any partial publication | `PlatformFriendsCoordinatorTests.cpp` in `HoroPlatformRequestTests` |
@@ -41,11 +43,16 @@ accounts or native identifiers.
 ## Execution status
 
 The tests above are coverage locations, not a claim that they have passed on every
-host. The current delivery's targeted configure/build/CTest and final managed
-Sonar IDE, CLI secrets and Codacy check are pending the repository-wide heavy-build
-slot. Initial sandbox configure stopped in the MSVC compiler sanity test with
-`C1902`; the subsequent non-sandbox attempt deferred because the shared lock was
-busy. No C++ regression result is inferred from either attempt.
+host. Targeted Windows Debug configuration with MSVC 19.44 completed after the
+helper verified its actual canonical shared-lock file handle. Earlier sandbox
+configuration stopped with `C1902`; that attempt supplies no compiler/test success.
+
+The first frontend RED build stopped before test execution: `BindDispatch` tried
+to mutate a handle through `Result::Value()`'s const lvalue view. The source fix
+moves the handle out through rvalue `Value()` before binding authority. Rebuild,
+RED/GREEN regressions, public consumers and final managed Sonar IDE, CLI secrets
+and Codacy checks remain pending the next shared heavy-build slot. No test pass
+is inferred from the successful configuration or failed compilation.
 
 `clang-format` and `git diff --check` have run on the changed sources. The portable
 VS Code profile with installed CMake/Ninja passes the local preflight prerequisite
