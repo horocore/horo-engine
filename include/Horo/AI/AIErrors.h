@@ -8,6 +8,8 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::AI::AIErrors {
+    /** @brief An environment-query generator or test threw instead of returning its typed provider result. */
+    extern const ErrorCodeDescriptor EnvironmentQueryProviderFailed;
     /** @brief Fixed-tick scheduler settings, registration or cooperative limits are invalid. */
     extern const ErrorCodeDescriptor SchedulerPolicyInvalid;
     /** @brief A cooperative owner or worker slice attempted work beyond its admitted allowance. */

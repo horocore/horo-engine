@@ -194,11 +194,13 @@ namespace Horo::AI {
 
         /** @brief Advances admitted generation and test stages after BlackboardSync.
          * @param tick Current simulation tick. @param budget Query, agent and global allowances for this tick.
+         * @details Provider exceptions become a query-local typed failure at the next Sync; accepted work is cancelled.
          */
         void Advance(std::uint64_t tick, QueryExecutionBudget budget);
         /** @brief Drains completions and publishes at most one terminal result.
          * @param tick Current simulation tick. @param finishEarly Explicit early finish request.
          * @return Whether this call published the terminal result.
+         * @details Poll exceptions cancel the accepted request and publish a query-local typed failure.
          */
         [[nodiscard]] bool Sync(std::uint64_t tick, bool finishEarly = false);
         /** @brief Requests cancellation. Accepted work is revoked immediately on the owner lane. */

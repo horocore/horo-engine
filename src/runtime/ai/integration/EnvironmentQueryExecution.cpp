@@ -4,11 +4,25 @@
 
 #include <algorithm>
 #include <bit>
+#include <exception>
 #include <numeric>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace Horo::AI {
     namespace {
+        /** @brief Translates the currently handled provider exception without changing typed Result errors. */
+        [[nodiscard]] Error ProviderFailure() {
+            try {
+                throw;
+            } catch (const std::exception &error) {
+                return MakeError(AIErrors::EnvironmentQueryProviderFailed, std::string{std::string_view{error.what()}.substr(0, 512)});
+            } catch (...) {
+                return MakeError(AIErrors::EnvironmentQueryProviderFailed);
+            }
+        }
+
         /** @brief Charges all distinct allowances together before work can start. */
         [[nodiscard]] bool Charge(const QueryExecutionBudget budget, const std::size_t units) noexcept {
             if (std::min({budget.query.Remaining(), budget.agent.Remaining(), budget.global.Remaining()}) < units)
@@ -159,10 +173,15 @@ namespace Horo::AI {
             stale_ = true;
             return;
         }
-        if (!generated_ && Charge(budget, GenerationCost(settings_)))
-            Generate();
-        if (generated_)
-            AdvanceCandidates(budget);
+        try {
+            if (!generated_ && Charge(budget, GenerationCost(settings_)))
+                Generate();
+            if (generated_)
+                AdvanceCandidates(budget);
+        } catch (...) {
+            result_.error = ProviderFailure();
+            StopTest();
+        }
     }
 
     /** @copydoc QueryExecution::CanAdvance */
@@ -194,24 +213,29 @@ namespace Horo::AI {
 
     /** @brief Drains one provider result and rejects facts for a different stage. */
     void QueryExecution::Poll() {
-        auto completion = source_->PollTest();
-        if (completion.HasError()) {
+        try {
+            auto completion = source_->PollTest();
+            if (completion.HasError()) {
+                pending_ = false;
+                result_.error = std::move(completion).ErrorValue();
+                return;
+            }
+            if (!completion.Value())
+                return;
             pending_ = false;
-            result_.error = std::move(completion).ErrorValue();
-            return;
+            const auto &sample = *completion.Value();
+            const auto slot = testOrder_[nextTest_];
+            if (sample.stage != scoring_.stages_[slot].rule.stage) {
+                result_.error = MakeError(AIErrors::EnvironmentQuerySchemaInvalid);
+                return;
+            }
+            samples_[slot] = sample;
+            if (++nextTest_ == testOrder_.size())
+                ScoreCandidate();
+        } catch (...) {
+            result_.error = ProviderFailure();
+            StopTest();
         }
-        if (!completion.Value())
-            return;
-        pending_ = false;
-        const auto &sample = *completion.Value();
-        const auto slot = testOrder_[nextTest_];
-        if (sample.stage != scoring_.stages_[slot].rule.stage) {
-            result_.error = MakeError(AIErrors::EnvironmentQuerySchemaInvalid);
-            return;
-        }
-        samples_[slot] = sample;
-        if (++nextTest_ == testOrder_.size())
-            ScoreCandidate();
     }
 
     /** @copydoc QueryExecution::Sync */

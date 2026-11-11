@@ -313,3 +313,11 @@ Their deterministic admission requires a concrete bounded owner-kernel adapter
 and its provider reservation contract. There is no implicit conversion from their
 asynchronous probes into deterministic sources. Query result caching is absent
 from this execution path.
+
+Adaptive generator, test-admission and test-poll exceptions are confined to the
+owning QueryExecution. They produce EnvironmentQueryProviderFailed with bounded
+exception detail and no winners. Generation/admission failures publish at the
+next BlackboardSync; poll failures cancel the retained request and publish in
+the current sync. Exact typed Result errors retain their original domain/code.
+Cancellation and source invalidation still precede ordinary failure publication.
+This boundary adds no retry, worker wait or cross-query callback.

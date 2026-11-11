@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -103,12 +104,22 @@ namespace Horo::AI {
             }
         };
 
+        enum class SourceFailure {
+            None,
+            Generation,
+            Admission,
+            Poll,
+            UnknownPoll,
+            TypedAdmission
+        };
+
         struct ExecutionProbe final {
             bool current{true};
             bool ready{true};
             bool backpressure{};
             bool overrun{};
             bool generationOverrun{};
+            SourceFailure failure{SourceFailure::None};
             int generated{};
             int attempts{};
             int polls{};
@@ -126,6 +137,8 @@ namespace Horo::AI {
 
             Result<QueryGenerationResult> Generate(const QueryExecutionInputs &, const QueryGeneratorOutput &output) override {
                 ++probe_.generated;
+                if (probe_.failure == SourceFailure::Generation)
+                    throw std::runtime_error("generator failed");
                 const std::array points{Math::WorldCoordinate64::FromMillimeters(1, 0, 0),
                                         Math::WorldCoordinate64::FromMillimeters(2, 0, 0)};
                 return GenerateQueryPoints(points, output);
@@ -133,6 +146,10 @@ namespace Horo::AI {
 
             Result<bool> StartTest(const QueryExecutionInputs &, const QueryStageId stage, const QueryGeneratedItem &item) override {
                 ++probe_.attempts;
+                if (probe_.failure == SourceFailure::Admission)
+                    throw std::runtime_error("test admission failed");
+                if (probe_.failure == SourceFailure::TypedAdmission)
+                    return Result<bool>::Failure(MakeError(AIErrors::CapabilityUnavailable));
                 probe_.lastStage = stage;
                 if (probe_.backpressure)
                     return Result<bool>::Success(false);
@@ -142,6 +159,10 @@ namespace Horo::AI {
 
             Result<std::optional<QueryTestSample>> PollTest() override {
                 ++probe_.polls;
+                if (probe_.failure == SourceFailure::Poll)
+                    throw std::runtime_error("poll failed");
+                if (probe_.failure == SourceFailure::UnknownPoll)
+                    throw 42;
                 return Result<std::optional<QueryTestSample>>::Success(probe_.ready ? std::exchange(sample_, std::nullopt) : std::nullopt);
             }
 
@@ -439,6 +460,37 @@ namespace Horo::AI {
             CHECK(query->Published()->status == QueryExecutionStatus::PartialSuccess);
             REQUIRE(query->Published()->winners.size() == 1);
             CHECK(query->Published()->winners[0].score.scoreKey == QueryScoringPlan::ScoreKeyScale / 2);
+        }
+
+        TEST_CASE("EQS isolates generator admission and poll exceptions from other queries", "[unit][ai][eqs][execution]") {
+            auto scene = MakeScene();
+            for (const auto point : {SourceFailure::Generation, SourceFailure::Admission, SourceFailure::Poll, SourceFailure::UnknownPoll,
+                                     SourceFailure::TypedAdmission}) {
+                ExecutionProbe failing{.failure = point}, healthy;
+                auto rejected = MakeExecution(failing, *scene);
+                auto accepted = MakeExecution(healthy, *scene);
+                AiWorkBudget firstFailure{9}, firstHealthy{9}, secondHealthy{2};
+                REQUIRE_FALSE(rejected->Sync(5));
+                REQUIRE_FALSE(accepted->Sync(5));
+                REQUIRE_NOTHROW(rejected->Advance(5, {firstFailure, firstFailure, firstFailure}));
+                accepted->Advance(5, {firstHealthy, firstHealthy, firstHealthy});
+                REQUIRE(rejected->Sync(6));
+                REQUIRE(rejected->Published());
+                CHECK(rejected->Published()->status == QueryExecutionStatus::Failed);
+                CHECK(rejected->Published()->winners.empty());
+                REQUIRE(rejected->Published()->error);
+                const auto &expected =
+                    point == SourceFailure::TypedAdmission ? AIErrors::CapabilityUnavailable : AIErrors::EnvironmentQueryProviderFailed;
+                CHECK(rejected->Published()->error->code.Value() == expected.code.Value());
+                CHECK(rejected->Published()->error->domain.Value() == expected.domain.Value());
+                CHECK(failing.cancelled == ((point == SourceFailure::Poll || point == SourceFailure::UnknownPoll) ? 1 : 0));
+                REQUIRE_FALSE(accepted->Sync(6));
+                accepted->Advance(6, {secondHealthy, secondHealthy, secondHealthy});
+                REQUIRE(accepted->Sync(7));
+                CHECK(accepted->Published()->status == QueryExecutionStatus::Completed);
+                CHECK(accepted->Published()->winners.size() == 2);
+                CHECK_FALSE(rejected->Sync(7));
+            }
         }
 
         TEST_CASE("EQS retires a pending provider when the publication window is missed", "[unit][ai][eqs][execution]") {
