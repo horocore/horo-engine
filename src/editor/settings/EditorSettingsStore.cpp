@@ -72,16 +72,31 @@ namespace Horo::Editor {
             return ss.str();
         }
 
-        /** @brief Imports the retained legacy profile only while the canonical Settings field is absent. */
-        void ImportLegacyKeymap(EditorSettingsDocument &document) {
-            const auto path = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
-            if (std::error_code error; std::filesystem::exists(path, error) && !error) {
-                const auto profile = Input::LoadBindingProfile(path);
-                if (profile.HasValue())
-                    document.settings.keymap.profile = profile.Value();
-                else
-                    document.error = profile.ErrorValue().message;
+        /** @brief Reads the sole editor-user profile; malformed canonical data never falls back to an older settings field. */
+        bool ReadCanonicalKeymap(EditorSettingsDocument &document) {
+            const auto paths = Input::ResolveBindingProfilePaths({}, ResolveEditorSettingsHomeDirectory());
+            if (paths.HasError()) {
+                document.parseError = true;
+                document.error = paths.ErrorValue().message;
+                return true;
             }
+            const auto &path = paths.Value().editorUser;
+            std::error_code error;
+            const bool exists = std::filesystem::exists(path, error);
+            if (error) {
+                document.parseError = true;
+                document.error = error.message();
+                return true;
+            }
+            if (!exists)
+                return false;
+            const auto profile = Input::LoadBindingProfile(path);
+            if (profile.HasError()) {
+                document.parseError = true;
+                document.error = profile.ErrorValue().message;
+            } else
+                document.settings.keymap.profile = profile.Value();
+            return true;
         }
 
         /** @brief Reads the canonical typed profile without normalizing duplicate or malformed JSON into valid settings. */
@@ -112,9 +127,10 @@ namespace Horo::Editor {
                 document.error = "Editor settings schema version is unsupported.";
                 return false;
             }
+            if (ReadCanonicalKeymap(document))
+                return !document.parseError;
             const auto input = parsed.find("input");
             if (input == parsed.end() || (input->is_object() && !input->contains("bindingProfile"))) {
-                ImportLegacyKeymap(document);
                 return true;
             }
             if (!input->is_object() || !(*input)["bindingProfile"].is_object()) {
@@ -527,10 +543,10 @@ namespace Horo::Editor {
         EditorSettingsDocument out;
         out.path = ResolveEditorSettingsPath();
         out.settings = DefaultEditorSettings();
+        (void)ReadCanonicalKeymap(out);
 
         if (std::error_code ec; !std::filesystem::exists(out.path, ec)) {
             LOG_DEBUG("editor.settings", "editor_settings.json not found at '%s' — using defaults.", out.path.string().c_str());
-            ImportLegacyKeymap(out);
             std::string validationError;
             if (!ValidateEditorSettings(out.settings, &validationError))
                 out.error = std::move(validationError);
@@ -594,6 +610,13 @@ namespace Horo::Editor {
             return false;
         }
 
+        const auto paths = Input::ResolveBindingProfilePaths({}, ResolveEditorSettingsHomeDirectory());
+        if (paths.HasError()) {
+            if (outError)
+                *outError = paths.ErrorValue().message;
+            return false;
+        }
+        const auto &profilePath = paths.Value().editorUser;
         const std::filesystem::path dir = doc->path.parent_path();
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
@@ -602,6 +625,29 @@ namespace Horo::Editor {
                 *outError = ec.message();
             }
             return false;
+        }
+
+        const bool profileExists = std::filesystem::exists(profilePath, ec);
+        if (ec) {
+            if (outError)
+                *outError = ec.message();
+            return false;
+        }
+        // Establish the prior profile before retiring an embedded legacy field. A
+        // later settings or profile write failure still leaves this authority intact.
+        if (!profileExists) {
+            const auto previous = LoadEditorSettingsDocument();
+            if (previous.parseError) {
+                if (outError)
+                    *outError = previous.error;
+                return false;
+            }
+            const auto seeded = Input::SaveBindingProfileAtomically(profilePath, previous.settings.keymap.profile);
+            if (seeded.HasError()) {
+                if (outError)
+                    *outError = seeded.ErrorValue().message;
+                return false;
+            }
         }
 
         std::ofstream out(doc->path, std::ios::binary | std::ios::trunc);
@@ -620,6 +666,19 @@ namespace Horo::Editor {
             if (outError) {
                 *outError = "Failed while writing editor settings file.";
             }
+            return false;
+        }
+
+        out.close();
+        if (!out) {
+            if (outError)
+                *outError = "Failed while closing editor settings file.";
+            return false;
+        }
+        const auto saved = Input::SaveBindingProfileAtomically(profilePath, doc->settings.keymap.profile);
+        if (saved.HasError()) {
+            if (outError)
+                *outError = saved.ErrorValue().message;
             return false;
         }
 

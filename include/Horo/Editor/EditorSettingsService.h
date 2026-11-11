@@ -61,9 +61,15 @@ namespace Horo::Editor {
         void SetContributedInputActions(std::vector<Input::ActionDescriptor> actions);
         /** @brief Returns the current live module command descriptors until the next publication. */
         [[nodiscard]] std::span<const Input::ActionDescriptor> ContributedInputActions() const noexcept;
+        /** @brief Supplies active project layers for authoring-time validation of global binding changes.
+         * @param paths Host-admitted project/user paths, or nullopt when the workspace retires.
+         * @details Called on the settings owner thread. It does not load files, activate bindings or change the settings revision.
+         */
+        void SetInputProfilePaths(std::optional<Input::BindingProfilePaths> paths);
 
     private:
         std::vector<Input::ActionDescriptor> m_contributedActions;
+        std::optional<Input::BindingProfilePaths> m_inputProfilePaths;
         EditorSettings m_committed;
         std::uint64_t m_revision = 0;
         ConfigurationService &m_configuration;

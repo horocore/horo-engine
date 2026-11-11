@@ -1394,6 +1394,19 @@ namespace Horo::Editor {
             const EditorOpenXRHostServices *xrHost;
         };
 
+        /** @brief Reloads the active project's authored layers after a committed global Settings change. */
+        Result<Input::InputBindingProfile> LoadProjectInputLayers(const std::filesystem::path &projectRoot) {
+            const auto metadata = Application::LoadProjectMetadata(projectRoot);
+            if (metadata.HasError())
+                return Result<Input::InputBindingProfile>::Failure(metadata.ErrorValue());
+            const auto paths =
+                Input::ResolveBindingProfilePaths(projectRoot, ResolveEditorSettingsHomeDirectory(), metadata.Value().projectId);
+            if (paths.HasError())
+                return Result<Input::InputBindingProfile>::Failure(paths.ErrorValue());
+            const std::array ordered{paths.Value().projectDefaults, paths.Value().editorUser, paths.Value().projectUser};
+            return Input::LoadBindingProfileLayers(ordered);
+        }
+
         struct RunEditorMainLoopParams {
             const EditorGuiOptions &options;
             EditorTelemetry &telemetry;
@@ -1894,8 +1907,15 @@ namespace Horo::Editor {
 
                 *settingsSnapshot_ = p_->settings.Snapshot();
                 if (settingsSnapshot_->revision != appliedKeymapRevision_) {
-                    const auto applied = p_->inputRouter.SetProfile(BuiltinEditorInputProfile(settingsSnapshot_->settings.keymap.profile));
-                    if (applied.HasError())
+                    const auto projectRoot = screenHost_->CurrentProjectRoot();
+                    auto profile = Result<Input::InputBindingProfile>::Success(settingsSnapshot_->settings.keymap.profile);
+                    if (screenHost_->ActiveRoute().kind == GuiRouteKind::EditorWorkspace && !projectRoot.empty())
+                        profile = LoadProjectInputLayers(projectRoot);
+                    if (profile.HasError())
+                        LOG_ERROR("editor.input", "Keeping the last valid editor keymap: %s", profile.ErrorValue().message.c_str());
+                    else if (const auto applied =
+                                 ActivateEditorInputProfile(p_->inputRouter, profile.Value(), p_->settings.ContributedInputActions());
+                             applied.HasError())
                         LOG_ERROR("editor.input", "Unable to activate editor keymap: %s", applied.ErrorValue().message.c_str());
                     appliedKeymapRevision_ = settingsSnapshot_->revision;
                 }
@@ -2909,6 +2929,7 @@ namespace Horo::Editor {
             ThemeContext themeContext{p.fonts, liveGui.Registry()};
             EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
             EditorGuiContext guiContext{p.engineEvents, p.editorEvents, p.localization, themeContext, settingsSnapshot};
+            guiContext.inputRouter = &p.inputRouter;
             std::optional<UpdateExperienceSession> updateSession;
             ConfigureUpdateExperience(p, guiContext, updateSession);
 
@@ -3151,7 +3172,7 @@ namespace Horo::Editor {
     }
 
     void ConfigureEditorInput(Input::InputRouter &inputRouter, const EditorSettings &settings) {
-        if (const auto installed = inputRouter.SetActionMap(BuildEditorInputActions(), BuiltinEditorInputProfile(settings.keymap.profile));
+        if (const auto installed = inputRouter.SetActionMap(EditorKeymapActions(settings.keymap.profile), settings.keymap.profile);
             installed.HasError())
             LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installed.ErrorValue().message.c_str());
     }

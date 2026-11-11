@@ -169,6 +169,7 @@ namespace Horo::Editor {
                                       {"horo.navigation", WorkspaceDockArea::Bottom},
                                       {"horo.inspector", WorkspaceDockArea::Right}};
         m_viewModel.panelDockAreas.emplace("horo.foliage_palette", WorkspaceDockArea::Right);
+        m_viewModel.panelDockAreas.emplace("horo.input_mapping", WorkspaceDockArea::Right);
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.hierarchy", ActivityBarSlot{ActivityBarRail::Left, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.viewport", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.game", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 1}));
@@ -178,6 +179,7 @@ namespace Horo::Editor {
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.navigation", ActivityBarSlot{ActivityBarRail::Left, 3, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.inspector", ActivityBarSlot{ActivityBarRail::Right, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.foliage_palette", ActivityBarSlot{ActivityBarRail::Right, 1, 0}));
+        static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.input_mapping", ActivityBarSlot{ActivityBarRail::Right, 2, 0}));
     }
 
     void EditorWorkspaceController::InitializeInitialScene(const std::filesystem::path &absoluteProjectRoot) {

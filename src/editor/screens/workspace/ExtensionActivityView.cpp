@@ -235,11 +235,13 @@ namespace Horo::Editor {
     /** @copydoc ExtensionActivityView::PrepareCommands */
     void ExtensionActivityView::PrepareCommands() {
         const auto surfaceRevision = host_->Registry().Revision();
-        if (commandSurfaceRevision_ == surfaceRevision && commandSettingsRevision_ == context_.settings.revision)
+        const auto inputRevision = context_.inputRouter ? context_.inputRouter->RoutingState({}).configurationRevision : 0;
+        if (commandSurfaceRevision_ == surfaceRevision && commandSettingsRevision_ == context_.settings.revision &&
+            commandInputRevision_ == inputRevision)
             return;
         commands_.clear();
         std::vector<Input::ActionDescriptor> actions;
-        const auto &profile = context_.settings.settings.keymap.profile;
+        const auto &profile = context_.inputRouter ? context_.inputRouter->Profile() : context_.settings.settings.keymap.profile;
         for (const auto &entry : host_->PreparedCommands()) {
             std::vector<Input::InputBinding> defaults;
             if (const auto binding = ParseEditorShortcut(entry.command.shortcut))
@@ -254,6 +256,7 @@ namespace Horo::Editor {
         commandBindingsValid_ = Input::ValidateBindingProfile(EditorKeymapActions(profile, actions), profile).IsValid();
         commandSurfaceRevision_ = surfaceRevision;
         commandSettingsRevision_ = context_.settings.revision;
+        commandInputRevision_ = inputRevision;
     }
 
     void ExtensionActivityView::Update() {

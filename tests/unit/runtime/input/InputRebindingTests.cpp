@@ -1,0 +1,150 @@
+#include "Horo/Runtime/Input.h"
+#include "support/AllocationProbe.h"
+#include "support/OwnedTestDirectory.h"
+
+#include <catch2/catch_test_macros.hpp>
+#include <thread>
+
+namespace {
+    using namespace Horo::Input;
+
+    struct CaptureFixture {
+        InputService input;
+        InputContextId gameplayId{"gameplay"};
+        InputContextId pauseId{"pause.rebind"};
+        InputContextToken gameplay{input.Router().PushContext(gameplayId, InputContextKind::Gameplay)};
+        InputContextToken owner{input.Router().PushContext(pauseId, InputContextKind::ModalRoot)};
+        std::optional<InputBindingCapture> capture;
+        GamepadDeviceId pad;
+        GamepadDeviceId raw;
+        FrameNumber frame{1};
+
+        CaptureFixture() {
+            REQUIRE(input.Router()
+                        .SetActionMap({{ActionId{"jump"},
+                                        ActionValueType::Digital,
+                                        gameplayId,
+                                        true,
+                                        {{.kind = BindingControlKind::Key, .key = Key::Space}}},
+                                       {ActionId{"pause.submit"},
+                                        ActionValueType::Digital,
+                                        pauseId,
+                                        false,
+                                        {{.kind = BindingControlKind::Key, .key = Key::J}}}})
+                        .HasValue());
+            input.BeginFrame(frame);
+            pad = input.Collector().ConnectGamepad("canonical");
+            raw = input.Collector().ConnectGamepad("unknown", false, 1, 1);
+            REQUIRE(input.Collector().SetRawGamepadAxis(raw, 0, -1.0F));
+            (void)input.CommitFrame();
+            auto created = InputBindingCapture::Create(input.Router(), owner, ActionId{"jump"});
+            REQUIRE(created.HasValue());
+            capture.emplace(std::move(created).Value());
+        }
+
+        RawInputCollector &Begin() {
+            input.BeginFrame(++frame);
+            return input.Collector();
+        }
+
+        BindingCaptureResult Poll() {
+            (void)input.CommitFrame();
+            return capture->Poll(input.Router(), owner);
+        }
+    };
+
+    TEST_CASE("Pause-menu and editor capture commit the same typed keyboard pointer and gamepad bindings", "[input][rebinding]") {
+        CaptureFixture fixture;
+        auto &collector = fixture.Begin();
+        BindingControlKind expected{BindingControlKind::Key};
+        SECTION("Keyboard") {
+            collector.SetKey(Key::J, true);
+            expected = BindingControlKind::Key;
+        }
+        SECTION("Pointer") {
+            collector.SetPointerButton(PointerButton::Secondary, true);
+            expected = BindingControlKind::PointerButton;
+        }
+        SECTION("Canonical gamepad") {
+            REQUIRE(collector.SetGamepadButton(fixture.pad, GamepadButton::East, true));
+            expected = BindingControlKind::GamepadButton;
+        }
+        SECTION("Unknown gamepad") {
+            REQUIRE(collector.SetRawGamepadButton(fixture.raw, 0, true));
+            expected = BindingControlKind::RawGamepadButton;
+        }
+        (void)fixture.input.CommitFrame();
+        const auto before = Horo::Tests::AllocationProbe::Count();
+        const auto result = fixture.capture->Poll(fixture.input.Router(), fixture.owner);
+        const auto after = Horo::Tests::AllocationProbe::Count();
+        REQUIRE(before == after);
+        REQUIRE(result.status == BindingCaptureStatus::Captured);
+        REQUIRE(result.binding);
+        REQUIRE(result.binding->kind == expected);
+        REQUIRE_FALSE(fixture.input.Router().ReadAction(fixture.owner, ActionId{"pause.submit"}).down);
+        fixture.owner.Reset();
+        REQUIRE_FALSE(fixture.input.Router().ReadAction(fixture.gameplay, ActionId{"jump"}).down);
+
+        const Horo::Tests::OwnedTestDirectory directory{"horo-rebinding-session"};
+        const BindingProfilePaths paths{{}, directory.Path() / "editor.json", directory.Path() / "project.json"};
+        REQUIRE(CommitBindingProfileChange(fixture.input.Router(), paths, BindingProfileScope::ProjectUser,
+                                           {ActionId{"jump"}, {*result.binding}})
+                    .HasValue());
+        const std::array ordered{paths.editorUser, paths.projectUser};
+        const auto restored = LoadBindingProfileLayers(ordered);
+        REQUIRE(restored.HasValue());
+        REQUIRE(restored.Value().overrides.front().bindings.front() == *result.binding);
+        REQUIRE_FALSE(std::filesystem::exists(paths.editorUser));
+    }
+
+    TEST_CASE("Resting unknown-controller axes require deliberate movement before capture", "[input][rebinding]") {
+        CaptureFixture fixture;
+        fixture.Begin();
+        REQUIRE(fixture.Poll().status == BindingCaptureStatus::Pending);
+        REQUIRE(fixture.capture->Poll(fixture.input.Router(), fixture.owner).status == BindingCaptureStatus::Pending);
+        REQUIRE(fixture.Begin().SetRawGamepadAxis(fixture.raw, 0, 1.0F));
+        const auto result = fixture.Poll();
+        REQUIRE(result.status == BindingCaptureStatus::Captured);
+        REQUIRE(result.binding->kind == BindingControlKind::RawGamepadAxis);
+        REQUIRE(result.binding->rawControl == 0);
+    }
+
+    TEST_CASE("Rebinding cancels on Escape focus loss modal preemption and reused device generations", "[input][rebinding]") {
+        CaptureFixture fixture;
+        auto &collector = fixture.Begin();
+        std::optional<InputContextToken> dialog;
+        SECTION("Escape") {
+            collector.SetKey(Key::Escape, true);
+        }
+        SECTION("Focus loss") {
+            collector.SetWindowState({.focused = false});
+        }
+        SECTION("Modal preemption") {
+            dialog.emplace(fixture.input.Router().PushContext(InputContextId{"dialog"}, InputContextKind::NativeDialog));
+        }
+        SECTION("Reused slot") {
+            REQUIRE(collector.DisconnectGamepad(fixture.pad));
+            const auto replacement = collector.ConnectGamepad("replacement");
+            REQUIRE(replacement.slot == fixture.pad.slot);
+            REQUIRE(replacement != fixture.pad);
+        }
+        const auto result = fixture.Poll();
+        REQUIRE(result.status == BindingCaptureStatus::Cancelled);
+        REQUIRE_FALSE(result.binding);
+        REQUIRE(fixture.capture->Poll(fixture.input.Router(), fixture.owner).status == BindingCaptureStatus::Cancelled);
+    }
+
+    TEST_CASE("Moved and off-thread rebinding captures cannot mutate router ownership", "[input][rebinding]") {
+        CaptureFixture fixture;
+        auto moved = std::move(*fixture.capture);
+        REQUIRE(fixture.capture->Poll(fixture.input.Router(), fixture.owner).status == BindingCaptureStatus::Cancelled);
+        REQUIRE(fixture.input.Router().IsContextActive(fixture.owner));
+        BindingCaptureResult result;
+        std::thread foreign([&] {
+            result = moved.Poll(fixture.input.Router(), fixture.owner);
+        });
+        foreign.join();
+        REQUIRE(result.status == BindingCaptureStatus::Cancelled);
+        REQUIRE(fixture.input.Router().IsContextActive(fixture.owner));
+    }
+}  // namespace

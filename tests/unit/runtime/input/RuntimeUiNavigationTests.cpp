@@ -157,10 +157,13 @@ namespace Horo::Runtime::Ui {
 
         TEST_CASE("Canonical glyph vocabulary has stable supported controls and typed missing capabilities", "[runtime_ui][glyph]") {
             using enum Input::BindingControlKind;
-            const std::array kinds{Key, PointerButton, GamepadButton, GamepadAxis};
-            const std::array counts{static_cast<std::size_t>(Input::Key::Count), static_cast<std::size_t>(Input::PointerButton::Count),
+            const std::array kinds{Key, PointerButton, GamepadButton, GamepadAxis, RawGamepadButton, RawGamepadAxis};
+            const std::array counts{static_cast<std::size_t>(Input::Key::Count),
+                                    static_cast<std::size_t>(Input::PointerButton::Count),
                                     static_cast<std::size_t>(Input::GamepadButton::Count),
-                                    static_cast<std::size_t>(Input::GamepadAxis::Count)};
+                                    static_cast<std::size_t>(Input::GamepadAxis::Count),
+                                    std::size_t{256},
+                                    std::size_t{256}};
             for (std::size_t kind = 0; kind < kinds.size(); ++kind) {
                 for (std::size_t control = kind == 0 ? 1 : 0; control < counts[kind]; ++control) {
                     const Input::InputGlyphId id{kinds[kind], static_cast<std::uint16_t>(control)};
@@ -177,7 +180,36 @@ namespace Horo::Runtime::Ui {
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::PointerWheelX, 0}).label == "Wheel X");
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::PointerWheelY, 0}).label == "Wheel Y");
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::PointerWheelX, 1}).support == Input::InputGlyphSupport::Unsupported);
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadAxis, 1}).support == Input::InputGlyphSupport::Unsupported);
+            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadAxis, 1}).label == "Raw axis 1");
+        }
+
+        TEST_CASE("Optional glyph packages preserve control identity and fall back without allocations", "[runtime_ui][glyph]") {
+            struct Provider final : Input::IInputGlyphProvider {
+                Input::InputGlyphPresentation presentation;
+                mutable std::optional<Input::GamepadDeviceId> observedDevice;
+
+                Input::InputGlyphPresentation Resolve(const Input::InputGlyphId,
+                                                      const std::optional<Input::GamepadDeviceId> device) const noexcept override {
+                    observedDevice = device;
+                    return presentation;
+                }
+            } provider;
+
+            const Input::InputGlyphId id{Input::BindingControlKind::GamepadButton, 0};
+            const Input::GamepadDeviceId device{2, 17};
+            provider.presentation = {id, Input::InputGlyphSupport::CanonicalLabel, "Package South"};
+            const auto before = Tests::AllocationProbe::Count();
+            const auto supplied = Input::ResolveInputGlyph(id, &provider, device);
+            const auto after = Tests::AllocationProbe::Count();
+            CHECK(before == after);
+            CHECK(supplied.id == id);
+            CHECK(supplied.label == "Package South");
+            CHECK(provider.observedDevice == device);
+            provider.presentation.id.control = 1;
+            CHECK(Input::ResolveInputGlyph(id, &provider, device).label == "South");
+            provider.presentation = {id, Input::InputGlyphSupport::Unsupported, {}};
+            CHECK(Input::ResolveInputGlyph(id, &provider, device).label == "South");
+            CHECK(Input::ResolveInputGlyph(id).label == "South");
         }
 
         TEST_CASE("Full action queue refuses submit without changing earlier admitted commands", "[runtime_ui][navigation][capacity]") {
@@ -442,7 +474,7 @@ namespace Horo::Runtime::Ui {
             CHECK(fixture.adapter->Presentation().modality == Input::InputModality::Unknown);
         }
 
-        TEST_CASE("Raw unmapped navigation reports unsupported capability and glyph identities remain canonical",
+        TEST_CASE("Raw unmapped navigation uses numbered fallback glyphs and rejects out of range identities",
                   "[runtime_ui][navigation][validation]") {
             Fixture fixture;
             auto profile = fixture.input.Router().Profile();
@@ -452,9 +484,10 @@ namespace Horo::Runtime::Ui {
             REQUIRE(fixture.input.Router().SetProfile(profile).HasValue());
             const auto candidate =
                 UiNavigationInput::Create(fixture.descriptor, fixture.input.Router(), fixture.context, fixture.graph, fixture.actions);
-            REQUIRE(candidate.HasError());
-            CHECK(candidate.ErrorValue().code.Value() == UiErrors::NavigationCapabilityUnsupported.code.Value());
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadButton, 0}).support == Input::InputGlyphSupport::Unsupported);
+            REQUIRE(candidate.HasValue());
+            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadButton, 0}).label == "Raw button 0");
+            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadButton, 256}).support ==
+                  Input::InputGlyphSupport::Unsupported);
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::GamepadButton, 65000}).support ==
                   Input::InputGlyphSupport::Unsupported);
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::Key, 0}).support == Input::InputGlyphSupport::Unsupported);

@@ -14,6 +14,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <stdexcept>
 #include <unordered_set>
 #include <utility>
 
@@ -23,6 +24,9 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace Horo::Input {
@@ -132,14 +136,16 @@ namespace Horo::Input {
         };
 
         float ResolveGamepadAxis(const float rawAxis, const InputBinding &binding) noexcept {
+            if (!std::isfinite(rawAxis))
+                return 0.0F;
             return binding.deadzoneKind == DeadzoneKind::Radial ? std::clamp(rawAxis, -1.0F, 1.0F) : ApplyDeadzone(rawAxis, binding);
         }
 
         /** @brief Derives pressed/released edges for a digital control driven by an analog axis. */
         ButtonState DigitalStateFromAxis(const float current, const float previous, const float threshold) noexcept {
             ButtonState state;
-            state.down = std::abs(current) >= threshold;
-            const bool previousDown = std::abs(previous) >= threshold;
+            state.down = current != 0.0F && std::abs(current) >= threshold;
+            const bool previousDown = previous != 0.0F && std::abs(previous) >= threshold;
             state.pressed = state.down && !previousDown;
             state.released = !state.down && previousDown;
             return state;
@@ -204,6 +210,7 @@ namespace Horo::Input {
 
         BindingEvaluationResult EvaluateGamepadBinding(const InputBinding &binding, const RawInputSnapshot &snapshot,
                                                        const RawInputSnapshot *previousSnapshot, const InputDeviceAssignments &assignments,
+                                                       const std::array<std::optional<GamepadDeviceId>, 256> &previousPlayerDevices,
                                                        const std::optional<PlayerId> &player,
                                                        GamepadTransitions &consumedGamepadTransitions) {
             BindingEvaluationResult result;
@@ -217,6 +224,12 @@ namespace Horo::Input {
                 if (result.axis != 0.0F || result.state.pressed || result.state.released)
                     break;
             }
+            if (previousSnapshot)
+                for (const auto &previous : previousSnapshot->gamepads) {
+                    if (snapshot.FindGamepad(previous.id) || (player && previousPlayerDevices[*player] != previous.id))
+                        continue;
+                    result.state.released = result.state.released || EvaluateBindingOnPad(binding, previous, nullptr).state.down;
+                }
             return result;
         }
     }  // namespace
@@ -243,6 +256,12 @@ namespace Horo::Input {
                 report.diagnostics.emplace_back(InvalidDeadzone, action, std::string(invalidDeadzoneMessage));
             if (binding.chordSize > binding.chord.size())
                 report.diagnostics.emplace_back(AmbiguousChord, action, "Binding chord exceeds the supported bounded size.");
+            else if (std::any_of(binding.chord.begin(), binding.chord.begin() + binding.chordSize, [](const Key key) {
+                return key <= Key::Unknown || key >= Key::Count;
+            }))
+                report.diagnostics.emplace_back(UnsupportedControl, action, "Binding chord references an unsupported key.");
+            if (binding.deadzoneKind > DeadzoneKind::Threshold)
+                report.diagnostics.emplace_back(InvalidDeadzone, action, "Binding deadzone policy is unsupported.");
             if (!IsControlSupported(binding))
                 report.diagnostics.emplace_back(UnsupportedControl, action, std::string(unsupportedControlMessage));
             if (IsReservedShortcut(binding))
@@ -282,6 +301,11 @@ namespace Horo::Input {
                     report.diagnostics.emplace_back(DuplicateBinding, overrideValue.action,
                                                     std::format("The profile contains more than one override for action '{}'.",
                                                                 overrideValue.action.Value()));
+                if (overrideValue.bindings.size() > 64) {
+                    report.diagnostics.emplace_back(MalformedProfile, overrideValue.action,
+                                                    "An input action override exceeds 64 bindings.");
+                    continue;
+                }
                 for (const InputBinding &binding : overrideValue.bindings)
                     ValidateBinding(report, overrideValue.action, binding, "Binding deadzone must be in [0, 1).",
                                     "Binding references an unsupported control.", "Binding is reserved by the operating system.");
@@ -390,15 +414,48 @@ namespace Horo::Input {
         BindingValidationReport report;
         if (profile.schemaVersion != 1)
             report.diagnostics.emplace_back(BindingDiagnosticCode::InvalidSchema, ActionId{}, "Unsupported input profile schema.");
+        if (profile.profileId.empty() || profile.profileId.size() > 256 || !IsValidUtf8ScalarSequence(profile.profileId))
+            report.diagnostics.emplace_back(BindingDiagnosticCode::InvalidSchema, ActionId{},
+                                            "Input profile identity must be valid UTF-8 with 1 to 256 bytes.");
+        if (profile.overrides.size() > 4096) {
+            report.diagnostics.emplace_back(BindingDiagnosticCode::MalformedProfile, ActionId{},
+                                            "Input profile exceeds 4096 action overrides.");
+            return report;
+        }
         ValidateOverrides(report, profile, actions);
         ValidateEffectiveBindings(report, profile, actions);
         return report;
     }
 
+    namespace {
+        /** @brief Validates bounded profile contents before serialization or layer replacement. */
+        Result<void> ValidateStoredProfile(const InputBindingProfile &profile) {
+            if (profile.profileId.size() > 256 || !IsValidUtf8ScalarSequence(profile.profileId) || profile.overrides.size() > 4096)
+                return Result<void>::Failure(MakeError(Errors::ProfileMalformed, "Input profile exceeds its storage bounds."));
+            std::unordered_set<std::string> actions;
+            BindingValidationReport validation;
+            for (const BindingOverride &entry : profile.overrides) {
+                if (!entry.action.IsValid() || !IsValidUtf8ScalarSequence(entry.action.Value()) ||
+                    !actions.insert(entry.action.Value()).second || entry.bindings.size() > 64)
+                    return Result<void>::Failure(
+                        MakeError(Errors::ProfileMalformed, "Input profile has invalid or duplicate action overrides."));
+                for (const InputBinding &binding : entry.bindings)
+                    ValidateBinding(validation, entry.action, binding, "Invalid binding deadzone.", "Unsupported binding control.",
+                                    "Binding is reserved by the operating system.");
+            }
+            if (!validation.IsValid())
+                return Result<void>::Failure(MakeError(Errors::ProfileValidationFailed, validation.diagnostics.front().message));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     Result<InputBindingProfile> MergeBindingProfiles(const InputBindingProfile &lower, const InputBindingProfile &higher) {
         if (lower.schemaVersion != 1 || higher.schemaVersion != 1)
             return Result<InputBindingProfile>::Failure(
                 MakeError(Errors::ProfileInvalidSchema, "Cannot merge profiles with an unsupported schema."));
+        for (const InputBindingProfile *profile : {&lower, &higher})
+            if (const auto valid = ValidateStoredProfile(*profile); valid.HasError())
+                return Result<InputBindingProfile>::Failure(valid.ErrorValue());
         InputBindingProfile merged = lower;
         merged.profileId = higher.profileId.empty() ? lower.profileId : higher.profileId;
         for (const BindingOverride &overrideValue : higher.overrides) {
@@ -413,6 +470,21 @@ namespace Horo::Input {
 
     namespace {
         InputBinding BindingFromJson(const nlohmann::json &json);
+
+        /** @brief Reads an unsigned schema integer before any narrowing conversion can change its identity. */
+        std::uint32_t ProfileInteger(const nlohmann::json &value, const std::uint64_t maximum) {
+            if (!value.is_number_integer() || (!value.is_number_unsigned() && value.get<std::int64_t>() < 0) ||
+                value.get<std::uint64_t>() > maximum)
+                throw std::invalid_argument("Input profile integer is outside its supported range.");
+            return value.get<std::uint32_t>();
+        }
+
+        /** @brief Rejects unsupported optional integers while retaining schema-1 defaults for absent fields. */
+        std::uint32_t ProfileInteger(const nlohmann::json &object, const char *key, const std::uint64_t maximum,
+                                     const std::uint32_t fallback = 0) {
+            const auto found = object.find(key);
+            return found == object.end() ? fallback : ProfileInteger(*found, maximum);
+        }
 
         /** @brief Parses the overrides array of a profile document, enforcing per-entry shape limits. */
         Result<std::vector<BindingOverride>> ParseOverrides(const nlohmann::json &json) {
@@ -465,25 +537,32 @@ namespace Horo::Input {
 
         InputBinding BindingFromJson(const nlohmann::json &json) {
             InputBinding binding;
-            binding.kind = static_cast<BindingControlKind>(json.at("kind").get<int>());
-            binding.key = static_cast<Key>(json.value("key", 0));
-            binding.pointerButton = static_cast<PointerButton>(json.value("pointerButton", 0));
-            binding.gamepadButton = static_cast<GamepadButton>(json.value("gamepadButton", 0));
-            binding.gamepadAxis = static_cast<GamepadAxis>(json.value("gamepadAxis", 0));
-            binding.rawControl = static_cast<std::uint16_t>(json.value("rawControl", 0));
+            binding.kind = static_cast<BindingControlKind>(ProfileInteger(json.at("kind"), Index(BindingControlKind::RawGamepadAxis)));
+            binding.key = static_cast<Key>(ProfileInteger(json, "key", Index(Key::Count) - 1));
+            binding.pointerButton = static_cast<PointerButton>(ProfileInteger(json, "pointerButton", Index(PointerButton::Count) - 1));
+            binding.gamepadButton = static_cast<GamepadButton>(ProfileInteger(json, "gamepadButton", Index(GamepadButton::Count) - 1));
+            binding.gamepadAxis = static_cast<GamepadAxis>(ProfileInteger(json, "gamepadAxis", Index(GamepadAxis::Count) - 1));
+            binding.rawControl = static_cast<std::uint16_t>(ProfileInteger(json, "rawControl", 255));
             binding.scale = json.value("scale", 1.0F);
-            binding.component = static_cast<std::uint8_t>(json.value("component", 0));
-            binding.deadzoneKind = static_cast<DeadzoneKind>(json.value("deadzoneKind", 0));
+            binding.component = static_cast<std::uint8_t>(ProfileInteger(json, "component", 1));
+            binding.deadzoneKind = static_cast<DeadzoneKind>(ProfileInteger(json, "deadzoneKind", Index(DeadzoneKind::Threshold)));
             binding.deadzone = json.value("deadzone", 0.0F);
             binding.digitalThreshold = json.value("digitalThreshold", 0.5F);
-            if (const auto chord = json.find("chord"); chord != json.end() && chord->is_array()) {
-                binding.chordSize = static_cast<std::uint8_t>(std::min(chord->size(), binding.chord.size()));
+            if (const auto chord = json.find("chord"); chord != json.end()) {
+                if (!chord->is_array() || chord->size() > binding.chord.size())
+                    throw std::invalid_argument("Input binding chord exceeds its supported shape.");
+                binding.chordSize = static_cast<std::uint8_t>(chord->size());
                 for (std::size_t i = 0; i < binding.chordSize; ++i)
-                    binding.chord[i] = static_cast<Key>((*chord)[i].get<int>());
+                    binding.chord[i] = static_cast<Key>(ProfileInteger((*chord)[i], Index(Key::Count) - 1));
             }
-            if (const auto mods = json.find("modifiers"); mods != json.end() && mods->is_object())
+            if (ProfileInteger(json, "chordSize", binding.chord.size(), binding.chordSize) != binding.chordSize)
+                throw std::invalid_argument("Input binding chord size disagrees with its keys.");
+            if (const auto mods = json.find("modifiers"); mods != json.end()) {
+                if (!mods->is_object())
+                    throw std::invalid_argument("Input binding modifiers must be an object.");
                 binding.requiredModifiers = {mods->value("control", false), mods->value("shift", false), mods->value("alt", false),
                                              mods->value("command", false)};
+            }
             return binding;
         }
     }  // namespace
@@ -499,6 +578,8 @@ namespace Horo::Input {
                                                                                              const nlohmann::json::parse_event_t event,
                                                                                              nlohmann::json &parsed)  // NOSONAR
             {
+                if (depth > 32)
+                    throw std::invalid_argument("Input profile nesting exceeds its supported limit.");
                 if (event == nlohmann::json::parse_event_t::object_start) {
                     if (keysByDepth.size() <= static_cast<std::size_t>(depth))
                         keysByDepth.resize(static_cast<std::size_t>(depth) + 1);
@@ -516,7 +597,7 @@ namespace Horo::Input {
                 return Result<InputBindingProfile>::Failure(
                     MakeError(Errors::ProfileMalformed, "Input profile contains duplicate keys or is not an object."));
             InputBindingProfile profile;
-            profile.schemaVersion = json.at("schemaVersion").get<std::uint32_t>();
+            profile.schemaVersion = ProfileInteger(json.at("schemaVersion"), std::numeric_limits<std::uint32_t>::max());
             profile.profileId = json.at("profileId").get<std::string>();
             if (Result<std::vector<BindingOverride>> overrides = ParseOverrides(json); overrides.HasError())
                 return Result<InputBindingProfile>::Failure(overrides.ErrorValue());
@@ -524,8 +605,12 @@ namespace Horo::Input {
                 profile.overrides = std::move(overrides).Value();
             if (profile.schemaVersion != 1 || profile.profileId.empty() || profile.profileId.size() > 256)
                 return Result<InputBindingProfile>::Failure(MakeError(Errors::ProfileInvalidSchema, "Invalid input profile schema."));
+            if (const auto valid = ValidateStoredProfile(profile); valid.HasError())
+                return Result<InputBindingProfile>::Failure(valid.ErrorValue());
             return Result<InputBindingProfile>::Success(std::move(profile));
         } catch (const nlohmann::json::exception &exception) {
+            return Result<InputBindingProfile>::Failure(MakeError(Errors::ProfileMalformed, exception.what()));
+        } catch (const std::invalid_argument &exception) {
             return Result<InputBindingProfile>::Failure(MakeError(Errors::ProfileMalformed, exception.what()));
         }
     }
@@ -533,6 +618,8 @@ namespace Horo::Input {
     Result<std::string> SerializeBindingProfile(const InputBindingProfile &profile) {
         if (profile.schemaVersion != 1 || profile.profileId.empty())
             return Result<std::string>::Failure(MakeError(Errors::ProfileInvalidSchema, "Invalid input profile schema."));
+        if (const auto valid = ValidateStoredProfile(profile); valid.HasError())
+            return Result<std::string>::Failure(valid.ErrorValue());
         nlohmann::json json{{"schemaVersion", profile.schemaVersion},
                             {"profileId", profile.profileId},
                             {"overrides", nlohmann::json::array()}};
@@ -545,19 +632,87 @@ namespace Horo::Input {
             }
             json["overrides"].push_back(std::move(entry));
         }
-        return Result<std::string>::Success(json.dump(2) + "\n");
+        std::string serialized = json.dump(2) + "\n";
+        if (serialized.size() > 1024U * 1024U)
+            return Result<std::string>::Failure(MakeError(Errors::ProfileMalformed, "Input profile exceeds its storage size limit."));
+        return Result<std::string>::Success(std::move(serialized));
     }
 
     Result<InputBindingProfile> LoadBindingProfile(const std::filesystem::path &path) {
         std::error_code error;
-        if (const std::uintmax_t size = std::filesystem::file_size(path, error); error || size == 0 || size > 1024U * 1024U)
+        const std::uintmax_t size = std::filesystem::file_size(path, error);
+        if (error || size == 0 || size > 1024U * 1024U)
             return Result<InputBindingProfile>::Failure(
                 MakeError(Errors::ProfileReadFailed, "Input profile is missing or exceeds the size limit."));
         std::ifstream input(path, std::ios::binary);
         if (!input)
             return Result<InputBindingProfile>::Failure(MakeError(Errors::ProfileReadFailed, "Unable to read input profile."));
-        return ParseBindingProfile(std::string(std::istreambuf_iterator<char>(input), {}));
+        std::string bytes(static_cast<std::size_t>(size) + 1, '\0');
+        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (input.bad() || input.gcount() > static_cast<std::streamsize>(size))
+            return Result<InputBindingProfile>::Failure(MakeError(Errors::ProfileReadFailed, "Input profile changed during reading."));
+        bytes.resize(static_cast<std::size_t>(input.gcount()));
+        return ParseBindingProfile(bytes);
     }
+
+    /** @copydoc LoadBindingProfileLayers */
+    Result<InputBindingProfile> LoadBindingProfileLayers(const std::span<const std::filesystem::path> paths) {
+        InputBindingProfile merged{.profileId = "composed"};
+        for (const auto &path : paths) {
+            if (path.empty())
+                continue;
+            std::error_code error;
+            const bool exists = std::filesystem::exists(path, error);
+            if (error)
+                return Result<InputBindingProfile>::Failure(MakeError(Errors::ProfileReadFailed, error.message()));
+            if (!exists)
+                continue;
+            auto loaded = LoadBindingProfile(path);
+            if (loaded.HasError())
+                return Result<InputBindingProfile>::Failure(loaded.ErrorValue());
+            auto layered = MergeBindingProfiles(merged, loaded.Value());
+            if (layered.HasError())
+                return Result<InputBindingProfile>::Failure(layered.ErrorValue());
+            merged = std::move(layered).Value();
+        }
+        return Result<InputBindingProfile>::Success(std::move(merged));
+    }
+
+    namespace {
+        /** @brief Exclusively creates and flushes an owned same-directory staging file before publication. */
+        Result<void> WriteProfileTemporary(const std::filesystem::path &path, const std::string &bytes, bool &created) {
+#if defined(_WIN32)
+            const HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (handle == INVALID_HANDLE_VALUE)
+                return Result<void>::Failure(
+                    MakeError(Errors::ProfileWriteFailed, "Unable to create a private input profile staging file."));
+            created = true;
+            DWORD written = 0;
+            const bool flushed = WriteFile(handle, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
+                                 written == bytes.size() && FlushFileBuffers(handle);
+            const bool closed = CloseHandle(handle) != 0;
+#else
+            const int handle = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+            if (handle < 0)
+                return Result<void>::Failure(
+                    MakeError(Errors::ProfileWriteFailed, "Unable to create a private input profile staging file."));
+            created = true;
+            std::size_t written = 0;
+            while (written < bytes.size()) {
+                const auto count = write(handle, bytes.data() + written, bytes.size() - written);
+                if (count <= 0)
+                    break;
+                written += static_cast<std::size_t>(count);
+            }
+            const bool flushed = written == bytes.size() && fsync(handle) == 0;
+            const bool closed = close(handle) == 0;
+#endif
+            if (!flushed || !closed)
+                return Result<void>::Failure(
+                    MakeError(Errors::ProfileWriteFailed, "Unable to flush the complete input profile staging file."));
+            return Result<void>::Success();
+        }
+    }  // namespace
 
     Result<void> SaveBindingProfileAtomically(const std::filesystem::path &path, const InputBindingProfile &profile) {
         if (path.empty())
@@ -566,17 +721,18 @@ namespace Horo::Input {
         if (serialized.HasError())
             return Result<void>::Failure(serialized.ErrorValue());
         std::error_code error;
-        std::filesystem::create_directories(path.parent_path(), error);
+        if (!path.parent_path().empty())
+            std::filesystem::create_directories(path.parent_path(), error);
         if (error)
             return Result<void>::Failure(MakeError(Errors::ProfileDirectoryCreationFailed, error.message()));
         std::filesystem::path temporary = path;
         temporary += std::filesystem::path{".tmp."};
         temporary += std::filesystem::path{std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())};
-        {
-            std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-            output << serialized.Value();
-            if (!output)
-                return Result<void>::Failure(MakeError(Errors::ProfileWriteFailed, "Unable to write input profile."));
+        bool created = false;
+        if (const auto written = WriteProfileTemporary(temporary, serialized.Value(), created); written.HasError()) {
+            if (created)
+                std::filesystem::remove(temporary, error);
+            return written;
         }
 #if defined(_WIN32)
         if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
@@ -592,6 +748,17 @@ namespace Horo::Input {
             std::filesystem::remove(temporary, error);  // NOSONAR(cpp:S2083)
             return Result<void>::Failure(MakeError(Errors::ProfilePromotionFailed, message));
         }
+        const auto parent = path.parent_path().empty() ? std::filesystem::path{"."} : path.parent_path();
+        const int directory = open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (directory < 0)
+            return Result<void>::Failure(
+                MakeError(Errors::ProfilePromotionFailed,
+                          "Input profile was replaced, but its directory could not be opened for synchronization."));
+        const bool synced = fsync(directory) == 0;
+        const bool closed = close(directory) == 0;
+        if (!synced || !closed)
+            return Result<void>::Failure(
+                MakeError(Errors::ProfilePromotionFailed, "Input profile was replaced, but directory durability could not be confirmed."));
 #endif
         return Result<void>::Success();
     }
@@ -605,6 +772,121 @@ namespace Horo::Input {
             return actual == required;
         }
     }  // namespace
+
+    namespace {
+        /** @brief Rejects redirects escaping one host-admitted root before profile read or publication. */
+        Result<std::filesystem::path> ContainedProfilePath(const std::filesystem::path &root, const std::filesystem::path &relativePath) {
+            if (!root.is_absolute())
+                return Result<std::filesystem::path>::Failure(
+                    MakeError(Errors::ProfileWriteFailed, "Input profile root must be absolute."));
+            std::error_code error;
+            const auto anchor = std::filesystem::weakly_canonical(root, error);
+            if (error)
+                return Result<std::filesystem::path>::Failure(MakeError(Errors::ProfileWriteFailed, error.message()));
+            const auto path = anchor / relativePath;
+            const auto resolved = std::filesystem::weakly_canonical(path, error);
+            const auto relative = resolved.lexically_relative(anchor);
+            if (error || relative.empty() || *relative.begin() == ".." || relative.is_absolute())
+                return Result<std::filesystem::path>::Failure(
+                    MakeError(Errors::ProfileWriteFailed, "Input profile escapes its admitted root."));
+            return Result<std::filesystem::path>::Success(path);
+        }
+    }  // namespace
+
+    /** @copydoc ResolveProjectBindingProfilePath */
+    Result<std::filesystem::path> ResolveProjectBindingProfilePath(const std::filesystem::path &userHome,
+                                                                   const std::string_view projectId) {
+        if (!userHome.is_absolute() || projectId.empty() || projectId.size() > 240 || !IsValidUtf8ScalarSequence(projectId) ||
+            projectId == "." || projectId == ".." || projectId.back() == '.' || projectId.back() == ' ' ||
+            std::ranges::any_of(projectId, [](const unsigned char byte) {
+            return byte < 32 || byte == 127 || std::string_view{"<>:\"/\\|?*"}.find(static_cast<char>(byte)) != std::string_view::npos;
+        }))
+            return Result<std::filesystem::path>::Failure(
+                MakeError(Errors::ProfileWriteFailed, "Project input profile identity is not a portable filename."));
+        std::string stem{projectId.substr(0, projectId.find('.'))};
+        std::ranges::transform(stem, stem.begin(), [](const unsigned char byte) {
+            return byte >= 'a' && byte <= 'z' ? static_cast<char>(byte - 'a' + 'A') : static_cast<char>(byte);
+        });
+        if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" ||
+            (stem.size() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.back() >= '1' && stem.back() <= '9'))
+            return Result<std::filesystem::path>::Failure(
+                MakeError(Errors::ProfileWriteFailed, "Project input profile identity is a reserved filename."));
+        return ContainedProfilePath(userHome, std::filesystem::path{".horo"} / "input" / "projects" /
+                                                  std::filesystem::u8path(std::string{projectId} + ".json"));
+    }
+
+    /** @copydoc ResolveBindingProfilePaths */
+    Result<BindingProfilePaths> ResolveBindingProfilePaths(const std::filesystem::path &projectRoot, const std::filesystem::path &userHome,
+                                                           const std::string_view projectId) {
+        auto editor = ContainedProfilePath(userHome, std::filesystem::path{".horo"} / "input" / "editor.json");
+        if (editor.HasError())
+            return Result<BindingProfilePaths>::Failure(editor.ErrorValue());
+        BindingProfilePaths paths{.editorUser = std::move(editor).Value()};
+        if (!projectRoot.empty()) {
+            auto project = ContainedProfilePath(projectRoot, std::filesystem::path{".horo"} / "input.json");
+            if (project.HasError())
+                return Result<BindingProfilePaths>::Failure(project.ErrorValue());
+            paths.projectDefaults = std::move(project).Value();
+        }
+        if (!projectId.empty()) {
+            auto user = ResolveProjectBindingProfilePath(userHome, projectId);
+            if (user.HasError())
+                return Result<BindingProfilePaths>::Failure(user.ErrorValue());
+            paths.projectUser = std::move(user).Value();
+        }
+        return Result<BindingProfilePaths>::Success(std::move(paths));
+    }
+
+    namespace {
+        /** @brief Projects authored layers onto the existing active action registry without changing stored data. */
+        void RetainRegisteredOverrides(InputBindingProfile &profile, const std::span<const ActionDescriptor> actions) {
+            std::erase_if(profile.overrides, [actions](const BindingOverride &entry) {
+                return std::ranges::find(actions, entry.action, &ActionDescriptor::id) == actions.end();
+            });
+        }
+    }  // namespace
+
+    /** @copydoc CommitBindingProfileChange */
+    Result<void> CommitBindingProfileChange(InputRouter &router, const BindingProfilePaths &paths, const BindingProfileScope scope,
+                                            BindingOverride change) {
+        if (scope != BindingProfileScope::EditorUser && scope != BindingProfileScope::ProjectUser)
+            return Result<void>::Failure(MakeError(Errors::ProfileWriteFailed, "Input binding scope is unsupported."));
+        const auto actions = router.Actions();
+        if (std::ranges::find(actions, change.action, &ActionDescriptor::id) == actions.end())
+            return Result<void>::Failure(
+                MakeError(Errors::ProfileValidationFailed, "The binding change references an unregistered action."));
+        const std::array orderedPaths{paths.projectDefaults, paths.editorUser, paths.projectUser};
+        const std::size_t selected = scope == BindingProfileScope::EditorUser ? 1 : 2;
+        if (orderedPaths[selected].empty())
+            return Result<void>::Failure(MakeError(Errors::ProfileWriteFailed, "The requested input profile scope is unavailable."));
+        std::array<InputBindingProfile, 3> layers;
+        for (std::size_t index = 0; index < orderedPaths.size(); ++index) {
+            auto loaded = LoadBindingProfileLayers(std::span(orderedPaths).subspan(index, 1));
+            if (loaded.HasError())
+                return Result<void>::Failure(loaded.ErrorValue());
+            layers[index] = std::move(loaded).Value();
+        }
+        auto &target = layers[selected];
+        target.profileId = scope == BindingProfileScope::EditorUser ? "editor-global" : "project-user";
+        const auto existing = std::ranges::find(target.overrides, change.action, &BindingOverride::action);
+        if (existing == target.overrides.end())
+            target.overrides.push_back(std::move(change));
+        else
+            *existing = std::move(change);
+        InputBindingProfile merged;
+        for (const auto &layer : layers) {
+            auto next = MergeBindingProfiles(merged, layer);
+            if (next.HasError())
+                return Result<void>::Failure(next.ErrorValue());
+            merged = std::move(next).Value();
+        }
+        RetainRegisteredOverrides(merged, actions);
+        if (const auto validation = ValidateBindingProfile(router.Actions(), merged); !validation.IsValid())
+            return Result<void>::Failure(MakeError(Errors::ProfileValidationFailed, validation.diagnostics.front().message));
+        if (auto saved = SaveBindingProfileAtomically(orderedPaths[selected], target); saved.HasError())
+            return saved;
+        return router.SetProfile(std::move(merged));
+    }
 
     InputRouter::InputRouter() : impl_(std::make_unique<Impl>()) {
         impl_->collection = std::make_shared<InputCollectionLifetime>(*this);
@@ -628,12 +910,18 @@ namespace Horo::Input {
     }
 
     void InputRouter::CommitRawFrame(const RawInputSnapshot &snapshot) {
+        impl_->bindingCaptureTerminal = false;
         impl_->modalBarrier =
             std::exchange(impl_->blockNextFrame, false) || std::ranges::any_of(impl_->contexts, [](const Impl::Context &context) {
             return Priority(context.kind) >= Priority(InputContextKind::ModalRoot);
         });
         impl_->previousSnapshot = impl_->snapshot;
         impl_->snapshot = &snapshot;
+        impl_->previousPlayerDevices.fill(std::nullopt);
+        if (impl_->previousSnapshot)
+            for (const auto &pad : impl_->previousSnapshot->gamepads)
+                if (const auto player = impl_->assignments.PlayerFor(pad.id))
+                    impl_->previousPlayerDevices[*player] = pad.id;
         impl_->textFocus.served = false;
         impl_->textFocus.blockedFrame = false;
         if (!snapshot.window.focused) {
@@ -660,6 +948,13 @@ namespace Horo::Input {
     void InputRouter::EndFrame() noexcept {
         if (impl_->capture && impl_->snapshot && impl_->snapshot->State(impl_->capture->button).released)
             CancelCapture(CaptureCancellationReason::Released);
+    }
+
+    /** @copydoc InputRouter::FinishBindingCapture */
+    void InputRouter::FinishBindingCapture() noexcept {
+        impl_->bindingCaptureTerminal = true;
+        impl_->modalBarrier = true;
+        impl_->blockNextFrame = true;
     }
 
     InputContextToken InputRouter::PushContext(InputContextId id, const InputContextKind kind) {
@@ -769,6 +1064,8 @@ namespace Horo::Input {
     }
 
     bool InputRouter::IsContextActive(const InputContextToken &context) const noexcept {
+        if (impl_->bindingCaptureTerminal)
+            return false;
         if (!impl_->collection->routingAllowed || context.router_ != this || !TokenActive(context.token_))
             return false;
         const auto found = std::ranges::find(impl_->contexts, context.token_, &Impl::Context::token);
@@ -811,6 +1108,17 @@ namespace Horo::Input {
         return Result<void>::Success();
     }
 
+    /** @copydoc InputRouter::ReloadProfile */
+    Result<void> InputRouter::ReloadProfile(const BindingProfilePaths &paths) {
+        const std::array ordered{paths.projectDefaults, paths.editorUser, paths.projectUser};
+        auto loaded = LoadBindingProfileLayers(ordered);
+        if (loaded.HasError())
+            return Result<void>::Failure(loaded.ErrorValue());
+        auto profile = std::move(loaded).Value();
+        RetainRegisteredOverrides(profile, Actions());
+        return SetProfile(std::move(profile));
+    }
+
     namespace {
         /** @brief Consumes one bounded digital transition without allocating. */
         template <std::size_t Size> bool ConsumeControl(std::bitset<Size> &bits, const std::size_t index) noexcept {
@@ -839,6 +1147,8 @@ namespace Horo::Input {
         template <typename ImplType>
         [[nodiscard]] BindingEvaluationResult EvaluateControlBinding(const InputBinding &binding, const RawInputSnapshot &snapshot,
                                                                      const std::optional<PlayerId> player, ImplType &impl) {
+            if (binding.kind <= BindingControlKind::PointerWheelY && player && impl.keyboardMousePlayer != player)
+                return {};
             using enum BindingControlKind;
             switch (binding.kind) {
                 case Key:
@@ -851,8 +1161,8 @@ namespace Horo::Input {
                 case PointerWheelY:
                     return EvaluateWheel(snapshot.pointer.wheelY, impl.consumed.wheelY);
                 default: {
-                    return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, player,
-                                                  impl.consumed.gamepadTransitions);
+                    return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, impl.previousPlayerDevices,
+                                                  player, impl.consumed.gamepadTransitions);
                 }
             }
         }
@@ -870,7 +1180,8 @@ namespace Horo::Input {
         }
 
         [[nodiscard]] bool IsBindingActive(const InputBinding &binding, const RawInputSnapshot &snapshot) {
-            if (!ModifiersMatch(snapshot.modifiers, binding.requiredModifiers))
+            if ((binding.kind <= BindingControlKind::PointerWheelY || binding.requiredModifiers != ModifierState{}) &&
+                !ModifiersMatch(snapshot.modifiers, binding.requiredModifiers))
                 return false;
             for (std::size_t index = 0; index < binding.chordSize; ++index)
                 if (!snapshot.State(binding.chord[index]).down)
@@ -914,10 +1225,15 @@ namespace Horo::Input {
                                const std::optional<PlayerId> player, ImplType &impl, BindingAccumulationTarget &target) {
             if (!IsBindingActive(binding, snapshot))
                 return;
+            if (player && impl.keyboardMousePlayer != player && (binding.chordSize != 0 || binding.requiredModifiers != ModifierState{}))
+                return;
 
             const auto evaluated = EvaluateControlBinding(binding, snapshot, player, impl);
             const auto state = evaluated.state;
-            const float axis = evaluated.axis * binding.scale;
+            float resolvedAxis = evaluated.axis;
+            if (descriptor.valueType == ActionValueType::Digital)
+                resolvedAxis = state.down || state.pressed ? 1.0F : 0.0F;
+            const float axis = resolvedAxis * binding.scale;
             AccumulateSource(binding, evaluated, target.evidence);
             target.radial2D =
                 target.radial2D || (descriptor.valueType == ActionValueType::Axis2D && binding.deadzoneKind == DeadzoneKind::Radial);
@@ -1055,6 +1371,19 @@ namespace Horo::Input {
 
     std::optional<PlayerId> InputRouter::PlayerForGamepad(const GamepadDeviceId gamepad) const noexcept {
         return impl_->assignments.PlayerFor(gamepad);
+    }
+
+    /** @copydoc InputRouter::AssignKeyboardMouse */
+    void InputRouter::AssignKeyboardMouse(const std::optional<PlayerId> player) noexcept {
+        if (impl_->keyboardMousePlayer != player) {
+            impl_->keyboardMousePlayer = player;
+            AdvanceRevision(impl_->assignmentRevision);
+        }
+    }
+
+    /** @copydoc InputRouter::PlayerForKeyboardMouse */
+    std::optional<PlayerId> InputRouter::PlayerForKeyboardMouse() const noexcept {
+        return impl_->keyboardMousePlayer;
     }
 
     void InputRouter::RemoveContext(const std::uint64_t token) noexcept {

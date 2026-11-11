@@ -47,6 +47,13 @@ namespace Horo::Editor {
                                                                            std::span<const Input::ActionDescriptor> contributions = {});
     /** @brief Filters a complete editor profile for the builtin workspace router. */
     [[nodiscard]] Input::InputBindingProfile BuiltinEditorInputProfile(const Input::InputBindingProfile &profile);
+    /** @brief Activates a changed complete editor profile through the host's existing router.
+     * @param router Borrowed host authority. @param profile Complete effective layer composition.
+     * @param contributions Currently admitted module commands.
+     * @return Validation result. Identical bindings/descriptors retain their routing and collection generations.
+     */
+    [[nodiscard]] Result<void> ActivateEditorInputProfile(Input::InputRouter &router, Input::InputBindingProfile profile,
+                                                          std::span<const Input::ActionDescriptor> contributions = {});
     /** @brief Parses a normalized extension command shortcut into one physical key binding; unsupported keys fail closed. */
     [[nodiscard]] std::optional<Input::InputBinding> ParseEditorShortcut(std::string_view shortcut);
 

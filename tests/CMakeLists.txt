@@ -331,6 +331,7 @@ horo_register_catch_test(HoroAndroidInputTests LABELS "unit;input;platform;headl
 add_executable(HoroInputTests
         unit/runtime/input/GameplayInputFrameTests.cpp
         unit/runtime/input/InputTests.cpp
+        unit/runtime/input/InputRebindingTests.cpp
         unit/runtime/input/InputCollectionTests.cpp
         support/AllocationProbe.cpp
         unit/runtime/input/InputContextTests.cpp
@@ -375,6 +376,7 @@ add_test(NAME HoroRuntimeUiPointerPublicHeaderConsumer COMMAND HoroRuntimeUiPoin
 set_tests_properties(HoroRuntimeUiPointerPublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless;public_headers;ci-windows")
 if (HORO_BUILD_INPUT_SDL3)
     add_executable(HoroInputSdlTests
+            unit/runtime/input/SdlGamepadTests.cpp
             unit/runtime/input/SdlTextInputTests.cpp
             unit/runtime/input/SdlTouchInputTests.cpp
     )
@@ -3765,6 +3767,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockBuildOutputPaneTests.cpp
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
+            unit/editor/InputMappingPanelRenderTests.cpp
             unit/editor/WorldSourceViewportRenderTests.cpp
             unit/editor/PrefabAssetBrowserRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
@@ -3779,6 +3782,7 @@ if (HORO_BUILD_EDITOR_GUI)
         ../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)
     target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::RenderApi HoroEngine::RenderFrontend)
     target_include_directories(HoroGlobalDockPanelRenderTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
             ${PROJECT_SOURCE_DIR}/tests/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
     )

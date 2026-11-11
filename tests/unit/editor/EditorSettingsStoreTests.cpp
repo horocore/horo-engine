@@ -9,6 +9,7 @@
 #include "support/OwnedTestDirectory.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 #include <filesystem>
@@ -427,31 +428,35 @@ TEST_CASE("Settings keymaps round trip typed punctuation chords and reject confl
     REQUIRE(reset.settings.keymap == loaded.settings.keymap);
 }
 
-TEST_CASE("Standalone editor keymaps migrate once and retain the old file without competing authority", "[unit][editor][keymap]") {
+TEST_CASE("Embedded editor keymaps migrate to the canonical user profile", "[unit][editor][keymap]") {
     using namespace Horo;
     using namespace Horo::Editor;
     KeymapHome home;
-    const auto legacyPath = home.directory.Path() / ".horo/input/editor.json";
-    std::filesystem::create_directories(legacyPath.parent_path());
+    const auto canonicalPath = home.directory.Path() / ".horo/input/editor.json";
+    std::filesystem::create_directories(ResolveEditorSettingsPath().parent_path());
     Input::InputBindingProfile profile;
     profile.overrides.push_back(
         {Input::ActionId{kActionSourceZoomIn},
          {{.kind = Input::BindingControlKind::Key, .key = Input::Key::F2, .requiredModifiers = {.command = true}}}});
-    REQUIRE(Input::SaveBindingProfileAtomically(legacyPath, profile).HasValue());
+    const auto serialized = Input::SerializeBindingProfile(profile);
+    REQUIRE(serialized.HasValue());
+    std::ofstream(ResolveEditorSettingsPath()) << R"({"schemaVersion":1,"input":{"bindingProfile":)" << serialized.Value() << "}}";
     auto imported = LoadEditorSettingsDocument();
-    REQUIRE(imported.settings.keymap.profile.overrides.size() == 1);
+    REQUIRE_FALSE(imported.parseError);
     REQUIRE(imported.settings.keymap.profile.overrides.front().bindings.front().key == Input::Key::F2);
     std::string error;
     REQUIRE(SaveEditorSettingsDocument(&imported, &error));
+    REQUIRE(std::filesystem::exists(canonicalPath));
+    {
+        std::ifstream settings(ResolveEditorSettingsPath());
+        const auto data = nlohmann::json::parse(settings);
+        REQUIRE_FALSE(data["input"].contains("bindingProfile"));
+    }
     profile.overrides.front().bindings.front().key = Input::Key::F3;
-    REQUIRE(Input::SaveBindingProfileAtomically(legacyPath, profile).HasValue());
+    REQUIRE(Input::SaveBindingProfileAtomically(canonicalPath, profile).HasValue());
     const auto canonical = LoadEditorSettingsDocument();
-    REQUIRE(canonical.settings.keymap.profile.overrides.front().bindings.front().key == Input::Key::F2);
-    REQUIRE(std::filesystem::exists(legacyPath));
-    std::ifstream input(ResolveEditorSettingsPath());
-    auto data = nlohmann::json::parse(input);
-    data["input"]["bindingProfile"] = "malformed";
-    std::ofstream(ResolveEditorSettingsPath()) << data.dump();
+    REQUIRE(canonical.settings.keymap.profile.overrides.front().bindings.front().key == Input::Key::F3);
+    std::ofstream(canonicalPath) << "{broken";
     const auto malformed = LoadEditorSettingsDocument();
     REQUIRE(malformed.parseError);
     REQUIRE(malformed.settings.keymap.profile.overrides.empty());
@@ -473,6 +478,71 @@ TEST_CASE("Every registered digital editor command has English and Turkish Setti
             REQUIRE_FALSE(service.Get("editor", key).empty());
         }
     }
+}
+
+TEST_CASE("Identical editor profile activation preserves routing generations and live module overrides", "[unit][editor][keymap]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    Input::InputRouter router;
+    Input::InputBindingProfile profile;
+    profile.overrides.push_back(
+        {Input::ActionId{"sample.extension.command"},
+         {{.kind = Input::BindingControlKind::Key, .key = Input::Key::F11, .requiredModifiers = {.control = true, .shift = true}}}});
+    REQUIRE(ActivateEditorInputProfile(router, profile).HasValue());
+    const auto before = router.RoutingState({}).configurationRevision;
+    REQUIRE(ActivateEditorInputProfile(router, profile).HasValue());
+    REQUIRE(router.RoutingState({}).configurationRevision == before);
+    const std::array contributions{Input::ActionDescriptor{Input::ActionId{"sample.extension.command"},
+                                                           Input::ActionValueType::Digital,
+                                                           Input::InputContextId{kEditorWorkspaceInputContext},
+                                                           false,
+                                                           {{.kind = Input::BindingControlKind::Key, .key = Input::Key::F10}}}};
+    REQUIRE(ActivateEditorInputProfile(router, profile, contributions).HasValue());
+    REQUIRE(router.RoutingState({}).configurationRevision != before);
+    REQUIRE(router.Profile() == profile);
+    REQUIRE(std::ranges::any_of(router.Actions(), [](const auto &action) {
+        return action.id == Input::ActionId{"sample.extension.command"} &&
+               action.context == Input::InputContextId{kEditorWorkspaceInputContext};
+    }));
+}
+
+TEST_CASE("Global binding authoring validates active project conflicts before persistence", "[unit][editor][keymap]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    KeymapHome home;
+    ConfigurationService configuration{BuildEditorAppearanceConfigurationSchema()};
+    EditorDataBus events;
+    LocalizationService localization{LocaleTag{"en-US"}};
+    EditorSettingsService service{DefaultEditorSettings(), configuration, events, localization};
+    const Input::BindingProfilePaths paths{home.directory.Path() / "project/.horo/input.json",
+                                           home.directory.Path() / ".horo/input/editor.json",
+                                           home.directory.Path() / ".horo/input/projects/project.json"};
+    const Input::InputBinding trigger{.kind = Input::BindingControlKind::Key,
+                                      .key = Input::Key::F11,
+                                      .requiredModifiers = {.shift = true, .command = true}};
+    REQUIRE(Input::SaveBindingProfileAtomically(paths.projectUser, {.profileId = "project-user",
+                                                                    .overrides = {{Input::ActionId{kActionSourceZoomOut}, {trigger}}}})
+                .HasValue());
+    service.SetInputProfilePaths(paths);
+    const auto before = service.Snapshot();
+    auto candidate = before.settings;
+    candidate.keymap.profile.overrides.push_back({Input::ActionId{kActionSourceZoomIn}, {trigger}});
+    const auto rejected = service.Commit({.baseRevision = before.revision, .settings = candidate});
+    REQUIRE(rejected.HasError());
+    REQUIRE_FALSE(rejected.ErrorValue().message.empty());
+    REQUIRE(service.Snapshot() == before);
+    REQUIRE_FALSE(std::filesystem::exists(paths.editorUser));
+
+    std::ofstream(paths.projectUser) << "{broken";
+    auto appearance = before.settings;
+    appearance.gridOverlay = !appearance.gridOverlay;
+    REQUIRE(service.Commit({.baseRevision = before.revision, .settings = appearance}).HasValue());
+    service.SetInputProfilePaths(std::nullopt);
+    const auto current = service.Snapshot();
+    auto global = current.settings;
+    global.keymap = candidate.keymap;
+    REQUIRE(service.Commit({.baseRevision = current.revision, .settings = global}).HasValue());
+    REQUIRE(Input::LoadBindingProfile(paths.editorUser).Value() == candidate.keymap.profile);
 }
 
 TEST_CASE("Canonical keymap JSON rejects duplicate fields unsupported versions wrong types and oversized input", "[unit][editor][keymap]") {

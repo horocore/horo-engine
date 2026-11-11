@@ -10,6 +10,10 @@ namespace Horo {
     class EngineDataBus;
 }
 
+namespace Horo::Input {
+    class InputRouter;
+}
+
 namespace Horo::Editor::Theme {
     struct Fonts;
 }
@@ -39,6 +43,7 @@ namespace Horo::Editor {
         ILocalizationService &localization;
         const ThemeContext &theme;
         const EditorSettingsSnapshot &settings;
-        UpdateExperienceSession *updates = nullptr; /**< Borrowed host-owned update workflow, when configured. */
+        UpdateExperienceSession *updates = nullptr;      /**< Borrowed host-owned update workflow, when configured. */
+        const Input::InputRouter *inputRouter = nullptr; /**< Borrowed host-owned effective binding authority, outliving GUI draws. */
     };
 }  // namespace Horo::Editor

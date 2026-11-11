@@ -161,7 +161,7 @@ namespace {
         CHECK((*world)->GetDisplayName() == "workspace.panel.world_composition");
 
         const auto &panels = registry.GetAllPanels();
-        REQUIRE(std::ranges::none_of(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
+        REQUIRE(std::ranges::any_of(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
             return panel->GetId() == "horo.input_mapping";
         }));
         const auto globalDock = std::ranges::find_if(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {

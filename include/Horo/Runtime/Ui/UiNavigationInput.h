@@ -32,6 +32,8 @@ namespace Horo::Runtime::Ui {
         std::uint32_t repeatDelayMilliseconds{350};
         std::uint32_t repeatIntervalMilliseconds{90};
         std::uint32_t modalityHysteresisMilliseconds{100};
+        const Input::IInputGlyphProvider
+            *glyphProvider{}; /**< Borrowed optional package; the host pins it through adapter/presentation lifetime. */
     };
 
     /** @brief Immutable presentation evidence; glyphs reference canonical controls rather than icon/atlas resources. */
