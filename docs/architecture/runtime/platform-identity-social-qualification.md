@@ -50,10 +50,33 @@ configuration stopped with `C1902`; that attempt supplies no compiler/test succe
 
 The first frontend RED build stopped before test execution: `BindDispatch` tried
 to mutate a handle through `Result::Value()`'s const lvalue view. The source fix
-moves the handle out through rvalue `Value()` before binding authority. Rebuild,
-RED/GREEN regressions, public consumers and final managed Sonar IDE, CLI secrets
-and Codacy checks remain pending the next shared heavy-build slot. No test pass
-is inferred from the successful configuration or failed compilation.
+moves the handle out through rvalue `Value()` before binding authority. The bounded
+retry compiled this fix and the new binding/friends tests successfully.
+
+Frontend RED then failed at the expected assertion with only its cancellation
+provenance guard bypassed: an old frontend handle was able to cancel a new account's
+request with reused numeric identity. The JUnit report recorded that failure.
+Restoring the exact fixed source and rebuilding produced these Windows Debug results:
+
+- `HoroPlatformRequestTests`, `HoroPlatformServicesCompositionTests`,
+  `HoroPlatformFriendsPublicConsumer`, `HoroPlatformServicesPublicHeaderConsumer`
+  and `HoroPlatformServicesExtensionPublicHeaderConsumer` built successfully with
+  `cmake --build build/skeleton --target <targets> --parallel 1`.
+- A generated CTest harness ran the request executable with the explicit filter
+  `[friends],[frontend],[session],[presence],[request],[completion-queue]`:
+  all 83 test cases passed, including the handle regression, six binding cases
+  and offline friends recovery. This is a selected subset, not the full request suite.
+- The same harness ran composition and friends public-consumer executables:
+  all three CTest entries passed with one worker and a 300-second timeout.
+
+The native lifecycle RED baseline build stopped before test execution in
+`PlatformProviderOperationsFixture.c`: MSVC reported C1189, `C atomics require C11
+or later`. The `HoroPlatformProviderAdmissionTests` target's C compile command did
+not select C11 on the current base. Both temporary baseline sources were restored
+byte-for-byte; the shared lock was released and independently reacquired without
+starting another job. Native RED/GREEN, the full request suite and final managed
+Sonar IDE, CLI secrets and Codacy checks remain incomplete. No native test pass is
+inferred from compilation of dependencies or the successful focused group.
 
 `clang-format` and `git diff --check` have run on the changed sources. The portable
 VS Code profile with installed CMake/Ninja passes the local preflight prerequisite
@@ -62,8 +85,8 @@ authentication could not be verified. Prerequisite readiness is not C++ sensor
 execution, a clean analyzer result, or a hosted quality gate.
 
 A bounded Lizard 1.23.0 measurement completed for the friends coordinator, native
-lifecycle dispatch and frontend implementation sources. Their maximum per-function
-CCN estimates were 14, 14 and 11 respectively. These are advisory source metrics,
+lifecycle dispatch, frontend and binding implementation sources. Their maximum
+per-function CCN estimates were 14, 14, 11 and 10 respectively. These are advisory source metrics,
 not complexity thresholds, complete-file rule analysis or executable test results.
 
 ## External evidence still required
