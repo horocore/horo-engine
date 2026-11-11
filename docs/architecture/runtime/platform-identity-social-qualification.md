@@ -38,6 +38,7 @@ accounts or native identifiers.
 | Friends pages reject mismatched offset/scope, oversized/malformed UTF-8, NUL, duplicate handles and invalid continuation before any partial publication | `PlatformFriendsCoordinatorTests.cpp` in `HoroPlatformRequestTests` |
 | Friends cache expiry, invalid session updates, consent/restriction replacement, cancellation, failure, timeout and shutdown preserve publication authority | `PlatformFriendsCoordinatorTests.cpp` in `HoroPlatformRequestTests` |
 | Scripted delayed friends results cannot cross access/session publication fences | `[qualification]` case in `PlatformFriendsCoordinatorTests.cpp` |
+| An offline refresh preserves its typed provider cause, clears retained presentation and recovers only under the current account after rapid switches | `[qualification]` case in `PlatformFriendsCoordinatorTests.cpp` |
 | Social handles cannot become local subject capabilities or ordinary stream/log values; staged public header remains consumable | `HoroPlatformFriendsPublicConsumer` |
 
 ## Execution status
@@ -70,6 +71,14 @@ not complexity thresholds, complete-file rule analysis or executable test result
 PLS-006.7 depends on open provider qualification #1887 / HORO-1843. Its open
 configuration prerequisite #1826 / HORO-1782 belongs to the configuration workstream.
 This delivery does not duplicate either external implementation.
+
+Provider lifecycle conformance also owns two source-reviewed shutdown gaps:
+repeated BUSY `Close` must not resend native cancellation, and the first close
+attempt must revoke request observer delivery even if native admission/ingress
+closure or drain fails. Native leases and callback context must remain retained
+until successful drain. The provider workstream has prepared separate fixes and
+regressions; their integration and execution evidence are still pending. Existing
+BUSY lifetime tests alone do not establish these stronger delivery guarantees.
 
 Private providers must still demonstrate native account-change and forced-logout
 callbacks, protected stable-subject/profile binding, real OS/provider versus

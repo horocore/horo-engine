@@ -1,4 +1,5 @@
 #include "Horo/PlatformServices/PlatformFriendsCoordinator.h"
+#include "Horo/PlatformServices/PlatformServiceErrors.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
 #include "PlatformServicesMockBackend.h"
 #include "PlatformServicesTestSupport.h"
@@ -235,6 +236,31 @@ namespace Horo::PlatformServices {
         RequireError(coordinator.Complete(shutdown, Result<FriendsPage>::Success(ApprovedPage(session)), {}),
                      FriendsCoordinatorErrors::Closed);
         RequireError(coordinator.ReadPage(*session.Subject(), session.AccessRevision(), {}), FriendsCoordinatorErrors::Closed);
+    }
+
+    TEST_CASE("Friends offline refresh discards old presentation and recovery cannot revive an old account page",
+              "[platform-services][friends][qualification]") {
+        const auto session = FriendsSession();
+        auto coordinator = FriendsCoordinator(session);
+        REQUIRE(coordinator.Complete(Query(coordinator, session), Result<FriendsPage>::Success(ApprovedPage(session)), {}).HasValue());
+        REQUIRE(coordinator.ReadPage(*session.Subject(), session.AccessRevision(), {}).Value().has_value());
+
+        const auto refresh = Query(coordinator, session);
+        const auto offline = MakePlatformProviderError(PlatformProviderFailureCategory::Offline, 1, 7);
+        const auto failed = coordinator.Complete(refresh, Result<FriendsPage>::Failure(offline), {});
+        RequireError(failed, PlatformServiceErrors::ProviderFailed);
+        CHECK(PlatformProviderCategory(failed.ErrorValue()) == PlatformProviderFailureCategory::Offline);
+        CHECK_FALSE(coordinator.ReadPage(*session.Subject(), session.AccessRevision(), {}).Value());
+
+        const auto delayed = Query(coordinator, session);
+        for (std::uint64_t generation = 2; generation <= 4; ++generation)
+            REQUIRE(coordinator.UpdateSession(FriendsSession(PlatformSessionAccessState::Granted, generation, generation)).HasValue());
+        RequireError(coordinator.Complete(delayed, Result<FriendsPage>::Success(ApprovedPage(session)), {}),
+                     PlatformSessionErrors::StaleSession);
+        const auto current = FriendsSession(PlatformSessionAccessState::Granted, 4, 4);
+        CHECK_FALSE(coordinator.ReadPage(*current.Subject(), current.AccessRevision(), {}).Value());
+        REQUIRE(coordinator.Complete(Query(coordinator, current), Result<FriendsPage>::Success(ApprovedPage(current)), {}).HasValue());
+        REQUIRE(coordinator.ReadPage(*current.Subject(), current.AccessRevision(), {}).Value().has_value());
     }
 
     TEST_CASE("Friends page offsets and aggregate personal data limits survive pagination", "[platform-services][friends]") {
