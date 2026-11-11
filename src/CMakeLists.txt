@@ -1749,7 +1749,9 @@ target_compile_features(HoroGameplayAiIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayAiIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::AISceneIntegration)
 target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayAiIntegration)
 
-add_library(HoroAISightIntegration STATIC runtime/ai/integration/PerceptionSight.cpp)
+add_library(HoroAISightIntegration STATIC
+    runtime/ai/integration/PerceptionSight.cpp
+    runtime/ai/integration/EnvironmentQueryPhysics.cpp)
 add_library(HoroEngine::AISightIntegration ALIAS HoroAISightIntegration)
 target_compile_features(HoroAISightIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISightIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::Physics)

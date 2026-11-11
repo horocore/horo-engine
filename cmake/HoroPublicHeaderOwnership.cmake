@@ -794,6 +794,7 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
     Horo/AI/PerceptionSight.h
+    Horo/AI/EnvironmentQueryPhysics.h
 )
 horo_configure_target_header_boundary(HoroAnimationEditorModel PUBLIC_HEADERS
     Horo/Editor/AnimationPreviewSession.h

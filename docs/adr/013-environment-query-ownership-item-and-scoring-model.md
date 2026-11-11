@@ -271,3 +271,9 @@ one live entity. It distinguishes remembered from currently sensed entities,
 optionally filters by sense and exposes only the match and highest eligible
 confidence. A replaced scene, publication, or candidate generation yields a
 typed stale result.
+
+The queued Physics probe lives in AISightIntegration, which already owns the
+Physics capability dependency. It checks the exact host publication and returns
+binary clearance from a bounded, blocking-only ray or overlap. The host supplies
+local-frame geometry and retires the probe on source replacement. Capacity
+backpressure admits no request. A stale binding cancels outstanding work.
