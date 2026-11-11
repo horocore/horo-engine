@@ -14,6 +14,7 @@
 #include <cmath>
 #include <glad/gl.h>
 #include <imgui.h>
+#include <iostream>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -432,6 +433,12 @@ namespace Horo::Render::OpenGLSmokeTests {
         Check(frontendResult.HasValue());
         std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
         Check(gladLoadGL(SDL_GL_GetProcAddress) != 0);
+        const auto *renderer = glGetString(GL_RENDERER);
+        const auto *version = glGetString(GL_VERSION);
+        REQUIRE(renderer != nullptr);
+        REQUIRE(version != nullptr);
+        std::cout << "OpenGL renderer " << reinterpret_cast<const char *>(renderer) << ", version "
+                  << reinterpret_cast<const char *>(version) << '\n';
 
         ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;

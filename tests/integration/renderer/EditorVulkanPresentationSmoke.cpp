@@ -123,6 +123,14 @@ namespace Horo::Tests::VulkanEditor {
             const auto borrowed = bridge->Port()->QueryDevice();
             Check(borrowed);
             const auto &device = borrowed.Value();
+            const auto properties =
+                std::bit_cast<PFN_vkGetPhysicalDeviceProperties>(device.instanceResolver(device.instance, "vkGetPhysicalDeviceProperties"));
+            REQUIRE(properties);
+            VkPhysicalDeviceProperties identity{};
+            properties(device.physical, &identity);
+            std::cout << "Vulkan device " << identity.deviceName << ", driver " << identity.driverVersion << ", API "
+                      << VK_API_VERSION_MAJOR(identity.apiVersion) << '.' << VK_API_VERSION_MINOR(identity.apiVersion) << '.'
+                      << VK_API_VERSION_PATCH(identity.apiVersion) << '\n';
             const auto query =
                 std::bit_cast<PFN_vkGetPhysicalDeviceFeatures2>(device.instanceResolver(device.instance, "vkGetPhysicalDeviceFeatures2"));
             REQUIRE(query);
@@ -263,6 +271,7 @@ namespace Horo::Tests::VulkanEditor {
             scene.camera = cinematic->Advance(0);
         REQUIRE(scene.IsValid());
         Host host;
+        host.RecordCapabilities();
         host.CreateViewport(scene);
         host.viewport->RequestGrid({.visible = true});
         host.viewport->RequestLightVisualizer({lights[1]});
