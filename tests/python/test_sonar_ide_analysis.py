@@ -329,3 +329,30 @@ def test_run_git_keeps_option_like_worktree_names_out_of_argv(tmp_path, monkeypa
     assert sonar_ide_analysis.run_git(root, "status") == b"ok"
     assert calls[0][0] == ["git", "status"]
     assert calls[0][1]["cwd"] == root.resolve()
+
+
+@pytest.mark.parametrize("generator", ["Ninja", "Unix Makefiles"])
+def test_prepare_keeps_compiler_context_builds_serial(tmp_path, monkeypatch, generator):
+    source = tmp_path / "input.cpp"
+    source.write_text("int value = 1;\n", encoding="utf-8")
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "CMakeCache.txt").write_text(
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={tmp_path}\nCMAKE_GENERATOR:INTERNAL={generator}\n", encoding="utf-8")
+    database = build / "compile_commands.json"
+    database.write_text(json.dumps([{"directory": str(build), "file": str(source),
+        "arguments": ["c++", "-c", str(source), "-o", "CMakeFiles/fixture.dir/input.cpp.obj"]}]), encoding="utf-8")
+    calls = []
+
+    def run(command, *args):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sonar_ide_analysis, "quality_run", run)
+    monkeypatch.setenv("CMAKE_BUILD_PARALLEL_LEVEL", "8")
+    result, contexts = sonar_ide_analysis.prepare(tmp_path, tmp_path / "cache", [source], database, 10)
+    assert result == database
+    assert contexts == {}
+    build_commands = [command for command in calls if "--build" in command]
+    assert len(build_commands) == 1
+    assert build_commands[0][build_commands[0].index("--parallel") + 1] == "1"

@@ -90,6 +90,9 @@ This run predates the final staging/error edits and does not validate those inpu
 Subsequent CTest runs use `--timeout 300 -j1 --output-on-failure` under the same
 shared lock. Heavy reruns wait for the main Windows validation block to finish.
 Final build, public-consumer, cloud-suite and full-target results are pending.
+The analysis helper now honors `CMAKE_BUILD_PARALLEL_LEVEL` when preparing compiler
+contexts, retaining its previous default when unset. Qualification sets it to `1`;
+both Ninja object and Make target command paths have lightweight regression coverage.
 
 The initial `scripts/analyze.py doctor --offline` found Sonar CLI 1.10.0,
 Codacy Analysis CLI 0.25.0 and VS Code 1.145.3; CMake/Ninja were absent from that
