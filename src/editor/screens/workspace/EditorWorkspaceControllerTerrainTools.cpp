@@ -88,12 +88,12 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::PrepareTerrainSelection */
-    Result<std::shared_ptr<TerrainToolSelection>> EditorWorkspaceController::PrepareTerrainSelection(const TerrainDocumentHost &document) {
+    Result<std::shared_ptr<TerrainToolSelection>> EditorWorkspaceController::PrepareTerrainSelection(
+        const TerrainDocumentHost &document) const {
         auto state = std::make_shared<TerrainToolSelection>();
         state->document = document.Identity().instance;
         const auto items = document.BorrowFoliageCatalog();
-        auto loaded = state->palette.Replace({items.begin(), items.end()});
-        if (loaded.HasError())
+        if (auto loaded = state->palette.Replace({items.begin(), items.end()}); loaded.HasError())
             return Result<std::shared_ptr<TerrainToolSelection>>::Failure(loaded.ErrorValue());
         return Result<std::shared_ptr<TerrainToolSelection>>::Success(std::move(state));
     }
@@ -112,8 +112,7 @@ namespace Horo::Editor {
             return Result<TerrainDocumentHost *>::Failure(MakeError(TerrainEditErrors::WrongDocument));
         if (requireFocus && m_viewModel.workspacePanelHost.ActiveDocument() != view.instance)
             return Result<TerrainDocumentHost *>::Failure(MakeError(TerrainEditErrors::WrongDocument));
-        const auto current = (*found)->View();
-        if (current.closed || !SameFence(current.fence, view.fence))
+        if (const auto current = (*found)->View(); current.closed || !SameFence(current.fence, view.fence))
             return Result<TerrainDocumentHost *>::Failure(MakeError(TerrainEditErrors::StaleRevision));
         return Result<TerrainDocumentHost *>::Success(found->get());
     }
@@ -247,11 +246,12 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ExecuteTerrainTool */
     Result<void> EditorWorkspaceController::ExecuteTerrainTool(TerrainDocumentHost &document, const TerrainToolCommand &intent) {
-        if (intent.action == TerrainToolAction::Stroke)
+        using enum Horo::Editor::TerrainToolAction;
+        if (intent.action == Stroke)
             return ExecuteTerrainStroke(document, intent);
         if (IsPaletteAction(intent.action))
             return ExecuteTerrainPalette(document, intent);
-        if (intent.action == TerrainToolAction::Cook || intent.action == TerrainToolAction::CancelCook)
+        if (intent.action == Cook || intent.action == CancelCook)
             return ExecuteTerrainCook(document, intent);
         return ExecuteTerrainDocumentAction(document, intent);
     }

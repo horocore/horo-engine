@@ -292,7 +292,7 @@ namespace Horo::Animation {
             control += 2048ULL * assets.program->Memory().blendMembers;
             control += Detail::ActionControlOperations(*assets.program, context.actions);
             for (const auto &occurrence : assets.program->Occurrences())
-                if (occurrence.blendTree) {
+                if (occurrence.blendTree.has_value()) {
                     const auto &tree = std::get<GraphBlendTreeNode>(
                         assets.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);
                     control += 128ULL * tree.samples.size() * (tree.triangles.size() + 1);

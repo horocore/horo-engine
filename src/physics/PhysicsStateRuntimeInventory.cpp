@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <memory>
 #include <new>
 
 namespace Horo::Physics::Detail {
@@ -21,11 +22,11 @@ namespace Horo::Physics::Detail {
         if (budget.maximumCaptureOwners == 0 || budget.maximumCaptureOwners > MaximumPhysicsBufferEntries ||
             budget.maximumRetainedBytes < sizeof(PhysicsStateRuntimeInventory))
             return Outcome::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-        const auto remaining = budget.maximumRetainedBytes - sizeof(PhysicsStateRuntimeInventory);
-        if (budget.maximumCaptureOwners > remaining / sizeof(std::shared_ptr<PhysicsStateResourceRecord>))
+        if (const auto remaining = budget.maximumRetainedBytes - sizeof(PhysicsStateRuntimeInventory);
+            budget.maximumCaptureOwners > remaining / sizeof(std::shared_ptr<PhysicsStateResourceRecord>))
             return Outcome::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         try {
-            auto inventory = std::unique_ptr<PhysicsStateRuntimeInventory>{new PhysicsStateRuntimeInventory};
+            auto inventory = std::make_unique<PhysicsStateRuntimeInventory>();
             inventory->budget_ = budget;
             inventory->records_.reserve(budget.maximumCaptureOwners);
             inventory->reserved_ =

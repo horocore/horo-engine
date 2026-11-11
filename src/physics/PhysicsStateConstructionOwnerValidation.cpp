@@ -51,13 +51,14 @@ namespace Horo::Physics::StateDetail {
 
         bool ReferencesOwnedObject(const PhysicsStateConstructionManifest &m, const PhysicsStatePersistentOwner &v) noexcept {
             switch (v.role) {
-                case PhysicsStateOwnerRole::Body:
+                using enum Horo::Physics::PhysicsStateOwnerRole;
+                case Body:
                     return BodyExists(m, v.object);
-                case PhysicsStateOwnerRole::Collider:
+                case Collider:
                     return HasShape(m, v.object);
-                case PhysicsStateOwnerRole::Constraint:
+                case Constraint:
                     return JointExists(m, v.object);
-                case PhysicsStateOwnerRole::CompoundBodyRoot:
+                case CompoundBodyRoot:
                     return HasShape(m, v.object) && CompoundOwner(m, v);
             }
             return false;

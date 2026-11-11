@@ -107,6 +107,9 @@ namespace Horo::Application::Internal {
                 owner.busy = true;
             }
 
+            Operation(const Operation &) = delete;
+            Operation &operator=(const Operation &) = delete;
+
             ~Operation() {
                 owner.busy = false;
             }

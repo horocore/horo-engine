@@ -106,8 +106,7 @@ namespace Horo::Runtime {
 
     Result<std::shared_ptr<SceneAnimationRuntime::State::Scope>> SceneAnimationRuntime::State::PrepareScope(const RuntimeSceneView &scene) {
         using Return = Result<std::shared_ptr<Scope>>;
-        const auto admission = Admit(true);
-        if (admission.HasError())
+        if (const auto admission = Admit(true); admission.HasError())
             return Return::Failure(admission.ErrorValue());
         if (!scene.IsCurrent())
             return Return::Failure(MakeError(A::AnimationAssetErrors::Stale));
@@ -129,8 +128,7 @@ namespace Horo::Runtime {
     Result<std::unique_ptr<SceneAnimationRuntime::State::Set>> SceneAnimationRuntime::State::PrepareChange(
         const RuntimeSceneView &scene, std::span<const RuntimeEntityView> created, std::span<const EntityRef> destroyed) {
         using Return = Result<std::unique_ptr<Set>>;
-        const auto admission = Admit(true);
-        if (admission.HasError())
+        if (const auto admission = Admit(true); admission.HasError())
             return Return::Failure(admission.ErrorValue());
         if (!CurrentScene(scene))
             return Return::Failure(MakeError(A::AnimationAssetErrors::Stale));

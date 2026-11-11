@@ -61,7 +61,7 @@ namespace Horo::Character::Detail {
     /** @copydoc CharacterScenePlacement::ValidateEmptyPendingContinuation */
     Result<void> CharacterScenePlacement::ValidateEmptyPendingContinuation(CharacterWorld &character, Physics::PhysicsWorld &physics,
                                                                            Runtime::SceneRuntimeId scene) {
-        auto &owner = *character.impl_;
+        const auto &owner = *character.impl_;
         if (auto empty = EmptyUnticked(owner); empty.HasError())
             return empty;
         if (auto pair = PairEvidence(owner, *physics.impl_, scene); pair.HasError())

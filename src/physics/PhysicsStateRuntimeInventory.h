@@ -44,6 +44,7 @@ namespace Horo::Physics::Detail {
     private:
         PhysicsStateRuntimeBudget budget_;
         std::vector<std::shared_ptr<PhysicsStateResourceRecord>> records_;
-        std::size_t reserved_{}, cursor_{};
+        std::size_t reserved_{};
+        std::size_t cursor_{};
     };
 }  // namespace Horo::Physics::Detail

@@ -28,28 +28,28 @@ namespace Horo::Extensions {
         }
 
         HoroExtensionStatus Register(AssetImporterRegistrationSession &load, const HoroExtensionServiceDescriptor &descriptor) {
-            const auto &module = load.nativeServices;
-            if (!module || !load.serviceTransportNegotiated || module->publications.size() >= 32)
+            const auto &nativeModule = load.nativeServices;
+            if (!nativeModule || !load.serviceTransportNegotiated || nativeModule->publications.size() >= 32)
                 return Reject(load);
             auto shape = CopyNativeServiceShape(descriptor, *load.extensionModule);
             if (shape.HasError() || !ScriptClaim(load, shape.Value()))
                 return Reject(load);
-            for (const auto &previous : module->publications)
+            for (const auto &previous : nativeModule->publications)
                 if (previous->shape.service == shape.Value().service)
                     return Reject(load);
             auto publication = std::make_shared<NativeServicePublication>();
             publication->shape = std::move(shape).Value();
-            publication->owner = module;
-            publication->provider = {module->declaration.id, publication->shape.service,
-                                     module->admission->ActivationLease().Activation().Generation()};
+            publication->owner = nativeModule;
+            publication->provider = {nativeModule->declaration.id, publication->shape.service,
+                                     nativeModule->admission->ActivationLease().Activation().Generation()};
             if (!publication->shape.scriptApi.empty()) {
-                auto scripts = NativeServiceScriptDescriptors(publication->shape, module->declaration.id);
+                auto scripts = NativeServiceScriptDescriptors(publication->shape, nativeModule->declaration.id);
                 if (scripts.HasError())
                     return Reject(load);
                 publication->descriptors = std::move(scripts).Value();
             }
             publication->pending = std::make_unique<NativeScalarService>(publication->shape, descriptor, load.lifetime);
-            module->publications.push_back(std::move(publication));
+            nativeModule->publications.push_back(std::move(publication));
             return HORO_EXTENSION_SUCCESS;
         }
 
@@ -90,15 +90,15 @@ namespace Horo::Extensions {
             if (!opaque || !RequestValid(request, result))
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             *result = {.structSize = sizeof(*result), .failureCode = HORO_EXTENSION_SERVICE_RETIRED};
-            auto &client = *static_cast<NativeServiceImportClient *>(opaque);
-            const auto module = client.module.lock();
-            if (!module || !module->committed.load(std::memory_order_acquire))
+            const auto &client = *static_cast<NativeServiceImportClient *>(opaque);
+            const auto nativeModule = client.module.lock();
+            if (!nativeModule || !nativeModule->committed.load(std::memory_order_acquire))
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             try {
                 const auto provider = client.provider.lock();
                 if (!provider)
                     return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
-                auto value = InvokeSelectedNativeServiceImport(*module, client.import, *provider,
+                auto value = InvokeSelectedNativeServiceImport(*nativeModule, client.import, *provider,
                                                                {View(request->method),
                                                                 {request->arguments, request->argumentCount},
                                                                 request->cancellation},
@@ -116,15 +116,15 @@ namespace Horo::Extensions {
 
         HoroExtensionStatus Bind(AssetImporterRegistrationSession &load, const HoroExtensionStringView id,
                                  HoroExtensionServiceClient &output) {
-            const auto &module = load.nativeServices;
-            if (!module || !load.serviceTransportNegotiated || !Text(id) || module->clients.size() >= 64)
+            const auto &nativeModule = load.nativeServices;
+            if (!nativeModule || !load.serviceTransportNegotiated || !Text(id) || nativeModule->clients.size() >= 64)
                 return Reject(load);
-            const auto found = std::ranges::find(module->imports, View(id), &ResolvedExtensionServiceImport::ImportId);
-            if (found == module->imports.end() || found->Status() != ExtensionServiceImportStatus::Bound)
+            const auto found = std::ranges::find(nativeModule->imports, View(id), &ResolvedExtensionServiceImport::ImportId);
+            if (found == nativeModule->imports.end() || found->Status() != ExtensionServiceImportStatus::Bound)
                 return Reject(load);
-            auto client = std::make_unique<NativeServiceImportClient>(module, *found);
+            auto client = std::make_unique<NativeServiceImportClient>(nativeModule, *found);
             output = {sizeof(output), client.get(), InvokeClient};
-            module->clients.push_back(std::move(client));
+            nativeModule->clients.push_back(std::move(client));
             return HORO_EXTENSION_SUCCESS;
         }
     }  // namespace

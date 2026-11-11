@@ -370,8 +370,8 @@ namespace Horo::Editor {
                              tokens.spacing.gridGap,        tokens.spacing.bodyPaddingY};
         const float scale = std::max(tokens.sizes.uiScale, 0.01F);
         layout.sidebarWidth = std::clamp(layout.sidebarWidth, 120.0F * scale, std::max(120.0F * scale, region.width - 280.0F * scale));
-        const float mainWidth = region.width - layout.sidebarWidth - 2.0F * layout.bodyPaddingX;
-        if (mainWidth < 560.0F * scale + layout.gridGap)
+        if (const float mainWidth = region.width - layout.sidebarWidth - 2.0F * layout.bodyPaddingX;
+            mainWidth < 560.0F * scale + layout.gridGap)
             layout.newsColumns = 1;
         return layout;
     }

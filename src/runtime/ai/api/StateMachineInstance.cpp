@@ -33,11 +33,12 @@ namespace Horo::AI {
 
         std::optional<TaskId> PhaseAction(const StateMachineState &state, StateMachineActionPhase phase) {
             switch (phase) {
-                case StateMachineActionPhase::Entry:
+                using enum Horo::AI::StateMachineActionPhase;
+                case Entry:
                     return state.entry;
-                case StateMachineActionPhase::Update:
+                case Update:
                     return state.update;
-                case StateMachineActionPhase::Exit:
+                case Exit:
                     return state.exit;
             }
             return {};
@@ -201,23 +202,24 @@ namespace Horo::AI {
 
     Result<void> StateMachineInstance::RunCall(const StateMachineState &state, std::size_t index, StateMachineActionPhase phase,
                                                const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions) {
+        using enum Horo::AI::AiTaskState;
         if (!state.call)
             return Result<void>::Success();
         if (!actions || !actions->SupportsSubplans())
             return Result<void>::Failure(MakeError(AIErrors::DecisionAssetSubtreeIncompatible));
         const StateMachineStateInvocation invocation{state.id, *lifecycle_.Context(), blackboard, tick};
         if (phase == StateMachineActionPhase::Entry) {
-            childOutcomes_[index] = AiTaskState::Idle;
+            childOutcomes_[index] = Idle;
             return actions->EnterState(invocation);
         }
         if (phase == StateMachineActionPhase::Exit) {
-            childOutcomes_[index] = AiTaskState::Idle;
+            childOutcomes_[index] = Idle;
             return actions->ExitState(invocation);
         }
         auto result = actions->UpdateState(invocation);
         if (result.HasError())
             return Result<void>::Failure(result.ErrorValue());
-        if (result.Value() < AiTaskState::Running || result.Value() > AiTaskState::Cancelled)
+        if (result.Value() < Running || result.Value() > Cancelled)
             return Result<void>::Failure(MakeError(AIErrors::TaskFailureInvalid));
         childOutcomes_[index] = result.Value();
         return Result<void>::Success();

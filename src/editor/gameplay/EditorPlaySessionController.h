@@ -90,7 +90,7 @@ namespace Horo::Editor {
         /** @brief Borrows only the selected activation's genuine save owner for synchronous UI intent. */
         [[nodiscard]] EditorPlaySaveSession *SaveSession() noexcept;
         /** @brief Retains path-free UI intent storage without exposing a controller pointer or extending callback admission. */
-        [[nodiscard]] std::weak_ptr<EditorPlayRuntimeBinding> SaveBinding() noexcept;
+        [[nodiscard]] std::weak_ptr<EditorPlayRuntimeBinding> SaveBinding() const noexcept;
         /** @brief Captures exact privately issued installed sources cold before the real Play host is activated. */
         void ConfigureSaveBindings(std::vector<PlaySaveGameplayBinding> bindings);
         /** @brief Preserves whole-inventory admission failure; no empty core-only save is substituted for missing required sources. */

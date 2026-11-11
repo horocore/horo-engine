@@ -159,14 +159,15 @@ namespace Horo::Prefab {
 
     /** @copydoc PrefabExpansionCache::Find */
     std::shared_ptr<const EffectivePrefabCandidate> PrefabExpansionCache::Find(const PrefabExpansionCacheKey &key) const {
+        using enum Horo::Prefab::PrefabMetricCacheEvent;
         PrefabMetricOperation observation{key.metrics_, PrefabMetricPhase::Cache};
         if (!IsOwner()) {
-            RecordPrefabCacheEvent(key.metrics_, PrefabMetricCacheEvent::Rejected);
+            RecordPrefabCacheEvent(key.metrics_, Rejected);
             observation.Complete(PrefabMetricOutcome::Failed);
             return {};
         }
         const auto found = FindUnobserved(key);
-        RecordPrefabCacheEvent(key.metrics_, found ? PrefabMetricCacheEvent::Hit : PrefabMetricCacheEvent::Miss);
+        RecordPrefabCacheEvent(key.metrics_, found ? Hit : Miss);
         observation.Complete();
         return found;
     }

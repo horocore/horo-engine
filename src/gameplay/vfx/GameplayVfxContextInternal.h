@@ -106,14 +106,15 @@ namespace Horo::Gameplay::VfxContextDetail {
                                                    std::shared_ptr<Detail::GameplayVfxSceneState> &scene) noexcept;
     [[nodiscard]] Vfx::VfxSpawnStatus ProducerStatus(const Detail::GameplayVfxProducerState &producer,
                                                      std::shared_ptr<Detail::GameplayVfxSceneState> &scene) noexcept;
-    [[nodiscard]] bool Allowed(const Detail::GameplayVfxModuleState &module, const Detail::GameplayVfxCompiledBinding &binding) noexcept;
-    [[nodiscard]] GameplayVfxSubmission Stage(Detail::GameplayVfxSceneState &scene, Detail::GameplayVfxModuleState &module,
+    [[nodiscard]] bool Allowed(const Detail::GameplayVfxModuleState &moduleState,
+                               const Detail::GameplayVfxCompiledBinding &binding) noexcept;
+    [[nodiscard]] GameplayVfxSubmission Stage(Detail::GameplayVfxSceneState &scene, Detail::GameplayVfxModuleState &moduleState,
                                               GameplayVfxEventKey key, const GameplayVfxEventPayload &payload,
                                               std::shared_ptr<const Detail::GameplayVfxScopeLifetime> lifetime = {}) noexcept;
-    [[nodiscard]] GameplayVfxSubmission EmitCommitted(Detail::GameplayVfxSceneState &scene, Detail::GameplayVfxModuleState &module,
+    [[nodiscard]] GameplayVfxSubmission EmitCommitted(Detail::GameplayVfxSceneState &scene, Detail::GameplayVfxModuleState &moduleState,
                                                       GameplayVfxEventKey key, const GameplayVfxEventPayload &payload,
                                                       std::uint64_t tick) noexcept;
-    [[nodiscard]] GameplayVfxResult Poll(const Detail::GameplayVfxSceneState &scene, const Detail::GameplayVfxModuleState &module,
+    [[nodiscard]] GameplayVfxResult Poll(const Detail::GameplayVfxSceneState &scene, const Detail::GameplayVfxModuleState &moduleState,
                                          const GameplayVfxReceipt &receipt) noexcept;
     [[nodiscard]] Vfx::VfxSpawnRequest Basis(const Detail::GameplayVfxSceneState &scene, const GameplayVfxReceipt &receipt) noexcept;
     [[nodiscard]] bool SameReceipt(const GameplayVfxReceipt &left, const GameplayVfxReceipt &right) noexcept;

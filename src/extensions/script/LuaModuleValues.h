@@ -16,12 +16,16 @@ namespace Horo::Extensions::LuaModuleDetail {
     struct Budget final {
         const ScriptValueLimits &limits;
         const std::chrono::steady_clock::time_point &deadline;
-        std::size_t nodes{}, bytes{};
+        std::size_t nodes{};
+        std::size_t bytes{};
         void Charge(std::size_t depth, std::size_t payload = 0);
     };
 
     struct Ledger final {
-        std::size_t maximumBytes{}, maximumValues{}, bytes{}, values{};
+        std::size_t maximumBytes{};
+        std::size_t maximumValues{};
+        std::size_t bytes{};
+        std::size_t values{};
     };
     enum class BoxKind : std::uint8_t {
         Null,

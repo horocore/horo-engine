@@ -498,6 +498,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportResources::AdvanceColorPipelineTargets */
     Result<bool> EditorViewportResources::AdvanceColorPipelineTargets(ViewportTargetResources &resources) {
+        using enum Horo::Render::RenderTextureUsage;
         using namespace Render;
 
         struct Attachment {
@@ -515,14 +516,13 @@ namespace Horo::Editor {
                                                 RenderTextureFormat::Rgba8Unorm}};
         bool ready = true;
         for (const auto &a : attachments) {
-            const auto texture = AdvanceTexture(*frontend_, config_.memoryScope,
-                                                {.extent = {resources.extent.width, resources.extent.height},
-                                                 .format = a.format,
-                                                 .usage = a.format == RenderTextureFormat::Rgba8Unorm
-                                                              ? RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment |
-                                                                    RenderTextureUsage::CopySource
-                                                              : RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment},
-                                                *a.texture, *a.operation);
+            const auto texture =
+                AdvanceTexture(*frontend_, config_.memoryScope,
+                               {.extent = {resources.extent.width, resources.extent.height},
+                                .format = a.format,
+                                .usage = a.format == RenderTextureFormat::Rgba8Unorm ? Sampled | RenderAttachment | CopySource
+                                                                                     : Sampled | RenderAttachment},
+                               *a.texture, *a.operation);
             if (texture.HasError())
                 return Result<bool>::Failure(texture.ErrorValue());
             if (!texture.Value()) {

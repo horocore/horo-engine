@@ -12,7 +12,8 @@ namespace Horo::Editor {
 
         struct SourceCapture final {
             Terrain::TerrainAuthoringSource value;
-            Assets::AssetSourceIdentity source, metadata;
+            Assets::AssetSourceIdentity source;
+            Assets::AssetSourceIdentity metadata;
             bool container{};
         };
 
@@ -126,8 +127,7 @@ namespace Horo::Editor {
             host->containerSource_ = value.container;
             host->layers_ = std::move(value.value.layers);
             host->registry_ = registry;
-            auto resources = host->LoadResources(value.value.foliage.definitions);
-            if (resources.HasError())
+            if (auto resources = host->LoadResources(value.value.foliage.definitions); resources.HasError())
                 return Return::Failure(std::move(resources).ErrorValue());
             return Return::Success(std::move(host));
         } catch (const std::bad_alloc &) {
@@ -164,9 +164,9 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(SourceDocumentErrors::Busy));
         if (document_.IsClosed())
             return Result<void>::Failure(MakeError(TerrainEditErrors::Closed));
-        const auto current = document_.Fence();
-        if (fence.session != current.session || fence.dataset != current.dataset || fence.expectedRevision != current.expectedRevision ||
-            fence.capabilityRevision != current.capabilityRevision)
+        if (const auto current = document_.Fence(); fence.session != current.session || fence.dataset != current.dataset ||
+                                                    fence.expectedRevision != current.expectedRevision ||
+                                                    fence.capabilityRevision != current.capabilityRevision)
             return Result<void>::Failure(MakeError(TerrainEditErrors::StaleRevision));
         return Result<void>::Success();
     }

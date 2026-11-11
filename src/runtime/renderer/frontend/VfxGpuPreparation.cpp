@@ -40,12 +40,13 @@ namespace Horo::Render {
         }
 
         Result<void> SupportsGpuPreparation(const RenderBackendCapabilities &caps, const VfxGpuReadbackDescriptor &readback) {
+            using enum Horo::Render::RenderCapability;
             const auto &features = caps.support.features;
-            if (!features.Supports(RenderCapability::VfxGpuSimulation) || !features.Supports(RenderCapability::VfxGpuDraw) ||
-                !caps.supportsExplicitGraphSubmissions || !caps.supportsSubmissionObservation)
+            if (!features.Supports(VfxGpuSimulation) || !features.Supports(VfxGpuDraw) || !caps.supportsExplicitGraphSubmissions ||
+                !caps.supportsSubmissionObservation)
                 return Result<void>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
             if (readback.enabled && readback.requirement == VfxGpuReadbackRequirement::RequiredForVisualEffect &&
-                !features.Supports(RenderCapability::VfxGpuReadback))
+                !features.Supports(VfxGpuReadback))
                 return Result<void>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
             return Result<void>::Success();
         }
@@ -128,6 +129,12 @@ namespace Horo::Render {
             VfxGpuStorage &storage;
             bool keep{};
 
+            Rollback(RenderFrontend &owner, VfxGpuRecord &value, VfxGpuStorage &registry) noexcept
+                : frontend(owner), record(value), storage(registry) {}
+
+            Rollback(const Rollback &) = delete;
+            Rollback &operator=(const Rollback &) = delete;
+
             ~Rollback() {
                 if (keep)
                     return;
@@ -172,18 +179,19 @@ namespace Horo::Render {
         }
 
         Result<bool> AllReady(const RenderFrontend &frontend, const VfxGpuRecord &record) {
+            using enum Horo::Render::RenderResourceState;
             for (const auto &buffer : record.buffers) {
                 const auto state = frontend.ResourceState(buffer.handle);
                 if (state.HasError())
                     return Result<bool>::Failure(state.ErrorValue());
-                if (state.Value() == RenderResourceState::Pending)
+                if (state.Value() == Pending)
                     return Result<bool>::Success(false);
-                if (state.Value() == RenderResourceState::Failed) {
+                if (state.Value() == Failed) {
                     const auto failed = frontend.ResourceOperationResult(buffer.operation);
                     if (failed.HasError())
                         return Result<bool>::Failure(failed.ErrorValue());
                 }
-                if (state.Value() != RenderResourceState::Ready)
+                if (state.Value() != Ready)
                     return Result<bool>::Failure(MakeError(VfxGpuSimulationErrors::InvalidPreparation,
                                                            "A prepared GPU particle buffer failed or retired before native admission."));
             }
@@ -252,8 +260,7 @@ namespace Horo::Render {
                                                                             const CookedVfxGpuPrograms &programs,
                                                                             const CancellationToken &lifetime) {
         using Outcome = Result<Detail::VfxGpuRecord *>;
-        const auto existing = FindExisting(*vfxGpuStorage_, preparation, programs);
-        if (existing.HasError() || existing.Value())
+        if (const auto existing = FindExisting(*vfxGpuStorage_, preparation, programs); existing.HasError() || existing.Value())
             return existing;
         if (const auto idle = QueueIsIdle(*this); idle.HasError())
             return Outcome::Failure(idle.ErrorValue());

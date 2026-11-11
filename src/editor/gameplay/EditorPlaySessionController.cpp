@@ -123,8 +123,8 @@ namespace Horo::Editor {
 
         std::optional<Error> ValidateViewSelection(const EditorPlayViewSource source, const EditorPlaySceneFactory &factory,
                                                    const IEditorPlayXrHost *host) {
-            if (source > EditorPlayViewSource::Simulator || (source != EditorPlayViewSource::AuthoredCamera && (!factory || !host)) ||
-                (source == EditorPlayViewSource::AuthoredCamera && host))
+            using enum Horo::Editor::EditorPlayViewSource;
+            if (source > Simulator || (source != AuthoredCamera && (!factory || !host)) || (source == AuthoredCamera && host))
                 return InvalidTransition("Selected XR Play requires its actual application factory and host.");
             if (host && host->ViewSource() != source)
                 return InvalidTransition("Selected Play view source must match its actual application host.");
@@ -393,7 +393,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorPlaySessionController::SaveBinding */
-    std::weak_ptr<EditorPlayRuntimeBinding> EditorPlaySessionController::SaveBinding() noexcept {
+    std::weak_ptr<EditorPlayRuntimeBinding> EditorPlaySessionController::SaveBinding() const noexcept {
         return runtimeBinding_;
     }
 
@@ -593,7 +593,7 @@ namespace Horo::Editor {
 
     /** @brief Reads immutable actual load state; pending restore advances only the existing Scene lifecycle, not project callbacks. */
     bool EditorPlaySessionController::SaveLoading() noexcept {
-        auto *save = SaveSession();
+        const auto *save = SaveSession();
         const auto snapshot = save ? save->Snapshot() : nullptr;
         return snapshot && snapshot->loading;
     }

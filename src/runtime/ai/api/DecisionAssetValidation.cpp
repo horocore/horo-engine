@@ -35,10 +35,11 @@ namespace Horo::AI {
         }
 
         [[nodiscard]] bool ValidIntrinsic(const DecisionAssetNode &node) noexcept {
+            using enum Horo::AI::DecisionControlKind;
             const auto kind = node.intrinsic;
-            if (kind <= DecisionControlKind::Unspecified || kind >= DecisionControlKind::Count || node.type.IsValid())
+            if (kind <= Unspecified || kind >= Count || node.type.IsValid())
                 return false;
-            return kind != DecisionControlKind::Task && kind != DecisionControlKind::Condition && kind != DecisionControlKind::Service;
+            return kind != Task && kind != Condition && kind != Service;
         }
 
         [[nodiscard]] bool ValidDefinition(const DecisionAssetNode &node) noexcept {

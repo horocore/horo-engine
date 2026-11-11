@@ -14,12 +14,18 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace Horo::AI {
     namespace {
-        /** @brief Copies diagnostics in the original scene-owner image; clients cannot replace this allocator dispatch. */
+        /** @brief Detaches diagnostics and their nested storage in the original scene-owner image before module unload. */
         std::shared_ptr<const Telemetry::OperationContext> CaptureHostDiagnostics(const Telemetry::OperationContext &context) {
-            return std::make_shared<const Telemetry::OperationContext>(context);
+            const auto fields = context.diagnosticContext.Fields();
+            auto diagnosticContext = context.diagnosticContext.IsIsolationBoundary()
+                                         ? Log::LogContextSnapshot::Isolated({fields.begin(), fields.end()})
+                                         : Log::LogContextSnapshot{{fields.begin(), fields.end()}};
+            return std::make_shared<const Telemetry::OperationContext>(context.operationId, context.parentOperationId,
+                                                                       std::move(diagnosticContext));
         }
 
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, std::string message) {

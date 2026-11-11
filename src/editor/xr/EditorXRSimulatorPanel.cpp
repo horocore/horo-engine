@@ -158,14 +158,15 @@ namespace Horo::Editor {
     }
 
     void XRSimulatorPanel::DrawCapture(const XRSimulatorView &snapshot, const EditorGuiContext &context) {
+        using enum Horo::Editor::XRSimulatorCommandKind;
         if (Button(context, "record"))
-            Apply(snapshot, XRSimulatorCommandKind::ArmCapture);
+            Apply(snapshot, ArmCapture);
         if (Button(context, "finish_record"))
-            Apply(snapshot, XRSimulatorCommandKind::StopCapture);
+            Apply(snapshot, StopCapture);
         if (Button(context, "cancel_record"))
-            Apply(snapshot, XRSimulatorCommandKind::CancelCapture);
+            Apply(snapshot, CancelCapture);
         if (Button(context, "replay"))
-            Apply(snapshot, XRSimulatorCommandKind::Replay);
+            Apply(snapshot, Replay);
         constexpr std::array states{"capture_idle",    "capture_armed",  "capture_recording", "capture_complete",
                                     "capture_partial", "capture_failed", "capture_cancelled"};
         const auto index = static_cast<std::size_t>(snapshot.state.capture.state);

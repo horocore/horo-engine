@@ -63,7 +63,8 @@ namespace Horo::Platform::Android {
             AndroidWindowGeneration window;
             AndroidWindowExtent extent;
             std::size_t leases{};
-            bool retired{}, committed{};
+            bool retired{};
+            bool committed{};
         };
 
         AndroidLifecycleController &lifecycle;

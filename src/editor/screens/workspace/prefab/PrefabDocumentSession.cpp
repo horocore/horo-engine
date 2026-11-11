@@ -15,8 +15,7 @@ namespace Horo::Editor {
         if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
             return admitted;
         limits_ = limits;
-        const auto checked = source_->ValidateLimits(limits_);
-        if (checked.HasError())
+        if (const auto checked = source_->ValidateLimits(limits_); checked.HasError())
             return Result<void>::Failure(checked.ErrorValue());
         return Result<void>::Success();
     }

@@ -79,7 +79,7 @@ namespace Horo::Extensions {
         return Result<std::uint64_t>::Success(next++);
     }
 
-    Result<ExtensionCapabilityAdmission> ModuleScriptHostAuthority::AdmitReference(std::string module, std::uint64_t generation) const {
+    Result<ExtensionCapabilityAdmission> ModuleScriptHostAuthority::AdmitReference(std::string moduleId, std::uint64_t generation) const {
         using Output = Result<ExtensionCapabilityAdmission>;
         auto admitted = RequireOpenOwner();
         if (admitted.HasError())
@@ -89,9 +89,9 @@ namespace Horo::Extensions {
             actual.availableCapabilities.end())
             return Output::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
         auto policy = actual;
-        policy.availableCapabilities.push_back({"horo.script.reference"});
+        policy.availableCapabilities.emplace_back("horo.script.reference");
         return ExtensionCapabilityAdmission::Evaluate({"horo.engine.script-reference",
-                                                       std::move(module),
+                                                       std::move(moduleId),
                                                        generation,
                                                        {{{"horo.script.reference"}, {{HORO_EXTENSION_SERVICE_PERMISSION}}}}},
                                                       policy);

@@ -17,6 +17,7 @@ namespace {
     public:
         std::size_t writes{}, promotions{}, failWrite{}, failPromotion{};
         std::function<void()> beforePromotion;
+        std::function<void()> beforeRemoval;
 
         Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
                                          std::filesystem::perms permissions) override {
@@ -32,6 +33,12 @@ namespace {
             if (++promotions == failPromotion)
                 return Result<void>::Failure(MakeError(AssetSourceErrors::ReadFailed));
             return native.AtomicReplaceTracked(stage, path, receipt);
+        }
+
+        Result<void> RemoveDurable(const std::filesystem::path &path) override {
+            if (beforeRemoval)
+                beforeRemoval();
+            return native.RemoveDurable(path);
         }
     };
 
@@ -81,7 +88,9 @@ TEST_CASE("Authored assets publish ordinary identity without invented import pro
         observedStage = true;
         hiddenUntilComplete = hiddenUntilComplete && project.registry.Snapshot().Records().empty();
     };
-    REQUIRE(project.committer.CommitAuthored(project.batch).HasValue());
+    const auto committed = project.committer.CommitAuthored(project.batch);
+    INFO((committed.HasError() ? committed.ErrorValue().message : "Authored publication completed"));
+    REQUIRE(committed.HasValue());
     REQUIRE(observedStage);
     REQUIRE(hiddenUntilComplete);
     const auto payload = CaptureAssetSource(project.directory.Path(), project.Payload(), 4096);
@@ -169,6 +178,7 @@ TEST_CASE("Authored late index failure retains the complete published registry g
     Project project;
     REQUIRE(std::filesystem::create_directories(project.directory.Path() / ".horo/asset_index.json"));
     const auto result = project.committer.CommitAuthored(project.batch);
+    INFO((result.HasError() ? result.ErrorValue().message : "Authored publication completed"));
     REQUIRE(result.HasError());
     CHECK(project.committer.LastReceipt().registryPublished);
     REQUIRE(project.registry.Snapshot().Find(Identity()) != nullptr);
@@ -188,7 +198,9 @@ TEST_CASE("Authored identity ambiguity preserves previous sources and registry",
         CHECK(project.files.writes == 0);
     }
     SECTION("Identity already belongs to a different published source") {
-        REQUIRE(project.committer.CommitAuthored(project.batch).HasValue());
+        const auto committed = project.committer.CommitAuthored(project.batch);
+        INFO((committed.HasError() ? committed.ErrorValue().message : "Authored publication completed"));
+        REQUIRE(committed.HasValue());
         const auto original = project.Payload();
         const auto source = CaptureAssetSource(project.directory.Path(), original, 4096);
         REQUIRE(source.HasValue());
@@ -226,10 +238,55 @@ TEST_CASE("Authored cancellation and reentrancy keep publication ownership expli
             attempted = true;
             rejected = project.committer.CommitAuthored(project.batch).HasError();
         };
-        REQUIRE(project.committer.CommitAuthored(project.batch).HasValue());
+        const auto committed = project.committer.CommitAuthored(project.batch);
+        INFO((committed.HasError() ? committed.ErrorValue().message : "Authored publication completed"));
+        REQUIRE(committed.HasValue());
         CHECK(attempted);
         CHECK(rejected);
         CHECK(project.committer.LastReceipt().registryPublished);
         CHECK(project.committer.LastReceipt().status == Application::ProjectAssetImportStatus::Published);
     }
+}
+
+TEST_CASE("Authored mutation lease excludes both coordinator and native writers through publication and compensation",
+          "[terrain][authored-publication][mutation]") {
+    Project project;
+    Editor::ProjectMutationCoordinator competing(project.files);
+    const Editor::ProjectMutationRequest request{project.directory.Path(), Editor::ProjectMutationOwner::Save, "competing-authored-writer"};
+    bool rollback{};
+    SECTION("Successful publication") {}
+    SECTION("Sidecar promotion failure compensates committed payload") {
+        rollback = true;
+        project.files.failPromotion = 2;
+    }
+    std::size_t probes{}, coordinatorRejected{}, nativeRejected{}, removals{};
+    const auto probe = [&project, &competing, &request, &probes, &coordinatorRejected, &nativeRejected] {
+        ++probes;
+        const auto local = project.mutations.TryAcquire(request);
+        if (local.HasError() && local.ErrorValue().code.Value() == "project.migration.locked")
+            ++coordinatorRejected;
+        const auto other = competing.TryAcquire(request);
+        if (other.HasError() && other.ErrorValue().code.Value() == "project.migration.locked")
+            ++nativeRejected;
+    };
+    project.files.beforePromotion = probe;
+    project.files.beforeRemoval = [&probe, &removals] {
+        ++removals;
+        probe();
+    };
+    const auto committed = project.committer.CommitAuthored(project.batch);
+    project.files.beforePromotion = {};
+    project.files.beforeRemoval = {};
+    REQUIRE(committed.HasError() == rollback);
+    REQUIRE(probes > 0);
+    CHECK(coordinatorRejected == probes);
+    CHECK(nativeRejected == probes);
+    if (rollback) {
+        REQUIRE(removals > 0);
+        project.CheckUnpublished();
+    } else {
+        CHECK(project.committer.LastReceipt().registryPublished);
+    }
+    const auto after = competing.TryAcquire(request);
+    REQUIRE(after.HasValue());
 }

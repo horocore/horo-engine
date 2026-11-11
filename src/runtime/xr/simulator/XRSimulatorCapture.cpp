@@ -100,15 +100,16 @@ namespace Horo::XR {
 
     /** @copydoc XRSimulatorRuntime::StopCapture */
     Result<void> XRSimulatorRuntime::StopCapture() {
+        using enum Horo::XR::XRSimulatorCaptureState;
         if (auto lane = impl_->Lane(); lane.HasError())
             return lane;
         if (impl_->recorded.empty()) {
-            impl_->capture = {.state = XRSimulatorCaptureState::Cancelled};
+            impl_->capture = {.state = Cancelled};
             return Result<void>::Failure(MakeError(XRSimulatorErrors::CaptureUnavailable));
         }
         if (Active(impl_->capture.state))
-            impl_->EndCapture(XRSimulatorCaptureState::Complete);
-        if (impl_->capture.state != XRSimulatorCaptureState::Complete && impl_->capture.state != XRSimulatorCaptureState::Partial)
+            impl_->EndCapture(Complete);
+        if (impl_->capture.state != Complete && impl_->capture.state != Partial)
             return Result<void>::Failure(MakeError(XRSimulatorErrors::CaptureUnavailable));
         return Result<void>::Success();
     }
@@ -124,11 +125,11 @@ namespace Horo::XR {
 
     /** @copydoc XRSimulatorRuntime::RecordedScenario */
     Result<XRSimulatorScenario> XRSimulatorRuntime::RecordedScenario() const {
+        using enum Horo::XR::XRSimulatorCaptureState;
         if (auto lane = impl_->Lane(); lane.HasError())
             return Result<XRSimulatorScenario>::Failure(lane.ErrorValue());
         const auto &capture = impl_->capture;
-        if ((capture.state != XRSimulatorCaptureState::Complete && capture.state != XRSimulatorCaptureState::Partial) ||
-            impl_->recorded.empty())
+        if ((capture.state != Complete && capture.state != Partial) || impl_->recorded.empty())
             return Result<XRSimulatorScenario>::Failure(MakeError(XRSimulatorErrors::CaptureUnavailable));
         const XRSimulatorCaptureManifest manifest{static_cast<std::uint32_t>(impl_->captureLimits.maximumSteps),
                                                   impl_->captureLimits.maximumBytes, impl_->captureLimits.maximumDurationNanoseconds,
@@ -136,7 +137,7 @@ namespace Horo::XR {
         return XRSimulatorScenario::Create({.provenance = XRSimulatorProvenance::RecordedSimulatorInteraction,
                                             .initialState = impl_->captureInitial,
                                             .steps = impl_->recorded,
-                                            .complete = capture.state == XRSimulatorCaptureState::Complete,
+                                            .complete = capture.state == Complete,
                                             .droppedSteps = static_cast<std::uint32_t>(capture.dropped),
                                             .bindings = impl_->captureFingerprint,
                                             .capture = manifest});

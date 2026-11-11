@@ -118,7 +118,7 @@ namespace Horo::Animation {
     Result<SkeletonAsset> DeserializeSkeletonAnimationSource(std::string_view source, SkeletonId identity,
                                                              const AnimationCookedContext &context,
                                                              const AnimationAssetSourceLimits &limits) {
-        return Boundary<SkeletonAsset>([&] {
+        return Boundary<SkeletonAsset>([&source, &context, &limits, &identity] {
             const auto envelope = Parse(source, context, limits);
             CheckEnvelope(envelope, "core.animation.skeleton");
             if (envelope.at("dependencies") != Json::array())
@@ -135,7 +135,7 @@ namespace Horo::Animation {
 
     Result<std::string> SerializeSkeletonAnimationSource(const SkeletonAsset &source, const AnimationCookedContext &context,
                                                          const AnimationAssetSourceLimits &limits) {
-        return Boundary<std::string>([&] {
+        return Boundary<std::string>([&source, &context, &limits] {
             auto data = EncodeBounded(source.Data(), context, limits);
             return Result<std::string>::Success(
                 Emit(Envelope("core.animation.skeleton", std::move(data), Json::array(), "skeleton"), context, limits));
@@ -145,7 +145,7 @@ namespace Horo::Animation {
     Result<AnimationClipCookedData> DeserializeClipAnimationSource(std::string_view source, AnimationClipId identity,
                                                                    const AnimationCookedContext &context,
                                                                    const AnimationAssetSourceLimits &limits) {
-        return Boundary<AnimationClipCookedData>([&] {
+        return Boundary<AnimationClipCookedData>([&source, &context, &limits, &identity] {
             const auto envelope = Parse(source, context, limits);
             CheckEnvelope(envelope, "core.animation.clip");
             auto data = Data<AnimationClipCookedData>(envelope, identity.Asset(), "id", context);
@@ -161,7 +161,7 @@ namespace Horo::Animation {
 
     Result<std::string> SerializeClipAnimationSource(const AnimationClipAsset &source, const AnimationCookedContext &context,
                                                      const AnimationAssetSourceLimits &limits) {
-        return Boundary<std::string>([&] {
+        return Boundary<std::string>([&source, &context, &limits] {
             auto data = EncodeClipBounded(source, context, limits);
             return Result<std::string>::Success(
                 Emit(Envelope("core.animation.clip", std::move(data), ClipDependency(source.Data().descriptor.skeleton), "id"), context,

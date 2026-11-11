@@ -18,6 +18,9 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
                 state.rebindPrepared = true;
             }
 
+            PreparationLane(const PreparationLane &) = delete;
+            PreparationLane &operator=(const PreparationLane &) = delete;
+
             ~PreparationLane() {
                 state.executing = false;
                 if (!kept)
@@ -65,8 +68,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
                         return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid));
                     if (state_->closed.load(std::memory_order_acquire))
                         return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationContextRevoked));
-                    auto valid = state_->authority->ValidateReplacement(*next_);
-                    if (valid.HasError())
+                    if (auto valid = state_->authority->ValidateReplacement(*next_); valid.HasError())
                         return valid;
                     validated_ = true;
                     return Result<void>::Success();
@@ -106,8 +108,10 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             std::vector<std::shared_ptr<const ScriptModuleBindingPlan>> plans_;
             std::vector<JSValue> namespaces_;
             std::uint64_t revision_;
-            std::shared_ptr<const ScriptModulePublishedContexts> publication_, activeOnly_;
-            bool validated_{}, consumed_{};
+            std::shared_ptr<const ScriptModulePublishedContexts> publication_;
+            std::shared_ptr<const ScriptModulePublishedContexts> activeOnly_;
+            bool validated_{};
+            bool consumed_{};
         };
     }  // namespace
 
@@ -126,8 +130,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
     Result<std::unique_ptr<ScriptModulePreparedRebind>> PrepareJavaScriptRebind(std::shared_ptr<State> state,
                                                                                 std::shared_ptr<ScriptModuleContext> next) {
         try {
-            auto checked = Check(*state, next);
-            if (checked.HasError())
+            if (auto checked = Check(*state, next); checked.HasError())
                 return Output::Failure(checked.ErrorValue());
             PreparationLane lane{*state};
             auto plans = PrepareScriptModulePlans(*next);

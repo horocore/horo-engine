@@ -268,14 +268,14 @@ namespace Horo::Extensions {
     }
 
     Result<std::shared_ptr<NativeExtensionScriptSession>> HeadlessExtensionHost::BindScript(const std::string_view extension,
-                                                                                            const std::string_view module,
+                                                                                            const std::string_view moduleId,
                                                                                             const std::string_view importId,
                                                                                             ScriptCapabilityContextDescriptor policy,
                                                                                             const CancellationToken &cancellation) {
         std::shared_lock lock{impl_->synchronization.Lifecycle()};
         if (impl_->state.load() != HeadlessExtensionHostState::Ready || !impl_->nativeServices)
             return Result<std::shared_ptr<NativeExtensionScriptSession>>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
-        return impl_->nativeServices->BindScript(extension, module, importId, std::move(policy), cancellation);
+        return impl_->nativeServices->BindScript(extension, moduleId, importId, std::move(policy), cancellation);
     }
 
     /** @copydoc HeadlessExtensionHost::RegisterCapability */

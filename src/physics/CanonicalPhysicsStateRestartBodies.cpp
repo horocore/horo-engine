@@ -94,7 +94,7 @@ namespace Horo::Physics::Detail {
             auto created = Create(world, owner, manifest, manifest.bodies[index], routes[index], bindings);
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
-            bindings.bodies.push_back({manifest.bodies[index].id, created.Value()});
+            bindings.bodies.emplace_back(manifest.bodies[index].id, created.Value());
         }
         return Result<void>::Success();
     }

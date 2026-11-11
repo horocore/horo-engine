@@ -92,7 +92,8 @@ namespace Horo::Editor {
             }
             std::vector<std::unordered_set<std::string>> objects;
             bool duplicate = false;
-            const auto parsed = nlohmann::json::parse(text, [&](int, nlohmann::json::parse_event_t event, nlohmann::json &value) {
+            const auto parsed =
+                nlohmann::json::parse(text, [&objects, &duplicate](int, nlohmann::json::parse_event_t event, nlohmann::json &value) {
                 using Event = nlohmann::json::parse_event_t;
                 if (event == Event::object_start)
                     objects.emplace_back();
@@ -303,10 +304,10 @@ namespace Horo::Editor {
             if (auto v = FindIntValue(json, "uiScalePercent"); v.has_value())
                 s.uiScalePercent = *v;
             for (const auto &entry : CodeEditorBooleanSettings())
-                if (const auto value = FindBoolValue(json, entry.key))
+                if (const auto value = FindBoolValue(json, entry.key); value.has_value())
                     s.codeEditor.*entry.member = *value;
             for (const auto &entry : CodeEditorIntegerSettings())
-                if (const auto value = FindIntValue(json, entry.key))
+                if (const auto value = FindIntValue(json, entry.key); value.has_value())
                     s.codeEditor.*entry.member = *value;
             if (auto v = FindIntValue(json, "codeFontSizePx"); v.has_value())
                 s.codeFontSizePx = *v;

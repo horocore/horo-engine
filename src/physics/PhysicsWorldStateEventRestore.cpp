@@ -23,9 +23,10 @@ namespace Horo::Physics::Detail {
 
         bool ValidEvent(const PhysicsStatePublishedEvent &event, const PhysicsStatePublishedEvent *previous, std::size_t count,
                         std::uint64_t tick) noexcept {
-            const bool trigger = event.kind == PhysicsEventKind::TriggerEnter || event.kind == PhysicsEventKind::TriggerExit;
-            return event.ordinal < count && event.tick == tick && event.kind <= PhysicsEventKind::TriggerExit &&
-                   event.pair.sensor == trigger && (!previous || !StatePairLess(event.pair, previous->pair));
+            using enum Horo::Physics::PhysicsEventKind;
+            const bool trigger = event.kind == TriggerEnter || event.kind == TriggerExit;
+            return event.ordinal < count && event.tick == tick && event.kind <= TriggerExit && event.pair.sensor == trigger &&
+                   (!previous || !StatePairLess(event.pair, previous->pair));
         }
 
         Result<void> Events(const CanonicalPhysicsStateWorkspace &workspace, const PhysicsStateWorldView &source,

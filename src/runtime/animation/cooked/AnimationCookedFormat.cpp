@@ -47,8 +47,7 @@ namespace Horo::Animation::CookedInternal {
                 return reader.policy.Reject(AnimationAssetErrors::Unsupported);
             const auto major = reader.Scalar<std::uint16_t>();
             const auto minor = reader.Scalar<std::uint16_t>();
-            const auto header = reader.Scalar<std::uint32_t>();
-            if (major != 1 || minor != 0 || header != HeaderBytes)
+            if (const auto header = reader.Scalar<std::uint32_t>(); major != 1 || minor != 0 || header != HeaderBytes)
                 return reader.policy.Reject(AnimationAssetErrors::Unsupported);
             sections.kind = static_cast<AnimationCookedKind>(reader.Scalar<std::uint32_t>());
             for (auto &version : sections.version)
@@ -66,8 +65,7 @@ namespace Horo::Animation::CookedInternal {
             const auto major = reader.Scalar<std::uint16_t>();
             const auto minor = reader.Scalar<std::uint16_t>();
             const auto patch = reader.Scalar<std::uint16_t>();
-            const auto reserved = reader.Scalar<std::uint16_t>();
-            if (major != 1 || minor != 0 || patch != 0 || reserved != 0)
+            if (const auto reserved = reader.Scalar<std::uint16_t>(); major != 1 || minor != 0 || patch != 0 || reserved != 0)
                 return reader.policy.Reject(AnimationAssetErrors::Unsupported);
             if (!std::ranges::equal(reader.Raw(64), ContributionBytes()) || ReadDigest(reader) != CodecDigest())
                 return reader.policy.Reject(AnimationAssetErrors::Unsupported);
@@ -82,8 +80,8 @@ namespace Horo::Animation::CookedInternal {
             const auto offset = reader.Scalar<std::uint64_t>();
             const auto length = reader.Scalar<std::uint64_t>();
             const auto count = reader.Scalar<std::uint32_t>();
-            const auto stride = reader.Scalar<std::uint32_t>();
-            if (kind != expectedKind || flags != 0 || offset != next || count != expectedCount || stride != 0)
+            if (const auto stride = reader.Scalar<std::uint32_t>();
+                kind != expectedKind || flags != 0 || offset != next || count != expectedCount || stride != 0)
                 return reader.policy.Reject(AnimationAssetErrors::Malformed);
             if (length > reader.bytes.size() - next)
                 return reader.policy.Reject(AnimationAssetErrors::Malformed);
@@ -179,8 +177,8 @@ namespace Horo::Animation::CookedInternal {
         }
 
         /** @brief Retains exact selected identity and byte integrity without an asset-readiness claim. */
-        bool MatchingContainer(const Sections &sections, AnimationCookedKind kind, Assets::AssetId asset, Sha256Digest dependencies,
-                               Sha256Digest checksum, std::span<const std::uint8_t> bytes) {
+        bool MatchingContainer(const Sections &sections, AnimationCookedKind kind, Assets::AssetId asset, const Sha256Digest &dependencies,
+                               const Sha256Digest &checksum, std::span<const std::uint8_t> bytes) {
             return sections.kind == kind && sections.asset == asset &&
                    dependencies == ComputeSha256(std::as_bytes(sections.dependencies)) && checksum == CompleteDigest(bytes);
         }

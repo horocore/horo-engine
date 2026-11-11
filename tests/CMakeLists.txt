@@ -4008,6 +4008,13 @@ target_compile_features(HoroFoundationErrorDomainTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationErrorDomainTests PRIVATE HoroEngine::Foundation)
 horo_register_catch_test(HoroFoundationErrorDomainTests LABELS "unit;foundation;headless;ci-windows;sonar-coverage")
 
+add_executable(HoroOperationIdentityAllocationTests
+        unit/foundation/OperationIdentityAllocationTests.cpp
+        support/AllocationProbe.cpp
+)
+target_link_libraries(HoroOperationIdentityAllocationTests PRIVATE HoroEngine::Foundation Threads::Threads)
+horo_register_catch_test(HoroOperationIdentityAllocationTests LABELS "unit;foundation;telemetry;headless;allocation")
+
 add_executable(HoroFoundationJobSystemTests
         unit/foundation/JobSystemTests.cpp
         unit/foundation/JobResourceSchedulingTests.cpp
@@ -5417,6 +5424,14 @@ add_executable(HoroRuntimeSavedSceneBootstrapTests
 target_compile_features(HoroRuntimeSavedSceneBootstrapTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSavedSceneBootstrapTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSavedSceneBootstrapTests PRIVATE HoroEngine::RuntimeScene)
+add_executable(HoroAssetIdAllocationTests
+        unit/runtime/assets/AssetIdAllocationTests.cpp
+        support/AllocationProbe.cpp
+)
+target_include_directories(HoroAssetIdAllocationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroAssetIdAllocationTests PRIVATE HoroEngine::Assets)
+horo_register_catch_test(HoroAssetIdAllocationTests LABELS "unit;assets;headless;allocation")
+
 add_executable(HoroAssetRegistryTests
         unit/runtime/assets/AssetRegistryTests.cpp
 )

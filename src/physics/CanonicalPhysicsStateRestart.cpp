@@ -17,8 +17,8 @@ namespace Horo::Physics::Detail {
         }
 
         Result<void> Capacity(const CanonicalWorld &world, const PhysicsStateConstructionManifest &manifest) {
-            const auto maximumBodies = static_cast<std::size_t>(world.native.system->GetMaxBodies());
-            if (manifest.bodies.size() > maximumBodies || manifest.fixtures.size() > maximumBodies - manifest.bodies.size())
+            if (const auto maximumBodies = static_cast<std::size_t>(world.native.system->GetMaxBodies());
+                manifest.bodies.size() > maximumBodies || manifest.fixtures.size() > maximumBodies - manifest.bodies.size())
                 return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
             const auto sceneShapes = manifest.shapes.roots.size() - manifest.fixtures.size();  // Unique roles already fully validated.
             if (sceneShapes > world.scene.maximumShapes || manifest.fixtures.size() > world.query.maximumFixtures ||

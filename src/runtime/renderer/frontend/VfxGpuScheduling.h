@@ -10,9 +10,14 @@ namespace Horo::Render::Detail {
         std::array<std::uint32_t, VfxGpuDispatchWords::Count> parameters{};
         std::array<RenderBufferHandle, 4> handles;
         std::array<RenderGraphResourceId, 4> resources;
-        std::size_t step{}, source{}, destination{}, observation{}, draw{};
+        std::size_t step{};
+        std::size_t source{};
+        std::size_t destination{};
+        std::size_t observation{};
+        std::size_t draw{};
         RenderGraphPassRef producer;
-        bool dispatch{}, replaceUndispatched{};
+        bool dispatch{};
+        bool replaceUndispatched{};
         std::uint32_t inputCount{};
         VfxGpuGraphSchedule schedule;
     };

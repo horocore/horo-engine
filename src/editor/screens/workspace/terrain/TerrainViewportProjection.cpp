@@ -36,9 +36,12 @@ namespace Horo::Editor {
         const auto index = std::size_t(iz) * source.width + ix;
         if (mode == TerrainSurfacePickMode::VisibleSurface && !VisibleCell(source, index))
             return {};
-        const double u = x - ix, v = z - iz;
-        const double a = source.heightsMeters[index], b = source.heightsMeters[index + 1], c = source.heightsMeters[index + source.width],
-                     d = source.heightsMeters[index + source.width + 1];
+        const double u = x - ix;
+        const double v = z - iz;
+        const double a = source.heightsMeters[index];
+        const double b = source.heightsMeters[index + 1];
+        const double c = source.heightsMeters[index + source.width];
+        const double d = source.heightsMeters[index + source.width + 1];
         const double height = u + v <= 1 ? a + (b - a) * u + (c - a) * v : d + (c - d) * (1 - u) + (b - d) * (1 - v);
         Math::Vec3 point{static_cast<float>(x * source.coordinates.spacingX), static_cast<float>(height),
                          static_cast<float>(z * source.coordinates.spacingZ)};

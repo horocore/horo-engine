@@ -13,6 +13,11 @@ namespace Horo::Render::Detail {
             std::shared_ptr<VulkanVfxGpuDevice> owner;
             std::array<VkShaderModule, 3> values{};
 
+            explicit Modules(const std::shared_ptr<VulkanVfxGpuDevice> &device) noexcept : owner(device) {}
+
+            Modules(const Modules &) = delete;
+            Modules &operator=(const Modules &) = delete;
+
             ~Modules() {
                 for (auto module : values)
                     if (module)
@@ -47,7 +52,7 @@ namespace Horo::Render::Detail {
         Result<void> Mappings(VulkanVfxGpuKernel &kernel, const CookedVfxGpuPrograms &programs) {
             const auto &compute = programs.simulation.artifact.reflection->reflection.targetBindings;
             const auto &draw = programs.draw.artifact.reflection->reflection.targetBindings;
-            const auto copy = [](const auto &rows, auto &indices) {
+            if (const auto copy = [](const auto &rows, auto &indices) {
                 for (std::size_t i = 0; i < indices.size(); ++i) {
                     const auto found =
                         std::ranges::find(rows, ShaderBindingId{static_cast<std::uint32_t>(i + 1)}, &ShaderTargetBindingMapEntry::id);
@@ -56,8 +61,7 @@ namespace Horo::Render::Detail {
                     indices[i] = found->nativeBinding;
                 }
                 return true;
-            };
-            if (!copy(compute, kernel.computeBindings) || !copy(draw, kernel.drawBindings))
+            }; !copy(compute, kernel.computeBindings) || !copy(draw, kernel.drawBindings))
                 return Result<void>::Failure(VulkanVfxGpuInvalid("Particle pipeline requires complete actual direct set-zero mappings."));
             return Result<void>::Success();
         }
@@ -215,6 +219,8 @@ namespace Horo::Render::Detail {
     }
 
     Result<std::shared_ptr<IResidentVfxGpuKernel>> VulkanVfxGpuRuntime::Programs(const CookedVfxGpuPrograms &programs) {
+        using enum Horo::Render::ShaderStage;
+        using enum Horo::Render::VfxGpuProgramRole;
         using Outcome = Result<std::shared_ptr<IResidentVfxGpuKernel>>;
         if (const auto access = impl_->Access(); access.HasError())
             return Outcome::Failure(access.ErrorValue());
@@ -228,12 +234,11 @@ namespace Horo::Render::Detail {
             auto kernel = std::make_shared<VulkanVfxGpuKernel>();
             kernel->owner = impl_->device;
             Modules modules{impl_->device};
-            if (const auto made = Module(modules, 0, programs.simulation, VfxGpuProgramRole::Simulation, ShaderStage::Compute);
-                made.HasError())
+            if (const auto made = Module(modules, 0, programs.simulation, Simulation, Compute); made.HasError())
                 return Outcome::Failure(made.ErrorValue());
-            if (const auto made = Module(modules, 1, programs.draw, VfxGpuProgramRole::Draw, ShaderStage::Vertex); made.HasError())
+            if (const auto made = Module(modules, 1, programs.draw, Draw, Vertex); made.HasError())
                 return Outcome::Failure(made.ErrorValue());
-            if (const auto made = Module(modules, 2, programs.draw, VfxGpuProgramRole::Draw, ShaderStage::Fragment); made.HasError())
+            if (const auto made = Module(modules, 2, programs.draw, Draw, Fragment); made.HasError())
                 return Outcome::Failure(made.ErrorValue());
             if (const auto ready = PrepareFamily(*kernel, programs, modules); ready.HasError())
                 return Outcome::Failure(ready.ErrorValue());

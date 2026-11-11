@@ -265,9 +265,9 @@ namespace Horo::Packages {
     }
 
     Result<PackageDecisionNodeGeneration> GameplayPackageModuleHost::AcquireDecisionNodes(const HoroPackageId &package,
-                                                                                          std::string_view module,
+                                                                                          std::string_view moduleId,
                                                                                           std::uint64_t generation) const {
-        auto state = FindRole(impl_->roles, impl_->owner, package, module, generation);
+        auto state = FindRole(impl_->roles, impl_->owner, package, moduleId, generation);
         if (!state)
             return Result<PackageDecisionNodeGeneration>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         auto nodes = state->selectedModule->AcquireDecisionNodes();
@@ -279,11 +279,11 @@ namespace Horo::Packages {
     }
 
     Result<std::unique_ptr<Gameplay::LuaDecisionNodeProgram>> GameplayPackageModuleHost::CompileDecisionNode(
-        const HoroPackageId &package, std::string_view module, std::uint64_t generation, const PackagePath &source,
+        const HoroPackageId &package, std::string_view moduleId, std::uint64_t generation, const PackagePath &source,
         AI::DecisionNodeTypeId type, AI::DecisionProviderId provider, std::uint32_t descriptorVersion,
         Gameplay::LuaBehaviorLimits limits) const {
         using Output = Result<std::unique_ptr<Gameplay::LuaDecisionNodeProgram>>;
-        auto state = FindRole(impl_->roles, impl_->owner, package, module, generation);
+        auto state = FindRole(impl_->roles, impl_->owner, package, moduleId, generation);
         if (!state)
             return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         if (!source.Value().ends_with(".horo_script"))

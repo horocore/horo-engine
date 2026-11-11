@@ -11,6 +11,9 @@ namespace Horo::Editor {
             value = true;
         }
 
+        TerrainHostBusy(const TerrainHostBusy &) = delete;
+        TerrainHostBusy &operator=(const TerrainHostBusy &) = delete;
+
         ~TerrainHostBusy() {
             value = false;
         }

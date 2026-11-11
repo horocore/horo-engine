@@ -36,11 +36,12 @@ namespace Horo::Render::RegisterRasterCookDetail {
 
     std::span<const StorageElementField> StorageFields(StorageElementKind kind) noexcept {
         switch (kind) {
-            case StorageElementKind::PackedLight:
+            using enum Horo::Render::RegisterRasterCookDetail::StorageElementKind;
+            case PackedLight:
                 return LightFields;
-            case StorageElementKind::Membership:
+            case Membership:
                 return MembershipFields;
-            case StorageElementKind::Reference:
+            case Reference:
                 return ReferenceFields;
         }
         return {};
@@ -48,18 +49,20 @@ namespace Horo::Render::RegisterRasterCookDetail {
 
     std::uint32_t StorageStride(StorageElementKind kind) noexcept {
         switch (kind) {
-            case StorageElementKind::PackedLight:
+            using enum Horo::Render::RegisterRasterCookDetail::StorageElementKind;
+            case PackedLight:
                 return sizeof(PackedRenderLight);
-            case StorageElementKind::Membership:
+            case Membership:
                 return sizeof(PackedLightMembership);
-            case StorageElementKind::Reference:
+            case Reference:
                 return sizeof(std::uint32_t);
         }
         return 0;
     }
 
     std::optional<StorageElementKind> StorageKind(const ShaderManifest &manifest, ShaderBindingId binding) noexcept {
-        for (const auto kind : {StorageElementKind::PackedLight, StorageElementKind::Membership, StorageElementKind::Reference})
+        using enum Horo::Render::RegisterRasterCookDetail::StorageElementKind;
+        for (const auto kind : {PackedLight, Membership, Reference})
             if (Matches(manifest, binding, kind))
                 return kind;
         return std::nullopt;

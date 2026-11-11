@@ -328,8 +328,8 @@ namespace Horo::Editor {
         (void)Ui::ComboControl("##Shading", &shading, &shaded, 1, fonts, {.height = ControlHeight});
         ImGui::PopItemWidth();
 
-        const float gridX = controlPosition.x + 140.0F + ControlGap + 116.0F + ControlGap;
-        if (DrawOverlayButton("##Grid", {gridX, controlPosition.y}, OverlayGlyph::Grid, state.gridVisible, true,
+        if (const float gridX = controlPosition.x + 140.0F + ControlGap + 116.0F + ControlGap;
+            DrawOverlayButton("##Grid", {gridX, controlPosition.y}, OverlayGlyph::Grid, state.gridVisible, true,
                               localization.Get("editor", "workspace.viewport.grid").c_str(), fonts))
             action.toggleGrid = true;
 

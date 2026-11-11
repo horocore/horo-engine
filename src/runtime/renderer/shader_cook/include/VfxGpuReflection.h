@@ -31,14 +31,20 @@ namespace Horo::Render {
 
 namespace Horo::Render::VfxGpuCookDetail {
     struct Field final {
-        std::string name, type;
-        std::uint32_t offset{}, bytes{}, matrixStride{};
+        std::string name;
+        std::string type;
+        std::uint32_t offset{};
+        std::uint32_t bytes{};
+        std::uint32_t matrixStride{};
     };
 
     struct Buffer final {
-        std::string name, wrapperMember;
-        std::uint32_t slot{}, bytes{};
-        bool constant{}, readonly{};
+        std::string name;
+        std::string wrapperMember;
+        std::uint32_t slot{};
+        std::uint32_t bytes{};
+        bool constant{};
+        bool readonly{};
         std::vector<Field> fields;
     };
 

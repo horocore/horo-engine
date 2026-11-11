@@ -42,8 +42,8 @@ namespace Horo::Animation::GraphCompileDetail {
         if (memory.workingSlots[0] >= context.limits.poseSlots || joints > context.limits.poseTransforms ||
             memory.poseTransforms > context.limits.poseTransforms - joints)
             return Result<void>::Failure(Failure(GraphLimitExceeded, occurrence.source));
-        const auto entries = static_cast<std::uint64_t>(tree.samples.size()) * joints;
-        if (entries > context.limits.poseTransforms || memory.compositionEntries > context.limits.poseTransforms - entries)
+        if (const auto entries = static_cast<std::uint64_t>(tree.samples.size()) * joints;
+            entries > context.limits.poseTransforms || memory.compositionEntries > context.limits.poseTransforms - entries)
             return Result<void>::Failure(Failure(GraphLimitExceeded, occurrence.source));
         occurrence.blendScratch = GraphWorkingSlot{GraphValueType::Pose, memory.workingSlots[0]++};
         memory.poseTransforms += joints;

@@ -111,16 +111,17 @@ namespace Horo::Application::Internal {
 
     /** @copydoc Editor::IEditorPlayXrHost::SetPlayState */
     Result<void> SimulatorPlayHost::SetPlayState(const Editor::EditorPlayState state) {
+        using enum Horo::Editor::EditorPlayState;
         if (auto lane = impl_->Lane(); lane.HasError())
             return lane;
         impl_->play = state;
         if (!impl_->runtime)
             return Result<void>::Success();
-        if (state == Editor::EditorPlayState::Playing)
+        if (state == Playing)
             return impl_->runtime->Run();
-        if (state == Editor::EditorPlayState::Paused)
+        if (state == Paused)
             return impl_->runtime->Pause();
-        if (state == Editor::EditorPlayState::Starting)
+        if (state == Starting)
             return Result<void>::Success();
         impl_->Revoke();
         return Result<void>::Success();

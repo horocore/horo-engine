@@ -77,8 +77,7 @@ namespace Horo::Physics::Detail {
         restoreControl->ownerThread = ownerThread;
         if (auto compatible = PrepareCompatibility(configuration); compatible.HasError())
             return Result<void>::Failure(ConfigurationStageError(std::move(compatible).ErrorValue(), "Physics state compatibility"));
-        auto storage = PreparePublicationStorage(configuration);
-        if (storage.HasError())
+        if (auto storage = PreparePublicationStorage(configuration); storage.HasError())
             return Result<void>::Failure(ConfigurationStageError(std::move(storage).ErrorValue(), "Physics state publication storage"));
         return Result<void>::Success();
     }

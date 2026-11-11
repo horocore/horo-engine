@@ -34,7 +34,7 @@ namespace Horo::Extensions {
     class NativeScalarService final {
     public:
         NativeScalarService(NativeServiceShape shape, const HoroExtensionServiceDescriptor &native,
-                            std::shared_ptr<ExtensionModuleLifetime> module);
+                            std::shared_ptr<ExtensionModuleLifetime> moduleLifetime);
         ~NativeScalarService();
         Result<std::int64_t> Invoke(const NativeServiceCall &request, const BackendServiceCallContext &context) const;
         void Shutdown() noexcept;
@@ -113,16 +113,17 @@ namespace Horo::Extensions {
 
     [[nodiscard]] Result<NativeServiceShape> CopyNativeServiceDescriptor(const HoroExtensionServiceDescriptor &input);
     [[nodiscard]] Result<NativeServiceShape> CopyNativeServiceShape(const HoroExtensionServiceDescriptor &input,
-                                                                    const ExtensionModuleManifest &module);
+                                                                    const ExtensionModuleManifest &moduleEntry);
     [[nodiscard]] Result<ApplicationCapabilityVersion> NativeServiceVersion(std::string_view input);
     [[nodiscard]] Result<ScriptExportDescriptorSnapshotPtr> NativeServiceScriptDescriptors(const NativeServiceShape &shape,
-                                                                                           std::string_view module);
+                                                                                           std::string_view moduleId);
     [[nodiscard]] Result<std::shared_ptr<NativeServicePublication>> FindNativeService(const NativeExtensionServiceState &host,
-                                                                                      const ResolvedExtensionServiceImport &import);
-    [[nodiscard]] Result<std::int64_t> InvokeNativeServiceImport(NativeServiceModule &module, const ResolvedExtensionServiceImport &import,
+                                                                                      const ResolvedExtensionServiceImport &resolvedImport);
+    [[nodiscard]] Result<std::int64_t> InvokeNativeServiceImport(NativeServiceModule &nativeModule,
+                                                                 const ResolvedExtensionServiceImport &resolvedImport,
                                                                  const NativeServiceCall &request, const CancellationToken &cancel);
-    [[nodiscard]] Result<std::int64_t> InvokeSelectedNativeServiceImport(NativeServiceModule &module,
-                                                                         const ResolvedExtensionServiceImport &import,
+    [[nodiscard]] Result<std::int64_t> InvokeSelectedNativeServiceImport(NativeServiceModule &nativeModule,
+                                                                         const ResolvedExtensionServiceImport &resolvedImport,
                                                                          const NativeServicePublication &publication,
                                                                          const NativeServiceCall &request, const CancellationToken &cancel);
     [[nodiscard]] Result<void> CommitNativeServices(std::span<const std::shared_ptr<ExtensionModuleLifetime>> modules);

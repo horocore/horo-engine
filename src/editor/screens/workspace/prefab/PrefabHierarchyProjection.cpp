@@ -54,15 +54,16 @@ namespace Horo::Editor {
         /** @brief Selects a closed presentation key from the authoritative value origin. */
         const char *OriginKey(const Prefab::PrefabValueOrigin origin) {
             switch (origin) {
-                case Prefab::PrefabValueOrigin::Source:
+                using enum Horo::Prefab::PrefabValueOrigin;
+                case Source:
                     return "workspace.prefab.diff.origin.source";
-                case Prefab::PrefabValueOrigin::Variant:
+                case Variant:
                     return "workspace.prefab.diff.origin.variant";
-                case Prefab::PrefabValueOrigin::Nested:
+                case Nested:
                     return "workspace.prefab.diff.origin.nested";
-                case Prefab::PrefabValueOrigin::Instance:
+                case Instance:
                     return "workspace.prefab.diff.origin.instance";
-                case Prefab::PrefabValueOrigin::Inherited:
+                case Inherited:
                     return "workspace.prefab.diff.unavailable";
             }
             return "workspace.prefab.diff.unavailable";
@@ -125,8 +126,8 @@ namespace Horo::Editor {
                             return item.original;
                     }();
                     const auto *add = std::get_if<Prefab::PrefabAddComponentOverride>(&record);
-                    const auto &object = add ? add->object : std::get<Prefab::PrefabRemoveComponentOverride>(record).target.object;
-                    if (row.target.member && row.target.member->object != object)
+                    if (const auto &object = add ? add->object : std::get<Prefab::PrefabRemoveComponentOverride>(record).target.object;
+                        row.target.member && row.target.member->object != object)
                         return;
                     const char *state = add ? "workspace.prefab.diff.component_added" : "workspace.prefab.diff.component_removed";
                     if constexpr (std::is_same_v<T, Prefab::PrefabComponentOverrideConflict>)

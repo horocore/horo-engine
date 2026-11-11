@@ -10,6 +10,8 @@
 #include <type_traits>
 
 namespace Horo::Assets {
+    using Foundation::Paths::NativeApiPath;
+
     namespace AssetSourceErrors {
         const ErrorDomainId Domain{"horo.assets.source"};
         const ErrorCodeDescriptor InvalidPath{Domain, ErrorCode{"assets.source.path.invalid"}, ErrorSeverity::Error,
@@ -41,10 +43,10 @@ namespace Horo::Assets {
             if (!root.is_absolute() || !path.is_absolute() || root != root.lexically_normal() || path != path.lexically_normal() ||
                 root == path || !Foundation::Paths::HasPathPrefix(root, path))
                 return false;
-            const auto canonicalRoot = std::filesystem::canonical(root, error);
+            const auto canonicalRoot = std::filesystem::canonical(NativeApiPath(root), error);
             if (error)
                 return false;
-            const auto canonicalPath = std::filesystem::weakly_canonical(path, error);
+            const auto canonicalPath = std::filesystem::weakly_canonical(NativeApiPath(path), error);
             return !error && canonicalPath == canonicalRoot / path.lexically_relative(root) &&
                    Foundation::Paths::HasPathPrefix(canonicalRoot, canonicalPath);
         }
@@ -122,17 +124,18 @@ namespace Horo::Assets {
             if (cancellation.IsCancellationRequested())
                 return Return::Failure(MakeError(AssetSourceErrors::Cancelled));
             std::error_code error;
-            const auto status = std::filesystem::symlink_status(path, error);
+            const auto nativePath = NativeApiPath(path);
+            const auto status = std::filesystem::symlink_status(nativePath, error);
             if (Missing(error, status))
                 return Return::Success({});
             if (error || !std::filesystem::is_regular_file(status))
                 return Return::Failure(MakeError(AssetSourceErrors::InvalidPath));
-            const auto size = std::filesystem::file_size(path, error);
+            const auto size = std::filesystem::file_size(nativePath, error);
             if (error)
                 return Return::Failure(MakeError(AssetSourceErrors::ReadFailed));
             if (size > maximumBytes)
                 return Return::Failure(MakeError(AssetSourceErrors::Limit));
-            const auto modified = std::filesystem::last_write_time(path, error);
+            const auto modified = std::filesystem::last_write_time(nativePath, error);
             if (error)
                 return Return::Failure(MakeError(AssetSourceErrors::ReadFailed));
             return Return::Success({true, size, modified});
@@ -142,9 +145,10 @@ namespace Horo::Assets {
             if (!SafePath(root, path))
                 return false;
             std::error_code error;
-            if (std::filesystem::file_size(path, error) != facts.size || error)
+            const auto nativePath = NativeApiPath(path);
+            if (std::filesystem::file_size(nativePath, error) != facts.size || error)
                 return false;
-            return std::filesystem::last_write_time(path, error) == facts.modified && !error;
+            return std::filesystem::last_write_time(nativePath, error) == facts.modified && !error;
         }
 
         /** @brief Hash every transferred chunk; optionally retain bytes without
@@ -178,7 +182,7 @@ namespace Horo::Assets {
             const auto size = static_cast<std::size_t>(facts.Value().size);
             if (retainBytes)
                 capture.bytes.resize(size);
-            std::ifstream stream(path, std::ios::binary);
+            std::ifstream stream(NativeApiPath(path), std::ios::binary);
             Sha256Builder hash;
             if (auto transferred = TransferSource(stream, size, capture, hash, retainBytes, cancellation); transferred.HasError())
                 return Return::Failure(std::move(transferred).ErrorValue());
@@ -266,7 +270,7 @@ namespace Horo::Assets {
             if (!SafePath(root, prepared))
                 return Return::Failure(MakeError(AssetSourceErrors::InvalidPath));
             std::error_code stageError;
-            if (const auto stageStatus = std::filesystem::symlink_status(prepared, stageError);
+            if (const auto stageStatus = std::filesystem::symlink_status(NativeApiPath(prepared), stageError);
                 (!stageError && std::filesystem::exists(stageStatus)) || (stageError && stageError != std::errc::no_such_file_or_directory))
                 return Return::Failure(MakeError(AssetSourceErrors::Conflict));
             return Return::Success(std::move(prepared));

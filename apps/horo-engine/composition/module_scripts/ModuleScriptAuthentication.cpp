@@ -84,8 +84,8 @@ namespace Horo::Application::Internal {
             return Result<ExtensionScriptArtifact>::Success(std::move(artifact));
         }
 
-        bool PresentationOnly(const Extensions::ExtensionModuleManifest &module) {
-            return module.roles.size() == 1 && module.roles.front() == Extensions::ExtensionModuleRole::EditorPresentation;
+        bool PresentationOnly(const Extensions::ExtensionModuleManifest &moduleEntry) {
+            return moduleEntry.roles.size() == 1 && moduleEntry.roles.front() == Extensions::ExtensionModuleRole::EditorPresentation;
         }
 
         Result<void> CaptureModules(AuthenticatedExtensionScript &packet, const ExtensionScriptOptions &options,
@@ -94,14 +94,14 @@ namespace Horo::Application::Internal {
                 return Denied<void>();
             std::size_t total{};
             std::set<std::string> paths;
-            for (const auto &module : packet.manifest.modules) {
-                if (PresentationOnly(module))
+            for (const auto &moduleEntry : packet.manifest.modules) {
+                if (PresentationOnly(moduleEntry))
                     continue;
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(cancellationError));
-                if (module.entry.empty() || !module.entries.empty() || !paths.insert(module.entry).second)
+                if (moduleEntry.entry.empty() || !moduleEntry.entries.empty() || !paths.insert(moduleEntry.entry).second)
                     return Denied<void>();
-                auto artifact = Capture(options, *packet.verifier, module.entry, 32U * 1024U * 1024U);
+                auto artifact = Capture(options, *packet.verifier, moduleEntry.entry, 32U * 1024U * 1024U);
                 if (artifact.HasError())
                     return Result<void>::Failure(artifact.ErrorValue());
                 if (artifact.Value().bytes.size() > 64U * 1024U * 1024U - total)
@@ -113,21 +113,22 @@ namespace Horo::Application::Internal {
         }
 
         Result<std::string> Service(const Extensions::ExtensionManifest &manifest, const ExtensionScriptOptions &options) {
-            const auto module = std::ranges::find(manifest.modules, options.module, &Extensions::ExtensionModuleManifest::id);
-            if (module == manifest.modules.end())
+            const auto moduleEntry = std::ranges::find(manifest.modules, options.module, &Extensions::ExtensionModuleManifest::id);
+            if (moduleEntry == manifest.modules.end())
                 return Denied<std::string>();
-            if (std::ranges::find(module->roles, Extensions::ExtensionModuleRole::ScriptProvider) == module->roles.end())
+            if (std::ranges::find(moduleEntry->roles, Extensions::ExtensionModuleRole::ScriptProvider) == moduleEntry->roles.end())
                 return Denied<std::string>();
             if (options.moduleOperation) {
-                auto valid = Extensions::ValidateScriptModuleSelectedDeclaration(*module);
+                auto valid = Extensions::ValidateScriptModuleSelectedDeclaration(*moduleEntry);
                 if (valid.HasError())
                     return Result<std::string>::Failure(valid.ErrorValue());
                 return Result<std::string>::Success({});
             }
-            const auto import = std::ranges::find(module->imports, options.import, &Extensions::ExtensionServiceImportManifest::id);
-            if (import == module->imports.end())
+            const auto serviceImport =
+                std::ranges::find(moduleEntry->imports, options.import, &Extensions::ExtensionServiceImportManifest::id);
+            if (serviceImport == moduleEntry->imports.end())
                 return Denied<std::string>();
-            return Result<std::string>::Success(import->service);
+            return Result<std::string>::Success(serviceImport->service);
         }
     }  // namespace
 

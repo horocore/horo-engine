@@ -69,6 +69,9 @@ namespace Horo::AI {
                 active_ = true;
             }
 
+            CallbackScope(const CallbackScope &) = delete;
+            CallbackScope &operator=(const CallbackScope &) = delete;
+
             ~CallbackScope() {
                 active_ = false;
             }

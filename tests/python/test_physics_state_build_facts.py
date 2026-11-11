@@ -1,6 +1,7 @@
 """Build-facts generator regressions. All metadata is explicitly synthetic test data."""
 import copy
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -17,6 +18,14 @@ COLLECTOR_SPEC = importlib.util.spec_from_file_location(
 collector = importlib.util.module_from_spec(COLLECTOR_SPEC)
 COLLECTOR_SPEC.loader.exec_module(collector)
 generator = facts
+
+CHECKER_SPEC = importlib.util.spec_from_file_location(
+    "physics_windows_argv_check", Path(__file__).resolve().parents[2] / "cmake/physics/check_physics_windows_argv.py")
+checker = importlib.util.module_from_spec(CHECKER_SPEC)
+with patch.dict(sys.modules, {"collect_physics_state_build_facts": collector,
+                              "generate_physics_state_build_facts": facts}):
+    CHECKER_SPEC.loader.exec_module(checker)
+
 
 
 
@@ -114,6 +123,8 @@ import types
 
 class CollectorTests(unittest.TestCase):
     def setUp(self):
+        # These recipes model GCC even on Windows. MSVC cases select their own adapter.
+        self.enterContext(patch.object(collector, "os", types.SimpleNamespace(name="posix")))
         self.directory = tempfile.TemporaryDirectory(prefix="horo-physics-collector-")
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
@@ -366,6 +377,81 @@ class CollectorTests(unittest.TestCase):
         self.database[0]["arguments"].append("CMakeFiles/Jolt.dir/collision.o")
         with self.assertRaisesRegex(ValueError, "Ambiguous"):
             self.manifest()
+
+
+
+class WindowsArgvSelfcheckAdapterTests(unittest.TestCase):
+    """Synthetic adapter contracts exercise the wrapper independently of native CRT qualification."""
+
+    def test_non_windows_host_is_rejected_before_the_adapter_is_called(self):
+        with patch.object(checker, "os", types.SimpleNamespace(name="posix")):
+            with patch.object(checker, "windows_arguments") as adapter:
+                with self.assertRaisesRegex(ValueError, "requires Windows"):
+                    checker.check(Path("unused-exporter"))
+                adapter.assert_not_called()
+
+    def test_quote_and_unicode_oracle_vectors_reach_the_exact_selected_exporter(self):
+        compiler = r"C:\nonexistent compiler\not-executed.exe"
+        vectors = [
+            (r'"a b c" d e', ['a b c', 'd', 'e']),
+            (r'"ab\"c" "\\" d', ['ab"c', '\\', 'd']),
+            (r'a\\\b d"e f"g h', [r'a\\\b', 'de fg', 'h']),
+            (r'a\\\"b c d', ['a\\"b', 'c', 'd']),
+            (r'a\\\\"b c" d e', [r'a\\b c', 'd', 'e']),
+            (r'a"b"" c d', ['ab" c d']),
+            ('"" "quoted  空間 🧪"', ['', 'quoted  空間 🧪']),
+        ]
+        expected = dict(vectors)
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            exporter = Path(directory) / "selected exporter 空間 🧪.exe"
+            exporter.write_bytes(b"SYNTHETIC_ADAPTER_INPUT")
+
+            def decode(command, selected, cwd):
+                self.assertEqual(selected, exporter)
+                self.assertEqual(cwd, str(exporter.parent))
+                prefix = '"' + compiler + '" '
+                self.assertTrue(command.startswith(prefix))
+                tail = command[len(prefix):]
+                self.assertIn(tail, expected)
+                calls.append(tail)
+                return [compiler, *expected[tail]]
+
+            with patch.object(checker, "os", types.SimpleNamespace(name="nt")):
+                with patch.object(checker, "windows_arguments", side_effect=decode):
+                    checker.check(exporter)
+            self.assertEqual(calls, [tail for tail, _ in vectors])
+            self.assertEqual(exporter.read_bytes(), b"SYNTHETIC_ADAPTER_INPUT")
+
+    def test_first_oracle_mismatch_stops_the_remaining_vectors(self):
+        with patch.object(checker, "os", types.SimpleNamespace(name="nt")):
+            with patch.object(checker, "windows_arguments", return_value=[]) as adapter:
+                with self.assertRaisesRegex(ValueError, "CRT argv selfcheck mismatch"):
+                    checker.check(Path("selected-exporter"))
+                self.assertEqual(adapter.call_count, 1)
+
+    def test_adapter_failure_propagates_without_attempting_other_vectors(self):
+        with patch.object(checker, "os", types.SimpleNamespace(name="nt")):
+            with patch.object(checker, "windows_arguments", side_effect=OSError("synthetic exporter failure")) as adapter:
+                with self.assertRaisesRegex(OSError, "synthetic exporter failure"):
+                    checker.check(Path("selected-exporter"))
+                self.assertEqual(adapter.call_count, 1)
+
+    def test_cli_forwards_one_explicit_unicode_exporter_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            exporter = Path(directory) / "argv oracle 空間 🧪.exe"
+            with patch.object(sys, "argv", ["check_physics_windows_argv.py", "--exporter", str(exporter)]):
+                with patch.object(checker, "check") as check:
+                    checker.main()
+                    check.assert_called_once_with(exporter)
+
+    def test_cli_requires_exporter_before_invoking_the_selfcheck(self):
+        with patch.object(sys, "argv", ["check_physics_windows_argv.py"]):
+            with patch.object(checker, "check") as check, patch("sys.stderr", new=io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    checker.main()
+                self.assertEqual(error.exception.code, 2)
+                check.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -22,17 +22,18 @@ namespace Horo::AI::Detail {
 
         bool PropertyVariantMatches(const BehaviorTreeProperty &property) noexcept {
             switch (property.kind) {
-                case BehaviorTreePropertyKind::Boolean:
+                using enum Horo::AI::BehaviorTreePropertyKind;
+                case Boolean:
                     return std::holds_alternative<bool>(property.value);
-                case BehaviorTreePropertyKind::SignedInteger:
+                case SignedInteger:
                     return std::holds_alternative<std::int64_t>(property.value);
-                case BehaviorTreePropertyKind::Scalar:
+                case Scalar:
                     return ScalarProperty(property.value);
-                case BehaviorTreePropertyKind::String:
+                case String:
                     return std::holds_alternative<std::string>(property.value);
-                case BehaviorTreePropertyKind::NodeReference:
+                case NodeReference:
                     return ReferenceProperty(property.value);
-                case BehaviorTreePropertyKind::Opaque:
+                case Opaque:
                     return OpaqueProperty(property.value);
                 default:
                     return false;

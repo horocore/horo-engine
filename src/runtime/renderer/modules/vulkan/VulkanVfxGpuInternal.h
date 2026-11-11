@@ -47,9 +47,13 @@ namespace Horo::Render::Detail {
         ~VulkanVfxGpuKernel() override;
         void Reset() noexcept;
         std::shared_ptr<VulkanVfxGpuDevice> owner;
-        VkPipeline compute{}, drawColor{}, drawDepth{};
-        VkPipelineLayout computeLayout{}, drawLayout{};
-        VkDescriptorSetLayout computeSet{}, drawSet{};
+        VkPipeline compute{};
+        VkPipeline drawColor{};
+        VkPipeline drawDepth{};
+        VkPipelineLayout computeLayout{};
+        VkPipelineLayout drawLayout{};
+        VkDescriptorSetLayout computeSet{};
+        VkDescriptorSetLayout drawSet{};
         std::array<std::uint32_t, 5> computeBindings{};
         std::array<std::uint32_t, 2> drawBindings{};
     };
@@ -58,22 +62,32 @@ namespace Horo::Render::Detail {
         VulkanVfxGpuBufferCapture capture;
         std::uint64_t generation{};
         VfxGpuStepIdentity observationStep;
-        bool held{}, completed{}, failed{};
+        bool held{};
+        bool completed{};
+        bool failed{};
     };
 
     struct VulkanVfxGpuOperation final {
         VulkanCommandTicket ticket;
         RenderTimelinePoint point;
         std::size_t journal{std::numeric_limits<std::size_t>::max()};
-        bool occupied{}, accepted{}, uncertain{};
+        bool occupied{};
+        bool accepted{};
+        bool uncertain{};
     };
 
     struct VulkanVfxGpuJournal final {
         VfxGpuStepIdentity step;
         RenderTimelinePoint point;
         VulkanCommandTicket ticket;
-        std::size_t source{}, destination{}, observation{}, operation{};
-        bool occupied{}, accepted{}, observe{}, uncertain{};
+        std::size_t source{};
+        std::size_t destination{};
+        std::size_t observation{};
+        std::size_t operation{};
+        bool occupied{};
+        bool accepted{};
+        bool observe{};
+        bool uncertain{};
     };
 
     class VulkanVfxGpuSimulation final : public IResidentVfxGpuSimulation {
@@ -89,17 +103,23 @@ namespace Horo::Render::Detail {
         VfxGpuSimulationDescriptor descriptor;
         NativeVfxGpuPreparationResources plan;
         VulkanVfxGpuBufferCapture arena;
-        std::vector<VulkanVfxGpuBuffer> states, observations;
+        std::vector<VulkanVfxGpuBuffer> states;
+        std::vector<VulkanVfxGpuBuffer> observations;
         VulkanVfxGpuBuffer forces;
         VkDescriptorPool pool{};
-        std::vector<VkDescriptorSet> computeSets, drawSets;
+        std::vector<VkDescriptorSet> computeSets;
+        std::vector<VkDescriptorSet> drawSets;
         std::vector<VulkanVfxGpuOperation> operations;
         std::vector<std::size_t> active;
         std::size_t operationCursor{};
         std::vector<VulkanVfxGpuJournal> journals;
         std::vector<NativeGpuVfxStepReceipt> receipts;
-        std::size_t head{}, count{}, reserved{}, source{};
-        std::uint64_t generation{1}, tick{};
+        std::size_t head{};
+        std::size_t count{};
+        std::size_t reserved{};
+        std::size_t source{};
+        std::uint64_t generation{1};
+        std::uint64_t tick{};
         bool stopped{};
     };
 

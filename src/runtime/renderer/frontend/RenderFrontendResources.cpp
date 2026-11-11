@@ -27,10 +27,10 @@ namespace Horo::Render {
 
         /** @brief Limits closed GPU workload storage to declared copy/storage roles; the selected adapter validates memory access. */
         [[nodiscard]] constexpr bool IsStorageCopyBuffer(const RenderBufferDescriptor &descriptor) noexcept {
-            constexpr auto allowed =
-                static_cast<std::uint8_t>(RenderBufferUsage::Storage | RenderBufferUsage::CopySource | RenderBufferUsage::CopyDestination);
+            using enum Horo::Render::RenderBufferUsage;
+            constexpr auto allowed = static_cast<std::uint8_t>(Storage | CopySource | CopyDestination);
             const auto usage = static_cast<std::uint8_t>(descriptor.usage);
-            return HasBufferUsage(descriptor.usage, RenderBufferUsage::Storage) && (usage & static_cast<std::uint8_t>(~allowed)) == 0;
+            return HasBufferUsage(descriptor.usage, Storage) && (usage & static_cast<std::uint8_t>(~allowed)) == 0;
         }
 
         /** @brief Exposure storage does not depend on installing the separate VFX executor. */
@@ -70,8 +70,8 @@ namespace Horo::Render {
 
         /** @brief Closed ordinary color formats; depth, storage and native sRGB are separate contracts. */
         [[nodiscard]] constexpr bool IsColorPipelineFormat(RenderTextureFormat format) noexcept {
-            constexpr std::array formats{RenderTextureFormat::Rgba8Unorm, RenderTextureFormat::Bgra8Unorm, RenderTextureFormat::R32Float,
-                                         RenderTextureFormat::Rgba16Float, RenderTextureFormat::Rgba32Float};
+            using enum Horo::Render::RenderTextureFormat;
+            constexpr std::array formats{Rgba8Unorm, Bgra8Unorm, R32Float, Rgba16Float, Rgba32Float};
             return std::ranges::find(formats, format) != formats.end();
         }
 
@@ -138,8 +138,8 @@ namespace Horo::Render {
             if (IsDepthCopySourceDescriptor(descriptor) && !initialData.empty())
                 return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                                                "Depth copy-source attachments do not admit initial upload bytes."));
-            const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
-            if (!bytes || (!initialData.empty() && initialData.size() != *bytes))
+            if (const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
+                !bytes || (!initialData.empty() && initialData.size() != *bytes))
                 return Result<void>::Failure(
                     MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
                                       "Texture initial data must be empty or contain one complete tightly packed base level."));
@@ -317,8 +317,8 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
                                   "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
-        const auto &features = backend_->Capabilities().support.features;
-        if (AdmitCurrentBufferDescriptor(descriptor, features.Supports(RenderCapability::LightCulling),
+        if (const auto &features = backend_->Capabilities().support.features;
+            AdmitCurrentBufferDescriptor(descriptor, features.Supports(RenderCapability::LightCulling),
                                          SupportsClosedGpuStorage(features)) == ResourceDescriptorAdmission::Unsupported)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,

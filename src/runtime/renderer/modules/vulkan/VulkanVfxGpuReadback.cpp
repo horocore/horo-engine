@@ -70,7 +70,7 @@ namespace Horo::Render::Detail {
         const auto count = std::min(budget, simulations.size());
         for (std::size_t visit = 0; visit < count && !simulations.empty(); ++visit) {
             retirementCursor %= simulations.size();
-            auto &simulation = simulations[retirementCursor];
+            const auto &simulation = simulations[retirementCursor];
             if (const auto observed = Observe(*simulation); observed.HasError())
                 return observed;
             if (simulation.use_count() != 1 || !Quiescent(*simulation)) {

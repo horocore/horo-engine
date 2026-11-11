@@ -45,6 +45,9 @@ namespace Horo::Physics::Detail {
             owner_.native = candidate;
         }
 
+        PrivateNativeSelection(const PrivateNativeSelection &) = delete;
+        PrivateNativeSelection &operator=(const PrivateNativeSelection &) = delete;
+
         ~PrivateNativeSelection() {
             if (!committed_) {
                 RevokePhysicsWorldSnapshots(owner_.snapshots);
@@ -71,8 +74,7 @@ namespace Horo::Physics::Detail {
             configuration.bodies = bindings.bodies;
             configuration.shapes = bindings.shapes;
             configuration.constraints = bindings.constraints;
-            auto configured = world.ConfigureStateSnapshots(configuration);
-            if (configured.HasError())
+            if (auto configured = world.ConfigureStateSnapshots(configuration); configured.HasError())
                 return Result<void>::Failure(configured.ErrorValue());
             auto decoded = world.DecodeStateSnapshot(input.Bytes());
             if (decoded.HasError())
@@ -121,7 +123,7 @@ namespace Horo::Physics::Detail {
         using Outcome = Result<bool>;
         if (!world.impl_)
             return Outcome::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        auto &owner = *world.impl_;
+        const auto &owner = *world.impl_;
         if (auto current = ValidateCaptureProvider(owner); current.HasError())
             return Outcome::Failure(current.ErrorValue());
         if (!CaptureIdle(owner))

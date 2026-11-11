@@ -45,18 +45,19 @@ namespace Horo::Physics::StateDetail {
         PhysicsStateConstraint UsedFields(const PhysicsStateConstraint &value) noexcept {
             PhysicsStateConstraint expected{.id = value.id, .kind = value.kind, .enabled = value.enabled};
             switch (value.kind) {
-                case PhysicsStateConstraintKind::Fixed:
+                using enum Horo::Physics::PhysicsStateConstraintKind;
+                case Fixed:
                     expected.rotationLambda = value.rotationLambda;
                     expected.pointLambda = value.pointLambda;
                     break;
-                case PhysicsStateConstraintKind::Distance:
+                case Distance:
                     expected.axisLambda = value.axisLambda;
                     expected.previousNormal = value.previousNormal;
                     break;
-                case PhysicsStateConstraintKind::Hinge:
+                case Hinge:
                     expected.pointLambda = value.pointLambda;
                     break;
-                case PhysicsStateConstraintKind::Slider:
+                case Slider:
                     expected.rotationLambda = value.rotationLambda;
                     break;
             }
@@ -66,10 +67,11 @@ namespace Horo::Physics::StateDetail {
         /** @brief Hinge/slider motor fields are retained even though their default Horo
          * policy disables motors. */
         bool ValidConstraint(const PhysicsStateConstraint &value) noexcept {
-            if (value.kind > PhysicsStateConstraintKind::Slider || !FiniteConstraint(value))
+            using enum Horo::Physics::PhysicsStateConstraintKind;
+            if (value.kind > Slider || !FiniteConstraint(value))
                 return false;
             auto expected = UsedFields(value);
-            if (value.kind == PhysicsStateConstraintKind::Hinge || value.kind == PhysicsStateConstraintKind::Slider) {
+            if (value.kind == Hinge || value.kind == Slider) {
                 expected.transverseLambda = value.transverseLambda;
                 expected.motorLambda = value.motorLambda;
                 expected.limitLambda = value.limitLambda;

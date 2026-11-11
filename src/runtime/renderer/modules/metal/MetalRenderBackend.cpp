@@ -664,9 +664,10 @@ namespace Horo::Render {
 
         private:
             Result<void> FinishInitialization(const RenderBackendConfig &config) {
-                const auto configured =
-                    runtime_->ConfigureGraphSubmissions(config.queueAssignments, capabilities_.support.deviceIncarnation);
-                if (configured.HasError()) {
+                using enum Horo::Render::RenderCapability;
+                if (const auto configured =
+                        runtime_->ConfigureGraphSubmissions(config.queueAssignments, capabilities_.support.deviceIncarnation);
+                    configured.HasError()) {
                     CloseUnsubmittedInitialization();
                     return configured;
                 }
@@ -674,9 +675,9 @@ namespace Horo::Render {
                 if (runtime_->HasConfiguredGraphSubmissionJournal()) {
                     capabilities_.supportsExplicitGraphSubmissions = true;
                     capabilities_.supportsSubmissionObservation = true;
-                    capabilities_.support.features.Enable(RenderCapability::VfxGpuSimulation);
-                    capabilities_.support.features.Enable(RenderCapability::VfxGpuDraw);
-                    capabilities_.support.features.Enable(RenderCapability::VfxGpuReadback);
+                    capabilities_.support.features.Enable(VfxGpuSimulation);
+                    capabilities_.support.features.Enable(VfxGpuDraw);
+                    capabilities_.support.features.Enable(VfxGpuReadback);
                 }
                 initialized_ = true;
                 shutdownBegun_ = false;

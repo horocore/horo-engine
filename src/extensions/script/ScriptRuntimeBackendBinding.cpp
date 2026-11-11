@@ -93,10 +93,10 @@ namespace Horo::Extensions {
         if (!actual)
             return Invalid("Concrete backend call is empty or consumed.");
         const auto &promised = input.service;
-        const bool matches = actual->serviceId == promised.serviceId && actual->contractId == promised.contractId &&
-                             actual->capability == promised.capability && actual->version == promised.version &&
-                             actual->provider == promised.provider && actual->threadRule == promised.threadRule;
-        if (!matches)
+        if (const bool matches = actual->serviceId == promised.serviceId && actual->contractId == promised.contractId &&
+                                 actual->capability == promised.capability && actual->version == promised.version &&
+                                 actual->provider == promised.provider && actual->threadRule == promised.threadRule;
+            !matches)
             return Invalid("Script execution metadata differs from the immutable actual backend registration.");
         return Result<void>::Success();
     }

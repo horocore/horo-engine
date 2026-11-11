@@ -34,7 +34,8 @@ namespace Horo::Extensions {
         std::vector<Bound> bound;
         std::vector<Work> work;
         const std::thread::id owner{std::this_thread::get_id()};
-        std::atomic_bool closed{}, sealed{};
+        std::atomic_bool closed{};
+        std::atomic_bool sealed{};
 
         Impl(ScriptCapabilityContext value, const JobSystem &system, ScriptModuleRuntimeIdentity identity, ScriptModuleRuntimeLimits policy,
              std::vector<ScriptModuleImport> declarations)

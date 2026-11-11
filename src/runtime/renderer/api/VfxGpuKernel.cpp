@@ -28,24 +28,24 @@ namespace Horo::Render {
 
         /** @brief Declares the actual GPU word input and canonical column-native billboard camera block. */
         void DrawInterface(ShaderManifest &manifest) {
+            using enum Horo::Render::ShaderValueType;
             manifest.entryPoints = {{ShaderStage::Vertex, "VfxGpuVSMain"}, {ShaderStage::Fragment, "VfxGpuPSMain"}};
             manifest
                 .bindings = {{{1}, ShaderResourceKind::StorageBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Vertex},
                              {{2}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Vertex}};
-            manifest.parameters = {{{1}, {2}, ShaderValueType::Float32, 4, 4, 1}, {{2}, {2}, ShaderValueType::Float32, 1, 4, 1},
-                                   {{3}, {2}, ShaderValueType::Float32, 1, 4, 1}, {{4}, {2}, ShaderValueType::Float32, 1, 4, 1},
-                                   {{5}, {2}, ShaderValueType::Uint32, 1, 4, 1},  {{100}, {1}, ShaderValueType::Uint32, 1, 1, 1}};
+            manifest.parameters = {{{1}, {2}, Float32, 4, 4, 1}, {{2}, {2}, Float32, 1, 4, 1}, {{3}, {2}, Float32, 1, 4, 1},
+                                   {{4}, {2}, Float32, 1, 4, 1}, {{5}, {2}, Uint32, 1, 4, 1},  {{100}, {1}, Uint32, 1, 1, 1}};
         }
 
         /** @brief Restricts exact stage spelling and multiplicity before exposing native bytes. */
         bool ExpectedStages(const ShaderArtifactPackageView &decoded, VfxGpuProgramRole role) {
+            using enum Horo::Render::ShaderStage;
             if (role == VfxGpuProgramRole::Simulation)
-                return decoded.stageCount == 1 && decoded.stages[0].stage == ShaderStage::Compute &&
-                       decoded.stages[0].entryPoint == "SimulateParticles";
+                return decoded.stageCount == 1 && decoded.stages[0].stage == Compute && decoded.stages[0].entryPoint == "SimulateParticles";
             if (role != VfxGpuProgramRole::Draw || decoded.stageCount != 2)
                 return false;
-            return decoded.stages[0].stage == ShaderStage::Vertex && decoded.stages[0].entryPoint == "VfxGpuVSMain" &&
-                   decoded.stages[1].stage == ShaderStage::Fragment && decoded.stages[1].entryPoint == "VfxGpuPSMain";
+            return decoded.stages[0].stage == Vertex && decoded.stages[0].entryPoint == "VfxGpuVSMain" &&
+                   decoded.stages[1].stage == Fragment && decoded.stages[1].entryPoint == "VfxGpuPSMain";
         }
 
         /** @brief Admits only the complete selected target's actual bounded artifact and interface. */
@@ -73,14 +73,15 @@ namespace Horo::Render {
             const auto expected = MakeVfxGpuShaderManifest(role, p.target);
             if (p.manifest.sourceIdentity != expected.sourceIdentity || p.manifest.sourceRevision != expected.sourceRevision)
                 return false;
-            const auto wanted = ComputeShaderInterfaceCompatibilityId(expected), actual = ComputeShaderInterfaceCompatibilityId(p.manifest);
+            const auto wanted = ComputeShaderInterfaceCompatibilityId(expected);
+            const auto actual = ComputeShaderInterfaceCompatibilityId(p.manifest);
             return wanted.HasValue() && actual.HasValue() && wanted.Value() == actual.Value();
         }
 
         /** @brief Checks every required final resource and canonical parameter layout, including exact member multiplicity. */
         bool ReflectionMatches(const NormalizedShaderReflection &r, VfxGpuProgramRole role) {
-            const auto expectedBindings = role == VfxGpuProgramRole::Simulation ? 5u : 2u;
-            if (r.bindings.size() != expectedBindings || r.parameters.size() != 6)
+            if (const auto expectedBindings = role == VfxGpuProgramRole::Simulation ? 5u : 2u;
+                r.bindings.size() != expectedBindings || r.parameters.size() != 6)
                 return false;
             if (!std::ranges::all_of(r.bindings, [](const auto &b) {
                 return b.active;
@@ -133,13 +134,14 @@ namespace Horo::Render {
 
     /** @copydoc MakeVfxGpuShaderManifest */
     ShaderManifest MakeVfxGpuShaderManifest(VfxGpuProgramRole role, const ShaderTargetRequirement &target) {
+        using enum Horo::Render::VfxGpuProgramRole;
         ShaderManifest manifest{.schemaVersion = 1,
-                                .sourceIdentity = role == VfxGpuProgramRole::Simulation ? "horo/runtime/vfx_simulation.hlsl"
-                                                                                        : "horo/runtime/vfx_gpu_draw.hlsl",
+                                .sourceIdentity =
+                                    role == Simulation ? "horo/runtime/vfx_simulation.hlsl" : "horo/runtime/vfx_gpu_draw.hlsl",
                                 .sourceRevision = 1};
-        if (role == VfxGpuProgramRole::Simulation)
+        if (role == Simulation)
             SimulationInterface(manifest);
-        if (role == VfxGpuProgramRole::Draw)
+        if (role == Draw)
             DrawInterface(manifest);
         manifest.targets = {target};
         return manifest;

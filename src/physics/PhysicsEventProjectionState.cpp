@@ -46,8 +46,8 @@ namespace Horo::Physics::Detail {
             return false;
         auto indexes = std::span{stateEventIndices_}.first(events.size());
         for (std::size_t index = 0; index < events.size(); ++index) {
-            const auto &event = events[index];
-            if (event.kind > PhysicsEventKind::TriggerExit || event.simulationTick != tick || !ValidStatePair(Pair(event), tick))
+            if (const auto &event = events[index];
+                event.kind > PhysicsEventKind::TriggerExit || event.simulationTick != tick || !ValidStatePair(Pair(event), tick))
                 return false;
             indexes[index] = index;
         }

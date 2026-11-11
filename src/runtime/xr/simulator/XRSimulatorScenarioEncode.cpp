@@ -85,13 +85,13 @@ namespace Horo::XR {
                 Text("{");
                 Key("p");
                 const std::array position{pose.position.x, pose.position.y, pose.position.z};
-                Array<float>(position, [&](float value) {
+                Array<float>(position, [this](float value) {
                     Float(value);
                 });
                 Text(",");
                 Key("q");
                 const std::array orientation{pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w};
-                Array<float>(orientation, [&](float value) {
+                Array<float>(orientation, [this](float value) {
                     Float(value);
                 });
                 Text(",");
@@ -156,7 +156,7 @@ namespace Horo::XR {
                 Pose(joint.pose);
                 Text(",");
                 Key("radius");
-                if (joint.radiusMeters)
+                if (joint.radiusMeters.has_value())
                     Float(*joint.radiusMeters);
                 else
                     Null();
@@ -185,22 +185,22 @@ namespace Horo::XR {
                 Number(step.deltaNanoseconds);
                 Text(",");
                 Key("views");
-                Array<XRSimulatorPose>(std::span{step.views}.first(step.viewCount), [&](const auto &value) {
+                Array<XRSimulatorPose>(std::span{step.views}.first(step.viewCount), [this](const auto &value) {
                     Pose(value);
                 });
                 Text(",");
                 Key("sources");
-                Array<XRSimulatorSource>(std::span{step.sources}.first(step.sourceCount), [&](const auto &value) {
+                Array<XRSimulatorSource>(std::span{step.sources}.first(step.sourceCount), [this](const auto &value) {
                     Source(value);
                 });
                 Text(",");
                 Key("actions");
-                Array<XRSimulatorAction>(std::span{step.actions}.first(step.actionCount), [&](const auto &value) {
+                Array<XRSimulatorAction>(std::span{step.actions}.first(step.actionCount), [this](const auto &value) {
                     Action(value);
                 });
                 Text(",");
                 Key("joints");
-                Array<XRSimulatorJoint>(std::span{step.joints}.first(step.jointCount), [&](const auto &value) {
+                Array<XRSimulatorJoint>(std::span{step.joints}.first(step.jointCount), [this](const auto &value) {
                     Joint(value);
                 });
                 Text("}");
@@ -255,7 +255,7 @@ namespace Horo::XR {
                 Number(scenario.DroppedSteps());
                 Text(",");
                 Key("bindings");
-                Array<std::byte>(scenario.BindingFingerprint(), [&](const auto value) {
+                Array<std::byte>(scenario.BindingFingerprint(), [this](const auto value) {
                     Number(std::to_integer<std::uint8_t>(value));
                 });
                 Text(",");
@@ -263,7 +263,7 @@ namespace Horo::XR {
                 Capture(scenario.CaptureManifest());
                 Text(",");
                 Key("steps");
-                Array<XRSimulatorStep>(scenario.Steps(), [&](const auto &step) {
+                Array<XRSimulatorStep>(scenario.Steps(), [this](const auto &step) {
                     Step(step);
                 });
                 Text("}");

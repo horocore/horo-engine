@@ -16,8 +16,7 @@ namespace Horo::Physics::Detail {
                                                                               const PhysicsWorldSettings &settings, std::size_t wireBytes,
                                                                               std::size_t retainedBytes) {
         using Outcome = Result<StateDetail::RestartInputLimits>;
-        auto counts = InspectCanonicalStateSceneInventory(handle);
-        if (counts.HasError())
+        if (auto counts = InspectCanonicalStateSceneInventory(handle); counts.HasError())
             return Outcome::Failure(counts.ErrorValue());
         const auto &world = *static_cast<const CanonicalWorld *>(handle.value);
         if (world.settingsIdentity != settings.Identity() || !world.owner.constructionRecipes)

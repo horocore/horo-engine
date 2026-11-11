@@ -10,15 +10,16 @@ namespace Horo::Animation {
         /** @brief Owner/candidate gates run before mutable record lookup. */
         GraphActionFailure Gate(const GraphInstanceState *state, const bool allowClosed = false,
                                 const bool allowCandidate = false) noexcept {
+            using enum Horo::Animation::GraphActionFailure;
             if (!state)
-                return GraphActionFailure::Closed;
+                return Closed;
             if (state->ownerThread != std::this_thread::get_id())
-                return GraphActionFailure::ThreadViolation;
+                return ThreadViolation;
             if (state->closed && !allowClosed)
-                return GraphActionFailure::Closed;
+                return Closed;
             if (state->candidate.tick.IsValid() && !allowCandidate)
-                return GraphActionFailure::EvaluationPending;
-            return GraphActionFailure::None;
+                return EvaluationPending;
+            return None;
         }
 
         /** @brief Exact issued identity prevents stale released records and foreign
@@ -65,7 +66,8 @@ namespace Horo::Animation {
             return {gate};
         if (!request.action.IsValid() || request.queue >= GraphActionQueuePolicy::Count)
             return {GraphActionFailure::Malformed};
-        std::uint32_t action = 0, section = 0;
+        std::uint32_t action = 0;
+        std::uint32_t section = 0;
         if (!Request(*state_, request, action, section))
             return {GraphActionFailure::BindingMismatch};
         auto &work = state_->actions;
@@ -91,36 +93,38 @@ namespace Horo::Animation {
 
     /** @copydoc AnimationGraphInstance::CancelAction */
     GraphActionCommandOutcome AnimationGraphInstance::CancelAction(const GraphActionHandle handle, const GraphActionStopPolicy policy) {
-        if (const auto gate = Gate(state_.get()); gate != GraphActionFailure::None)
+        using enum Horo::Animation::GraphActionFailure;
+        if (const auto gate = Gate(state_.get()); gate != None)
             return {gate};
         if (policy >= GraphActionStopPolicy::Count)
-            return {GraphActionFailure::Malformed};
+            return {Malformed};
         const auto index = Record(*state_, handle);
         if (index == NoActionIndex)
-            return {GraphActionFailure::HandleStale};
+            return {HandleStale};
         auto &record = state_->actions.records[index];
         if (record.observation.phase == GraphActionPhase::Terminal)
-            return {GraphActionFailure::None, handle};
+            return {None, handle};
         if (!record.cancelIntent || policy == GraphActionStopPolicy::Cut)
             record.stop = policy;
         record.cancelIntent = true;
-        return {GraphActionFailure::None, handle};
+        return {None, handle};
     }
 
     /** @copydoc AnimationGraphInstance::ReleaseActionLoop */
     GraphActionCommandOutcome AnimationGraphInstance::ReleaseActionLoop(const GraphActionHandle handle) {
-        if (const auto gate = Gate(state_.get()); gate != GraphActionFailure::None)
+        using enum Horo::Animation::GraphActionFailure;
+        if (const auto gate = Gate(state_.get()); gate != None)
             return {gate};
         const auto index = Record(*state_, handle);
         if (index == NoActionIndex)
-            return {GraphActionFailure::HandleStale};
+            return {HandleStale};
         auto &record = state_->actions.records[index];
         if (record.observation.phase == GraphActionPhase::Terminal)
-            return {GraphActionFailure::NotTerminal};
+            return {NotTerminal};
         if (state_->program->Actions()[record.action].sequence.loops.empty())
-            return {GraphActionFailure::BindingMismatch};
+            return {BindingMismatch};
         record.releaseIntent = true;
-        return {GraphActionFailure::None, handle};
+        return {None, handle};
     }
 
     /** @copydoc AnimationGraphInstance::ReleaseActionResult */
@@ -234,7 +238,8 @@ namespace Horo::Animation::Detail {
         bool handoff = false;
         if (slot.active != NoActionIndex) {
             const auto &old = work.candidateRecords[slot.active];
-            const auto oldAction = old.action, oldSection = slot.section;
+            const auto oldAction = old.action;
+            const auto oldSection = slot.section;
             const auto oldWeight = slot.weight;
             const auto joints = state.program->SkeletonBinding().joints;
             const auto offset = static_cast<std::size_t>(slotIndex) * joints;
@@ -299,8 +304,8 @@ namespace Horo::Animation::Detail {
 
         void Admit(GraphInstanceState &state, const std::uint32_t index, const AnimationTickId tick) noexcept {
             auto &work = state.actions;
-            auto &record = work.candidateRecords[index];
-            auto &slot = work.candidateSlots[work.definitions[record.action].slot];
+            const auto &record = work.candidateRecords[index];
+            const auto &slot = work.candidateSlots[work.definitions[record.action].slot];
             if (record.cancelIntent || record.cancellation.IsCancellationRequested()) {
                 FinishAction(state, index, GraphActionCompletionReason::Cancelled, tick);
                 return;
@@ -324,9 +329,10 @@ namespace Horo::Animation::Detail {
         /** @brief Removes cancelled queued requests without confusing terminal
          * retention with physical FIFO membership. */
         void CancelQueue(GraphInstanceState &state, ActionSlotState &slot, const AnimationTickId tick) noexcept {
-            auto previous = NoActionIndex, current = slot.head;
+            auto previous = NoActionIndex;
+            auto current = slot.head;
             while (current != NoActionIndex) {
-                auto &record = state.actions.candidateRecords[current];
+                const auto &record = state.actions.candidateRecords[current];
                 const auto next = record.next;
                 if (record.cancelIntent || record.cancellation.IsCancellationRequested()) {
                     if (previous == NoActionIndex)
@@ -354,7 +360,7 @@ namespace Horo::Animation::Detail {
             }
             if (slot.active == NoActionIndex)
                 return;
-            auto &record = state.actions.candidateRecords[slot.active];
+            const auto &record = state.actions.candidateRecords[slot.active];
             slot.exitLoop = slot.exitLoop || record.releaseIntent;
             if (record.cancelIntent || record.cancellation.IsCancellationRequested())
                 StopAction(state, slot.active, GraphActionCompletionReason::Cancelled, record.stop, tick);

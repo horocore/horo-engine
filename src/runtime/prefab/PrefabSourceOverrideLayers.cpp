@@ -109,7 +109,7 @@ namespace Horo::Prefab {
                 return Result<void>::Failure(resolved.ErrorValue());
             auto value = std::move(resolved).Value();
             state.unresolved = !value.effective.has_value();
-            state.layers.push_back({owner, placement, state.originChain, std::move(value.rebased)});
+            state.layers.emplace_back(owner, placement, state.originChain, std::move(value.rebased));
             return state.unresolved ? Result<void>::Success() : RestoreSlice(state, begin, *value.effective);
         }
     }  // namespace Detail

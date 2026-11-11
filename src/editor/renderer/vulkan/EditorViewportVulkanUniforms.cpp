@@ -112,8 +112,10 @@ namespace Horo::Editor {
                                                                                        const Render::RenderSceneView &scene,
                                                                                        const Render::DirectionalShadowFrame *shadow) {
         std::array<float, 64> matrices{};
-        std::array<float, 16> splits{}, rectangles{};
-        std::array<float, 4> settings{}, bias{};
+        std::array<float, 16> splits{};
+        std::array<float, 16> rectangles{};
+        std::array<float, 4> settings{};
+        std::array<float, 4> bias{};
         if (shadow) {
             for (std::uint32_t index = 0; index < shadow->cascadeCount; ++index) {
                 const auto &cascade = shadow->cascades[index];

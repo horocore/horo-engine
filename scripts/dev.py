@@ -7,7 +7,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Iterator, Mapping, Sequence
 from urllib.parse import quote, urlencode
 import argparse
@@ -527,7 +527,7 @@ def _git(repo: Path, *arguments: str) -> str:
     # The local operator owns PATH and the checkout; executable discovery preserves that tool choice.
     # Private callers supply fixed Git subcommands and pinned refs; paths remain separate argv entries.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-    result = subprocess.run(command, check=False, capture_output=True, text=True, shell=False)  # nosec B603
+    result = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", shell=False)  # nosec B603
     if result.returncode:
         raise CacheError(f"git {' '.join(arguments[:2])} failed: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -1217,7 +1217,9 @@ def notes_main(argv=None) -> int:
 
 def notes_member(name: str) -> bool:
     """Accept only a root or single package-directory notes file."""
-    if not name or "\\" in name or name.startswith("/"):
+    if not name or "\\" in name or name.startswith("/") or PureWindowsPath(name).drive:
+        raise NotesError(f"unsafe package member path: {name}")
+    if any(ord(char) < 32 or ord(char) == 127 for char in name):
         raise NotesError(f"unsafe package member path: {name}")
     parts = PurePosixPath(name).parts
     if any(part in (".", "..") for part in name.split("/")) or any(not part for part in name.split("/")):
@@ -1240,7 +1242,7 @@ def verify_tar(snapshot: bytes, archive: Path) -> None:
 def verify_zip(snapshot: bytes, archive: Path) -> None:
     with zipfile.ZipFile(archive) as package:
         members = [member for member in package.infolist()
-                   if notes_member(member.filename.rstrip("/"))]
+                   if notes_member(member.orig_filename.rstrip("/"))]
         if len(members) != 1 or members[0].is_dir() or members[0].file_size != len(snapshot):
             raise NotesError("package must contain exactly one matching release-notes.json")
         with package.open(members[0]) as content:
@@ -1922,7 +1924,7 @@ def write_case_regex(path, cases):
 # Resolve the trusted sibling identically for direct CLI and file-spec loading.
 
 
-SCENE_WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
+SCENE_WORKSPACE_EVIDENCE_ERROR = EVIDENCE_WORKSPACE_EVIDENCE_ERROR
 
 SCENE_PREFIX = "HoroSceneRuntimeConversionTests::"
 SCENE_CASES = frozenset(SCENE_PREFIX + name for name in (
@@ -2069,7 +2071,7 @@ def scene_main(argv=None):
 # Resolve the trusted sibling identically for direct CLI and file-spec loading.
 
 
-CHARACTER_WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
+CHARACTER_WORKSPACE_EVIDENCE_ERROR = EVIDENCE_WORKSPACE_EVIDENCE_ERROR
 CHARACTER_PREFIX = "HoroPhysicsTests::"
 CHARACTER_CASES = frozenset({CHARACTER_PREFIX + "Character preparation allocation failures roll back every retained storage stage"})
 
@@ -2565,18 +2567,29 @@ class _RunnerConsole:
             print("  " + self.paint(line, "1;36"))
         print("\n  " + self.paint("DEVELOPER RUNNER", "1"))
 
+    @staticmethod
+    def value_style(value: str) -> str:
+        """Classify flag values for consistent console emphasis."""
+        if value.startswith("ON"):
+            return "1;32"
+        if value == "OFF":
+            return "2"
+        return "1"
+
     def panel(self, title: str, rows: Sequence[tuple[str, str]]) -> None:
         content_width = self.width - 4
         label_width = 16
         heading = f" {title} "[:self.width - 2].ljust(self.width - 2, "-")
+        compact = content_width < 36
+        wrap_width = content_width if compact else content_width - label_width - 1
         print("  " + self.paint("+" + heading + "+", "2"))
         for label, value in rows:
-            compact = content_width < 36
             lines = textwrap.wrap(f"{label}: {value}" if compact else value,
-                                  width=content_width if compact else content_width - label_width - 1) or [""]
+                                  width=wrap_width) or [""]
+            style = self.value_style(value)
             for index, line in enumerate(lines):
-                prefix = "" if compact else f"{label if index == 0 else '':<{label_width}} "
-                style = "1;32" if value.startswith("ON") else "2" if value == "OFF" else "1"
+                displayed_label = label if index == 0 else ""
+                prefix = "" if compact else f"{displayed_label:<{label_width}} "
                 padding = " " * (content_width - len(prefix) - len(line))
                 print("  " + self.paint("| ", "2") + self.paint(prefix, "2") + self.paint(line, style)
                       + padding + self.paint(" |", "2"))
@@ -3817,20 +3830,8 @@ def _gui_live_build_file(path: Path, build_root: Path, suffix: str) -> Path:
     return resolved
 
 
-def _generate_gui_live_bridge(database: Path, output: Path, image: str, target_platform: str = "win32"):
-    database = database.resolve(strict=True)
-    build_root = database.parent
-    response_path = _gui_live_build_file(output if target_platform == "darwin" else output.with_suffix(".rsp"), build_root, ".rsp")
-    if target_platform != "darwin":
-        output = _gui_live_build_file(output, build_root, ".def")
-    entries = json.loads(database.read_text(encoding='utf-8'))
-    gui = [entry for entry in entries
-           if 'HoroGui.dir' in (entry.get('command') or ' '.join(entry.get('arguments', [])))]
-    if not gui:
-        raise ValueError('No HoroGui compile commands in the selected build')
-    if target_platform == "darwin":
-        _generate_gui_live_mac_flags(gui[0], response_path)
-        return
+def _gui_live_exports(gui: list[dict], build_root: Path) -> set[str]:
+    """Collect host imports from object files confined to the selected build."""
     exports = set()
     for entry in gui:
         match = re.search(r'(?:^|\s)/Fo(?:"([^"]+)"|(\S+))', entry['command'])
@@ -3845,6 +3846,24 @@ def _generate_gui_live_bridge(database: Path, output: Path, image: str, target_p
     exports.add('?GImGui@@3PEAUImGuiContext@@EA DATA')
     if not exports or len(exports) >= 65535:
         raise ValueError(f'Invalid GUI bridge export count: {len(exports)}')
+    return exports
+
+
+def _generate_gui_live_bridge(database: Path, output: Path, image: str, target_platform: str = "win32"):
+    database = database.resolve(strict=True)
+    build_root = database.parent
+    response_path = _gui_live_build_file(output if target_platform == "darwin" else output.with_suffix(".rsp"), build_root, ".rsp")
+    if target_platform != "darwin":
+        output = _gui_live_build_file(output, build_root, ".def")
+    entries = json.loads(database.read_text(encoding='utf-8'))
+    gui = [entry for entry in entries
+           if 'HoroGui.dir' in (entry.get('command') or ' '.join(entry.get('arguments', [])))]
+    if not gui:
+        raise ValueError('No HoroGui compile commands in the selected build')
+    if target_platform == "darwin":
+        _generate_gui_live_mac_flags(gui[0], response_path)
+        return
+    exports = _gui_live_exports(gui, build_root)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text('EXPORTS\n' + ''.join(f'    {name}\n' for name in sorted(exports)), encoding='utf-8')
     definitions = re.findall(r'(?:^|\s)([-/]D(?:"[^"\n]+"|\S+))', gui[0]['command'])

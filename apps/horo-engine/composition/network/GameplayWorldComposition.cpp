@@ -50,13 +50,14 @@ namespace Horo::Application::Internal {
         /** @brief Separates source-owner contract failures from ordinary effect admission/simulation outcomes. */
         bool IsVfxOwnerFailure(const Vfx::VfxSpawnStatus status) noexcept {
             switch (status) {
-                case Vfx::VfxSpawnStatus::ThreadViolation:
-                case Vfx::VfxSpawnStatus::Reentrant:
-                case Vfx::VfxSpawnStatus::OutOfOrder:
-                case Vfx::VfxSpawnStatus::StaleScene:
-                case Vfx::VfxSpawnStatus::StaleOwner:
-                case Vfx::VfxSpawnStatus::ShutDown:
-                case Vfx::VfxSpawnStatus::PermissionDenied:
+                using enum Horo::Vfx::VfxSpawnStatus;
+                case ThreadViolation:
+                case Reentrant:
+                case OutOfOrder:
+                case StaleScene:
+                case StaleOwner:
+                case ShutDown:
+                case PermissionDenied:
                     return true;
                 default:
                     return false;

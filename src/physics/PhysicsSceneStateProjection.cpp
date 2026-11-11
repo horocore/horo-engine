@@ -37,11 +37,11 @@ namespace Horo::Physics::Detail {
     void PhysicsSceneStateProjection::PrepareCoverage() {
         for (const auto &row : rows_) {
             if (row.body.IsValid())
-                bindings_.bodies.push_back({0, row.body});
+                bindings_.bodies.emplace_back(0, row.body);
             if (row.shape.IsValid())
-                bindings_.shapes.push_back({0, row.shape});
+                bindings_.shapes.emplace_back(0, row.shape);
             if (row.constraint.IsValid())
-                bindings_.constraints.push_back({0, row.constraint});
+                bindings_.constraints.emplace_back(0, row.constraint);
         }
         std::ranges::sort(bindings_.bodies, {}, &PhysicsStateBodyBinding::body);
         std::ranges::sort(bindings_.shapes, {}, &PhysicsStateShapeBinding::shape);
@@ -54,16 +54,15 @@ namespace Horo::Physics::Detail {
     /** @copydoc PhysicsSceneStateProjection::CheckCoverage */
     Result<void> PhysicsSceneStateProjection::CheckCoverage() {
         std::ranges::sort(rows_, {}, &SceneStateKeyBinding::key);
-        const auto duplicate = std::ranges::adjacent_find(rows_, {}, &SceneStateKeyBinding::key);
-        if (duplicate != rows_.end())
+        if (const auto duplicate = std::ranges::adjacent_find(rows_, {}, &SceneStateKeyBinding::key); duplicate != rows_.end())
             return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
         PrepareCoverage();
         const auto bodies =
             std::ranges::equal(nativeBodies_, bindings_.bodies, {}, &CanonicalStateSceneBody::handle, &PhysicsStateBodyBinding::body);
         const auto shapes = std::ranges::equal(nativeShapes_, bindings_.shapes, {}, std::identity{}, &PhysicsStateShapeBinding::shape);
-        const auto constraints =
-            std::ranges::equal(nativeConstraints_, bindings_.constraints, {}, std::identity{}, &PhysicsStateConstraintBinding::constraint);
-        if (!bodies || !shapes || !constraints)
+        if (const auto constraints = std::ranges::equal(nativeConstraints_, bindings_.constraints, {}, std::identity{},
+                                                        &PhysicsStateConstraintBinding::constraint);
+            !bodies || !shapes || !constraints)
             return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
         bindings_.bodies.clear();
         bindings_.shapes.clear();
@@ -104,21 +103,20 @@ namespace Horo::Physics::Detail {
             auto index = MapId(nativeBodies_, row.body, &CanonicalStateSceneBody::handle, id, 0, idByNative_);
             if (index.HasError())
                 return Result<void>::Failure(index.ErrorValue());
-            bindings_.bodies.push_back({id, row.body});
+            bindings_.bodies.emplace_back(id, row.body);
             routes_.push_back({id, nativeBodies_[index.Value()].sceneEntity});
         }
         if (row.shape.IsValid()) {
-            auto index = MapId(nativeShapes_, row.shape, std::identity{}, id, nativeBodies_.size(), idByNative_);
-            if (index.HasError())
+            if (auto index = MapId(nativeShapes_, row.shape, std::identity{}, id, nativeBodies_.size(), idByNative_); index.HasError())
                 return Result<void>::Failure(index.ErrorValue());
-            bindings_.shapes.push_back({id, row.shape});
+            bindings_.shapes.emplace_back(id, row.shape);
         }
         if (row.constraint.IsValid()) {
-            auto index =
-                MapId(nativeConstraints_, row.constraint, std::identity{}, id, nativeBodies_.size() + nativeShapes_.size(), idByNative_);
-            if (index.HasError())
+            if (auto index = MapId(nativeConstraints_, row.constraint, std::identity{}, id, nativeBodies_.size() + nativeShapes_.size(),
+                                   idByNative_);
+                index.HasError())
                 return Result<void>::Failure(index.ErrorValue());
-            bindings_.constraints.push_back({id, row.constraint});
+            bindings_.constraints.emplace_back(id, row.constraint);
         }
         return Result<void>::Success();
     }
@@ -128,8 +126,8 @@ namespace Horo::Physics::Detail {
         routes_.reserve(nativeBodies_.size());
         owners_.reserve(rows_.size());
         for (const auto &row : rows_)
-            owners_.push_back({row.key.entity.Bytes(), row.key.generation.value, row.key.role, row.key.slot,
-                               static_cast<PhysicsStateObjectId>(owners_.size()) + 1});
+            owners_.emplace_back(row.key.entity.Bytes(), row.key.generation.value, row.key.role, row.key.slot,
+                                 static_cast<PhysicsStateObjectId>(owners_.size()) + 1);
         for (std::size_t index = 0; index < rows_.size(); ++index)
             if (auto bound = BindRow(static_cast<PhysicsStateObjectId>(index) + 1, rows_[index]); bound.HasError())
                 return bound;

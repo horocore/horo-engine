@@ -67,7 +67,10 @@ namespace Horo::Editor {
         }
 
         struct SculptRegion final {
-            std::uint32_t minX, minZ, maxX, maxZ;
+            std::uint32_t minX;
+            std::uint32_t minZ;
+            std::uint32_t maxX;
+            std::uint32_t maxZ;
 
             std::uint32_t Width() const noexcept {
                 return maxX - minX + 1;
@@ -115,8 +118,8 @@ namespace Horo::Editor {
         Result<void> AdmitWork(const SculptRegion &region, const TerrainSculptBrush &brush, std::size_t stampCount,
                                const TerrainSculptLimits &limits) {
             // Smooth visits at most nine canonical neighbors plus the center/output per stamp.
-            const std::uint64_t visits = brush.mode == TerrainSculptMode::Smooth ? 11U : 2U;
-            if (region.Samples() > limits.maximumPatchSamples || stampCount > limits.maximumSampleVisits / visits / region.Samples())
+            if (const std::uint64_t visits = brush.mode == TerrainSculptMode::Smooth ? 11U : 2U;
+                region.Samples() > limits.maximumPatchSamples || stampCount > limits.maximumSampleVisits / visits / region.Samples())
                 return Result<void>::Failure(MakeError(TerrainEditErrors::LimitExceeded));
             return Result<void>::Success();
         }
@@ -232,14 +235,12 @@ namespace Horo::Editor {
                                                       std::span<const TerrainSculptStamp> stamps, const TerrainSculptLimits &limits,
                                                       const CancellationToken &cancellation) {
         using Return = Result<TerrainEditOperation>;
-        auto admitted = AdmitSource(source, fence, operation, brush, stamps, cancellation);
-        if (admitted.HasError())
+        if (auto admitted = AdmitSource(source, fence, operation, brush, stamps, cancellation); admitted.HasError())
             return Return::Failure(std::move(admitted).ErrorValue());
         auto region = CaptureRegion(source, brush, stamps, limits);
         if (region.HasError())
             return Return::Failure(std::move(region).ErrorValue());
-        auto work = AdmitWork(region.Value(), brush, stamps.size(), limits);
-        if (work.HasError())
+        if (auto work = AdmitWork(region.Value(), brush, stamps.size(), limits); work.HasError())
             return Return::Failure(std::move(work).ErrorValue());
         try {
             auto patch = BuildPatch(source, region.Value(), brush, stamps, cancellation);

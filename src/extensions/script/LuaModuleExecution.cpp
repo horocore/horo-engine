@@ -33,8 +33,8 @@ namespace Horo::Extensions::LuaModuleDetail {
         sourceBytes = source.size();
         sourceDigest = ComputeSha256(std::as_bytes(std::span{source.data(), source.size()}));
         deadline = std::chrono::steady_clock::now() + authority->Limits().executionDeadline;
-        const std::string wrapped = std::string{"local horo=...\n"} + std::string{source};
-        if (luaL_loadbufferx(thread, wrapped.data(), wrapped.size(), "horo/module-operation.lua", "t") != LUA_OK)
+        if (const std::string wrapped = std::string{"local horo=...\n"} + std::string{source};
+            luaL_loadbufferx(thread, wrapped.data(), wrapped.size(), "horo/module-operation.lua", "t") != LUA_OK)
             Invalid("Module source is not a valid text-only Lua program.");
         prepared = true;
     }
@@ -48,6 +48,9 @@ namespace Horo::Extensions::LuaModuleDetail {
             explicit Active(bool &value) : flag(value) {
                 flag = true;
             }
+
+            Active(const Active &) = delete;
+            Active &operator=(const Active &) = delete;
 
             ~Active() {
                 flag = false;
@@ -90,8 +93,7 @@ namespace Horo::Extensions::LuaModuleDetail {
             Invalid("Module program has not started.");
         if (result)
             return;
-        auto events = authority->Poll();
-        if (events.HasError())
+        if (auto events = authority->Poll(); events.HasError())
             throw Failure{events.ErrorValue()};
         if (!awaiting)
             return;

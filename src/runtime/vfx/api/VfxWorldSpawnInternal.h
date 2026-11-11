@@ -93,7 +93,7 @@ namespace Horo::Vfx::SpawnDetail {
     [[nodiscard]] Result<std::unique_ptr<Detail::VfxWorldSpawnState>> Prepare(VfxIdentityScope scene,
                                                                               std::span<const VfxSpawnAssetPreparation> assets,
                                                                               VfxSpawnBudget budget);
-    [[nodiscard]] VfxSpawnStatus ValidateBudget(VfxSpawnBudget budget) noexcept;
+    [[nodiscard]] VfxSpawnStatus ValidateBudget(const VfxSpawnBudget &budget) noexcept;
     [[nodiscard]] VfxSpawnOutcome Enqueue(Detail::VfxWorldSpawnState &state, VfxIdentityScope scene,
                                           std::span<const VfxSpawnRequest> requests) noexcept;
     [[nodiscard]] VfxSpawnUpdate Update(Detail::VfxWorldSpawnState &state, std::uint64_t tick, float deltaSeconds) noexcept;

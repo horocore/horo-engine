@@ -30,8 +30,8 @@ namespace Horo::Physics::Detail {
     void RecordCanonicalPhysicsStateColdAllocation(std::size_t bytes) noexcept {
         if (!activeCost)
             return;
-        const auto maximum = std::numeric_limits<std::size_t>::max();
-        if (bytes > maximum - activeCost->requestedBytes || activeCost->requests == maximum) {
+        if (const auto maximum = std::numeric_limits<std::size_t>::max();
+            bytes > maximum - activeCost->requestedBytes || activeCost->requests == maximum) {
             activeCost->overflow = true;
             return;
         }

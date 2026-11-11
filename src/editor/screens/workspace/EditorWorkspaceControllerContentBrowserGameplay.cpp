@@ -211,8 +211,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::RebindSaveAfterUnchangedNativeFailure */
     bool EditorWorkspaceController::RebindSaveAfterUnchangedNativeFailure() {
-        const auto state = m_playSession.State();
-        if (state != EditorPlaySessionState::Playing && state != EditorPlaySessionState::Paused)
+        if (const auto state = m_playSession.State(); state != EditorPlaySessionState::Playing && state != EditorPlaySessionState::Paused)
             return false;
         if (!m_gameplayRegistry || !m_playSession.SceneView())
             return false;

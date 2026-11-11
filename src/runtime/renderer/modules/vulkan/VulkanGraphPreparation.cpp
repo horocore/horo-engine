@@ -41,9 +41,9 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(Invalid("Imported state differs from the actual successfully submitted native state."));
         if (!states[index].hasNativeState && !states[index].contentsDefined)
             return Result<void>::Failure(Invalid("Undefined native storage cannot claim preserved contents."));
-        const auto translated = TranslateVulkanGraphBarrier(bindings[index], initial.state, initial.state,
-                                                            {.particleHandoff = vfxGpu.Owns(bindings[index].buffer)});
-        if (translated.HasError())
+        if (const auto translated = TranslateVulkanGraphBarrier(bindings[index], initial.state, initial.state,
+                                                                {.particleHandoff = vfxGpu.Owns(bindings[index].buffer)});
+            translated.HasError())
             return Result<void>::Failure(translated.ErrorValue());
         states[index].logical = initial.state;
         return Result<void>::Success();
@@ -97,7 +97,8 @@ namespace Horo::Render::Detail {
                                                                                   bool acquire) const {
         using Outcome = Result<VulkanGraphBarrierOptions>;
         const auto index = transition.resource.value - 1;
-        const auto *source = Queue(transition.oldState.queue), *destination = Queue(transition.newState.queue);
+        const auto *source = Queue(transition.oldState.queue);
+        const auto *destination = Queue(transition.newState.queue);
         const bool ownership = release || acquire;
         if (!destination || (ownership && !source))
             return Outcome::Failure(Unsupported("Queue ownership has no exact admitted native family."));
@@ -161,8 +162,8 @@ namespace Horo::Render::Detail {
         const auto &pass = request.graph.Passes()[index];
         for (const auto &usage : request.graph.Usages().subspan(pass.usages.offset, pass.usages.count)) {
             const auto resource = usage.resource.value - 1;
-            const auto &actual = *bindings[resource].state;
-            if (!used[resource] && actual.hasNativeState && actual.logical.queue != pass.queue)
+            if (const auto &actual = *bindings[resource].state;
+                !used[resource] && actual.hasNativeState && actual.logical.queue != pass.queue)
                 return Result<void>::Failure(Unsupported("Cross-graph queue change requires actual matched release evidence."));
             if (usage.access != RenderGraphAccess::Write && !states[resource].contentsDefined)
                 return Result<void>::Failure(Invalid("Native read observes undefined whole-resource contents."));
@@ -196,8 +197,8 @@ namespace Horo::Render::Detail {
 
     Result<void> VulkanGraphRuntime::Impl::PrepareParticleWork(const RenderGraphExecutionRequest &request, std::size_t index) {
         const auto &work = request.workloads[index].workload;
-        const bool compute = std::holds_alternative<RenderGraphVfxGpuCompute>(work),
-                   draw = std::holds_alternative<RenderGraphVfxGpuDraw>(work);
+        const bool compute = std::holds_alternative<RenderGraphVfxGpuCompute>(work);
+        const bool draw = std::holds_alternative<RenderGraphVfxGpuDraw>(work);
         if (!compute && !draw)
             return Result<void>::Success();
         if (!ParticleQueue(Queue(request.graph.Passes()[index].queue), compute, draw))

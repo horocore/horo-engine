@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <new>
 
 namespace Horo::Render::Detail {
@@ -20,8 +21,9 @@ namespace Horo::Render::Detail {
         }
         const bool slots = storage.reservedReadbackSlots <= storage.readbackPool.slotCount &&
                            policy.maximumPendingResults <= storage.readbackPool.slotCount - storage.reservedReadbackSlots;
-        const bool bytes = std::size_t{policy.maximumRecords} * VfxGpuObservationWords::Bytes <= storage.readbackPool.maximumBytesPerResult;
-        if (!nativeReadbackAvailable || !storage.readbacks || !slots || !bytes) {
+        if (const bool bytes =
+                std::size_t{policy.maximumRecords} * VfxGpuObservationWords::Bytes <= storage.readbackPool.maximumBytesPerResult;
+            !nativeReadbackAvailable || !storage.readbacks || !slots || !bytes) {
             record.readback = VfxGpuReadbackAdmission::OptionalUnavailable;
             if (policy.requirement == VfxGpuReadbackRequirement::RequiredForVisualEffect)
                 return Result<void>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
@@ -40,10 +42,11 @@ namespace Horo::Render::Detail {
     void ReleaseVfxGpuReadbackReservation(VfxGpuStorage &storage, VfxGpuRecord &record) noexcept {
         if (record.reservedReadbackSlots == 0)
             return;
-        const bool pending = std::ranges::any_of(record.requests, [](const auto &request) {
+        if (const bool pending = std::ranges::any_of(record.requests,
+                                                     [](const auto &request) {
             return request.occupied;
         });
-        if (pending)
+            pending)
             return;
         storage.reservedReadbackSlots -= record.reservedReadbackSlots;
         record.reservedReadbackSlots = 0;
@@ -55,10 +58,11 @@ namespace Horo::Render::Detail {
     RenderReadbackPreparedStatus RequestVfxGpuObservation(VfxGpuStorage &storage, VfxGpuRecord &record, const VfxGpuStepIdentity step,
                                                           const std::size_t observation, std::size_t &requestIndex) noexcept {
         using Status = RenderReadbackPreparedStatus;
-        const auto existing = std::ranges::find_if(record.requests, [&](const auto &request) {
+        if (const auto existing = std::ranges::find_if(record.requests,
+                                                       [&](const auto &request) {
             return request.occupied && request.step == step;
         });
-        if (existing != record.requests.end()) {
+            existing != record.requests.end()) {
             requestIndex = static_cast<std::size_t>(existing - record.requests.begin());
             return !existing->submitted && !existing->nativeUncertain ? Status::Complete : Status::InvalidTransition;
         }
@@ -128,11 +132,12 @@ namespace Horo::Render {
 
         /** @brief Resolves request-level timeout and cancellation before exposing a result lease. */
         Status ObservationAvailability(const VfxGpuRecord &record, const VfxGpuObservationRequest &request) noexcept {
+            using enum Horo::Render::RenderReadbackPreparedStatus;
             if (request.timedOut)
-                return Status::TimedOut;
+                return TimedOut;
             if (record.released || VfxGpuLifetimeCancelled(record) || request.cancelRequested)
-                return Status::Cancelled;
-            return Status::Complete;
+                return Cancelled;
+            return Complete;
         }
 
         void SaturatingAdd(std::uint64_t &counter, const std::uint64_t amount) noexcept {
@@ -204,18 +209,19 @@ namespace Horo::Render {
             const auto found = std::ranges::find_if(record.requests, [&](const auto &request) {
                 return request.occupied && request.step == step;
             });
-            return found == record.requests.end() ? nullptr : &*found;
+            return found == record.requests.end() ? nullptr : std::to_address(found);
         }
 
         Status FindObservation(VfxGpuStorage *storage, const VfxGpuPreparationReceipt &preparation, const VfxGpuStepIdentity &step,
                                VfxGpuRecord *&record, VfxGpuObservationRequest *&request) noexcept {
+            using enum Horo::Render::RenderReadbackPreparedStatus;
             if (!storage || !storage->readbacks || !preparation.IsLive())
-                return Status::InvalidRequest;
+                return InvalidRequest;
             record = storage->Find(preparation.Id());
             if (!record)
-                return Status::InvalidRequest;
+                return InvalidRequest;
             request = Observation(*record, step);
-            return request ? Status::Complete : Status::InvalidRequest;
+            return request ? Complete : InvalidRequest;
         }
 
         bool Copyable(const VfxGpuRecord *record) noexcept {
@@ -223,8 +229,8 @@ namespace Horo::Render {
         }
 
         Result<bool> FinishCancelledRequest(RenderReadbackQueue &queue, VfxGpuObservationRequest &request) {
-            const auto cancelled = request.timedOut && request.submitted ? queue.Timeout(request.id) : queue.Cancel(request.id);
-            if (cancelled.HasError())
+            if (const auto cancelled = request.timedOut && request.submitted ? queue.Timeout(request.id) : queue.Cancel(request.id);
+                cancelled.HasError())
                 return Result<bool>::Failure(cancelled.ErrorValue());
             if (request.submitted)
                 if (const auto retired = queue.Retire(request.id); retired.HasError())
@@ -291,27 +297,28 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ObserveVfxGpuReadbackFact */
     Result<void> RenderFrontend::ObserveVfxGpuReadbackFact(Detail::VfxGpuRecord &record, const NativeGpuVfxStepReceipt &receipt) {
+        using enum Horo::Render::VfxGpuSubmissionState;
         auto *request = Observation(record, receipt.step);
         if (!request)
             return Result<void>::Success();
-        if (receipt.state == VfxGpuSubmissionState::RejectedUnsubmitted || receipt.state == VfxGpuSubmissionState::CancelledUnsubmitted) {
+        if (receipt.state == RejectedUnsubmitted || receipt.state == CancelledUnsubmitted) {
             Detail::AbandonVfxGpuObservation(*vfxGpuStorage_, record, receipt.step);
             return Result<void>::Success();
         }
-        if (receipt.state == VfxGpuSubmissionState::SubmissionUncertain) {
-            request->nativeUncertain = request->cancelRequested = true;
+        if (receipt.state == SubmissionUncertain) {
+            request->nativeUncertain = true;
+            request->cancelRequested = true;
             return Result<void>::Success();
         }
-        if (receipt.state == VfxGpuSubmissionState::Accepted) {
-            const auto submitted = vfxGpuStorage_->readbacks->MarkSubmitted(request->id, receipt.submission);
-            if (submitted.HasError())
+        if (receipt.state == Accepted) {
+            if (const auto submitted = vfxGpuStorage_->readbacks->MarkSubmitted(request->id, receipt.submission); submitted.HasError())
                 return submitted;
             request->submitted = true;
             request->submission = receipt.submission;
         }
-        if (receipt.state == VfxGpuSubmissionState::Completed || receipt.state == VfxGpuSubmissionState::DeviceLost)
+        if (receipt.state == Completed || receipt.state == DeviceLost)
             request->nativeCompleted = true;
-        if (receipt.state == VfxGpuSubmissionState::DeviceLost)
+        if (receipt.state == DeviceLost)
             request->cancelRequested = true;
         return Result<void>::Success();
     }
@@ -320,22 +327,21 @@ namespace Horo::Render {
     RenderReadbackPreparedStatus RenderFrontend::AcquireVfxGpuObservation(const VfxGpuPreparationReceipt &preparation,
                                                                           const VfxGpuStepIdentity &step,
                                                                           RenderReadbackResult &result) noexcept {
+        using enum Horo::Render::RenderReadbackPreparedStatus;
         if (std::this_thread::get_id() != preparationOwner_)
-            return Status::WrongThread;
+            return WrongThread;
         if (closing_)
-            return Status::Stopped;
+            return Stopped;
         if (vfxGpuStorage_ && vfxGpuStorage_->busy)
-            return Status::ResultPending;
+            return ResultPending;
         Detail::VfxGpuRecord *record{};
         Detail::VfxGpuObservationRequest *request{};
-        const auto found = FindObservation(vfxGpuStorage_.get(), preparation, step, record, request);
-        if (found != Status::Complete)
+        if (const auto found = FindObservation(vfxGpuStorage_.get(), preparation, step, record, request); found != Complete)
             return found;
-        const auto available = ObservationAvailability(*record, *request);
-        if (available != Status::Complete)
+        if (const auto available = ObservationAvailability(*record, *request); available != Complete)
             return available;
         const auto acquired = vfxGpuStorage_->readbacks->AcquirePrepared(request->id, result);
-        if (acquired == Status::Complete)
+        if (acquired == Complete)
             request->acquired = true;
         return acquired;
     }
@@ -343,22 +349,23 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::CancelVfxGpuObservation */
     RenderReadbackPreparedStatus RenderFrontend::CancelVfxGpuObservation(const VfxGpuPreparationReceipt &preparation,
                                                                          const VfxGpuStepIdentity &step) noexcept {
+        using enum Horo::Render::RenderReadbackPreparedStatus;
         if (std::this_thread::get_id() != preparationOwner_)
-            return Status::WrongThread;
+            return WrongThread;
         if (closing_)
-            return Status::Stopped;
+            return Stopped;
         if (vfxGpuStorage_ && vfxGpuStorage_->busy)
-            return Status::ResultPending;
+            return ResultPending;
         if (!vfxGpuStorage_ || !vfxGpuStorage_->readbacks || !preparation.IsLive())
-            return Status::InvalidRequest;
+            return InvalidRequest;
         auto *record = vfxGpuStorage_->Find(preparation.Id());
         if (!record)
-            return Status::InvalidRequest;
+            return InvalidRequest;
         auto *request = Observation(*record, step);
         if (!request)
-            return Status::InvalidRequest;
+            return InvalidRequest;
         request->cancelRequested = true;
-        return Status::Complete;
+        return Complete;
     }
 
     /** @copydoc RenderFrontend::GpuReadbackDiagnostics */
@@ -457,9 +464,10 @@ namespace Horo::Render {
         if (!request.nativeCompleted && !request.nativeUncertain)
             return Result<bool>::Success(false);
         if (record.observationHeld[request.observation]) {
-            const auto discarded =
-                Detail::RenderFrontendResourceAccess::DiscardCompletedVfxGpuObservation(*this, IssueVfxGpuReceipt(record), request.step);
-            if (discarded.HasError()) {
+            if (const auto discarded =
+                    Detail::RenderFrontendResourceAccess::DiscardCompletedVfxGpuObservation(*this, IssueVfxGpuReceipt(record),
+                                                                                            request.step);
+                discarded.HasError()) {
                 if (ErrorChainContains(discarded.ErrorValue(), VfxFrameErrors::Pending.domain, VfxFrameErrors::Pending.code))
                     return Result<bool>::Success(false);
                 return Result<bool>::Failure(discarded.ErrorValue());
@@ -486,7 +494,8 @@ namespace Horo::Render {
         if (copied.Value() != expected)
             return Result<bool>::Failure(MakeError(VfxFrameErrors::InvalidInput));
         if (std::chrono::steady_clock::now() >= request.deadline) {
-            request.cancelRequested = request.timedOut = true;
+            request.cancelRequested = true;
+            request.timedOut = true;
             return CancelVfxGpuReadbackRequest(record, index);
         }
         if (vfxGpuStorage_->readbacks->CompletePrepared(request.id, request.submission) != Status::Complete)
@@ -502,8 +511,10 @@ namespace Horo::Render {
             return Result<bool>::Success(false);
         if (request.acquired)
             return RetireVfxGpuReadbackResult(record, index);
-        if (!request.ready && std::chrono::steady_clock::now() >= request.deadline)
-            request.cancelRequested = request.timedOut = true;
+        if (!request.ready && std::chrono::steady_clock::now() >= request.deadline) {
+            request.cancelRequested = true;
+            request.timedOut = true;
+        }
         if (record.released || Detail::VfxGpuLifetimeCancelled(record))
             request.cancelRequested = true;
         if (request.cancelRequested)
@@ -525,7 +536,8 @@ namespace Horo::Render {
         Detail::VfxGpuBusyGuard guard{vfxGpuStorage_->busy};
         auto &storage = *vfxGpuStorage_;
         static_cast<void>(storage.readbacks->CollectPreparedResults());
-        std::size_t count{}, ownerIndex{};
+        std::size_t count{};
+        std::size_t ownerIndex{};
         while (ownerIndex < storage.readbackOwners.size()) {
             auto &slot = storage.slots[storage.readbackOwners[ownerIndex]];
             auto &record = *slot.record;

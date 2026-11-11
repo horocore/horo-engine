@@ -31,7 +31,7 @@ namespace Horo::Physics::Detail {
             std::vector<Resident> result;
             result.reserve(world.scene.constraints.size());
             for (const auto &joint : world.scene.constraints)
-                result.push_back({joint.handle, joint.constraint.GetPtr()});
+                result.emplace_back(joint.handle, joint.constraint.GetPtr());
             std::ranges::sort(result, {}, &Resident::handle);
             return result;
         }

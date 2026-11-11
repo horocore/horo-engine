@@ -547,7 +547,7 @@ namespace Horo::Physics::Detail {
         if (auto admitted = ValidateCanonicalRecipeAdmission(pool, recipe); admitted.HasError())
             return Result<PhysicsQueryFixture>::Failure(admitted.ErrorValue());
         PhysicsQueryFixtureDescriptor ownedFixture = fixture;
-        const auto nativeShape = ObserveCanonicalPhysicsShapeCreation([&] {
+        const auto nativeShape = ObserveCanonicalPhysicsShapeCreation([&fixture] {
             return CreateNativeShape(fixture.shape);
         });
         if (nativeShape.HasError())

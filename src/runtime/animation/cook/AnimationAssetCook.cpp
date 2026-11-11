@@ -78,8 +78,7 @@ namespace Horo::Animation {
             if (identity.HasError())
                 return Return::Failure(std::move(identity).ErrorValue());
             state->captureIdentity = std::move(identity).Value();
-            auto built = state->Build(cancellation);
-            if (built.HasError())
+            if (auto built = state->Build(cancellation); built.HasError())
                 return Return::Failure(std::move(built).ErrorValue());
             if (cancellation.IsCancellationRequested())
                 return Return::Failure(MakeError(AnimationAssetErrors::Cancelled));

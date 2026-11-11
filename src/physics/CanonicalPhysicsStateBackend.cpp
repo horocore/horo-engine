@@ -10,11 +10,11 @@ namespace Horo::Physics::Detail {
             return Result<void>::Failure(MakeError(PhysicsErrors::WorldInvalid));
         if (auto epochs = ValidateOwnerEpochs(previous); epochs.HasError())
             return epochs;
-        const auto &candidateBinding = static_cast<const CanonicalWorld *>(restored.value)->simulation.binding;
-        if (candidateBinding.generation != impl_->filterEpoch || candidateBinding.surfaces.mappingGeneration != impl_->surfaceEpoch)
+        if (const auto &candidateBinding = static_cast<const CanonicalWorld *>(restored.value)->simulation.binding;
+            candidateBinding.generation != impl_->filterEpoch || candidateBinding.surfaces.mappingGeneration != impl_->surfaceEpoch)
             return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityStale));
-        const auto &source = *static_cast<const CanonicalWorld *>(previous.value);
-        if (source.continuousCollision.revision == std::numeric_limits<std::uint64_t>::max())
+        if (const auto &source = *static_cast<const CanonicalWorld *>(previous.value);
+            source.continuousCollision.revision == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(PhysicsErrors::GenerationExhausted));
         return Result<void>::Success();
     }
@@ -65,8 +65,8 @@ namespace Horo::Physics::Detail {
     Result<void> CanonicalPhysicsStateWorkspace::ValidateOwnerEpochs(CanonicalWorldHandle world) const {
         if (world.value != impl_->owner.value || !world.value)
             return Result<void>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        const auto &binding = static_cast<const CanonicalWorld *>(world.value)->simulation.binding;
-        if (binding.generation != impl_->filterEpoch || binding.surfaces.mappingGeneration != impl_->surfaceEpoch)
+        if (const auto &binding = static_cast<const CanonicalWorld *>(world.value)->simulation.binding;
+            binding.generation != impl_->filterEpoch || binding.surfaces.mappingGeneration != impl_->surfaceEpoch)
             return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityStale));
         return Result<void>::Success();
     }

@@ -46,16 +46,17 @@ namespace Horo::Physics::Detail {
     void CanonicalJointFields(CanonicalPhysicsStateFields &fields, PhysicsStateConstraint &joint) {
         fields.Value(joint.enabled);
         switch (joint.kind) {
-            case PhysicsStateConstraintKind::Fixed:
+            using enum Horo::Physics::PhysicsStateConstraintKind;
+            case Fixed:
                 FixedFields(fields, joint);
                 break;
-            case PhysicsStateConstraintKind::Distance:
+            case Distance:
                 DistanceFields(fields, joint);
                 break;
-            case PhysicsStateConstraintKind::Hinge:
+            case Hinge:
                 HingeFields(fields, joint);
                 break;
-            case PhysicsStateConstraintKind::Slider:
+            case Slider:
                 SliderFields(fields, joint);
                 break;
         }

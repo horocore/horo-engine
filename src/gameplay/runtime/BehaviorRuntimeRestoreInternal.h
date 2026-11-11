@@ -25,7 +25,8 @@ namespace Horo::Gameplay {
     };
 
     struct BehaviorRestoreBindingProgress {
-        bool materialized{}, fixed{};
+        bool materialized{};
+        bool fixed{};
     };
 
     struct BehaviorRuntimeRestoreCandidate::State {
@@ -38,7 +39,13 @@ namespace Horo::Gameplay {
         std::vector<std::shared_ptr<BehaviorRestoreBindingProgress>> bindings;
         std::thread::id owner{std::this_thread::get_id()};
         std::uint64_t bindingEpoch{1};
-        bool prehookReady{}, restoring{}, staged{}, lifecyclePublished{}, published{}, closed{}, ordinaryActivated{};
+        bool prehookReady{};
+        bool restoring{};
+        bool staged{};
+        bool lifecyclePublished{};
+        bool published{};
+        bool closed{};
+        bool ordinaryActivated{};
     };
 
     struct BehaviorRuntimeSceneOwner::State {

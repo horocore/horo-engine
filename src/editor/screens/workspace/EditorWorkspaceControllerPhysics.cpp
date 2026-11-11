@@ -17,7 +17,7 @@ namespace Horo::Editor {
         if (document.HasError())
             return;
         for (const auto &profile : document.Value().settings->Input().profiles)
-            m_viewModel.physicsProfiles.push_back({profile.id, profile.name});
+            m_viewModel.physicsProfiles.emplace_back(profile.id, profile.name);
     }
 
     /** @copydoc EditorWorkspaceController::RefreshPhysicsMaterials */
@@ -25,8 +25,8 @@ namespace Horo::Editor {
         m_viewModel.physicsMaterials.clear();
         for (const auto &record : m_assetRegistry.Records())
             if (record.type.Value() == "core.physics_material")
-                m_viewModel.physicsMaterials.push_back(
-                    {record.id, WorkspacePathText(WorkspaceNativePath(record.sourcePath.String()).stem())});
+                m_viewModel.physicsMaterials.emplace_back(record.id,
+                                                          WorkspacePathText(WorkspaceNativePath(record.sourcePath.String()).stem()));
     }
 
     /** @copydoc EditorWorkspaceController::RefreshPhysicsInspectorPort */

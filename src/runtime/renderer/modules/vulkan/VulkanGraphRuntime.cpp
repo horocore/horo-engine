@@ -271,6 +271,11 @@ namespace Horo::Render::Detail {
         struct UploadScope final {
             bool &active;
 
+            explicit UploadScope(bool &value) noexcept : active(value) {}
+
+            UploadScope(const UploadScope &) = delete;
+            UploadScope &operator=(const UploadScope &) = delete;
+
             ~UploadScope() {
                 active = false;
             }
@@ -340,16 +345,17 @@ namespace Horo::Render::Detail {
     }
 
     Result<RenderBackendDrainProgress> VulkanGraphRuntime::PollDrain() {
+        using enum Horo::Render::RenderBackendDrainProgress;
         if (impl_->owner == std::thread::id{})
-            return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Drained);
+            return Result<RenderBackendDrainProgress>::Success(Drained);
         if (const auto access = impl_->Access(false); access.HasError())
             return Result<RenderBackendDrainProgress>::Failure(access.ErrorValue());
         if (!impl_->lifecycle.closing)
             return Result<RenderBackendDrainProgress>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         if (impl_->lifecycle.uploadingVfx)
-            return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Pending);
+            return Result<RenderBackendDrainProgress>::Success(Pending);
         auto drained = impl_->DrainOwners();
-        if (drained.HasValue() && drained.Value() == RenderBackendDrainProgress::Drained)
+        if (drained.HasValue() && drained.Value() == Drained)
             impl_->FinishDrained();
         return drained;
     }

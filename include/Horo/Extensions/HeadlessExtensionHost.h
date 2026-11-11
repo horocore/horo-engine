@@ -117,11 +117,11 @@ namespace Horo::Extensions {
          * @return Success, or a typed registration or lifecycle failure.
          */
         /** @brief Binds an actual declared script import through this host's shared native service composition.
-         * @param extension Exact active package. @param module Exact importing module. @param importId Manifest-local import.
+         * @param extension Exact active package. @param moduleId Exact importing module. @param importId Manifest-local import.
          * @param policy Actual trusted runtime/scopes/permission policy. @return Revocable binding or typed denial.
          */
-        [[nodiscard]] Result<std::shared_ptr<NativeExtensionScriptSession>> BindScript(std::string_view extension, std::string_view module,
-                                                                                       std::string_view importId,
+        [[nodiscard]] Result<std::shared_ptr<NativeExtensionScriptSession>> BindScript(std::string_view extension,
+                                                                                       std::string_view moduleId, std::string_view importId,
                                                                                        ScriptCapabilityContextDescriptor policy,
                                                                                        const CancellationToken &cancellation = {});
 

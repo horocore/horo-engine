@@ -5,6 +5,7 @@
 #include "Horo/Foundation/PathUtils.h"
 
 #include <algorithm>
+#include <format>
 #include <new>
 #include <set>
 
@@ -25,7 +26,8 @@ namespace Horo::Application {
             std::vector<std::byte> bytes;
             Assets::AssetSourceIdentity identity;
             std::optional<ExclusiveFileLock> lock;
-            bool staged{}, published{};
+            bool staged{};
+            bool published{};
         };
 
         /** @brief Portable single filename admission prevents display names from becoming paths. */
@@ -33,7 +35,7 @@ namespace Horo::Application {
             if (value.empty() || value.size() > 200 || value == "." || value == "..")
                 return false;
             for (const unsigned char c : value)
-                if (c < 32 || c == 127 || std::string_view("/\\:*?\"<>|").find(static_cast<char>(c)) != std::string_view::npos)
+                if (c < 32 || c == 127 || std::string_view(R"(/\:*?"<>|)").find(static_cast<char>(c)) != std::string_view::npos)
                     return false;
             return value.back() != '.' && value.back() != ' ';
         }
@@ -51,7 +53,7 @@ namespace Horo::Application {
             entries.reserve(batch.items.size() * 2);
             std::set<std::filesystem::path> destinations;
             std::size_t total{};
-            const auto append = [&](std::filesystem::path path, std::span<const std::byte> bytes) -> Result<void> {
+            const auto append = [&](std::filesystem::path path, std::span<const std::byte> bytes) {
                 if (bytes.size() > MaximumBatchBytes - total || !destinations.insert(path).second)
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
                 auto absent = Assets::CaptureAssetSource(batch.projectRoot, path, MaximumBatchBytes);
@@ -61,7 +63,7 @@ namespace Horo::Application {
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
                 Entry entry;
                 entry.path = std::move(path);
-                entry.stage = directory / (".horo-import-" + stageKey + "-" + std::to_string(entries.size()) + ".tmp");
+                entry.stage = directory / std::format(".horo-import-{}-{}.tmp", stageKey, entries.size());
                 entry.bytes.assign(bytes.begin(), bytes.end());
                 entry.identity = {true, bytes.size(), ComputeSha256(bytes)};
                 total += bytes.size();
@@ -76,8 +78,7 @@ namespace Horo::Application {
                 if (prepared.type.Value() == "core.terrain" && (!item.createMetaSidecar || !item.supportsMetaSidecar))
                     return Return::Failure(MakeError(TerrainSidecarRequired));
                 const auto path = directory / (item.displayName + item.targetExtension);
-                auto payload = append(path, std::as_bytes(std::span(prepared.editorPayload)));
-                if (payload.HasError())
+                if (auto payload = append(path, std::as_bytes(std::span(prepared.editorPayload))); payload.HasError())
                     return Return::Failure(std::move(payload).ErrorValue());
                 if (item.createMetaSidecar && item.supportsMetaSidecar) {
                     const auto id = item.preservedAssetId ? *item.preservedAssetId : ids.Generate();
@@ -118,28 +119,29 @@ namespace Horo::Application {
         /** @brief Compensates only proven owned destinations while all cooperating writer leases remain held. */
         void Rollback(std::vector<Entry> &entries, const std::filesystem::path &root, DurableFileSystem &files,
                       ProjectAssetImportReceipt &receipt) noexcept {
+            using enum Horo::Application::ProjectAssetImportStatus;
             for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry) {
                 try {
                     if (entry->published) {
                         auto current = Assets::CaptureAssetSource(root, entry->path, MaximumBatchBytes);
                         if (current.HasError() || current.Value().identity != entry->identity) {
-                            receipt.status = ProjectAssetImportStatus::ReconciliationRequired;
+                            receipt.status = ReconciliationRequired;
                         } else {
                             auto removed = files.RemoveDurable(entry->path);
                             if (removed.HasError())
-                                receipt.status = ProjectAssetImportStatus::ReconciliationRequired;
+                                receipt.status = ReconciliationRequired;
                             else
                                 ++receipt.rolledBackFiles;
                         }
                     }
                     if (entry->staged && files.RemoveDurable(entry->stage).HasError())
-                        receipt.status = ProjectAssetImportStatus::ReconciliationRequired;
+                        receipt.status = ReconciliationRequired;
                 } catch (...) {
-                    receipt.status = ProjectAssetImportStatus::ReconciliationRequired;
+                    receipt.status = ReconciliationRequired;
                 }
             }
-            if (receipt.status != ProjectAssetImportStatus::ReconciliationRequired && receipt.promotedFiles)
-                receipt.status = ProjectAssetImportStatus::RolledBack;
+            if (receipt.status != ReconciliationRequired && receipt.promotedFiles)
+                receipt.status = RolledBack;
         }
 
         /** @brief Stages every complete pair before making any asset destination visible. */
@@ -155,11 +157,9 @@ namespace Horo::Application {
                 if (lock.HasError())
                     return Result<void>::Failure(std::move(lock).ErrorValue());
                 entry.lock.emplace(std::move(lock).Value());
-                auto parent = files.CreateDirectoryPath(entry.path.parent_path(), DirectoryCreationMode::Parents);
-                if (parent.HasError())
+                if (auto parent = files.CreateDirectoryPath(entry.path.parent_path(), DirectoryCreationMode::Parents); parent.HasError())
                     return Result<void>::Failure(std::move(parent).ErrorValue());
-                auto staged = files.WritePrivateDurable(entry.stage, entry.bytes, entry.staged);
-                if (staged.HasError())
+                if (auto staged = files.WritePrivateDurable(entry.stage, entry.bytes, entry.staged); staged.HasError())
                     return staged;
                 auto verified = Assets::CaptureAssetSource(root, entry.stage, MaximumBatchBytes, cancellation);
                 if (verified.HasError())
@@ -188,6 +188,9 @@ namespace Horo::Application {
         struct BusyScope final {
             bool &busy;
 
+            BusyScope(const BusyScope &) = delete;
+            BusyScope &operator=(const BusyScope &) = delete;
+
             explicit BusyScope(bool &value) noexcept : busy(value) {
                 busy = true;
             }
@@ -208,7 +211,7 @@ namespace Horo::Application {
                 ++receipt.promotedFiles;
                 if (result.Value().status != Assets::AssetSourcePublicationStatus::Durable) {
                     receipt.status = ProjectAssetImportStatus::ReconciliationRequired;
-                    return Result<void>::Failure(std::move(*result.Value().durabilityError));
+                    return Result<void>::Failure(*result.Value().durabilityError);
                 }
             }
             return Result<void>::Success();
@@ -217,8 +220,7 @@ namespace Horo::Application {
         /** @brief Remove private copies before publishing registry references to the promoted batch. */
         Result<void> ClearStages(std::vector<Entry> &entries, DurableFileSystem &files) {
             for (auto &entry : entries) {
-                auto removed = files.RemoveDurable(entry.stage);
-                if (removed.HasError())
+                if (auto removed = files.RemoveDurable(entry.stage); removed.HasError())
                     return removed;
                 entry.staged = false;
             }
@@ -252,15 +254,15 @@ namespace Horo::Application {
                 return planned;
             if (!registry)
                 return Result<void>::Success();
-            const auto report = registry->Publish(std::move(candidate).Value());
-            if (report.status == Assets::AssetRegistryBuildStatus::Failed)
+            if (const auto report = registry->Publish(std::move(candidate).Value());
+                report.status == Assets::AssetRegistryBuildStatus::Failed)
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
             receipt.registryPublished = true;
             complete = true;
             receipt.status = ProjectAssetImportStatus::ReconciliationRequired;
-            auto indexed =
-                Assets::AssetIndexStore::SaveAtomically(root / std::filesystem::path{ProjectLayout::AssetIndexPath}, registry->Snapshot());
-            if (indexed.HasError())
+            if (auto indexed = Assets::AssetIndexStore::SaveAtomically(root / std::filesystem::path{ProjectLayout::AssetIndexPath},
+                                                                       registry->Snapshot());
+                indexed.HasError())
                 return Result<void>::Failure(WrapError(Assets::AssetSourceErrors::DurabilityUnconfirmed, std::move(indexed).ErrorValue()));
             return Result<void>::Success();
         }
@@ -268,7 +270,7 @@ namespace Horo::Application {
         /** @brief Bound aggregate authored bytes and reserve only absent destinations before any native write. */
         class AuthoredPreparation final {
         public:
-            AuthoredPreparation(const PreparedAuthoredProjectAssetBatch &batch)
+            explicit AuthoredPreparation(const PreparedAuthoredProjectAssetBatch &batch)
                 : batch_(batch), key_(FormatSha256(ComputeSha256(std::as_bytes(std::span(batch.operationId)))).substr(7)) {}
 
             Result<void> Append(std::filesystem::path path, std::span<const std::byte> bytes) {
@@ -281,7 +283,7 @@ namespace Horo::Application {
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
                 Entry entry;
                 entry.path = std::move(path);
-                entry.stage = entry.path.parent_path() / (".horo-import-" + key_ + "-" + std::to_string(entries.size()) + ".tmp");
+                entry.stage = entry.path.parent_path() / std::format(".horo-import-{}-{}.tmp", key_, entries.size());
                 entry.bytes.assign(bytes.begin(), bytes.end());
                 entry.identity = {true, bytes.size(), ComputeSha256(bytes)};
                 total_ += bytes.size();
@@ -294,14 +296,14 @@ namespace Horo::Application {
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
                 const auto path = Foundation::Paths::Resolve(batch_.projectRoot, item.destination);
                 // AssetTypeId is a validated canonical identifier, never arbitrary JSON text.
-                const std::string metadata = "{\"schemaVersion\":1,\"assetId\":\"" + item.asset.ToString() + "\",\"assetType\":\"" +
-                                             std::string(item.type.Value()) + "\"}\n";
+                const std::string metadata = std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"{}"}})"
+                                                         "\n",
+                                                         item.asset.ToString(), item.type.Value());
                 auto decoded = Assets::DecodeAssetIdentitySidecar(item.destination.String(), metadata);
                 if (decoded.HasError())
                     return Result<void>::Failure(std::move(decoded).ErrorValue());
                 expected.push_back(std::move(decoded).Value());
-                auto payload = Append(path, item.payload);
-                if (payload.HasError())
+                if (auto payload = Append(path, item.payload); payload.HasError())
                     return payload;
                 auto sidecar = path;
                 sidecar += ".horo";
@@ -352,14 +354,16 @@ namespace Horo::Application {
         try {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
-            auto lease = mutations_.TryAcquire({batch.projectRoot, Editor::ProjectMutationOwner::Asset, batch.operationId});
-            if (lease.HasError())
+            if (auto lease = mutations_.TryAcquire({batch.projectRoot, Editor::ProjectMutationOwner::Asset, batch.operationId});
+                lease.HasValue()) {
+                auto prepared = Prepare(batch, ids);
+                if (prepared.HasError())
+                    return Result<void>::Failure(std::move(prepared).ErrorValue());
+                PreparedPublication publication{batch.projectRoot, batch.operationId, std::move(prepared).Value(), {}};
+                return PublishPrepared(publication, cancellation);
+            } else {
                 return Result<void>::Failure(std::move(lease).ErrorValue());
-            auto prepared = Prepare(batch, ids);
-            if (prepared.HasError())
-                return Result<void>::Failure(std::move(prepared).ErrorValue());
-            PreparedPublication publication{batch.projectRoot, batch.operationId, std::move(prepared).Value(), {}};
-            return PublishPrepared(publication, cancellation);
+            }
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
         } catch (...) {
@@ -377,15 +381,18 @@ namespace Horo::Application {
         try {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
-            auto lease = mutations_.TryAcquire({batch.projectRoot, Editor::ProjectMutationOwner::Asset, batch.operationId});
-            if (lease.HasError())
+            if (auto lease = mutations_.TryAcquire({batch.projectRoot, Editor::ProjectMutationOwner::Asset, batch.operationId});
+                lease.HasValue()) {
+                auto prepared = PrepareAuthored(batch);
+                if (prepared.HasError())
+                    return Result<void>::Failure(std::move(prepared).ErrorValue());
+                auto sources = std::move(prepared).Value();
+                PreparedPublication publication{batch.projectRoot, batch.operationId, std::move(sources.entries),
+                                                std::move(sources.expected)};
+                return PublishPrepared(publication, cancellation);
+            } else {
                 return Result<void>::Failure(std::move(lease).ErrorValue());
-            auto prepared = PrepareAuthored(batch);
-            if (prepared.HasError())
-                return Result<void>::Failure(std::move(prepared).ErrorValue());
-            auto sources = std::move(prepared).Value();
-            PreparedPublication publication{batch.projectRoot, batch.operationId, std::move(sources.entries), std::move(sources.expected)};
-            return PublishPrepared(publication, cancellation);
+            }
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
         } catch (...) {
@@ -403,25 +410,29 @@ namespace Horo::Application {
             ProjectAssetImportReceipt &receipt;
             bool &complete;
 
+            Cleanup(PreparedPublication &publication, DurableFileSystem &files, ProjectAssetImportReceipt &receipt, bool &complete) noexcept
+                : publication(publication), files(files), receipt(receipt), complete(complete) {}
+
+            Cleanup(const Cleanup &) = delete;
+            Cleanup &operator=(const Cleanup &) = delete;
+
             ~Cleanup() {
                 if (!complete)
                     Rollback(publication.entries, publication.root, files, receipt);
             }
-        } cleanup{publication, files_, receipt_, complete};
+        };
+
+        Cleanup cleanup{publication, files_, receipt_, complete};
 
         auto uncertain = MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed);
         try {
-            auto staged = Stage(publication.entries, publication.root, publication.operation, files_, cancellation);
-            if (staged.HasError())
+            if (auto staged = Stage(publication.entries, publication.root, publication.operation, files_, cancellation); staged.HasError())
                 return staged;
-            auto promoted = Promote(publication.entries, publication.root, files_, receipt_, cancellation);
-            if (promoted.HasError())
+            if (auto promoted = Promote(publication.entries, publication.root, files_, receipt_, cancellation); promoted.HasError())
                 return promoted;
-            auto removed = ClearStages(publication.entries, files_);
-            if (removed.HasError())
+            if (auto removed = ClearStages(publication.entries, files_); removed.HasError())
                 return removed;
-            auto registry = PublishRegistry(publication.root, registry_, receipt_, complete, publication.expected);
-            if (registry.HasError())
+            if (auto registry = PublishRegistry(publication.root, registry_, receipt_, complete, publication.expected); registry.HasError())
                 return registry;
             receipt_.status = ProjectAssetImportStatus::Published;
             complete = true;

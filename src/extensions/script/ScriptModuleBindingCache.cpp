@@ -10,7 +10,8 @@
 namespace Horo::Extensions {
     struct ScriptModuleBindingCache::Impl final {
         const std::thread::id owner{std::this_thread::get_id()};
-        std::size_t maximumEntries, maximumBytes;
+        std::size_t maximumEntries;
+        std::size_t maximumBytes;
         ScriptModuleBindingCacheStats stats;
         std::vector<std::shared_ptr<const ScriptModuleBindingPlan>> plans;
     };
@@ -158,7 +159,7 @@ namespace Horo::Extensions {
     void ScriptModuleBindingCache::Invalidate(const Sha256Digest &fingerprint) {
         if (impl_->owner != std::this_thread::get_id())
             return;
-        std::erase_if(impl_->plans, [&](const auto &plan) {
+        std::erase_if(impl_->plans, [this, &fingerprint](const auto &plan) {
             if (plan->descriptorFingerprint != fingerprint)
                 return false;
             impl_->stats.retainedBytes -= plan->retainedBytes;
@@ -169,7 +170,7 @@ namespace Horo::Extensions {
     void ScriptModuleBindingCache::InvalidateKey(const Sha256Digest &key) {
         if (impl_->owner != std::this_thread::get_id())
             return;
-        std::erase_if(impl_->plans, [&](const auto &plan) {
+        std::erase_if(impl_->plans, [this, &key](const auto &plan) {
             if (plan->key != key)
                 return false;
             impl_->stats.retainedBytes -= plan->retainedBytes;

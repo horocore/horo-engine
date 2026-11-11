@@ -25,11 +25,12 @@ namespace {
 
     ShaderManifest Manifest(CookMode mode) {
         switch (mode) {
-            case CookMode::Viewport:
+            using enum CookMode;
+            case Viewport:
                 return Editor::EditorVulkanViewportShaderManifest();
-            case CookMode::Multiview:
+            case Multiview:
                 return Editor::EditorVulkanMultiviewShaderManifest();
-            case CookMode::Shadow:
+            case Shadow:
                 return Editor::EditorVulkanShadowShaderManifest();
         }
         return {};
@@ -37,11 +38,12 @@ namespace {
 
     std::vector<ShaderReflectionBindingName> Names(CookMode mode) {
         switch (mode) {
-            case CookMode::Viewport:
+            using enum CookMode;
+            case Viewport:
                 return Editor::EditorVulkanViewportReflectionNames();
-            case CookMode::Multiview:
+            case Multiview:
                 return Editor::EditorVulkanMultiviewReflectionNames();
-            case CookMode::Shadow:
+            case Shadow:
                 return Editor::EditorVulkanShadowReflectionNames();
         }
         return {};
@@ -49,11 +51,12 @@ namespace {
 
     std::string_view ModeName(CookMode mode) {
         switch (mode) {
-            case CookMode::Viewport:
+            using enum CookMode;
+            case Viewport:
                 return "viewport";
-            case CookMode::Multiview:
+            case Multiview:
                 return "multiview";
-            case CookMode::Shadow:
+            case Shadow:
                 return "shadow";
         }
         return "invalid";
@@ -134,11 +137,12 @@ namespace {
     /** @brief Admits the same compiled payload and immutable reflection through its actual selected runtime consumer. */
     Result<void> ValidateCookedConsumer(const CompiledShaderArtifact &artifact, std::span<const std::uint8_t> metadata, CookMode mode) {
         switch (mode) {
-            case CookMode::Viewport:
+            using enum CookMode;
+            case Viewport:
                 return Admit(Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata));
-            case CookMode::Multiview:
+            case Multiview:
                 return Admit(Editor::LoadEditorVulkanMultiviewCook(artifact.payload, metadata));
-            case CookMode::Shadow:
+            case Shadow:
                 return Admit(Editor::LoadEditorVulkanShadowCook(artifact.payload, metadata));
         }
         return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
@@ -197,9 +201,8 @@ namespace {
 
 namespace {
     bool CookTool(const Horo::Render::ApprovedShaderCompilerTool &tool) {
-        return tool.hostPlatform == "linux-x86_64-ubuntu-26.04" &&
-               (tool.tool == Horo::Render::ShaderCompilerTool::Dxc || tool.tool == Horo::Render::ShaderCompilerTool::SpirvTools ||
-                tool.tool == Horo::Render::ShaderCompilerTool::SpirvCross);
+        using enum Horo::Render::ShaderCompilerTool;
+        return tool.hostPlatform == "linux-x86_64-ubuntu-26.04" && (tool.tool == Dxc || tool.tool == SpirvTools || tool.tool == SpirvCross);
     }
 
     void DescribeTools() {
@@ -210,14 +213,15 @@ namespace {
     }
 
     std::optional<CookMode> ParseMode(int argc, char **argv) {
+        using enum CookMode;
         if (argc == 7)
-            return CookMode::Viewport;
+            return Viewport;
         if (argc != 8)
             return std::nullopt;
         if (std::string_view{argv[7]} == "--multiview")
-            return CookMode::Multiview;
+            return Multiview;
         if (std::string_view{argv[7]} == "--shadow")
-            return CookMode::Shadow;
+            return Shadow;
         return std::nullopt;
     }
 }  // namespace

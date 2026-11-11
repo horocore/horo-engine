@@ -46,7 +46,8 @@ namespace Horo::Application {
         ShaderHotReloadConfiguration configuration;
         const std::thread::id owner{std::this_thread::get_id()};
         ShaderHotReloadSnapshot snapshot;
-        std::shared_ptr<ShaderHotReloadDetail::Work> active, pending;
+        std::shared_ptr<ShaderHotReloadDetail::Work> active;
+        std::shared_ptr<ShaderHotReloadDetail::Work> pending;
         std::optional<JobHandle> job;
         std::uint64_t generation{};
         bool busy{};

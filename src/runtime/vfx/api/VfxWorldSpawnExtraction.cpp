@@ -34,8 +34,8 @@ namespace Horo::Vfx {
             const Math::Vec2 size{source.sizeX[particle] * scale.x, source.sizeY[particle] * scale.y};
             if (!ValidInstance(position, size, source.rotation[particle]))
                 return false;
-            data.instances_.push_back(
-                {source.handles[particle].particle.Value(), position, size, source.rotation[particle], source.packedColor[particle]});
+            data.instances_.emplace_back(source.handles[particle].particle.Value(), position, size, source.rotation[particle],
+                                         source.packedColor[particle]);
         }
         return true;
     }
@@ -62,8 +62,8 @@ namespace Horo::Vfx {
         const auto first = static_cast<std::uint32_t>(data.instances_.size());
         if (!CopySpawnParticles(instance, source.Value(), data, origin))
             return false;
-        data.batches_.push_back(
-            {Batch(asset, instance), asset.material, asset.mesh, asset.blend, asset.topology, false, false, first, count});
+        data.batches_.emplace_back(Batch(asset, instance), asset.material, asset.mesh, asset.blend, asset.topology, false, false, first,
+                                   count);
         ++report.admittedBatches;
         report.admittedInstances += count;
         report.reservedDrawCalls += draws;

@@ -5,9 +5,11 @@ namespace Horo::Extensions {
     class ScriptModuleReferenceInstallation;
 
     struct ScriptModuleOperationPolicy final {
-        std::vector<ExtensionCapabilityId> projectCapabilities, contextCapabilities;
+        std::vector<ExtensionCapabilityId> projectCapabilities;
+        std::vector<ExtensionCapabilityId> contextCapabilities;
         std::vector<ScriptCapabilityScopeLease> scopes;
-        bool nativeConsent{}, scriptConsent{};
+        bool nativeConsent{};
+        bool scriptConsent{};
     };
 
     [[nodiscard]] std::vector<ExtensionCapabilityId> ScriptModuleRequestedCapabilities(const ScriptModuleProgram &);

@@ -495,7 +495,8 @@ namespace Horo::Editor {
             double area = 0.0;
             const auto origin = polygon.corners[0];
             for (std::size_t index = 1; index + 1 < polygon.count; ++index) {
-                const auto a = polygon.corners[index], b = polygon.corners[index + 1];
+                const auto a = polygon.corners[index];
+                const auto b = polygon.corners[index + 1];
                 area += (static_cast<double>(a.x) - origin.x) * (static_cast<double>(b.y) - origin.y) -
                         (static_cast<double>(a.y) - origin.y) * (static_cast<double>(b.x) - origin.x);
             }
@@ -574,7 +575,8 @@ namespace Horo::Editor {
             if (!Math::IsFinite(first) || !Math::IsFinite(last))
                 return MoveAxisProjection::Failure(
                     MakeError(TransformGizmoErrors::InvalidRequest, "Gizmo axis overflows clip coordinates."));
-            double minimum = 0.0, maximum = 1.0;
+            double minimum = 0.0;
+            double maximum = 1.0;
             if (!ClipMoveAxis(projection, first, last, minimum, maximum) || minimum == maximum)
                 return MoveAxisProjection::Success(std::nullopt);
             const auto start = MoveClipPixels(projection, MoveClipLerp(first, last, minimum));
@@ -597,7 +599,8 @@ namespace Horo::Editor {
         bool PointInMovePolygon(const ImVec2 point, const TransformGizmoPlanePolygon &polygon) noexcept {
             double winding = 0.0;
             for (std::size_t index = 0; index < polygon.count; ++index) {
-                const auto a = polygon.corners[index], b = polygon.corners[(index + 1) % polygon.count];
+                const auto a = polygon.corners[index];
+                const auto b = polygon.corners[(index + 1) % polygon.count];
                 const double cross = (static_cast<double>(b.x) - a.x) * (static_cast<double>(point.y) - a.y) -
                                      (static_cast<double>(b.y) - a.y) * (static_cast<double>(point.x) - a.x);
                 if (std::fabs(cross) < 0.001F)
@@ -698,8 +701,7 @@ namespace Horo::Editor {
             const auto &segment = *projected.Value();
             geometry.moveAxisSegments[axis] = segment;
             const float length = Distance(segment.start, segment.end);
-            const double projectedExtent = length / (segment.lastParameter - segment.firstParameter);
-            if (projectedExtent < 2.0) {
+            if (const double projectedExtent = length / (segment.lastParameter - segment.firstParameter); projectedExtent < 2.0) {
                 PrepareMoveDepthAxis(geometry, axis, segment.end, context.centerPixelsPerWorldUnit);
                 return Result<void>::Success();
             }
@@ -737,8 +739,7 @@ namespace Horo::Editor {
                 if (drawn.HasError())
                     return drawn;
             }
-            const auto planes = DrawMovePlaneHandles(drawList, projection, geometry, colors, scale.Value());
-            if (planes.HasError())
+            if (const auto planes = DrawMovePlaneHandles(drawList, projection, geometry, colors, scale.Value()); planes.HasError())
                 return planes;
             for (int axis = 0; axis < 3; ++axis)
                 if (geometry.moveEndOnAnchors[axis])
@@ -836,7 +837,7 @@ namespace Horo::Editor {
                 if (drawn.HasError())
                     return drawn;
             }
-            if (hitState.endOnAxis)
+            if (hitState.endOnAxis.has_value())
                 DrawScaleEndOnHandle(drawList, request, geometry, *hitState.endOnAxis, axisColors[*hitState.endOnAxis]);
             DrawScaleCenterHandle(drawList, request, geometry);
             return Result<void>::Success();

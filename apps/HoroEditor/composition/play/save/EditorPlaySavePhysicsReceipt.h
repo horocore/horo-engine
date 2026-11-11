@@ -45,6 +45,8 @@ namespace Horo::Application::Internal {
         std::shared_ptr<PlaySavePhysicsRestoreFence> fence_;
         Runtime::StagedRestoreParticipantRequirement requirement_;
         std::unique_ptr<Physics::StateDetail::RestartInput> input_;
-        bool validated_{}, published_{}, retired_{};
+        bool validated_{};
+        bool published_{};
+        bool retired_{};
     };
 }  // namespace Horo::Application::Internal

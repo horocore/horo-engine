@@ -8,14 +8,15 @@ namespace Horo::Character {
     CharacterEventCapture CharacterWorld::CaptureEvents(const CharacterEventCaptureRequest &request,
                                                         std::span<CharacterMovementEvent> events,
                                                         std::span<CharacterEventTerminalState> terminal) const noexcept {
+        using enum Horo::Character::CharacterEventCaptureStatus;
         if (impl_->ownerThread != std::this_thread::get_id())
-            return {.status = CharacterEventCaptureStatus::WrongThread};
+            return {.status = WrongThread};
         if (impl_->state.load() == CharacterWorldState::Destroyed)
-            return {.status = CharacterEventCaptureStatus::Closed};
+            return {.status = Closed};
         if (impl_->ticking.load() || impl_->placementActive)
-            return {.status = CharacterEventCaptureStatus::Busy};
+            return {.status = Busy};
         if (request.world != impl_->descriptor.identity || request.sceneGeneration != impl_->descriptor.sceneGeneration)
-            return {.status = CharacterEventCaptureStatus::Stale};
+            return {.status = Stale};
         return impl_->fastPath.CaptureEvents(request.afterPublicationRevision, events, terminal);
     }
 

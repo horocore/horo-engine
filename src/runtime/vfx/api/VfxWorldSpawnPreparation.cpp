@@ -18,13 +18,13 @@ namespace Horo::Vfx::SpawnDetail {
 
         /** @brief Admits exact prepared visual recipes without substituting topology, sorting or blend behavior. */
         [[nodiscard]] bool SupportedVisual(const VfxSpawnAssetPreparation &source) noexcept {
+            using enum Horo::Render::MaterialAlphaMode;
             const auto mode = source.particles->Data().renderMode;
             if (mode == ParticleRenderMode::Billboard)
-                return source.mesh == Render::RenderMeshHandle{} && source.materialBlend == Render::MaterialAlphaMode::Additive;
+                return source.mesh == Render::RenderMeshHandle{} && source.materialBlend == Additive;
             if (mode != ParticleRenderMode::Mesh || !source.mesh.IsValid())
                 return false;
-            return source.materialBlend == Render::MaterialAlphaMode::Opaque || source.materialBlend == Render::MaterialAlphaMode::Masked ||
-                   source.materialBlend == Render::MaterialAlphaMode::Additive;
+            return source.materialBlend == Opaque || source.materialBlend == Masked || source.materialBlend == Additive;
         }
 
         /** @brief Rejects unprepared native/collision/sort paths while preserving the CPU kernel and callback boundary. */
@@ -138,8 +138,8 @@ namespace Horo::Vfx::SpawnDetail {
         }
 
         /** @brief Rejects aggregate demand before allocating any simulator, including checked disjoint identity ranges. */
-        [[nodiscard]] bool FitsAggregate(const VfxSpawnAssetPreparation &source, const VfxSpawnBudget budget, const std::uint64_t instances,
-                                         const std::uint64_t particles) noexcept {
+        [[nodiscard]] bool FitsAggregate(const VfxSpawnAssetPreparation &source, const VfxSpawnBudget &budget,
+                                         const std::uint64_t instances, const std::uint64_t particles) noexcept {
             if (!ValidAsset(source))
                 return false;
             return instances + source.maximumInstances <= budget.maximumInstances &&
@@ -165,12 +165,12 @@ namespace Horo::Vfx::SpawnDetail {
         }
 
         /** @brief Checks one finite aggregate resource envelope before materialization. */
-        [[nodiscard]] bool ValidCounts(const VfxSpawnBudget budget) noexcept {
+        [[nodiscard]] bool ValidCounts(const VfxSpawnBudget &budget) noexcept {
             return budget.maximumInstances > 0 && budget.maximumInstances <= 256 && budget.maximumParticles > 0 &&
                    budget.maximumParticles <= 16'384;
         }
 
-        [[nodiscard]] bool ValidResources(const VfxSpawnBudget budget) noexcept {
+        [[nodiscard]] bool ValidResources(const VfxSpawnBudget &budget) noexcept {
             return ValidCounts(budget) && budget.maximumBytes > 0 && budget.maximumBytes <= CpuParticleBufferHardLimits::Bytes &&
                    std::isfinite(budget.maximumDeltaSeconds) && budget.maximumDeltaSeconds > 0.0F && budget.maximumDeltaSeconds <= 60.0F;
         }
@@ -179,7 +179,8 @@ namespace Horo::Vfx::SpawnDetail {
         [[nodiscard]] Result<std::unique_ptr<Detail::VfxWorldSpawnState>> PrepareCandidate(
             const VfxIdentityScope scene, const std::span<const VfxSpawnAssetPreparation> assets, const VfxSpawnBudget budget) {
             auto state = PrepareStorage(budget, assets.size());
-            std::uint64_t instances{}, particles{};
+            std::uint64_t instances{};
+            std::uint64_t particles{};
             for (const auto &source : assets) {
                 if (!ValidAsset(source))
                     return Reject<std::unique_ptr<Detail::VfxWorldSpawnState>>(VfxErrors::SpawnPreparationInvalid);
@@ -203,14 +204,15 @@ namespace Horo::Vfx::SpawnDetail {
         }
     }  // namespace
 
-    VfxSpawnStatus ValidateBudget(const VfxSpawnBudget budget) noexcept {
+    VfxSpawnStatus ValidateBudget(const VfxSpawnBudget &budget) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         const bool queues = budget.maximumPending > 0 && budget.maximumPending <= VfxSpawnHardLimits::Pending &&
                             budget.maximumResults > 0 && budget.maximumResults <= VfxSpawnHardLimits::Results;
         if (!queues)
-            return VfxSpawnStatus::InvalidRequest;
+            return InvalidRequest;
         const bool owners = budget.maximumOwners > 0 && budget.maximumOwners <= VfxSpawnHardLimits::Producers &&
                             budget.maximumProducers > 0 && budget.maximumProducers <= VfxSpawnHardLimits::Producers;
-        return owners ? VfxSpawnStatus::Accepted : VfxSpawnStatus::InvalidRequest;
+        return owners ? Accepted : InvalidRequest;
     }
 
     Result<std::unique_ptr<Detail::VfxWorldSpawnState>> Prepare(const VfxIdentityScope scene,

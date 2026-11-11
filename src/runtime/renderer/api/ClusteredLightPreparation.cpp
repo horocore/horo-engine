@@ -33,15 +33,16 @@ namespace Horo::Render {
         }
 
         std::uint8_t Missing(const LightPreparationSupport &support) noexcept {
+            using enum Horo::Render::LightPreparationMissing;
             std::uint8_t missing{};
             if (!support.nativeCulling)
-                missing |= static_cast<std::uint8_t>(LightPreparationMissing::NativeCulling);
+                missing |= static_cast<std::uint8_t>(NativeCulling);
             if (!support.storageRaster)
-                missing |= static_cast<std::uint8_t>(LightPreparationMissing::StorageRaster);
+                missing |= static_cast<std::uint8_t>(StorageRaster);
             if (!support.sameGraphConsumer)
-                missing |= static_cast<std::uint8_t>(LightPreparationMissing::SameGraphConsumer);
+                missing |= static_cast<std::uint8_t>(SameGraphConsumer);
             if (!support.depthPrepass)
-                missing |= static_cast<std::uint8_t>(LightPreparationMissing::DepthPrepass);
+                missing |= static_cast<std::uint8_t>(DepthPrepass);
             return missing;
         }
     }  // namespace
@@ -115,18 +116,20 @@ namespace Horo::Render {
 
     Result<LightPreparationSelection> SelectLightPreparation(LightPreparationMode requested, LightPreparationFallback fallback,
                                                              const LightPreparationSupport &support) {
+        using enum Horo::Render::LightPreparationMode;
+        using enum Horo::Render::LightPreparationFallback;
         using Outcome = Result<LightPreparationSelection>;
-        if (fallback != LightPreparationFallback::Forbidden && fallback != LightPreparationFallback::AllowBaselineForwardCpu)
+        if (fallback != Forbidden && fallback != AllowBaselineForwardCpu)
             return Outcome::Failure(MakeError(LightCullingErrors::InvalidInput));
-        if (requested == LightPreparationMode::BaselineForwardCpu)
+        if (requested == BaselineForwardCpu)
             return Outcome::Success({requested, 0});
-        if (requested != LightPreparationMode::ClusteredForwardNative)
+        if (requested != ClusteredForwardNative)
             return Outcome::Failure(MakeError(LightCullingErrors::InvalidInput));
         const auto missing = Missing(support);
         if (missing == 0)
             return Outcome::Success({requested, 0});
-        if (fallback == LightPreparationFallback::Forbidden)
+        if (fallback == Forbidden)
             return Outcome::Failure(MakeError(LightCullingErrors::Unsupported));
-        return Outcome::Success({LightPreparationMode::BaselineForwardCpu, missing});
+        return Outcome::Success({BaselineForwardCpu, missing});
     }
 }  // namespace Horo::Render

@@ -82,8 +82,9 @@ namespace Horo::Application {
 
     Result<void> ShaderHotReloadService::State::Adopt(const std::shared_ptr<ShaderHotReloadDetail::Work> &work,
                                                       const ShaderHotReloadDetail::CompiledSet &compiled) {
+        using enum Horo::Application::ShaderHotReloadOutcome;
         if (auto current = Current(target, work->target); current.HasError()) {
-            Finish(work, ShaderHotReloadOutcome::Stale, current.ErrorValue());
+            Finish(work, Stale, current.ErrorValue());
             return Result<void>::Success();
         }
         std::array<Render::ShaderHotReloadProgramView, ShaderHotReloadDetail::MaximumPrograms> programs{};
@@ -93,19 +94,19 @@ namespace Horo::Application {
         }
         auto candidate = Prepare(target, std::span(programs).first(compiled.size()), work->target, work->cancellation.Token());
         if (candidate.HasError()) {
-            Finish(work, ShaderHotReloadOutcome::Failed, candidate.ErrorValue());
+            Finish(work, Failed, candidate.ErrorValue());
             return Result<void>::Success();
         }
         if (work->cancellation.Token().IsCancellationRequested()) {
-            Finish(work, ShaderHotReloadOutcome::Cancelled, ShaderHotReloadDetail::CancelledError());
+            Finish(work, Cancelled, ShaderHotReloadDetail::CancelledError());
             return Result<void>::Success();
         }
         auto adopted = Publish(target, std::move(candidate).Value(), work->target);
         if (adopted.HasError()) {
-            Finish(work, ShaderHotReloadOutcome::Failed, adopted.ErrorValue());
+            Finish(work, Failed, adopted.ErrorValue());
             return Result<void>::Success();
         }
-        Finish(work, ShaderHotReloadOutcome::Adopted, {}, adopted.Value());
+        Finish(work, Adopted, {}, adopted.Value());
         return Result<void>::Success();
     }
 

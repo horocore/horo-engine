@@ -106,8 +106,8 @@ namespace Horo::Editor {
 
     void GuiScreenHost::AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
         Runtime::RuntimeDispatchFacts ignored;
-        const auto status = context.dispatchEvidence.Read(dispatchSource_, Runtime::RuntimePhase::FixedUpdate, ignored);
-        if (status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Retired)
+        if (const auto status = context.dispatchEvidence.Read(dispatchSource_, Runtime::RuntimePhase::FixedUpdate, ignored);
+            status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Retired)
             return;
         if (!MatchesFixedAttempt(context))
             return;

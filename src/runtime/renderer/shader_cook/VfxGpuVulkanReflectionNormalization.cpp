@@ -63,8 +63,10 @@ namespace Horo::Render {
 
         void Entry(const Json &json, const SpirvReflectionStage &stage, VfxGpuProgramRole role) {
             const auto &rows = Rows(json, "entryPoints", 1);
-            const auto mode = stage.stage == ShaderStage::Compute ? "comp" : stage.stage == ShaderStage::Vertex ? "vert" : "frag";
-            if (rows.size() != 1 || rows[0].at("name").get_ref<const std::string &>() != EntryName(role, stage.stage) ||
+            if (const auto mode = stage.stage == ShaderStage::Compute  ? "comp"
+                                  : stage.stage == ShaderStage::Vertex ? "vert"
+                                                                       : "frag";
+                rows.size() != 1 || rows[0].at("name").get_ref<const std::string &>() != EntryName(role, stage.stage) ||
                 rows[0].at("mode") != mode)
                 throw InvalidEvidence{};
             Workgroup(rows[0], stage.stage);
@@ -73,8 +75,8 @@ namespace Horo::Render {
         void Counts(const Json &json, VfxGpuProgramRole role, ShaderStage stage) {
             const bool fragment = stage == ShaderStage::Fragment;
             const auto storage = fragment ? 0u : Compute(role) ? 4u : 1u;
-            const auto uniform = fragment ? 0u : 1u;
-            if (Rows(json, "ssbos", 4).size() != storage || Rows(json, "ubos", 1).size() != uniform)
+            if (const auto uniform = fragment ? 0u : 1u;
+                Rows(json, "ssbos", 4).size() != storage || Rows(json, "ubos", 1).size() != uniform)
                 throw InvalidEvidence{};
             if (json.contains("types") && (!json.at("types").is_object() || json.at("types").size() > 32))
                 throw InvalidEvidence{};

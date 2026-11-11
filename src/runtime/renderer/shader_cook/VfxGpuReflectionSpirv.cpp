@@ -9,9 +9,24 @@ namespace Horo::Render::VfxGpuCookDetail {
         using Words = std::span<const std::uint32_t>;
 
         struct Node {
-            std::uint32_t type{}, storage{}, element{}, root{}, binding{~0u}, set{~0u}, stride{}, kind{}, width{}, count{}, signedness{};
-            bool pointer{}, block{}, readonlyMember{};
-            std::vector<std::uint32_t> members, offsets, major, matrixStride;
+            std::uint32_t type{};
+            std::uint32_t storage{};
+            std::uint32_t element{};
+            std::uint32_t root{};
+            std::uint32_t binding{~0u};
+            std::uint32_t set{~0u};
+            std::uint32_t stride{};
+            std::uint32_t kind{};
+            std::uint32_t width{};
+            std::uint32_t count{};
+            std::uint32_t signedness{};
+            bool pointer{};
+            bool block{};
+            bool readonlyMember{};
+            std::vector<std::uint32_t> members;
+            std::vector<std::uint32_t> offsets;
+            std::vector<std::uint32_t> major;
+            std::vector<std::uint32_t> matrixStride;
             std::vector<std::string> memberNames;
             std::string name;
         };
@@ -25,8 +40,12 @@ namespace Horo::Render::VfxGpuCookDetail {
             std::vector<Node> ids;
             std::vector<Instruction> instructions;
             std::array<std::uint32_t, 5> resources{};
-            std::uint32_t entry{}, functions{}, localSizes{}, extensionSet{};
-            bool functionOpen{}, functionEnded{};
+            std::uint32_t entry{};
+            std::uint32_t functions{};
+            std::uint32_t localSizes{};
+            std::uint32_t extensionSet{};
+            bool functionOpen{};
+            bool functionEnded{};
             VfxGpuProgramRole role;
         };
 
@@ -295,7 +314,7 @@ namespace Horo::Render::VfxGpuCookDetail {
                 const auto count = words[at] >> 16;
                 if (!count || count > words.size() - at || proof.instructions.size() == 65536)
                     throw InvalidEvidence{};
-                proof.instructions.push_back({words[at] & 65535, words.subspan(at, count)});
+                proof.instructions.emplace_back(words[at] & 65535, words.subspan(at, count));
                 at += count;
             }
         }
@@ -322,9 +341,9 @@ namespace Horo::Render::VfxGpuCookDetail {
         }
 
         void BindResource(Proof &proof, Words w) {
-            auto &value = Id(proof, w[2]);
-            const auto count = ResourceNames(proof.role).size();
-            if (w.size() != 4 || (w[3] != 12 && w[3] != 2) || value.set != 0 || value.binding >= count || proof.resources[value.binding])
+            const auto &value = Id(proof, w[2]);
+            if (const auto count = ResourceNames(proof.role).size();
+                w.size() != 4 || (w[3] != 12 && w[3] != 2) || value.set != 0 || value.binding >= count || proof.resources[value.binding])
                 throw InvalidEvidence{};
             proof.resources[value.binding] = w[2];
         }
@@ -332,8 +351,7 @@ namespace Horo::Render::VfxGpuCookDetail {
         void Resource(Proof &proof, Words w) {
             RequireSize(w, 4);
             auto &value = Id(proof, w[2]);
-            const auto &pointer = Id(proof, w[1]);
-            if (!pointer.pointer || pointer.storage != w[3] || PointerType(proof, pointer.element))
+            if (const auto &pointer = Id(proof, w[1]); !pointer.pointer || pointer.storage != w[3] || PointerType(proof, pointer.element))
                 throw InvalidEvidence{};
             value.root = w[2];
             if (w.size() == 5)
@@ -357,8 +375,8 @@ namespace Horo::Render::VfxGpuCookDetail {
         }
 
         void StorageBlock(Proof &proof, const Node &block, std::size_t index) {
-            const bool readonly = !Compute(proof.role) || index == 0 || index == 2;
-            if (block.members.size() != 1 || block.offsets != std::vector<std::uint32_t>{0} || block.readonlyMember != readonly)
+            if (const bool readonly = !Compute(proof.role) || index == 0 || index == 2;
+                block.members.size() != 1 || block.offsets != std::vector<std::uint32_t>{0} || block.readonlyMember != readonly)
                 throw InvalidEvidence{};
             const auto &array = Id(proof, block.members[0]);
             if (array.kind != 29 || array.stride != 4 || !Uint(proof, array.element))
@@ -366,8 +384,7 @@ namespace Horo::Render::VfxGpuCookDetail {
         }
 
         void MatrixField(Proof &proof, const Node &block, std::uint32_t type) {
-            const auto &matrix = Id(proof, type);
-            if (matrix.kind != 24 || matrix.count != 4 || !Vector(proof, matrix.element, false))
+            if (const auto &matrix = Id(proof, type); matrix.kind != 24 || matrix.count != 4 || !Vector(proof, matrix.element, false))
                 throw InvalidEvidence{};
             if (block.major.empty() || (block.major[0] != 4 && block.major[0] != 5) || block.matrixStride.empty() ||
                 block.matrixStride[0] != 16)
@@ -386,9 +403,9 @@ namespace Horo::Render::VfxGpuCookDetail {
 
         void UniformBlock(Proof &proof, const Node &block) {
             const auto names = UniformNames(proof.role);
-            const std::vector<std::uint32_t> offsets =
-                Compute(proof.role) ? std::vector<std::uint32_t>{0, 16, 32, 48, 64, 80} : std::vector<std::uint32_t>{0, 64, 80, 96, 112};
-            if (block.offsets != offsets || block.members.size() != names.size() || block.memberNames.size() != names.size())
+            if (const std::vector<std::uint32_t> offsets = Compute(proof.role) ? std::vector<std::uint32_t>{0, 16, 32, 48, 64, 80}
+                                                                               : std::vector<std::uint32_t>{0, 64, 80, 96, 112};
+                block.offsets != offsets || block.members.size() != names.size() || block.memberNames.size() != names.size())
                 throw InvalidEvidence{};
             for (std::size_t i = 0; i < names.size(); ++i) {
                 if (block.memberNames[i] != names[i])
@@ -400,7 +417,7 @@ namespace Horo::Render::VfxGpuCookDetail {
         void ValidateResource(Proof &proof, std::size_t index) {
             const auto names = ResourceNames(proof.role);
             const bool uniform = index + 1 == names.size();
-            auto &value = Id(proof, proof.resources[index]);
+            const auto &value = Id(proof, proof.resources[index]);
             const auto &pointer = Id(proof, value.type);
             const auto &block = Id(proof, pointer.element);
             if (value.name != names[index] || !block.block || pointer.storage != (uniform ? 2u : 12u))
@@ -415,8 +432,8 @@ namespace Horo::Render::VfxGpuCookDetail {
             RequireSize(w, 5);
             auto &value = Id(proof, w[2]);
             const auto &base = Id(proof, w[3]);
-            const auto &resultType = Id(proof, w[1]);
-            if (!base.root || !resultType.pointer || resultType.storage != Id(proof, base.type).storage)
+            if (const auto &resultType = Id(proof, w[1]);
+                !base.root || !resultType.pointer || resultType.storage != Id(proof, base.type).storage)
                 throw InvalidEvidence{};
             ValueOperands(proof, w.subspan(4));
             value.root = base.root;
@@ -432,8 +449,7 @@ namespace Horo::Render::VfxGpuCookDetail {
 
         bool WritableRoot(Proof &proof, std::uint32_t root) {
             const auto &node = Id(proof, root);
-            const auto storage = Id(proof, node.type).storage;
-            if (storage == 3 || storage == 6 || storage == 7)
+            if (const auto storage = Id(proof, node.type).storage; storage == 3 || storage == 6 || storage == 7)
                 return true;
             return Compute(proof.role) && (root == proof.resources[1] || root == proof.resources[3]);
         }
@@ -441,8 +457,7 @@ namespace Horo::Render::VfxGpuCookDetail {
         void Store(Proof &proof, Words w) {
             if (w.size() != 3)
                 throw InvalidEvidence{};
-            const auto root = Id(proof, w[1]).root;
-            if (!root || !WritableRoot(proof, root))
+            if (const auto root = Id(proof, w[1]).root; !root || !WritableRoot(proof, root))
                 throw InvalidEvidence{};
             ValueOperands(proof, w.subspan(2));
         }
@@ -465,8 +480,7 @@ namespace Horo::Render::VfxGpuCookDetail {
         void ScalarMinimum(Proof &proof, Words w) {
             if (w.size() != 7 || w[3] != proof.extensionSet)
                 throw InvalidEvidence{};
-            const auto &type = Id(proof, w[1]);
-            if (type.kind != 22 || type.width != 32)
+            if (const auto &type = Id(proof, w[1]); type.kind != 22 || type.width != 32)
                 throw InvalidEvidence{};
             for (const auto operand : w.subspan(5))
                 if (Id(proof, operand).type != w[1] || Pointer(proof, operand))
@@ -479,8 +493,8 @@ namespace Horo::Render::VfxGpuCookDetail {
                 ScalarMinimum(proof, w);
                 return;
             }
-            constexpr std::array pure{4u, 13u, 14u, 31u, 37u, 38u, 39u, 40u, 41u, 42u, 43u, 44u, 45u, 46u, 48u, 49u, 50u, 66u};
-            if (w[3] != proof.extensionSet || std::ranges::find(pure, w[4]) == pure.end())
+            if (constexpr std::array pure{4u, 13u, 14u, 31u, 37u, 38u, 39u, 40u, 41u, 42u, 43u, 44u, 45u, 46u, 48u, 49u, 50u, 66u};
+                w[3] != proof.extensionSet || std::ranges::find(pure, w[4]) == pure.end())
                 throw InvalidEvidence{};
             ValueOperands(proof, w.subspan(5));
         }

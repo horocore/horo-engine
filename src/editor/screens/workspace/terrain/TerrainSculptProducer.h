@@ -14,7 +14,8 @@ namespace Horo::Editor {
 
     /** @brief One detached brush position in canonical sample coordinates. */
     struct TerrainSculptStamp final {
-        double sampleX{}, sampleZ{};
+        double sampleX{};
+        double sampleZ{};
     };
 
     /** @brief Transient stroke policy, captured once before pointer motion. */

@@ -11,7 +11,8 @@ namespace Horo::Render::LightCullingMetalCookDetail {
 
         struct Primitive {
             std::string_view json;
-            std::uint32_t bytes, alignment;
+            std::uint32_t bytes;
+            std::uint32_t alignment;
         };
 
         std::optional<Primitive> Type(std::string_view type) {
@@ -254,7 +255,8 @@ namespace Horo::Render::LightCullingMetalCookDetail {
 
         std::vector<Buffer> ReadArguments(Tokens tokens, Tokens parameters) {
             std::vector<Buffer> buffers;
-            std::size_t start = 0, depth = 0;
+            std::size_t start = 0;
+            std::size_t depth = 0;
             for (std::size_t at = 0; at < parameters.size(); ++at) {
                 if (parameters[at] == "(")
                     ++depth;

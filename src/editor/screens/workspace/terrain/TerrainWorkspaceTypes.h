@@ -13,8 +13,13 @@ namespace Horo::Editor {
         TerrainEditFence fence;
         Assets::AssetId workspace;
         DocumentInstanceId instance;
-        bool dirty{}, canUndo{}, canRedo{}, conflict{}, closed{};
-        bool containerSource{}, hasLayerBinding{};
+        bool dirty{};
+        bool canUndo{};
+        bool canRedo{};
+        bool conflict{};
+        bool closed{};
+        bool containerSource{};
+        bool hasLayerBinding{};
     };
     /** @brief Explicit selected authoring mode; runtime and source capabilities are never inferred from a mode. */
     enum class TerrainToolMode : std::uint8_t {

@@ -15,7 +15,7 @@ namespace Horo::Physics::Detail {
             std::vector<StateDetail::ConstructionRecipeChild> children;
             children.reserve(group.count);
             for (const auto &edge : manifest.edges.subspan(group.begin, group.count))
-                children.push_back({previous.recipes[edge.child], edge.localPose, edge.userData});
+                children.emplace_back(previous.recipes[edge.child], edge.localPose, edge.userData);
             return pool.AddCompound(children, control);
         }
 
@@ -41,7 +41,7 @@ namespace Horo::Physics::Detail {
 
         Result<CanonicalPhysicsStateCreatedShape> Native(const PhysicsStateShapeRecipes &manifest, const CanonicalRestartShapes &previous,
                                                          const PhysicsStateShapeRecipe &recipe) {
-            return ObserveCanonicalPhysicsShapeCreation([&]() -> Result<JPH::Ref<JPH::Shape>> {
+            return ObserveCanonicalPhysicsShapeCreation([&recipe, &manifest, &previous]() -> Result<JPH::Ref<JPH::Shape>> {
                 if (const auto *analytic = std::get_if<PhysicsShapeDescriptor>(&recipe.geometry))
                     return CreateNativeShape(*analytic);
                 return CompoundNative(manifest, previous, std::get<PhysicsStateCompoundRecipe>(recipe.geometry));

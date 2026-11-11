@@ -130,7 +130,7 @@ namespace Horo::Assets::Detail {
 
     /** @copydoc ReimportAdmission::~ReimportAdmission */
     ReimportAdmission::~ReimportAdmission() {
-        for (auto &entry : entries) {
+        for (const auto &entry : entries) {
             if (!entry.backupCreated)
                 continue;
             try {

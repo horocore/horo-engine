@@ -70,8 +70,8 @@ namespace Horo::Physics::StateDetail {
             return Outcome::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         std::size_t rowBytes{};
         const auto shapeBytes = static_cast<std::size_t>(header.shapeBytes);
-        const auto tailBytes = input.size() - ConstructionManifestHeader::Bytes - shapeBytes;
-        if (!ConstructionManifestRowSize(header, tailBytes, rowBytes) || rowBytes != tailBytes)
+        if (const auto tailBytes = input.size() - ConstructionManifestHeader::Bytes - shapeBytes;
+            !ConstructionManifestRowSize(header, tailBytes, rowBytes) || rowBytes != tailBytes)
             return Outcome::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
         auto parsedShapes = ReadShapeHeader(input, shapeBytes, ceilings.shapes);
         if (parsedShapes.HasError())

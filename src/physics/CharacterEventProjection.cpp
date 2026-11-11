@@ -84,17 +84,18 @@ namespace Horo::Character::Detail {
 
         void ProjectContacts(CharacterEventProjection &events, const CharacterEventPreviousState &previous,
                              const CharacterLocomotionSnapshot &current, const CharacterControllerDescriptor &descriptor) noexcept {
+            using enum Horo::Character::CharacterCollisionFlags;
             const auto collisions = current.movement.collisions;
-            if (!HasFlag(previous.collisions, CharacterCollisionFlags::Sides) && HasFlag(collisions, CharacterCollisionFlags::Sides))
+            if (!HasFlag(previous.collisions, Sides) && HasFlag(collisions, Sides))
                 Append(events, CharacterMovementEventKind::HitWall, current, BlockingContact(current.movement, descriptor, false));
-            if (!HasFlag(previous.collisions, CharacterCollisionFlags::Ceiling) && HasFlag(collisions, CharacterCollisionFlags::Ceiling))
+            if (!HasFlag(previous.collisions, Ceiling) && HasFlag(collisions, Ceiling))
                 Append(events, CharacterMovementEventKind::HitCeiling, current, BlockingContact(current.movement, descriptor, true));
         }
 
         /** @brief Reconcile end states before ordinary contact hints when the bounded event prefix fills. */
         bool Critical(CharacterMovementEventKind kind) noexcept {
-            return kind == CharacterMovementEventKind::Landed || kind == CharacterMovementEventKind::LeftGround ||
-                   kind == CharacterMovementEventKind::SlideEnd;
+            using enum Horo::Character::CharacterMovementEventKind;
+            return kind == Landed || kind == LeftGround || kind == SlideEnd;
         }
     }  // namespace
 

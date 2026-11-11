@@ -522,7 +522,8 @@ namespace Horo::Terrain {
             if (!value.id.IsValid() || value.type != request.target.definition.Data().type || value.sampleX < request.sampleOriginX ||
                 value.sampleZ < request.sampleOriginZ)
                 return Result<PlacementPosition>::Failure(MakeError(FoliagePlacementCookErrors::InvalidInput));
-            const auto x = value.sampleX - request.sampleOriginX, z = value.sampleZ - request.sampleOriginZ;
+            const auto x = value.sampleX - request.sampleOriginX;
+            const auto z = value.sampleZ - request.sampleOriginZ;
             if (x >= grid.width || z >= grid.height || !ValidAuthoredTransform(value, request.target.definition.Data()))
                 return Result<PlacementPosition>::Failure(MakeError(FoliagePlacementCookErrors::InvalidInput));
             if (!AuthoredAltitudeValid(grid.samples[std::size_t(z) * grid.width + x].altitudeMillimeters))

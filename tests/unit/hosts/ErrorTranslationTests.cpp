@@ -24,11 +24,11 @@ TEST_CASE("All hosts preserve the same application error across stable presentat
         REQUIRE(gui.surface == (index == 7 ? GuiErrorSurface::FatalDialog : GuiErrorSurface::Inline));
         REQUIRE(payload["domain"] == original.domain.Value());
         REQUIRE(payload["code"] == original.code.Value());
-        REQUIRE(payload["message"] == Descriptors[index].summary);
+        REQUIRE(payload["message"].get<std::string>() == Descriptors[index].summary);
         REQUIRE(payload["metadata"].is_object());
         REQUIRE(payload["diagnostics"].size() == 2);
         REQUIRE(payload["diagnostics"][0]["severity"] == "warning");
-        REQUIRE(payload["diagnostics"][0]["message"] == DiagnosticDescriptors[0].summary);
+        REQUIRE(payload["diagnostics"][0]["message"].get<std::string>() == DiagnosticDescriptors[0].summary);
         REQUIRE(payload["diagnostics"][1]["severity"] == "note");
         REQUIRE(payload["cause"]["code"] == Descriptors[3].code.Value());
         REQUIRE(payload["cause"]["cause"].is_null());

@@ -151,32 +151,33 @@ namespace Horo::Gameplay {
 
         /** @brief Metadata decoding uses protected raw reads; native allocations unwind through the protected frame. */
         BehaviorTreeProperty ReadProperty(lua_State *state) {
+            using enum Horo::AI::BehaviorTreePropertyKind;
             constexpr const char *keys[]{"id", "kind", "value"};
             ExactKeys(state, -1, keys);
             BehaviorTreeProperty property;
             property.id = RequiredIdentity<BehaviorTreePropertyId>(state, -1, "id");
-            property.kind = Enumeration(state, -1, "kind", BehaviorTreePropertyKind::Count, -1);
+            property.kind = Enumeration(state, -1, "kind", Count, -1);
             RawField(state, -1, "value");
             switch (property.kind) {
-                case BehaviorTreePropertyKind::Boolean:
+                case Boolean:
                     if (!lua_isboolean(state, -1))
                         throw std::invalid_argument("Invalid boolean property");
                     property.value = static_cast<bool>(lua_toboolean(state, -1));
                     break;
-                case BehaviorTreePropertyKind::SignedInteger:
+                case SignedInteger:
                     if (!lua_isinteger(state, -1))
                         throw std::invalid_argument("Invalid integer property");
                     property.value = static_cast<std::int64_t>(lua_tointeger(state, -1));
                     break;
-                case BehaviorTreePropertyKind::Scalar:
+                case Scalar:
                     if (lua_type(state, -1) != LUA_TNUMBER)
                         throw std::invalid_argument("Invalid scalar property");
                     property.value = static_cast<double>(lua_tonumber(state, -1));
                     break;
-                case BehaviorTreePropertyKind::String:
+                case String:
                     property.value = ReadStringProperty(state);
                     break;
-                case BehaviorTreePropertyKind::NodeReference:
+                case NodeReference:
                     property.value = RequiredIdentity<BehaviorTreeNodeId>(state, -2, "value");
                     break;
                 default:
@@ -262,13 +263,14 @@ namespace Horo::Gameplay {
         }
 
         void ValidateCallbacks(lua_State *state, int table, DecisionNodeRole role) {
-            const bool task = role == DecisionNodeRole::Task;
+            using enum Horo::AI::DecisionNodeRole;
+            const bool task = role == Task;
             ValidateCallback(state, table, "start", task);
             ValidateCallback(state, table, "resume", task);
             ValidateCallback(state, table, "abort", task);
             ValidateCallback(state, table, "cleanup", task);
-            ValidateCallback(state, table, "check", role == DecisionNodeRole::Condition);
-            ValidateCallback(state, table, "service", role == DecisionNodeRole::Service);
+            ValidateCallback(state, table, "check", role == Condition);
+            ValidateCallback(state, table, "service", role == Service);
         }
 
         struct NodeVm final {
@@ -280,6 +282,9 @@ namespace Horo::Gameplay {
             explicit NodeVm(LuaBehaviorLimits policy) : budget{0, policy.maximumMemoryBytes}, limits(policy) {
                 state = lua_newstate(Detail::BudgetAllocate, &budget);
             }
+
+            NodeVm(const NodeVm &) = delete;
+            NodeVm &operator=(const NodeVm &) = delete;
 
             ~NodeVm() {
                 if (state)

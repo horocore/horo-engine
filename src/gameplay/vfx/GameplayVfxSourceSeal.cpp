@@ -5,17 +5,18 @@
 namespace Horo::Gameplay::Detail {
     /** @copydoc GameplayVfxHostAccess::PrepareSealTick */
     Vfx::VfxSpawnStatus GameplayVfxHostAccess::PrepareSealTick(const GameplayVfxSceneLease &lease, const std::uint64_t tick) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (!lease.state)
-            return Vfx::VfxSpawnStatus::StaleScene;
+            return StaleScene;
         auto &scene = *lease.state;
-        if (const auto status = VfxContextDetail::Status(scene); status != Vfx::VfxSpawnStatus::Accepted)
+        if (const auto status = VfxContextDetail::Status(scene); status != Accepted)
             return status;
         if (!scene.sourceOpen || tick != scene.tick)
-            return Vfx::VfxSpawnStatus::OutOfOrder;
+            return OutOfOrder;
         if (scene.sealCount == scene.sealed.size())
-            return Vfx::VfxSpawnStatus::EventQueueFull;
+            return EventQueueFull;
         scene.sealPrepared = true;
-        return Vfx::VfxSpawnStatus::Accepted;
+        return Accepted;
     }
 
     /** @copydoc GameplayVfxHostAccess::SealTick */

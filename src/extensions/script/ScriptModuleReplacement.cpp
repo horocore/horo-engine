@@ -68,8 +68,7 @@ namespace Horo::Extensions {
 
         Result<void> Compatible(const ScriptModuleImport &old, const ScriptModuleImport &next) {
             const auto &a = old.Resolution();
-            const auto &b = next.Resolution();
-            if (!SameIdentity(a, b))
+            if (const auto &b = next.Resolution(); !SameIdentity(a, b))
                 return Result<void>::Failure(
                     MakeError(ExtensionErrors::ScriptInvocationInvalid, "Replacement changes the actual module import identity."));
             if (!RequiredRetained(a, next))
@@ -82,8 +81,8 @@ namespace Horo::Extensions {
             if (previous.capabilities != candidate.capabilities || previous.services != candidate.services)
                 return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid,
                                                        "Replacement belongs to another actual capability/backend registry."));
-            auto checked = BuildScriptExportDescriptorReplacement(previous.descriptors, candidate.descriptors->Descriptors());
-            if (checked.HasError())
+            if (auto checked = BuildScriptExportDescriptorReplacement(previous.descriptors, candidate.descriptors->Descriptors());
+                checked.HasError())
                 return Result<void>::Failure(checked.ErrorValue());
             for (const auto &function : previous.functions)
                 if (!next.Backend()->AllowsFunction(function))
@@ -111,8 +110,7 @@ namespace Horo::Extensions {
     }
 
     Result<void> ScriptModuleContext::CommitReplacement(const ScriptModuleContext &next) {
-        auto valid = ValidateReplacement(next);
-        if (valid.HasError())
+        if (auto valid = ValidateReplacement(next); valid.HasError())
             return valid;
         if (!CommitPreparedReplacement(next))
             return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));

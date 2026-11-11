@@ -15,7 +15,8 @@ namespace Horo::Animation::Detail {
     std::uint64_t ActionStorageBytes(const AnimationGraphProgram &program, const GraphActionLimits &limits) noexcept {
         if (program.ActionSlots().empty())
             return 0;
-        const std::uint64_t slots = program.ActionSlots().size(), joints = program.SkeletonBinding().joints;
+        const std::uint64_t slots = program.ActionSlots().size();
+        const std::uint64_t joints = program.SkeletonBinding().joints;
         std::uint64_t bytes =
             slots * (2 * sizeof(ActionSlotState) + 2 * sizeof(GraphActionSlotObservation)) + 4 * slots * joints * sizeof(Math::Transform);
         bytes += limits.requests * (2 * sizeof(ActionRecord) + 2 * sizeof(GraphActionObservation) + sizeof(std::uint32_t));

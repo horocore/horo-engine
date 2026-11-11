@@ -191,7 +191,7 @@ namespace Horo::Vfx {
             std::array<std::uint32_t, 5> numbers{};
             for (std::size_t i = 0; i < names.size(); ++i) {
                 const auto number = Unsigned<std::uint32_t>(value.at(names[i]));
-                if (!number)
+                if (!number.has_value())
                     return std::nullopt;
                 numbers[i] = *number;
             }
@@ -353,16 +353,16 @@ namespace Horo::Vfx {
 
         /** @brief Adds the original finite/infinite lifetime findings in their original order. */
         void AddLifetimeFindings(FindingCollector &findings, const ParticleSystemDescriptorData &data) {
+            using enum Horo::Vfx::ParticleKillCondition;
             if (data.lifetimeKind == ParticleLifetimeKind::Finite) {
                 findings.AddIf(!FiniteOrdered(data.lifetimeSeconds) || data.lifetimeSeconds.minimum <= 0.0, VfxErrors::ParticleRangeInvalid,
                                "Finite lifetime seconds must contain finite ordered positive values.");
-                findings.AddIf(data.killCondition != ParticleKillCondition::Lifetime, VfxErrors::ParticleModeIncompatible,
+                findings.AddIf(data.killCondition != Lifetime, VfxErrors::ParticleModeIncompatible,
                                "Finite lifetime descriptors use the canonical lifetime kill condition.");
             } else if (data.lifetimeKind == ParticleLifetimeKind::Infinite) {
                 findings.AddIf(data.lifetimeSeconds != ParticleScalarRange{}, VfxErrors::ParticleModeIncompatible,
                                "Infinite lifetime descriptors must encode seconds as the canonical zero range.");
-                findings.AddIf(data.killCondition == ParticleKillCondition::None || data.killCondition == ParticleKillCondition::Lifetime,
-                               VfxErrors::ParticleLifetimeUnbounded,
+                findings.AddIf(data.killCondition == None || data.killCondition == Lifetime, VfxErrors::ParticleLifetimeUnbounded,
                                "Infinite particles require collision or explicit-signal termination.");
             }
         }

@@ -57,7 +57,8 @@ namespace Horo::Render::RegisterRasterCookDetail {
     /** @brief Actual selected-entry const-device declaration and its proven element layout. */
     struct NativeStorage final {
         std::string name;
-        std::uint32_t binding{}, elementStride{};
+        std::uint32_t binding{};
+        std::uint32_t elementStride{};
         bool scalarUint{};
         std::string wrapperMember; /**< Empty for a direct pointer; actual single-array member for a wrapper reference. */
         std::vector<NativeStorageMember> members;

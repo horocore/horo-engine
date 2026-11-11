@@ -25,15 +25,22 @@ namespace Horo::Physics::Detail {
         std::unique_ptr<CanonicalWorld> candidate; /**< Cold prepared once; after publication owns the previous
                                                       native world. */
         CanonicalPhysicsStateBindingStorage bindings;
-        CanonicalPhysicsStateTopologyMap ownerMap, candidateMap;
+        CanonicalPhysicsStateTopologyMap ownerMap;
+        CanonicalPhysicsStateTopologyMap candidateMap;
         std::vector<PhysicsStateShapeBinding> shapes;
-        std::vector<PhysicsStateBodyBinding> bodies, bodiesByHandle;
+        std::vector<PhysicsStateBodyBinding> bodies;
+        std::vector<PhysicsStateBodyBinding> bodiesByHandle;
         std::shared_ptr<CanonicalPhysicsStateResources> resources;
-        Sha256Digest filters, surfaces;
-        std::uint64_t filterEpoch{}, surfaceEpoch{};
+        Sha256Digest filters;
+        Sha256Digest surfaces;
+        std::uint64_t filterEpoch{};
+        std::uint64_t surfaceEpoch{};
         std::unique_ptr<StateDetail::SolverStorage> recapture;
         std::unique_ptr<StateDetail::ConstructionManifestOwner> construction;
-        std::vector<std::byte> temporary, recorder, expectedWire, actualWire;
+        std::vector<std::byte> temporary;
+        std::vector<std::byte> recorder;
+        std::vector<std::byte> expectedWire;
+        std::vector<std::byte> actualWire;
         std::vector<std::uint32_t> active;
         std::size_t candidateReservation{};
 

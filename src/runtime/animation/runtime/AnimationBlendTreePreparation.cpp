@@ -27,7 +27,7 @@ namespace Horo::Animation::Detail {
         const auto occurrences = state.program->Occurrences();
         for (std::uint32_t i = 0; i < occurrences.size(); ++i) {
             const auto &occurrence = occurrences[i];
-            if (!occurrence.blendTree)
+            if (!occurrence.blendTree.has_value())
                 continue;
             const auto &tree = std::get<GraphBlendTreeNode>(
                 state.program->Definitions()[occurrence.definitionIndex].instructions[occurrence.instructionIndex].payload);

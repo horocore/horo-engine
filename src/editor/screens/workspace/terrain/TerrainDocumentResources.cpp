@@ -255,10 +255,11 @@ namespace Horo::Editor {
 
     /** @copydoc TerrainDocumentHost::ValidateLayer */
     Result<void> TerrainDocumentHost::ValidateLayer(const Terrain::TerrainAuthoringLayerBinding &binding) const {
-        const auto match = std::ranges::find_if(layerSets_, [&](const auto &item) {
+        if (const auto match = std::ranges::find_if(layerSets_,
+                                                    [&](const auto &item) {
             return item.binding == binding;
         });
-        if (match == layerSets_.end())
+            match == layerSets_.end())
             return Result<void>::Failure(MakeError(TerrainEditErrors::StaleRevision));
         auto source = CaptureTracked(root_, registry_, binding.asset, "core.terrain.layerset", 4096);
         if (source.HasError())
@@ -270,10 +271,11 @@ namespace Horo::Editor {
 
     /** @copydoc TerrainDocumentHost::ValidateDefinition */
     Result<void> TerrainDocumentHost::ValidateDefinition(const Terrain::FoliageAuthoringDefinitionReference &definition) const {
-        const auto match = std::ranges::find_if(foliageCatalog_, [&](const auto &item) {
+        if (const auto match = std::ranges::find_if(foliageCatalog_,
+                                                    [&](const auto &item) {
             return item.source == definition;
         });
-        if (match == foliageCatalog_.end())
+            match == foliageCatalog_.end())
             return Result<void>::Failure(MakeError(TerrainEditErrors::StaleRevision));
         auto source = CaptureTracked(root_, registry_, definition.asset, "core.foliage.type", 1024);
         if (source.HasError())

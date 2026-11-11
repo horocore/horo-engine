@@ -17,7 +17,7 @@ namespace Horo::Physics::Detail {
                 auto child = AcquireCanonicalSceneShapeRecipe(world, input.shape);
                 if (child.HasError())
                     return Outcome::Failure(child.ErrorValue());
-                children.push_back({std::move(child).Value(), input.localPose, ++ordinal});
+                children.emplace_back(std::move(child).Value(), input.localPose, ++ordinal);
             }
             return pool.AddCompound(children, control);
         }

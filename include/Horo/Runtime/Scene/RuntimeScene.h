@@ -1069,12 +1069,12 @@ namespace Horo::Runtime {
          * @return Success or a typed invalid-input/lifecycle error. */
         [[nodiscard]] Result<void> AddActivationParticipant(std::unique_ptr<SceneActivationParticipant> participant);
         /** @brief Queues validated preparation and later safe-point activation. Asset-bearing definitions pin the current
-         * registry snapshot and load through the injected service. @param definition Immutable scene definition consumed by
-         * the operation; lvalue callers retain source compatibility through a boundary copy. @param config Generation retirement policy.
+         * registry snapshot and load through the injected service. @param definition Borrowed immutable scene definition;
+         * the operation retains an independent copy inside its allocation boundary. @param config Generation retirement policy.
          * @return Success when accepted, or a typed immediate validation/admission error. */
-        [[nodiscard]] Result<void> QueuePreparation(RuntimeSceneDefinition definition, RuntimeSceneConfig config = {});
+        [[nodiscard]] Result<void> QueuePreparation(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config = {});
         /** @brief Queues detached preparation with an additional owned pure publication check.
-         * @param definition Immutable complete runtime definition consumed by this operation.
+         * @param definition Borrowed immutable complete runtime definition copied into the operation inside its allocation boundary.
          * @param publicationCheck Optional predicate retained through preparation and revalidated before aggregate publication.
          * @param config Generation retirement policy.
          * @return Owned receipt for a nonnull check; deferred failures preserve the active scene and reach TakeOperationError().
@@ -1082,15 +1082,16 @@ namespace Horo::Runtime {
          * @details Existing cancellation, replacement and shutdown paths retire the predicate with the pending operation.
          */
         [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationWithPublicationCheck(
-            RuntimeSceneDefinition definition, std::unique_ptr<ScenePublicationCheck> publicationCheck, RuntimeSceneConfig config = {});
+            const RuntimeSceneDefinition &definition, std::unique_ptr<ScenePublicationCheck> publicationCheck,
+            RuntimeSceneConfig config = {});
         /** @brief Queues a composite save restore through the existing exclusive Scene admission path.
-         * @param definition Validated compatible immutable authored defaults.
+         * @param definition Borrowed validated compatible immutable authored defaults; pending preparation retains an independent copy.
          * @param restore Non-null owned restore composition, retained through pending preparation/rollback.
          * @param config Generation retirement policy.
          * @return Typed admission result; failed/pending owner preparation never publishes a partial Scene.
          * @details Normal QueuePreparation callers retain their existing block preparation behavior.
          */
-        [[nodiscard]] Result<void> QueuePreparationWithRestore(RuntimeSceneDefinition definition,
+        [[nodiscard]] Result<void> QueuePreparationWithRestore(const RuntimeSceneDefinition &definition,
                                                                std::unique_ptr<SceneAggregateRestore> restore,
                                                                RuntimeSceneConfig config = {});
         /** @brief Queues transactional active-scene unload; repeated unload with no pending transition is harmless.
@@ -1199,7 +1200,7 @@ namespace Horo::Runtime {
             std::unique_ptr<SceneAggregateRestore> restore; /**< Pins committed identity/fixup/module roots until Scene retirement. */
         };
 
-        [[nodiscard]] Result<void> BeginPreparation(RuntimeSceneDefinition definition, RuntimeSceneConfig config);
+        [[nodiscard]] Result<void> BeginPreparation(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config);
         /** @brief Stages the validated runtime scene and its detached participant candidates without publication. */
         [[nodiscard]] Result<void> StageCandidate(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config,
                                                   Assets::AssetRegistryRevision revision, std::vector<RuntimeScene::ResolvedAsset> assets);

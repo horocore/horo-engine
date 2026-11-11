@@ -59,8 +59,8 @@ namespace Horo::Render {
             return Result<void>::Failure(currentBuffer.ErrorValue());
         if (currentPipeline.HasError())
             return Result<void>::Failure(currentPipeline.ErrorValue());
-        const auto &current = buffers_[proof.buffer.slot];
-        if (currentBuffer.Value() != proof.bufferInstance || currentPipeline.Value() != proof.pipelineInstance ||
+        if (const auto &current = buffers_[proof.buffer.slot];
+            currentBuffer.Value() != proof.bufferInstance || currentPipeline.Value() != proof.pipelineInstance ||
             current.generation != proof.buffer.generation || current.descriptor.byteSize != proof.byteSize ||
             current.descriptor.usage != RenderBufferUsage::Uniform || current.descriptor.access != RenderBufferAccess::HostVisible)
             return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
@@ -118,8 +118,7 @@ namespace Horo::Render {
         const auto bufferHandle = proof.buffer;
         if (const auto valid = ValidateVfxResidents(proof); valid.HasError())
             return Preparation::Failure(valid.ErrorValue());
-        const auto &current = buffers_[bufferHandle.slot];
-        if (!current.vfxPreparing || current.vfxClaimed || !current.vfxSlot.expired())
+        if (const auto &current = buffers_[bufferHandle.slot]; !current.vfxPreparing || current.vfxClaimed || !current.vfxSlot.expired())
             return Preparation::Failure(MakeError(VfxFrameErrors::InvalidInput));
         if (!vfxFrontendState_)
             vfxFrontendState_ = std::make_shared<const Detail::VfxFrontendState>();
@@ -274,8 +273,8 @@ namespace Horo::Render {
                                           retained->deviceIncarnation_};
         try {
             const auto uploaded = backend_->UpdateVfxFrame(update);
-            const auto valid = ValidateVfxResidents(proof);
-            if (valid.HasError() || retained->owner_.lock() != vfxFrontendState_ || !vfxFrontendState_) {
+            if (const auto valid = ValidateVfxResidents(proof);
+                valid.HasError() || retained->owner_.lock() != vfxFrontendState_ || !vfxFrontendState_) {
                 retained->published_ = false;
                 if (uploaded.HasError())
                     return uploaded;

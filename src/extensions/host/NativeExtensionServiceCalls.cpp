@@ -30,14 +30,13 @@ namespace Horo::Extensions {
         }
 
         Result<std::int64_t> ProviderFailed(const HoroExtensionServiceResult &result) {
+            using enum Horo::ErrorSeverity;
             static const std::array<ErrorCodeDescriptor, 4> errors{
-                {{ErrorDomainId{"horo.extensions.native-service"}, ErrorCode{"invalid_call"}, ErrorSeverity::Error,
-                  "Native service call is invalid."},
-                 {ErrorDomainId{"horo.extensions.native-service"}, ErrorCode{"overflow"}, ErrorSeverity::Error,
-                  "Native service arithmetic overflow."},
-                 {ErrorDomainId{"horo.extensions.native-service"}, ErrorCode{"requested_failure"}, ErrorSeverity::Error,
+                {{ErrorDomainId{"horo.extensions.native-service"}, ErrorCode{"invalid_call"}, Error, "Native service call is invalid."},
+                 {ErrorDomainId{"horo.extensions.native-service"}, ErrorCode{"overflow"}, Error, "Native service arithmetic overflow."},
+                 {ErrorDomainId{"horo.extensions.native-service"}, ErrorCode{"requested_failure"}, Error,
                   "Native service requested failure."},
-                 {ErrorDomainId{"horo.extensions.native-service"}, ErrorCode{"retired"}, ErrorSeverity::Error, "Native service retired."}}};
+                 {ErrorDomainId{"horo.extensions.native-service"}, ErrorCode{"retired"}, Error, "Native service retired."}}};
             if (result.failureCode == 0)
                 return Failed("Native service failed without a semantic failure code.");
             return Result<std::int64_t>::Failure(MakeError(errors[result.failureCode - 1], std::string{result.error, result.errorLength}));
@@ -50,9 +49,9 @@ namespace Horo::Extensions {
     }  // namespace
 
     NativeScalarService::NativeScalarService(NativeServiceShape shape, const HoroExtensionServiceDescriptor &native,
-                                             std::shared_ptr<ExtensionModuleLifetime> module)
+                                             std::shared_ptr<ExtensionModuleLifetime> moduleLifetime)
         : shape_(std::move(shape)), provider_(native.provider), invoke_(native.invoke), shutdown_(native.shutdown),
-          module_(std::move(module)) {}
+          module_(std::move(moduleLifetime)) {}
 
     Result<std::int64_t> NativeScalarService::Invoke(const NativeServiceCall &request, const BackendServiceCallContext &context) const {
         if (!ValidCall(request, shape_))
@@ -117,53 +116,56 @@ namespace Horo::Extensions {
                 native->RequireRestart();
             return;  // Actual retirement retains native owners; mutable publication tables are owner-only.
         }
-        for (auto &publication : std::ranges::reverse_view(publications))
+        for (const auto &publication : std::ranges::reverse_view(publications))
             publication->Revoke();
     }
 
     Result<std::shared_ptr<NativeServicePublication>> FindNativeService(const NativeExtensionServiceState &host,
-                                                                        const ResolvedExtensionServiceImport &import) {
+                                                                        const ResolvedExtensionServiceImport &resolvedImport) {
         for (const auto &weak : host.modules) {
-            const auto module = weak.lock();
-            if (!module || !module->committed || module->revoked || module->declaration.id != import.ProviderModuleId())
+            const auto nativeModule = weak.lock();
+            if (!nativeModule || !nativeModule->committed || nativeModule->revoked ||
+                nativeModule->declaration.id != resolvedImport.ProviderModuleId())
                 continue;
-            for (const auto &publication : module->publications)
-                if (publication->shape.service == import.ServiceId() && publication->shape.contract == import.ContractId())
+            for (const auto &publication : nativeModule->publications)
+                if (publication->shape.service == resolvedImport.ServiceId() && publication->shape.contract == resolvedImport.ContractId())
                     return Result<std::shared_ptr<NativeServicePublication>>::Success(publication);
         }
         return Result<std::shared_ptr<NativeServicePublication>>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
     }
 
-    Result<std::int64_t> InvokeNativeServiceImport(NativeServiceModule &module, const ResolvedExtensionServiceImport &import,
+    Result<std::int64_t> InvokeNativeServiceImport(NativeServiceModule &nativeModule, const ResolvedExtensionServiceImport &resolvedImport,
                                                    const NativeServiceCall &request, const CancellationToken &cancel) {
-        if (module.owner != std::this_thread::get_id())
+        if (nativeModule.owner != std::this_thread::get_id())
             return Failed("Native service selection crossed its owner lane.");
-        const auto host = module.host.lock();
+        const auto host = nativeModule.host.lock();
         if (!host)
             return Failed("Native service host expired.");
-        auto selected = FindNativeService(*host, import);
+        auto selected = FindNativeService(*host, resolvedImport);
         if (selected.HasError())
             return Result<std::int64_t>::Failure(selected.ErrorValue());
-        return InvokeSelectedNativeServiceImport(module, import, *selected.Value(), request, cancel);
+        return InvokeSelectedNativeServiceImport(nativeModule, resolvedImport, *selected.Value(), request, cancel);
     }
 
-    Result<std::int64_t> InvokeSelectedNativeServiceImport(NativeServiceModule &module, const ResolvedExtensionServiceImport &import,
+    Result<std::int64_t> InvokeSelectedNativeServiceImport(NativeServiceModule &nativeModule,
+                                                           const ResolvedExtensionServiceImport &resolvedImport,
                                                            const NativeServicePublication &publication, const NativeServiceCall &request,
                                                            const CancellationToken &cancel) {
-        if (!module.committed.load(std::memory_order_acquire) || module.revoked.load(std::memory_order_acquire))
+        if (!nativeModule.committed.load(std::memory_order_acquire) || nativeModule.revoked.load(std::memory_order_acquire))
             return Failed("Native service caller activation is closed.");
-        const auto host = module.host.lock();
-        if (!host || host->closed.load(std::memory_order_acquire) || !module.admission)
+        const auto host = nativeModule.host.lock();
+        if (!host || host->closed.load(std::memory_order_acquire) || !nativeModule.admission)
             return Failed("Native service host is closed.");
-        auto grant = module.admission->Grant({import.ServiceId()});
+        auto grant = nativeModule.admission->Grant({resolvedImport.ServiceId()});
         if (grant.HasError())
             return Result<std::int64_t>::Failure(grant.ErrorValue());
-        const auto generation = module.admission->ActivationLease().Activation().Generation();
-        auto provider = host->capabilities->ResolveExact(grant.Value(), {publication.shape.version, publication.shape.version},
-                                                         publication.provider, module.extension, module.declaration.id, generation);
+        const auto generation = nativeModule.admission->ActivationLease().Activation().Generation();
+        auto provider =
+            host->capabilities->ResolveExact(grant.Value(), {publication.shape.version, publication.shape.version}, publication.provider,
+                                             nativeModule.extension, nativeModule.declaration.id, generation);
         if (provider.HasError())
             return Result<std::int64_t>::Failure(provider.ErrorValue());
-        auto binding = host->services->BindImport(std::move(provider).Value(), import);
+        auto binding = host->services->BindImport(std::move(provider).Value(), resolvedImport);
         if (binding.HasError())
             return Result<std::int64_t>::Failure(binding.ErrorValue());
         auto call = host->services->ResolveImported<NativeScalarService>(std::move(binding).Value());

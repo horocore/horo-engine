@@ -44,9 +44,9 @@ namespace Horo::Physics::Detail {
     void PhysicsSceneStateProjection::IndexInitialOwners() {
         for (std::size_t i = 0; i < rows_.size(); ++i) {
             if (rows_[i].body.IsValid())
-                bindings_.bodies.push_back({i + 1, rows_[i].body});
+                bindings_.bodies.emplace_back(i + 1, rows_[i].body);
             if (rows_[i].shape.IsValid())
-                bindings_.shapes.push_back({i + 1, rows_[i].shape});
+                bindings_.shapes.emplace_back(i + 1, rows_[i].shape);
         }
         // IDs are private row-index scratch until complete coverage and canonical key order succeed.
         std::ranges::sort(bindings_.bodies, {}, &PhysicsStateBodyBinding::body);
@@ -57,8 +57,8 @@ namespace Horo::Physics::Detail {
     Result<void> PhysicsSceneStateProjection::AddCompoundRoots() {
         IndexInitialOwners();
         for (const auto &body : nativeBodies_) {
-            const auto existing = std::ranges::lower_bound(bindings_.shapes, body.shape, {}, &PhysicsStateShapeBinding::shape);
-            if (existing != bindings_.shapes.end() && existing->shape == body.shape) {
+            if (const auto existing = std::ranges::lower_bound(bindings_.shapes, body.shape, {}, &PhysicsStateShapeBinding::shape);
+                existing != bindings_.shapes.end() && existing->shape == body.shape) {
                 if (rows_[existing->id - 1].ownerBody != body.handle)
                     return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
                 continue;

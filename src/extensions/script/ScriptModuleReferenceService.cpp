@@ -48,8 +48,7 @@ namespace Horo::Extensions {
         using Output = Result<ScriptCallResult>;
         if (closed_.load(std::memory_order_acquire) || context.IsCancellationRequested())
             return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationCancelled));
-        auto valid = Validate(request);
-        if (valid.HasError())
+        if (auto valid = Validate(request); valid.HasError())
             return Output::Failure(valid.ErrorValue());
         if (request.functionId == "echo")
             return Output::Success(ScriptCallResult::Success(request.arguments));

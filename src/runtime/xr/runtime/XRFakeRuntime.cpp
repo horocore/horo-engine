@@ -63,6 +63,11 @@ namespace Horo::XR {
         struct ResetStage final {
             Resources &resources;
 
+            explicit ResetStage(Resources &value) noexcept : resources(value) {}
+
+            ResetStage(const ResetStage &) = delete;
+            ResetStage &operator=(const ResetStage &) = delete;
+
             ~ResetStage() {
                 resources.failStage.reset();
             }

@@ -77,7 +77,8 @@ namespace Horo::Physics::Detail {
 
     private:
         std::span<std::byte> storage_;
-        std::size_t written_{}, read_{};
+        std::size_t written_{};
+        std::size_t read_{};
         bool failed_{};
     };
 }  // namespace Horo::Physics::Detail

@@ -64,8 +64,13 @@ namespace Horo::Editor {
     /** @brief Bounded CPU diagnostics; automatic EV remains absent until genuine completed GPU observation exists. */
     struct EditorViewportColorDiagnostics final {
         EditorViewportColorStatus status{EditorViewportColorStatus::Unavailable};
-        bool active{}, candidate{}, automatic{}, resetPending{true};
-        std::uint64_t settingsGeneration{1}, acceptedSubmission{}, exposureGeneration{};
+        bool active{};
+        bool candidate{};
+        bool automatic{};
+        bool resetPending{true};
+        std::uint64_t settingsGeneration{1};
+        std::uint64_t acceptedSubmission{};
+        std::uint64_t exposureGeneration{};
         std::uint64_t outputRevision{};
         bool unmanagedSdrPreview{}; /**< Native legacy SDR encoding only; never a calibrated display or physical HDR claim. */
         std::optional<float> automaticEv;

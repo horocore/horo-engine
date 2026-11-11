@@ -53,7 +53,7 @@ namespace Horo::Editor {
             if (!entity.authoredObject)
                 return Result<void>::Failure(
                     ExtractionError(ViewportSceneErrors::InvalidObjectId, "Viewport light has no authored object identity."));
-            extracted.eligibleLights.push_back({entity.entity, SceneObjectId{entity.authoredObject->value}});
+            extracted.eligibleLights.emplace_back(entity.entity, SceneObjectId{entity.authoredObject->value});
             if (!entity.components->light->enabled)
                 return Result<void>::Success();
             const Render::RenderLightIdentity identity{(std::uint64_t{entity.entity.entity.generation} << 32U) |
@@ -195,7 +195,7 @@ namespace Horo::Editor {
                                           Runtime::PrimitiveMeshCache &meshCache, EditorViewportSceneSnapshot &snapshot,
                                           const EditorGeometryExtractionPolicy policy) {
             if (entity.authoredObject)
-                snapshot.authoredEntities.push_back({entity.entity, SceneObjectId{entity.authoredObject->value}});
+                snapshot.authoredEntities.emplace_back(entity.entity, SceneObjectId{entity.authoredObject->value});
             std::optional<ResolvedSceneObjectEditorState> editorState;
             if (document != nullptr && entity.authoredObject.has_value())
                 editorState = ResolveSceneObjectEditorState(document->objects, SceneObjectId{entity.authoredObject->value});
@@ -229,8 +229,8 @@ namespace Horo::Editor {
             if (view.HasError())
                 return Result<void>::Failure(view.ErrorValue());
             if (!view.Value().components->light)
-                snapshot.eligibleLights.push_back(
-                    {found->entity, object.id, object.components.light, document.revision, scene.DefinitionRevision()});
+                snapshot.eligibleLights.emplace_back(found->entity, object.id, object.components.light, document.revision,
+                                                     scene.DefinitionRevision());
             return Result<void>::Success();
         }
 

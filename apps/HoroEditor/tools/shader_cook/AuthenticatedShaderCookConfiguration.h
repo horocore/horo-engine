@@ -8,12 +8,16 @@
 namespace Horo::Application::Internal {
     struct AuthenticatedShaderCookConfiguration final {
         Render::ShaderCompilerToolchainConfiguration configuration;
-        std::shared_ptr<const std::vector<std::uint8_t>> catalogBytes, signatureBytes;
+        std::shared_ptr<const std::vector<std::uint8_t>> catalogBytes;
+        std::shared_ptr<const std::vector<std::uint8_t>> signatureBytes;
     };
 
     /** @brief Actual host inputs, independent trust, and exactly DXC/validator/Cross paths; no Apple selection occurs. */
     struct AuthenticatedSpirvCookInputs final {
-        std::filesystem::path scratchRoot, catalog, detachedSignature, hostTrust;
+        std::filesystem::path scratchRoot;
+        std::filesystem::path catalog;
+        std::filesystem::path detachedSignature;
+        std::filesystem::path hostTrust;
         std::array<std::filesystem::path, 3> executables;
     };
     enum class ShaderCookToolProfile {
@@ -22,7 +26,10 @@ namespace Horo::Application::Internal {
     };
 
     struct ShaderCookAuthenticationFiles final {
-        std::filesystem::path scratchRoot, catalog, detachedSignature, hostTrust;
+        std::filesystem::path scratchRoot;
+        std::filesystem::path catalog;
+        std::filesystem::path detachedSignature;
+        std::filesystem::path hostTrust;
     };
 
     [[nodiscard]] std::string_view ActualShaderCookHost() noexcept;

@@ -47,11 +47,9 @@ namespace Horo::Extensions {
                                                                                ScriptCapabilityProfile profile) {
             using Output = Result<std::shared_ptr<const ScriptRuntimeBackendBinding>>;
             auto input = Input(host, native->Evidence(), profile);
-            auto valid = Detail::ValidateScriptRuntimeBackendInput(input);
-            if (valid.HasError())
+            if (auto valid = Detail::ValidateScriptRuntimeBackendInput(input); valid.HasError())
                 return Output::Failure(valid.ErrorValue());
-            auto live = native->Probe();
-            if (live.HasError())
+            if (auto live = native->Probe(); live.HasError())
                 return Output::Failure(live.ErrorValue());
             auto port = std::make_shared<NativePort>(std::move(input), native);
             return Output::Success(std::shared_ptr<const ScriptRuntimeBackendBinding>{new ScriptRuntimeBackendBinding{std::move(port)}});
@@ -74,20 +72,20 @@ namespace Horo::Extensions {
     }
 
     Result<ScriptModuleImport> BindNativeModuleScriptImport(NativeExtensionServiceHost &native, std::string_view package,
-                                                            std::string_view module, std::string_view id, std::string alias,
+                                                            std::string_view moduleId, std::string_view id, std::string alias,
                                                             ScriptCapabilityProfile profile) {
         auto host = ModuleScriptHostAuthority::RetainState(native);
         if (host.HasError())
             return Result<ScriptModuleImport>::Failure(host.ErrorValue());
-        return BindModuleScriptHostImport(*host.Value(), package, module, id, std::move(alias), profile);
+        return BindModuleScriptHostImport(*host.Value(), package, moduleId, id, std::move(alias), profile);
     }
 
     Result<ScriptModuleImport> BindHeadlessModuleScriptImport(HeadlessExtensionHost &native, std::string_view package,
-                                                              std::string_view module, std::string_view id, std::string alias,
+                                                              std::string_view moduleId, std::string_view id, std::string alias,
                                                               ScriptCapabilityProfile profile) {
         auto host = ModuleScriptHostAuthority::Headless(native, false);
         if (host.HasError())
             return Result<ScriptModuleImport>::Failure(host.ErrorValue());
-        return BindModuleScriptHostImport(*host.Value(), package, module, id, std::move(alias), profile);
+        return BindModuleScriptHostImport(*host.Value(), package, moduleId, id, std::move(alias), profile);
     }
 }  // namespace Horo::Extensions

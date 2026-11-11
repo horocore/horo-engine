@@ -58,7 +58,8 @@ namespace Horo::Physics::StateDetail {
         std::vector<PhysicsStatePersistentOwner> owners_;
         std::vector<ConstructionRecipeRootBinding> rootBindings_;
         std::vector<ConstructionRecipeExportFrame> frames_;
-        std::vector<std::uint32_t> nodeMap_, validation_;
+        std::vector<std::uint32_t> nodeMap_;
+        std::vector<std::uint32_t> validation_;
         std::vector<std::byte> encoded_;
         PhysicsStateConstructionManifest view_;
         std::size_t usedBytes_{};

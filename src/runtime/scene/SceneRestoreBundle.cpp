@@ -169,7 +169,8 @@ namespace Horo::Runtime {
         }
 
         /** @brief Defers spawned existence only to its explicit owner; authored deletions retain exact baseline provenance. */
-        Result<void> CaptureTombstone(const PersistentEntityRecord &record, std::vector<std::pair<std::size_t, EntityRef>> &tombstones) {
+        Result<void> CaptureTombstone(const PersistentEntityRecord &record,
+                                      std::vector<std::pair<std::size_t, EntityRef>> &tombstones) const {
             const auto *authored = std::get_if<AuthoredPersistentEntityProvenance>(&record.provenance);
             if (!authored)
                 return request.dynamicEntities

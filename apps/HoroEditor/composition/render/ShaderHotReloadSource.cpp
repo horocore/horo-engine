@@ -50,7 +50,7 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(
                     SourceError("application.shader_reload.source_read", "A canonical shader source cannot be empty."));
             build.compilation.source = CompilerBytes(file.source);
-            build.sources.push_back({build.compilation.manifest.sourceIdentity, std::move(file.path)});
+            build.sources.emplace_back(build.compilation.manifest.sourceIdentity, std::move(file.path));
             return Result<void>::Success();
         }
 
@@ -64,8 +64,9 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(read.ErrorValue());
                 auto file = std::move(read).Value();
                 dependencyRemaining -= file.source.bytes.size();
-                build.compilation.dependencies.push_back({dependency.logicalPath, file.source.identity.digest, CompilerBytes(file.source)});
-                build.sources.push_back({dependency.logicalPath, std::move(file.path)});
+                build.compilation.dependencies.emplace_back(dependency.logicalPath, file.source.identity.digest,
+                                                            CompilerBytes(file.source));
+                build.sources.emplace_back(dependency.logicalPath, std::move(file.path));
             }
             return Result<void>::Success();
         }

@@ -20,9 +20,9 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PlaySaveJobSettled */
     bool PlaySaveJobSettled(const JobHandle &job) {
+        using enum Horo::JobState;
         const auto current = job.Snapshot();
-        return job.Id() == 0 || (current && (current->state == JobState::Succeeded || current->state == JobState::Failed ||
-                                             current->state == JobState::Cancelled));
+        return job.Id() == 0 || (current && (current->state == Succeeded || current->state == Failed || current->state == Cancelled));
     }
 
     namespace {

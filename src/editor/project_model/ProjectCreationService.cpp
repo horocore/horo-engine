@@ -413,15 +413,15 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<StagingPreparationFailure> WriteScaffolding(const std::filesystem::path &staging,
                                                                                 const ProjectCreationRequest &request,
                                                                                 const std::string &projectId) {
+            using enum Horo::Editor::ProjectCreationErrorCode;
             if (!WritePortableScaffolding(staging, request, projectId))
-                return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed,
-                                                 "Unable to write project metadata into the staging directory."};
+                return StagingPreparationFailure{WriteFailed, "Unable to write project metadata into the staging directory."};
             if (!WriteCollisionScaffolding(staging, projectId))
-                return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed, "Unable to write project collision settings."};
+                return StagingPreparationFailure{WriteFailed, "Unable to write project collision settings."};
             if (!WriteSurfaceScaffolding(staging, projectId))
-                return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed, "Unable to write project surface settings."};
+                return StagingPreparationFailure{WriteFailed, "Unable to write project surface settings."};
             if (!WriteAssetScaffolding(staging))
-                return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed, "Unable to create project asset scaffolding."};
+                return StagingPreparationFailure{WriteFailed, "Unable to create project asset scaffolding."};
             return WriteOptionalScaffolding(staging, request);
         }
 

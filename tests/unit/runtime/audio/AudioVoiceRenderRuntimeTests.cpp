@@ -252,20 +252,36 @@ namespace Horo::Tests::VoiceRenderFixture {
     TEST_CASE("Voice preparation allocation failures leave canonical slots reusable", "[audio][voice_render][allocation]") {
         Audio::PlaybackTest::SampleBuffers samples;
         const auto playback = Playback();
-        bool sawFailure{};
-        bool sawSuccess{};
-        for (std::size_t failureIndex = 0; failureIndex < 16; ++failureIndex) {
+        const auto descriptor = Descriptor();
+        const auto source = samples.Source();
+        std::size_t allocationCount{};
+        {
             auto registry = Registry();
-            {
+            auto measured = [&] {
+                AllocationProbe::ScopedMeasurement measurement;
+                auto created = AudioVoiceRenderRuntime::CreateResident(registry, source, playback, descriptor);
+                allocationCount = measurement.Snapshot().requests;
+                return created;
+            }();
+            REQUIRE(measured.HasValue());
+            measured.Value()->Close();
+            REQUIRE(measured.Value()->CompleteShutdown(true));
+        }
+        REQUIRE(allocationCount > 0);
+        for (std::size_t failureIndex = 0; failureIndex <= allocationCount; ++failureIndex) {
+            INFO(failureIndex);
+            auto registry = Registry();
+            auto created = [&] {
                 AllocationProbe::ScopedFailure failure(failureIndex);
-                auto created = AudioVoiceRenderRuntime::CreateResident(registry, samples.Source(), playback, Descriptor());
-                if (created.HasValue()) {
-                    created.Value()->Close();
-                    (void)created.Value()->CompleteShutdown(true);
-                    sawSuccess = true;
-                } else {
-                    sawFailure = true;
-                }
+                return AudioVoiceRenderRuntime::CreateResident(registry, source, playback, descriptor);
+            }();
+            if (failureIndex < allocationCount) {
+                REQUIRE(created.HasError());
+                CHECK(created.ErrorValue().code.Value() == AudioErrors::MemoryAllocationFailed.code.Value());
+            } else {
+                REQUIRE(created.HasValue());
+                created.Value()->Close();
+                REQUIRE(created.Value()->CompleteShutdown(true));
             }
             std::array<AudioVoiceHandle, 8> admitted;
             for (auto &voice : admitted) {
@@ -278,7 +294,5 @@ namespace Horo::Tests::VoiceRenderFixture {
             for (const auto voice : admitted)
                 REQUIRE(registry->Release(voice).HasValue());
         }
-        CHECK(sawFailure);
-        CHECK(sawSuccess);
     }
 }  // namespace Horo::Tests::VoiceRenderFixture

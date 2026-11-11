@@ -17,8 +17,10 @@ namespace Horo::Extensions {
 
     struct ScriptModuleProgramInput final {
         ScriptModuleRuntimeKind runtime{ScriptModuleRuntimeKind::Lua54};
-        std::string package, module;
-        std::filesystem::path root, source;
+        std::string package;
+        std::string module;
+        std::filesystem::path root;
+        std::filesystem::path source;
         std::shared_ptr<const Security::NativeArtifactGate> currentTrust;
         std::vector<ScriptModuleCapturedArtifact> artifacts;
     };
@@ -66,7 +68,8 @@ namespace Horo::Extensions {
         ScriptModuleProgramInput input_;
         ExtensionManifest manifest_;
         const ExtensionModuleManifest *module_{};
-        std::string source_, scriptId_;
+        std::string source_;
+        std::string scriptId_;
     };
 
     [[nodiscard]] Result<void> ValidateScriptModuleSelectedDeclaration(const ExtensionModuleManifest &);

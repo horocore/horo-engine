@@ -74,9 +74,9 @@ namespace Horo::Physics {
         if (compatibility.floatingPoint.architecture <= PhysicsStateFpArchitecture::Unspecified ||
             compatibility.floatingPoint.architecture > PhysicsStateFpArchitecture::ArmFpcr)
             return Invalid("Physics snapshot floating-point control architecture is unsupported.");
-        const std::array digests{&compatibility.build,   &compatibility.platform, &compatibility.solver,  &compatibility.settings.digest,
-                                 &compatibility.content, &compatibility.topology, &compatibility.filters, &compatibility.surfaces};
-        if (!std::ranges::all_of(digests, [](const auto *digest) {
+        if (const std::array digests{&compatibility.build, &compatibility.platform, &compatibility.solver, &compatibility.settings.digest,
+                                     &compatibility.content, &compatibility.topology, &compatibility.filters, &compatibility.surfaces};
+            !std::ranges::all_of(digests, [](const auto *digest) {
             return Nonzero(*digest);
         }))
             return Invalid("Physics snapshot requires complete build, platform, "

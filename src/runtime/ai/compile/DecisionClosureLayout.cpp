@@ -124,8 +124,8 @@ namespace Horo::AI::Detail {
                 if (auto charged = ChargeProviders(graphs_[graph].localStorage); charged.HasError())
                     return charged;
                 const auto index = layout_.occurrences.size();
-                layout_.occurrences.push_back({graph, parent, node, 0, firstSlot});
-                frames_.push_back({index, 0, depth, executionDepth});
+                layout_.occurrences.emplace_back(graph, parent, node, std::size_t{0}, firstSlot);
+                frames_.emplace_back(index, std::size_t{0}, depth, executionDepth);
                 layout_.storage.maximumExecutionDepth = std::max(layout_.storage.maximumExecutionDepth, executionDepth);
                 layout_.storage.maximumCallDepth = std::max(layout_.storage.maximumCallDepth, depth);
                 return Result<void>::Success();
@@ -144,13 +144,14 @@ namespace Horo::AI::Detail {
             }
 
             Result<void> ValidateProviderPolicy() const {
-                if (limits_.memoryPolicy >= DecisionMemoryPolicy::Count)
+                using enum Horo::AI::DecisionMemoryPolicy;
+                if (limits_.memoryPolicy >= Count)
                     return Limit<void>();
-                if (limits_.memoryPolicy == DecisionMemoryPolicy::CoreBound)
+                if (limits_.memoryPolicy == CoreBound)
                     return Result<void>::Success();
                 if (layout_.storage.unknownNativeProviders != 0)
                     return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
-                if (limits_.memoryPolicy == DecisionMemoryPolicy::EnforcedTotal && layout_.storage.nativeDeclaredProviders != 0)
+                if (limits_.memoryPolicy == EnforcedTotal && layout_.storage.nativeDeclaredProviders != 0)
                     return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
                 return Result<void>::Success();
             }

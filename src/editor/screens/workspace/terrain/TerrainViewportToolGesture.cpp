@@ -27,7 +27,8 @@ namespace Horo::Editor {
         }
 
         bool IsFoliageMode(TerrainToolMode mode) {
-            return mode == TerrainToolMode::FoliagePaint || mode == TerrainToolMode::FoliageErase || mode == TerrainToolMode::FoliageSelect;
+            using enum Horo::Editor::TerrainToolMode;
+            return mode == FoliagePaint || mode == FoliageErase || mode == FoliageSelect;
         }
     }  // namespace
 
@@ -194,9 +195,9 @@ namespace Horo::Editor {
     /** @copydoc TerrainViewportTool::ExtendGesture */
     void TerrainViewportTool::ExtendGesture(const Terrain::TerrainCanonicalSource &source, const TerrainSurfaceHit &hit) {
         const auto &last = stamps_[count_ - 1];
-        const auto moved = std::hypot((last.sampleX - hit.stamp.sampleX) * source.coordinates.spacingX,
-                                      (last.sampleZ - hit.stamp.sampleZ) * source.coordinates.spacingZ);
-        if (moved < brush_.radiusMeters * .2)
+        if (const auto moved = std::hypot((last.sampleX - hit.stamp.sampleX) * source.coordinates.spacingX,
+                                          (last.sampleZ - hit.stamp.sampleZ) * source.coordinates.spacingZ);
+            moved < brush_.radiusMeters * .2)
             return;
         if (count_ == stamps_.size())
             invalid_ = true;

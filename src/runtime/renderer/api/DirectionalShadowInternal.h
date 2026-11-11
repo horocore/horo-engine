@@ -4,11 +4,14 @@
 
 namespace Horo::Render::DirectionalShadowDetail {
     struct Basis final {
-        Math::Vec3 forward, right, up;
+        Math::Vec3 forward;
+        Math::Vec3 right;
+        Math::Vec3 up;
     };
 
     struct DepthBounds final {
-        float minimum{}, maximum{};
+        float minimum{};
+        float maximum{};
     };
 
     [[nodiscard]] Result<Basis> CameraBasis(const RenderCameraView &camera);

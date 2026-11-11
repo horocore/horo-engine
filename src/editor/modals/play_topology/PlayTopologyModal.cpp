@@ -149,29 +149,29 @@ namespace Horo::Editor {
     /** @brief Renders bounded portable fields in responsive pairs without selecting transport implementations. */
     void PlayTopologyModal::DrawFields() {
         const auto &fonts = context_.theme.fonts;
-        FieldPair("##TopologyIdentity", [&] {
+        FieldPair("##TopologyIdentity", [this, &fonts] {
             Ui::FieldLabel(Text("name").c_str(), fonts);
             (void)Ui::InputTextControl("##TopologyName", draft_.name, 97, fonts);
-        }, [&] {
+        }, [this, &fonts] {
             Ui::FieldLabel(Text("map").c_str(), fonts);
             (void)Ui::InputTextControl("##TopologyMap", draft_.map, 257, fonts);
         });
-        FieldPair("##TopologyModeClients", [&] {
+        FieldPair("##TopologyModeClients", [this, &fonts] {
             const std::array kinds{Text("standalone").c_str(), Text("listen").c_str(), Text("dedicated").c_str()};
             Ui::FieldLabel(Text("kind").c_str(), fonts);
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
             (void)Ui::ComboControl("##TopologyKind", &kind_, kinds.data(), static_cast<int>(kinds.size()), fonts);
-        }, [&] {
+        }, [this, &fonts] {
             ImGui::BeginDisabled(kind_ == static_cast<int>(Application::PlayTopologyKind::Standalone));
             Ui::FieldLabel(Text("clients").c_str(), fonts);
             Ui::InputIntControl("##TopologyClients", &clients_, fonts);
             ImGui::EndDisabled();
         });
         ImGui::BeginDisabled(kind_ == static_cast<int>(Application::PlayTopologyKind::Standalone));
-        FieldPair("##TopologyConnection", [&] {
+        FieldPair("##TopologyConnection", [this, &fonts] {
             Ui::FieldLabel(Text("transport").c_str(), fonts);
             (void)Ui::InputTextControl("##TopologyTransport", transport_, 21, fonts);
-        }, [&] {
+        }, [this, &fonts] {
             Ui::FieldLabel(Text("port").c_str(), fonts);
             Ui::InputIntControl("##TopologyPort", &port_, fonts);
         });

@@ -52,8 +52,8 @@ namespace Horo::Render {
                 const auto plan = backend.QueryBufferMemoryCost(descriptor);
                 if (plan.HasError())
                     return Result<void>::Failure(plan.ErrorValue());
-                const auto limit = record.descriptor.maximumRetainedBytes;
-                if (!plan.Value().IsValid() || charged > limit || count > (limit - charged) / plan.Value().requiredBytes)
+                if (const auto limit = record.descriptor.maximumRetainedBytes;
+                    !plan.Value().IsValid() || charged > limit || count > (limit - charged) / plan.Value().requiredBytes)
                     return Result<void>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted,
                                                            "Actual GPU particle native cost exceeds its retained-byte ledger slice."));
                 charged += count * plan.Value().requiredBytes;
@@ -71,12 +71,10 @@ namespace Horo::Render {
             }
 
             Result<void> States(const VfxGpuSimulationPreparation &source) {
-                const RenderBufferDescriptor seed{source.descriptor.layout.byteCount,
-                                                  RenderBufferUsage::Storage | RenderBufferUsage::CopySource,
+                using enum Horo::Render::RenderBufferUsage;
+                const RenderBufferDescriptor seed{source.descriptor.layout.byteCount, Storage | CopySource,
                                                   RenderBufferAccess::HostVisible};
-                const RenderBufferDescriptor output{source.descriptor.layout.byteCount,
-                                                    RenderBufferUsage::Storage | RenderBufferUsage::CopySource |
-                                                        RenderBufferUsage::CopyDestination,
+                const RenderBufferDescriptor output{source.descriptor.layout.byteCount, Storage | CopySource | CopyDestination,
                                                     RenderBufferAccess::DeviceLocal};
                 if (const auto cost = Charge(seed, 1); cost.HasError())
                     return cost;
@@ -154,10 +152,11 @@ namespace Horo::Render {
         for (auto &request : record.requests)
             if (request.occupied)
                 request.cancelRequested = true;
-        const bool nativeObservation = std::ranges::any_of(record.observationHeld, [](auto held) {
+        if (const bool nativeObservation = std::ranges::any_of(record.observationHeld,
+                                                               [](auto held) {
             return held != 0;
         });
-        if (!nativeObservation)
+            !nativeObservation)
             record.native.reset();
         for (const auto &buffer : record.buffers)
             static_cast<void>(ReleaseBuffer(buffer.handle));

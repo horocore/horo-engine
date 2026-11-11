@@ -53,7 +53,8 @@ namespace Horo::Platform {
         Result<void> VerifyNative(const NativeState &state) {
             FileOwner current;
             current.value = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
-            struct stat opened{}, running{};
+            struct stat opened{};
+            struct stat running{};
             if (current.value < 0 || fstat(current.value, &running) != 0 || fstat(state.file.value, &opened) != 0)
                 return Failure<void>("Cannot verify the kernel executable image reference.");
             if (!SameExecutable(state.metadata, opened) || !SameExecutable(opened, running))

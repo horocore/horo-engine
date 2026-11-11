@@ -26,16 +26,17 @@ namespace Horo::Vfx::SpawnDetail {
 
         /** @brief Binds a genuinely pool-issued activation to its preallocated same-slot CPU kernel. */
         [[nodiscard]] VfxSpawnOutcome Activate(Detail::VfxSpawnAsset &asset, const VfxSpawnRequest &request) noexcept {
+            using enum Horo::Vfx::VfxSpawnStatus;
             const auto admitted = asset.pool.Play({request.owner, request.ownerGeneration, request.tick, request.requirement});
             if (admitted.status != EffectPoolStatus::Admitted)
-                return MakeVfxSpawnOutcome(request, VfxSpawnStatus::EffectCapacityExceeded);
+                return MakeVfxSpawnOutcome(request, EffectCapacityExceeded);
             auto &instance = asset.instances[admitted.instance.slot - asset.firstSlot];
             const bool same = instance.instance == admitted.instance;
             const bool reset = same || instance.simulation.Reset(admitted.instance) == CpuParticleResetStatus::Complete;
             instance.instance = admitted.instance;
             if (!reset) {
                 Retire(asset, instance);
-                return MakeVfxSpawnOutcome(request, VfxSpawnStatus::SimulationFailed);
+                return MakeVfxSpawnOutcome(request, SimulationFailed);
             }
             instance.request = request;
             instance.elapsed = 0.0F;
@@ -43,9 +44,9 @@ namespace Horo::Vfx::SpawnDetail {
             instance.live = true;
             if (!ApplyParameters(instance)) {
                 Retire(asset, instance);
-                return MakeVfxSpawnOutcome(request, VfxSpawnStatus::ParameterSchemaMismatch);
+                return MakeVfxSpawnOutcome(request, ParameterSchemaMismatch);
             }
-            return MakeVfxSpawnOutcome(request, VfxSpawnStatus::Spawned, admitted.instance);
+            return MakeVfxSpawnOutcome(request, Spawned, admitted.instance);
         }
 
         /** @brief Emits exactly one reserved terminal admission result for each consumed request. */
@@ -129,6 +130,9 @@ namespace Horo::Vfx::SpawnDetail {
                 busy = true;
             }
 
+            UpdateScope(const UpdateScope &) = delete;
+            UpdateScope &operator=(const UpdateScope &) = delete;
+
             ~UpdateScope() {
                 busy = false;
             }
@@ -144,12 +148,13 @@ namespace Horo::Vfx::SpawnDetail {
     }
 
     VfxSpawnUpdate Update(Detail::VfxWorldSpawnState &state, const std::uint64_t tick, const float deltaSeconds) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (tick == 0 || tick <= state.tick)
-            return {.status = VfxSpawnStatus::OutOfOrder};
+            return {.status = OutOfOrder};
         if (!std::isfinite(deltaSeconds) || deltaSeconds < 0.0F || deltaSeconds > state.budget.maximumDeltaSeconds)
-            return {.status = VfxSpawnStatus::InvalidRequest};
+            return {.status = InvalidRequest};
         const UpdateScope scope{state.busy};
-        VfxSpawnUpdate report{.status = VfxSpawnStatus::Accepted};
+        VfxSpawnUpdate report{.status = Accepted};
         state.tick = tick;
         Drain(state, tick, report);
         for (auto &asset : state.assets)

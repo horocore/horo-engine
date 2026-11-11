@@ -62,10 +62,10 @@ namespace Horo::Editor {
             const std::string &path = tab.identity.key.source.Value();
             const auto separator = path.rfind('/');
             const std::string title = path.substr(separator == std::string::npos ? 0 : separator + 1) + (tab.dirty ? " *" : "");
-            const auto action =
-                Ui::DocumentTabButton("document", title.c_str(), m_context.localization.Get("editor", "workspace.documents.close").c_str(),
-                                      active == instance, m_context.theme.fonts);
-            if (action != Ui::DocumentTabAction::None) {
+            if (const auto action = Ui::DocumentTabButton("document", title.c_str(),
+                                                          m_context.localization.Get("editor", "workspace.documents.close").c_str(),
+                                                          active == instance, m_context.theme.fonts);
+                action != Ui::DocumentTabAction::None) {
                 outCommand.command = action == Ui::DocumentTabAction::Close ? EditorWorkspaceViewCommand::CloseWorkspaceDocument
                                                                             : EditorWorkspaceViewCommand::FocusWorkspaceDocument;
                 outCommand.documentInstance = instance;

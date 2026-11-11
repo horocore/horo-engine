@@ -57,9 +57,8 @@ namespace Horo::Physics::StateDetail {
         Wire wire{input};
         SolverHeader header;
         HeaderFields(wire, header);
-        std::size_t expected{};
-        if (wire.Failed() || header.tag != SolverWireTag || header.version != PhysicsStateSolverSchemaVersion ||
-            !WireSize(header, staging.limits.maximumBytes, expected) || expected != input.size())
+        if (std::size_t expected{}; wire.Failed() || header.tag != SolverWireTag || header.version != PhysicsStateSolverSchemaVersion ||
+                                    !WireSize(header, staging.limits.maximumBytes, expected) || expected != input.size())
             return Result<PhysicsStateSolverView>::Failure(
                 MakeError(PhysicsErrors::DescriptorInvalid, "Physics solver state wire is invalid."));
         if (!Fits(header, staging))

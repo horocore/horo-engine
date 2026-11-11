@@ -150,6 +150,18 @@ TEST_CASE("Exposure reflection admits all three actual strict-route captures", "
     }
 }
 
+TEST_CASE("Exposure evidence diagnostics identify the rejected predicate call site", "[renderer][exposure][reflection]") {
+    Capture capture{ExposureGpuStage::ClearHistogram};
+    capture.reflection[0].entryPoint = "ForeignExposure";
+    const auto result = capture.Normalize();
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == ShaderReflectionErrors::InvalidReflection.code.Value());
+    const auto &message = result.ErrorValue().message;
+    CHECK(message.starts_with("Exposure evidence rejected in "));
+    CHECK(message.find("NormalizeExposureGpuMetalReflection") != std::string::npos);
+    CHECK(message.find("EvidenceFailure") == std::string::npos);
+}
+
 TEST_CASE("Exposure readonly qualification preserves every original byte except the proven input qualifier",
           "[renderer][exposure][reflection]") {
     Capture capture{ExposureGpuStage::Adapt};

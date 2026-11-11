@@ -183,9 +183,9 @@ namespace Horo::Editor {
         }
 
         if (Ui::BeginMenuPopup("AddComponentPopup")) {
-            const auto synchronized = m_addComponents.SynchronizeBehaviors(viewModel.projectRoot, viewModel.availableBehaviorsRevision,
-                                                                           viewModel.availableBehaviors);
-            if (synchronized.HasError()) {
+            if (const auto synchronized = m_addComponents.SynchronizeBehaviors(viewModel.projectRoot, viewModel.availableBehaviorsRevision,
+                                                                               viewModel.availableBehaviors);
+                synchronized.HasError()) {
                 Ui::ErrorText(synchronized.ErrorValue().message.c_str(), context.theme.fonts);
             } else {
                 const AddComponentContext state{object, m_physicsSession.Draft(), viewModel.physicsContext.canEdit,

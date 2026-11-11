@@ -1898,6 +1898,34 @@ work before releasing the decoder, package lease, and ring. Source providers
 honor worker cancellation and bounded I/O. Package selection and publication
 remain in Assets without authoring-file fallback.
 
+`AudioStreamingService::Admit` borrows `const AudioStreamRequest&` only for its
+synchronous control-lane call. It validates the original request before copying
+its decoder facts into independently owned stream state inside the allocation
+boundary. The copied channel-role vector is bounded by `MaximumAudioChannels`
+(64); ring, decode and scratch allocations retain their existing declared limits.
+Slot storage and the byte reservation publish only after every owned allocation
+has completed. Allocation failure reports `StreamCapacityExceeded`, leaves the
+caller request intact, and consumes neither a stream generation nor reserved
+bytes. Provider opening and worker scheduling still begin only through `Pump`.
+
+On checked MSVC STL, implicit `noexcept` vector moves allocate iterator proxies.
+Admission therefore performs a fallible request copy rather than moving the public
+layout before or inside its error boundary. `AudioChannelLayout`, processing
+formats and request records retain their existing aggregate definitions and move
+traits; callback code and provider ownership are unchanged. The private Foundation
+cancellation state's initially empty wake-registration vector uses its fallible
+size constructor so its checked-library bookkeeping can also unwind through the
+owning admission boundary. Its empty contents, wake/cancellation behavior, public
+API, state layout and allocation ownership remain unchanged.
+
+Migration: ordinary lvalue/rvalue admission calls remain source-compatible, but
+admission no longer consumes an rvalue request. An exact pointer-to-member type
+must change its argument from `AudioStreamRequest` to `const AudioStreamRequest&`;
+dependent binaries must be rebuilt. No current exact member-pointer binding or
+production admission caller is present. Fault regressions cover every measured
+preparation allocation, caller preservation, immediate retry with the original
+slot/generation, exact-capacity byte reservation recovery and no provider opening.
+
 `MakeCookedAudioStreamSource` in the existing AudioCook contribution target supplies
 the concrete adapter for a host-pinned `FilesystemAssetProvider` or verified
 `AssetArchiveProvider`. Opening occurs inside the fill job and validates the AST

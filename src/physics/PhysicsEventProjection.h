@@ -32,7 +32,8 @@ namespace Horo::Physics::Detail {
         PhysicsEventPairKey pair;
         std::optional<PhysicsEventMaterial> firstMaterial;
         std::optional<PhysicsEventMaterial> secondMaterial;
-        std::optional<PhysicsSurfaceEvidence> firstSurface, secondSurface;
+        std::optional<PhysicsSurfaceEvidence> firstSurface;
+        std::optional<PhysicsSurfaceEvidence> secondSurface;
         PhysicsContactSummary contact;
         bool sensor{};
     };
@@ -40,7 +41,8 @@ namespace Horo::Physics::Detail {
     /** @brief Borrowed joined owner-state for typed checkpoint conversion; never a
      * public wire format. */
     struct PhysicsEventProjectionStateView final {
-        std::uint64_t tick{}, dropped{};
+        std::uint64_t tick{};
+        std::uint64_t dropped{};
         std::span<const PhysicsEventProjectionPairState> pairs;
         std::span<const PhysicsEventRecord> events;
     };

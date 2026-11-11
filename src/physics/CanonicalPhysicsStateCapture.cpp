@@ -34,8 +34,7 @@ namespace Horo::Physics::Detail {
         const auto *world = static_cast<const CanonicalWorld *>(handle.value);
         if (!Joined(world))
             return Result<PhysicsStateSolverView>::Failure(MakeError(PhysicsErrors::InvalidState));
-        auto bounds = ValidateCanonicalPhysicsStateScratch(handle, settings, staging, scratch);
-        if (bounds.HasError())
+        if (auto bounds = ValidateCanonicalPhysicsStateScratch(handle, settings, staging, scratch); bounds.HasError())
             return Result<PhysicsStateSolverView>::Failure(bounds.ErrorValue());
         staging.used = {};
         CanonicalPhysicsStateArena arena{scratch.temporary};

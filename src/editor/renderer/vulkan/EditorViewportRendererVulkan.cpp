@@ -59,7 +59,8 @@ namespace Horo::Editor {
 
         EditorViewportRendererVulkan &owner;
         Render::ShaderHotReloadTargetState expected;
-        ShaderResources program, shadowProgram;
+        ShaderResources program;
+        ShaderResources shadowProgram;
         std::array<FrameSlot, 8> slots;
     };
 

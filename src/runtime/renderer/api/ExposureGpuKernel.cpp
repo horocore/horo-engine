@@ -17,11 +17,12 @@ namespace Horo::Render {
 
         /** @brief Describes each closed stage's active logical resources. */
         bool Uses(ExposureGpuStage stage, std::uint32_t id) noexcept {
-            if (stage == ExposureGpuStage::ClearHistogram)
+            using enum Horo::Render::ExposureGpuStage;
+            if (stage == ClearHistogram)
                 return id == 2 || id == 5;
-            if (stage == ExposureGpuStage::BuildHistogram)
+            if (stage == BuildHistogram)
                 return id == 1 || id == 2 || id == 5;
-            return stage == ExposureGpuStage::Adapt && id >= 2 && id <= 5;
+            return stage == Adapt && id >= 2 && id <= 5;
         }
 
         /** @brief Checks artifact target and finite package identity before reflection. */
@@ -57,11 +58,12 @@ namespace Horo::Render {
 
         /** @brief Appends one fixed logical resource declaration. */
         void AppendBinding(ShaderManifest &manifest, std::uint32_t id) {
-            auto kind = ShaderResourceKind::StorageBuffer;
+            using enum Horo::Render::ShaderResourceKind;
+            auto kind = StorageBuffer;
             if (id == 1)
-                kind = ShaderResourceKind::SampledTexture;
+                kind = SampledTexture;
             if (id == 5)
-                kind = ShaderResourceKind::UniformBuffer;
+                kind = UniformBuffer;
             manifest.bindings.push_back({.id = {id},
                                          .kind = kind,
                                          .access = id == 2 || id == 4 ? ShaderResourceAccess::ReadWrite : ShaderResourceAccess::ReadOnly,

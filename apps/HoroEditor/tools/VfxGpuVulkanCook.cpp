@@ -143,8 +143,9 @@ namespace Horo::Editor::Offline {
     }
 
     Result<ShaderCompilerTargetDescriptor> VfxGpuVulkanCookDescriptor(const ShaderCompilerToolchainConfiguration &configuration) {
+        using enum Horo::Render::ShaderCompilerTool;
         using Descriptor = Result<ShaderCompilerTargetDescriptor>;
-        constexpr std::array roles{ShaderCompilerTool::Dxc, ShaderCompilerTool::SpirvTools, ShaderCompilerTool::SpirvCross};
+        constexpr std::array roles{Dxc, SpirvTools, SpirvCross};
         if (configuration.tools.size() != roles.size())
             return Descriptor::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
         for (std::size_t i = 0; i < roles.size(); ++i)

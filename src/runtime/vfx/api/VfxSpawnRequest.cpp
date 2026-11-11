@@ -62,13 +62,14 @@ namespace Horo::Vfx {
 
     /** @copydoc ValidateVfxSpawnRequest */
     VfxSpawnStatus ValidateVfxSpawnRequest(const VfxSpawnRequest &request) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (!ValidIdentity(request) || !ValidRouting(request))
-            return VfxSpawnStatus::InvalidRequest;
+            return InvalidRequest;
         if (!Unit(request.transform.orientation) || !ValidScale(request))
-            return VfxSpawnStatus::InvalidTransform;
+            return InvalidTransform;
         if (request.impactNormal && !Unit(*request.impactNormal))
-            return VfxSpawnStatus::InvalidImpactNormal;
-        return ValidParameters(request.parameters) ? VfxSpawnStatus::Accepted : VfxSpawnStatus::InvalidParameters;
+            return InvalidImpactNormal;
+        return ValidParameters(request.parameters) ? Accepted : InvalidParameters;
     }
 
     /** @copydoc MakeVfxSpawnOutcome */

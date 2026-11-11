@@ -51,8 +51,7 @@ namespace Horo::Runtime {
         Result<void> Write(Work &work, const CancellationToken &cancellation) {
             if (work.producer.PublishProgress(SaveOperationStage::Serializing, {}) != SaveOperationTransitionResult::Applied)
                 return JobCancelled();
-            auto prepared = work.writer->Prepare(work.capture, cancellation);
-            if (prepared.HasError())
+            if (auto prepared = work.writer->Prepare(work.capture, cancellation); prepared.HasError())
                 return Fail(work, std::move(prepared).ErrorValue());
             if (cancellation.IsCancellationRequested()) {
                 (void)work.handle.RequestCancellation();
@@ -120,8 +119,7 @@ namespace Horo::Runtime {
                         return bound;
                     }
                 }
-                auto prepared = transaction.Prepare();
-                if (prepared.HasError())
+                if (auto prepared = transaction.Prepare(); prepared.HasError())
                     return prepared;
                 return transaction.Activate({generation.registry, generation.runtime, generation.scene});
             }
@@ -155,13 +153,12 @@ namespace Horo::Runtime {
         /** @brief Activate staged restore through the same safe-point owner and forward its terminal error. */
         Result<void> CommitRestore(Work &work, SaveSafePointCoordinator &safePoints, SaveRuntimeGeneration generation) {
             Executor executor(work);
-            auto drained = safePoints.CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation, 1, executor);
-            if (drained.HasError())
+            if (auto drained = safePoints.CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation, 1, executor);
+                drained.HasError())
                 return Result<void>::Failure(std::move(drained).ErrorValue());
             if (work.handoffFailure)
                 return Result<void>::Failure(*work.handoffFailure);
-            const auto result = work.handle.Snapshot();
-            if (result->terminalError)
+            if (const auto result = work.handle.Snapshot(); result->terminalError)
                 return Result<void>::Failure(*result->terminalError);
             return Result<void>::Success();
         }
@@ -241,10 +238,10 @@ namespace Horo::Runtime {
         auto work = std::make_shared<Work>(std::move(producer).Value(), std::move(cancellation));
         work->participants = participants_;
         work->context = {operation.operation, generation_.registry, generation_.runtime, generation_.scene, limits_.maximumParticipants};
-        auto admitted = safePoints_->Admit(
-            {operation.operation, operation.kind == SaveOperationKind::Save ? SaveSafePointAction::Capture : SaveSafePointAction::Restore,
-             generation_});
-        if (admitted.HasError())
+        if (auto admitted = safePoints_->Admit(
+                {operation.operation,
+                 operation.kind == SaveOperationKind::Save ? SaveSafePointAction::Capture : SaveSafePointAction::Restore, generation_});
+            admitted.HasError())
             return Return::Failure(std::move(admitted).ErrorValue());
         work_ = work;
         return Return::Success(std::move(work));
@@ -348,8 +345,7 @@ namespace Horo::Runtime {
         if (!barrierPending_ || !work_)
             return;
         try {
-            const auto state = barrier_.Snapshot();
-            if (state.HasValue() && state.Value().state == SaveBarrierState::Pending)
+            if (const auto state = barrier_.Snapshot(); state.HasValue() && state.Value().state == SaveBarrierState::Pending)
                 (void)barrier_.Cancel(work_->handle.Id());
             (void)barrier_.Acknowledge(work_->handle.Id());
             barrierPending_ = false;
@@ -361,8 +357,7 @@ namespace Horo::Runtime {
     Result<void> RuntimeSaveSession::RequestCaptureBarrier(Work &work) {
         if (barrierPending_)
             return Result<void>::Success();
-        auto requested = barrier_.Request(work.handle.Id(), generation_);
-        if (requested.HasError())
+        if (auto requested = barrier_.Request(work.handle.Id(), generation_); requested.HasError())
             return Fail(work, requested.ErrorValue());
         barrierPending_ = true;
         return Result<void>::Success();
@@ -398,8 +393,8 @@ namespace Horo::Runtime {
         capturePreparedFor_.reset();
         ReleaseBarrier();
         Executor executor(work);
-        auto drained = safePoints_->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation_, 1, executor);
-        if (drained.HasError())
+        if (auto drained = safePoints_->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, generation_, 1, executor);
+            drained.HasError())
             return Fail(work, std::move(drained).ErrorValue());
         return Dispatch(work_);
     }
@@ -422,8 +417,7 @@ namespace Horo::Runtime {
         const auto job = work.job->Snapshot();
         if (!job || JobPending(job->state))
             return Result<void>::Success();
-        auto completed = PublishCompletion(work, *safePoints_, generation_, *job);
-        if (completed.HasError())
+        if (auto completed = PublishCompletion(work, *safePoints_, generation_, *job); completed.HasError())
             return completed;
         if (!work.writer)
             return CommitRestore(work, *safePoints_, generation_);

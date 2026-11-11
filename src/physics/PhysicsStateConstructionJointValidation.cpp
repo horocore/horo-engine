@@ -40,7 +40,7 @@ namespace Horo::Physics::StateDetail {
         Result<void> Endpoints(const PhysicsStateConstructionManifest &manifest, const PhysicsStateConstructionJoint &joint) {
             if (!HasSceneBody(manifest, joint.first))
                 return MalformedConstruction();
-            if (joint.second) {
+            if (joint.second.has_value()) {
                 if (*joint.second == joint.first || !HasSceneBody(manifest, *joint.second))
                     return MalformedConstruction();
                 if (joint.collisionPolicy == PhysicsJointCollisionPolicy::AllowBetweenBodies)

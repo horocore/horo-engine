@@ -16,8 +16,7 @@ namespace Horo::Physics::StateDetail {
                                        std::size_t rowsSize, std::span<std::byte> output) {
             using Outcome = Result<std::size_t>;
             const auto offset = ConstructionManifestHeader::Bytes + shapeSize;
-            Wire rows{output.subspan(offset, rowsSize)};
-            if (!ConstructionManifestRows(rows, m) || rows.Size() != rowsSize)
+            if (Wire rows{output.subspan(offset, rowsSize)}; !ConstructionManifestRows(rows, m) || rows.Size() != rowsSize)
                 return Outcome::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
             header.shapeBytes = shapeSize;
             Wire prefix{output.first(ConstructionManifestHeader::Bytes)};

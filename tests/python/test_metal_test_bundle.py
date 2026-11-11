@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tarfile
@@ -26,6 +27,7 @@ SPEC.loader.exec_module(bundle)
 IDENTITY = {"repository": "horocore/horo-engine", "run": 7, "attempt": 1,
             "commit": "a" * 40, "head": "b" * 40, "tree": "c" * 40}
 MEMBER = "tests/HoroRenderMetalTests"
+requires_posix_modes = pytest.mark.skipif(os.name != "posix", reason='Metal bundle owner-private UID/mode and link contracts require POSIX filesystem semantics')
 
 
 def test_git_inspection_preserves_literal_arguments_and_resolved_executable(tmp_path: Path, monkeypatch) -> None:
@@ -212,6 +214,7 @@ def native_producer(tmp_path: Path, monkeypatch):
     return workspace, workspace / "build/metal-test-bundle" / bundle.PAYLOAD, tests
 
 
+@requires_posix_modes
 def test_package_output_is_private_fixed_and_preserves_verified_payload(native_producer, tmp_path: Path) -> None:
     workspace, output, tests = native_producer
     report = bundle.pack(workspace)
@@ -230,6 +233,7 @@ def test_package_output_is_private_fixed_and_preserves_verified_payload(native_p
 
 
 @pytest.mark.parametrize("name", sorted(bundle.UI_PAINT_FILES))
+@requires_posix_modes
 def test_producer_requires_every_ui_qualification_input(native_producer, name: str) -> None:
     workspace, output, _ = native_producer
     (workspace / bundle.BUILD / name).unlink()
@@ -261,6 +265,7 @@ def test_cli_rejects_output_selection_before_source_inspection(native_producer, 
 
 
 @pytest.mark.parametrize("attack", ["parent-link", "file-link", "existing-file", "public-directory"])
+@requires_posix_modes
 def test_package_destination_never_replaces_files_or_follows_links(native_producer, tmp_path: Path, attack: str) -> None:
     workspace, output, _ = native_producer
     outside = tmp_path / "outside"
@@ -284,6 +289,7 @@ def test_package_destination_never_replaces_files_or_follows_links(native_produc
         assert output.read_bytes() == b"preserve existing bytes"
 
 
+@requires_posix_modes
 def test_exclusive_bundle_creation_preserves_a_file_created_after_validation(native_producer, monkeypatch) -> None:
     workspace, output, _ = native_producer
 
@@ -323,6 +329,7 @@ def test_shader_fixture_path_contract_uses_its_explicit_ctest_working_directory(
     assert 'TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 4' in contract
 
 
+@requires_posix_modes
 def test_verified_regular_payload_keeps_bytes_and_uses_safe_modes(tmp_path: Path) -> None:
     data = native_binary()
     payload = archive_at(tmp_path / "payload.gz", manifest(data), [(MEMBER, data, tarfile.REGTYPE)])
@@ -406,12 +413,12 @@ def test_typed_relocation_preserves_arguments_and_every_unrelated_property(tmp_p
 
 def test_ctest_round_trip_retains_literal_arguments_and_execution_guards(tmp_path: Path) -> None:
     name = "literal [=[nested]=]; ü"
-    test = {"name": name, "command": [sys.executable, "argument;with spaces"],
+    test = {"name": name, "command": [Path(sys.executable).as_posix(), "argument;with spaces"],
             "properties": [{"name": "ENVIRONMENT", "value": ["KEY=literal;semicolon"]},
                            {"name": "RESOURCE_LOCK", "value": ["original-lock"]},
                            {"name": "RUN_SERIAL", "value": True}, {"name": "SKIP_RETURN_CODE", "value": 4},
                            {"name": "TIMEOUT", "value": 60.0}, {"name": "WORKING_DIRECTORY", "value": str(tmp_path)}]}
-    (tmp_path / "CTestTestfile.cmake").write_text(bundle.ctest_file([test]))
+    (tmp_path / "CTestTestfile.cmake").write_text(bundle.ctest_file([test]), encoding="utf-8")
     document = json.loads(run("ctest", "--test-dir", str(tmp_path), "--show-only=json-v1").stdout)
     actual = document["tests"][0]
     assert actual["name"] == name

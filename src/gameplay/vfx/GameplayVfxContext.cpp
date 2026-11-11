@@ -2,40 +2,43 @@
 
 namespace Horo::Gameplay::VfxContextDetail {
     Vfx::VfxSpawnStatus Status(const Detail::GameplayVfxSceneState &state) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (state.owner != std::this_thread::get_id())
-            return Vfx::VfxSpawnStatus::ThreadViolation;
+            return ThreadViolation;
         if (!state.active || !state.world)
-            return Vfx::VfxSpawnStatus::StaleScene;
+            return StaleScene;
         if (state.busy)
-            return Vfx::VfxSpawnStatus::Reentrant;
+            return Reentrant;
         Vfx::VfxSpawnAssetInfo witness;
         return state.world->InspectSpawnAsset(state.witness, witness);
     }
 
     Vfx::VfxSpawnStatus ClientStatus(const Detail::GameplayVfxClientState &client,
                                      std::shared_ptr<Detail::GameplayVfxSceneState> &scene) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (client.module->owner != std::this_thread::get_id())
-            return Vfx::VfxSpawnStatus::ThreadViolation;
+            return ThreadViolation;
         if (client.retired || ScopeRevoked(client.lifetime) || !client.module->active)
-            return Vfx::VfxSpawnStatus::ShutDown;
+            return ShutDown;
         scene = client.scene.lock();
-        return scene ? Status(*scene) : Vfx::VfxSpawnStatus::StaleScene;
+        return scene ? Status(*scene) : StaleScene;
     }
 
     Vfx::VfxSpawnStatus ProducerStatus(const Detail::GameplayVfxProducerState &producer,
                                        std::shared_ptr<Detail::GameplayVfxSceneState> &scene) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (producer.module->owner != std::this_thread::get_id())
-            return Vfx::VfxSpawnStatus::ThreadViolation;
+            return ThreadViolation;
         if (!producer.module->active)
-            return Vfx::VfxSpawnStatus::ShutDown;
+            return ShutDown;
         scene = producer.scene.lock();
-        return scene ? Status(*scene) : Vfx::VfxSpawnStatus::StaleScene;
+        return scene ? Status(*scene) : StaleScene;
     }
 
-    bool Allowed(const Detail::GameplayVfxModuleState &module, const Detail::GameplayVfxCompiledBinding &binding) noexcept {
+    bool Allowed(const Detail::GameplayVfxModuleState &moduleState, const Detail::GameplayVfxCompiledBinding &binding) noexcept {
         if (binding.event.IsValid())
-            return std::ranges::find(module.grant.events, binding.event) != module.grant.events.end();
-        return std::ranges::find(module.grant.tags, binding.tag) != module.grant.tags.end();
+            return std::ranges::find(moduleState.grant.events, binding.event) != moduleState.grant.events.end();
+        return std::ranges::find(moduleState.grant.tags, binding.tag) != moduleState.grant.tags.end();
     }
 
     Vfx::VfxSpawnRequest Basis(const Detail::GameplayVfxSceneState &scene, const GameplayVfxReceipt &receipt) noexcept {
@@ -53,25 +56,26 @@ namespace Horo::Gameplay::VfxContextDetail {
                left.occurrence == right.occurrence;
     }
 
-    GameplayVfxResult Poll(const Detail::GameplayVfxSceneState &scene, const Detail::GameplayVfxModuleState &module,
+    GameplayVfxResult Poll(const Detail::GameplayVfxSceneState &scene, const Detail::GameplayVfxModuleState &moduleState,
                            const GameplayVfxReceipt &receipt) noexcept {
-        if (receipt.scene != scene.scene || receipt.owner != module.grant.owner ||
-            receipt.ownerGeneration != module.grant.ownerGeneration || receipt.occurrence.producer != module.grant.producer)
-            return {.status = Vfx::VfxSpawnStatus::PermissionDenied};
+        using enum Horo::Vfx::VfxSpawnStatus;
+        if (receipt.scene != scene.scene || receipt.owner != moduleState.grant.owner ||
+            receipt.ownerGeneration != moduleState.grant.ownerGeneration || receipt.occurrence.producer != moduleState.grant.producer)
+            return {.status = PermissionDenied};
         for (const auto &pending : std::span{scene.pending.data(), scene.pendingCount})
             if (SameReceipt(pending.receipt, receipt))
-                return {.status = Vfx::VfxSpawnStatus::Accepted, .pending = true};
+                return {.status = Accepted, .pending = true};
         for (const auto &result : std::span{scene.results.data(), scene.resultCount})
             if (SameReceipt(result.receipt, receipt))
                 return result.result;
-        return {.status = Vfx::VfxSpawnStatus::Empty};
+        return {.status = Empty};
     }
 }  // namespace Horo::Gameplay::VfxContextDetail
 
 namespace Horo::Gameplay {
     namespace {
-        [[nodiscard]] bool AllowsEvent(const Detail::GameplayVfxModuleState &module, const std::string_view event) noexcept {
-            return std::ranges::any_of(module.grant.events, [event](const auto &allowed) {
+        [[nodiscard]] bool AllowsEvent(const Detail::GameplayVfxModuleState &moduleState, const std::string_view event) noexcept {
+            return std::ranges::any_of(moduleState.grant.events, [event](const auto &allowed) {
                 return allowed.Value() == event;
             });
         }

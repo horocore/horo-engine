@@ -44,9 +44,9 @@ namespace Horo::Physics::StateDetail {
         using Outcome = Result<std::shared_ptr<ConstructionRecipePool>>;
         if (!ConfigurationValid(limits, profile, tracking))
             return Outcome::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
-        auto remaining = limits.maximumBytes;
-        if (!Charge(1, sizeof(ConstructionRecipePool), remaining) || !Charge(limits.maximumNodes, sizeof(Node), remaining) ||
-            !Charge(limits.maximumEdges, sizeof(Edge), remaining))
+        if (auto remaining = limits.maximumBytes; !Charge(1, sizeof(ConstructionRecipePool), remaining) ||
+                                                  !Charge(limits.maximumNodes, sizeof(Node), remaining) ||
+                                                  !Charge(limits.maximumEdges, sizeof(Edge), remaining))
             return Outcome::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         try {
             return Outcome::Success(std::shared_ptr<ConstructionRecipePool>(new ConstructionRecipePool(limits, profile, tracking)));

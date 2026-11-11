@@ -47,9 +47,13 @@ namespace Horo::Application::Internal {
                 : definition(std::move(definition)), gameplay(gameplay), replicationAdmission(admission) {}
 
             ~WorldOwners() {
-                auto retired = PollRetirement(64);
-                if (retired.HasError() || !retired.Value())
+                try {
+                    auto retired = PollRetirement(64);
+                    if (retired.HasError() || !retired.Value())
+                        std::terminate();
+                } catch (const std::exception &) {
                     std::terminate();
+                }
             }
 
             /** @brief Binds the actual process before any native World/resource can be created. */

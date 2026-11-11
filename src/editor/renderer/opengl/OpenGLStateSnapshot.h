@@ -29,7 +29,8 @@ namespace Horo::Editor {
         struct UniformBinding {
             GLuint slot{};
             GLint buffer{};
-            GLint64 offset{}, size{};
+            GLint64 offset{};
+            GLint64 size{};
         };
 
         std::array<UniformBinding, 3> uniforms_{};

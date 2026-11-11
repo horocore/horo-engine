@@ -16,8 +16,8 @@ namespace Horo::Animation::Detail {
             auto &work = state.actions;
             auto &slot = work.candidateSlots[slotIndex];
             auto &record = work.candidateRecords[slot.active];
-            const auto &definition = state.program->Actions()[record.action];
-            if (rate.millionths < 0 && definition.reverse == GraphActionReverse::Reject)
+            if (const auto &definition = state.program->Actions()[record.action];
+                rate.millionths < 0 && definition.reverse == GraphActionReverse::Reject)
                 return {GraphInstanceFailure::TypeMismatch};
             if (!slot.directionPending || rate.millionths == 0)
                 return {};
@@ -38,9 +38,9 @@ namespace Horo::Animation::Detail {
             const auto &record = state.actions.candidateRecords[slot.active];
             const auto &section = state.actions.definitions[record.action].sections[slot.section];
             const auto player = ActionPlayer(state, slotIndex);
-            const auto staged = StageClipNotifies(state, player, section.clip, state.candidate.players[player].cursor, {}, section.region,
-                                                  true, record.observation.handle);
-            if (staged.HasError())
+            if (const auto staged = StageClipNotifies(state, player, section.clip, state.candidate.players[player].cursor, {},
+                                                      section.region, true, record.observation.handle);
+                staged.HasError())
                 return staged;
             EnterActionClipNotifyLoop(state, player,
                                       rate.millionths < 0 ? AnimationTraversalDirection::Reverse : AnimationTraversalDirection::Forward);
@@ -231,7 +231,7 @@ namespace Horo::Animation::Detail {
          * explicit boundary pose. */
         GraphInstanceOutcome Active(GraphInstanceState &state, const std::uint32_t slotIndex, std::int64_t &remaining,
                                     const GraphEvaluationInput &input) {
-            auto &slot = state.actions.candidateSlots[slotIndex];
+            const auto &slot = state.actions.candidateSlots[slotIndex];
             if (const auto direction = Direction(state, slotIndex, input.rate); direction.HasError())
                 return direction;
             if (state.actions.candidateRecords[slot.active].observation.phase == GraphActionPhase::BlendingOut) {
@@ -263,7 +263,7 @@ namespace Horo::Animation::Detail {
                 return {GraphInstanceFailure::Cancelled};
             if (const auto queued = EnsureActive(state, index); queued.HasError())
                 return queued;
-            auto &slot = state.actions.candidateSlots[index];
+            const auto &slot = state.actions.candidateSlots[index];
             if (slot.active == NoActionIndex) {
                 done = true;
                 return {};

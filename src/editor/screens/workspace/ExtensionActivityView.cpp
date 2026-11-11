@@ -220,8 +220,8 @@ namespace Horo::Editor {
             if (admitted && commandBindingsValid_ && !ImGui::GetIO().AppFocusLost)
                 for (const auto &command : commands_)
                     for (const auto &binding : command.bindings) {
-                        const auto &modifiers = binding.requiredModifiers;
-                        if (ImGui::GetIO().WantTextInput && !modifiers.control && !modifiers.command && !modifiers.alt)
+                        if (const auto &modifiers = binding.requiredModifiers;
+                            ImGui::GetIO().WantTextInput && !modifiers.control && !modifiers.command && !modifiers.alt)
                             continue;
                         if (Ui::ShortcutPressed(std::span{&binding, 1})) {
                             if (host_->QueueCommand(command.id).HasValue())

@@ -56,16 +56,15 @@ namespace Horo::Prefab {
         /** @brief Confirms every member retains the exact prefab occurrence as its
          * creation provenance. */
         Result<void> Member(const PrefabPersistentInstance &instance, const PrefabPersistentMember &member) {
+            using enum Horo::Runtime::PersistentEntityDisposition;
             const auto &record = member.record;
             if (!HasMemberIdentity(instance, record))
                 return Invalid("Durable prefab member identity does not match its exact "
                                "creation recipe.");
-            if (!member.source.sourceAsset.IsValid() || member.source.sourceDigest == Sha256Digest{} ||
-                record.disposition > Runtime::PersistentEntityDisposition::Tombstone)
+            if (!member.source.sourceAsset.IsValid() || member.source.sourceDigest == Sha256Digest{} || record.disposition > Tombstone)
                 return Invalid("Durable prefab member lacks valid original cooked source "
                                "evidence or disposition.");
-            if (instance.disposition == Runtime::PersistentEntityDisposition::Tombstone &&
-                record.disposition != Runtime::PersistentEntityDisposition::Tombstone)
+            if (instance.disposition == Tombstone && record.disposition != Tombstone)
                 return Invalid("A destroyed prefab occurrence cannot retain a live member.");
             return Result<void>::Success();
         }

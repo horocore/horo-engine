@@ -16,8 +16,7 @@ namespace Horo::Runtime {
         }
 
         Result<void> ValidatePublication() const override {
-            const auto admission = owner_->Admit(true);
-            if (admission.HasError())
+            if (const auto admission = owner_->Admit(true); admission.HasError())
                 return admission;
             if (!scope_ || scope_->closed)
                 return Result<void>::Failure(MakeError(A::AnimationAssetErrors::Stale));
@@ -57,8 +56,7 @@ namespace Horo::Runtime {
         Result<std::vector<SceneAssetDependency>> DiscoverDependencies(const RuntimeSceneAssetView &asset,
                                                                        const CancellationToken &cancellation,
                                                                        std::size_t maximumReturnedDependencies) override {
-            const auto admission = owner_->Admit(true);
-            if (admission.HasError())
+            if (const auto admission = owner_->Admit(true); admission.HasError())
                 return Result<std::vector<SceneAssetDependency>>::Failure(admission.ErrorValue());
             return AnimationSceneInternal::DiscoverAssets(asset, owner_->config.target, cancellation, maximumReturnedDependencies);
         }
@@ -85,8 +83,7 @@ namespace Horo::Runtime {
             : owner_(std::move(owner)), scope_(std::move(scope)), next_(std::move(next)), revision_(scope_->revision) {}
 
         Result<void> ValidatePublication() const override {
-            const auto admission = owner_->Admit(true);
-            if (admission.HasError())
+            if (const auto admission = owner_->Admit(true); admission.HasError())
                 return admission;
             if (owner_->active != scope_ || scope_->closed || scope_->revision != revision_ || !next_)
                 return Result<void>::Failure(MakeError(A::AnimationAssetErrors::Stale));

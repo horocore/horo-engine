@@ -39,7 +39,9 @@ namespace Horo::Editor {
         Render::LightCullingBudget budget_;
         std::array<Render::IdentifiedRenderLight, Render::LightCullingBudget::HardMaximumLights> lights_;
         std::size_t count_{};
-        std::uint64_t domain_{}, revision_{};
-        bool admitted_{}, ready_{};
+        std::uint64_t domain_{};
+        std::uint64_t revision_{};
+        bool admitted_{};
+        bool ready_{};
     };
 }  // namespace Horo::Editor

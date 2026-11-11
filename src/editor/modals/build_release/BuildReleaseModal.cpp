@@ -54,11 +54,12 @@ namespace Horo::Editor {
 
         /** @brief Resolves terminal and active release badge feedback. */
         Ui::BadgeTone ReleaseBadgeTone(const Release::ReleaseJobSnapshot *job) {
+            using enum Horo::Editor::Ui::BadgeTone;
             if (job && job->state == Release::ReleaseJobState::Succeeded)
-                return Ui::BadgeTone::Success;
+                return Success;
             if (job && !Running(job))
-                return Ui::BadgeTone::Error;
-            return Ui::BadgeTone::Accent;
+                return Error;
+            return Accent;
         }
 
         /** @brief Resolves one stage's completion/error surface. */
@@ -466,7 +467,8 @@ namespace Horo::Editor {
             if (state == Release::ReleaseStageState::Running) {
                 const float phase =
                     Theme::GetActiveTokens().motion.reduceMotion ? 0.5F : static_cast<float>(std::fmod(ImGui::GetTime() * 0.6, 1));
-                const float segment = width * 0.3F, offset = phase * (width + segment) - segment;
+                const float segment = width * 0.3F;
+                const float offset = phase * (width + segment) - segment;
                 draw->AddRectFilled({pos.x + std::max(0.0F, offset), pos.y}, {pos.x + std::min(width, offset + segment), pos.y + 4},
                                     Theme::U32(Theme::Accent()), 2);
             }

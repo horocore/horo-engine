@@ -274,7 +274,7 @@ namespace Horo::Application::Internal {
     Result<void> PlaySaveSceneHandoff::QueueReady() {
         auto &pending = *pending_;
         auto control = pending.control;
-        auto &packet = *control->packet;
+        const auto &packet = *control->packet;
         const auto &decoded = *control->decoded;
         if (!CurrentAuthority(*authority_, packet.context))
             return Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
@@ -324,7 +324,7 @@ namespace Horo::Application::Internal {
     Result<void> PlaySaveSceneHandoff::AdvanceInternal() {
         if (!pending_)
             return Result<void>::Success();
-        auto &pending = *pending_;
+        const auto &pending = *pending_;
         ObservePending();
         std::size_t active = ConsumeLoads();
         if (pending.draining) {
@@ -349,7 +349,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PlaySaveSceneHandoff::ObservePending */
     void PlaySaveSceneHandoff::ObservePending() {
-        auto &pending = *pending_;
+        const auto &pending = *pending_;
         if (!pending.draining && pending.control->packet->operation.ObserveCancellation() == SaveCancellationObservation::Cancelled)
             RejectPending(CancelledPacketError(state_->operation));
         if (prefabs_)

@@ -233,18 +233,15 @@ namespace Horo::Render::Detail {
         const auto kernel = std::dynamic_pointer_cast<VulkanVfxGpuKernel>(preparation.kernel);
         const auto &d = preparation.preparation.descriptor;
         const auto observations = d.readback.enabled ? d.readback.maximumPendingResults : 1u;
-        const std::array valid{preparation.id.IsValid(),
-                               bool(preparation.resourceLease),
-                               kernel && kernel->owner == impl_->device,
-                               preparation.deviceIncarnation == impl_->device->incarnation,
-                               preparation.states.size() == VfxGpuStateBufferCount(d),
-                               preparation.observations.size() == observations,
-                               SamePlan(plan.Value(), preparation.preparationResources),
-                               impl_->simulations.size() < impl_->simulations.capacity(),
-                               d.layout.byteCount <= impl_->device->properties.limits.maxStorageBufferRange,
-                               (std::uint64_t{d.layout.streamStrideWords} + 63) / 64 <=
-                                   impl_->device->properties.limits.maxComputeWorkGroupCount[0]};
-        if (!std::ranges::all_of(valid, [](bool value) {
+        if (const std::array valid{preparation.id.IsValid(), bool(preparation.resourceLease), kernel && kernel->owner == impl_->device,
+                                   preparation.deviceIncarnation == impl_->device->incarnation,
+                                   preparation.states.size() == VfxGpuStateBufferCount(d), preparation.observations.size() == observations,
+                                   SamePlan(plan.Value(), preparation.preparationResources),
+                                   impl_->simulations.size() < impl_->simulations.capacity(),
+                                   d.layout.byteCount <= impl_->device->properties.limits.maxStorageBufferRange,
+                                   (std::uint64_t{d.layout.streamStrideWords} + 63) / 64 <=
+                                       impl_->device->properties.limits.maxComputeWorkGroupCount[0]};
+            !std::ranges::all_of(valid, [](bool value) {
             return value;
         }))
             return Outcome::Failure(VulkanVfxGpuInvalid("Native preparation inventory/arena/device bounds differ."));

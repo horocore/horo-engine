@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <stdexcept>
+#include <vector>
 
 namespace {
     using namespace Horo;
@@ -108,12 +109,17 @@ extern "C" HORO_GAME_EXPORT void DestroyGameModule(Horo::Gameplay::IGameModule *
 
 /** @brief Exercises the module-emitted frontend while its diagnostic allocator remains host-issued. */
 extern "C" HORO_GAME_EXPORT bool HoroTestStartAiTaskWithDiagnostics(const std::shared_ptr<const Horo::Gameplay::GameplayAiContext> &context,
-                                                                    Horo::AI::AgentHandle agent, Horo::AI::TaskHandle &task,
+                                                                    Horo::AI::AgentHandle agent, bool isolated, bool includeFields,
+                                                                    Horo::AI::TaskHandle &task,
                                                                     std::shared_ptr<const Horo::Telemetry::OperationContext> &captured) {
     Horo::Telemetry::OperationContext diagnostics;
     diagnostics.operationId = 741;
     diagnostics.parentOperationId = 740;
-    diagnostics.diagnosticContext = Horo::Log::LogContextSnapshot{{{"module.source", "native-ai-image"}}};
+    std::vector<Horo::Log::MdcField> fields;
+    if (includeFields)
+        fields.emplace_back("module.source", "native-ai-image");
+    diagnostics.diagnosticContext =
+        isolated ? Horo::Log::LogContextSnapshot::Isolated(std::move(fields)) : Horo::Log::LogContextSnapshot{std::move(fields)};
     auto started = context->StartTask(agent, Horo::AI::TaskId::Create(411).Value(), diagnostics);
     if (started.HasError())
         return false;

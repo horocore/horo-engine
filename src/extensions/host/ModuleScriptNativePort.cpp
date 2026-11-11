@@ -120,12 +120,12 @@ namespace Horo::Extensions {
         return std::move(actual).Value().Invoke(&NativeScalarService::InvokeScript, request, cancel);
     }
 
-    Result<ModuleScriptSourceLease> ModuleScriptHostAuthority::Source(std::string_view package, std::string_view module) const {
+    Result<ModuleScriptSourceLease> ModuleScriptHostAuthority::Source(std::string_view package, std::string_view moduleId) const {
         using Output = Result<ModuleScriptSourceLease>;
         auto lane = RequireOpenOwner();
         if (lane.HasError())
             return Output::Failure(lane.ErrorValue());
-        auto selected = Consumer(*impl_->state, package, module);
+        auto selected = Consumer(*impl_->state, package, moduleId);
         if (selected.HasError())
             return Output::Failure(selected.ErrorValue());
         if (!selected.Value()->admission)
@@ -139,13 +139,13 @@ namespace Horo::Extensions {
         return Output::Success(ModuleScriptSourceLease{std::move(actual).Value(), BackendServiceCodeLease::Retain(std::move(code))});
     }
 
-    Result<ModuleScriptResolvedImport> ModuleScriptHostAuthority::Resolve(std::string_view package, std::string_view module,
+    Result<ModuleScriptResolvedImport> ModuleScriptHostAuthority::Resolve(std::string_view package, std::string_view moduleId,
                                                                           std::string_view id) const {
         using Output = Result<ModuleScriptResolvedImport>;
         auto lane = RequireOpenOwner();
         if (lane.HasError())
             return Output::Failure(lane.ErrorValue());
-        auto consumer = Consumer(*impl_->state, package, module);
+        auto consumer = Consumer(*impl_->state, package, moduleId);
         if (consumer.HasError())
             return Output::Failure(consumer.ErrorValue());
         const auto &imports = consumer.Value()->imports;

@@ -41,7 +41,7 @@ namespace Horo::Extensions {
                 if (!Text(method.id) || !Detail::IsCanonicalExtensionAuthorityId({method.id.data, method.id.length}) ||
                     method.reserved != 0 || method.argumentCount > HORO_EXTENSION_SERVICE_MAX_ARGUMENTS)
                     return Invalid();
-                shape.methods.push_back({Copy(method.id), method.argumentCount});
+                shape.methods.emplace_back(Copy(method.id), method.argumentCount);
             }
             std::ranges::sort(shape.methods, {}, &NativeServiceMethod::id);
             if (std::ranges::adjacent_find(shape.methods, {}, &NativeServiceMethod::id) != shape.methods.end())
@@ -49,8 +49,8 @@ namespace Horo::Extensions {
             return Result<void>::Success();
         }
 
-        bool Declared(const ExtensionModuleManifest &module, const HoroExtensionServiceDescriptor &input) {
-            return std::ranges::any_of(module.exports, [&](const auto &claim) {
+        bool Declared(const ExtensionModuleManifest &moduleEntry, const HoroExtensionServiceDescriptor &input) {
+            return std::ranges::any_of(moduleEntry.exports, [&](const auto &claim) {
                 return claim.id == Copy(input.service) && claim.contract == Copy(input.contract) && claim.version == Copy(input.version);
             });
         }
@@ -97,19 +97,20 @@ namespace Horo::Extensions {
         return Result<NativeServiceShape>::Success(std::move(shape));
     }
 
-    Result<NativeServiceShape> CopyNativeServiceShape(const HoroExtensionServiceDescriptor &input, const ExtensionModuleManifest &module) {
+    Result<NativeServiceShape> CopyNativeServiceShape(const HoroExtensionServiceDescriptor &input,
+                                                      const ExtensionModuleManifest &moduleEntry) {
         auto copied = CopyNativeServiceDescriptor(input);
         if (copied.HasError())
             return copied;
-        if (!Declared(module, input))
+        if (!Declared(moduleEntry, input))
             return Result<NativeServiceShape>::Failure(Invalid().ErrorValue());
         return copied;
     }
 
     Result<ScriptExportDescriptorSnapshotPtr> NativeServiceScriptDescriptors(const NativeServiceShape &shape,
-                                                                             const std::string_view module) {
+                                                                             const std::string_view moduleId) {
         const ScriptExportVersion version{shape.version.major, shape.version.minor, shape.version.patch};
-        ScriptExportDescriptor descriptor{.moduleId = std::string{module},
+        ScriptExportDescriptor descriptor{.moduleId = std::string{moduleId},
                                           .id = shape.scriptApi,
                                           .nameSpace = shape.scriptApi,
                                           .version = version,

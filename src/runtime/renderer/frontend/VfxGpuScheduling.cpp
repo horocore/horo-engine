@@ -91,8 +91,8 @@ namespace Horo::Render::Detail {
             const auto prior = std::ranges::find_if(record.steps, [&](const auto &step) {
                 return step.occupied && step.identity == plan.work.step;
             });
-            const bool priorOmission = prior != record.steps.end() && !prior->observe;
-            if (record.readback != VfxGpuReadbackAdmission::Available || priorOmission) {
+            if (const bool priorOmission = prior != record.steps.end() && !prior->observe;
+                record.readback != VfxGpuReadbackAdmission::Available || priorOmission) {
                 plan.schedule.observationOmitted = plan.work.observe;
                 plan.work.observe = false;
             }
@@ -102,7 +102,7 @@ namespace Horo::Render::Detail {
         }
 
         const ErrorCodeDescriptor *PendingPlan(VfxGpuAppendPlan &plan, const RenderGraphOwnerId graph) noexcept {
-            auto &record = plan.record;
+            const auto &record = plan.record;
             if (const auto *error = NormalizePending(plan))
                 return error;
             if (plan.work.step.simulation != record.id || plan.work.step.deviceIncarnation != record.deviceIncarnation)
@@ -192,27 +192,22 @@ namespace Horo::Render {
         }
 
         Result<void> Uses(RenderGraphBuilder &builder, const RenderGraphPassRef pass, const VfxGpuAppendPlan &plan, const bool compute) {
+            using enum Horo::Render::RenderGraphAccess;
+            using enum Horo::Render::RenderGraphUsageKind;
             if (compute) {
-                constexpr std::array access{RenderGraphAccess::Read, RenderGraphAccess::Write, RenderGraphAccess::Read,
-                                            RenderGraphAccess::Write};
+                constexpr std::array access{Read, Write, Read, Write};
                 for (std::size_t index = 0; index < access.size(); ++index)
-                    if (const auto used = builder.AddUsage({pass, plan.resources[index], access[index], RenderGraphUsageKind::Storage});
-                        used.HasError())
+                    if (const auto used = builder.AddUsage({pass, plan.resources[index], access[index], Storage}); used.HasError())
                         return used;
             } else {
                 const auto particles = plan.dispatch ? plan.resources[1] : plan.resources[0];
-                if (const auto used = builder.AddUsage({pass, particles, RenderGraphAccess::Read, RenderGraphUsageKind::Storage});
-                    used.HasError())
+                if (const auto used = builder.AddUsage({pass, particles, Read, Storage}); used.HasError())
                     return used;
-                const auto colorAccess = plan.request.colorOperations.loadOperation == AttachmentLoadOperation::Load
-                                             ? RenderGraphAccess::ReadWrite
-                                             : RenderGraphAccess::Write;
-                if (const auto used = builder.AddUsage({pass, plan.request.color, colorAccess, RenderGraphUsageKind::ColorAttachment});
-                    used.HasError())
+                const auto colorAccess = plan.request.colorOperations.loadOperation == AttachmentLoadOperation::Load ? ReadWrite : Write;
+                if (const auto used = builder.AddUsage({pass, plan.request.color, colorAccess, ColorAttachment}); used.HasError())
                     return used;
                 if (plan.request.depth.IsValid())
-                    return builder.AddUsage(
-                        {pass, plan.request.depth, RenderGraphAccess::Read, RenderGraphUsageKind::DepthStencilAttachment});
+                    return builder.AddUsage({pass, plan.request.depth, Read, DepthStencilAttachment});
             }
             return Result<void>::Success();
         }
@@ -237,7 +232,8 @@ namespace Horo::Render {
         }
 
         struct AppendBudget final {
-            std::uint32_t passes{}, usages{};
+            std::uint32_t passes{};
+            std::uint32_t usages{};
         };
 
         AppendBudget RequiredBudget(const VfxGpuAppendPlan &plan) noexcept {
@@ -256,7 +252,7 @@ namespace Horo::Render {
                 return Result<void>::Failure(pass.ErrorValue());
             if (const auto used = Uses(builder, pass.Value(), plan, true); used.HasError())
                 return used;
-            auto &record = plan.record;
+            const auto &record = plan.record;
             plan.schedule.records[plan.schedule.recordCount++] = {pass.Value(),
                                                                   RenderGraphVfxGpuCompute{plan.resources[0], plan.resources[1],
                                                                                            plan.resources[2], plan.resources[3],
@@ -314,8 +310,7 @@ namespace Horo::Render {
             return VfxGpuGraphSchedulingOutcome::Failure(RenderGraphExecutionErrors::InvalidGraph);
         if (const auto provenance = SnapshotAuthority(request, record); provenance.HasError())
             return provenance;
-        std::array<std::uint32_t, VfxGpuDrawWords::Count> view;
-        if (!PackVfxGpuDrawParameters(record.descriptor, request.view, view))
+        if (std::array<std::uint32_t, VfxGpuDrawWords::Count> view; !PackVfxGpuDrawParameters(record.descriptor, request.view, view))
             return VfxGpuGraphSchedulingOutcome::Failure(VfxFrameErrors::InvalidInput);
         return VfxGpuGraphSchedulingOutcome::Success({});
     }
@@ -327,11 +322,12 @@ namespace Horo::Render {
         if (graphics == queues.end())
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidQueueTopology));
         for (std::size_t index = 0; index < plan.inputCount; ++index) {
-            const auto existing = std::ranges::find_if(builder.resources_, [&](const auto &resource) {
+            if (const auto existing = std::ranges::find_if(builder.resources_,
+                                                           [&](const auto &resource) {
                 const auto *handle = std::get_if<RenderBufferHandle>(&resource.binding);
                 return handle && *handle == plan.handles[index];
             });
-            if (existing != builder.resources_.end()) {
+                existing != builder.resources_.end()) {
                 plan.resources[index] = existing->id;
                 continue;
             }

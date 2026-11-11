@@ -5,7 +5,10 @@ namespace Horo::Application::TerrainCookDetail {
     /** @brief Source-grid rectangle of one verified first-LOD tile, including its closed terminal edge. */
     struct FoliageTileRegion final {
         Terrain::TerrainTileId tile;
-        std::uint32_t x{}, z{}, width{}, height{};
+        std::uint32_t x{};
+        std::uint32_t z{};
+        std::uint32_t width{};
+        std::uint32_t height{};
     };
 
     /** @brief Own sample storage before exposing its temporary immutable view; move preserves the vector allocation. */

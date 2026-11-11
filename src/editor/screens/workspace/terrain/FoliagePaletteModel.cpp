@@ -7,8 +7,8 @@ namespace Horo::Editor {
     namespace {
         /** @brief Validate an exact asset/type/revision pair without manufacturing a definition identity. */
         bool Matches(const FoliagePaletteItem &item) {
-            const auto &data = item.definition.Data();
-            if (!item.source.asset.IsValid() || item.source.type != data.type || item.source.revision != data.revision)
+            if (const auto &data = item.definition.Data();
+                !item.source.asset.IsValid() || item.source.type != data.type || item.source.revision != data.revision)
                 return false;
             return !item.label.empty() && item.label.size() <= 256;
         }
@@ -46,10 +46,11 @@ namespace Horo::Editor {
     Result<void> FoliagePaletteModel::Choose(Terrain::FoliageTypeId type) {
         if (closed_)
             return Result<void>::Failure(MakeError(TerrainEditErrors::Closed));
-        const auto found = std::ranges::find_if(items_, [type](const auto &item) {
+        if (const auto found = std::ranges::find_if(items_,
+                                                    [type](const auto &item) {
             return item.source.type == type;
         });
-        if (found == items_.end())
+            found == items_.end())
             return Result<void>::Failure(MakeError(TerrainEditErrors::CapabilityUnavailable));
         selected_ = type;
         return Result<void>::Success();

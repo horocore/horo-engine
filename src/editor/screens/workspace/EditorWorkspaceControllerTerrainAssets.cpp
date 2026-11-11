@@ -12,8 +12,9 @@ namespace Horo::Editor {
                                            const Application::TerrainAuthoringAssetCreated &created,
                                            Application::TerrainAuthoringAssetKind kind) {
             const auto *record = registry.Find(created.asset);
-            const auto expected = kind == Application::TerrainAuthoringAssetKind::LayerSet ? "core.terrain.layerset" : "core.foliage.type";
-            if (!record || record->type.Value() != expected)
+            if (const auto expected =
+                    kind == Application::TerrainAuthoringAssetKind::LayerSet ? "core.terrain.layerset" : "core.foliage.type";
+                !record || record->type.Value() != expected)
                 return Result<void>::Failure(MakeError(TerrainEditErrors::CapabilityUnavailable));
             return Result<void>::Success();
         }
@@ -36,7 +37,7 @@ namespace Horo::Editor {
                 continue;
             if (choices.size() == 4096)
                 return Result<std::vector<TerrainCreationAssetChoice>>::Failure(MakeError(TerrainEditErrors::LimitExceeded));
-            choices.push_back({record.id, *kind, record.sourcePath.String()});
+            choices.emplace_back(record.id, *kind, record.sourcePath.String());
         }
         std::ranges::sort(choices, {}, &TerrainCreationAssetChoice::label);
         return Result<std::vector<TerrainCreationAssetChoice>>::Success(std::move(choices));
@@ -79,8 +80,7 @@ namespace Horo::Editor {
         const TerrainDocumentView &view, const Application::TerrainAuthoringAssetRequest &request) {
         using Outcome = Application::TerrainAuthoringAssetCreated;
         using Return = Result<std::shared_ptr<const Outcome>>;
-        auto target = TerrainTarget(view, false);
-        if (target.HasError())
+        if (auto target = TerrainTarget(view, false); target.HasError())
             return Return::Failure(target.ErrorValue());
         if (!m_viewModel.terrainAssetCreationAvailable)
             return Return::Failure(MakeError(TerrainEditErrors::CapabilityUnavailable));

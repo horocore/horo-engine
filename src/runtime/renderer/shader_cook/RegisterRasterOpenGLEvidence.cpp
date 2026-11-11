@@ -25,7 +25,7 @@ namespace Horo::Render::RegisterRasterCookDetail {
 
         /** @brief Name-based links have locations only after the translator applies our exact location rename. */
         std::uint32_t InterfaceLocation(const TokenView tokens, const std::size_t at, const std::string_view name) {
-            if (const auto location = DeclaredLocation(tokens, at))
+            if (const auto location = DeclaredLocation(tokens, at); location.has_value())
                 return *location;
             constexpr std::string_view prefix = "horo_raster_varying_";
             if (!name.starts_with(prefix))
@@ -41,8 +41,10 @@ namespace Horo::Render::RegisterRasterCookDetail {
             const auto name = tokens[at + 2];
             if (result.interfaces.size() == 256)
                 throw InvalidEvidence{};
-            result.interfaces.push_back({stage, direction, InterfaceLocation(tokens, at, name), ShaderValueType::Float32, 1,
-                                         VectorWidth(tokens[at + 1]), 1, std::string{name}});
+            const auto location = InterfaceLocation(tokens, at, name);
+            const auto width = VectorWidth(tokens[at + 1]);
+            result.interfaces.emplace_back(stage, direction, location, ShaderValueType::Float32, std::uint8_t{1}, width, std::uint32_t{1},
+                                           std::string{name});
         }
 
         /** @brief Requires the exact std140 qualifier emitted by the admitted no-420pack translator route. */
@@ -82,7 +84,7 @@ namespace Horo::Render::RegisterRasterCookDetail {
                 throw InvalidEvidence{};
             if (!Identifier(tokens[at + 2]) || tokens[at + 3] != ";")
                 throw InvalidEvidence{};
-            result.textures.push_back({std::string{tokens[at + 2]}, 0});
+            result.textures.emplace_back(std::string{tokens[at + 2]}, std::uint32_t{0});
             result.samplers = result.textures;
         }
 

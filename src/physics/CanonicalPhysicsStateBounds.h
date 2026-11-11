@@ -12,7 +12,11 @@ namespace Horo::Physics::Detail {
     /** @brief Pinned recorder scratch plan, separate from retained snapshot payload
      * and native candidate costs. */
     struct CanonicalPhysicsStateBounds final {
-        std::size_t cacheBytes{}, pairEntries{}, manifoldEntries{}, temporaryBytes{}, recorderBytes{};
+        std::size_t cacheBytes{};
+        std::size_t pairEntries{};
+        std::size_t manifoldEntries{};
+        std::size_t temporaryBytes{};
+        std::size_t recorderBytes{};
     };
 
     /** @brief Derives conservative bounds from the REAL shared cache allocation,

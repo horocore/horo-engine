@@ -114,8 +114,8 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::PollContentBrowserPreviews() {
-        const auto currentSchema = m_navigationPrefabSchemas ? m_navigationPrefabSchemas->Revision() : Sha256Digest{};
-        if (m_contentBrowserPreviewSchemaRevision != currentSchema) {
+        if (const auto currentSchema = m_navigationPrefabSchemas ? m_navigationPrefabSchemas->Revision() : Sha256Digest{};
+            m_contentBrowserPreviewSchemaRevision != currentSchema) {
             ScheduleContentBrowserPreviews();
             return;
         }

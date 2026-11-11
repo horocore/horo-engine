@@ -50,8 +50,15 @@ namespace Horo::Editor {
         BuildOutputSnapshot outputSnapshot_;
         std::optional<Error> error_;
         bool showDraft_{true};
-        bool testAfter_{}, runAfter_{};
-        int profile_{}, product_{}, workflow_{}, platform_{}, architecture_{}, configuration_{}, content_{};
+        bool testAfter_{};
+        bool runAfter_{};
+        int profile_{};
+        int product_{};
+        int workflow_{};
+        int platform_{};
+        int architecture_{};
+        int configuration_{};
+        int content_{};
         float refreshSeconds_{};
     };
 }  // namespace Horo::Editor

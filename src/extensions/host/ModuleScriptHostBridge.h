@@ -10,7 +10,8 @@
 namespace Horo::Extensions {
     struct ModuleScriptNativeEvidence final {
         ResolvedExtensionServiceImport import;
-        ExtensionCapabilityHandle consumer, provider;
+        ExtensionCapabilityHandle consumer;
+        ExtensionCapabilityHandle provider;
         BackendServiceCodeLease code;
         BackendServiceDescriptor descriptor;
         ScriptExportDescriptorSnapshotPtr descriptors;
@@ -100,9 +101,9 @@ namespace Horo::Extensions {
         std::shared_ptr<const std::atomic<bool>> ClosedFlag() const noexcept;
         Result<void> RequireOpenOwner() const;
         Result<std::uint64_t> IssueGeneration();
-        Result<ExtensionCapabilityAdmission> AdmitReference(std::string module, std::uint64_t generation) const;
-        Result<ModuleScriptSourceLease> Source(std::string_view package, std::string_view module) const;
-        Result<ModuleScriptResolvedImport> Resolve(std::string_view package, std::string_view module, std::string_view import) const;
+        Result<ExtensionCapabilityAdmission> AdmitReference(std::string moduleId, std::uint64_t generation) const;
+        Result<ModuleScriptSourceLease> Source(std::string_view package, std::string_view moduleId) const;
+        Result<ModuleScriptResolvedImport> Resolve(std::string_view package, std::string_view moduleId, std::string_view id) const;
         Result<void> ValidateActiveArtifacts(const ExtensionManifest &, std::span<const ModuleScriptArtifactEvidence>) const;
 
     private:

@@ -111,6 +111,7 @@ namespace Horo::Application::Internal {
         /** @brief Reads exact committed dynamic entity incarnations; generation mismatch is deletion, never slot reuse. */
         Result<void> Dynamic(RuntimeSceneView view, std::vector<PersistentEntityRecord> &records,
                              std::vector<PersistentEntityRuntimeBinding> &bindings) const {
+            using enum Horo::Runtime::PersistentEntityDisposition;
             for (const auto &entry : entries) {
                 if (entry->invalid)
                     return Invalid<void>("An actual prefab receipt did not cover its reserved durable member inventory.");
@@ -118,8 +119,8 @@ namespace Horo::Application::Internal {
                     continue;
                 for (std::size_t index = 0; index < entry->recipe.members.size(); ++index) {
                     auto record = entry->recipe.members[index].record;
-                    const bool live = record.disposition == PersistentEntityDisposition::Live && view.Get(entry->runtime[index]).HasValue();
-                    record.disposition = live ? PersistentEntityDisposition::Live : PersistentEntityDisposition::Tombstone;
+                    const bool live = record.disposition == Live && view.Get(entry->runtime[index]).HasValue();
+                    record.disposition = live ? Live : Tombstone;
                     records.push_back(record);
                     if (live)
                         bindings.emplace_back(record.identity, record.generation, entry->runtime[index]);
@@ -294,14 +295,15 @@ namespace Horo::Application::Internal {
 
         /** @brief Captures exact current member incarnations and retains explicit deletion without flattening component memory. */
         Result<PrefabPersistentInstance> CaptureEntry(const Entry &entry, RuntimeSceneView view) const {
+            using enum Horo::Runtime::PersistentEntityDisposition;
             auto recipe = entry.recipe;
             for (std::size_t index = 0; index < entry.runtime.size(); ++index) {
                 auto &record = recipe.members[index].record;
                 if (view.Get(entry.runtime[index]).HasError())
-                    record.disposition = PersistentEntityDisposition::Tombstone;
+                    record.disposition = Tombstone;
             }
-            if (recipe.members.front().record.disposition == PersistentEntityDisposition::Tombstone) {
-                recipe.disposition = PersistentEntityDisposition::Tombstone;
+            if (recipe.members.front().record.disposition == Tombstone) {
+                recipe.disposition = Tombstone;
                 return Result<PrefabPersistentInstance>::Success(std::move(recipe));
             }
             auto transforms = Transforms(entry, view, recipe);

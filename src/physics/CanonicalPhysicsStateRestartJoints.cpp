@@ -11,7 +11,7 @@ namespace Horo::Physics::Detail {
                                                        const CanonicalRestartBindings &bindings, PhysicsWorldId owner) {
             PhysicsConstraintDescriptor descriptor;
             descriptor.first = {Body(bindings, source.first), source.firstLocalFrame};
-            if (source.second)
+            if (source.second.has_value())
                 descriptor.second = PhysicsBodyAnchor{Body(bindings, *source.second), source.secondLocalOrWorldFrame};
             else
                 descriptor.second = PhysicsWorldAnchor{source.secondLocalOrWorldFrame};
@@ -52,7 +52,7 @@ namespace Horo::Physics::Detail {
             auto created = Create(world, owner, source, bindings);
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
-            bindings.constraints.push_back({source.id, created.Value()});
+            bindings.constraints.emplace_back(source.id, created.Value());
         }
         return Result<void>::Success();
     }

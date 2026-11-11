@@ -24,7 +24,7 @@ namespace Horo::Editor {
                 auto adapter = std::dynamic_pointer_cast<const Runtime::GameplayPersistenceAdapter>(installed.Value().AcquireAdapter());
                 if (!adapter)
                     return Outcome::Failure(MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
-                bindings.push_back({declaration, std::move(installed).Value(), std::move(adapter)});
+                bindings.emplace_back(declaration, std::move(installed).Value(), std::move(adapter));
             }
             return Outcome::Success(std::move(bindings));
         } catch (const std::bad_alloc &) {

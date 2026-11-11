@@ -56,7 +56,8 @@ namespace Horo::Editor {
         EditorViewportRendererOpenGL *owner{};
         Render::ShaderHotReloadTargetState expected;
         std::uint32_t gridProgram{};
-        std::array<std::uint32_t, 3> buffers{}, bufferSlots{};
+        std::array<std::uint32_t, 3> buffers{};
+        std::array<std::uint32_t, 3> bufferSlots{};
         std::uint32_t textureUnit{7};
         std::array<std::size_t, 3> bufferBytes{};
         std::array<Render::MaterialBindingLayout, 3> layouts;

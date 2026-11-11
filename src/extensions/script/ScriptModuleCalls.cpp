@@ -23,8 +23,7 @@ namespace Horo::Extensions {
             if (result.HasError())
                 return controller.Fail(result.ErrorValue());
             auto payload = std::move(result).Value();
-            auto valid = ValidatePayload(controller, payload, limits);
-            if (valid.HasError())
+            if (auto valid = ValidatePayload(controller, payload, limits); valid.HasError())
                 return Result<ScriptInvocationTransitionResult>::Failure(valid.ErrorValue());
             if (payload.IsFailure())
                 return controller.Fail(std::move(*payload.error));
@@ -32,8 +31,7 @@ namespace Horo::Extensions {
         }
 
         void Finish(ScriptInvocationController &controller, Result<ScriptCallResult> result, const ScriptValueLimits &limits) {
-            auto cancelled = controller.ObserveCancellation();
-            if (cancelled.HasError())
+            if (auto cancelled = controller.ObserveCancellation(); cancelled.HasError())
                 throw cancelled.ErrorValue();
             auto terminal = Publish(controller, std::move(result), limits);
             if (terminal.HasError()) {
@@ -120,11 +118,10 @@ namespace Horo::Extensions {
             return Output::Failure(selected.ErrorValue());
         const auto bound = selected.Value().bound;
         const auto method = selected.Value().function;
-        auto defaults = Defaults(arguments, *method, impl_->limits.values);
-        if (defaults.HasError())
+        if (auto defaults = Defaults(arguments, *method, impl_->limits.values); defaults.HasError())
             return Output::Failure(defaults.ErrorValue());
-        auto argumentsValid = ValidateScriptArguments(*method, arguments, bound->backend->Descriptor(), impl_->limits.values);
-        if (argumentsValid.HasError())
+        if (auto argumentsValid = ValidateScriptArguments(*method, arguments, bound->backend->Descriptor(), impl_->limits.values);
+            argumentsValid.HasError())
             return Output::Failure(argumentsValid.ErrorValue());
         ScriptInvocationRequest request{.functionId = std::string{function},
                                         .arguments = std::move(arguments),
@@ -158,9 +155,8 @@ namespace Horo::Extensions {
             return Result<std::vector<ScriptInvocationEvent>>::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
         if (!IsUsable())
             return Result<std::vector<ScriptInvocationEvent>>::Failure(MakeError(ExtensionErrors::ScriptInvocationContextRevoked));
-        for (auto &work : impl_->work) {
-            const auto job = work.job.Snapshot();
-            if (job && job->state == JobState::Cancelled)
+        for (const auto &work : impl_->work) {
+            if (const auto job = work.job.Snapshot(); job && job->state == JobState::Cancelled)
                 static_cast<void>(work.controller->Handle().RequestCancellation());
             static_cast<void>(work.controller->ObserveCancellation());
         }

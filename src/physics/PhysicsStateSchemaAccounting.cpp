@@ -18,8 +18,7 @@ namespace Horo::Physics::Detail {
          * capacity includes its trailing null byte. */
         bool String(const std::string &value, std::size_t &total) noexcept {
             const auto object = reinterpret_cast<std::uintptr_t>(&value);
-            const auto data = reinterpret_cast<std::uintptr_t>(value.data());
-            if (data >= object && data - object < sizeof(value))
+            if (const auto data = reinterpret_cast<std::uintptr_t>(value.data()); data >= object && data - object < sizeof(value))
                 return true;
             if (!Add(value.capacity(), sizeof(char), total))
                 return false;

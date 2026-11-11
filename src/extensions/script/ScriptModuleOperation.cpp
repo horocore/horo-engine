@@ -33,14 +33,12 @@ namespace Horo::Extensions {
             return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
         if (impl_->result)
             return Result<void>::Success();
-        auto advanced = impl_->runtime->Poll();
-        if (advanced.HasError()) {
+        if (auto advanced = impl_->runtime->Poll(); advanced.HasError()) {
             SetScriptModuleFailure(impl_->result, impl_->emergency, advanced.ErrorValue(), {});
             Cancel();
             return advanced;
         }
-        auto retired = impl_->owner->PollProviderRetirement();
-        if (retired.HasError())
+        if (auto retired = impl_->owner->PollProviderRetirement(); retired.HasError())
             return Result<void>::Failure(retired.ErrorValue());
         impl_->result = impl_->runtime->ResultSnapshot();
         if (impl_->result)

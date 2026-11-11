@@ -29,12 +29,13 @@ namespace Horo::Runtime::AnimationSceneInternal {
         }
 
         std::optional<A::AnimationCookedKind> Kind(std::string_view type) {
+            using enum Horo::Animation::AnimationCookedKind;
             if (type == "core.animation.skeleton")
-                return A::AnimationCookedKind::Skeleton;
+                return Skeleton;
             if (type == "core.animation.clip")
-                return A::AnimationCookedKind::Clip;
+                return Clip;
             if (type == "core.animation.graph")
-                return A::AnimationCookedKind::Graph;
+                return Graph;
             return {};
         }
 
@@ -138,10 +139,11 @@ namespace Horo::Runtime::AnimationSceneInternal {
                                   std::optional<Sha256Digest> expectedPayload) {
         Assets::AssetCookLimits envelopeLimits;
         envelopeLimits.maximumArtifactBytes = static_cast<std::size_t>(codec.limits.bytes) + 4096;
-        const auto found = std::ranges::find(group, expected.id, [](const auto &pin) {
+        if (const auto found = std::ranges::find(group, expected.id,
+                                                 [](const auto &pin) {
             return pin.metadata.id;
         });
-        if (found != group.end()) {
+            found != group.end()) {
             if (found->metadata.expectedType != expected.expectedType)
                 return Result<Artifact>::Failure(MakeError(A::AnimationAssetErrors::Malformed));
             return CheckArtifact(Assets::DecodeCookedArtifactBytes(found->artifact.Bytes(), envelopeLimits), expected, target,

@@ -59,8 +59,8 @@ namespace Horo::Render {
         if (!UploadResourceKind(request, upload.source, RenderGraphResourceKind::Buffer) ||
             !UploadResourceKind(request, upload.destination, RenderGraphResourceKind::Texture))
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
-        const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
-        if (uses.size() != 2 || !UploadUse(uses, upload.source, RenderGraphUsageKind::CopySource, RenderGraphAccess::Read) ||
+        if (const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
+            uses.size() != 2 || !UploadUse(uses, upload.source, RenderGraphUsageKind::CopySource, RenderGraphAccess::Read) ||
             !UploadUse(uses, upload.destination, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write))
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
         return Result<void>::Success();

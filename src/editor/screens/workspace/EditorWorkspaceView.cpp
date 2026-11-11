@@ -932,10 +932,10 @@ namespace Horo::Editor {
         ImGui::PushID(panelId.c_str());
         const char *title =
             panel == panels.end() ? panelId.c_str() : m_context.localization.Get("editor", (*panel)->GetDisplayName()).c_str();
-        const auto action =
-            Ui::DocumentTabButton("document", title, m_context.localization.Get("editor", "workspace.documents.close").c_str(), active,
-                                  m_context.theme.fonts, panelId != "horo.viewport");
-        if (action != Ui::DocumentTabAction::None) {
+        if (const auto action =
+                Ui::DocumentTabButton("document", title, m_context.localization.Get("editor", "workspace.documents.close").c_str(), active,
+                                      m_context.theme.fonts, panelId != "horo.viewport");
+            action != Ui::DocumentTabAction::None) {
             outCommand.command = action == Ui::DocumentTabAction::Close ? EditorWorkspaceViewCommand::CloseWorkspacePanel
                                                                         : EditorWorkspaceViewCommand::ChangeActivePanel;
             outCommand.targetIndex = 3;

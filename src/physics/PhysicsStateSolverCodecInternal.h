@@ -10,7 +10,8 @@ namespace Horo::Physics::StateDetail {
 
     /** @brief Header counts have a fixed meaning independent of platform layout. */
     struct SolverHeader final {
-        std::uint32_t tag{SolverWireTag}, version{PhysicsStateSolverSchemaVersion};
+        std::uint32_t tag{SolverWireTag};
+        std::uint32_t version{PhysicsStateSolverSchemaVersion};
         float previousDelta{};
         std::array<float, 3> gravity{};
         std::array<std::uint32_t, 6> counts{};

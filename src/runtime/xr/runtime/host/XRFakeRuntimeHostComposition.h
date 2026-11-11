@@ -66,6 +66,9 @@ namespace Horo::XR::RuntimeInternal {
                 busy = true;
             }
 
+            Operation(const Operation &) = delete;
+            Operation &operator=(const Operation &) = delete;
+
             ~Operation() {
                 busy = false;
             }

@@ -129,11 +129,18 @@ Rules:
 - symlink traversal is explicit for security-sensitive operations
 - path comparisons are tested on Windows, macOS, and Linux semantics
 
-Native durable I/O converts canonical absolute Windows paths to extended-length
-spelling only inside the platform syscall boundary. Caller-facing paths and
+Native durable I/O and asset source capture convert normalized absolute Windows
+paths to extended-length spelling only at the filesystem I/O boundary. Caller-facing paths and
 directory entry names retain their original namespace; bounded reads still
 reject caller-supplied device/extended prefixes and preserve no-follow parent
 checks. This does not depend on the machine-wide long-path policy being enabled.
+
+`Foundation::Paths::NativeApiPath` owns this pure path conversion in the existing
+Foundation path API. The private Platform helper retains its alias so existing
+adapters use the same policy. Asset source status, size, timestamp and stream
+operations share it after caller-namespace containment validation. Foundation-only
+consumer tests and long Unicode source-capture regression tests cover this additive
+promotion without introducing a concrete Platform dependency into Assets.
 
 Project reads retain native directory identities through descendant traversal and
 content capture. `IProjectReadFiles::Text` and `Files` retain their interactive

@@ -11,19 +11,24 @@ namespace Horo::Render::LightCullingMetalCookDetail {
     struct Field {
         std::string name;
         std::string jsonType;
-        std::uint32_t offset{}, count{1}, stride{};
+        std::uint32_t offset{};
+        std::uint32_t count{1};
+        std::uint32_t stride{};
     };
 
     struct Layout {
-        std::uint32_t bytes{}, alignment{1};
+        std::uint32_t bytes{};
+        std::uint32_t alignment{1};
         std::vector<Field> fields;
         std::string scalarType;
     };
 
     struct Buffer {
-        std::string name, wrapperMember;
+        std::string name;
+        std::string wrapperMember;
         std::uint32_t slot{};
-        bool constant{}, readonly{};
+        bool constant{};
+        bool readonly{};
         Layout layout;
     };
 

@@ -23,12 +23,12 @@ namespace Horo::Animation::Detail {
 
         /** @brief Only actual component-domain values are admitted; subscriptions require authoritative simulation. */
         bool Domain(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
-            if (context.evaluationDomain > AnimationEvaluationDomain::Count)
+            using enum Horo::Animation::AnimationEvaluationDomain;
+            if (context.evaluationDomain > Count)
                 return false;
-            if (context.evaluationDomain == AnimationEvaluationDomain::Count)
+            if (context.evaluationDomain == Count)
                 return !HasMetadata(assets) && context.clipEvents.subscriptions.empty();
-            return context.clipEvents.subscriptions.empty() ||
-                   context.evaluationDomain == AnimationEvaluationDomain::AuthoritativeSimulation;
+            return context.clipEvents.subscriptions.empty() || context.evaluationDomain == AuthoritativeSimulation;
         }
 
         /** @brief Cold subscription types must name an actual pinned schema revision. */
@@ -45,18 +45,19 @@ namespace Horo::Animation::Detail {
 
         /** @brief All queue admission precedes any payload/workspace allocation. */
         GraphInstanceFailure Subscription(const GraphInstanceAssets &assets, const AnimationEventSubscription &value) noexcept {
+            using enum Horo::Animation::GraphInstanceFailure;
             if (!value.consumer.IsValid() || value.capacity == 0 || value.capacity > AnimationNotifyHardLimits::QueuedOccurrences)
-                return GraphInstanceFailure::Malformed;
+                return Malformed;
             if (value.types.empty() || value.types.size() > AnimationNotifyHardLimits::TypesPerConsumer)
-                return GraphInstanceFailure::LimitExceeded;
+                return LimitExceeded;
             for (std::size_t i = 0; i < value.types.size(); ++i) {
                 if (!KnownType(assets, value.types[i]))
-                    return GraphInstanceFailure::BindingMismatch;
+                    return BindingMismatch;
                 for (std::size_t j = 0; j < i; ++j)
                     if (value.types[j] == value.types[i])
-                        return GraphInstanceFailure::Malformed;
+                        return Malformed;
             }
-            return GraphInstanceFailure::None;
+            return None;
         }
 
         /** @brief Checks finite filter policy and hard bounds before size arithmetic. */
@@ -78,22 +79,23 @@ namespace Horo::Animation::Detail {
 
     /** @copydoc AdmitClipNotifies */
     GraphInstanceFailure AdmitClipNotifies(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context) noexcept {
+        using enum Horo::Animation::GraphInstanceFailure;
         if (!Domain(assets, context) || !Settings(context.clipEvents))
-            return GraphInstanceFailure::Malformed;
+            return Malformed;
         std::uint64_t queued = 0;
         const auto subscriptions = context.clipEvents.subscriptions;
         for (std::size_t i = 0; i < subscriptions.size(); ++i) {
-            if (const auto failure = Subscription(assets, subscriptions[i]); failure != GraphInstanceFailure::None)
+            if (const auto failure = Subscription(assets, subscriptions[i]); failure != None)
                 return failure;
             queued += subscriptions[i].capacity;
             for (std::size_t j = 0; j < i; ++j)
                 if (subscriptions[j].consumer == subscriptions[i].consumer)
-                    return GraphInstanceFailure::Malformed;
+                    return Malformed;
         }
         if (queued > AnimationNotifyHardLimits::QueuedOccurrences ||
             ClipNotifyOperations(assets, context) > context.clipEvents.maximumOperations)
-            return GraphInstanceFailure::LimitExceeded;
-        return GraphInstanceFailure::None;
+            return LimitExceeded;
+        return None;
     }
 
     /** @copydoc ClipNotifyOperations */

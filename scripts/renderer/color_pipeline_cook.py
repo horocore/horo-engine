@@ -10,6 +10,7 @@ linear Rec709, with no creative look selected.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import ctypes
 import hashlib
 import importlib
@@ -337,7 +338,7 @@ def rename_exclusive(source: Path, destination: Path) -> None:
         raise OSError(code, os.strerror(code), str(destination))
 
 
-def publish(destination: Path, writer: object) -> object:
+def publish(destination: Path, writer: Callable[[Path], object]) -> object:
     """Stage in the exact destination parent and clean only this invocation's unpublished directory."""
     require(destination.is_absolute(), "Output directory must be absolute")
     require(destination.parent.is_dir() and not destination.parent.is_symlink(), "Output parent must already exist")

@@ -343,6 +343,11 @@ namespace Horo::Runtime {
         struct ActivePublication {
             bool &active;
 
+            explicit ActivePublication(bool &value) noexcept : active(value) {}
+
+            ActivePublication(const ActivePublication &) = delete;
+            ActivePublication &operator=(const ActivePublication &) = delete;
+
             ~ActivePublication() {
                 active = false;
             }

@@ -53,12 +53,16 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
     struct Budget final {
         const ScriptValueLimits &limits;
         const std::chrono::steady_clock::time_point *deadline{};
-        std::size_t nodes{}, bytes{};
+        std::size_t nodes{};
+        std::size_t bytes{};
         void Charge(std::size_t depth, std::size_t payload = 0);
     };
 
     struct HandleBudget final {
-        std::size_t maximumBytes{}, maximumValues{}, bytes{}, values{};
+        std::size_t maximumBytes{};
+        std::size_t maximumValues{};
+        std::size_t bytes{};
+        std::size_t values{};
     };
 
     struct HandleBox final {
@@ -81,7 +85,10 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
 
     struct Values final {
         JSContext *context{};
-        JSClassID objectClass{}, arrayClass{}, handleClass{}, outcomeClass{};
+        JSClassID objectClass{};
+        JSClassID arrayClass{};
+        JSClassID handleClass{};
+        JSClassID outcomeClass{};
         std::shared_ptr<ScriptModuleContext> authority;
         std::shared_ptr<HandleBudget> handles;
         const std::chrono::steady_clock::time_point *deadline{};

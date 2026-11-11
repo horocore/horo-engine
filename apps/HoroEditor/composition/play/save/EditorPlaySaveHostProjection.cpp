@@ -29,13 +29,14 @@ namespace Horo::Application::Internal {
 
     /** @brief Derives presentation readiness from actual owner/storage/worker state; it grants no runtime capability. */
     Editor::PlaySaveAvailability EditorPlaySaveHost::State::Availability() const noexcept {
+        using enum Horo::Editor::PlaySaveAvailability;
         if (retiring)
-            return Editor::PlaySaveAvailability::Retiring;
+            return Retiring;
         if (error)
-            return Editor::PlaySaveAvailability::Failed;
+            return Failed;
         if (suspending || suspended)
-            return Editor::PlaySaveAvailability::Opening;
-        return storage ? Editor::PlaySaveAvailability::Ready : Editor::PlaySaveAvailability::Opening;
+            return Opening;
+        return storage ? Ready : Opening;
     }
 
     /** @brief Copies the real detached catalog and canonical operation progress without reading the filesystem. */

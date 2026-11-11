@@ -39,6 +39,9 @@ namespace Horo::Application {
                 busy = true;
             }
 
+            ControlGuard(const ControlGuard &) = delete;
+            ControlGuard &operator=(const ControlGuard &) = delete;
+
             ~ControlGuard() {
                 busy = false;
             }
@@ -197,7 +200,7 @@ namespace Horo::Application {
             if (auto current = weak.lock())
                 current->cancellation.RequestCancellation();
         }});
-        if (!operation)
+        if (!operation.has_value())
             return Result<void>::Failure(MakeError(ShaderHotReloadErrors::Capacity));
         work->operation = *operation;
         const auto session = output.BeginSession();

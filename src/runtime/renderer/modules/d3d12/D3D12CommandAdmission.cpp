@@ -6,7 +6,8 @@ namespace Horo::Render::D3D12Detail {
     namespace {
         /** @brief Validates the closed native queue class without accepting negative enum casts. */
         bool KnownQueueKind(D3D12QueueKind kind) noexcept {
-            return kind == D3D12QueueKind::Direct || kind == D3D12QueueKind::Compute || kind == D3D12QueueKind::Copy;
+            using enum Horo::Render::D3D12QueueKind;
+            return kind == Direct || kind == Compute || kind == Copy;
         }
 
         /** @brief Admits exact effective identity/native queue pairs without inventing role remapping. */
@@ -138,8 +139,7 @@ namespace Horo::Render::D3D12Detail {
             return Result<void>::Failure(
                 D3D12CommandError("render.d3d12.timeline_invalid", "Submission names an unavailable queue or malformed signal."));
         auto projected = ProjectSignalHistory(*queue, earlier);
-        const auto last = projected.lastSignal;
-        if (submission.signal.value <= last)
+        if (const auto last = projected.lastSignal; submission.signal.value <= last)
             return Result<void>::Failure(D3D12CommandError("render.d3d12.timeline_reused",
                                                            "Queue signal values must strictly increase without reuse or wraparound."));
         return Result<void>::Success();
@@ -150,9 +150,9 @@ namespace Horo::Render::D3D12Detail {
         if (request.resources.size() > limits_.maximumResourceReferences || graph.Transitions().size() > limits_.maximumTransitions)
             return Result<void>::Failure(
                 D3D12CommandError("render.d3d12.command_capacity", "Graph resources or transitions exceed the admitted startup capacity."));
-        const auto barriers = graph.Transitions().size() + graph.ReleaseTransfers().size() + graph.AcquireTransfers().size() +
-                              graph.ExternalReleases().size();
-        if (barriers > limits_.maximumTransitions)
+        if (const auto barriers = graph.Transitions().size() + graph.ReleaseTransfers().size() + graph.AcquireTransfers().size() +
+                                  graph.ExternalReleases().size();
+            barriers > limits_.maximumTransitions)
             return Result<void>::Failure(
                 D3D12CommandError("render.d3d12.command_capacity",
                                   "Complete transition/release/acquire work exceeds the admitted startup capacity."));
@@ -179,11 +179,9 @@ namespace Horo::Render::D3D12Detail {
                 return Result<void>::Failure(
                     D3D12CommandError("render.d3d12.submission_order",
                                       "Frontend submission order must increase across the entire device lifetime."));
-            auto signal = ValidateSignal(submission, submissions.first(index));
-            if (signal.HasError())
+            if (auto signal = ValidateSignal(submission, submissions.first(index)); signal.HasError())
                 return signal;
-            auto waits = ValidateWaits(submission, submissions.first(index));
-            if (waits.HasError())
+            if (auto waits = ValidateWaits(submission, submissions.first(index)); waits.HasError())
                 return waits;
             order = submission.order.value;
         }
@@ -191,11 +189,9 @@ namespace Horo::Render::D3D12Detail {
     }
 
     Result<void> CommandService::ValidateRequest(const RenderGraphExecutionRequest &request) const {
-        auto frame = ValidateCommandFrame(request);
-        if (frame.HasError())
+        if (auto frame = ValidateCommandFrame(request); frame.HasError())
             return frame;
-        auto lease = ValidateCommandLease(request);
-        if (lease.HasError())
+        if (auto lease = ValidateCommandLease(request); lease.HasError())
             return lease;
         if (request.submissions.empty() || request.submissions.size() > RenderGraphSubmissionLimits::MaximumSubmissions)
             return Result<void>::Failure(D3D12CommandError("render.d3d12.submission_required",

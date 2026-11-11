@@ -7,8 +7,8 @@ namespace Horo::Render::RegisterRasterCookDetail {
     /** @copydoc Literal */
     std::uint32_t Literal(const std::string_view token, const std::uint32_t maximum) {
         std::uint32_t result{};
-        const auto parsed = std::from_chars(token.data(), token.data() + token.size(), result);
-        if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() || result > maximum)
+        if (const auto parsed = std::from_chars(token.data(), token.data() + token.size(), result);
+            parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() || result > maximum)
             throw InvalidEvidence{};
         return result;
     }

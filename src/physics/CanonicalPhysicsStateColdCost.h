@@ -6,7 +6,8 @@ namespace Horo::Physics::Detail {
     /** @brief Conservative cumulative requested native bytes, not RSS, heap
      * overhead or a cold construction peak guarantee. */
     struct CanonicalPhysicsStateColdCost final {
-        std::size_t requestedBytes{}, requests{};
+        std::size_t requestedBytes{};
+        std::size_t requests{};
         bool overflow{};
     };
 

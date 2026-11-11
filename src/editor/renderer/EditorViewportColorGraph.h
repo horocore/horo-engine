@@ -59,7 +59,9 @@ namespace Horo::Editor {
         std::vector<Render::RenderGraphImportedState> *initial_{};
         Render::RenderQueueId queue_;
         Render::FramebufferExtent extent_;
-        Render::RenderGraphResourceId scene_, display_, exposure_;
+        Render::RenderGraphResourceId scene_;
+        Render::RenderGraphResourceId display_;
+        Render::RenderGraphResourceId exposure_;
         std::array<Render::RenderGraphPassWorkload, 3> workloads_;
         std::array<std::array<Render::RenderGraphMaterialDraw, 1>, 2> draws_;
         std::array<std::array<Render::RenderGraphMaterialRead, 6>, 2> reads_;

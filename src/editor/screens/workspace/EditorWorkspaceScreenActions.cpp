@@ -198,8 +198,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (action != EditorMenuAction::OpenSaveLoadManager)
             return false;
         const auto binding = controller_ ? controller_->PlaySaveBinding() : std::weak_ptr<EditorPlayRuntimeBinding>{};
-        const auto opened = modalHost_.OpenRoot(std::make_unique<SaveLoadManagerModal>(context_, binding));
-        if (opened.HasError())
+        if (const auto opened = modalHost_.OpenRoot(std::make_unique<SaveLoadManagerModal>(context_, binding)); opened.HasError())
             LOG_WARN("editor.play.save", "Manager admission failed: %s", opened.ErrorValue().message.c_str());
         return true;
     }
@@ -288,8 +287,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     void EditorWorkspaceScreen::OpenPlayTopologyProfilesModal() {
         if (!controller_ || !projectServices_.durableFiles)
             return;
-        const auto &model = controller_->ViewModel();
-        if (model.playState != EditorPlayState::Idle && model.playState != EditorPlayState::Failed)
+        if (const auto &model = controller_->ViewModel();
+            model.playState != EditorPlayState::Idle && model.playState != EditorPlayState::Failed)
             return;
         const std::filesystem::path root{controller_->ProjectRoot()};
         auto store =

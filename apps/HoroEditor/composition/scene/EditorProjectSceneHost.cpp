@@ -14,6 +14,7 @@
 #include "ScenePhysicsHost.h"
 
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <utility>
 
@@ -45,10 +46,14 @@ namespace Horo::Application::Internal {
                 : native_(range), identity_(identity) {}
 
             ~ProjectPlaySceneHost() override {
-                Shutdown();
-                auto retired = PollShutdown(64);
-                if (retired.HasError() || !retired.Value())
+                try {
+                    Shutdown();
+                    auto retired = PollShutdown(64);
+                    if (retired.HasError() || !retired.Value())
+                        std::terminate();
+                } catch (const std::exception &) {
                     std::terminate();
+                }
             }
 
             ProjectPlaySceneHost(const ProjectPlaySceneHost &) = delete;

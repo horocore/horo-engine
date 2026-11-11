@@ -92,7 +92,7 @@ namespace Horo::Animation::AssetSourceInternal {
         if (source.starts_with("\xEF\xBB\xBF") || source.find('\0') != std::string_view::npos)
             Reject(AnimationAssetErrors::Malformed);
         ParseBudget budget{context, limits, {}, 0};
-        return Json::parse(source.begin(), source.end(), [&](int depth, Json::parse_event_t event, Json &value) {
+        return Json::parse(source.begin(), source.end(), [&budget](int depth, Json::parse_event_t event, Json &value) {
             return budget.Event(depth, event, value);
         });
     }

@@ -64,7 +64,7 @@ namespace Horo::Animation::Detail {
     namespace {
         /** @brief Even a zero-travel alignment relocation revokes ownership at its true prior sample. */
         void Relocate(GraphInstanceState &state, const std::uint32_t player, const AnimationClipTrace &trace) noexcept {
-            auto &owner = state.notifies.candidate[player];
+            const auto &owner = state.notifies.candidate[player];
             if (!owner.initialized)
                 return;
             const auto origin = trace.segments == 0 ? trace.traversal.sampleTime : state.notifies.trace[0].from;
@@ -94,13 +94,14 @@ namespace Horo::Animation::Detail {
         /** @brief Closed transition policy uses only the canonical state-machine blend outcome. */
         bool TransitionAllows(const GraphTransitionEventPolicy policy, const GraphMachineState &machine, const bool source) noexcept {
             switch (policy) {
-                case GraphTransitionEventPolicy::SourceOnly:
+                using enum Horo::Animation::GraphTransitionEventPolicy;
+                case SourceOnly:
                     return source;
-                case GraphTransitionEventPolicy::DestinationOnly:
+                case DestinationOnly:
                     return !source;
-                case GraphTransitionEventPolicy::HighestContribution:
+                case HighestContribution:
                     return source == (machine.outcome.weight <= 0.5F);
-                case GraphTransitionEventPolicy::SuppressWhileBlending:
+                case SuppressWhileBlending:
                     return false;
                 default:
                     return true;

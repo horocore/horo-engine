@@ -35,9 +35,9 @@ namespace Horo::Physics::Detail {
         const PhysicsStateLimits &limits, std::uint32_t maximumPairs, std::uint32_t maximumEvents, std::size_t wireBytes,
         std::size_t maximumPayloadBytes, const std::shared_ptr<PhysicsStateResourceRecord> &resources) {
         using Outcome = Result<std::shared_ptr<PhysicsStateSnapshotSlot>>;
-        constexpr auto fixed = sizeof(PhysicsStateSnapshotSlot) + sizeof(PhysicsStateSnapshot) + sizeof(PhysicsStateSnapshot::Impl) +
-                               sizeof(StateDetail::SolverStorage);
-        if (!resources || !SlotFits(limits, maximumPairs, maximumEvents, wireBytes, maximumPayloadBytes, fixed))
+        if (constexpr auto fixed = sizeof(PhysicsStateSnapshotSlot) + sizeof(PhysicsStateSnapshot) + sizeof(PhysicsStateSnapshot::Impl) +
+                                   sizeof(StateDetail::SolverStorage);
+            !resources || !SlotFits(limits, maximumPairs, maximumEvents, wireBytes, maximumPayloadBytes, fixed))
             return Outcome::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         try {
             auto solver = StateDetail::PrepareSolverStorage(limits);

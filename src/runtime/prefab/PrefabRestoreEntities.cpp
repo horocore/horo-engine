@@ -179,7 +179,7 @@ namespace Horo::Prefab {
                     auto &node = *localNodes[index][entity];
                     if (!Live(node.member->record))
                         continue;
-                    if (data.entities[entity].parent && !localNodes[index][data.entities[entity].parent->value]->dense)
+                    if (data.entities[entity].parent && !localNodes[index][data.entities[entity].parent->value]->dense.has_value())
                         return Invalid<void>("A live saved member cannot have a tombstoned cooked parent.");
                     if (denseNodes.size() >= maximumEntities)
                         return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
@@ -225,7 +225,7 @@ namespace Horo::Prefab {
 
         Result<Detail::PrefabRestoredBinding> DynamicBinding(PrefabPropertyId slot, const CookedPrefabBindingDeclaration &declaration,
                                                              const Node &node) const {
-            if (!node.dense)
+            if (!node.dense.has_value())
                 return Invalid<Detail::PrefabRestoredBinding>("Saved external binding targets a deleted dynamic member.");
             if (!declaration.componentType)
                 return Result<Detail::PrefabRestoredBinding>::Success({slot, Runtime::RuntimeGroupExternalEntitySlot{{*node.dense}, {}}});
@@ -294,7 +294,7 @@ namespace Horo::Prefab {
         }
 
         Result<std::size_t> Dense(std::size_t instance, std::size_t local) const {
-            if (local >= localNodes[instance].size() || !localNodes[instance][local]->dense)
+            if (local >= localNodes[instance].size() || !localNodes[instance][local]->dense.has_value())
                 return Invalid<std::size_t>("Cooked relationship targets an absent or tombstoned saved member.");
             return Result<std::size_t>::Success(*localNodes[instance][local]->dense);
         }
@@ -334,7 +334,7 @@ namespace Horo::Prefab {
 
         Result<void> RemapEntry(Runtime::RuntimeEntityGroupEntry &entry, std::size_t instance, std::size_t local,
                                 Runtime::RuntimeSceneView scene) const {
-            if (entry.parentInGroup) {
+            if (entry.parentInGroup.has_value()) {
                 auto parent = Dense(instance, *entry.parentInGroup);
                 if (parent.HasError())
                     return Result<void>::Failure(parent.ErrorValue());
@@ -395,7 +395,7 @@ namespace Horo::Prefab {
             auto localEntries =
                 Detail::MakePrefabGroupEntries(prepared[index]->Data().entities, std::move(projection.Value().components), options);
             for (std::size_t local = 0; local < localEntries.size(); ++local) {
-                if (!localNodes[index][local]->dense)
+                if (!localNodes[index][local]->dense.has_value())
                     continue;
                 auto &entry = localEntries[local];
                 if (auto mapped = RemapEntry(entry, index, local, scene); mapped.HasError())
@@ -468,7 +468,7 @@ namespace Horo::Prefab {
                                                               {}};
                 partition.members.reserve(localNodes[instance].size());
                 for (const auto *node : localNodes[instance]) {
-                    if (!node->dense)
+                    if (!node->dense.has_value())
                         continue;
                     const auto &record = node->member->record;
                     entries[*node->dense].restorePartition = partitions.size();

@@ -21,7 +21,8 @@ namespace Horo::Platform::Android {
 
     /** @brief Committed native pixel extent; zero dimensions describe a nondrawable window. */
     struct AndroidWindowExtent final {
-        std::uint32_t width{}, height{};
+        std::uint32_t width{};
+        std::uint32_t height{};
         [[nodiscard]] constexpr bool operator==(const AndroidWindowExtent &) const noexcept = default;
     };
 
@@ -44,9 +45,17 @@ namespace Horo::Platform::Android {
 
     /** @brief Typed private window admission and lifetime failures, independent of renderer errors. */
     namespace AndroidWindowErrors {
-        extern const ErrorCodeDescriptor InvalidInput, WrongThread, Unsupported, Headless, Closed, Pending, StaleGeneration,
-            CapacityExceeded, RevisionExhausted, AllocationFailed;
-    }
+        extern const ErrorCodeDescriptor InvalidInput;
+        extern const ErrorCodeDescriptor WrongThread;
+        extern const ErrorCodeDescriptor Unsupported;
+        extern const ErrorCodeDescriptor Headless;
+        extern const ErrorCodeDescriptor Closed;
+        extern const ErrorCodeDescriptor Pending;
+        extern const ErrorCodeDescriptor StaleGeneration;
+        extern const ErrorCodeDescriptor CapacityExceeded;
+        extern const ErrorCodeDescriptor RevisionExhausted;
+        extern const ErrorCodeDescriptor AllocationFailed;
+    }  // namespace AndroidWindowErrors
 
     /** @brief Move-only allocation-free retention of one genuine native-window occurrence and facts revision.
      * @details Host, lease and renderer retirement run on the same serialized owner lane. The host outlives every lease.
@@ -92,7 +101,8 @@ namespace Horo::Platform::Android {
      */
     class AndroidWindowHost final {
     public:
-        static constexpr std::size_t MaximumOccurrences = 8, MaximumLeasesPerOccurrence = 64;
+        static constexpr std::size_t MaximumOccurrences = 8;
+        static constexpr std::size_t MaximumLeasesPerOccurrence = 64;
         /** @brief Creates one private window owner.
          * @param lifecycle Existing lifecycle authority, retained by composition for the owner's complete lifetime.
          * @param adapter Its exact generation-issuing adapter, retained for the same lifetime.

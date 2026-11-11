@@ -67,8 +67,8 @@ namespace Horo::Editor {
         const auto origin = ImGui::GetCursorScreenPos();
         const float height = std::max(0.0F, ImGui::GetContentRegionAvail().y);
         RequestViewport(size.x, height);
-        const auto texture = viewportRenderer_ ? viewportRenderer_->TextureView() : EditorViewportTextureView{};
-        if (CanDraw(viewModel, texture)) {
+        if (const auto texture = viewportRenderer_ ? viewportRenderer_->TextureView() : EditorViewportTextureView{};
+            CanDraw(viewModel, texture)) {
             ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(texture.textureId), origin,
                                                  ImVec2(origin.x + size.x, origin.y + height), ImVec2(texture.u0, texture.v0),
                                                  ImVec2(texture.u1, texture.v1));

@@ -24,7 +24,8 @@ namespace Horo::Physics::Detail {
     };
 
     struct SceneStateProjectionLimits final {
-        std::size_t maximumBindings{}, maximumRetainedBytes{};
+        std::size_t maximumBindings{};
+        std::size_t maximumRetainedBytes{};
     };
 
     /** @brief Cold owner-built full-key bijection covering EVERY native Scene resource exactly once.

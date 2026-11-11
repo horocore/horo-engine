@@ -56,11 +56,11 @@ namespace Horo::Physics::Detail {
         std::vector<CanonicalPhysicsStateGeometry> geometry;
         geometry.reserve(count);
         for (const auto &shape : world.scene.shapes)
-            geometry.push_back({shape.handle, shape.shape, shape.recipe, shape.nativeRequestedBytes});
+            geometry.emplace_back(shape.handle, shape.shape, shape.recipe, shape.nativeRequestedBytes);
         for (const auto &body : world.scene.bodies)
-            geometry.push_back({body.policy.shape, body.shapeEvidence, body.shapeRecipe, body.shapeNativeRequestedBytes});
+            geometry.emplace_back(body.policy.shape, body.shapeEvidence, body.shapeRecipe, body.shapeNativeRequestedBytes);
         for (const auto &fixture : world.query.fixtures)
-            geometry.push_back({fixture.fixture.shape, fixture.shape, fixture.recipe, fixture.nativeRequestedBytes});
+            geometry.emplace_back(fixture.fixture.shape, fixture.shape, fixture.recipe, fixture.nativeRequestedBytes);
         if (auto consolidated = Consolidate(geometry); consolidated.HasError())
             return Outcome::Failure(consolidated.ErrorValue());
         if (geometry.capacity() > maximumCount)

@@ -24,8 +24,8 @@ namespace Horo::Render {
                 return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
             if (pass.submission && !capabilities.supportsExplicitMaterialSubmissions)
                 return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
-            const bool extended = !pass.precedingPasses.empty() || pass.depthOnly || pass.region.has_value();
-            if (extended && !capabilities.supportsMaterialPassBatches)
+            if (const bool extended = !pass.precedingPasses.empty() || pass.depthOnly || pass.region.has_value();
+                extended && !capabilities.supportsMaterialPassBatches)
                 return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
             return Result<void>::Success();
         }
@@ -40,7 +40,9 @@ namespace Horo::Render {
         std::array<RenderMaterialDraw, RenderMaterialPass::MaximumBatchDraws> sources;
         std::array<Detail::RenderGraphResidentIdentity, RenderMaterialPass::MaximumBatchDraws + RenderMaterialPass::MaximumPasses> pins;
         std::array<RenderMaterialExecutionRequest, RenderMaterialPass::MaximumPasses> requests;
-        std::size_t drawCount{}, pinCount{}, passCount{};
+        std::size_t drawCount{};
+        std::size_t pinCount{};
+        std::size_t passCount{};
 
         Result<void> Prepare(RenderFrameScope &frame, const RenderMaterialPass &pass) {
             if (auto valid = ValidateBatchCapability(pass, frame.backend_->Capabilities()); valid.HasError())

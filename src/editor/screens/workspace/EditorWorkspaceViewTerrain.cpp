@@ -9,10 +9,11 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceView::DrawTerrainDocument */
     bool EditorWorkspaceView::DrawTerrainDocument(const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command) const {
         const auto active = model.workspacePanelHost.ActiveDocument();
-        const auto found = std::ranges::find_if(model.terrainDocuments, [&](const auto &document) {
+        if (const auto found = std::ranges::find_if(model.terrainDocuments,
+                                                    [&](const auto &document) {
             return document->Identity().instance == active;
         });
-        if (found == model.terrainDocuments.end())
+            found == model.terrainDocuments.end())
             return false;
         const auto &panels = m_panelRegistry.GetAllPanels();
         const auto viewport = std::ranges::find_if(panels, [](const auto &panel) {

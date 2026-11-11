@@ -79,6 +79,22 @@ immutable registry snapshots, sidecar rebuild, deterministic derived-index
 storage, synchronous providers, and a bounded asynchronous load service over
 the process `JobSystem`.
 
+`AssetTypeId` owns its canonical string. Parsing, default construction and move
+construction may throw `std::bad_alloc`, including checked-library bookkeeping
+for an empty string. Move construction prepares the destination before swapping
+the owned string, so an allocation failure preserves the source. This fixes the
+MSVC checked-string move termination observed during Scene dependency discovery;
+it adds no shared owner or identifier-text copy to the transfer. The type's
+layout, canonical grammar, comparison and serialized representation stay the same.
+
+Migration: rebuild Assets and all consumers of `AssetId.h`. Registry, provider,
+Scene discovery and import/cook callers must allow allocation failure to reach
+their existing fallible admission boundary rather than requiring nothrow move
+construction. Move assignment into existing storage remains nonthrowing. The
+`HoroAssetIdAllocationTests` parse/move sweeps and the Scene discovery transaction
+allocation sweep cover the failure boundary and preservation of the source or
+last published Scene; native qualification is recorded separately from this contract.
+
 Registry candidates are mutable only on their owner thread while being built.
 Publish first validates the complete candidate and then atomically replaces one
 immutable shared state. Snapshots pin that state and are safe for concurrent,

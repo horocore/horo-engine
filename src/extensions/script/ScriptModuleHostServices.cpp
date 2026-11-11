@@ -88,8 +88,7 @@ namespace Horo::Extensions {
         using Output = Result<std::shared_ptr<ScriptModuleHostServices>>;
         if (!authority || profile >= ScriptCapabilityProfile::Count)
             return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid));
-        auto lane = authority->RequireOpenOwner();
-        if (lane.HasError())
+        if (auto lane = authority->RequireOpenOwner(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
         return Output::Success(std::shared_ptr<ScriptModuleHostServices>{
             new ScriptModuleHostServices{std::make_unique<Impl>(std::move(authority), jobs, profile)}});
@@ -123,11 +122,9 @@ namespace Horo::Extensions {
                                                                                    ScriptModuleOperationPolicy policy,
                                                                                    const CancellationToken &cancellation) {
         using Output = Result<std::unique_ptr<ScriptModuleOperation>>;
-        auto admitted = Admit(*impl_, program, policy, cancellation);
-        if (admitted.HasError())
+        if (auto admitted = Admit(*impl_, program, policy, cancellation); admitted.HasError())
             return Output::Failure(admitted.ErrorValue());
-        auto reference = PrepareReference(program->RequestsReference());
-        if (reference.HasError())
+        if (auto reference = PrepareReference(program->RequestsReference()); reference.HasError())
             return Output::Failure(reference.ErrorValue());
         auto context = Context(*impl_, *program, std::move(policy), cancellation);
         if (context.HasError())
@@ -142,8 +139,7 @@ namespace Horo::Extensions {
         state->counted = true;
         auto operation = std::unique_ptr<ScriptModuleOperation>{new ScriptModuleOperation{std::move(state)}};
         *std::ranges::find(impl_->operations, nullptr) = operation.get();
-        auto started = operation->impl_->runtime->Start(program->Source());
-        if (started.HasError()) {
+        if (auto started = operation->impl_->runtime->Start(program->Source()); started.HasError()) {
             SetScriptModuleFailure(operation->impl_->result, operation->impl_->emergency, started.ErrorValue(), {});
             operation->Cancel();
         }

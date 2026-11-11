@@ -38,8 +38,8 @@ namespace Horo::Physics::Detail {
     /** @copydoc PrepareCanonicalPhysicsStateBuild */
     Result<CanonicalPhysicsStateBuildIdentity> PrepareCanonicalPhysicsStateBuild(const PhysicsStateBuildBinding &binding) {
         static_assert(StateBuildFacts::ContractVersion == 1);
-        const std::array facts{&StateBuildFacts::SolverInputs, &StateBuildFacts::PhysicsInputs, &StateBuildFacts::PlatformAbi};
-        if (!std::ranges::all_of(facts,
+        if (const std::array facts{&StateBuildFacts::SolverInputs, &StateBuildFacts::PhysicsInputs, &StateBuildFacts::PlatformAbi};
+            !std::ranges::all_of(facts,
                                  [](const auto *digest) {
             return Present(*digest);
         }) ||

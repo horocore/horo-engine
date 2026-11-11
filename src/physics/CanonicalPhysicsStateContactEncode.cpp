@@ -20,10 +20,12 @@ namespace Horo::Physics::Detail {
 
         /** @brief Only exact stable binding resolution supplies native key fields. */
         bool Key(CanonicalPhysicsStateStream &stream, const CanonicalPhysicsStateBindings &bindings, const PhysicsStateManifoldKey &key) {
-            JPH::BodyID first, second;
+            JPH::BodyID first;
+            JPH::BodyID second;
             if (!PairIds(bindings, key.first, key.second, first, second))
                 return false;
-            JPH::SubShapeID a, b;
+            JPH::SubShapeID a;
+            JPH::SubShapeID b;
             a.SetValue(key.firstSubshape);
             b.SetValue(key.secondSubshape);
             stream.Write(JPH::SubShapeIDPair{first, a, second, b});
@@ -54,7 +56,8 @@ namespace Horo::Physics::Detail {
          * native bridge encoding. */
         bool Pair(CanonicalPhysicsStateStream &stream, const CanonicalPhysicsStateBindings &bindings, const PhysicsStateSolverView &state,
                   const PhysicsStateBodyPair &input) {
-            JPH::BodyID first, second;
+            JPH::BodyID first;
+            JPH::BodyID second;
             if (!PairIds(bindings, input.first, input.second, first, second))
                 return false;
             stream.Write(JPH::BodyPair{first, second});

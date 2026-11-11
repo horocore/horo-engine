@@ -40,7 +40,8 @@ namespace Horo::Application {
             entries.reserve(value.size());
             for (const auto &entry : value) {
                 Fields(entry, {"id", "displayName"});
-                entries.push_back({Identity(entry.at("id")), entry.at("displayName").get<std::string>()});
+                const auto id = Identity(entry.at("id"));
+                entries.emplace_back(id, entry.at("displayName").get<std::string>());
             }
             return entries;
         }

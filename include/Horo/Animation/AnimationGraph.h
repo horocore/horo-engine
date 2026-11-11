@@ -924,19 +924,20 @@ namespace Horo::Animation {
         [[nodiscard]] static Result<AnimationGraphProgram> BindProgram(AnimationGraphProgram program,
                                                                        const AnimationGraphCompileContext &context);
         friend Result<AnimationGraphData> MigrateAnimationGraph(const AnimationGraphData &, const AnimationGraphCompileContext &);
-        std::vector<GraphInstructionOccurrence> occurrences_{};
-        std::vector<GraphStateMachineBinding> stateMachines_{};
+        // Count construction lets checked-library bookkeeping failures reach the caller's allocation boundary.
+        std::vector<GraphInstructionOccurrence> occurrences_ = std::vector<GraphInstructionOccurrence>(std::size_t{0});
+        std::vector<GraphStateMachineBinding> stateMachines_ = std::vector<GraphStateMachineBinding>(std::size_t{0});
         GraphMemoryRequirements memory_{};
         GraphSkeletonBinding skeletonBinding_{};
-        std::vector<AnimationClipDescriptor> clipBindings_{};
+        std::vector<AnimationClipDescriptor> clipBindings_ = std::vector<AnimationClipDescriptor>(std::size_t{0});
         AnimationGraphId id_{};
         AnimationClipId sourceClip_{};
         SkeletonId skeleton_{};
-        std::vector<GraphParameter> parameters_{};
-        std::vector<GraphActionSlot> actionSlots_{};
-        std::vector<GraphActionDefinition> actions_{};
-        std::vector<GraphCompiledDefinition> definitions_{};
-        std::vector<AnimationClipId> clips_{};
+        std::vector<GraphParameter> parameters_ = std::vector<GraphParameter>(std::size_t{0});
+        std::vector<GraphActionSlot> actionSlots_ = std::vector<GraphActionSlot>(std::size_t{0});
+        std::vector<GraphActionDefinition> actions_ = std::vector<GraphActionDefinition>(std::size_t{0});
+        std::vector<GraphCompiledDefinition> definitions_ = std::vector<GraphCompiledDefinition>(std::size_t{0});
+        std::vector<AnimationClipId> clips_ = std::vector<AnimationClipId>(std::size_t{0});
         std::uint32_t entry_{};
     };
 

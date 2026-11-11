@@ -71,13 +71,13 @@ namespace Horo::Animation {
 
     Result<void> PreparedAnimationCook::State::Merge(std::vector<Assets::AssetDependency> &closure, const Assets::AssetDependency &role,
                                                      std::size_t maximumAssets) const {
-        const auto *record = capture.Registry().Find(role.id);
-        if (!record || record->type != role.expectedType)
+        if (const auto *record = capture.Registry().Find(role.id); !record || record->type != role.expectedType)
             return Result<void>::Failure(MakeError(AnimationAssetErrors::Stale));
-        const auto found = std::ranges::find(closure, role.id, [](const auto &value) {
+        if (const auto found = std::ranges::find(closure, role.id,
+                                                 [](const auto &value) {
             return value.id;
         });
-        if (found != closure.end()) {
+            found != closure.end()) {
             if (found->expectedType != role.expectedType)
                 return Result<void>::Failure(MakeError(AnimationAssetErrors::Malformed));
             return Result<void>::Success();

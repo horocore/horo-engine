@@ -78,13 +78,13 @@ namespace Horo::Render {
 
         /** @brief Preserves existing color contents when requested and never permits depth mutation. */
         bool ExactDrawUses(const std::span<const RenderGraphResourceUsage> uses, const RenderGraphVfxGpuDraw &draw) noexcept {
-            const auto colorAccess = draw.colorOperations.loadOperation == AttachmentLoadOperation::Load ? RenderGraphAccess::ReadWrite
-                                                                                                         : RenderGraphAccess::Write;
-            if (uses.size() != (draw.depth.IsValid() ? 3U : 2U) ||
-                !HasUse(uses, draw.particles, RenderGraphUsageKind::Storage, RenderGraphAccess::Read) ||
-                !HasUse(uses, draw.color, RenderGraphUsageKind::ColorAttachment, colorAccess))
+            using enum Horo::Render::RenderGraphAccess;
+            using enum Horo::Render::RenderGraphUsageKind;
+            if (const auto colorAccess = draw.colorOperations.loadOperation == AttachmentLoadOperation::Load ? ReadWrite : Write;
+                uses.size() != (draw.depth.IsValid() ? 3U : 2U) || !HasUse(uses, draw.particles, Storage, Read) ||
+                !HasUse(uses, draw.color, ColorAttachment, colorAccess))
                 return false;
-            return !draw.depth.IsValid() || HasUse(uses, draw.depth, RenderGraphUsageKind::DepthStencilAttachment, RenderGraphAccess::Read);
+            return !draw.depth.IsValid() || HasUse(uses, draw.depth, DepthStencilAttachment, Read);
         }
 
         /** @brief Only whole graph color attachments with preserved results are part of this closed draw operation. */

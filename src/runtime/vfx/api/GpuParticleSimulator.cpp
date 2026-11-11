@@ -9,39 +9,41 @@ namespace Horo::Vfx {
 
         /** @brief Checks owner/lifetime without allocating an expected frame-hot diagnostic. */
         GpuParticleStepStatus Operational(const State &s) noexcept {
+            using enum Horo::Vfx::GpuParticleStepStatus;
             if (s.owner != std::this_thread::get_id())
-                return GpuParticleStepStatus::ThreadViolation;
+                return ThreadViolation;
             if (s.shutdown)
-                return GpuParticleStepStatus::ShutDown;
+                return ShutDown;
             if (s.deviceLost)
-                return GpuParticleStepStatus::DeviceLost;
+                return DeviceLost;
             if (s.uncertain)
-                return GpuParticleStepStatus::SubmissionUncertain;
+                return SubmissionUncertain;
             if (s.stopped || !s.active || !s.receipt.IsLive())
-                return GpuParticleStepStatus::NotActive;
-            return GpuParticleStepStatus::Complete;
+                return NotActive;
+            return Complete;
         }
 
         /** @brief Checks new logical input before constructing an immutable candidate. */
         GpuParticleStepStatus RequestStatus(const State &s, std::uint64_t tick, float delta, const CancellationToken &token) noexcept {
+            using enum Horo::Vfx::GpuParticleStepStatus;
             const auto &bounds = s.preparation.descriptor.arithmetic;
             if (s.nextTick >= bounds.maximumSteps)
-                return GpuParticleStepStatus::StepLimit;
+                return StepLimit;
             if (tick != s.nextTick || !std::isfinite(delta) || delta < 0 || delta > bounds.maximumDeltaSeconds)
-                return GpuParticleStepStatus::InvalidStep;
+                return InvalidStep;
             if (token.IsCancellationRequested())
-                return GpuParticleStepStatus::Cancelled;
-            return GpuParticleStepStatus::Complete;
+                return Cancelled;
+            return Complete;
         }
 
         /** @brief Distinguishes unavailable optional observations from required visual observation failure. */
         bool ReadbackMatches(const Render::VfxGpuReadbackDescriptor &policy, Render::VfxGpuReadbackAdmission admission) noexcept {
+            using enum Horo::Render::VfxGpuReadbackAdmission;
             if (!policy.enabled)
-                return admission == Render::VfxGpuReadbackAdmission::Disabled;
-            if (admission == Render::VfxGpuReadbackAdmission::Available)
+                return admission == Disabled;
+            if (admission == Available)
                 return true;
-            return policy.requirement == Render::VfxGpuReadbackRequirement::Optional &&
-                   admission == Render::VfxGpuReadbackAdmission::OptionalUnavailable;
+            return policy.requirement == Render::VfxGpuReadbackRequirement::Optional && admission == OptionalUnavailable;
         }
 
         /** @brief Compares all semantic metadata by rehashing the same actual immutable source words under the issued descriptor. */
@@ -79,15 +81,16 @@ namespace Horo::Vfx {
 
         /** @brief Records actual accepted native work once; it does not claim GPU completion or compare particle values. */
         GpuParticleStepStatus AcceptSubmitted(State &s, const Render::GpuVfxStepAcknowledgement &ack) noexcept {
+            using enum Horo::Vfx::GpuParticleStepStatus;
             if (!s.pending || s.pending->step != ack.Step() || !ack.Submission().IsValid())
-                return GpuParticleStepStatus::StaleAcknowledgement;
+                return StaleAcknowledgement;
             auto slot = std::ranges::find(s.submitted, false, &Detail::GpuParticlePending::occupied);
             if (slot == s.submitted.end())
-                return GpuParticleStepStatus::CapacityExceeded;
+                return CapacityExceeded;
             *slot = {ack.Step(), ack.Submission(), true};
             ++s.nextTick;
             s.pending.reset();
-            return GpuParticleStepStatus::Complete;
+            return Complete;
         }
 
         /** @brief Only matching actual completion evidence releases logical in-flight capacity. */
@@ -103,11 +106,11 @@ namespace Horo::Vfx {
 
         /** @brief Clears only a proven unsubmitted candidate so the exact tick may be retried safely. */
         GpuParticleStepStatus Unsubmitted(State &s, const Render::GpuVfxStepAcknowledgement &ack) noexcept {
+            using enum Horo::Vfx::GpuParticleStepStatus;
             if (!s.pending || s.pending->step != ack.Step() || ack.Submission().IsValid())
-                return GpuParticleStepStatus::StaleAcknowledgement;
+                return StaleAcknowledgement;
             s.pending.reset();
-            return ack.State() == Render::VfxGpuSubmissionState::CancelledUnsubmitted ? GpuParticleStepStatus::Cancelled
-                                                                                      : GpuParticleStepStatus::Complete;
+            return ack.State() == Render::VfxGpuSubmissionState::CancelledUnsubmitted ? Cancelled : Complete;
         }
 
         /** @brief Contains an uncertain or lost native submission; it can never become an unsubmitted retry. */
@@ -166,20 +169,21 @@ namespace Horo::Vfx {
     /** @copydoc GpuParticleSimulator::PrepareStep */
     GpuParticleStepOutcome GpuParticleSimulator::PrepareStep(std::uint64_t tick, float delta,
                                                              const CancellationToken &cancellation) noexcept {
+        using enum Horo::Vfx::GpuParticleStepStatus;
         auto &s = *state_;
-        if (const auto status = Operational(s); status != GpuParticleStepStatus::Complete)
+        if (const auto status = Operational(s); status != Complete)
             return {status, {}};
         if (s.pending)
-            return {GpuParticleStepStatus::PendingSubmission, {}};
-        if (const auto status = RequestStatus(s, tick, delta, cancellation); status != GpuParticleStepStatus::Complete)
+            return {PendingSubmission, {}};
+        if (const auto status = RequestStatus(s, tick, delta, cancellation); status != Complete)
             return {status, {}};
         if (std::ranges::all_of(s.submitted, &Detail::GpuParticlePending::occupied))
-            return {GpuParticleStepStatus::CapacityExceeded, {}};
+            return {CapacityExceeded, {}};
         const auto work = Work(s, delta, cancellation);
         if (!Render::ValidateVfxGpuSimulationWork(s.preparation.descriptor, work))
-            return {GpuParticleStepStatus::InvalidStep, {}};
+            return {InvalidStep, {}};
         s.pending = work;
-        return {GpuParticleStepStatus::Complete, work};
+        return {Complete, work};
     }
 
     /** @copydoc GpuParticleSimulator::ApplyAcknowledgement */
@@ -221,16 +225,17 @@ namespace Horo::Vfx {
 
     /** @copydoc GpuParticleSimulator::Stop */
     GpuParticleStepStatus GpuParticleSimulator::Stop() noexcept {
+        using enum Horo::Vfx::GpuParticleStepStatus;
         auto &s = *state_;
         if (s.owner != std::this_thread::get_id())
-            return GpuParticleStepStatus::ThreadViolation;
+            return ThreadViolation;
         if (s.shutdown)
-            return GpuParticleStepStatus::ShutDown;
+            return ShutDown;
         s.stopped = true;
         s.active = false;
         s.pending.reset();
         s.lifetimeSource.RequestCancellation();
-        return GpuParticleStepStatus::Complete;
+        return Complete;
     }
 
     /** @copydoc GpuParticleSimulator::Shutdown */

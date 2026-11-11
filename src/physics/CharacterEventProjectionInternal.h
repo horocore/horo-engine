@@ -4,7 +4,8 @@
 namespace Horo::Character::Detail {
     /** @brief Prior committed facts only; candidate events and raw callback order are never transition history. */
     struct CharacterEventPreviousState final {
-        bool grounded{}, sliding{};
+        bool grounded{};
+        bool sliding{};
         CharacterCollisionFlags collisions{CharacterCollisionFlags::None};
         std::optional<Physics::PhysicsSurfaceEvidence> groundSurface;
     };

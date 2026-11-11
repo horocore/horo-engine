@@ -55,16 +55,17 @@ namespace Horo::Packages {
             const VerifiedPackageModule &module, std::span<const std::shared_ptr<IPackageModuleActivation>> dependencies,
             const CancellationToken &cancellation) override;
         /** @brief Acquires an exact live SDK module; the lease pins verified bytes and prevents finalization while borrowed.
-         * @param package Owning package. @param module Exact module identity. @param generation Exact activation generation.
+         * @param package Owning package. @param selectedModule Exact module identity. @param generation Exact activation generation.
          * @return Read-only SDK owner, or null after withdrawal/mismatch. Release on any thread; owner-lane drain performs teardown.
          * @pre Application exposes this only after the matching PackageLifecycleService snapshot publishes.
          */
-        [[nodiscard]] std::shared_ptr<const Gameplay::LoadedGameModule> Acquire(const HoroPackageId &package, std::string_view module,
+        [[nodiscard]] std::shared_ptr<const Gameplay::LoadedGameModule> Acquire(const HoroPackageId &package,
+                                                                                std::string_view selectedModule,
                                                                                 std::uint64_t generation) const;
         /** @brief Acquires generated contributions from the exact trusted, locked and live package activation.
          * Package versions remain selected by the existing resolver/lock; no highest-version or load-order fallback occurs.
          */
-        [[nodiscard]] Result<PackageDecisionNodeGeneration> AcquireDecisionNodes(const HoroPackageId &package, std::string_view module,
+        [[nodiscard]] Result<PackageDecisionNodeGeneration> AcquireDecisionNodes(const HoroPackageId &package, std::string_view moduleId,
                                                                                  std::uint64_t generation) const;
         /** @brief Compiles actual declared package script bytes under that same native activation's revocation/lifetime.
          * @param source Exact declared .horo_script inventory identity, never an arbitrary physical file.
@@ -73,7 +74,7 @@ namespace Horo::Packages {
          * @details No script invocation provider or manifest flag is treated as an executable node implementation.
          */
         [[nodiscard]] Result<std::unique_ptr<Gameplay::LuaDecisionNodeProgram>> CompileDecisionNode(
-            const HoroPackageId &package, std::string_view module, std::uint64_t generation, const PackagePath &source,
+            const HoroPackageId &package, std::string_view moduleId, std::uint64_t generation, const PackagePath &source,
             AI::DecisionNodeTypeId type, AI::DecisionProviderId provider, std::uint32_t descriptorVersion,
             Gameplay::LuaBehaviorLimits limits = {}) const;
 

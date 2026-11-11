@@ -75,7 +75,8 @@ namespace Horo::Gameplay::Detail {
             return Result<void>::Success();
         }
 
-        std::shared_ptr<IPersistenceSource> factory_, current_;
+        std::shared_ptr<IPersistenceSource> factory_;
+        std::shared_ptr<IPersistenceSource> current_;
         std::optional<BehaviorPersistenceTarget> target_;
         bool closed_{};
         const std::atomic_bool *admission_;

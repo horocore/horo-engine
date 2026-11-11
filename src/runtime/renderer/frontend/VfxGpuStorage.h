@@ -11,11 +11,18 @@ namespace Horo::Render::Detail {
     /** @brief Metadata for one registered immutable candidate; native acceptance is a distinct state. */
     struct VfxGpuFrontendStep final {
         VfxGpuStepIdentity identity;
-        CancellationToken unitLifetime, callerCancellation;
+        CancellationToken unitLifetime;
+        CancellationToken callerCancellation;
         std::array<std::uint32_t, VfxGpuDispatchWords::Count> parameters{};
         RenderTimelinePoint submission;
-        std::size_t destination{}, observation{};
-        bool occupied{}, accepted{}, completed{}, observe{}, dispatched{}, uncertain{};
+        std::size_t destination{};
+        std::size_t observation{};
+        bool occupied{};
+        bool accepted{};
+        bool completed{};
+        bool observe{};
+        bool dispatched{};
+        bool uncertain{};
     };
 
     /** @brief One existing-queue request, retained until exact native completion and the queue's own consumer retirement fact. */
@@ -25,7 +32,14 @@ namespace Horo::Render::Detail {
         RenderTimelinePoint submission;
         std::chrono::steady_clock::time_point deadline;
         std::size_t observation{};
-        bool occupied{}, submitted{}, nativeCompleted{}, nativeUncertain{}, acquired{}, ready{}, cancelRequested{}, timedOut{};
+        bool occupied{};
+        bool submitted{};
+        bool nativeCompleted{};
+        bool nativeUncertain{};
+        bool acquired{};
+        bool ready{};
+        bool cancelRequested{};
+        bool timedOut{};
     };
 
     /** @brief Cold inventory retained by the existing frontend, never by a live VFX world pointer. */
@@ -33,31 +47,41 @@ namespace Horo::Render::Detail {
         VfxGpuSimulationId id;
         VfxGpuSimulationDescriptor descriptor;
         std::uint64_t deviceIncarnation{};
-        std::size_t nativeBufferBytes{}, reservedCpuPayloadBytes{}, parameterArenaBytes{};
-        Sha256Digest simulationProgram, drawProgram;
-        CancellationToken lifetime, unitLifetime;
+        std::size_t nativeBufferBytes{};
+        std::size_t reservedCpuPayloadBytes{};
+        std::size_t parameterArenaBytes{};
+        Sha256Digest simulationProgram;
+        Sha256Digest drawProgram;
+        CancellationToken lifetime;
+        CancellationToken unitLifetime;
         bool unitLifetimeBound{};
         VfxGpuReadbackAdmission readback{VfxGpuReadbackAdmission::Disabled};
         std::shared_ptr<IResidentVfxGpuKernel> kernel;
         std::shared_ptr<IResidentVfxGpuSimulation> native;
         std::vector<ResourceCreation<RenderBufferHandle>> buffers;
-        std::vector<NativeVfxGpuBuffer> states, observations;
-        NativeVfxGpuBuffer forces, parameterArena;
+        std::vector<NativeVfxGpuBuffer> states;
+        std::vector<NativeVfxGpuBuffer> observations;
+        NativeVfxGpuBuffer forces;
+        NativeVfxGpuBuffer parameterArena;
         NativeVfxGpuPreparationResources preparationResources;
         std::vector<std::uint64_t> generations;
-        std::vector<std::uint8_t> observationHeld, observationCompleted;
+        std::vector<std::uint8_t> observationHeld;
+        std::vector<std::uint8_t> observationCompleted;
         std::vector<VfxGpuStepIdentity> observationSteps;
         std::vector<VfxGpuFrontendStep> steps;
         std::vector<VfxGpuObservationRequest> requests;
         std::uint32_t reservedReadbackSlots{};
-        std::uint64_t generation{1}, nextTick{};
-        std::size_t currentSource{}, nextDestination{1};
+        std::uint64_t generation{1};
+        std::uint64_t nextTick{};
+        std::size_t currentSource{};
+        std::size_t nextDestination{1};
         RenderTimelinePoint acceptedPoint;
         RenderGraphOwnerId scheduledGraph;
         RenderGraphPassRef computePass;
         std::array<RenderGraphResourceId, 4> graphBuffers;
         std::uint64_t scheduledFrame{};
-        bool released{}, stopped{};
+        bool released{};
+        bool stopped{};
     };
 
     /** @brief Either immutable owner gate can revoke a unit; a caller-mutated payload cannot replace captured ownership. */
@@ -78,15 +102,19 @@ namespace Horo::Render::Detail {
         std::vector<VfxGpuStorageSlot> slots;
         bool busy{};
         std::optional<Error> pendingError;
-        std::size_t drainCursor{}, retirementCursor{};
+        std::size_t drainCursor{};
+        std::size_t retirementCursor{};
         std::unique_ptr<RenderReadbackQueue> readbacks;
         RenderReadbackPreparedStorage readbackPool;
         RenderReadbackLimits readbackLimits;
         std::chrono::nanoseconds observationTimeout{};
         std::vector<std::uint32_t> readbackOwners;
-        std::size_t readbackCpuBytes{}, readbackGlobalRemainderBytes{};
+        std::size_t readbackCpuBytes{};
+        std::size_t readbackGlobalRemainderBytes{};
         std::uint32_t reservedReadbackSlots{};
-        std::uint64_t observationCopyCalls{}, copiedObservationBytes{}, observationDiscardCalls{};
+        std::uint64_t observationCopyCalls{};
+        std::uint64_t copiedObservationBytes{};
+        std::uint64_t observationDiscardCalls{};
         /** @brief Looks up an exact issued ID without allocating or creating a generation. */
         [[nodiscard]] VfxGpuRecord *Find(VfxGpuSimulationId id) noexcept;
         /** @brief Cold-only slot reservation; exhausted generation slots are never reused. */

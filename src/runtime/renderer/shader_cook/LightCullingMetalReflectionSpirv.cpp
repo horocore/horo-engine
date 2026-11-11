@@ -8,9 +8,18 @@ namespace Horo::Render::LightCullingMetalCookDetail {
         using Words = std::span<const std::uint32_t>;
 
         struct Node {
-            std::uint32_t type{}, storage{}, element{}, root{}, binding{~0u}, set{~0u}, stride{};
-            bool pointer{}, block{}, readonlyMember{};
-            std::vector<std::uint32_t> members, offsets;
+            std::uint32_t type{};
+            std::uint32_t storage{};
+            std::uint32_t element{};
+            std::uint32_t root{};
+            std::uint32_t binding{~0u};
+            std::uint32_t set{~0u};
+            std::uint32_t stride{};
+            bool pointer{};
+            bool block{};
+            bool readonlyMember{};
+            std::vector<std::uint32_t> members;
+            std::vector<std::uint32_t> offsets;
             std::string name;
         };
 
@@ -23,8 +32,12 @@ namespace Horo::Render::LightCullingMetalCookDetail {
             std::vector<Node> ids;
             std::vector<Instruction> instructions;
             std::array<std::uint32_t, 5> resources{};
-            std::uint32_t entry{}, functions{}, localSizes{}, extensionSet{};
-            bool functionOpen{}, functionEnded{};
+            std::uint32_t entry{};
+            std::uint32_t functions{};
+            std::uint32_t localSizes{};
+            std::uint32_t extensionSet{};
+            bool functionOpen{};
+            bool functionEnded{};
         };
 
         Node &Id(Proof &proof, std::uint32_t id) {
@@ -231,7 +244,7 @@ namespace Horo::Render::LightCullingMetalCookDetail {
                 const auto count = words[at] >> 16;
                 if (!count || count > words.size() - at || proof.instructions.size() == 65536)
                     throw InvalidEvidence{};
-                proof.instructions.push_back({words[at] & 65535, words.subspan(at, count)});
+                proof.instructions.emplace_back(words[at] & 65535, words.subspan(at, count));
                 at += count;
             }
         }
@@ -256,8 +269,7 @@ namespace Horo::Render::LightCullingMetalCookDetail {
             if (w.size() != 4)
                 throw InvalidEvidence{};
             auto &value = Id(proof, w[2]);
-            const auto &pointer = Id(proof, w[1]);
-            if (!pointer.pointer || pointer.storage != w[3])
+            if (const auto &pointer = Id(proof, w[1]); !pointer.pointer || pointer.storage != w[3])
                 throw InvalidEvidence{};
             value.root = w[2];
             if (w[3] == 1)
@@ -284,7 +296,7 @@ namespace Horo::Render::LightCullingMetalCookDetail {
 
         void ValidateResource(Proof &proof, std::size_t index) {
             constexpr std::array names{"Lights", "Clusters", "Membership", "References", "Dispatch"};
-            auto &value = Id(proof, proof.resources[index]);
+            const auto &value = Id(proof, proof.resources[index]);
             const auto &pointer = Id(proof, value.type);
             const auto &block = Id(proof, pointer.element);
             if (value.name != names[index] || !block.block || pointer.storage != (index == 4 ? 2u : 12u))
@@ -301,8 +313,8 @@ namespace Horo::Render::LightCullingMetalCookDetail {
             RequireSize(w, 5);
             auto &value = Id(proof, w[2]);
             const auto &base = Id(proof, w[3]);
-            const auto &resultType = Id(proof, w[1]);
-            if (!base.root || !resultType.pointer || resultType.storage != Id(proof, base.type).storage)
+            if (const auto &resultType = Id(proof, w[1]);
+                !base.root || !resultType.pointer || resultType.storage != Id(proof, base.type).storage)
                 throw InvalidEvidence{};
             ValueOperands(proof, w.subspan(4));
             value.root = base.root;
@@ -317,8 +329,7 @@ namespace Horo::Render::LightCullingMetalCookDetail {
         void Store(Proof &proof, Words w) {
             if (w.size() != 3)
                 throw InvalidEvidence{};
-            const auto root = Id(proof, w[1]).root;
-            if (!root || (root != proof.resources[2] && root != proof.resources[3]))
+            if (const auto root = Id(proof, w[1]).root; !root || (root != proof.resources[2] && root != proof.resources[3]))
                 throw InvalidEvidence{};
             ValueOperands(proof, w.subspan(2));
         }

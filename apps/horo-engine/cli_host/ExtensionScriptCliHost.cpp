@@ -84,7 +84,7 @@ namespace Horo::Application::Internal {
         configuration.artifactGate = std::make_shared<ExtensionScriptArtifactGate>(impl_->staging, impl_->packet);
         configuration.servicePolicy = ServicePolicy();
         if (impl_->options->moduleOperation)
-            configuration.capabilities.push_back("horo.script.reference");
+            configuration.capabilities.emplace_back("horo.script.reference");
         return Configuration::Success(std::move(configuration));
     }
 

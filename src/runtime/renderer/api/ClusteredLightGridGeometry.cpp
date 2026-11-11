@@ -6,11 +6,18 @@
 namespace Horo::Render::ClusteredLightDetail {
     namespace {
         struct Slice final {
-            float left, right, bottom, top, nearDistance, farDistance;
+            float left;
+            float right;
+            float bottom;
+            float top;
+            float nearDistance;
+            float farDistance;
         };
 
         Slice Bounds(const ClusteredLightGridDescriptor &d, std::uint32_t index) noexcept {
-            const auto x = index % d.x, y = (index / d.x) % d.y, z = index / (d.x * d.y);
+            const auto x = index % d.x;
+            const auto y = (index / d.x) % d.y;
+            const auto z = index / (d.x * d.y);
             return {-1.0F + 2.0F * x / d.x, -1.0F + 2.0F * (x + 1U) / d.x, 1.0F - 2.0F * (y + 1U) / d.y,
                     1.0F - 2.0F * y / d.y,  DepthBoundary(d, z),           DepthBoundary(d, z + 1U)};
         }
@@ -65,7 +72,8 @@ namespace Horo::Render::ClusteredLightDetail {
     }
 
     float DepthBoundary(const ClusteredLightGridDescriptor &d, std::uint32_t slice) noexcept {
-        const double nearDistance = d.camera.projection.nearPlane, farDistance = d.camera.projection.farPlane;
+        const double nearDistance = d.camera.projection.nearPlane;
+        const double farDistance = d.camera.projection.farPlane;
         const double fraction = static_cast<double>(slice) / d.z;
         return static_cast<float>(d.depthPartition == LightClusterDepthPartition::Linear
                                       ? nearDistance + (farDistance - nearDistance) * fraction

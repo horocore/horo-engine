@@ -11,11 +11,12 @@ namespace Horo::AI {
 
         const StateMachineProviderAction *ProviderAction(const StateMachineState &state, StateMachineActionPhase phase) {
             switch (phase) {
-                case StateMachineActionPhase::Entry:
+                using enum Horo::AI::StateMachineActionPhase;
+                case Entry:
                     return state.entryProvider ? &*state.entryProvider : nullptr;
-                case StateMachineActionPhase::Update:
+                case Update:
                     return state.updateProvider ? &*state.updateProvider : nullptr;
-                case StateMachineActionPhase::Exit:
+                case Exit:
                     return state.exitProvider ? &*state.exitProvider : nullptr;
             }
             return nullptr;

@@ -58,12 +58,37 @@ namespace Horo::Editor {
         /** @brief Transient form values; never treated as accepted execution or
          * capability evidence. */
         struct Draft {
-            int view{}, product{}, platform{}, architecture{}, configuration{}, signing{}, protection{}, inclusion{}, packageFormat{},
-                testProfile{};
+            int view{};
+            int product{};
+            int platform{};
+            int architecture{};
+            int configuration{};
+            int signing{};
+            int protection{};
+            int inclusion{};
+            int packageFormat{};
+            int testProfile{};
             int jobs{2};
-            std::string name, version, notes, minimumEngine, defines, beforeBuild, afterBuild, output, branch, symbols, endpoint;
-            bool debugSymbols{true}, crashReporter{true}, allowDowngrades{}, lto{true}, stripEditor{true}, unitTests{};
-            bool failUnresolved{true}, delta{}, compress{true};
+            std::string name;
+            std::string version;
+            std::string notes;
+            std::string minimumEngine;
+            std::string defines;
+            std::string beforeBuild;
+            std::string afterBuild;
+            std::string output;
+            std::string branch;
+            std::string symbols;
+            std::string endpoint;
+            bool debugSymbols{true};
+            bool crashReporter{true};
+            bool allowDowngrades{};
+            bool lto{true};
+            bool stripEditor{true};
+            bool unitTests{};
+            bool failUnresolved{true};
+            bool delta{};
+            bool compress{true};
         } draft_;
 
         /** @brief Draws observed stages, never placeholder progress. */

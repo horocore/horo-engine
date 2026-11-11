@@ -37,9 +37,9 @@ namespace Horo::Render {
                                            const bool explicitSubmissions) {
             if (!HasGpuVfx(workloads))
                 return Result<void>::Success();
-            const auto &features = backend.Capabilities().support.features;
-            if (!explicitSubmissions || !features.Supports(RenderCapability::VfxGpuSimulation) ||
-                !features.Supports(RenderCapability::VfxGpuDraw))
+            if (const auto &features = backend.Capabilities().support.features; !explicitSubmissions ||
+                                                                                !features.Supports(RenderCapability::VfxGpuSimulation) ||
+                                                                                !features.Supports(RenderCapability::VfxGpuDraw))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
             return Result<void>::Success();
         }
@@ -70,10 +70,11 @@ namespace Horo::Render {
         Result<std::shared_ptr<Detail::VfxSchedulingStorage>> SelectVfxResolutionStorage(
             const std::span<const RenderGraphPassWorkload> workloads, const std::shared_ptr<Detail::VfxSchedulingStorage> &storage) {
             using Selection = Result<std::shared_ptr<Detail::VfxSchedulingStorage>>;
-            const auto hasVfx = std::ranges::any_of(workloads, [](const auto &entry) {
+            if (const auto hasVfx = std::ranges::any_of(workloads,
+                                                        [](const auto &entry) {
                 return std::holds_alternative<RenderGraphVfx>(entry.workload);
             });
-            if (!hasVfx)
+                !hasVfx)
                 return Selection::Success(nullptr);
             if (!storage || storage->resolvingGraph)
                 return Selection::Failure(MakeError(VfxFrameErrors::Pending));

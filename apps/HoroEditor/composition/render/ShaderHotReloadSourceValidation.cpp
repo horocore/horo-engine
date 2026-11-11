@@ -27,7 +27,7 @@ namespace Horo::Application::Internal::ShaderSourceDetail {
 
         bool EmptyCapturedPayload(const ShaderBuildRequest &build) noexcept {
             return build.compilation.source.empty() && build.compilation.dependencies.empty() && build.sources.empty() &&
-                   !build.operationId;
+                   !build.operationId.has_value();
         }
 
         bool SourceLimits(const Render::ShaderCompilerLimits &limits) noexcept {

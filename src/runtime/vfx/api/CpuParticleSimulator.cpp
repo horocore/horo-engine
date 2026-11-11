@@ -188,19 +188,20 @@ namespace Horo::Vfx {
 
     /** @copydoc CpuParticleSimulator::AdvancePrepared */
     CpuParticleAdvanceOutcome CpuParticleSimulator::AdvancePrepared(const CpuParticleSimulationStep &step) noexcept {
+        using enum Horo::Vfx::CpuParticleAdvanceStatus;
         if (const auto failure = ValidateAdvance(state_.get(), step))
-            return {CpuParticleAdvanceStatus::Rejected, {}, failure};
+            return {Rejected, {}, failure};
         if (!PreparedProfile(*state_))
-            return {CpuParticleAdvanceStatus::UnsupportedDiagnostics, {}, &VfxErrors::UnsupportedCapability};
+            return {UnsupportedDiagnostics, {}, &VfxErrors::UnsupportedCapability};
         state_->advancing = true;
         const AdvanceScope scope{state_->advancing};
         try {
             const auto result = ExecuteStages(*state_, step);
             if (result.HasError())
-                return {CpuParticleAdvanceStatus::Rejected, {}, result.ErrorValue().descriptor};
-            return {CpuParticleAdvanceStatus::Complete, result.Value(), nullptr};
+                return {Rejected, {}, result.ErrorValue().descriptor};
+            return {Complete, result.Value(), nullptr};
         } catch (...) {
-            return {CpuParticleAdvanceStatus::Rejected, {}, &VfxErrors::ParticleStageContractViolation};
+            return {Rejected, {}, &VfxErrors::ParticleStageContractViolation};
         }
     }
 

@@ -52,8 +52,7 @@ namespace Horo::Animation::Detail {
         /** @brief Reverse arrival at start still owns the boundary; the following departure closes it. */
         void ReverseWindow(GraphInstanceState &state, const std::uint32_t marker, const AnimationClipEvent &event,
                            const AnimationClipTraversalSegment &segment) noexcept {
-            const AnimationTime end{event.time.ticks + event.duration->ticks};
-            if (segment.to < end && end < segment.from)
+            if (const AnimationTime end{event.time.ticks + event.duration->ticks}; segment.to < end && end < segment.from)
                 Hit(state, marker, end, AnimationNotifyPhase::Begin);
             if (segment.to < event.time && event.time < segment.from)
                 Hit(state, marker, event.time, AnimationNotifyPhase::End);
@@ -112,12 +111,13 @@ namespace Horo::Animation::Detail {
     /** @copydoc EmitClipNotify */
     void EmitClipNotify(GraphInstanceState &state, const std::uint32_t player, const NotifyHit &hit,
                         const AnimationTraversalDirection direction) noexcept {
+        using enum Horo::Animation::AnimationNotifyPhase;
         auto &work = state.notifies;
         auto &owner = work.candidate[player];
         auto &window = Window(state, player, hit.marker);
-        if (hit.phase == AnimationNotifyPhase::End && window == 0)
+        if (hit.phase == End && window == 0)
             return;
-        if (hit.phase == AnimationNotifyPhase::Begin && window != 0)
+        if (hit.phase == Begin && window != 0)
             return;
         if (owner.serial == std::numeric_limits<std::uint64_t>::max() || work.count == work.occurrences.size()) {
             work.failure = GraphInstanceFailure::LimitExceeded;
@@ -126,7 +126,7 @@ namespace Horo::Animation::Detail {
         const auto &clip = state.clips[owner.clip]->Data();
         const auto &event = clip.events[hit.marker];
         const auto serial = ++owner.serial;
-        const auto begin = hit.phase == AnimationNotifyPhase::Begin ? serial : window;
+        const auto begin = hit.phase == Begin ? serial : window;
         work.occurrences[work.count++] = {.id = {state.identity, work.tick, clip.descriptor.id, clip.descriptor.generation, event.id,
                                                  player, serial, owner.loopOrdinal, hit.phase, direction},
                                           .type = event.type,
@@ -136,8 +136,8 @@ namespace Horo::Animation::Detail {
                                           .action = owner.action,
                                           .windowBeginSerial = begin,
                                           .reason = hit.reason};
-        if (hit.phase != AnimationNotifyPhase::Point)
-            window = hit.phase == AnimationNotifyPhase::Begin ? serial : 0;
+        if (hit.phase != Point)
+            window = hit.phase == Begin ? serial : 0;
     }
 
     /** @copydoc ClipNotifyOrigin */
@@ -184,7 +184,7 @@ namespace Horo::Animation::Detail {
         auto &work = state.notifies;
         if (work.candidate.empty() || !work.candidate[player].initialized)
             return;
-        auto &owner = work.candidate[player];
+        const auto &owner = work.candidate[player];
         const auto &events = state.clips[owner.clip]->Data().events;
         for (std::uint32_t i = 0; i < events.size(); ++i)
             EmitClipNotify(state, player, {i, owner.sample, AnimationNotifyPhase::End, reason}, AnimationTraversalDirection::Held);
@@ -193,19 +193,20 @@ namespace Horo::Animation::Detail {
     /** @copydoc ResetClipNotifyPlayer */
     void ResetClipNotifyPlayer(GraphInstanceState &state, const std::uint32_t player, const AnimationNotifyReason reason,
                                const AnimationTraversalDirection direction) noexcept {
+        using enum Horo::Animation::AnimationNotifyReason;
         if (state.notifies.candidate.empty())
             return;
         CloseClipNotifyPlayer(state, player, reason);
         auto &owner = state.notifies.candidate[player];
         const auto serial = owner.serial;
         auto ordinal = owner.loopOrdinal;
-        if (reason == AnimationNotifyReason::Loop)
+        if (reason == Loop)
             ordinal = NextActionNotifyLoop(state, ordinal, direction);
-        else if (reason != AnimationNotifyReason::SectionChanged)
+        else if (reason != SectionChanged)
             ordinal = 0;
         owner = {};
         owner.serial = serial;
         owner.loopOrdinal = ordinal;
-        owner.originReason = reason == AnimationNotifyReason::Reentered ? AnimationNotifyReason::Activation : reason;
+        owner.originReason = reason == Reentered ? Activation : reason;
     }
 }  // namespace Horo::Animation::Detail

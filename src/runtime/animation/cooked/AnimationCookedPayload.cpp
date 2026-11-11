@@ -46,11 +46,12 @@ namespace Horo::Animation::CookedInternal {
 
         std::array<std::uint16_t, 3> CurrentVersion(AnimationCookedKind kind) {
             switch (kind) {
-                case AnimationCookedKind::Skeleton:
+                using enum Horo::Animation::AnimationCookedKind;
+                case Skeleton:
                     return VersionParts(CurrentSkeletonAssetContractVersion);
-                case AnimationCookedKind::Clip:
+                case Clip:
                     return VersionParts(CurrentAnimationClipContractVersion);
-                case AnimationCookedKind::Graph:
+                case Graph:
                     return VersionParts(CurrentAnimationGraphContractVersion);
             }
             return {};
@@ -73,10 +74,10 @@ namespace Horo::Animation::CookedInternal {
                 return Return::Failure(MakeError(AnimationAssetErrors::Capacity));
             std::vector<Assets::AssetDependency> result;
             result.reserve(count);
-            result.push_back({skeleton.Asset(), Assets::AssetTypeId::Parse("core.animation.skeleton").Value()});
+            result.emplace_back(skeleton.Asset(), Assets::AssetTypeId::Parse("core.animation.skeleton").Value());
             const auto clipType = Assets::AssetTypeId::Parse("core.animation.clip").Value();
             for (const auto clip : clips)
-                result.push_back({clip.Asset(), clipType});
+                result.emplace_back(clip.Asset(), clipType);
             std::ranges::sort(result, {}, &Assets::AssetDependency::id);
             return Return::Success(std::move(result));
         }
@@ -158,10 +159,9 @@ namespace Horo::Animation::CookedInternal {
                 bytes += inputs[index].payload.size();
                 const auto kind = roles[index].expectedType.Value() == "core.animation.skeleton" ? AnimationCookedKind::Skeleton
                                                                                                  : AnimationCookedKind::Clip;
-                auto checked = ReadSections(inputs[index].payload, kind, roles[index].id, context);
-                if (checked.HasError())
+                if (auto checked = ReadSections(inputs[index].payload, kind, roles[index].id, context); checked.HasError())
                     return Return::Failure(checked.ErrorValue());
-                bindings.push_back({roles[index], ComputeSha256(std::as_bytes(inputs[index].payload))});
+                bindings.emplace_back(roles[index], ComputeSha256(std::as_bytes(inputs[index].payload)));
             }
             return Return::Success(std::move(bindings));
         }

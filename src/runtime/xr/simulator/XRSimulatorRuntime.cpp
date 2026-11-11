@@ -24,25 +24,15 @@ namespace Horo::XR {
         }
 
         XRCapabilitySnapshot Capabilities(const XRRuntimeGeneration incarnation) {
+            using enum Horo::XR::XRCapability;
             XRCapabilityDescriptor descriptor{.system = {incarnation, {0, 1}},
                                               .revision = Value<XRCapabilityRevision>(1),
                                               .limits = {2, 8, XRFakeLimits::MaximumActions, 5}};
             descriptor.states.fill(XRCapabilityState::Unsupported);
-            constexpr std::array supported{XRCapability::Projection,
-                                           XRCapability::PrimaryOpaqueStereo,
-                                           XRCapability::OrientationTracking,
-                                           XRCapability::PositionTracking,
-                                           XRCapability::ViewSpace,
-                                           XRCapability::LocalSpace,
-                                           XRCapability::BooleanActions,
-                                           XRCapability::FloatActions,
-                                           XRCapability::Vector2Actions,
-                                           XRCapability::PoseActions,
-                                           XRCapability::PredictedFrames,
-                                           XRCapability::ExternalColorTargets,
-                                           XRCapability::SessionLossLifecycle,
-                                           XRCapability::CanonicalInputProjection,
-                                           XRCapability::HandTracking};
+            constexpr std::array
+                supported{Projection,      PrimaryOpaqueStereo,  OrientationTracking,  PositionTracking,         ViewSpace,
+                          LocalSpace,      BooleanActions,       FloatActions,         Vector2Actions,           PoseActions,
+                          PredictedFrames, ExternalColorTargets, SessionLossLifecycle, CanonicalInputProjection, HandTracking};
             for (const auto capability : supported)
                 descriptor.states[static_cast<std::size_t>(capability)] = XRCapabilityState::Available;
             return XRCapabilitySnapshot::Create(descriptor).Value();
@@ -59,16 +49,17 @@ namespace Horo::XR {
         }
 
         XRSimulatorStep DefaultControls() {
+            using enum Horo::XR::XRTrackedDeviceState;
             XRSimulatorStep step;
             step.viewCount = 2;
             step.views[0].position = {-0.032F, 1.6F, 3};
             step.views[1].position = {0.032F, 1.6F, 3};
             step.sourceCount = 3;
-            step.sources[0] = {XRTrackedDeviceRole::Head, XRTrackedPoseKind::Head, XRTrackedDeviceState::Tracked, {}};
+            step.sources[0] = {XRTrackedDeviceRole::Head, XRTrackedPoseKind::Head, Tracked, {}};
             step.sources[0].pose.position = {0, 1.6F, 3};
-            step.sources[1] = {XRTrackedDeviceRole::LeftController, XRTrackedPoseKind::Grip, XRTrackedDeviceState::Tracked, {}};
+            step.sources[1] = {XRTrackedDeviceRole::LeftController, XRTrackedPoseKind::Grip, Tracked, {}};
             step.sources[1].pose.position = {-0.2F, 1.2F, 2.7F};
-            step.sources[2] = {XRTrackedDeviceRole::RightController, XRTrackedPoseKind::Grip, XRTrackedDeviceState::Tracked, {}};
+            step.sources[2] = {XRTrackedDeviceRole::RightController, XRTrackedPoseKind::Grip, Tracked, {}};
             step.sources[2].pose.position = {0.2F, 1.2F, 2.7F};
             return step;
         }
@@ -122,7 +113,8 @@ namespace Horo::XR {
     }
 
     Result<void> XRSimulatorRuntime::Impl::Bootstrap(const XRSimulatorInitialState initial) {
-        constexpr std::array events{XRSessionEvent::Started, XRSessionEvent::BecameVisible, XRSessionEvent::BecameFocused};
+        using enum Horo::XR::XRSessionEvent;
+        constexpr std::array events{Started, BecameVisible, BecameFocused};
         const auto session = host.Snapshot().session;
         for (std::size_t index = 0; index < static_cast<std::size_t>(initial); ++index) {
             XRFakeStep step{.event = events[index], .executeFrame = false, .shouldRender = false};
@@ -225,21 +217,23 @@ namespace Horo::XR {
 
     /** @copydoc XRSimulatorRuntime::Run */
     Result<void> XRSimulatorRuntime::Run() {
+        using enum Horo::XR::XRSimulatorPlayback;
         if (auto lane = impl_->Lane(); lane.HasError())
             return lane;
-        if (impl_->playback == XRSimulatorPlayback::Failed || impl_->playback == XRSimulatorPlayback::Stopped)
+        if (impl_->playback == Failed || impl_->playback == Stopped)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
-        impl_->playback = impl_->replay ? XRSimulatorPlayback::Replaying : XRSimulatorPlayback::Running;
+        impl_->playback = impl_->replay ? Replaying : Running;
         return Result<void>::Success();
     }
 
     /** @copydoc XRSimulatorRuntime::Pause */
     Result<void> XRSimulatorRuntime::Pause() {
+        using enum Horo::XR::XRSimulatorPlayback;
         if (auto lane = impl_->Lane(); lane.HasError())
             return lane;
-        if (impl_->playback == XRSimulatorPlayback::Failed || impl_->playback == XRSimulatorPlayback::Stopped)
+        if (impl_->playback == Failed || impl_->playback == Stopped)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
-        impl_->playback = XRSimulatorPlayback::Paused;
+        impl_->playback = Paused;
         return Result<void>::Success();
     }
 

@@ -47,26 +47,26 @@ namespace Horo::Extensions {
                                                             const ExtensionModuleManifest &declaration) {
             using Output = Result<std::shared_ptr<NativeServiceModule>>;
             for (const auto &weak : host.modules) {
-                auto module = weak.lock();
-                if (!module)
+                auto nativeModule = weak.lock();
+                if (!nativeModule)
                     continue;
-                if (module->extension != package || module->declaration.id != declaration.id)
+                if (nativeModule->extension != package || nativeModule->declaration.id != declaration.id)
                     continue;
-                if (!module->committed || module->revoked || !Same(module->declaration, declaration))
+                if (!nativeModule->committed || nativeModule->revoked || !Same(nativeModule->declaration, declaration))
                     break;
-                return Output::Success(std::move(module));
+                return Output::Success(std::move(nativeModule));
             }
             return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationUnavailable,
                                              "The exact signed native module declaration is not currently active."));
         }
 
-        Result<void> Evidence(const NativeServiceModule &module, std::span<const ModuleScriptArtifactEvidence> artifacts) {
-            const auto code = module.moduleCode.lock();
+        Result<void> Evidence(const NativeServiceModule &nativeModule, std::span<const ModuleScriptArtifactEvidence> artifacts) {
+            const auto code = nativeModule.moduleCode.lock();
             if (!code || !code->loaded || !code->artifactEvidence)
                 return Result<void>::Failure(
                     MakeError(ExtensionErrors::ScriptInvocationProviderRevoked, "Actual native load evidence is absent or retired."));
-            const auto found =
-                std::ranges::find(artifacts, std::filesystem::path{module.declaration.entry}, &ModuleScriptArtifactEvidence::relative);
+            const auto found = std::ranges::find(artifacts, std::filesystem::path{nativeModule.declaration.entry},
+                                                 &ModuleScriptArtifactEvidence::relative);
             if (found == artifacts.end() || !(code->artifactEvidence->ArtifactDigest() == found->evidence.ArtifactDigest() &&
                                               code->artifactEvidence->PublisherId() == found->evidence.PublisherId() &&
                                               code->artifactEvidence->KeyId() == found->evidence.KeyId()))
@@ -75,8 +75,8 @@ namespace Horo::Extensions {
             return Result<void>::Success();
         }
 
-        bool PresentationOnly(const ExtensionModuleManifest &module) {
-            return module.roles.size() == 1 && module.roles.front() == ExtensionModuleRole::EditorPresentation;
+        bool PresentationOnly(const ExtensionModuleManifest &moduleEntry) {
+            return moduleEntry.roles.size() == 1 && moduleEntry.roles.front() == ExtensionModuleRole::EditorPresentation;
         }
     }  // namespace
 

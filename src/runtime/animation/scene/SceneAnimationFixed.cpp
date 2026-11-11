@@ -19,8 +19,7 @@ namespace Horo::Runtime {
         RuntimeDispatchFacts facts;
         if (!ReadAttempt(context, facts) || facts.fixedTick == 0 || facts.fixedDuration.ToNanoseconds() <= 0)
             return Result<void>::Failure(MakeError(A::AnimationErrors::GraphAdmissionRejected));
-        const auto admission = Admit(true);
-        if (admission.HasError())
+        if (const auto admission = Admit(true); admission.HasError())
             return admission;
         if (!started)
             return Result<void>::Failure(MakeError(A::AnimationAssetErrors::Unavailable));
@@ -39,26 +38,22 @@ namespace Horo::Runtime {
         const A::GraphEvaluationInput input{attemptTick,           {context.fixedDelta.ToNanoseconds()},
                                             snapshot.playbackRate, snapshot.parameters,
                                             context.cancellation,  snapshot.curveTime};
-        const auto outcome = actor.graph.Evaluate(input);
-        if (outcome.HasError())
+        if (const auto outcome = actor.graph.Evaluate(input); outcome.HasError())
             return Result<void>::Failure(A::DescribeGraphInstanceFailure(outcome));
         actor.staged = true;
         return Result<void>::Success();
     }
 
     Result<void> SceneAnimationRuntime::State::PrepareAttempt(const FixedStepContext &context) {
-        RuntimeDispatchFacts facts;
-        if (!ReadAttempt(context, facts))
+        if (RuntimeDispatchFacts facts; !ReadAttempt(context, facts))
             return Result<void>::Failure(MakeError(A::AnimationErrors::GraphAdmissionRejected));
-        const auto admission = Admit();
-        if (admission.HasError())
+        if (const auto admission = Admit(); admission.HasError())
             return admission;
         if (!attempting || armed || !attemptEvidence.RefersToSameDispatch(context.dispatchEvidence))
             return Result<void>::Failure(MakeError(A::AnimationErrors::GraphAdmissionRejected));
         if (context.cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(A::AnimationAssetErrors::Cancelled));
-        auto prepared = ArmActors();
-        if (prepared.HasError())
+        if (auto prepared = ArmActors(); prepared.HasError())
             return prepared;
         armed = true;
         return Result<void>::Success();
@@ -126,8 +121,8 @@ namespace Horo::Runtime {
         if (!OnOwner())
             return;
         RuntimeDispatchFacts facts;
-        const auto status = context.dispatchEvidence.Read(config.expectedDispatch, RuntimePhase::FixedUpdate, facts);
-        if (status != RuntimeDispatchStatus::Valid && status != RuntimeDispatchStatus::Retired)
+        if (const auto status = context.dispatchEvidence.Read(config.expectedDispatch, RuntimePhase::FixedUpdate, facts);
+            status != RuntimeDispatchStatus::Valid && status != RuntimeDispatchStatus::Retired)
             return;
         if (!attempting || !attemptEvidence.RefersToSameDispatch(context.dispatchEvidence))
             return;
@@ -137,8 +132,7 @@ namespace Horo::Runtime {
     }
 
     Result<void> SceneAnimationRuntime::OnFixedUpdate(const FixedStepContext &context) {
-        const auto admitted = state_->BeginAttempt(context);
-        if (admitted.HasError())
+        if (const auto admitted = state_->BeginAttempt(context); admitted.HasError())
             return admitted;
         if (!state_->active || state_->active->closed)
             return Result<void>::Success();

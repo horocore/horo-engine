@@ -85,7 +85,8 @@ namespace Horo::Application::TerrainCookDetail {
         }
 
         Result<void> Proof(Bytes &bytes, const Terrain::CookedFoliagePlacement &proof, const CancellationToken &cancellation) {
-            constexpr std::size_t HeaderBytes = 145, InstanceBytes = 94;
+            constexpr std::size_t HeaderBytes = 145;
+            constexpr std::size_t InstanceBytes = 94;
             if (bytes.value.size() > bytes.maximum || bytes.maximum - bytes.value.size() < HeaderBytes)
                 return Result<void>::Failure(MakeError(Terrain::TerrainSourceErrors::LimitExceeded));
             if (proof.Instances().size() > (bytes.maximum - bytes.value.size() - HeaderBytes) / InstanceBytes)

@@ -8,43 +8,43 @@ namespace Horo::Extensions {
             return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected, std::string{text}));
         }
 
-        bool Requested(const ExtensionModuleManifest &module, const std::string_view capability) {
-            return std::ranges::find(module.requiredCapabilities, capability) != module.requiredCapabilities.end();
+        bool Requested(const ExtensionModuleManifest &moduleEntry, const std::string_view capability) {
+            return std::ranges::find(moduleEntry.requiredCapabilities, capability) != moduleEntry.requiredCapabilities.end();
         }
 
-        Result<ExtensionCapabilityAdmission> AdmitModule(const NativeExtensionServiceState &host, const NativeServiceModule &module,
+        Result<ExtensionCapabilityAdmission> AdmitModule(const NativeExtensionServiceState &host, const NativeServiceModule &nativeModule,
                                                          const std::uint64_t generation) {
-            ExtensionAdmissionRequest request{module.extension, module.declaration.id, generation, {}};
+            ExtensionAdmissionRequest request{nativeModule.extension, nativeModule.declaration.id, generation, {}};
             ExtensionAdmissionPolicy policy = host.policy;
             if (std::ranges::find(policy.availableCapabilities, ExtensionCapabilityId{HORO_EXTENSION_SERVICE_CAPABILITY}) ==
                 policy.availableCapabilities.end())
                 return Result<ExtensionCapabilityAdmission>::Failure(Rejected("Native service feature is not available.").ErrorValue());
             std::vector<std::string> services;
-            for (const auto &claim : module.declaration.exports)
+            for (const auto &claim : nativeModule.declaration.exports)
                 services.push_back(claim.id);
-            for (const auto &claim : module.imports)
+            for (const auto &claim : nativeModule.imports)
                 services.push_back(claim.ServiceId());
             std::ranges::sort(services);
             services.erase(std::unique(services.begin(), services.end()), services.end());
             request.capabilities.push_back({{HORO_EXTENSION_SERVICE_CAPABILITY}, {{HORO_EXTENSION_SERVICE_PERMISSION}}});
             for (const auto &service : services) {
                 if (std::ranges::find(policy.availableCapabilities, ExtensionCapabilityId{service}) == policy.availableCapabilities.end())
-                    policy.availableCapabilities.push_back({service});
+                    policy.availableCapabilities.emplace_back(service);
                 request.capabilities.push_back({{service}, {{HORO_EXTENSION_SERVICE_PERMISSION}}});
             }
             return ExtensionCapabilityAdmission::Evaluate(request, policy);
         }
 
-        Result<void> ValidateModule(const NativeServiceModule &module) {
-            if (!Requested(module.declaration, HORO_EXTENSION_SERVICE_HOST_CAPABILITY))
+        Result<void> ValidateModule(const NativeServiceModule &nativeModule) {
+            if (!Requested(nativeModule.declaration, HORO_EXTENSION_SERVICE_HOST_CAPABILITY))
                 return Rejected("Native service transport was not declared by this module.");
             return Result<void>::Success();
         }
 
-        Result<void> PublishService(NativeServiceModule &module, NativeServicePublication &publication) {
-            const auto host = module.host.lock();
-            const auto code = module.moduleCode.lock();
-            const auto retirement = module.retirement.lock();
+        Result<void> PublishService(NativeServiceModule &nativeModule, NativeServicePublication &publication) {
+            const auto host = nativeModule.host.lock();
+            const auto code = nativeModule.moduleCode.lock();
+            const auto retirement = nativeModule.retirement.lock();
             if (!host || !code || !retirement || !publication.pending)
                 return Rejected("Native service owners expired before publication.");
             const auto &shape = publication.shape;
@@ -68,10 +68,10 @@ namespace Horo::Extensions {
             return Result<void>::Success();
         }
 
-        Result<void> PublishScript(NativeServiceModule &module, NativeServicePublication &publication) {
+        Result<void> PublishScript(NativeServiceModule &nativeModule, NativeServicePublication &publication) {
             if (publication.shape.scriptApi.empty())
                 return Result<void>::Success();
-            const auto host = module.host.lock();
+            const auto host = nativeModule.host.lock();
             auto script = host->invocations->RegisterProvider({publication.provider.generation, 64});
             if (script.HasError())
                 return Result<void>::Failure(script.ErrorValue());
@@ -98,47 +98,47 @@ namespace Horo::Extensions {
         auto &state = *host.state_;
         if (auto admitted = AdmitStage(state); admitted.HasError())
             return Result<std::shared_ptr<NativeServiceModule>>::Failure(admitted.ErrorValue());
-        auto module = std::make_shared<NativeServiceModule>();
-        module->host = host.state_;
-        module->moduleCode = load.lifetime;
-        module->retirement = load.retirement;
-        module->extension = load.manifest->id;
-        module->declaration = *load.extensionModule;
-        for (const auto &import : imports)
-            if (import.ConsumerModuleId() == module->declaration.id)
-                module->imports.push_back(import);
-        if (auto valid = ValidateModule(*module); valid.HasError())
+        auto nativeModule = std::make_shared<NativeServiceModule>();
+        nativeModule->host = host.state_;
+        nativeModule->moduleCode = load.lifetime;
+        nativeModule->retirement = load.retirement;
+        nativeModule->extension = load.manifest->id;
+        nativeModule->declaration = *load.extensionModule;
+        for (const auto &resolvedImport : imports)
+            if (resolvedImport.ConsumerModuleId() == nativeModule->declaration.id)
+                nativeModule->imports.push_back(resolvedImport);
+        if (auto valid = ValidateModule(*nativeModule); valid.HasError())
             return Result<std::shared_ptr<NativeServiceModule>>::Failure(valid.ErrorValue());
         const auto generation = state.nextGeneration;
         state.nextGeneration = generation == std::numeric_limits<std::uint64_t>::max() ? 0 : generation + 1;
-        auto admitted = AdmitModule(state, *module, generation);
+        auto admitted = AdmitModule(state, *nativeModule, generation);
         if (admitted.HasError())
             return Result<std::shared_ptr<NativeServiceModule>>::Failure(admitted.ErrorValue());
-        module->admission.emplace(std::move(admitted).Value());
-        if (!load.retirement->RegisterContribution(module->declaration.id, module))
+        nativeModule->admission.emplace(std::move(admitted).Value());
+        if (!load.retirement->RegisterContribution(nativeModule->declaration.id, nativeModule))
             return Result<std::shared_ptr<NativeServiceModule>>::Failure(Rejected("Service module retirement was rejected.").ErrorValue());
-        state.modules.push_back(module);
-        return Result<std::shared_ptr<NativeServiceModule>>::Success(std::move(module));
+        state.modules.push_back(nativeModule);
+        return Result<std::shared_ptr<NativeServiceModule>>::Success(std::move(nativeModule));
     }
 
     Result<void> CommitNativeServices(const std::span<const std::shared_ptr<ExtensionModuleLifetime>> modules) {
         for (const auto &code : modules) {
-            const auto &module = code->nativeServices;
-            if (!module)
+            const auto &nativeModule = code->nativeServices;
+            if (!nativeModule)
                 continue;
-            for (auto &publication : module->publications) {
-                if (auto service = PublishService(*module, *publication); service.HasError())
+            for (const auto &publication : nativeModule->publications) {
+                if (auto service = PublishService(*nativeModule, *publication); service.HasError())
                     return service;
-                if (auto script = PublishScript(*module, *publication); script.HasError())
+                if (auto script = PublishScript(*nativeModule, *publication); script.HasError())
                     return script;
             }
-            for (auto &client : module->clients) {
-                auto provider = FindNativeService(*module->host.lock(), client->import);
+            for (const auto &client : nativeModule->clients) {
+                auto provider = FindNativeService(*nativeModule->host.lock(), client->import);
                 if (provider.HasError())
                     return Result<void>::Failure(provider.ErrorValue());
                 client->provider = provider.Value();
             }
-            module->committed.store(true, std::memory_order_release);
+            nativeModule->committed.store(true, std::memory_order_release);
         }
         return Result<void>::Success();
     }
@@ -165,8 +165,8 @@ namespace Horo::Extensions {
         state_->closed.store(true, std::memory_order_release);
         if (state_->owner != std::this_thread::get_id())
             return;  // Actual manager/retirement owners retain owner-only native finalization. Never traverse mutable tables here.
-        for (auto &weak : std::ranges::reverse_view(state_->modules))
-            if (const auto module = weak.lock())
-                module->Revoke();
+        for (const auto &weak : std::ranges::reverse_view(state_->modules))
+            if (const auto nativeModule = weak.lock())
+                nativeModule->Revoke();
     }
 }  // namespace Horo::Extensions

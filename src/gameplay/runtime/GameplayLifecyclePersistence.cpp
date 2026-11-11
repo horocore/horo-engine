@@ -110,7 +110,12 @@ namespace Horo::Gameplay {
             std::vector<BehaviorLifecycleFlags> flags_;
             StagedRestoreParticipantRequirement requirement_;
             Projection projection_;
-            bool decoded_{}, validated_{}, instantiated_{}, applied_{}, ready_{}, published_{};
+            bool decoded_{};
+            bool validated_{};
+            bool instantiated_{};
+            bool applied_{};
+            bool ready_{};
+            bool published_{};
         };
     }  // namespace
 

@@ -103,6 +103,8 @@ namespace Horo::Physics::StateDetail {
         std::span<std::byte> output_;
         std::span<const std::byte> input_;
         std::size_t offset_{};
-        bool reading_{}, comparing_{}, failed_{};
+        bool reading_{};
+        bool comparing_{};
+        bool failed_{};
     };
 }  // namespace Horo::Physics::StateDetail

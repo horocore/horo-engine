@@ -24,6 +24,25 @@ SPEC.loader.exec_module(dev)
 LOCAL_ENV_FILENAME = ".env.local"
 
 
+@pytest.mark.parametrize("width", [16, 32, 78])
+def test_console_panel_preserves_wrapping_and_row_padding(monkeypatch, capsys, width):
+    monkeypatch.setattr(dev.shutil, "get_terminal_size", lambda *_: dev.os.terminal_size((width + 4, 24)))
+    console = dev._RunnerConsole()
+    console.color = False
+    console.panel("TEST", [
+        ("Live C++", "ON / RCC++"),
+        ("Theme", "OFF"),
+        ("Detail", "Several words that require wrapping even in a wide panel"),
+        ("Empty", ""),
+    ])
+    output = capsys.readouterr().out
+    assert all(len(line) == width + 2 for line in output.splitlines())
+    assert output.count("Live C++") == 1
+    assert output.count("Empty") == 1
+    assert "OFF" in output
+    assert "\033" not in output
+
+
 @pytest.mark.parametrize("cancellation", [KeyboardInterrupt(), SystemExit(23)])
 def test_cleanup_cancellation_blocks_later_builds_and_preserves_exit(
     monkeypatch: pytest.MonkeyPatch, cancellation: BaseException,

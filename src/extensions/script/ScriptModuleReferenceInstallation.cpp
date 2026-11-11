@@ -52,8 +52,7 @@ namespace Horo::Extensions {
         if (version != ScriptExportVersion{1, 0, 0} && version != ScriptExportVersion{1, 1, 0})
             return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid,
                                              "The builtin supports only its real 1.0.0 and additive 1.1.0 schemas."));
-        auto admitted = Admit(host, profile);
-        if (admitted.HasError())
+        if (auto admitted = Admit(host, profile); admitted.HasError())
             return Output::Failure(admitted.ErrorValue());
         auto issued = host->IssueGeneration();
         if (issued.HasError())
@@ -75,15 +74,14 @@ namespace Horo::Extensions {
         auto state =
             std::make_unique<Impl>(std::move(host), std::move(code), profile, std::move(caller).Value(), std::move(provider).Value());
         auto owner = std::unique_ptr<ScriptModuleReferenceInstallation>{new ScriptModuleReferenceInstallation{std::move(state)}};
-        auto registered = Register(*owner->impl_);
-        if (registered.HasError())
+        if (auto registered = Register(*owner->impl_); registered.HasError())
             return Output::Failure(registered.ErrorValue());
         return Output::Success(std::move(owner));
     }
 
     Result<ScriptModuleImport> ScriptModuleReferenceInstallation::Bind(std::string alias) const {
         using Output = Result<ScriptModuleImport>;
-        auto &state = *impl_;
+        const auto &state = *impl_;
         if (state.host->OwnerThread() != std::this_thread::get_id())
             return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
         if (!state.invocation)
@@ -107,7 +105,7 @@ namespace Horo::Extensions {
         input.profile = state.profile;
         input.functions = {"echo", "digest", "sum", "reject"};
         if (Version() == ScriptExportVersion{1, 1, 0})
-            input.functions.push_back("apirevision");
+            input.functions.emplace_back("apirevision");
         input.hostClosed = state.host->ClosedFlag();
         auto port = BindScriptRuntimeBackend<ScriptModuleReferenceService>(std::move(input), &ScriptModuleReferenceService::Invoke);
         if (port.HasError())

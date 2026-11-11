@@ -37,7 +37,7 @@ namespace Horo::Physics::Detail {
                 return poses;
             poses.reserve(children->size());
             for (const auto &child : *children)
-                poses.push_back({batch.shapes[child.shape].handle, child.localPose});
+                poses.emplace_back(batch.shapes[child.shape].handle, child.localPose);
             return poses;
         }
 
@@ -66,12 +66,12 @@ namespace Horo::Physics::Detail {
             if (const auto *analytic = std::get_if<PhysicsShapeDescriptor>(&input.geometry)) {
                 if (const auto valid = ValidatePhysicsShapeDescriptor(*analytic); valid.HasError())
                     return Outcome::Failure(valid.ErrorValue());
-                return ObserveCanonicalPhysicsShapeCreation([&] {
+                return ObserveCanonicalPhysicsShapeCreation([&analytic] {
                     return CreateNativeShape(*analytic);
                 });
             }
             const auto &children = std::get<std::vector<PhysicsSceneGroupShape::Child>>(input.geometry);
-            auto created = ObserveCanonicalPhysicsShapeCreation([&] {
+            auto created = ObserveCanonicalPhysicsShapeCreation([&batch, &children] {
                 return PrepareCompoundShape(batch, children);
             });
             if (created.HasError())
@@ -176,9 +176,9 @@ namespace Horo::Physics::Detail {
         Result<void> ValidateColliderTopology(const PhysicsSceneCollisionBinding &binding, const JPH::Shape &shape) {
             if (binding.colliders.empty())
                 return Result<void>::Success();
-            const auto count =
-                shape.GetType() == JPH::EShapeType::Compound ? static_cast<const JPH::CompoundShape &>(shape).GetNumSubShapes() : 1;
-            if (count != binding.colliders.size())
+            if (const auto count =
+                    shape.GetType() == JPH::EShapeType::Compound ? static_cast<const JPH::CompoundShape &>(shape).GetNumSubShapes() : 1;
+                count != binding.colliders.size())
                 return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
             return Result<void>::Success();
         }
@@ -313,8 +313,8 @@ namespace Horo::Physics::Detail {
         /** @brief Private staged shapes take precedence over the resident table exactly
          * as the original batch path. */
         const CanonicalSceneShapeRecord *DetachedShape(const CanonicalSceneBodyBatchState &batch, ShapeHandle handle) noexcept {
-            const auto staged = std::ranges::find(batch.shapes, handle, &CanonicalSceneShapeRecord::handle);
-            if (staged != batch.shapes.end())
+            if (const auto staged = std::ranges::find(batch.shapes, handle, &CanonicalSceneShapeRecord::handle);
+                staged != batch.shapes.end())
                 return std::to_address(staged);
             const auto &resident = batch.world->scene.shapes;
             const auto found = std::ranges::find(resident, handle, &CanonicalSceneShapeRecord::handle);
@@ -402,8 +402,8 @@ namespace Horo::Physics::Detail {
             const auto control = CompleteCanonicalBodyControl(before, ReadCanonicalBodyControl());
             if (!body)
                 return Outcome::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-            auto admitted = AdmitCanonicalBodyControl(world.owner.constructionRecipes, control);
-            if (body->GetID().GetIndex() >= world.query.nativeFixtureIndices.size() || admitted.HasError()) {
+            if (auto admitted = AdmitCanonicalBodyControl(world.owner.constructionRecipes, control);
+                body->GetID().GetIndex() >= world.query.nativeFixtureIndices.size() || admitted.HasError()) {
                 const auto failure = admitted.HasError() ? admitted.ErrorValue() : MakeError(PhysicsErrors::CapacityExceeded);
                 bodies.DestroyBody(body->GetID());
                 return Outcome::Failure(failure);
@@ -490,8 +490,8 @@ namespace Horo::Physics::Detail {
         if (nativeBody.IsInvalid())
             return Result<BodyHandle>::Failure(
                 MakeError(PhysicsErrors::CapacityExceeded, "Canonical solver rejected the scene body admission."));
-        const auto controlAdmission = AdmitCanonicalBodyControl(canonical.owner.constructionRecipes, control);
-        if (nativeBody.GetIndex() >= canonical.query.nativeFixtureIndices.size() || controlAdmission.HasError()) {
+        if (const auto controlAdmission = AdmitCanonicalBodyControl(canonical.owner.constructionRecipes, control);
+            nativeBody.GetIndex() >= canonical.query.nativeFixtureIndices.size() || controlAdmission.HasError()) {
             canonical.native.system->GetBodyInterface().RemoveBody(nativeBody);
             canonical.native.system->GetBodyInterface().DestroyBody(nativeBody);
             return Result<BodyHandle>::Failure(controlAdmission.HasError() ? controlAdmission.ErrorValue()
@@ -512,8 +512,8 @@ namespace Horo::Physics::Detail {
                                     bool contradictoryDescriptors) {
             if (bodyCount > 256 || shapeCount > 1024 || !world.pendingBodyBatch.expired() || contradictoryDescriptors)
                 return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
-            const auto slots = std::numeric_limits<std::uint32_t>::max() - world.nextResourceSlot;
-            if (bodyCount > world.scene.maximumBodies - world.scene.bodies.size() ||
+            if (const auto slots = std::numeric_limits<std::uint32_t>::max() - world.nextResourceSlot;
+                bodyCount > world.scene.maximumBodies - world.scene.bodies.size() ||
                 shapeCount > world.scene.maximumShapes - world.scene.shapes.size() || shapeCount > slots || bodyCount > slots - shapeCount)
                 return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
             return Result<void>::Success();

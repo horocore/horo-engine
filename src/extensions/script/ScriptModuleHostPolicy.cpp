@@ -7,9 +7,9 @@ namespace Horo::Extensions {
         std::vector<ExtensionCapabilityId> result;
         result.reserve(program.Module().imports.size() + 1);
         for (const auto &imported : program.Module().imports)
-            result.push_back({imported.service});
+            result.emplace_back(imported.service);
         if (program.RequestsReference())
-            result.push_back({"horo.script.reference"});
+            result.emplace_back("horo.script.reference");
         std::ranges::sort(result, {}, &ExtensionCapabilityId::value);
         result.erase(std::unique(result.begin(), result.end()), result.end());
         return result;

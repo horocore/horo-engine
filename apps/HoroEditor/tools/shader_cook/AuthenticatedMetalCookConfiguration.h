@@ -8,7 +8,10 @@
 namespace Horo::Application::Internal {
     /** @brief Independent host inputs; tool paths never derive from catalog or project data. */
     struct AuthenticatedMetalCookInputs final {
-        std::filesystem::path scratchRoot, catalog, detachedSignature, hostTrust;
+        std::filesystem::path scratchRoot;
+        std::filesystem::path catalog;
+        std::filesystem::path detachedSignature;
+        std::filesystem::path hostTrust;
         std::array<std::filesystem::path, 4> executables; /**< DXC, SPIRV validator, Cross, Apple xcrun, in exact order. */
     };
 

@@ -37,8 +37,8 @@ namespace Horo::Render {
             if (stage.stage != entry.stage || stage.entryPoint != entry.name)
                 throw InvalidEvidence{};
             auto json = ParseJson(stage.json);
-            const auto &entries = Rows(json, "entryPoints", 1);
-            if (entries.size() != 1 || entries[0].at("name") != entry.name ||
+            if (const auto &entries = Rows(json, "entryPoints", 1);
+                entries.size() != 1 || entries[0].at("name") != entry.name ||
                 entries[0].at("mode") != (entry.stage == ShaderStage::Vertex ? "vert" : "frag"))
                 throw InvalidEvidence{};
             return json;
@@ -57,7 +57,8 @@ namespace Horo::Render {
                     throw InvalidEvidence{};
                 return;
             }
-            const auto &array = Rows(member, "array", 1), &literal = Rows(member, "array_size_is_literal", 1);
+            const auto &array = Rows(member, "array", 1);
+            const auto &literal = Rows(member, "array_size_is_literal", 1);
             if (array.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(array[0]) != native.arrayCount ||
                 Unsigned(member.at("array_stride")) != native.arrayStride)
                 throw InvalidEvidence{};
@@ -118,9 +119,10 @@ namespace Horo::Render {
         }
 
         void Interfaces(const Json &json, ShaderStage stage, const NativeStage &native, ShaderReflectionCandidate &candidate) {
+            using enum Horo::Render::ShaderInterfaceDirection;
             std::size_t count{};
-            for (const auto direction : {ShaderInterfaceDirection::Input, ShaderInterfaceDirection::Output}) {
-                for (const auto &value : Rows(json, direction == ShaderInterfaceDirection::Input ? "inputs" : "outputs", 64)) {
+            for (const auto direction : {Input, Output}) {
+                for (const auto &value : Rows(json, direction == Input ? "inputs" : "outputs", 64)) {
                     const auto columns = InterfaceColumns(value);
                     const auto location = Unsigned(value.at("location"));
                     const auto matches = [&](const auto &entry) {
@@ -261,8 +263,8 @@ namespace Horo::Render {
                     return;
                 const auto role = Role(kind);
                 const auto &entry = entries[0];
-                const auto &name = *FindName(names_, manifest_.bindings[role].id);
-                if (entry.at("name") != name.name || entry.at("type") != (kind == ShaderResourceKind::Sampler ? "sampler" : "texture2D") ||
+                if (const auto &name = *FindName(names_, manifest_.bindings[role].id);
+                    entry.at("name") != name.name || entry.at("type") != (kind == ShaderResourceKind::Sampler ? "sampler" : "texture2D") ||
                     Unsigned(entry.at("set")) != 0 || entry.contains("array"))
                     throw InvalidEvidence{};
                 static_cast<void>(Unsigned(entry.at("binding")));
@@ -284,8 +286,8 @@ namespace Horo::Render {
 
             /** @brief Requires an actual readonly ordinary nonarray resource in the admitted register space. */
             void SampleEntry(const Json &entry, ShaderResourceKind kind) const {
-                const auto expected = kind == ShaderResourceKind::Sampler ? "sampler" : "texture2D";
-                if (entry.at("type") != expected || Unsigned(entry.at("set")) != 0 || entry.contains("array"))
+                if (const auto expected = kind == ShaderResourceKind::Sampler ? "sampler" : "texture2D";
+                    entry.at("type") != expected || Unsigned(entry.at("set")) != 0 || entry.contains("array"))
                     throw InvalidEvidence{};
                 if (entry.value("writeonly", false) || !entry.value("readonly", true))
                     throw InvalidEvidence{};
@@ -367,13 +369,14 @@ namespace Horo::Render {
     }
 
     Result<std::vector<std::uint32_t>> RegisterRasterVaryingLocations(const SpirvReflectionStage &stage) {
+        using enum Horo::Render::ShaderStage;
         using Outcome = Result<std::vector<std::uint32_t>>;
         try {
-            if (stage.stage != ShaderStage::Vertex && stage.stage != ShaderStage::Fragment)
+            if (stage.stage != Vertex && stage.stage != Fragment)
                 throw InvalidEvidence{};
             const auto json = ParseStage(stage, {stage.stage, stage.entryPoint});
             std::vector<std::uint32_t> locations;
-            for (const auto &value : Rows(json, stage.stage == ShaderStage::Vertex ? "outputs" : "inputs", 256)) {
+            for (const auto &value : Rows(json, stage.stage == Vertex ? "outputs" : "inputs", 256)) {
                 static_cast<void>(InterfaceColumns(value));
                 const auto location = Unsigned(value.at("location"));
                 if (location > 255)

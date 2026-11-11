@@ -6,7 +6,12 @@ namespace Horo::Physics::Detail {
     /** @brief Caller-private row cursors. All capacity derives from actual retained topology before export. */
     struct CanonicalConstructionRows final {
         StateDetail::ConstructionManifestStorage storage;
-        std::size_t bodies{}, colliders{}, materials{}, joints{}, fixtures{}, children{};
+        std::size_t bodies{};
+        std::size_t colliders{};
+        std::size_t materials{};
+        std::size_t joints{};
+        std::size_t fixtures{};
+        std::size_t children{};
     };
 
     [[nodiscard]] Result<void> ExportCanonicalConstructionBodies(const CanonicalWorld &, const CanonicalPhysicsStateBindings &,

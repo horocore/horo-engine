@@ -9,9 +9,12 @@ namespace Horo::Physics::Detail {
         std::vector<StructuralBodyBinding> bodies;
         std::vector<StructuralShapeBinding> shapes;
         std::vector<StructuralConstraintBinding> constraints;
-        std::vector<PhysicsSceneBodyBinding> authoredBodies, legacyBodies;
-        std::vector<PhysicsSceneShapeBinding> authoredShapes, legacyShapes;
-        std::vector<PhysicsSceneConstraintBinding> authoredConstraints, legacyConstraints;
+        std::vector<PhysicsSceneBodyBinding> authoredBodies;
+        std::vector<PhysicsSceneBodyBinding> legacyBodies;
+        std::vector<PhysicsSceneShapeBinding> authoredShapes;
+        std::vector<PhysicsSceneShapeBinding> legacyShapes;
+        std::vector<PhysicsSceneConstraintBinding> authoredConstraints;
+        std::vector<PhysicsSceneConstraintBinding> legacyConstraints;
         [[nodiscard]] Result<void> Rebind(const PhysicsSceneStateProjection &, const CanonicalRestartBindings &);
         [[nodiscard]] std::size_t RetainedPayloadBytes() const noexcept;
     };

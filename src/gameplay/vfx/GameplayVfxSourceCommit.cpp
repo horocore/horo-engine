@@ -3,53 +3,58 @@
 namespace Horo::Gameplay::VfxContextDetail {
     namespace {
         [[nodiscard]] GameplayVfxReceipt Receipt(const Detail::GameplayVfxSceneState &scene,
-                                                 const Detail::GameplayVfxModuleState &module) noexcept {
-            return {scene.scene, module.grant.owner, module.grant.ownerGeneration, {module.grant.producer, module.nextSequence}};
+                                                 const Detail::GameplayVfxModuleState &moduleState) noexcept {
+            return {scene.scene,
+                    moduleState.grant.owner,
+                    moduleState.grant.ownerGeneration,
+                    {moduleState.grant.producer, moduleState.nextSequence}};
         }
 
-        [[nodiscard]] GameplayVfxResolveOutcome Resolve(Detail::GameplayVfxSceneState &scene, const Detail::GameplayVfxModuleState &module,
-                                                        const GameplayVfxEventKey key, const GameplayVfxEventPayload &payload,
-                                                        const GameplayVfxReceipt &receipt,
+        [[nodiscard]] GameplayVfxResolveOutcome Resolve(Detail::GameplayVfxSceneState &scene,
+                                                        const Detail::GameplayVfxModuleState &moduleState, const GameplayVfxEventKey key,
+                                                        const GameplayVfxEventPayload &payload, const GameplayVfxReceipt &receipt,
                                                         const std::span<Vfx::VfxSpawnRequest> output) noexcept {
+            using enum Horo::Vfx::VfxSpawnStatus;
             if (key.generation != scene.table->Generation())
-                return {Vfx::VfxSpawnStatus::StaleBinding, 0};
+                return {StaleBinding, 0};
             const auto &compiled = Detail::GameplayVfxBindingAccess::State(*scene.table);
             const auto *binding = VfxBindingDetail::FindDestination(compiled, key.destination);
             if (!binding)
-                return {Vfx::VfxSpawnStatus::UnknownEvent, 0};
-            if (!Allowed(module, *binding))
-                return {Vfx::VfxSpawnStatus::PermissionDenied, 0};
+                return {UnknownEvent, 0};
+            if (!Allowed(moduleState, *binding))
+                return {PermissionDenied, 0};
             return scene.table->Resolve(key, payload, Basis(scene, receipt), output);
         }
     }  // namespace
 
-    GameplayVfxSubmission Stage(Detail::GameplayVfxSceneState &scene, Detail::GameplayVfxModuleState &module, const GameplayVfxEventKey key,
-                                const GameplayVfxEventPayload &payload,
+    GameplayVfxSubmission Stage(Detail::GameplayVfxSceneState &scene, Detail::GameplayVfxModuleState &moduleState,
+                                const GameplayVfxEventKey key, const GameplayVfxEventPayload &payload,
                                 std::shared_ptr<const Detail::GameplayVfxScopeLifetime> lifetime) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (!scene.sourceOpen)
-            return {.status = Vfx::VfxSpawnStatus::PermissionDenied};
+            return {.status = PermissionDenied};
         if (scene.sealPrepared)
-            return {.status = Vfx::VfxSpawnStatus::Reentrant};
-        if (module.nextSequence == std::numeric_limits<std::uint64_t>::max())
-            return {.status = Vfx::VfxSpawnStatus::ResourceBudgetExceeded};
-        const auto receipt = Receipt(scene, module);
+            return {.status = Reentrant};
+        if (moduleState.nextSequence == std::numeric_limits<std::uint64_t>::max())
+            return {.status = ResourceBudgetExceeded};
+        const auto receipt = Receipt(scene, moduleState);
         std::array<Vfx::VfxSpawnRequest, Vfx::VfxSpawnHardLimits::Layers> scratch;
-        const auto resolved = Resolve(scene, module, key, payload, receipt, scratch);
-        if (resolved.status != Vfx::VfxSpawnStatus::Accepted)
+        const auto resolved = Resolve(scene, moduleState, key, payload, receipt, scratch);
+        if (resolved.status != Accepted)
             return {.status = resolved.status};
         if (scene.pendingCount + scene.resultCount >= scene.pending.size())
-            return {.status = Vfx::VfxSpawnStatus::EventQueueFull};
+            return {.status = EventQueueFull};
         scene.pending[scene.pendingCount++] = {scene.table, key, payload, receipt, scene.tick, false, std::move(lifetime)};
-        ++module.nextSequence;
-        return {Vfx::VfxSpawnStatus::Accepted, receipt};
+        ++moduleState.nextSequence;
+        return {Accepted, receipt};
     }
 
-    GameplayVfxSubmission EmitCommitted(Detail::GameplayVfxSceneState &scene, Detail::GameplayVfxModuleState &module,
+    GameplayVfxSubmission EmitCommitted(Detail::GameplayVfxSceneState &scene, Detail::GameplayVfxModuleState &moduleState,
                                         const GameplayVfxEventKey key, const GameplayVfxEventPayload &payload,
                                         const std::uint64_t tick) noexcept {
         if (!scene.sourceOpen || tick != scene.tick || scene.sealPrepared)
             return {.status = Vfx::VfxSpawnStatus::OutOfOrder};
-        const auto staged = Stage(scene, module, key, payload);
+        const auto staged = Stage(scene, moduleState, key, payload);
         if (staged.status == Vfx::VfxSpawnStatus::Accepted)
             scene.pending[scene.pendingCount - 1].committed = true;
         return staged;
@@ -63,6 +68,9 @@ namespace Horo::Gameplay::Detail {
             explicit SourceScope(GameplayVfxSceneState &value) : scene(value) {
                 scene.busy = true;
             }
+
+            SourceScope(const SourceScope &) = delete;
+            SourceScope &operator=(const SourceScope &) = delete;
 
             ~SourceScope() {
                 scene.busy = false;
@@ -109,6 +117,7 @@ namespace Horo::Gameplay::Detail {
 
         /** @brief Copies actual terminal layers, without equating source staging or queue admission with spawning. */
         void CollectResult(const GameplayVfxSceneState &scene, GameplayVfxSourceRecord &record) noexcept {
+            using enum Horo::Vfx::VfxSpawnStatus;
             if (!record.result.pending)
                 return;
             for (const auto &outcome : scene.world->SpawnResults()) {
@@ -117,13 +126,13 @@ namespace Horo::Gameplay::Detail {
                 if (record.result.layerCount == record.result.layers.size())
                     break;
                 record.result.layers[record.result.layerCount++] = outcome;
-                if (outcome.status != Vfx::VfxSpawnStatus::Spawned)
+                if (outcome.status != Spawned)
                     record.result.status = outcome.status;
             }
             if (record.result.layerCount != 0) {
                 record.result.pending = false;
-                if (record.result.status == Vfx::VfxSpawnStatus::Accepted)
-                    record.result.status = Vfx::VfxSpawnStatus::Spawned;
+                if (record.result.status == Accepted)
+                    record.result.status = Spawned;
             }
         }
 
@@ -211,17 +220,18 @@ namespace Horo::Gameplay::Detail {
 
     Vfx::VfxSpawnStatus GameplayVfxHostAccess::BeginTick(const GameplayVfxSceneLease &lease, const std::uint64_t tick,
                                                          const float deltaSeconds) noexcept {
-        if (const auto status = Current(lease); status != Vfx::VfxSpawnStatus::Accepted)
+        using enum Horo::Vfx::VfxSpawnStatus;
+        if (const auto status = Current(lease); status != Accepted)
             return status;
         auto &scene = *lease.state;
         if (scene.sourceOpen)
-            return Vfx::VfxSpawnStatus::Reentrant;
+            return Reentrant;
         if (!NewSourceTick(scene, tick))
-            return Vfx::VfxSpawnStatus::OutOfOrder;
+            return OutOfOrder;
         if (!std::isfinite(deltaSeconds) || deltaSeconds < 0.0F || deltaSeconds > scene.maximumDelta)
-            return Vfx::VfxSpawnStatus::InvalidRequest;
+            return InvalidRequest;
         if (scene.sealCount == scene.sealed.size())
-            return Vfx::VfxSpawnStatus::EventQueueFull;
+            return EventQueueFull;
         scene.tick = tick;
         scene.delta = deltaSeconds;
         scene.sourceOpen = true;
@@ -229,7 +239,7 @@ namespace Horo::Gameplay::Detail {
         scene.resultCount = 0;
         if (scene.sealCount == 0)
             scene.world->ClearSpawnResults();
-        return Vfx::VfxSpawnStatus::Accepted;
+        return Accepted;
     }
 
     GameplayVfxTickResult GameplayVfxHostAccess::CommitTick(const GameplayVfxSceneLease &lease, const std::uint64_t tick) noexcept {

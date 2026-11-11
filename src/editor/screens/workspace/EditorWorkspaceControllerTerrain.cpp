@@ -21,7 +21,8 @@ namespace Horo::Editor {
         /** @brief Establish an explicit isolated asset-preview camera without changing any Scene entity. */
         Result<void> FrameSource(EditorViewportCamera &camera, const Terrain::TerrainCanonicalSource &source) {
             const auto [minimum, maximum] = std::minmax_element(source.heightsMeters.begin(), source.heightsMeters.end());
-            const double x = (source.width - 1) * source.coordinates.spacingX, z = (source.height - 1) * source.coordinates.spacingZ;
+            const double x = (source.width - 1) * source.coordinates.spacingX;
+            const double z = (source.height - 1) * source.coordinates.spacingZ;
             const double y = (double(*minimum) + double(*maximum)) * 0.5;
             const double extent = std::max({x, z, double(*maximum) - double(*minimum), 1.0});
             if (!std::isfinite(extent) || extent > 8192 || std::abs(y) > 8192)
@@ -75,6 +76,12 @@ namespace Horo::Editor {
             DocumentInstanceId instance;
             bool owned;
 
+            OpenIdentity(DocumentIdentityRegistry &owner, DocumentInstanceId value, bool owns) noexcept
+                : registry(owner), instance(value), owned(owns) {}
+
+            OpenIdentity(const OpenIdentity &) = delete;
+            OpenIdentity &operator=(const OpenIdentity &) = delete;
+
             ~OpenIdentity() {
                 if (owned)
                     static_cast<void>(registry.Close(instance));
@@ -90,6 +97,11 @@ namespace Horo::Editor {
         struct PreparedOwner final {
             TerrainDocumentHost &document;
             bool accepted{};
+
+            explicit PreparedOwner(TerrainDocumentHost &value) noexcept : document(value) {}
+
+            PreparedOwner(const PreparedOwner &) = delete;
+            PreparedOwner &operator=(const PreparedOwner &) = delete;
 
             ~PreparedOwner() {
                 if (!accepted)
@@ -252,8 +264,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DocumentUnknown));
         if (!discard && (*found)->View().dirty)
             return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DirtyDocument));
-        auto closed = (*found)->Close();
-        if (closed.HasError())
+        if (auto closed = (*found)->Close(); closed.HasError())
             return closed;
         CancelTerrainCook(instance);
         static_cast<void>(m_viewModel.workspacePanelHost.CloseDocument(instance, WorkspaceDocumentClosePolicy::DiscardChanges));
@@ -288,10 +299,11 @@ namespace Horo::Editor {
     bool EditorWorkspaceController::TryCloseTerrainCommand(const EditorWorkspaceViewCommandData &command) {
         if (command.command != EditorWorkspaceViewCommand::CloseWorkspaceDocument || !command.documentInstance)
             return false;
-        const auto found = std::ranges::find_if(m_terrainDocuments, [&](const auto &document) {
+        if (const auto found = std::ranges::find_if(m_terrainDocuments,
+                                                    [&](const auto &document) {
             return document->Identity().instance == *command.documentInstance;
         });
-        if (found == m_terrainDocuments.end())
+            found == m_terrainDocuments.end())
             return false;
         if (auto closed = CloseTerrainDocument(*command.documentInstance, false); closed.HasError())
             Failure(m_viewModel, closed.ErrorValue());
@@ -339,10 +351,11 @@ namespace Horo::Editor {
     void EditorWorkspaceController::ProcessFocusedTerrainCommand(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
         if (command.command == SaveScene || command.command == UndoScene || command.command == RedoScene) {
-            const auto found = std::ranges::find_if(m_terrainDocuments, [&](const auto &document) {
+            if (const auto found = std::ranges::find_if(m_terrainDocuments,
+                                                        [&](const auto &document) {
                 return document->Identity().instance == m_activeTerrainDocument;
             });
-            if (found != m_terrainDocuments.end()) {
+                found != m_terrainDocuments.end()) {
                 auto intent = std::make_shared<TerrainToolCommand>();
                 intent->document = (*found)->View();
                 intent->action = command.command == SaveScene   ? TerrainToolAction::Save

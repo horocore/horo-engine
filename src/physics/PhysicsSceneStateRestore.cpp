@@ -37,6 +37,9 @@ namespace Horo::Physics::Detail {
         public:
             explicit RebindAdmission(PhysicsStructuralState &state) noexcept : state_(state) {}
 
+            RebindAdmission(const RebindAdmission &) = delete;
+            RebindAdmission &operator=(const RebindAdmission &) = delete;
+
             ~RebindAdmission() {
                 if (!complete_)
                     state_.closed = true;

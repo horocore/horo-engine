@@ -13,6 +13,9 @@ import subprocess
 import tarfile
 
 
+COMPILE_DATABASE_NAME = "compile_commands.json"
+ARCHIVE_NAME = "inputs.tar.gz"
+GIT_METADATA_ERROR = "Git internals are never analysis inputs"
 REPORTS = ("coverage.xml", "python-coverage.xml", "ctest.xml", "coverage-ctest-discovery.json")
 BUILD_OUTPUTS = {".o", ".obj", ".a", ".lib", ".so", ".dll", ".pdb", ".gcda", ".gcno", ".d", ".ninja_deps", ".ninja_log"}
 SOURCE_SUFFIXES = {".h", ".hh", ".hpp", ".hxx", ".inc", ".inl", ".ipp", ".tpp", ".def", ".c", ".cc", ".cpp", ".cxx", ".S"}
@@ -83,7 +86,7 @@ def compile_outputs(entries: list[dict]) -> set[Path]:
 
 
 def ninja_inputs(build: Path) -> set[Path]:
-    entries = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
+    entries = json.loads((build / COMPILE_DATABASE_NAME).read_text(encoding="utf-8"))
     outputs = compile_outputs(entries)
     output = subprocess.check_output([executable("ninja"), "-C", str(build), "-t", "deps"], text=True)
     paths = set()
@@ -105,7 +108,7 @@ def is_git_metadata(path: Path) -> bool:
 
 def scope(path: Path, roots: dict[str, Path]) -> tuple[str, str]:
     if is_git_metadata(path):
-        raise ValueError("Git internals are never analysis inputs")
+        raise ValueError(GIT_METADATA_ERROR)
     for name, root in roots.items():
         if path.is_relative_to(root):
             return name, path.relative_to(root).as_posix()
@@ -125,21 +128,26 @@ def is_header_candidate(path: Path) -> bool:
         return b"\0" not in stream.read(8192)
 
 
+def include_directories(directory: Path, children: list[str], root: Path) -> list[str]:
+    """Reject credential aliases and ancestry cycles before descending into includes."""
+    ancestors = {parent.resolve() for parent in (directory, *directory.parents) if parent.is_relative_to(root)}
+    include_children = []
+    for child in children:
+        if child in {".git", ".sonar", "__pycache__"}:
+            continue
+        resolved = (directory / child).resolve()
+        if ".git" in resolved.parts:
+            continue
+        if resolved in ancestors:
+            raise ValueError("Cyclic include-directory alias")
+        include_children.append(child)
+    return include_children
+
+
 def include_files(root: Path):
     """Materialize header aliases as ordinary bytes; never archive Git credentials."""
     for directory, children, names in os.walk(root, followlinks=True):
-        ancestors = {parent.resolve() for parent in (Path(directory), *Path(directory).parents) if parent.is_relative_to(root)}
-        include_children = []
-        for child in children:
-            if child in {".git", ".sonar", "__pycache__"}:
-                continue
-            resolved = (Path(directory) / child).resolve()
-            if ".git" in resolved.parts:
-                continue
-            if resolved in ancestors:
-                raise ValueError("Cyclic include-directory alias")
-            include_children.append(child)
-        children[:] = include_children
+        children[:] = include_directories(Path(directory), children, root)
         for name in names:
             path = Path(directory) / name
             if is_header_candidate(path):
@@ -172,7 +180,7 @@ def fallback_headers(directories: set[Path], roots: dict[str, Path], tracked: se
 
 
 def collect(build: Path, roots: dict[str, Path], tracked: set[str]) -> set[Path]:
-    database = build / "compile_commands.json"
+    database = build / COMPILE_DATABASE_NAME
     entries = json.loads(database.read_text(encoding="utf-8"))
     if not isinstance(entries, list) or not entries:
         raise ValueError("The real compilation database is empty")
@@ -194,7 +202,7 @@ def pack(workspace: Path, build: Path, sdk: Path, bundle: Path, commit: str) -> 
     tracked = set(git(workspace, "ls-files", "-z").split("\0"))
     bundle.mkdir(parents=True, exist_ok=False)
     files = []
-    with tarfile.open(bundle / "inputs.tar.gz", "w:gz", compresslevel=1) as archive:
+    with tarfile.open(bundle / ARCHIVE_NAME, "w:gz", compresslevel=1) as archive:
         for path in sorted(collect(build, roots, tracked)):
             if not path.is_file():
                 raise ValueError(f"Recorded native input disappeared: {path}")
@@ -210,7 +218,7 @@ def pack(workspace: Path, build: Path, sdk: Path, bundle: Path, commit: str) -> 
                     archive.addfile(member, stream)
             files.append(item)
     manifest = {"schema": 1, "commit": commit, "tree": tree, "roots": {key: str(value) for key, value in roots.items()},
-                "archiveSha256": digest(bundle / "inputs.tar.gz"), "files": files}
+                "archiveSha256": digest(bundle / ARCHIVE_NAME), "files": files}
     source_identity(workspace, commit)
     (bundle / "manifest.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
     print(f"Captured {len(files)} actual compiler/header/report inputs for {commit}")
@@ -225,7 +233,7 @@ def target(root: Path, relative: str) -> Path:
     result = root / value
     resolved = result.resolve()
     if ".git" in resolved.parts:
-        raise ValueError("Git internals are never analysis inputs")
+        raise ValueError(GIT_METADATA_ERROR)
     if not resolved.is_relative_to(root.resolve()):
         raise ValueError("Analysis input escapes its declared root")
     return result
@@ -245,6 +253,16 @@ def generated_target(root: Path, relative: str, workspace: Path, tracked: set[st
     return destination
 
 
+def verify_immutable_input(workspace: Path, item: dict) -> None:
+    """Validate checkout/environment inputs without creating files or directories."""
+    path = target(workspace, item["path"]) if item["scope"] == "checkout" else Path(item["path"])
+    if not path.is_absolute():
+        raise ValueError("Environment inputs must retain their absolute paths")
+    if is_git_metadata(path):
+        raise ValueError(GIT_METADATA_ERROR)
+    verify_file(path, item)
+
+
 def restore_inventory(workspace: Path, roots: dict[str, Path], files: list[dict]) -> dict:
     """Verify immutable inputs before accepting any generated-file destinations."""
     tracked = set(git(workspace, "ls-files", "-z").split("\0"))
@@ -252,12 +270,7 @@ def restore_inventory(workspace: Path, roots: dict[str, Path], files: list[dict]
     for item in files:
         owner = item["scope"]
         if owner in {"checkout", "environment"}:
-            path = target(workspace, item["path"]) if owner == "checkout" else Path(item["path"])
-            if not path.is_absolute():
-                raise ValueError("Environment inputs must retain their absolute paths")
-            if is_git_metadata(path):
-                raise ValueError("Git internals are never analysis inputs")
-            verify_file(path, item)
+            verify_immutable_input(workspace, item)
             continue
         if owner not in roots:
             raise ValueError("Unknown analysis input scope")
@@ -297,7 +310,7 @@ def restore_payload(archive_path: Path, roots: dict[str, Path], expected: dict) 
 
 def restore_working_directories(roots: dict[str, Path], expected: dict) -> None:
     """Recreate the original compiler directories without altering its database."""
-    databases = [path for path, unused in expected.values() if path.name == "compile_commands.json"]
+    databases = [path for path, unused in expected.values() if path.name == COMPILE_DATABASE_NAME]
     if len(databases) != 1:
         raise ValueError("Exactly one original compilation database is required")
     database = databases[0]
@@ -318,7 +331,7 @@ def restore(workspace: Path, sdk: Path, bundle: Path, commit: str) -> None:
     if (manifest.get("schema") != 1 or manifest.get("commit") != commit or manifest.get("tree") != tree
             or manifest.get("roots") != {key: str(value) for key, value in roots.items()}):
         raise ValueError("Source commit/tree and original absolute build paths must match")
-    archive_path = bundle / "inputs.tar.gz"
+    archive_path = bundle / ARCHIVE_NAME
     if digest(archive_path) != manifest["archiveSha256"]:
         raise ValueError("Analysis input archive digest mismatch")
     expected = restore_inventory(workspace, roots, manifest["files"])

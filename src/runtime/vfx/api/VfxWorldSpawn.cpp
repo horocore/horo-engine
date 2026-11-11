@@ -36,11 +36,12 @@ namespace Horo::Vfx {
     }
 
     VfxSpawnStatus VfxWorld::SpawnAdmissionStatus() const noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (owner_ != std::this_thread::get_id())
-            return VfxSpawnStatus::ThreadViolation;
+            return ThreadViolation;
         if (shutDown_ || !spawn_)
-            return VfxSpawnStatus::ShutDown;
-        return spawn_->busy ? VfxSpawnStatus::Reentrant : VfxSpawnStatus::Accepted;
+            return ShutDown;
+        return spawn_->busy ? Reentrant : Accepted;
     }
 
     /** @copydoc VfxWorld::PrepareSpawnPalette */
@@ -59,27 +60,28 @@ namespace Horo::Vfx {
 
     /** @copydoc VfxWorld::AdmitSpawnOwner */
     VfxSpawnStatus VfxWorld::AdmitSpawnOwner(const VfxIdentityScope owner, const std::uint64_t generation) noexcept {
-        if (const auto status = SpawnAdmissionStatus(); status != VfxSpawnStatus::Accepted)
+        using enum Horo::Vfx::VfxSpawnStatus;
+        if (const auto status = SpawnAdmissionStatus(); status != Accepted)
             return status;
         if (!owner.IsValid() || generation == 0)
-            return VfxSpawnStatus::InvalidRequest;
+            return InvalidRequest;
         for (auto &entry : spawn_->owners) {
             if (entry.owner != owner)
                 continue;
             if (entry.generation >= generation)
-                return VfxSpawnStatus::StaleOwner;
+                return StaleOwner;
             if (entry.active)
-                return VfxSpawnStatus::PermissionDenied;
+                return PermissionDenied;
             entry = {owner, generation, true};
-            return VfxSpawnStatus::Accepted;
+            return Accepted;
         }
         const auto free = std::ranges::find_if(spawn_->owners, [](const auto &entry) {
             return !entry.owner.IsValid();
         });
         if (free == spawn_->owners.end())
-            return VfxSpawnStatus::ResourceBudgetExceeded;
+            return ResourceBudgetExceeded;
         *free = {owner, generation, true};
-        return VfxSpawnStatus::Accepted;
+        return Accepted;
     }
 
     /** @copydoc VfxWorld::TryEnqueueSpawns */
@@ -100,19 +102,20 @@ namespace Horo::Vfx {
 
     /** @copydoc VfxWorld::CancelSpawnOwner */
     VfxSpawnStatus VfxWorld::CancelSpawnOwner(const VfxIdentityScope owner, const std::uint64_t generation) noexcept {
-        if (const auto status = SpawnAdmissionStatus(); status != VfxSpawnStatus::Accepted)
+        using enum Horo::Vfx::VfxSpawnStatus;
+        if (const auto status = SpawnAdmissionStatus(); status != Accepted)
             return status;
         if (!owner.IsValid() || generation == 0)
-            return VfxSpawnStatus::InvalidRequest;
+            return InvalidRequest;
         const auto found = std::ranges::find(spawn_->owners, owner, &Detail::VfxSpawnOwner::owner);
         if (found == spawn_->owners.end() || found->generation != generation)
-            return VfxSpawnStatus::StaleOwner;
+            return StaleOwner;
         found->active = false;
         for (auto &asset : spawn_->assets)
             for (auto &instance : asset.instances)
                 if (OwnedBy(instance, owner, generation))
                     SpawnDetail::Retire(asset, instance);
-        return VfxSpawnStatus::Accepted;
+        return Accepted;
     }
 
     /** @copydoc VfxWorld::SpawnResults */
@@ -130,13 +133,14 @@ namespace Horo::Vfx {
 
     /** @copydoc VfxWorld::InspectSpawnAsset */
     VfxSpawnStatus VfxWorld::InspectSpawnAsset(const Assets::AssetId asset, VfxSpawnAssetInfo &output) const noexcept {
-        if (const auto status = SpawnAdmissionStatus(); status != VfxSpawnStatus::Accepted)
+        using enum Horo::Vfx::VfxSpawnStatus;
+        if (const auto status = SpawnAdmissionStatus(); status != Accepted)
             return status;
         const auto found = SpawnDetail::FindAsset(*spawn_, asset);
         if (!found)
-            return VfxSpawnStatus::MissingAsset;
+            return MissingAsset;
         output = found->info;
-        return VfxSpawnStatus::Accepted;
+        return Accepted;
     }
 
     void VfxWorld::ShutdownSpawns() noexcept {

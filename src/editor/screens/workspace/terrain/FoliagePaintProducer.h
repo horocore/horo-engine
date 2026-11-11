@@ -14,7 +14,9 @@ namespace Horo::Editor {
         FoliagePaintMode mode{FoliagePaintMode::Paint};
         double radiusMeters{2};
         std::uint16_t densityPermille{1'000};
-        float scale{1}, offsetMeters{}, yawRadians{};
+        float scale{1};
+        float offsetMeters{};
+        float yawRadians{};
         bool allTypes{};                        /**< Erase/select all types instead of the explicitly active palette type. */
         std::array<std::byte, 16> gestureKey{}; /**< Identity provenance, independent of source revision/rebakes. */
     };
@@ -22,7 +24,8 @@ namespace Horo::Editor {
     /** @brief Explicit whole-stroke ceilings, separate from document transaction/history limits. */
     struct FoliageToolLimits final {
         TerrainSculptLimits stroke;
-        std::size_t maximumPlacementEdits{4'096}, maximumExistingPlacements{65'536};
+        std::size_t maximumPlacementEdits{4'096};
+        std::size_t maximumExistingPlacements{65'536};
     };
 
     /** @brief Produce exact stable-ID placement edits without changing source, history or selection.

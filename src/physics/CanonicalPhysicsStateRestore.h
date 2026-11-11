@@ -7,7 +7,8 @@ namespace Horo::Physics::Detail {
      * never aliases submitted immutable snapshot values. */
     struct CanonicalPhysicsStateRestoreScratch final {
         CanonicalPhysicsStateCaptureScratch native;
-        std::span<std::byte> expectedWire, actualWire;
+        std::span<std::byte> expectedWire;
+        std::span<std::byte> actualWire;
         StateDetail::SolverStorage &recapture;
     };
 

@@ -49,22 +49,25 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportColorGraph::RasterInputs */
     void EditorViewportColorGraph::RasterInputs(EditorViewportColorPipeline &pipeline, std::size_t role, RenderGraphPassRef pass) {
+        using enum Horo::Render::RenderGraphAccess;
+        using enum Horo::Render::RenderGraphUsageKind;
         const auto geometry = pipeline.GeometryBuffers();
-        const auto vertex = Buffer(geometry[0]), index = Buffer(geometry[1]);
-        Use(pass, vertex, RenderGraphAccess::Read, RenderGraphUsageKind::VertexBuffer);
-        Use(pass, index, RenderGraphAccess::Read, RenderGraphUsageKind::IndexBuffer);
+        const auto vertex = Buffer(geometry[0]);
+        const auto index = Buffer(geometry[1]);
+        Use(pass, vertex, Read, VertexBuffer);
+        Use(pass, index, Read, IndexBuffer);
         draws_[role][0] = {pipeline.Mesh(), vertex, index, pipeline.Material(role)};
         std::size_t count{};
         for (const auto &binding : pipeline.Material(role)->Descriptor().resources) {
             if (const auto *buffer = std::get_if<MaterialBufferBinding>(&binding.value)) {
                 const bool storage = binding.binding.value == 7;
                 const auto id = Buffer(buffer->buffer);
-                Use(pass, id, RenderGraphAccess::Read, storage ? RenderGraphUsageKind::Storage : RenderGraphUsageKind::UniformBuffer);
+                Use(pass, id, Read, storage ? Storage : UniformBuffer);
                 reads_[role][count++] = {id, buffer->buffer, {}};
             }
             if (const auto *view = std::get_if<RenderTextureViewHandle>(&binding.value)) {
                 const auto id = RasterTexture(pipeline, role, binding);
-                Use(pass, id, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled);
+                Use(pass, id, Read, Sampled);
                 reads_[role][count++] = {id, {}, *view};
             }
         }
@@ -146,6 +149,9 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportColorGraph::Refresh */
     void EditorViewportColorGraph::Refresh(EditorViewportColorPipeline &pipeline) noexcept {
+        using enum Horo::Render::RenderGraphSynchronizationAccess;
+        using enum Horo::Render::RenderGraphPipelineScope;
+        using enum Horo::Render::RenderGraphTextureLayout;
         auto &work = std::get<RenderGraphExposureGpu>(workloads_[0].workload);
         work.dispatch = pipeline.Dispatch();
         work.previous = pipeline.Previous();
@@ -155,17 +161,13 @@ namespace Horo::Editor {
             draws_[role][0].material = pipeline.Material(role);
         for (std::size_t i = 0; i < bufferCount_; ++i) {
             auto state =
-                RenderGraphLogicalState{RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
-                                        RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue_};
+                RenderGraphLogicalState{Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer, Graphics, NotApplicable, queue_};
             if (buffers_[i].second == work.histogram)
-                state = {RenderGraphSynchronizationAccess::ReadWrite, RenderGraphSynchronizationOperation::Storage,
-                         RenderGraphPipelineScope::Compute, RenderGraphTextureLayout::NotApplicable, queue_};
+                state = {ReadWrite, RenderGraphSynchronizationOperation::Storage, Compute, NotApplicable, queue_};
             if (buffers_[i].second == work.outputExposure)
-                state = {RenderGraphSynchronizationAccess::Write, RenderGraphSynchronizationOperation::Storage,
-                         RenderGraphPipelineScope::Compute, RenderGraphTextureLayout::NotApplicable, queue_};
+                state = {Write, RenderGraphSynchronizationOperation::Storage, Compute, NotApplicable, queue_};
             if (buffers_[i].second == work.previousExposure)
-                state = {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::Storage,
-                         RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue_};
+                state = {Read, RenderGraphSynchronizationOperation::Storage, Graphics, NotApplicable, queue_};
             pipeline.StageBufferState(buffers_[i].first, state);
         }
     }

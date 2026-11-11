@@ -25,7 +25,7 @@ namespace Horo::Physics::Detail {
                                                                       const CanonicalPhysicsStateTopologyMap &map,
                                                                       StateDetail::ConstructionManifestOwner &owner) {
         using Outcome = Result<PhysicsStateShapeRecipes>;
-        auto *pool = world.owner.constructionRecipes;
+        const auto *pool = world.owner.constructionRecipes;
         if (!pool)
             return Outcome::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
         auto roots = owner.RootBindings();

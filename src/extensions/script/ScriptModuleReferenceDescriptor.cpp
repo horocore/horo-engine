@@ -44,18 +44,16 @@ namespace Horo::Extensions {
         }
 
         ScriptExportTypeDescriptor Record() {
-            auto handle = Primitive(ScriptExportPrimitiveKind::Handle);
+            using enum Horo::Extensions::ScriptExportPrimitiveKind;
+            auto handle = Primitive(Handle);
             handle.nullability = ScriptExportNullability::Nullable;
             return {.id = "horo.reference.record",
                     .kind = ScriptExportNamedTypeKind::Struct,
                     .introducedVersion = Introduced,
-                    .fields = {Field("id", Primitive(ScriptExportPrimitiveKind::UnsignedInteger)),
-                               Field("name", Primitive(ScriptExportPrimitiveKind::String)),
-                               Field("payload", Primitive(ScriptExportPrimitiveKind::Bytes)),
-                               Field("active", Primitive(ScriptExportPrimitiveKind::Boolean)),
-                               Field("ratio", Primitive(ScriptExportPrimitiveKind::Number)), Field("names", Named("horo.reference.names")),
-                               Field("scores", Named("horo.reference.scores")), Field("mode", Named("horo.reference.mode")),
-                               Field("token", std::move(handle))}};
+                    .fields = {Field("id", Primitive(UnsignedInteger)), Field("name", Primitive(String)),
+                               Field("payload", Primitive(Bytes)), Field("active", Primitive(Boolean)), Field("ratio", Primitive(Number)),
+                               Field("names", Named("horo.reference.names")), Field("scores", Named("horo.reference.scores")),
+                               Field("mode", Named("horo.reference.mode")), Field("token", std::move(handle))}};
         }
 
         ScriptExportParameterDescriptor Parameter(std::string id, ScriptExportTypeReference type) {

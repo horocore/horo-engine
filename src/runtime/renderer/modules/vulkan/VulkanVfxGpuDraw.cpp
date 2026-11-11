@@ -68,7 +68,7 @@ namespace Horo::Render::Detail {
                                             .colorAttachmentCount = 1,
                                             .pColorAttachments = &color,
                                             .pDepthAttachment = draw.depth.IsValid() ? &depth : nullptr};
-            auto &native = simulation.owner->native;
+            const auto &native = simulation.owner->native;
             native.beginRendering(command, &rendering);
             native.bindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 draw.depth.IsValid() ? simulation.kernel->drawDepth : simulation.kernel->drawColor);
@@ -90,21 +90,18 @@ namespace Horo::Render::Detail {
         if (found.HasError())
             return Result<void>::Failure(found.ErrorValue());
         const auto &simulation = *found.Value();
-        const std::array valid{!simulation.stopped,
-                               draw.simulation == simulation.id,
-                               draw.deviceIncarnation == device->incarnation,
-                               !draw.lifetimeCancellation.IsCancellationRequested(),
-                               draw.kernel.get() == simulation.kernel.get(),
-                               SameVfxGpuDescriptor(simulation.descriptor, draw.descriptor)};
-        if (!std::ranges::all_of(valid, [](bool value) {
+        if (const std::array valid{!simulation.stopped, draw.simulation == simulation.id, draw.deviceIncarnation == device->incarnation,
+                                   !draw.lifetimeCancellation.IsCancellationRequested(), draw.kernel.get() == simulation.kernel.get(),
+                                   SameVfxGpuDescriptor(simulation.descriptor, draw.descriptor)};
+            !std::ranges::all_of(valid, [](bool value) {
             return value;
         }))
             return Result<void>::Failure(VulkanVfxGpuInvalid("Particle draw descriptor, generation or native lease is stale."));
         const auto index = VulkanVfxGpuState(simulation, draw.particles, request);
         if (index == simulation.states.size())
             return Result<void>::Failure(VulkanVfxGpuInvalid("Particle draw is not an exact prepared native state buffer."));
-        const bool accepted = simulation.states[index].generation == draw.generation && draw.generation <= simulation.generation;
-        if (!accepted && !EarlierProducer(simulation, draw, request))
+        if (const bool accepted = simulation.states[index].generation == draw.generation && draw.generation <= simulation.generation;
+            !accepted && !EarlierProducer(simulation, draw, request))
             return Result<void>::Failure(
                 VulkanVfxGpuInvalid("Particle draw lacks an accepted generation or exact earlier same-graph producer."));
         if (const auto attachments = Attachments(draw, resources); attachments.HasError())

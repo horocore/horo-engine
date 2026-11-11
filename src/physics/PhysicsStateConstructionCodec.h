@@ -13,7 +13,9 @@ namespace Horo::Physics::StateDetail {
     /** @brief Canonical shape subsection of the SINGLE Physics snapshot, not an application Save format. */
     struct ConstructionShapeHeader final {
         std::uint32_t tag{0x31504853U};  // Explicit little-endian SHP1 grammar tag.
-        std::uint32_t nodes{}, edges{}, roots{};
+        std::uint32_t nodes{};
+        std::uint32_t edges{};
+        std::uint32_t roots{};
     };
 
     void ConstructionShapeHeaderFields(Wire &, ConstructionShapeHeader &) noexcept;

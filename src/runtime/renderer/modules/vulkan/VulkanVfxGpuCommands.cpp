@@ -189,16 +189,13 @@ namespace Horo::Render::Detail {
         const auto &simulation = *found.Value();
         if (!ValidComputeMetadata(simulation, work, request))
             return Result<void>::Failure(VulkanVfxGpuInvalid("Particle compute work is not the exact next issued native step."));
-        const auto source = VulkanVfxGpuState(simulation, work.source, request),
-                   destination = VulkanVfxGpuState(simulation, work.destination, request);
+        const auto source = VulkanVfxGpuState(simulation, work.source, request);
+        const auto destination = VulkanVfxGpuState(simulation, work.destination, request);
         const auto observation = VulkanVfxGpuObservation(simulation, work.observations, request);
-        const std::array valid{source == simulation.source,
-                               destination > 0,
-                               destination < simulation.states.size(),
-                               source != destination,
-                               observation < simulation.observations.size(),
-                               Matches(simulation.forces, work.forces, request)};
-        if (!std::ranges::all_of(valid, [](bool value) {
+        if (const std::array valid{source == simulation.source, destination > 0, destination < simulation.states.size(),
+                                   source != destination, observation < simulation.observations.size(),
+                                   Matches(simulation.forces, work.forces, request)};
+            !std::ranges::all_of(valid, [](bool value) {
             return value;
         }))
             return Result<void>::Failure(VulkanVfxGpuInvalid("Particle compute buffers differ from its exact native inventory."));

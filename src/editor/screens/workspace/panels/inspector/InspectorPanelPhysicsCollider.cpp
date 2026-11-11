@@ -19,7 +19,7 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
             for (std::size_t index = 0; index < choices.size(); ++index)
                 if (choices[index].id == value)
                     selected = static_cast<int>(index) + 1;
-            const Ui::ComboItemSource source{.label = [&](const int index) {
+            const Ui::ComboItemSource source{.label = [&choices, &context, &value](const int index) {
                 if (index != 0)
                     return choices[static_cast<std::size_t>(index - 1)].name.c_str();
                 return Label(context, value.IsValid() ? "workspace.physics.missing_reference" : "workspace.physics.choose_reference");

@@ -38,13 +38,13 @@ namespace Horo::Extensions {
 
         /** @brief Binds one actual importing module's declared API using explicit real script policy.
          * @param extension Exact active package.
-         * @param module Exact active importing module.
+         * @param moduleId Exact active importing module.
          * @param importId Exact manifest import local to that module.
          * @param policy Actual runtime trust/scopes/capability intersection; imports are host-derived.
          * @return Owner-lane session or typed missing/denied/stale/shape failure.
          */
-        [[nodiscard]] Result<std::shared_ptr<NativeExtensionScriptSession>> BindScript(std::string_view extension, std::string_view module,
-                                                                                       std::string_view importId,
+        [[nodiscard]] Result<std::shared_ptr<NativeExtensionScriptSession>> BindScript(std::string_view extension,
+                                                                                       std::string_view moduleId, std::string_view importId,
                                                                                        ScriptCapabilityContextDescriptor policy,
                                                                                        const CancellationToken &cancellation = {});
 

@@ -122,7 +122,8 @@ namespace Horo::Physics::StateDetail {
         for (const auto &material : m.materials)
             if (!ConstructionMaterialValid(material))
                 return MalformedConstruction();
-        std::size_t nextCollider{}, nextMaterial{};
+        std::size_t nextCollider{};
+        std::size_t nextMaterial{};
         for (const auto &body : m.bodies) {
             if (body.floatingPoint != current)
                 return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));

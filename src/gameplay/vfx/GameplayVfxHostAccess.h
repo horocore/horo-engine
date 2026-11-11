@@ -39,9 +39,9 @@ namespace Horo::Gameplay::Detail {
         [[nodiscard]] static std::shared_ptr<const GameplayVfxCommittedProducer> CommittedProducer(const GameplayVfxSceneLease &lease,
                                                                                                    std::string_view moduleId) noexcept;
         [[nodiscard]] static Result<std::shared_ptr<const GameplayVfxContext>> ForEntity(
-            const std::shared_ptr<const GameplayVfxContext> &module, GameplayEntityRef entity);
+            const std::shared_ptr<const GameplayVfxContext> &moduleContext, GameplayEntityRef entity);
         [[nodiscard]] static Result<std::shared_ptr<const GameplayVfxContext>> ForkRuntime(
-            const std::shared_ptr<const GameplayVfxContext> &module);
+            const std::shared_ptr<const GameplayVfxContext> &moduleContext);
         /** @brief Revokes future entity calls after actual successful Scene structural publication.
          * Admitted commands retain their exact cancellation lifetime; explicit RevokeClient and runner/Scene revocation still cancel them.
          * @param client Genuine entity scope owned by the structural attachment being retired.

@@ -30,7 +30,7 @@ namespace Horo::Physics::Detail {
             std::vector<StateDetail::ConstructionRecipeChild> children;
             children.reserve(rows.size());
             for (std::size_t index = 0; index < rows.size(); ++index)
-                children.push_back({previous[rows[index].shape], rows[index].localPose, index + 1});
+                children.emplace_back(previous[rows[index].shape], rows[index].localPose, index + 1);
             return pool.AddCompound(children, control);
         }
 

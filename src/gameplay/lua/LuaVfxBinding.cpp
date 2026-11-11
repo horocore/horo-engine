@@ -94,8 +94,11 @@ namespace Horo::Gameplay::Detail {
             const bool scaleValid = lua_isnil(state, -1) || Number(state, -1, payload.scale);
             lua_pop(state, 1);
             std::array<float, 4> orientation{};
-            std::array<float, 3> normal{}, axes{};
-            bool rotated{}, impacted{}, scaled{};
+            std::array<float, 3> normal{};
+            std::array<float, 3> axes{};
+            bool rotated{};
+            bool impacted{};
+            bool scaled{};
             if (!scaleValid || !OptionalVector(state, table, "orientation", orientation, rotated) ||
                 !OptionalVector(state, table, "normal", normal, impacted) || !OptionalVector(state, table, "axes", axes, scaled))
                 return false;

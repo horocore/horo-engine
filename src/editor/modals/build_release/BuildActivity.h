@@ -37,7 +37,7 @@ namespace Horo::Editor {
         content.label = localization.Get("editor", BuildStatusKey(build->state));
         content.tone = EditorStatusItemTone::Accent;
         content.available = true;
-        if (build->progress && std::isfinite(*build->progress))
+        if (build->progress.has_value() && std::isfinite(*build->progress))
             content.value = std::to_string(static_cast<int>(std::clamp(*build->progress, 0.0F, 1.0F) * 100)) + "%";
         return content;
     }

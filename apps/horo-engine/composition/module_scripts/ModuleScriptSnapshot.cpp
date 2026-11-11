@@ -25,6 +25,11 @@ namespace Horo::Application::Internal {
             std::filesystem::path path;
             bool owned{};
 
+            Candidate() = default;
+
+            Candidate(const Candidate &) = delete;
+            Candidate &operator=(const Candidate &) = delete;
+
             ~Candidate() {
                 if (owned) {
                     std::error_code error;

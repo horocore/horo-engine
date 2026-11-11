@@ -2,9 +2,9 @@
 
 namespace Horo::Extensions {
     struct NativeExtensionScriptSession::Impl final {
-        std::shared_ptr<NativeServiceModule> module;
+        std::shared_ptr<NativeServiceModule> nativeModule;
         std::shared_ptr<NativeServicePublication> publication;
-        ResolvedExtensionServiceImport import;
+        ResolvedExtensionServiceImport resolvedImport;
         ScriptCapabilityContext context;
         ScriptCapabilityBinding binding;
         const std::thread::id owner{std::this_thread::get_id()};
@@ -18,15 +18,16 @@ namespace Horo::Extensions {
             if (host.closed.load(std::memory_order_acquire))
                 return Result<std::shared_ptr<NativeServiceModule>>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
             for (const auto &weak : host.modules) {
-                const auto module = weak.lock();
-                if (module && !module->revoked && module->committed && module->extension == extension && module->declaration.id == id)
-                    return Result<std::shared_ptr<NativeServiceModule>>::Success(module);
+                const auto nativeModule = weak.lock();
+                if (nativeModule && !nativeModule->revoked && nativeModule->committed && nativeModule->extension == extension &&
+                    nativeModule->declaration.id == id)
+                    return Result<std::shared_ptr<NativeServiceModule>>::Success(nativeModule);
             }
             return Result<std::shared_ptr<NativeServiceModule>>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
         }
 
-        Result<ScriptCapabilityImport> ScriptImport(NativeServiceModule &module, const NativeServicePublication &publication) {
-            if (!module.admission || !module.admission->ActivationLease().IsUsable())
+        Result<ScriptCapabilityImport> ScriptImport(NativeServiceModule &nativeModule, const NativeServicePublication &publication) {
+            if (!nativeModule.admission || !nativeModule.admission->ActivationLease().IsUsable())
                 return Result<ScriptCapabilityImport>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
             const auto providerOwner = publication.owner.lock();
             if (!providerOwner || providerOwner->revoked || !providerOwner->admission)
@@ -35,23 +36,23 @@ namespace Horo::Extensions {
             if (grant.HasError())
                 return Result<ScriptCapabilityImport>::Failure(grant.ErrorValue());
             const auto &descriptor = *publication.descriptors->Find(publication.shape.scriptApi);
-            ScriptCapabilityImport import{descriptor.id,
-                                          descriptor.compatibility,
-                                          publication.descriptors,
-                                          std::move(grant).Value(),
-                                          publication.script->Lease(),
-                                          ScriptCapabilityProfile::Tooling,
-                                          {}};
+            ScriptCapabilityImport capabilityImport{descriptor.id,
+                                                    descriptor.compatibility,
+                                                    publication.descriptors,
+                                                    std::move(grant).Value(),
+                                                    publication.script->Lease(),
+                                                    ScriptCapabilityProfile::Tooling,
+                                                    {}};
             for (const auto &method : publication.shape.methods)
-                import.functions.push_back(method.id);
-            return Result<ScriptCapabilityImport>::Success(std::move(import));
+                capabilityImport.functions.push_back(method.id);
+            return Result<ScriptCapabilityImport>::Success(std::move(capabilityImport));
         }
 
-        bool ScriptSessionUsable(const NativeServiceModule &module, const ScriptCapabilityBinding &binding,
+        bool ScriptSessionUsable(const NativeServiceModule &nativeModule, const ScriptCapabilityBinding &binding,
                                  const NativeServicePublication &publication) noexcept {
-            const auto host = module.host.lock();
-            return host && !host->closed.load(std::memory_order_acquire) && module.committed.load(std::memory_order_acquire) &&
-                   !module.revoked.load(std::memory_order_acquire) && static_cast<bool>(publication.script) && binding.IsUsable();
+            const auto host = nativeModule.host.lock();
+            return host && !host->closed.load(std::memory_order_acquire) && nativeModule.committed.load(std::memory_order_acquire) &&
+                   !nativeModule.revoked.load(std::memory_order_acquire) && static_cast<bool>(publication.script) && binding.IsUsable();
         }
 
         bool InvocationShape(const std::string_view function, const std::span<const std::int64_t> arguments) noexcept {
@@ -96,9 +97,9 @@ namespace Horo::Extensions {
         auto moduleResult = FindModule(*state_, extension, moduleId);
         if (moduleResult.HasError())
             return Result<std::shared_ptr<NativeExtensionScriptSession>>::Failure(moduleResult.ErrorValue());
-        auto module = std::move(moduleResult).Value();
-        const auto found = std::ranges::find(module->imports, importId, &ResolvedExtensionServiceImport::ImportId);
-        if (found == module->imports.end())
+        auto nativeModule = std::move(moduleResult).Value();
+        const auto found = std::ranges::find(nativeModule->imports, importId, &ResolvedExtensionServiceImport::ImportId);
+        if (found == nativeModule->imports.end())
             return Result<std::shared_ptr<NativeExtensionScriptSession>>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
         auto selected = FindNativeService(*state_, *found);
         if (selected.HasError())
@@ -106,10 +107,10 @@ namespace Horo::Extensions {
         auto publication = std::move(selected).Value();
         if (!publication->script || !publication->descriptors || !policy.imports.empty())
             return Result<std::shared_ptr<NativeExtensionScriptSession>>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
-        auto import = ScriptImport(*module, *publication);
-        if (import.HasError())
-            return Result<std::shared_ptr<NativeExtensionScriptSession>>::Failure(import.ErrorValue());
-        policy.imports.push_back(std::move(import).Value());
+        auto capabilityImport = ScriptImport(*nativeModule, *publication);
+        if (capabilityImport.HasError())
+            return Result<std::shared_ptr<NativeExtensionScriptSession>>::Failure(capabilityImport.ErrorValue());
+        policy.imports.push_back(std::move(capabilityImport).Value());
         auto contextResult = ScriptCapabilityContext::Create(state_->invocations, std::move(policy), {.parentCancellation = cancellation});
         if (contextResult.HasError())
             return Result<std::shared_ptr<NativeExtensionScriptSession>>::Failure(contextResult.ErrorValue());
@@ -117,7 +118,7 @@ namespace Horo::Extensions {
         auto binding = context.Bind(publication->shape.scriptApi);
         if (binding.HasError())
             return Result<std::shared_ptr<NativeExtensionScriptSession>>::Failure(binding.ErrorValue());
-        auto impl = std::make_unique<NativeExtensionScriptSession::Impl>(module, publication, *found, std::move(context),
+        auto impl = std::make_unique<NativeExtensionScriptSession::Impl>(nativeModule, publication, *found, std::move(context),
                                                                          std::move(binding).Value());
         return Result<std::shared_ptr<NativeExtensionScriptSession>>::Success(
             std::shared_ptr<NativeExtensionScriptSession>{new NativeExtensionScriptSession{std::move(impl)}});
@@ -142,7 +143,7 @@ namespace Horo::Extensions {
                                                               const CancellationToken &cancellation) {
         if (impl_->owner != std::this_thread::get_id())
             return Result<std::int64_t>::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
-        if (!ScriptSessionUsable(*impl_->module, impl_->binding, *impl_->publication))
+        if (!ScriptSessionUsable(*impl_->nativeModule, impl_->binding, *impl_->publication))
             return Result<std::int64_t>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
         if (!InvocationShape(function, arguments))
             return Result<std::int64_t>::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid));
@@ -154,8 +155,8 @@ namespace Horo::Extensions {
             return Result<std::int64_t>::Failure(started.ErrorValue());
         auto controller = std::move(started).Value();
         CallCancellation cancelled{cancellation, controller.Cancellation()};
-        auto result = InvokeNativeServiceImport(*impl_->module, impl_->import, {function, arguments, {&cancelled, CallCancelled}},
-                                                controller.Cancellation());
+        auto result = InvokeNativeServiceImport(*impl_->nativeModule, impl_->resolvedImport,
+                                                {function, arguments, {&cancelled, CallCancelled}}, controller.Cancellation());
         if (CallCancelled(&cancelled))
             static_cast<void>(controller.Handle().RequestCancellation());
         auto completed = Finish(controller, result);

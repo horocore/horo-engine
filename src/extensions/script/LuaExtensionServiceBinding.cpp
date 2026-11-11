@@ -134,7 +134,7 @@ namespace Horo::Extensions {
         }
 
         int Run(lua_State *state) {
-            auto &execution = Owner(state);
+            const auto &execution = Owner(state);
             luaopen_base(state);
             lua_pop(state, 1);
             if (luaL_loadbufferx(state, execution.source.data(), execution.source.size(), "extension-reference", "t") != LUA_OK)
@@ -184,10 +184,10 @@ namespace Horo::Extensions {
     }
 
     Result<std::int64_t> ExecuteHeadlessLuaExtensionService(HeadlessExtensionHost &host, const std::string_view extension,
-                                                            const std::string_view module, const std::string_view importId,
+                                                            const std::string_view moduleId, const std::string_view importId,
                                                             ScriptCapabilityContextDescriptor policy, const std::string_view source,
                                                             const CancellationToken &cancellation, const LuaExtensionServiceLimits limits) {
-        auto binding = host.BindScript(extension, module, importId, std::move(policy), cancellation);
+        auto binding = host.BindScript(extension, moduleId, importId, std::move(policy), cancellation);
         if (binding.HasError())
             return Result<std::int64_t>::Failure(binding.ErrorValue());
         return ExecuteLuaExtensionService(*binding.Value(), source, cancellation, limits);

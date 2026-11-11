@@ -66,8 +66,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         if (!snapshot || !snapshot->terminalResult)
             InvalidValue("Synchronous invocation did not produce its actual terminal outcome.");
         // Drain the actual canonical event queue, including prior async calls; handles retain exact immutable results.
-        auto drained = authority->Poll();
-        if (drained.HasError())
+        if (auto drained = authority->Poll(); drained.HasError())
             throw ConversionFailure{drained.ErrorValue()};
         return values.WriteOutcome(std::move(*snapshot->terminalResult));
     }
@@ -176,8 +175,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         if (result)
             return;
         Active active{*this};
-        auto events = authority->Poll();
-        if (events.HasError())
+        if (auto events = authority->Poll(); events.HasError())
             throw ConversionFailure{events.ErrorValue()};
         Deliver();
         Jobs();

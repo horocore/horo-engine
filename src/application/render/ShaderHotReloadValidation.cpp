@@ -167,7 +167,8 @@ namespace Horo::Application::ShaderHotReloadDetail {
         if (request.programs.empty() || request.programs.size() > MaximumPrograms || target.liveGeneration == 0)
             return Result<void>::Failure(MakeError(ShaderHotReloadErrors::InvalidRequest));
         // Reject the complete ownership envelope before canonical validation can allocate scratch data.
-        Budget input(configuration.maximumInputBytes), output(configuration.maximumCompiledBytes);
+        Budget input(configuration.maximumInputBytes);
+        Budget output(configuration.maximumCompiledBytes);
         output.Add(sizeof(CompiledSet));
         input.Rows(request.programs);
         for (const auto &program : request.programs) {

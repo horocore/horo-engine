@@ -36,11 +36,12 @@ namespace Horo::Editor {
 
         /** @brief Resolves build lifecycle feedback independently of widget construction. */
         Ui::BadgeTone BuildBadgeTone(const Application::GameplayBuildState state) {
+            using enum Horo::Editor::Ui::BadgeTone;
             if (state == Application::GameplayBuildState::Succeeded)
-                return Ui::BadgeTone::Success;
+                return Success;
             if (BuildIsRunning(state))
-                return Ui::BadgeTone::Accent;
-            return Ui::BadgeTone::Error;
+                return Accent;
+            return Error;
         }
 
         /** @brief Resolves stage feedback while retaining completed-stage precedence. */
@@ -132,7 +133,7 @@ namespace Horo::Editor {
             build_ = builds_->QueryActiveProject(request_.projectRoot);
             if (build_)
                 retainedBuild_ = build_->id;
-            else if (retainedBuild_)
+            else if (retainedBuild_.has_value())
                 build_ = builds_->Query(*retainedBuild_);
         }
         if (output_) {
@@ -303,7 +304,7 @@ namespace Horo::Editor {
         int active = BuildStageIndex(build_->state);
         if (!Running()) {
             for (auto record = outputSnapshot_.records.rbegin(); record != outputSnapshot_.records.rend(); ++record) {
-                if (!build_->operationId || record->operationId != build_->operationId)
+                if (!build_->operationId.has_value() || record->operationId != build_->operationId)
                     continue;
                 if (record->stage == "configure" || record->stage == "build" || record->stage == "validate") {
                     active = OutputStageIndex(record->stage);
@@ -351,7 +352,7 @@ namespace Horo::Editor {
             Ui::ErrorText(error_->message.c_str(), fonts);
         bool records{};
         for (const auto &record : outputSnapshot_.records) {
-            if (!build_->operationId || record.operationId != build_->operationId)
+            if (!build_->operationId.has_value() || record.operationId != build_->operationId)
                 continue;
             records = true;
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, record.message,

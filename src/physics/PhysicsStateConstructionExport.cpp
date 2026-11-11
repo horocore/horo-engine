@@ -122,7 +122,9 @@ namespace Horo::Physics::StateDetail {
 
         const ConstructionRecipePool &pool_;
         ConstructionRecipeExportStorage storage_;
-        std::size_t nodeCount_{}, edgeCount_{}, depth_{};
+        std::size_t nodeCount_{};
+        std::size_t edgeCount_{};
+        std::size_t depth_{};
     };
 
     /** @copydoc ConstructionRecipePool::Export */

@@ -23,7 +23,8 @@ namespace Horo::Physics::StateDetail {
 
         bool Parameters(Wire &wire, decltype(PhysicsConstraintDescriptor::parameters) &v, bool reading) noexcept {
             auto kind = static_cast<std::uint8_t>(v.index());
-            float first{}, second{};
+            float first{};
+            float second{};
             std::visit([&](const auto &value) {
                 Bounds(value, first, second);
             }, v);

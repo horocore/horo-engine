@@ -100,21 +100,22 @@ namespace Horo::Render {
     DirectionalShadowProfile MakeDirectionalShadowProfile(DirectionalShadowQuality quality) noexcept {
         DirectionalShadowProfile profile;
         switch (quality) {
-            case DirectionalShadowQuality::Off:
+            using enum Horo::Render::DirectionalShadowQuality;
+            case Off:
                 profile.enabled = false;
                 break;
-            case DirectionalShadowQuality::Low:
+            case Low:
                 profile.cascadeCount = 1;
                 profile.tileResolution = 1024;
                 profile.filterRadius = 0;
                 break;
-            case DirectionalShadowQuality::Medium:
+            case Medium:
                 profile.cascadeCount = 2;
                 profile.tileResolution = 1024;
                 break;
-            case DirectionalShadowQuality::High:
+            case High:
                 break;
-            case DirectionalShadowQuality::Ultra:
+            case Ultra:
                 profile.tileResolution = 2048;
                 profile.filterRadius = 2;
                 break;

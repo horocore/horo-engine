@@ -12,6 +12,9 @@ namespace Horo::Runtime {
                 active_ = true;
             }
 
+            PreparationScope(const PreparationScope &) = delete;
+            PreparationScope &operator=(const PreparationScope &) = delete;
+
             ~PreparationScope() {
                 active_ = false;
             }

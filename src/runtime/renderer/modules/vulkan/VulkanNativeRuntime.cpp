@@ -665,11 +665,11 @@ namespace Horo::Render {
 
             /** @brief Publishes only the actual initialized forward draw and GPU simulation routes. */
             void PublishVfxCapabilities() {
+                using enum Horo::Render::RenderCapability;
                 if (graph_.SupportsVfxForwardInstancing())
-                    resourceCapabilities_.features.Enable(RenderCapability::VfxForwardInstancing);
+                    resourceCapabilities_.features.Enable(VfxForwardInstancing);
                 if (graph_.SupportsVfxGpu())
-                    for (const auto capability :
-                         {RenderCapability::VfxGpuSimulation, RenderCapability::VfxGpuDraw, RenderCapability::VfxGpuReadback})
+                    for (const auto capability : {VfxGpuSimulation, VfxGpuDraw, VfxGpuReadback})
                         resourceCapabilities_.features.Enable(capability);
             }
 

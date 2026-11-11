@@ -58,8 +58,7 @@ namespace Horo::Runtime {
     }
 
     Result<void> SceneAnimationRuntime::Startup(const CancellationToken &cancellation) {
-        const auto admission = state_->Admit(true);
-        if (admission.HasError())
+        if (const auto admission = state_->Admit(true); admission.HasError())
             return admission;
         if (state_->started)
             return Result<void>::Failure(MakeError(A::AnimationErrors::GraphAdmissionRejected));
@@ -79,8 +78,7 @@ namespace Horo::Runtime {
 
     Result<SceneAnimationObservation> SceneAnimationRuntime::Query(EntityRef entity) const {
         using Return = Result<SceneAnimationObservation>;
-        const auto admission = state_->Admit();
-        if (admission.HasError())
+        if (const auto admission = state_->Admit(); admission.HasError())
             return Return::Failure(admission.ErrorValue());
         const auto actor = state_->Find(entity);
         if (!actor)
@@ -90,8 +88,7 @@ namespace Horo::Runtime {
         observation.authoring = actor->authoring;
         observation.instance = actor->instance;
         observation.state = actor->playing ? A::AnimationPlaybackState::Playing : A::AnimationPlaybackState::Paused;
-        const auto publication = actor->graph.Publication();
-        if (publication.currentPose.IsValid()) {
+        if (const auto publication = actor->graph.Publication(); publication.currentPose.IsValid()) {
             const auto previous = publication.previousPose.IsValid() ? publication.previousPose : publication.currentPose;
             observation.component = A::RuntimeAnimationComponent{A::CurrentAnimationComponentContractVersion,
                                                                  actor->instance,
@@ -106,8 +103,7 @@ namespace Horo::Runtime {
     }
 
     Result<void> SceneAnimationRuntime::SetPlaying(EntityRef entity, bool playing) {
-        const auto admission = state_->Admit(true);
-        if (admission.HasError())
+        if (const auto admission = state_->Admit(true); admission.HasError())
             return admission;
         const auto actor = state_->Find(entity);
         if (!actor)
@@ -117,15 +113,16 @@ namespace Horo::Runtime {
     }
 
     A::GraphInstanceOutcome SceneAnimationRuntime::QueueTrigger(EntityRef entity, A::GraphParameterId parameter) {
+        using enum Horo::Animation::GraphInstanceFailure;
         if (!state_->OnOwner())
-            return Rejected(A::GraphInstanceFailure::ThreadViolation);
+            return Rejected(ThreadViolation);
         if (state_->closed || state_->attempting)
-            return Rejected(A::GraphInstanceFailure::AdmissionRejected);
+            return Rejected(AdmissionRejected);
         if (state_->config.ownerCancellation.IsCancellationRequested())
-            return Rejected(A::GraphInstanceFailure::Cancelled);
+            return Rejected(Cancelled);
         const auto actor = state_->Find(entity);
         if (!actor)
-            return Rejected(A::GraphInstanceFailure::HandleStale);
+            return Rejected(HandleStale);
         return actor->graph.QueueTrigger(parameter);
     }
 

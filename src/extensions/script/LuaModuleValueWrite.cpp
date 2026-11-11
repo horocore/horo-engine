@@ -10,8 +10,7 @@ namespace Horo::Extensions::LuaModuleDetail {
     }
 
     int CollectBox(lua_State *lua) {
-        auto **box = static_cast<Box **>(lua_touserdata(lua, 1));
-        if (box) {
+        if (auto **box = static_cast<Box **>(lua_touserdata(lua, 1)); box) {
             delete *box;
             *box = nullptr;
         }

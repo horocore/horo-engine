@@ -22,7 +22,10 @@ namespace Horo::Physics::Detail {
         std::vector<std::size_t> joints;                          /**< Same strict stable-ID order as binding.stableJoints. */
         std::vector<PhysicsStateShapeBinding> shapesByHandle;
         std::vector<CanonicalPhysicsStateShapeRecordIndex> shapeRecords;
-        std::size_t sceneBodies{}, queryBodies{}, sceneShapes{}, sceneJoints{};
+        std::size_t sceneBodies{};
+        std::size_t queryBodies{};
+        std::size_t sceneShapes{};
+        std::size_t sceneJoints{};
 
         [[nodiscard]] std::size_t RetainedPayloadBytes() const noexcept;
     };

@@ -26,7 +26,8 @@ namespace Horo::Extensions {
      * Owner fields still drive VM access; Close snapshots both actual contexts and never reads mutable owner containers.
      */
     struct ScriptModulePublishedContexts final {
-        std::shared_ptr<ScriptModuleContext> active, predecessor;
+        std::shared_ptr<ScriptModuleContext> active;
+        std::shared_ptr<ScriptModuleContext> predecessor;
 
         void Close() const noexcept {
             if (active)

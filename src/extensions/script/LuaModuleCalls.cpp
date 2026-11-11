@@ -48,8 +48,7 @@ namespace Horo::Extensions::LuaModuleDetail {
             scratchResult = std::move(*snapshot->terminalResult);
             values.PrepareOutcome(*scratchResult);
             scratchResult.reset();
-            auto drained = authority->Poll();
-            if (drained.HasError())
+            if (auto drained = authority->Poll(); drained.HasError())
                 return RecordError(drained.ErrorValue());
             return true;
         } catch (const Failure &failure) {
@@ -71,10 +70,11 @@ namespace Horo::Extensions::LuaModuleDetail {
             return luaL_error(lua, "Value projection stack limit.");
         if (lua_type(lua, lua_upvalueindex(1)) != LUA_TSTRING || lua_type(lua, lua_upvalueindex(2)) != LUA_TSTRING)
             return luaL_error(lua, "Host call identity is invalid.");
-        std::size_t aliasSize{}, methodSize{};
+        std::size_t aliasSize{};
+        std::size_t methodSize{};
         const char *alias = lua_tolstring(lua, lua_upvalueindex(1), &aliasSize);
-        const char *method = lua_tolstring(lua, lua_upvalueindex(2), &methodSize);
-        if (!state.PrepareCall(lua, {alias, aliasSize}, {method, methodSize}))
+        if (const char *method = lua_tolstring(lua, lua_upvalueindex(2), &methodSize);
+            !state.PrepareCall(lua, {alias, aliasSize}, {method, methodSize}))
             return luaL_error(lua, "Host call failed its declared boundary.");
         if (state.awaiting)
             return lua_yieldk(lua, 0, 0, Continue);
@@ -92,8 +92,7 @@ namespace Horo::Extensions::LuaModuleDetail {
             if (size == 0 || size > 20)
                 Invalid("u64 decimal is out of range.");
             std::uint64_t value{};
-            const auto parsed = std::from_chars(text, text + size, value);
-            if (parsed.ec != std::errc{} || parsed.ptr != text + size)
+            if (const auto parsed = std::from_chars(text, text + size, value); parsed.ec != std::errc{} || parsed.ptr != text + size)
                 Invalid("u64 decimal is out of range.");
             scratchValue = ScriptValue{value};
             values.PrepareValueBox(BoxKind::Unsigned, *scratchValue);

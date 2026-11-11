@@ -33,7 +33,10 @@ namespace Horo::Physics::Detail {
         CancellationToken restoreCancellation;
         CanonicalWorldHandle pendingNative;
         std::uint64_t pendingPublicationRevision{};
-        std::uint64_t nextRestoreSerial{1}, pendingRestoreSerial{}, validatedRestoreSerial{}, validatedPublicationRevision{};
+        std::uint64_t nextRestoreSerial{1};
+        std::uint64_t pendingRestoreSerial{};
+        std::uint64_t validatedRestoreSerial{};
+        std::uint64_t validatedPublicationRevision{};
 
         /** @brief Transactional cold same-world admission; registers no global/native ownership until every reservation fits. */
         [[nodiscard]] static Result<std::shared_ptr<PhysicsWorldSnapshotState>> Prepare(

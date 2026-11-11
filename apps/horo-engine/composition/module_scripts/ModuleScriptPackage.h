@@ -8,8 +8,14 @@
 
 namespace Horo::Application::Internal {
     struct ExtensionScriptOptions final {
-        std::filesystem::path packageRoot, hostTrust, temporaryRoot, script;
-        std::string package, module, import, publisher;
+        std::filesystem::path packageRoot;
+        std::filesystem::path hostTrust;
+        std::filesystem::path temporaryRoot;
+        std::filesystem::path script;
+        std::string package;
+        std::string module;
+        std::string import;
+        std::string publisher;
         bool moduleOperation{};
         bool refreshReference{};
         Extensions::ScriptModuleRuntimeKind runtime{Extensions::ScriptModuleRuntimeKind::Lua54};
@@ -27,7 +33,8 @@ namespace Horo::Application::Internal {
         Extensions::ExtensionManifest manifest;
         std::shared_ptr<const Security::ArtifactVerifier> verifier;
         std::vector<ExtensionScriptArtifact> artifacts;
-        std::string source, service;
+        std::string source;
+        std::string service;
     };
 
     class ExtensionScriptArtifactGate final : public Security::NativeArtifactGate {

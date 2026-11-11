@@ -86,8 +86,8 @@ namespace Horo::Render {
         using Return = Result<std::shared_ptr<const CookedColorTransform>>;
         if (!DescriptorValid(descriptor))
             return Return::Failure(MakeError(ColorPipelineErrors::InvalidTransform));
-        const auto expected = static_cast<std::uint64_t>(descriptor.dimension) * descriptor.dimension * descriptor.dimension * 3U;
-        if (rgb.size() != expected)
+        if (const auto expected = static_cast<std::uint64_t>(descriptor.dimension) * descriptor.dimension * descriptor.dimension * 3U;
+            rgb.size() != expected)
             return Return::Failure(MakeError(ColorPipelineErrors::InvalidTransform));
         for (float value : rgb)
             if (!std::isfinite(value))

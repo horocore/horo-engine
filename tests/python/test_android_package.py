@@ -188,14 +188,21 @@ class AndroidPackageTests(unittest.TestCase):
         with self.assertRaisesRegex(AndroidError, "declared library set"):
             stage_native(native.parent, self.root / "stage", self.tools, self.profile, ["arm64-v8a"])
 
-    def test_portable_paths_reject_traversal_absolute_and_links(self):
+    def test_portable_paths_reject_traversal_and_absolute(self):
         self.assertEqual(relative_name("assets/ü file.json"), "assets/ü file.json")
         for name in ("../bad", "/bad", "a/../b", "a//b", "C:/bad", "a\\bad"):
             with self.subTest(name=name), self.assertRaises(AndroidError):
                 relative_name(name)
+
+    def test_input_path_rejects_links(self):
         source = self.root / "ordinary"
         source.write_bytes(b"ok")
-        (self.root / "link").symlink_to(source)
+        try:
+            (self.root / "link").symlink_to(source)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest("Creating symlinks requires Windows symlink privilege")
+            raise
         with self.assertRaises(AndroidError):
             input_path(self.root, "link")
 

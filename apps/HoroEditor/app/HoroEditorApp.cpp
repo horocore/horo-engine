@@ -2361,7 +2361,8 @@ namespace Horo::Editor {
             bool surfaceClosed_{};
             std::uint64_t presentedFrames_{};
             bool colorExitReported_{};
-            Duration colorAcceptedTime_{}, colorCandidateTime_{};
+            Duration colorAcceptedTime_{};
+            Duration colorCandidateTime_{};
             bool colorClockAccepted_{};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             EditorSurfaceLifecycleQualification qualification_;
@@ -2639,6 +2640,11 @@ namespace Horo::Editor {
 
         struct SimulatorInputOwnerScope final {
             Application::Internal::SimulatorPlayHost *host{};
+
+            explicit SimulatorInputOwnerScope(Application::Internal::SimulatorPlayHost *value = nullptr) noexcept : host(value) {}
+
+            SimulatorInputOwnerScope(const SimulatorInputOwnerScope &) = delete;
+            SimulatorInputOwnerScope &operator=(const SimulatorInputOwnerScope &) = delete;
 
             ~SimulatorInputOwnerScope() {
                 if (host)
@@ -2939,7 +2945,7 @@ namespace Horo::Editor {
                 return std::nullopt;
             }
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
-            auto &xrComposition = p.presentation.composition;
+            const auto &xrComposition = p.presentation.composition;
             XrInputOwnerScope xrInputOwner{xrComposition.xrPlay.get()};
 #endif
             SimulatorInputOwnerScope simulatorInputOwner{p.presentation.composition.simulator.get()};
@@ -2949,8 +2955,8 @@ namespace Horo::Editor {
             auto preparedScenes = PrepareEditorScenes(p, createdRuntime.Value()->DispatchSource(), std::move(preparedUi->sources));
             if (!preparedScenes)
                 return std::nullopt;
-            auto &scenePolicy = preparedScenes->policy;
-            auto &previewProjectRoot = preparedScenes->projectRoot;
+            const auto &scenePolicy = preparedScenes->policy;
+            const auto &previewProjectRoot = preparedScenes->projectRoot;
             auto &preview = preparedScenes->preview;
             auto runtimeScene = std::move(preview.scenes);
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();

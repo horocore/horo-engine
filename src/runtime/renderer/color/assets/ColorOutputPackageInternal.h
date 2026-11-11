@@ -24,7 +24,7 @@ namespace Horo::Render::Internal::ColorPackageDetail {
     }
 
     /** @brief Preserves a failing synchronous validation result. @param result Actual owner result. */
-    inline void Take(Result<void> result) {
+    inline void Take(const Result<void> &result) {
         if (result.HasError())
             throw Failure{result.ErrorValue()};
     }

@@ -4,7 +4,10 @@
 
 namespace Horo::Physics::Detail {
     struct CanonicalStateSceneCounts final {
-        std::size_t bodies{}, shapes{}, constraints{}, queryFixtures{};
+        std::size_t bodies{};
+        std::size_t shapes{};
+        std::size_t constraints{};
+        std::size_t queryFixtures{};
     };
 
     struct CanonicalStateSceneBody final {

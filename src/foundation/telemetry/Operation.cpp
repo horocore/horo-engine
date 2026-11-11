@@ -20,9 +20,27 @@ namespace Horo::Telemetry {
             OperationId parentId{};
         };
 
+        thread_local const std::vector<ActiveOperation> *activeOperationStack{};
+
+        /** @brief Publishes the lazy thread-local stack only after fallible construction, and retires its borrow before destruction. */
+        struct OperationStack final {
+            std::vector<ActiveOperation> operations{std::size_t{0}};
+
+            OperationStack() {
+                activeOperationStack = &operations;
+            }
+
+            ~OperationStack() {
+                activeOperationStack = nullptr;
+            }
+
+            OperationStack(const OperationStack &) = delete;
+            OperationStack &operator=(const OperationStack &) = delete;
+        };
+
         std::vector<ActiveOperation> &ActiveOperations() {
-            thread_local std::vector<ActiveOperation> operations;
-            return operations;
+            thread_local OperationStack stack;
+            return stack.operations;
         }
 
         void PushOperation(const OperationId id, const OperationId parentId) {
@@ -48,10 +66,10 @@ namespace Horo::Telemetry {
 
     /** @copydoc CaptureOperationIdentity */
     OperationContext CaptureOperationIdentity() noexcept {
-        const auto &operations = ActiveOperations();
-        if (operations.empty())
+        const auto *operations = activeOperationStack;
+        if (!operations || operations->empty())
             return {};
-        return {.operationId = operations.back().id, .parentOperationId = operations.back().parentId};
+        return {.operationId = operations->back().id, .parentOperationId = operations->back().parentId};
     }
 
     /** @copydoc CaptureOperationContext */

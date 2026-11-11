@@ -7,20 +7,22 @@ namespace Horo::Render::RegisterRasterCookDetail {
         struct NativeType final {
             ShaderValueType type;
             std::uint8_t columns;
-            std::uint32_t size, alignment;
+            std::uint32_t size;
+            std::uint32_t alignment;
         };
 
         NativeType Type(std::string_view token) {
+            using enum Horo::Render::ShaderValueType;
             if (token == "uint")
-                return {ShaderValueType::Uint32, 1, 4, 4};
+                return {Uint32, 1, 4, 4};
             if (token == "float2")
-                return {ShaderValueType::Float32, 2, 8, 8};
+                return {Float32, 2, 8, 8};
             if (token == "float3")
-                return {ShaderValueType::Float32, 3, 16, 16};
+                return {Float32, 3, 16, 16};
             if (token == "packed_float3")
-                return {ShaderValueType::Float32, 3, 12, 4};
+                return {Float32, 3, 12, 4};
             if (token == "float4")
-                return {ShaderValueType::Float32, 4, 16, 16};
+                return {Float32, 4, 16, 16};
             throw InvalidEvidence{};
         }
 
@@ -35,7 +37,8 @@ namespace Horo::Render::RegisterRasterCookDetail {
                 return;
             }
             const auto body = StructureBody(tokens, type);
-            std::uint32_t offset{}, alignment = 1;
+            std::uint32_t offset{};
+            std::uint32_t alignment = 1;
             for (std::size_t at = 0; at < body.size(); at += 3) {
                 if (body.size() - at < 3 || storage.members.size() == MaximumMembers)
                     throw InvalidEvidence{};
@@ -46,7 +49,7 @@ namespace Horo::Render::RegisterRasterCookDetail {
                     throw InvalidEvidence{};
                 offset = Align(offset, field.alignment);
                 alignment = std::max(alignment, field.alignment);
-                storage.members.push_back({std::string{body[at + 1]}, field.type, field.columns, offset});
+                storage.members.emplace_back(std::string{body[at + 1]}, field.type, field.columns, offset);
                 offset += field.size;
             }
             if (storage.members.empty())

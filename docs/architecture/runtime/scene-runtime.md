@@ -108,6 +108,25 @@ rejects one identity requested with conflicting types. The definition is an
 in-memory typed handoff, not a serialized schema, and therefore carries no
 format version or migration policy.
 
+All three Scene preparation queue entry points borrow `const RuntimeSceneDefinition&`
+for their synchronous admission call. An asset-bearing operation copies the complete
+immutable definition into its detached private preparation inside the existing
+allocation-error boundary; it retains no reference to the caller. Validation still
+precedes owned allocation, and publication-check/aggregate-restore ownership keeps
+its existing transfer, rollback and retirement rules. The private dependency-entry
+vector uses a fallible empty count constructor so checked-library bookkeeping can
+unwind through that same preparation boundary.
+
+This avoids an allocating MSVC checked-vector move of the definition before the
+queue method can catch allocation failure. It does not change the public definition
+or entity aggregate layouts, their storage/move traits, activation publication timing,
+or the original asset discovery last-good transaction. Lvalue and rvalue callers
+remain source-compatible; an rvalue definition is no longer consumed at admission.
+Exact pointer-to-member signatures for the three queue methods must use
+`const RuntimeSceneDefinition&` instead of a value parameter, and dependent binaries
+must be rebuilt. The original exhaustive Scene discovery allocation regression is
+retained without narrowing its failure window or excluding checked-library work.
+
 `RuntimeSceneService::QueuePreparation` is the single activation admission path.
 The former public prepare/candidate activation pair does not exist. Assetless
 definitions remain valid for editor preview and headless use. Asset-bearing

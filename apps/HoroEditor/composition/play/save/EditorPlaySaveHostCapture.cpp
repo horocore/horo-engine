@@ -217,7 +217,8 @@ namespace Horo::Application::Internal {
     /** @copydoc ValidatePlaySaveCurrentScope */
     Result<void> ValidatePlaySaveCurrentScope(Runtime::RuntimeSceneView scene, std::span<const Editor::PlaySaveGameplayBinding> gameplay,
                                               PlaySavePhysicsReadPolicy physics) {
-        if (physics != PlaySavePhysicsReadPolicy::Unavailable && physics != PlaySavePhysicsReadPolicy::CanonicalRecordRequired)
+        using enum Horo::Application::Internal::PlaySavePhysicsReadPolicy;
+        if (physics != Unavailable && physics != CanonicalRecordRequired)
             return Result<void>::Failure(Unsupported());
         if (!scene.IsCurrent() || scene.SlotCount() > MaximumEntities || scene.BaselineCount() != 0)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::CaptureContextInvalid));
@@ -227,7 +228,7 @@ namespace Horo::Application::Internal {
                 continue;
             if (!entity->components)
                 return Result<void>::Failure(Unsupported());
-            if (UnregisteredState(*entity->components, gameplay, physics == PlaySavePhysicsReadPolicy::CanonicalRecordRequired))
+            if (UnregisteredState(*entity->components, gameplay, physics == CanonicalRecordRequired))
                 return Result<void>::Failure(Unsupported());
         }
         return Result<void>::Success();
@@ -237,24 +238,26 @@ namespace Horo::Application::Internal {
     Result<void> ValidatePlaySaveCoreReadState(const Runtime::RuntimeSceneDefinition &definition,
                                                std::span<const Editor::PlaySaveGameplayBinding> gameplay,
                                                PlaySavePhysicsReadPolicy physics) {
-        if (physics != PlaySavePhysicsReadPolicy::Unavailable && physics != PlaySavePhysicsReadPolicy::CanonicalRecordRequired)
+        using enum Horo::Application::Internal::PlaySavePhysicsReadPolicy;
+        if (physics != Unavailable && physics != CanonicalRecordRequired)
             return Result<void>::Failure(Unsupported());
         if (definition.Entities().size() > MaximumEntities)
             return Result<void>::Failure(Unsupported());
         for (const auto &entity : definition.Entities())
-            if (UnregisteredState(entity.components, gameplay, physics == PlaySavePhysicsReadPolicy::CanonicalRecordRequired))
+            if (UnregisteredState(entity.components, gameplay, physics == CanonicalRecordRequired))
                 return Result<void>::Failure(Unsupported());
         return Result<void>::Success();
     }
 
     /** @copydoc ValidatePlaySaveCoreStructure */
     Result<void> ValidatePlaySaveCoreStructure(const Runtime::RuntimeSceneDefinition &definition, PlaySavePhysicsReadPolicy physics) {
-        if (physics != PlaySavePhysicsReadPolicy::Unavailable && physics != PlaySavePhysicsReadPolicy::CanonicalRecordRequired)
+        using enum Horo::Application::Internal::PlaySavePhysicsReadPolicy;
+        if (physics != Unavailable && physics != CanonicalRecordRequired)
             return Result<void>::Failure(Unsupported());
         if (definition.Entities().size() > MaximumEntities)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::CaptureBudgetExceeded));
         for (const auto &entity : definition.Entities())
-            if (UnsupportedPeerState(entity.components, physics == PlaySavePhysicsReadPolicy::CanonicalRecordRequired))
+            if (UnsupportedPeerState(entity.components, physics == CanonicalRecordRequired))
                 return Result<void>::Failure(Unsupported());
         return Result<void>::Success();
     }

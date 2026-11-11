@@ -64,11 +64,10 @@ namespace Horo::Render::RegisterRasterCookDetail {
         void InterfaceField(const TokenView field, const ShaderStage stage, const ShaderInterfaceDirection direction, NativeStage &result) {
             if (field.size() < 8 || !Identifier(field[1]) || field[2] != "[" || field[3] != "[")
                 throw InvalidEvidence{};
-            const auto size = field.size();
-            if (field[size - 3] != "]" || field[size - 2] != "]" || field[size - 1] != ";")
+            if (const auto size = field.size(); field[size - 3] != "]" || field[size - 2] != "]" || field[size - 1] != ";")
                 throw InvalidEvidence{};
             const auto location = InterfaceAttribute(field);
-            if (!location)
+            if (!location.has_value())
                 return;
             if (result.interfaces.size() == 256)
                 throw InvalidEvidence{};
@@ -154,9 +153,9 @@ namespace Horo::Render::RegisterRasterCookDetail {
             if (attribute == 0 || !Identifier(argument[attribute - 1]))
                 throw InvalidEvidence{};
             constexpr std::array<std::string_view, 4> image{"texture2d", "<", "float", ">"};
-            const bool validType =
-                texture ? attribute == 5 && std::ranges::equal(argument.first(4), image) : attribute == 2 && argument[0] == "sampler";
-            if (!validType)
+            if (const bool validType =
+                    texture ? attribute == 5 && std::ranges::equal(argument.first(4), image) : attribute == 2 && argument[0] == "sampler";
+                !validType)
                 throw InvalidEvidence{};
             auto &resources = texture ? result.textures : result.samplers;
             RetainSampled(resources, {std::string{argument[attribute - 1]}, ResourceIndex(argument, attribute + 3)});
@@ -206,7 +205,8 @@ namespace Horo::Render::RegisterRasterCookDetail {
 
         /** @brief Splits finite resource arguments without treating commas inside annotations as separators. */
         void Parameters(const TokenView tokens, const TokenView parameters, const ShaderStage stage, NativeStage &result) {
-            std::size_t start{}, depth{};
+            std::size_t start{};
+            std::size_t depth{};
             for (std::size_t at = 0; at < parameters.size(); ++at) {
                 if (parameters[at] == "(")
                     ++depth;

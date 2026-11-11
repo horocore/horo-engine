@@ -8,13 +8,15 @@
 
 namespace Horo::Render::D3D12Detail {
     struct IssuedRange final {
-        std::uint64_t first{}, last{};
+        std::uint64_t first{};
+        std::uint64_t last{};
     };
 
     struct CommandQueueHistory final {
         D3D12CommandQueueBinding binding;
         std::vector<IssuedRange> issued;
-        std::uint64_t lastSignal{}, expiredThrough{};
+        std::uint64_t lastSignal{};
+        std::uint64_t expiredThrough{};
         [[nodiscard]] bool Contains(std::uint64_t value) const noexcept;
     };
 
@@ -25,6 +27,9 @@ namespace Horo::Render::D3D12Detail {
         explicit CommandCall(bool &value) noexcept : active(value) {
             active = true;
         }
+
+        CommandCall(const CommandCall &) = delete;
+        CommandCall &operator=(const CommandCall &) = delete;
 
         ~CommandCall() {
             active = false;
@@ -65,9 +70,12 @@ namespace Horo::Render::D3D12Detail {
         std::vector<CommandQueueHistory> queues_;
         D3D12CommandLimits limits_;
         D3D12BarrierMode mode_;
-        std::uint64_t deviceIncarnation_{}, lastOrder_{};
+        std::uint64_t deviceIncarnation_{};
+        std::uint64_t lastOrder_{};
         std::thread::id owner_{std::this_thread::get_id()};
-        bool initialized_{}, accepting_{}, active_{};
+        bool initialized_{};
+        bool accepting_{};
+        bool active_{};
     };
 
     [[nodiscard]] Result<void> ValidateCommandConfiguration(const D3D12CommandConfiguration &configuration);

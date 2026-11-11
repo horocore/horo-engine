@@ -7,7 +7,9 @@
 
 namespace Horo::Application::Internal {
     struct PlaySavePhysicsContentLimits final {
-        std::size_t maximumEntitySlots{}, maximumMaterials{}, maximumRetainedBytes{};
+        std::size_t maximumEntitySlots{};
+        std::size_t maximumMaterials{};
+        std::size_t maximumRetainedBytes{};
     };
 
     /** @brief Actual Scene-ready canonical material bytes copied cold into immutable content ownership.

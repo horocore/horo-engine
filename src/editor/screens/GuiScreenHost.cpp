@@ -57,17 +57,18 @@ namespace Horo::Editor {
         /** @brief Resolves presentation keys without changing the host-owned action policy. */
         [[nodiscard]] const char *LeaveActionKey(const LeaveAction action) noexcept {
             switch (action) {
-                case LeaveAction::Save:
+                using enum Horo::Editor::LeaveAction;
+                case Save:
                     return "save";
-                case LeaveAction::Discard:
+                case Discard:
                     return "discard";
-                case LeaveAction::CancelOperation:
+                case CancelOperation:
                     return "cancel_operation";
-                case LeaveAction::KeepRunning:
+                case KeepRunning:
                     return "keep_running";
-                case LeaveAction::Wait:
+                case Wait:
                     return "wait";
-                case LeaveAction::Stay:
+                case Stay:
                     return "stay";
             }
             return "stay";
@@ -737,7 +738,7 @@ namespace Horo::Editor {
             if (buildStatusElapsed_ >= 0.25F) {
                 buildStatusElapsed_ = 0;
                 std::optional<Application::GameplayBuildSnapshot> build;
-                if (auto *builds = services_.TryGet<Application::GameplayBuildService>(); builds && nativeBuildSession_)
+                if (const auto *builds = services_.TryGet<Application::GameplayBuildService>(); builds && nativeBuildSession_.has_value())
                     build = builds->Query(*nativeBuildSession_);
                 const bool modalVisible = modalHost_ && dynamic_cast<const BuildModal *>(modalHost_->TopModal()) != nullptr;
                 static_cast<void>(statusItemRegistry_.Update(BackgroundBuildStatusId, BackgroundBuildStatus(build ? &*build : nullptr,
@@ -981,8 +982,7 @@ namespace Horo::Editor {
                 modal = std::make_unique<BuildReleaseModal>(context, BuildReleasePage::Release, std::move(request),
                                                             services.TryGet<Application::GameplayBuildService>(), retainedBuild,
                                                             services.TryGet<IBuildReleaseJobs>());
-            const auto opened = host->OpenRoot(std::move(modal));
-            if (opened.HasError())
+            if (const auto opened = host->OpenRoot(std::move(modal)); opened.HasError())
                 LOG_WARN("editor.build", "Build/release modal admission failed: %s", opened.ErrorValue().code.Value().c_str());
             return true;
         }
@@ -1227,8 +1227,8 @@ namespace Horo::Editor {
                 else if (drawn != 0)
                     ImGui::SameLine(0, gap);
                 ImGui::SetCursorPosX(x);
-                const auto action = actions[index];
-                if (Ui::Button({.label = text(LeaveActionKey(action)).c_str(),
+                if (const auto action = actions[index];
+                    Ui::Button({.label = text(LeaveActionKey(action)).c_str(),
                                 .variant = action == LeaveAction::Save ? Ui::ButtonVariant::Primary : Ui::ButtonVariant::Secondary,
                                 .font = fonts.sans}))
                     selected = action;

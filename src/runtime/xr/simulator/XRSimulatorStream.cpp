@@ -12,6 +12,7 @@ namespace Horo::XR {
         }
 
         void Components(const XRSimulatorPose &pose, XRPoseDescriptor &descriptor) {
+            using enum Horo::XR::XRTrackingLossState;
             if (pose.positionValid)
                 descriptor.components.positionMeters = {pose.position, XRPoseComponentValidity::Tracked};
             if (pose.orientationValid)
@@ -19,19 +20,20 @@ namespace Horo::XR {
             if (pose.positionValid || pose.orientationValid)
                 descriptor.components.confidence = XRTrackingConfidence::High;
             if (pose.positionValid && pose.orientationValid)
-                descriptor.components.loss = XRTrackingLossState::None;
+                descriptor.components.loss = None;
             else if (pose.positionValid)
-                descriptor.components.loss = XRTrackingLossState::OrientationLost;
+                descriptor.components.loss = OrientationLost;
             else if (pose.orientationValid)
-                descriptor.components.loss = XRTrackingLossState::PositionLost;
+                descriptor.components.loss = PositionLost;
         }
 
         XRPoseDescriptor Pose(const XRSimulatorPose &pose, const XRSessionId &session, const std::uint64_t time,
                               const XRSimulationTime simulation, const bool presentation, const bool head) {
+            using enum Horo::XR::XRSpaceKind;
             const auto origin = Value<XRWorldOriginRevision>(1);
             XRPoseDescriptor descriptor{.session = session,
-                                        .source = {{session, {1, 1}}, head ? XRSpaceKind::View : XRSpaceKind::Action, origin},
-                                        .target = {{session, {2, 1}}, XRSpaceKind::Local, origin},
+                                        .source = {{session, {1, 1}}, head ? View : Action, origin},
+                                        .target = {{session, {2, 1}}, Local, origin},
                                         .purpose = presentation ? XRPosePurpose::PresentationPrediction : XRPosePurpose::SimulationInput,
                                         .time = {.runtimeSample = Value<XRRuntimeTime>(time)}};
             if (presentation)
@@ -48,7 +50,8 @@ namespace Horo::XR {
         }
 
         XRFakeActionKind FakeKind(const XRTrackedActionKind kind) noexcept {
-            constexpr std::array values{XRFakeActionKind::Boolean, XRFakeActionKind::Float, XRFakeActionKind::Vector2};
+            using enum Horo::XR::XRFakeActionKind;
+            constexpr std::array values{Boolean, Float, Vector2};
             return values[static_cast<std::size_t>(kind)];
         }
 

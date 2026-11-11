@@ -11,7 +11,8 @@ namespace Horo::Render {
     namespace {
         /** @brief Rejects overlapping descriptor/output storage before any canonical word write. */
         bool Aliases(const void *source, std::size_t bytes, std::span<std::uint32_t> destination) noexcept {
-            const auto a = reinterpret_cast<std::uintptr_t>(source), b = reinterpret_cast<std::uintptr_t>(destination.data());
+            const auto a = reinterpret_cast<std::uintptr_t>(source);
+            const auto b = reinterpret_cast<std::uintptr_t>(destination.data());
             return a <= b ? b - a < bytes : a - b < destination.size_bytes();
         }
 

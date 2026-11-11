@@ -19,7 +19,7 @@ namespace Horo::Physics::Detail {
                 auto analytic = pool.AddAnalytic(child.geometry, control);
                 if (analytic.HasError())
                     return Outcome::Failure(analytic.ErrorValue());
-                children.push_back({std::move(analytic).Value(), child.localPose, children.size() + 1});
+                children.emplace_back(std::move(analytic).Value(), child.localPose, children.size() + 1);
             }
             return pool.AddCompound(children, control);
         }

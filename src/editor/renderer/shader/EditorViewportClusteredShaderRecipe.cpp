@@ -20,20 +20,18 @@ namespace Horo::Editor {
         }
 
         void AddClusterStorage(ShaderManifest &manifest) {
+            using enum Horo::Render::ShaderValueType;
             for (std::uint32_t id = 4; id <= 6; ++id)
                 manifest.bindings.push_back(
                     {{id}, ShaderResourceKind::StorageBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment});
-            const std::array lightParameters{ShaderParameter{{100}, {4}, ShaderValueType::Float32, 1, 4, 1},
-                                             ShaderParameter{{101}, {4}, ShaderValueType::Float32, 1, 3, 1},
-                                             ShaderParameter{{102}, {4}, ShaderValueType::Uint32, 1, 1, 1},
-                                             ShaderParameter{{103}, {4}, ShaderValueType::Float32, 1, 4, 1},
-                                             ShaderParameter{{104}, {4}, ShaderValueType::Float32, 1, 2, 1},
-                                             ShaderParameter{{105}, {4}, ShaderValueType::Uint32, 1, 1, 1},
-                                             ShaderParameter{{106}, {4}, ShaderValueType::Uint32, 1, 1, 1}};
+            const std::array lightParameters{ShaderParameter{{100}, {4}, Float32, 1, 4, 1}, ShaderParameter{{101}, {4}, Float32, 1, 3, 1},
+                                             ShaderParameter{{102}, {4}, Uint32, 1, 1, 1},  ShaderParameter{{103}, {4}, Float32, 1, 4, 1},
+                                             ShaderParameter{{104}, {4}, Float32, 1, 2, 1}, ShaderParameter{{105}, {4}, Uint32, 1, 1, 1},
+                                             ShaderParameter{{106}, {4}, Uint32, 1, 1, 1}};
             manifest.parameters.insert(manifest.parameters.end(), lightParameters.begin(), lightParameters.end());
             for (std::uint32_t id = 110; id <= 113; ++id)
-                manifest.parameters.push_back({{id}, {5}, ShaderValueType::Uint32, 1, 1, 1});
-            manifest.parameters.push_back({{120}, {6}, ShaderValueType::Uint32, 1, 1, 1});
+                manifest.parameters.push_back({{id}, {5}, Uint32, 1, 1, 1});
+            manifest.parameters.push_back({{120}, {6}, Uint32, 1, 1, 1});
         }
     }  // namespace
 

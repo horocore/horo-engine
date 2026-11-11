@@ -11,7 +11,9 @@ namespace Horo::Editor {
         Render::LightPreparationFallback fallback{Render::LightPreparationFallback::AllowBaselineForwardCpu};
         Render::LightCullingBudget budget{static_cast<std::uint32_t>(Render::MaximumSceneLights), 256,
                                           static_cast<std::uint32_t>(Render::MaximumSceneLights), true};
-        std::uint32_t gridX{8}, gridY{4}, gridZ{8};
+        std::uint32_t gridX{8};
+        std::uint32_t gridY{4};
+        std::uint32_t gridZ{8};
         std::uint64_t maximumForwardLightTests{8U * 1024U * 1024U}; /**< Finite per-view CPU selection work, including empty-table draws. */
 
         /** @brief Admits product budgets before native allocation or selection. @return True for an exact finite 3D envelope. */
@@ -33,7 +35,8 @@ namespace Horo::Editor {
     struct EditorViewportLightingDiagnostics final {
         Render::LightPreparationSelection selection;
         std::uint32_t sourceLightCount{};
-        std::uint64_t shadedReferences{}, omittedReferences{};
+        std::uint64_t shadedReferences{};
+        std::uint64_t omittedReferences{};
         std::uint64_t completedLightRevision{}; /**< Native totals belong only to this actual completed uploaded table revision. */
         bool gpuDiagnosticsPending{}; /**< True until exact completed membership evidence is available; never an encode-success claim. */
     };

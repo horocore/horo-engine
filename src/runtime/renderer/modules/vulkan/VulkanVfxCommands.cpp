@@ -21,15 +21,17 @@ namespace Horo::Render::Detail {
 
         /** @brief Admits only implemented forward depth/blend semantics, without selecting variants or pipelines. */
         bool ForwardState(const RenderGraphicsPipelineState &state, const VfxGraphStage stage) {
+            using enum Horo::Render::RenderBlendMode;
             if (!state.depthTest || !state.depthFormat || state.sampleCount != 1 || state.viewRouting != RenderViewRouting::SingleView)
                 return false;
             switch (stage) {
-                case VfxGraphStage::OpaqueForward:
-                    return state.depthWrite && state.blend == RenderBlendMode::Disabled;
-                case VfxGraphStage::TranslucentForward:
-                    return !state.depthWrite && state.blend == RenderBlendMode::Alpha;
-                case VfxGraphStage::AdditiveForward:
-                    return !state.depthWrite && state.blend == RenderBlendMode::Additive;
+                using enum Horo::Render::VfxGraphStage;
+                case OpaqueForward:
+                    return state.depthWrite && state.blend == Disabled;
+                case TranslucentForward:
+                    return !state.depthWrite && state.blend == Alpha;
+                case AdditiveForward:
+                    return !state.depthWrite && state.blend == Additive;
                 default:
                     return false;
             }
@@ -53,7 +55,8 @@ namespace Horo::Render::Detail {
                                                                       const VulkanPreparedMaterialBinding &material,
                                                                       const VfxPreparedDraw &source, const VulkanMaterialTarget &target) {
         const auto &parameters = bindings[source.parameters.value - 1];
-        std::size_t instanceBindings{}, samples{};
+        std::size_t instanceBindings{};
+        std::size_t samples{};
         for (const auto &resource : material.resources) {
             if (resource.buffer) {
                 if (resource.buffer == parameters.buffer) {
@@ -117,8 +120,8 @@ namespace Horo::Render::Detail {
         const auto &vertices = bindings[source.vertices.value - 1];
         const auto &indices = bindings[source.indices.value - 1];
         const auto &parameters = bindings[source.parameters.value - 1];
-        const auto publication = resources->VfxPublication(Instance(request, source.parameters));
-        if (mesh.Value().vertex.buffer != vertices.buffer || mesh.Value().vertex.state != vertices.state ||
+        if (const auto publication = resources->VfxPublication(Instance(request, source.parameters));
+            mesh.Value().vertex.buffer != vertices.buffer || mesh.Value().vertex.state != vertices.state ||
             mesh.Value().index.buffer != indices.buffer || mesh.Value().index.state != indices.state ||
             mesh.Value().descriptor.vertexStride != sizeof(MeshVertex) || mesh.Value().descriptor.indexCount == 0 ||
             publication.HasError() || !publication.Value().published || publication.Value().buffer != parameters.buffer ||
@@ -145,8 +148,8 @@ namespace Horo::Render::Detail {
         if (target.HasError())
             return Result<void>::Failure(target.ErrorValue());
         const auto &color = bindings[workload.color.value - 1];
-        const auto &depth = bindings[workload.depth.value - 1];
-        if (!target.Value().depthView || target.Value().color.image != color.image || target.Value().color.state != color.state ||
+        if (const auto &depth = bindings[workload.depth.value - 1];
+            !target.Value().depthView || target.Value().color.image != color.image || target.Value().color.state != color.state ||
             target.Value().depth.image != depth.image || target.Value().depth.state != depth.state || color.image == depth.image)
             return Result<void>::Failure(Invalid("VFX target attachments differ from the declared graph generations."));
         auto &prepared = passes[pass];

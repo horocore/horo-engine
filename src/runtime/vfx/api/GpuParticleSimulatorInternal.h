@@ -16,7 +16,8 @@ namespace Horo::Vfx::Detail {
     /** @brief Scene-owner mutable logical state; renderer retains all independent native resource and submission leases. */
     struct GpuParticleSimulatorState final {
         Render::VfxGpuSimulationPreparation preparation;
-        std::vector<std::uint32_t> initialWords, forceWords;
+        std::vector<std::uint32_t> initialWords;
+        std::vector<std::uint32_t> forceWords;
         std::vector<GpuParticlePending> submitted;
         std::optional<Render::GpuVfxSimulationWork> pending;
         Render::VfxGpuPreparationReceipt receipt;
@@ -24,7 +25,11 @@ namespace Horo::Vfx::Detail {
         CancellationSource lifetimeSource;
         CancellationToken lifetimeToken{lifetimeSource.Token()};
         std::uint64_t nextTick{};
-        bool active{}, stopped{}, shutdown{}, uncertain{}, deviceLost{};
+        bool active{};
+        bool stopped{};
+        bool shutdown{};
+        bool uncertain{};
+        bool deviceLost{};
     };
 }  // namespace Horo::Vfx::Detail
 

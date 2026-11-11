@@ -59,11 +59,10 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         ScriptValue ReadHandle(Values &values, JSValueConst value) {
             if (JS_IsProxy(value) || JS_GetClassID(value) != values.handleClass)
                 InvalidValue("A host-issued opaque handle is required.");
-            auto *handle = static_cast<HandleBox *>(JS_GetOpaque(value, values.handleClass));
+            const auto *handle = static_cast<HandleBox *>(JS_GetOpaque(value, values.handleClass));
             if (!handle)
                 InvalidValue("Opaque handle is no longer present.");
-            auto valid = values.authority->ValidateHandle(handle->handle);
-            if (valid.HasError())
+            if (auto valid = values.authority->ValidateHandle(handle->handle); valid.HasError())
                 throw ConversionFailure{valid.ErrorValue()};
             return ScriptValue{handle->handle};
         }
@@ -110,13 +109,14 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
     ScriptValue Values::ReadNamed(JSValueConst value, const ScriptExportTypeDescriptor &type, const ScriptExportDescriptor &api,
                                   Budget &budget, std::size_t depth) {
         switch (type.kind) {
-            case ScriptExportNamedTypeKind::Enum:
+            using enum Horo::Extensions::ScriptExportNamedTypeKind;
+            case Enum:
                 return ScriptValue{ScriptEnumValue{type.id, Signed(context, value)}};
-            case ScriptExportNamedTypeKind::Array:
+            case Array:
                 return ReadArray(value, type, api, budget, depth);
-            case ScriptExportNamedTypeKind::Map:
+            case Map:
                 return ReadMap(value, type, api, budget, depth);
-            case ScriptExportNamedTypeKind::Struct:
+            case Struct:
                 return ReadStruct(value, type, api, budget, depth);
             default:
                 InvalidValue("Unsupported named type.");

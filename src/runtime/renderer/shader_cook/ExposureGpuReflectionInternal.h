@@ -3,21 +3,23 @@
 #include "ExposureGpuReflection.h"
 #include "LightCullingMetalReflectionInternal.h"
 
+#include <source_location>
+
 namespace Horo::Render::ExposureGpuCookDetail {
     using Foundation::Json;
     using RegisterRasterCookDetail::InvalidEvidence;
 
     /** @brief Identifies a rejected static predicate without retaining source bytes or unbounded diagnostics. */
     struct EvidenceFailure final : InvalidEvidence {
-        const char *function;
-        int line;
+        std::source_location location;
 
-        EvidenceFailure(const char *name, int location) noexcept : function(name), line(location) {}
+        explicit EvidenceFailure(std::source_location site = std::source_location::current()) noexcept : location(site) {}
     };
 
     /** @brief Builds bounded actionable context for one independently checked exposure proof predicate. */
     inline std::string EvidenceMessage(const EvidenceFailure &failure) {
-        return std::string{"Exposure evidence rejected in "} + failure.function + ":" + std::to_string(failure.line) + ".";
+        return std::string{"Exposure evidence rejected in "} + failure.location.function_name() + ":" +
+               std::to_string(failure.location.line()) + ".";
     }
 
     using Tokens = RegisterRasterCookDetail::TokenView;
@@ -27,9 +29,12 @@ namespace Horo::Render::ExposureGpuCookDetail {
     using LightCullingMetalCookDetail::Unsigned;
 
     struct Buffer {
-        std::string name, wrapperMember;
+        std::string name;
+        std::string wrapperMember;
         std::uint32_t slot{};
-        bool constant{}, readonly{}, texture{};
+        bool constant{};
+        bool readonly{};
+        bool texture{};
         Layout layout;
     };
 

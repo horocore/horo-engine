@@ -24,13 +24,14 @@ namespace Horo::Editor {
         }
 
         bool ActionEnabled(TerrainToolAction action, const TerrainDocumentView &view, bool eligible) {
+            using enum Horo::Editor::TerrainToolAction;
             if (!eligible)
                 return false;
-            if (action == TerrainToolAction::Undo)
+            if (action == Undo)
                 return view.canUndo;
-            if (action == TerrainToolAction::Redo)
+            if (action == Redo)
                 return view.canRedo;
-            if (action == TerrainToolAction::Save)
+            if (action == Save)
                 return view.dirty;
             return true;
         }
@@ -42,8 +43,8 @@ namespace Horo::Editor {
                                  Text(context, "terrain.tools.carve").c_str(),         Text(context, "terrain.tools.restore").c_str(),
                                  Text(context, "terrain.tools.foliage_paint").c_str(), Text(context, "terrain.tools.foliage_erase").c_str(),
                                  Text(context, "terrain.tools.foliage_select").c_str()};
-        int mode = static_cast<int>(mode_);
-        if (Ui::DrawComboPropRow(Text(context, "terrain.tools.tool").c_str(), "##terrain_tool", mode, choices, context.theme.fonts))
+        if (int mode = static_cast<int>(mode_);
+            Ui::DrawComboPropRow(Text(context, "terrain.tools.tool").c_str(), "##terrain_tool", mode, choices, context.theme.fonts))
             mode_ = static_cast<TerrainToolMode>(mode);
         float radius = static_cast<float>(brush_.radiusMeters);
         if (Ui::DrawFloatPropRow(Text(context, "terrain.tools.radius").c_str(), "##terrain_radius", radius, context.theme.fonts).changed)
@@ -53,10 +54,10 @@ namespace Horo::Editor {
     /** @copydoc TerrainViewportTool::SculptControls */
     void TerrainViewportTool::SculptControls(const EditorGuiContext &context) {
         int mode = static_cast<int>(brush_.mode);
-        const std::array choices{Text(context, "terrain.tools.raise").c_str(), Text(context, "terrain.tools.lower").c_str(),
-                                 Text(context, "terrain.tools.smooth").c_str(), Text(context, "terrain.tools.flatten").c_str(),
-                                 Text(context, "terrain.tools.noise").c_str()};
-        if (Ui::DrawComboPropRow(Text(context, "terrain.tools.operation").c_str(), "##terrain_sculpt_mode", mode, choices,
+        if (const std::array choices{Text(context, "terrain.tools.raise").c_str(), Text(context, "terrain.tools.lower").c_str(),
+                                     Text(context, "terrain.tools.smooth").c_str(), Text(context, "terrain.tools.flatten").c_str(),
+                                     Text(context, "terrain.tools.noise").c_str()};
+            Ui::DrawComboPropRow(Text(context, "terrain.tools.operation").c_str(), "##terrain_sculpt_mode", mode, choices,
                                  context.theme.fonts))
             brush_.mode = static_cast<TerrainSculptMode>(mode);
         static_cast<void>(Ui::DrawFloatPropRow(Text(context, "terrain.tools.amount").c_str(), "##terrain_amount", brush_.amountMeters,
@@ -99,8 +100,8 @@ namespace Horo::Editor {
     /** @copydoc TerrainViewportTool::LayerControls */
     void TerrainViewportTool::LayerControls(const Terrain::TerrainAuthoringLayerBinding &binding, std::size_t count,
                                             const EditorGuiContext &context) {
-        const auto &locale = Text(context, "terrain.tools.layer");
-        if (layerLabelsDigest_ != binding.digest || layerLabelsLocale_ != locale) {
+        if (const auto &locale = Text(context, "terrain.tools.layer");
+            layerLabelsDigest_ != binding.digest || layerLabelsLocale_ != locale) {
             layerLabelsDigest_ = binding.digest;
             layerLabelsLocale_ = locale;
             for (std::size_t i = 0; i < count; ++i)
@@ -148,8 +149,8 @@ namespace Horo::Editor {
                 Ui::CheckboxControl(Text(context, "terrain.tools.all_types").c_str(), &foliage_.allTypes, context.theme.fonts));
             return;
         }
-        std::int32_t density = foliage_.densityPermille;
-        if (Ui::DrawIntegerPropRow(Text(context, "terrain.tools.density").c_str(), "##foliage_density", density, context.theme.fonts)
+        if (std::int32_t density = foliage_.densityPermille;
+            Ui::DrawIntegerPropRow(Text(context, "terrain.tools.density").c_str(), "##foliage_density", density, context.theme.fonts)
                 .changed)
             foliage_.densityPermille = static_cast<std::uint16_t>(std::clamp(density, 1, 1'000));
         static_cast<void>(
@@ -177,8 +178,8 @@ namespace Horo::Editor {
             conversionLayer_ = 0;
         static_cast<void>(Ui::DrawComboPropRow(Text(context, "terrain.tools.layer_set").c_str(), "##terrain_layer_set", conversionLayer_,
                                                std::span(labels.data(), layers.size() + 1), context.theme.fonts));
-        const bool convertible = !view.containerSource || (!view.hasLayerBinding && conversionLayer_ > 0);
-        if (Ui::Button({.label = Text(context, "terrain.tools.enable_painting").c_str(),
+        if (const bool convertible = !view.containerSource || (!view.hasLayerBinding && conversionLayer_ > 0);
+            Ui::Button({.label = Text(context, "terrain.tools.enable_painting").c_str(),
                         .variant = Ui::ButtonVariant::Secondary,
                         .enabled = frame.eligible && convertible,
                         .style = {.width = Ui::StyleWidth::FillAvailable}})) {
@@ -197,12 +198,11 @@ namespace Horo::Editor {
     /** @copydoc TerrainViewportTool::ActionControls */
     void TerrainViewportTool::ActionControls(const Frame &frame, std::optional<TerrainToolCommand> &command,
                                              const EditorGuiContext &context) {
+        using enum Horo::Editor::TerrainToolAction;
         const auto view = frame.source.View();
-        const std::array actions{std::pair{TerrainToolAction::Undo, "terrain.tools.undo"},
-                                 std::pair{TerrainToolAction::Redo, "terrain.tools.redo"},
-                                 std::pair{TerrainToolAction::Save, "terrain.tools.save"},
-                                 std::pair{TerrainToolAction::Close, "terrain.tools.close"},
-                                 std::pair{TerrainToolAction::Discard, "terrain.tools.discard"}};
+        const std::array actions{std::pair{Undo, "terrain.tools.undo"}, std::pair{Redo, "terrain.tools.redo"},
+                                 std::pair{Save, "terrain.tools.save"}, std::pair{Close, "terrain.tools.close"},
+                                 std::pair{Discard, "terrain.tools.discard"}};
         for (const auto &[action, key] : actions)
             if (Ui::Button({.label = Text(context, key).c_str(),
                             .variant = Ui::ButtonVariant::Secondary,
@@ -235,8 +235,8 @@ namespace Horo::Editor {
     /** @copydoc TerrainViewportTool::CookControls */
     void TerrainViewportTool::CookControls(const Frame &frame, std::optional<TerrainToolCommand> &command,
                                            const EditorGuiContext &context) {
-        const auto view = frame.source.View();
-        if (Ui::Button({.label = Text(context, "terrain.tools.cook").c_str(),
+        if (const auto view = frame.source.View();
+            Ui::Button({.label = Text(context, "terrain.tools.cook").c_str(),
                         .variant = Ui::ButtonVariant::Secondary,
                         .enabled = frame.eligible && frame.cookAvailable && !frame.cookRunning && !view.dirty && view.containerSource})) {
             command = Intent(frame, TerrainToolAction::Cook);

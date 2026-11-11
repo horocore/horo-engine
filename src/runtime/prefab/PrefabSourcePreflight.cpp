@@ -15,6 +15,11 @@ namespace Horo::Prefab::Detail {
         struct PopActive final {
             std::vector<Assets::AssetId> &active;
 
+            explicit PopActive(std::vector<Assets::AssetId> &value) noexcept : active(value) {}
+
+            PopActive(const PopActive &) = delete;
+            PopActive &operator=(const PopActive &) = delete;
+
             ~PopActive() {
                 active.pop_back();
             }
@@ -23,6 +28,11 @@ namespace Horo::Prefab::Detail {
         /** @brief Retires only the current exact semantic edge after a recursive visit. */
         struct PopEdge final {
             std::vector<PrefabCompositionOriginStep> &edges;
+
+            explicit PopEdge(std::vector<PrefabCompositionOriginStep> &value) noexcept : edges(value) {}
+
+            PopEdge(const PopEdge &) = delete;
+            PopEdge &operator=(const PopEdge &) = delete;
 
             ~PopEdge() {
                 edges.pop_back();
@@ -95,7 +105,7 @@ namespace Horo::Prefab::Detail {
                 if (!nested)
                     return Fail(inspection, PrefabErrors::DependencyUnavailable, asset);
                 auto &path = inspection.operation.originChain;
-                path.push_back({PrefabCompositionOrigin::Nested, document.assetId, asset, placement.placementLocalId});
+                path.emplace_back(PrefabCompositionOrigin::Nested, document.assetId, asset, placement.placementLocalId);
                 const PopEdge pop{path};
                 if (auto visited = Visit(inspection, *nested, nestedEdges + 1, variantEdges); visited.HasError())
                     return visited;

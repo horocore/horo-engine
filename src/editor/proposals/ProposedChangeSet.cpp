@@ -147,8 +147,7 @@ namespace Horo::Editor::Proposals {
             // Both per-fragment ceilings precede the aggregate accounting, as in the ingress contract.
             if (hunk.before.size() > limits.maximumTextBytes || hunk.after.size() > limits.maximumTextBytes)
                 return Fail<void>(Errors::Bounds);
-            const auto before = ChargeText(hunk.before, limits, total);
-            if (before.HasError())
+            if (const auto before = ChargeText(hunk.before, limits, total); before.HasError())
                 return before;
             return ChargeText(hunk.after, limits, total);
         }
@@ -182,8 +181,7 @@ namespace Horo::Editor::Proposals {
             auto resultBytes = base.bytes;
             std::uint64_t insertedBytes{};
             for (const auto &hunk : hunks) {
-                const auto charged = ChargeHunk(hunk, limits, total);
-                if (charged.HasError())
+                if (const auto charged = ChargeHunk(hunk, limits, total); charged.HasError())
                     return charged;
                 if (!HunkTextValid(hunk) || !HunkRangeValid(base, hunk) || !HunkOrderValid(hunk, priorStart, priorEnd))
                     return Fail<void>(Errors::Invalid);
@@ -209,8 +207,7 @@ namespace Horo::Editor::Proposals {
             DraftAdmission(const ProjectPolicy &policy, const Limits &limits) : policy_(policy), limits_(limits) {}
 
             Result<void> Admit(FileOperation &operation) {
-                const auto reserved = Reserve(Path(operation));
-                if (reserved.HasError())
+                if (const auto reserved = Reserve(Path(operation)); reserved.HasError())
                     return reserved;
                 return std::visit([this](auto &value) {
                     return AdmitValue(value);
@@ -229,8 +226,7 @@ namespace Horo::Editor::Proposals {
 
             /** @brief Admits new file text without implying destination existence or mutation authority. */
             Result<void> AdmitValue(CreateFile &file) {
-                const auto charged = ChargeText(file.text, limits_, total_);
-                if (charged.HasError())
+                if (const auto charged = ChargeText(file.text, limits_, total_); charged.HasError())
                     return charged;
                 return Text(file.text) ? Result<void>::Success() : Fail<void>(Errors::Invalid);
             }
@@ -243,7 +239,7 @@ namespace Horo::Editor::Proposals {
             }
 
             /** @brief Admits only exact file-base deletion evidence, never recursive directory removal. */
-            Result<void> AdmitValue(DeleteFile &file) {
+            Result<void> AdmitValue(DeleteFile &file) const {
                 return ValidBase(file.base, limits_) ? Result<void>::Success() : Fail<void>(Errors::Invalid);
             }
 
@@ -251,8 +247,7 @@ namespace Horo::Editor::Proposals {
             Result<void> AdmitValue(RenameFile &file) {
                 if (!ValidBase(file.base, limits_))
                     return Fail<void>(Errors::Invalid);
-                const auto destination = Reserve(file.destination);
-                if (destination.HasError())
+                if (const auto destination = Reserve(file.destination); destination.HasError())
                     return destination;
                 return Hunks(file.base, file.hunks, limits_, total_);
             }
@@ -339,9 +334,10 @@ namespace Horo::Editor::Proposals {
             if (application.state > ApplicationState::PartiallyApplied || application.appliedOperations > count)
                 return false;
             switch (application.state) {
-                case ApplicationState::AppliedToWorkspace:
+                using enum Horo::Editor::Proposals::ApplicationState;
+                case AppliedToWorkspace:
                     return application.appliedOperations == count;
-                case ApplicationState::PartiallyApplied:
+                case PartiallyApplied:
                     return application.appliedOperations > 0 && application.appliedOperations < count;
                 default:
                     return application.appliedOperations == 0;
@@ -386,8 +382,7 @@ namespace Horo::Editor::Proposals {
             if (save && !application)
                 return Fail<void>(Errors::Invalid);
             if (application) {
-                const auto valid = ValidateReceipts(proposal, *application, save);
-                if (valid.HasError())
+                if (const auto valid = ValidateReceipts(proposal, *application, save); valid.HasError())
                     return valid;
                 audit.application = application->state;
                 audit.appliedOperations = application->appliedOperations;
@@ -483,8 +478,7 @@ namespace Horo::Editor::Proposals {
         if (draft.files.size() > limits.maximumFiles)
             return Fail<ChangeSet>(Errors::Bounds);
         try {
-            const auto admitted = PrepareOperations(policy, draft, limits);
-            if (admitted.HasError())
+            if (const auto admitted = PrepareOperations(policy, draft, limits); admitted.HasError())
                 return Result<ChangeSet>::Failure(admitted.ErrorValue());
             ChangeSet proposal{policy, std::move(draft), {}};
             const auto encoded = EncodeRecovery(proposal, limits);
@@ -504,8 +498,7 @@ namespace Horo::Editor::Proposals {
             return Result<void>::Failure(actual.ErrorValue());
         if (!SameBaseRevision(base, actual.Value()) || !SameBaseContent(base, actual.Value()))
             return Fail<void>(Errors::StaleBase);
-        const auto structure = ValidateSnapshotHunkStructure(base, hunks);
-        if (structure.HasError())
+        if (const auto structure = ValidateSnapshotHunkStructure(base, hunks); structure.HasError())
             return structure;
         for (const auto &hunk : hunks) {
             const auto valid = ValidateSnapshotHunk(base, hunk, current.Text());
@@ -544,11 +537,9 @@ namespace Horo::Editor::Proposals {
                            proposal.PolicyDigest()};
         for (const auto &operation : proposal.Files())
             ++result.operationCounts[operation.index()];
-        const auto reviewed = AttachAuditReview(result, proposal, review);
-        if (reviewed.HasError())
+        if (const auto reviewed = AttachAuditReview(result, proposal, review); reviewed.HasError())
             return Result<AuditRecord>::Failure(reviewed.ErrorValue());
-        const auto applied = AttachAuditApplication(result, proposal, review, application, save);
-        if (applied.HasError())
+        if (const auto applied = AttachAuditApplication(result, proposal, review, application, save); applied.HasError())
             return Result<AuditRecord>::Failure(applied.ErrorValue());
         return Result<AuditRecord>::Success(std::move(result));
     }

@@ -49,7 +49,8 @@ namespace Horo::Physics::StateDetail {
 
     /** @brief Caller-prepared iterative DFS frame; recursion and hidden heap growth are forbidden. */
     struct ConstructionRecipeExportFrame final {
-        std::uint32_t slot{}, nextEdge{};
+        std::uint32_t slot{};
+        std::uint32_t nextEdge{};
     };
 
     struct ConstructionRecipeExportStorage final {
@@ -105,13 +106,16 @@ namespace Horo::Physics::StateDetail {
             PhysicsStateShapeRecipe recipe;
             Sha256Digest digest;
             std::uint64_t serial{};
-            std::uint32_t firstEdge{None}, depth{};
+            std::uint32_t firstEdge{None};
+            std::uint32_t depth{};
             bool occupied{};
         };
 
         struct Edge final {
-            std::uint32_t child{}, next{None};
-            std::uint64_t serial{}, userData{};
+            std::uint32_t child{};
+            std::uint32_t next{None};
+            std::uint64_t serial{};
+            std::uint64_t userData{};
             PhysicsPose localPose;
         };
 
@@ -133,7 +137,8 @@ namespace Horo::Physics::StateDetail {
         std::unique_ptr<Node[]> nodes_;
         std::unique_ptr<Edge[]> edges_;
         std::uint64_t nextSerial_{1};
-        std::uint32_t freeEdge_{None}, freeEdges_{};
+        std::uint32_t freeEdge_{None};
+        std::uint32_t freeEdges_{};
         std::size_t cursor_{};
     };
 }  // namespace Horo::Physics::StateDetail

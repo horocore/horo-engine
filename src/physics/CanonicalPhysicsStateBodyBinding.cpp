@@ -14,9 +14,9 @@ namespace Horo::Physics::Detail {
             std::vector<Resident> result;
             result.reserve(world.scene.bodies.size() + world.query.fixtures.size());
             for (const auto &body : world.scene.bodies)
-                result.push_back({body.handle, body.nativeBody, true});
+                result.emplace_back(body.handle, body.nativeBody, true);
             for (const auto &fixture : world.query.fixtures)
-                result.push_back({fixture.fixture.body, fixture.nativeBody});
+                result.emplace_back(fixture.fixture.body, fixture.nativeBody);
             std::ranges::sort(result, {}, &Resident::handle);
             return result;
         }

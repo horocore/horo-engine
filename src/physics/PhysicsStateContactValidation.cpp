@@ -78,8 +78,8 @@ namespace Horo::Physics::StateDetail {
             for (const auto &key : state.ccdManifolds) {
                 if (!PairExists(state.bodies, key.first, key.second) || (previous && !(*previous < key)))
                     return false;
-                const auto ordinary = std::ranges::lower_bound(state.manifolds, key, {}, &PhysicsStateManifold::key);
-                if (ordinary != state.manifolds.end() && ordinary->key == key)
+                if (const auto ordinary = std::ranges::lower_bound(state.manifolds, key, {}, &PhysicsStateManifold::key);
+                    ordinary != state.manifolds.end() && ordinary->key == key)
                     return false;
                 previous = key;
             }

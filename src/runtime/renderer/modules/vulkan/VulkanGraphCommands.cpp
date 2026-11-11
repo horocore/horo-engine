@@ -206,8 +206,7 @@ namespace Horo::Render::Detail {
                                                       const RenderQueueSubmission &submission, const RenderGraphExecutionRequest &request,
                                                       std::size_t pass) {
         Barriers(command, passes[pass].before);
-        const auto &workload = request.workloads[pass].workload;
-        if (std::holds_alternative<RenderGraphVfx>(workload))
+        if (const auto &workload = request.workloads[pass].workload; std::holds_alternative<RenderGraphVfx>(workload))
             EncodeVfx(command, pass);
         else if (std::holds_alternative<RenderGraphVfxGpuCompute>(workload) || std::holds_alternative<RenderGraphVfxGpuDraw>(workload)) {
             if (const auto encoded = vfxGpu.Encode(command, ticket, submission, request, pass, bindings); encoded.HasError())

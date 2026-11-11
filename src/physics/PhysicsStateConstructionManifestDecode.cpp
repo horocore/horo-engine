@@ -24,8 +24,7 @@ namespace Horo::Physics::StateDetail {
                                                           const PhysicsStateConstructionManifestLimits &limits,
                                                           PhysicsStateFpControl current, std::span<std::uint32_t> scratch) {
             using Outcome = Result<PhysicsStateConstructionManifest>;
-            Wire rows{tail};
-            if (!ReadConstructionManifestRows(rows, storage))
+            if (Wire rows{tail}; !ReadConstructionManifestRows(rows, storage))
                 return Outcome::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
             auto view = View(shapes, storage);
             if (auto valid = ValidatePhysicsStateConstructionManifest(view, limits, current, scratch); valid.HasError())

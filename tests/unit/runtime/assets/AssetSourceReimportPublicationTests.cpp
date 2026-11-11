@@ -39,6 +39,42 @@ namespace {
     };
 }  // namespace
 
+TEST_CASE("Asset source capture retains existing identity under long Unicode native project roots",
+          "[assets][reimport-source][long-path]") {
+    Tests::OwnedTestDirectory directory{"source-long-path"};
+    NativeDurableFileSystem files;
+    std::vector<std::filesystem::path> directories{directory.Path()};
+    for (unsigned index = 0; index < 4; ++index) {
+        directories.push_back(directories.back() / (std::string(72, 'c') + std::to_string(index)));
+        const auto created = files.CreateDirectoryPath(directories.back(), DirectoryCreationMode::Single);
+        REQUIRE(created.HasValue());
+        REQUIRE(created.Value());
+    }
+    const auto &root = directories.back();
+    const auto source = root / std::filesystem::path{u8"source \u00fc asset.bin"};
+    REQUIRE(root.native().size() > 260);
+    const std::string payload{"retained source bytes"};
+    const auto bytes = std::as_bytes(std::span{payload});
+    REQUIRE(files.WriteDurable(source, bytes).HasValue());
+    const auto captured = CaptureAssetSource(root, source, 1024);
+    INFO((captured.HasError() ? captured.ErrorValue().message : "Long source captured"));
+    REQUIRE(captured.HasValue());
+    CHECK(captured.Value().identity.exists);
+    CHECK(captured.Value().identity.bytes == payload.size());
+    CHECK(captured.Value().identity.digest == ComputeSha256(bytes));
+    CHECK(captured.Value().bytes == std::vector<std::byte>(bytes.begin(), bytes.end()));
+    const auto inspected = InspectReimportAssetSource(root, source);
+    REQUIRE(inspected.HasValue());
+    CHECK(inspected.Value() == captured.Value().identity);
+    CHECK(CaptureAssetSource(root, source, payload.size() - 1).HasError());
+    const auto missing = CaptureAssetSource(root, root / "absent.bin", 1024);
+    REQUIRE(missing.HasValue());
+    CHECK_FALSE(missing.Value().identity.exists);
+    REQUIRE(files.RemoveDurable(source).HasValue());
+    for (auto path = directories.rbegin(); path != directories.rend(); ++path)
+        REQUIRE(files.RemoveDurable(*path).HasValue());
+}
+
 TEST_CASE("Reimport identity streaming preserves missing and existing-empty distinctions", "[assets][reimport-source]") {
     ReimportSourceProject project;
     const auto missing = InspectReimportAssetSource(project.directory.Path(), project.source);

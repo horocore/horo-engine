@@ -169,7 +169,7 @@ namespace Horo::Render {
                               const RenderGraphVfxGpuDraw &draw) noexcept {
             if (!storage)
                 return false;
-            auto *record = storage->Find(draw.simulation);
+            const auto *record = storage->Find(draw.simulation);
             return record && ExactDraw(*record, draw, request);
         }
 

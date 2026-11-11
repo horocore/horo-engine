@@ -8,28 +8,24 @@ namespace Horo::Editor {
 
         /** @brief Logical scalar/vector/matrix shapes only; actual offsets and strides come from target reflection. */
         std::vector<ShaderParameter> LitParameters() {
-            return {{{1}, {1}, ShaderValueType::Float32, 4, 4, 1},  {{2}, {1}, ShaderValueType::Float32, 4, 4, 1},
-                    {{3}, {1}, ShaderValueType::Float32, 4, 4, 4},  {{4}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                    {{5}, {1}, ShaderValueType::Float32, 1, 4, 16}, {{6}, {1}, ShaderValueType::Float32, 1, 4, 16},
-                    {{7}, {1}, ShaderValueType::Float32, 1, 4, 16}, {{8}, {1}, ShaderValueType::Float32, 1, 4, 16},
-                    {{9}, {1}, ShaderValueType::Float32, 1, 4, 1},  {{10}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                    {{11}, {1}, ShaderValueType::Float32, 1, 4, 1}, {{12}, {1}, ShaderValueType::Float32, 1, 4, 4},
-                    {{13}, {1}, ShaderValueType::Float32, 1, 4, 4}, {{14}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                    {{15}, {1}, ShaderValueType::Float32, 1, 4, 1}, {{20}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                    {{21}, {1}, ShaderValueType::Float32, 1, 4, 1}};
+            using enum Horo::Render::ShaderValueType;
+            return {{{1}, {1}, Float32, 4, 4, 1},  {{2}, {1}, Float32, 4, 4, 1},  {{3}, {1}, Float32, 4, 4, 4},
+                    {{4}, {1}, Float32, 1, 4, 1},  {{5}, {1}, Float32, 1, 4, 16}, {{6}, {1}, Float32, 1, 4, 16},
+                    {{7}, {1}, Float32, 1, 4, 16}, {{8}, {1}, Float32, 1, 4, 16}, {{9}, {1}, Float32, 1, 4, 1},
+                    {{10}, {1}, Float32, 1, 4, 1}, {{11}, {1}, Float32, 1, 4, 1}, {{12}, {1}, Float32, 1, 4, 4},
+                    {{13}, {1}, Float32, 1, 4, 4}, {{14}, {1}, Float32, 1, 4, 1}, {{15}, {1}, Float32, 1, 4, 1},
+                    {{20}, {1}, Float32, 1, 4, 1}, {{21}, {1}, Float32, 1, 4, 1}};
         }
 
         void DescribeLit(ShaderManifest &manifest) {
+            using enum Horo::Render::ShaderResourceKind;
+            using enum Horo::Render::ShaderStageVisibility;
+            using enum Horo::Render::ShaderResourceAccess;
             manifest.sourceIdentity = "engine/editor/viewport_lit.hlsl";
             manifest.sourceRevision = 4;
-            manifest
-                .bindings = {{{1},
-                              ShaderResourceKind::UniformBuffer,
-                              ShaderResourceAccess::ReadOnly,
-                              1,
-                              ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment},
-                             {{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
-                             {{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}};
+            manifest.bindings = {{{1}, UniformBuffer, ReadOnly, 1, Vertex | Fragment},
+                                 {{2}, SampledTexture, ReadOnly, 1, Fragment},
+                                 {{3}, Sampler, ReadOnly, 1, Fragment}};
             manifest.parameters = LitParameters();
         }
 
@@ -55,11 +51,12 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportShaderSource */
     std::string_view EditorViewportShaderSource(const EditorViewportShaderProgram program) noexcept {
         switch (program) {
-            case EditorViewportShaderProgram::Lit:
+            using enum Horo::Editor::EditorViewportShaderProgram;
+            case Lit:
                 return "shaders/editor/viewport_lit.hlsl";
-            case EditorViewportShaderProgram::Grid:
+            case Grid:
                 return "shaders/editor/viewport_grid.hlsl";
-            case EditorViewportShaderProgram::Shadow:
+            case Shadow:
                 return "shaders/editor/viewport_shadow.hlsl";
         }
         return {};
@@ -76,13 +73,14 @@ namespace Horo::Editor {
                                 .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
                                 .targets = {target}};
         switch (program) {
-            case EditorViewportShaderProgram::Lit:
+            using enum Horo::Editor::EditorViewportShaderProgram;
+            case Lit:
                 DescribeLit(manifest);
                 break;
-            case EditorViewportShaderProgram::Grid:
+            case Grid:
                 DescribeGrid(manifest);
                 break;
-            case EditorViewportShaderProgram::Shadow:
+            case Shadow:
                 DescribeShadow(manifest);
                 break;
             default:

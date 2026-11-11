@@ -3,7 +3,9 @@
 
 namespace Horo::Render::ClusteredLightDetail {
     struct Basis final {
-        Math::Vec3 forward, right, up;
+        Math::Vec3 forward;
+        Math::Vec3 right;
+        Math::Vec3 up;
     };
 
     [[nodiscard]] Result<Basis> CameraBasis(const RenderCameraView &camera);

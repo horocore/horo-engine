@@ -148,7 +148,7 @@ namespace Horo::Prefab {
                     return Return::Failure(MakeError(PrefabErrors::Cancelled));
                 if (object.key.object.NestedInstanceScope().size() > policy.Policy().maximumNestedPrefabDepth)
                     return Return::Failure(MakeError(PrefabErrors::DiagnosticInvalid));
-                result.objects_.push_back({object.sourcePrefab, object.key, object.parent, object.object.components.size()});
+                result.objects_.emplace_back(object.sourcePrefab, object.key, object.parent, object.object.components.size());
             }
             for (const auto &value : provenance.first(result.valueCoverage_.retained)) {
                 if (cancellation.IsCancellationRequested())
@@ -158,7 +158,7 @@ namespace Horo::Prefab {
                      value.origin != PrefabValueOrigin::Instance && value.origin != PrefabValueOrigin::Variant &&
                      value.origin != PrefabValueOrigin::Nested))
                     return Return::Failure(MakeError(PrefabErrors::DiagnosticInvalid));
-                result.values_.push_back({value.target, value.origin, value.sourcePrefab});
+                result.values_.emplace_back(value.target, value.origin, value.sourcePrefab);
             }
             if (overrides) {
                 auto intentRemaining = result.overrideCoverage_.retained;

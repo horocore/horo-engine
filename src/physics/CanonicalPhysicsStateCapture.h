@@ -9,7 +9,9 @@ namespace Horo::Physics::Detail {
     /** @brief Optional owner observation of actual allocator routing; not
      * capture/publication authority. */
     struct CanonicalPhysicsStateCaptureMetrics final {
-        std::size_t nativeTemporaryAllocations{}, nativeTemporaryBytes{}, nativeForeignReallocations{};
+        std::size_t nativeTemporaryAllocations{};
+        std::size_t nativeTemporaryBytes{};
+        std::size_t nativeForeignReallocations{};
     };
 
     /** @brief Actual preallocated native temporaries are distinct from retained

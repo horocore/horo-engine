@@ -184,11 +184,12 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
     /** @copydoc ValidateRasterReflection */
     Result<void> ValidateRasterReflection(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
                                           const ShaderCompilerReflectionRequest &request, const ShaderCompilerToolInstallation *cross) {
+        using enum Horo::Render::ShaderTargetBackend;
         const auto expected = ComputeShaderInterfaceCompatibilityId(MakeVfxShaderManifest(target));
         const auto actual = ComputeShaderInterfaceCompatibilityId(manifest);
         if (expected.HasError() || actual.HasError())
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-        if (target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL)
+        if (target.backend != Metal && target.backend != OpenGL)
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
         if (UsesClosedComputeReflection(manifest, target, request.names))
             return ValidateRasterTool(request, cross);
@@ -196,7 +197,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             return ValidateRasterTool(request, cross);
         if (expected.Value() == actual.Value())
             return ValidateVfxRasterNames(request, cross);
-        if (target.backend == ShaderTargetBackend::Metal)
+        if (target.backend == Metal)
             return ValidateUiPaintMetalReflection(request, cross);
         return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
     }

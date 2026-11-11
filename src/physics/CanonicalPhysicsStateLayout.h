@@ -26,12 +26,14 @@ namespace Horo::Physics::Detail {
      * establish checked upper-bound arithmetic only.
      */
     struct CanonicalStatePointLayout final {
-        JPH::Float3 position1, position2;
+        JPH::Float3 position1;
+        JPH::Float3 position2;
         float lambda;
     };
 
     struct CanonicalStatePairLayout final {
-        JPH::Float3 relativePosition, relativeRotation;
+        JPH::Float3 relativePosition;
+        JPH::Float3 relativeRotation;
         std::uint32_t next;
     };
 

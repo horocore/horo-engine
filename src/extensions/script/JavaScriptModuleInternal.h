@@ -34,12 +34,15 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         JSRuntime *runtime{};
         JSContext *context{};
         Values values;
-        JSValue program{JS_UNDEFINED}, completion{JS_UNDEFINED}, horo{JS_UNDEFINED};
+        JSValue program{JS_UNDEFINED};
+        JSValue completion{JS_UNDEFINED};
+        JSValue horo{JS_UNDEFINED};
         std::vector<JSValue> imports;
         std::vector<Pending> pending;
         std::optional<ScriptCallResult> result;
         std::chrono::steady_clock::time_point deadline{};
-        bool started{}, executing{};
+        bool started{};
+        bool executing{};
         ScriptCallResult emergency{MakeScriptModuleEmergencyResult()};
 
         explicit State(std::shared_ptr<ScriptModuleContext> value)
@@ -81,6 +84,9 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             state.RequireLive();
             state.executing = true;
         }
+
+        Active(const Active &) = delete;
+        Active &operator=(const Active &) = delete;
 
         ~Active() {
             state.executing = false;

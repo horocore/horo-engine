@@ -141,8 +141,8 @@ namespace Horo::Physics::Detail {
             const PhysicsContactObservation &observation = observations_[index];
             const PhysicsEventPairKey pair{.first = observation.first, .second = observation.second};
             if (!currentPairs_.empty() && currentPairs_.back().pair == pair) {
-                const auto &previous = currentPairs_.back();
-                if (previous.firstSurface != observation.firstSurface || previous.secondSurface != observation.secondSurface)
+                if (const auto &previous = currentPairs_.back();
+                    previous.firstSurface != observation.firstSurface || previous.secondSurface != observation.secondSurface)
                     surfaceConflict_ = true;
                 auto &summary = currentPairs_.back().contact;
                 summary.omittedPointCount = SaturatingAdd(summary.omittedPointCount, observation.contact.omittedPointCount);

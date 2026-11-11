@@ -8,9 +8,9 @@ namespace Horo::Physics::Detail {
             std::vector<CanonicalPhysicsStateBodyRecordIndex> result;
             result.reserve(world.scene.bodies.size() + world.query.fixtures.size());
             for (std::size_t index = 0; index < world.scene.bodies.size(); ++index)
-                result.push_back({world.scene.bodies[index].handle, index, false});
+                result.emplace_back(world.scene.bodies[index].handle, index, false);
             for (std::size_t index = 0; index < world.query.fixtures.size(); ++index)
-                result.push_back({world.query.fixtures[index].fixture.body, index, true});
+                result.emplace_back(world.query.fixtures[index].fixture.body, index, true);
             std::ranges::sort(result, {}, &CanonicalPhysicsStateBodyRecordIndex::handle);
             return result;
         }
@@ -56,7 +56,7 @@ namespace Horo::Physics::Detail {
                 const auto id = FindStateShapeId(map, handle);
                 if (id == 0)
                     return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
-                map.shapeRecords.push_back({id, handle, index});
+                map.shapeRecords.emplace_back(id, handle, index);
             }
             std::ranges::sort(map.shapeRecords, {}, &CanonicalPhysicsStateShapeRecordIndex::id);
             return Result<void>::Success();

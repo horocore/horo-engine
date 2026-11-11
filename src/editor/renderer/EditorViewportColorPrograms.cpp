@@ -152,15 +152,14 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportColorPipeline::PrepareGeometry */
     Result<void> EditorViewportColorPipeline::PrepareGeometry() {
+        using enum Horo::Render::RenderBufferUsage;
         try {
             const std::array<MeshVertex, 3> vertices{};
             const std::array<std::uint32_t, 3> indices{0, 1, 2};
-            Take(OwnCreation(frontend_->CreateBuffer({sizeof(vertices), RenderBufferUsage::Vertex | RenderBufferUsage::CopyDestination,
-                                                      RenderBufferAccess::DeviceLocal},
+            Take(OwnCreation(frontend_->CreateBuffer({sizeof(vertices), Vertex | CopyDestination, RenderBufferAccess::DeviceLocal},
                                                      std::as_bytes(std::span{vertices})),
                              geometry_[0]));
-            Take(OwnCreation(frontend_->CreateBuffer({sizeof(indices), RenderBufferUsage::Index | RenderBufferUsage::CopyDestination,
-                                                      RenderBufferAccess::DeviceLocal},
+            Take(OwnCreation(frontend_->CreateBuffer({sizeof(indices), Index | CopyDestination, RenderBufferAccess::DeviceLocal},
                                                      std::as_bytes(std::span{indices})),
                              geometry_[1]));
             Take(DrainCreations());
@@ -173,9 +172,7 @@ namespace Horo::Editor {
                              mesh_));
             for (auto &slot : slots_)
                 for (std::size_t role = 0; role < 2; ++role)
-                    Take(OwnCreation(frontend_->CreateBuffer({programs_[role].uniformBytes, RenderBufferUsage::Uniform,
-                                                              RenderBufferAccess::HostVisible},
-                                                             {}),
+                    Take(OwnCreation(frontend_->CreateBuffer({programs_[role].uniformBytes, Uniform, RenderBufferAccess::HostVisible}, {}),
                                      slot.uniform[role]));
             Take(DrainCreations());
             return Result<void>::Success();

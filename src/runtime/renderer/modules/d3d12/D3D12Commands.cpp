@@ -33,13 +33,11 @@ namespace Horo::Render {
         if (!runtime)
             return Result<std::unique_ptr<ID3D12Commands>>::Failure(
                 D3D12CommandError("render.d3d12.command_runtime", "Provide the exact session-owned command runtime."));
-        auto valid = D3D12Detail::ValidateCommandConfiguration(configuration);
-        if (valid.HasError())
+        if (auto valid = D3D12Detail::ValidateCommandConfiguration(configuration); valid.HasError())
             return Result<std::unique_ptr<ID3D12Commands>>::Failure(valid.ErrorValue());
         try {
             auto service = std::make_unique<D3D12Detail::CommandService>(std::move(runtime), configuration);
-            auto initialized = service->Initialize();
-            if (initialized.HasError())
+            if (auto initialized = service->Initialize(); initialized.HasError())
                 return Result<std::unique_ptr<ID3D12Commands>>::Failure(initialized.ErrorValue());
             return Result<std::unique_ptr<ID3D12Commands>>::Success(std::move(service));
         } catch (const std::bad_alloc &) {
@@ -70,8 +68,7 @@ namespace Horo::Render::D3D12Detail {
     }
 
     Result<void> CommandService::Initialize() {
-        auto initialized = runtime_->Initialize(Configuration());
-        if (initialized.HasError())
+        if (auto initialized = runtime_->Initialize(Configuration()); initialized.HasError())
             return initialized;
         initialized_ = true;
         accepting_ = true;
@@ -132,30 +129,23 @@ namespace Horo::Render::D3D12Detail {
 
     /** @copydoc ID3D12Commands::ExecuteGraph */
     Result<void> CommandService::ExecuteGraph(const RenderGraphExecutionRequest &request, const CancellationToken &cancellation) {
-        auto access = Access(true);
-        if (access.HasError())
+        if (auto access = Access(true); access.HasError())
             return access;
         CommandCall call{active_};
-        auto valid = ValidateRequest(request);
-        if (valid.HasError())
+        if (auto valid = ValidateRequest(request); valid.HasError())
             return valid;
-        auto limits = ValidateLimits(request);
-        if (limits.HasError())
+        if (auto limits = ValidateLimits(request); limits.HasError())
             return limits;
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(
                 D3D12CommandError("render.d3d12.command_cancelled", "Command admission was cancelled before recording."));
-        auto batch = ValidateBatch(request.submissions);
-        if (batch.HasError())
+        if (auto batch = ValidateBatch(request.submissions); batch.HasError())
             return batch;
-        auto polled = PollNative();
-        if (polled.HasError())
+        if (auto polled = PollNative(); polled.HasError())
             return polled;
-        auto history = ReclaimHistory(request.submissions);
-        if (history.HasError())
+        if (auto history = ReclaimHistory(request.submissions); history.HasError())
             return history;
-        auto prepared = Prepare(request, cancellation);
-        if (prepared.HasError())
+        if (auto prepared = Prepare(request, cancellation); prepared.HasError())
             return prepared;
         if (cancellation.IsCancellationRequested()) {
             runtime_->AbortPrepared();
@@ -167,14 +157,12 @@ namespace Horo::Render::D3D12Detail {
 
     /** @copydoc ID3D12Commands::Observe */
     Result<bool> CommandService::Observe(const RenderCpuWait &wait) {
-        auto access = Access(false);
-        if (access.HasError())
+        if (auto access = Access(false); access.HasError())
             return Result<bool>::Failure(access.ErrorValue());
         if (!wait.IsValid() || wait.expectedDeviceIncarnation != deviceIncarnation_)
             return Result<bool>::Failure(
                 D3D12CommandError("render.d3d12.timeline_stale", "Use the exact device incarnation and declared finite CPU wait policy."));
-        auto point = ValidatePoint(wait.completion);
-        if (point.HasError())
+        if (auto point = ValidatePoint(wait.completion); point.HasError())
             return Result<bool>::Failure(point.ErrorValue());
         CommandCall call{active_};
         return runtime_->Observe(wait);
@@ -182,8 +170,7 @@ namespace Horo::Render::D3D12Detail {
 
     /** @copydoc ID3D12Commands::Poll */
     Result<void> CommandService::Poll() {
-        auto access = Access(false);
-        if (access.HasError())
+        if (auto access = Access(false); access.HasError())
             return access;
         CommandCall call{active_};
         return PollNative();
@@ -191,8 +178,7 @@ namespace Horo::Render::D3D12Detail {
 
     /** @copydoc ID3D12Commands::BeginShutdown */
     Result<void> CommandService::BeginShutdown() {
-        auto access = Access(false);
-        if (access.HasError())
+        if (auto access = Access(false); access.HasError())
             return access;
         CommandCall call{active_};
         accepting_ = false;
@@ -202,8 +188,7 @@ namespace Horo::Render::D3D12Detail {
 
     /** @copydoc ID3D12Commands::PollDrain */
     Result<RenderBackendDrainProgress> CommandService::PollDrain() {
-        auto access = Access(false);
-        if (access.HasError())
+        if (auto access = Access(false); access.HasError())
             return Result<RenderBackendDrainProgress>::Failure(access.ErrorValue());
         if (accepting_)
             return Result<RenderBackendDrainProgress>::Failure(

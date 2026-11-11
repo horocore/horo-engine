@@ -10,9 +10,8 @@ namespace Horo::Physics::StateDetail {
             SnapshotHeader header;
             Wire prefix{input};
             SnapshotHeaderFields(prefix, header);
-            std::size_t size{};
-            if (prefix.Failed() || header.tag != SnapshotHeader::Tag || header.version != PhysicsStateSnapshotVersion ||
-                header.worldVersion != 1 || !SnapshotWireSize(header, input.size(), size) || size != input.size())
+            if (std::size_t size{}; prefix.Failed() || header.tag != SnapshotHeader::Tag || header.version != PhysicsStateSnapshotVersion ||
+                                    header.worldVersion != 1 || !SnapshotWireSize(header, input.size(), size) || size != input.size())
                 return Result<SnapshotHeader>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
             if (auto valid = ValidatePhysicsStateCompatibility(header.compatibility); valid.HasError())
                 return Result<SnapshotHeader>::Failure(valid.ErrorValue());

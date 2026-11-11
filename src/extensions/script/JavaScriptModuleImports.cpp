@@ -85,6 +85,11 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             JSContext *context;
             std::vector<JSValue> values;
 
+            explicit NamespaceOwner(JSContext *value) : context(value) {}
+
+            NamespaceOwner(const NamespaceOwner &) = delete;
+            NamespaceOwner &operator=(const NamespaceOwner &) = delete;
+
             ~NamespaceOwner() {
                 for (auto value : values)
                     JS_FreeValue(context, value);
@@ -94,7 +99,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
 
     std::vector<JSValue> PrepareJavaScriptNamespaces(State &state, const std::shared_ptr<ScriptModuleContext> &context,
                                                      const std::vector<std::shared_ptr<const ScriptModuleBindingPlan>> &plans) {
-        NamespaceOwner output{state.context, {}};
+        NamespaceOwner output{state.context};
         output.values.reserve(context->Imports().size());
         auto projector = state.values;
         projector.authority = context;

@@ -6,19 +6,19 @@ namespace Horo::Render {
     namespace {
         /** @brief Scene, two analytic auxiliary tables and previous GPU state all remain independent resources. */
         void DescribeScene(ShaderManifest &manifest) {
+            using enum Horo::Render::ShaderStageVisibility;
+            using enum Horo::Render::ShaderValueType;
+            using enum Horo::Render::ShaderResourceAccess;
+            using enum Horo::Render::ShaderResourceKind;
             manifest.sourceIdentity = "engine/runtime/color_output.hlsl";
-            manifest
-                .bindings = {{{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
-                             {{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
-                             {{3}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
-                             {{4}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
-                             {{5}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
-                             {{6}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
-                             {{7}, ShaderResourceKind::StorageBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}};
-            manifest.parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                                   {{2}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                                   {{3}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                                   {{100}, {7}, ShaderValueType::Uint32, 1, 1, 1}};
+            manifest.bindings = {{{1}, UniformBuffer, ReadOnly, 1, Fragment},  {{2}, SampledTexture, ReadOnly, 1, Fragment},
+                                 {{3}, SampledTexture, ReadOnly, 1, Fragment}, {{4}, SampledTexture, ReadOnly, 1, Fragment},
+                                 {{5}, Sampler, ReadOnly, 1, Fragment},        {{6}, Sampler, ReadOnly, 1, Fragment},
+                                 {{7}, StorageBuffer, ReadOnly, 1, Fragment}};
+            manifest.parameters = {{{1}, {1}, Float32, 1, 4, 1},
+                                   {{2}, {1}, Float32, 1, 4, 1},
+                                   {{3}, {1}, Float32, 1, 4, 1},
+                                   {{100}, {7}, Uint32, 1, 1, 1}};
         }
 
         /** @brief Extends the exact scene route with a real independently bound creative cube atlas. */
@@ -52,13 +52,14 @@ namespace Horo::Render {
                                 .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
                                 .targets = {target}};
         switch (stage) {
-            case ColorOutputShaderStage::SceneToDisplayLinear:
+            using enum Horo::Render::ColorOutputShaderStage;
+            case SceneToDisplayLinear:
                 DescribeScene(manifest);
                 break;
-            case ColorOutputShaderStage::SceneToDisplayLinearWithLook:
+            case SceneToDisplayLinearWithLook:
                 DescribeLook(manifest);
                 break;
-            case ColorOutputShaderStage::EncodeSdr:
+            case EncodeSdr:
                 DescribeEncode(manifest);
                 break;
             default:
@@ -72,7 +73,8 @@ namespace Horo::Render {
     /** @copydoc ColorOutputShaderReflectionNames */
     std::vector<ShaderReflectionBindingName> ColorOutputShaderReflectionNames(ColorOutputShaderStage stage) {
         switch (stage) {
-            case ColorOutputShaderStage::SceneToDisplayLinear:
+            using enum Horo::Render::ColorOutputShaderStage;
+            case SceneToDisplayLinear:
                 return {{{1}, "type.ColorOutputParameters", {{{1}, "SourceSize"}, {{2}, "ExposureSelection"}, {{3}, "ExposureIdentity"}}},
                         {{2}, "SceneColor", {}},
                         {{3}, "horo_color_reach_m_table_0", {}},
@@ -80,14 +82,14 @@ namespace Horo::Render {
                         {{5}, "horo_color_reach_m_table_0Sampler", {}},
                         {{6}, "horo_color_gamut_cusp_table_0Sampler", {}},
                         {{7}, "ExposureWords", {{{100}, "_m0"}}}};
-            case ColorOutputShaderStage::SceneToDisplayLinearWithLook: {
-                auto names = ColorOutputShaderReflectionNames(ColorOutputShaderStage::SceneToDisplayLinear);
+            case SceneToDisplayLinearWithLook: {
+                auto names = ColorOutputShaderReflectionNames(SceneToDisplayLinear);
                 names[0].parameters.insert(names[0].parameters.end(),
                                            {{{4}, "LookDomainMinimum"}, {{5}, "LookDomainMaximum"}, {{6}, "LookControl"}});
                 names.push_back({{8}, "LookCube", {}});
                 return names;
             }
-            case ColorOutputShaderStage::EncodeSdr:
+            case EncodeSdr:
                 return {{{1}, "type.ColorEncodeParameters", {{{1}, "OutputControl"}}}, {{2}, "DisplayLinearColor", {}}};
         }
         return {};

@@ -44,6 +44,28 @@ namespace {
         REQUIRE_FALSE(Horo::Foundation::Paths::HasPathPrefix(root, root.parent_path() / "outside/file.txt"));
     }
 
+    TEST_CASE("Native I/O path conversion preserves caller spelling and uses one Windows namespace", "[unit][foundation]") {
+        using Horo::Foundation::Paths::NativeApiPath;
+        const std::filesystem::path relative{"assets/source.bin"};
+        CHECK(NativeApiPath(relative) == relative);
+#if defined(_WIN32)
+        const std::filesystem::path drive{LR"(C:\project\source.bin)"};
+        const auto native = NativeApiPath(drive);
+        CHECK(native == std::filesystem::path{LR"(\\?\C:\project\source.bin)"});
+        CHECK(drive == std::filesystem::path{LR"(C:\project\source.bin)"});
+        CHECK(NativeApiPath(native) == native);
+        const std::filesystem::path unc{LR"(\\server\share\source.bin)"};
+        CHECK(NativeApiPath(unc) == std::filesystem::path{LR"(\\?\UNC\server\share\source.bin)"});
+        const std::filesystem::path device{LR"(\\.\pipe\source)"};
+        CHECK(NativeApiPath(device) == device);
+        const std::filesystem::path unnormalized{LR"(C:\project\..\source.bin)"};
+        CHECK(NativeApiPath(unnormalized) == unnormalized);
+#else
+        const std::filesystem::path absolute{"/project/source.bin"};
+        CHECK(NativeApiPath(absolute) == absolute);
+#endif
+    }
+
     TEST_CASE("Typed Handles Reject Different Resource Tags", "[unit][foundation]") {
         constexpr Horo::Handle<TextureTag> texture{.index = 4, .generation = 9};
         constexpr Horo::Handle<MeshTag> mesh{.index = 4, .generation = 9};

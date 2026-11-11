@@ -47,8 +47,7 @@ namespace Horo::Editor {
         RetirePrefabHierarchy();
         m_navigationPrefabSchemas.reset();
         ScheduleContentBrowserPreviews();
-        const auto accepted = m_prefabSettings->Accepted();
-        if (accepted.HasValue()) {
+        if (const auto accepted = m_prefabSettings->Accepted(); accepted.HasValue()) {
             for (const auto &document : m_prefabDocuments) {
                 const auto checked = document->UpdateLimitProfile(accepted.Value()->Limits());
                 if (checked.HasError())
@@ -79,11 +78,9 @@ namespace Horo::Editor {
         const auto snapshot = m_prefabSettings->Snapshot();
         if (snapshot.HasError())
             return Result<void>::Failure(snapshot.ErrorValue());
-        auto saved = m_prefabSettings->Execute({PrefabSettingsCommandKind::Save, snapshot.Value()->revision});
-        if (saved.HasError())
+        if (auto saved = m_prefabSettings->Execute({PrefabSettingsCommandKind::Save, snapshot.Value()->revision}); saved.HasError())
             return Result<void>::Failure(std::move(saved).ErrorValue());
-        const auto published = m_prefabSettings->Snapshot();
-        if (published.Value()->durabilityError)
+        if (const auto published = m_prefabSettings->Snapshot(); published.Value()->durabilityError)
             return Result<void>::Failure(*published.Value()->durabilityError);
         UpdatePrefabSettingsProjection();
         return Result<void>::Success();

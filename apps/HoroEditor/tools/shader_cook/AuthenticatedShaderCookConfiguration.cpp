@@ -61,7 +61,8 @@ namespace Horo::Application::Internal {
 
         struct CatalogSnapshot {
             std::shared_ptr<const VerifiedShaderHostCatalog> approval;
-            std::vector<std::uint8_t> catalog, signature;
+            std::vector<std::uint8_t> catalog;
+            std::vector<std::uint8_t> signature;
         };
 
         Result<CatalogSnapshot> Authenticate(const ShaderCookAuthenticationFiles &inputs) {
@@ -92,10 +93,11 @@ namespace Horo::Application::Internal {
         Result<void> InstallTools(ShaderCompilerToolchainConfiguration &configuration, const VerifiedShaderHostCatalog &catalog,
                                   const ShaderCookAuthenticationFiles &, std::span<const std::filesystem::path> executables,
                                   ShaderCookToolProfile profile) {
-            constexpr std::array roles{ShaderCompilerTool::Dxc, ShaderCompilerTool::SpirvTools, ShaderCompilerTool::SpirvCross,
-                                       ShaderCompilerTool::AppleMetal};
-            const auto count = profile == ShaderCookToolProfile::Spirv ? 3u : 4u;
-            if ((profile != ShaderCookToolProfile::Spirv && profile != ShaderCookToolProfile::Metal) || executables.size() != count)
+            using enum Horo::Render::ShaderCompilerTool;
+            using enum Horo::Application::Internal::ShaderCookToolProfile;
+            constexpr std::array roles{Dxc, SpirvTools, SpirvCross, AppleMetal};
+            const auto count = profile == Spirv ? 3u : 4u;
+            if ((profile != Spirv && profile != Metal) || executables.size() != count)
                 return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid));
             const auto approved = catalog.Tools();
             for (std::size_t index = 0; index < count; ++index) {

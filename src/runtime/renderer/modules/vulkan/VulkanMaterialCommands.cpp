@@ -78,11 +78,11 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(Invalid("Material backing has no canonical resource state."));
         auto existing = std::ranges::find(updates, resource.state, &Update::target);
         const auto states = std::span{materialPassStates}.first(materialPassStateCount);
-        const bool currentPass = std::ranges::find(states, resource.state) != states.end();
-        if (currentPass)
+        if (const bool currentPass = std::ranges::find(states, resource.state) != states.end(); currentPass)
             return ValidateRepeatedMaterialState(existing, updates.end(), next);
-        const std::array capacity{materialPassStateCount < materialPassStates.size(), updates.size() < RenderGraphLimits::HardMaxResources};
-        if (!std::ranges::all_of(capacity, [](bool valid) {
+        if (const std::array capacity{materialPassStateCount < materialPassStates.size(),
+                                      updates.size() < RenderGraphLimits::HardMaxResources};
+            !std::ranges::all_of(capacity, [](bool valid) {
             return valid;
         }))
             return Result<void>::Failure(Invalid("Material resource-state storage is full."));

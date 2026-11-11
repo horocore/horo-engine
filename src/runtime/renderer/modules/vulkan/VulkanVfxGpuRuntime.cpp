@@ -117,10 +117,11 @@ namespace Horo::Render::Detail {
                                                  const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver) {
         if (!ValidInitialization(device, incarnation, frames, bool(resolver), bool(impl_->device)))
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidConfig));
-        const bool compute = std::ranges::any_of(queues, [](const auto &queue) {
+        if (const bool compute = std::ranges::any_of(queues,
+                                                     [](const auto &queue) {
             return queue.supportsGraphics && queue.supportsCompute;
         });
-        if (!compute || !SupportedLimits(properties.limits))
+            !compute || !SupportedLimits(properties.limits))
             return Result<void>::Success();
         auto selected = std::make_shared<VulkanVfxGpuDevice>();
         selected->device = device;
@@ -188,8 +189,7 @@ namespace Horo::Render::Detail {
         if (!impl_->closing)
             return Result<bool>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         for (const auto &simulation : impl_->simulations) {
-            const auto observed = impl_->Observe(*simulation);
-            if (observed.HasError())
+            if (const auto observed = impl_->Observe(*simulation); observed.HasError())
                 return Result<bool>::Failure(observed.ErrorValue());
             if (std::ranges::any_of(simulation->operations, [](const auto &op) {
                 return op.occupied;

@@ -87,6 +87,9 @@ namespace Horo::Gameplay {
                     vfxEntered = Detail::GameplayVfxHostAccess::EnterCallback(instance.vfx);
             }
 
+            ContextBackend(const ContextBackend &) = delete;
+            ContextBackend &operator=(const ContextBackend &) = delete;
+
             ~ContextBackend() override {
                 if (vfxEntered)
                     Detail::GameplayVfxHostAccess::LeaveCallback(instance.vfx);

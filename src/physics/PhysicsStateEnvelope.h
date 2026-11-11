@@ -18,7 +18,9 @@ namespace Horo::Physics::StateDetail {
      */
     struct SnapshotEnvelopeSections final {
         SnapshotHeader header;
-        std::span<const std::byte> solver, construction, world;
+        std::span<const std::byte> solver;
+        std::span<const std::byte> construction;
+        std::span<const std::byte> world;
     };
 
     [[nodiscard]] Result<SnapshotEnvelopeSections> InspectSnapshotEnvelope(std::span<const std::byte>);

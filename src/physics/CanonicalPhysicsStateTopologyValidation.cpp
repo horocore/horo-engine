@@ -10,10 +10,11 @@ namespace Horo::Physics::Detail {
          * unsupported future shapes fail closed. */
         bool Leaf(const JPH::Shape &shape, JPH::SubShapeID key) noexcept {
             switch (shape.GetSubType()) {
-                case JPH::EShapeSubType::Box:
-                case JPH::EShapeSubType::Sphere:
-                case JPH::EShapeSubType::Capsule:
-                case JPH::EShapeSubType::Plane:
+                using enum JPH::EShapeSubType;
+                case Box:
+                case Sphere:
+                case Capsule:
+                case Plane:
                     return key.IsEmpty();
                 default:
                     return false;

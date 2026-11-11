@@ -18,7 +18,8 @@ namespace Horo::Editor {
             const auto second = SampleTerrainPreview(source, b.sampleX, b.sampleZ, mode);
             if (!first || !second)
                 return;
-            const auto pa = ProjectTerrainPreview(frame, *first), pb = ProjectTerrainPreview(frame, *second);
+            const auto pa = ProjectTerrainPreview(frame, *first);
+            const auto pb = ProjectTerrainPreview(frame, *second);
             if (pa && pb)
                 frame.draw.AddLine(*pa, *pb, color, 1.F);
         }
@@ -105,8 +106,8 @@ namespace Horo::Editor {
     void TerrainViewportTool::BrushGrid(const Frame &frame, const Terrain::TerrainCanonicalSource &source,
                                         const TerrainSurfaceHit &hit) const {
         constexpr unsigned Divisions = 12;
-        const double radiusX = brush_.radiusMeters / source.coordinates.spacingX,
-                     radiusZ = brush_.radiusMeters / source.coordinates.spacingZ;
+        const double radiusX = brush_.radiusMeters / source.coordinates.spacingX;
+        const double radiusZ = brush_.radiusMeters / source.coordinates.spacingZ;
         const auto mode =
             mode_ == TerrainToolMode::RestoreHole ? TerrainSurfacePickMode::UnderlyingHeightfield : TerrainSurfacePickMode::VisibleSurface;
         for (unsigned z = 0; z <= Divisions; ++z)
@@ -216,8 +217,7 @@ namespace Horo::Editor {
         }
         if (!PrepareFrame(frame, *source))
             return false;
-        const auto *document = frame.source.BorrowDocument();
-        if (document && document->Placements().size() > 512) {
+        if (const auto *document = frame.source.BorrowDocument(); document && document->Placements().size() > 512) {
             const auto cursor = ImGui::GetCursorScreenPos();
             ImGui::SetCursorScreenPos({frame.origin.x + Ui::ScaledLayoutValue(8), frame.origin.y + Ui::ScaledLayoutValue(80)});
             Ui::WrappedText(std::max(1.F, frame.size.x - Ui::ScaledLayoutValue(16)),

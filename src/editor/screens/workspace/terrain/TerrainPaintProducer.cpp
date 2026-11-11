@@ -56,11 +56,11 @@ namespace Horo::Editor {
             for (std::size_t i = 0; i < count; ++i) {
                 if (binding.order[i] != target)
                     continue;
-                if (found)
+                if (found.has_value())
                     return Return::Failure(MakeError(TerrainEditErrors::Invalid));
                 found = i;
             }
-            if (!found || !target.IsValid())
+            if (!found.has_value() || !target.IsValid())
                 return Return::Failure(MakeError(TerrainEditErrors::Invalid));
             return Return::Success(*found);
         }
@@ -170,7 +170,8 @@ namespace Horo::Editor {
 
         Result<void> ApplyPixel(TerrainRasterPatch &patch, const Terrain::TerrainCanonicalSource &source, const TerrainPaintBrush &brush,
                                 const Weights &desired, const TerrainSculptStamp &stamp, std::uint32_t x, std::uint32_t z) {
-            const auto sampleX = patch.rect.x + x, sampleZ = patch.rect.z + z;
+            const auto sampleX = patch.rect.x + x;
+            const auto sampleZ = patch.rect.z + z;
             const double distance = std::hypot((sampleX - stamp.sampleX) * source.coordinates.spacingX,
                                                (sampleZ - stamp.sampleZ) * source.coordinates.spacingZ);
             if (distance >= brush.radiusMeters)
@@ -204,9 +205,9 @@ namespace Horo::Editor {
                                               const CancellationToken &token) {
             using Return = Result<TerrainRasterPatch>;
             TerrainRasterPatch patch{.rect = plan.footprint.rect};
-            auto copied =
-                brush.mode == TerrainPaintMode::Weights ? CopyWeightRows(patch, source, token) : CopyHoleRows(patch, source, token);
-            if (copied.HasError())
+            if (auto copied =
+                    brush.mode == TerrainPaintMode::Weights ? CopyWeightRows(patch, source, token) : CopyHoleRows(patch, source, token);
+                copied.HasError())
                 return Return::Failure(std::move(copied).ErrorValue());
             for (const auto &stamp : stamps) {
                 auto applied = ApplyStamp(patch, source, brush, plan.desired, stamp, token);
@@ -230,8 +231,7 @@ namespace Horo::Editor {
             return Return::Failure(MakeError(TerrainEditErrors::StaleRevision));
         if (!operation.IsValid() || !ValidBrush(brush))
             return Return::Failure(MakeError(TerrainEditErrors::Invalid));
-        auto admitted = AdmitChannels(source, binding, brush.mode);
-        if (admitted.HasError())
+        if (auto admitted = AdmitChannels(source, binding, brush.mode); admitted.HasError())
             return Return::Failure(std::move(admitted).ErrorValue());
         try {
             auto plan = PreparePlan(source, binding, brush, stamps, limits);

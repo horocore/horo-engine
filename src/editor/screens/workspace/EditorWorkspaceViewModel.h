@@ -581,7 +581,10 @@ namespace Horo::Editor {
         std::vector<std::shared_ptr<const TerrainDocumentHost>> terrainDocuments;
         std::shared_ptr<const TerrainDocumentHost> terrainPaletteDocument;
         std::shared_ptr<const TerrainToolSelection> terrainToolSelection;
-        bool terrainCookAvailable{}, terrainCookRunning{}, terrainCookCurrent{}, terrainAssetCreationAvailable{};
+        bool terrainCookAvailable{};
+        bool terrainCookRunning{};
+        bool terrainCookCurrent{};
+        bool terrainAssetCreationAvailable{};
         std::uint64_t terrainCookEpoch{};
         DocumentInstanceId terrainCookDocument;
         std::shared_ptr<const Application::TerrainAuthoringCookCompletion> terrainCookOutcome;

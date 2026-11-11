@@ -17,7 +17,7 @@ namespace Horo::Physics::Detail {
                 return result;
             result.reserve(group->count);
             for (const auto &edge : graph.edges.subspan(group->begin, group->count))
-                result.push_back({ShapeHandle{}, edge.localPose});
+                result.emplace_back(ShapeHandle{}, edge.localPose);
             // Original process-local child handles are deliberately not reconstructed. Native refs and full recipes
             // own the real DAG; this existing metadata preserves exact ordered collider-pose validation after restart.
             return result;

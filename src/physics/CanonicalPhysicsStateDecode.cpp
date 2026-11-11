@@ -88,7 +88,9 @@ namespace Horo::Physics::Detail {
         auto bodies = Bodies(stream, bindings, staging);
         if (bodies.HasError())
             return Result<PhysicsStateSolverView>::Failure(bodies.ErrorValue());
-        std::uint32_t pairCount{}, manifoldCount{}, ccdCount{};
+        std::uint32_t pairCount{};
+        std::uint32_t manifoldCount{};
+        std::uint32_t ccdCount{};
         if (auto contacts = DecodeCanonicalPhysicsContacts(stream, bindings, staging, pairCount, manifoldCount, ccdCount);
             contacts.HasError())
             return Result<PhysicsStateSolverView>::Failure(contacts.ErrorValue());

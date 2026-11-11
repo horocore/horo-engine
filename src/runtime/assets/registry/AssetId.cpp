@@ -75,6 +75,11 @@ namespace Horo::Assets {
         return hash;
     }
 
+    /** @copydoc AssetTypeId::AssetTypeId */
+    AssetTypeId::AssetTypeId(AssetTypeId &&other) : AssetTypeId() {
+        value_.swap(other.value_);
+    }
+
     /** @copydoc AssetTypeId::Parse */
     Result<AssetTypeId> AssetTypeId::Parse(const std::string_view value) {
         if (value.empty() || value.size() > 96 || value.front() == '.' || value.back() == '.')
@@ -97,7 +102,7 @@ namespace Horo::Assets {
 
         if (segmentStart || !hasDot)
             return Result<AssetTypeId>::Failure(MakeError(AssetErrors::TypeInvalid));
-        return Result<AssetTypeId>::Success(AssetTypeId{std::string{value}});
+        return Result<AssetTypeId>::Success(AssetTypeId{value});
     }
 
     /** @copydoc AssetTypeId::Value */

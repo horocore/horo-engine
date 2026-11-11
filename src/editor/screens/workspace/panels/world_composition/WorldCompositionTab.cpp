@@ -221,8 +221,9 @@ namespace Horo::Editor {
         };
         const auto &fonts = context.theme.fonts;
         ImGui::BeginDisabled(command.command != EditorWorkspaceViewCommand::None);
-        if (Ui::Button(
-                {.label = text("world.bake").c_str(), .enabled = vm.worldBakeAvailable && !vm.worldBakeOperation, .font = fonts.sans})) {
+        if (Ui::Button({.label = text("world.bake").c_str(),
+                        .enabled = vm.worldBakeAvailable && !vm.worldBakeOperation.has_value(),
+                        .font = fonts.sans})) {
             command.command = EditorWorkspaceViewCommand::BakeWorldCells;
             command.worldDocumentFence = vm.worldDocument->fence;
         }
@@ -232,14 +233,14 @@ namespace Horo::Editor {
             command.command = EditorWorkspaceViewCommand::ValidateWorldCells;
             command.worldDocumentFence = vm.worldDocument->fence;
         }
-        if (vm.worldBakeOperation && Ui::Button({.label = text("world.cancel_bake").c_str(), .font = fonts.sans})) {
+        if (vm.worldBakeOperation.has_value() && Ui::Button({.label = text("world.cancel_bake").c_str(), .font = fonts.sans})) {
             command.command = EditorWorkspaceViewCommand::CancelWorldBake;
             command.worldBakeOperation = vm.worldBakeOperation;
             command.worldDocumentFence = vm.worldDocument->fence;
         }
         ImGui::EndDisabled();
         const char *bakeStatusKey = "world.bake_needed";
-        if (vm.worldBakeOperation)
+        if (vm.worldBakeOperation.has_value())
             bakeStatusKey = "world.bake_running";
         else if (vm.worldBakeCurrent)
             bakeStatusKey = "world.bake_current";

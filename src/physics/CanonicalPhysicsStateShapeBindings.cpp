@@ -36,8 +36,8 @@ namespace Horo::Physics::Detail {
         using Outcome = Result<std::vector<PhysicsStateShapeBinding>>;
         // World capacities already bound the actual inventory. No caller count may
         // trigger an unbounded extra allocation.
-        const auto maximum = world.scene.shapes.size() + world.scene.bodies.size() + world.query.fixtures.size();
-        if (bindings.size() > maximum)
+        if (const auto maximum = world.scene.shapes.size() + world.scene.bodies.size() + world.query.fixtures.size();
+            bindings.size() > maximum)
             return Outcome::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
         auto geometry = CollectCanonicalPhysicsStateGeometry(world, std::numeric_limits<std::size_t>::max());
         if (geometry.HasError())

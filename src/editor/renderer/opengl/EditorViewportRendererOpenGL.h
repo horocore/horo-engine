@@ -94,8 +94,12 @@ namespace Horo::Editor {
             std::int32_t shadowEnabled{-1};
             std::int32_t shadowLightIndex{-1};
             std::int32_t shadowMvp{-1};
-            std::int32_t shadowCascadeCount{-1}, cascadeSplits{-1}, atlasRects{-1}, cameraForward{-1}, shadowTexel{-1},
-                shadowBiasFilter{-1};
+            std::int32_t shadowCascadeCount{-1};
+            std::int32_t cascadeSplits{-1};
+            std::int32_t atlasRects{-1};
+            std::int32_t cameraForward{-1};
+            std::int32_t shadowTexel{-1};
+            std::int32_t shadowBiasFilter{-1};
             std::int32_t selectionColor{-1};
             std::int32_t selectionStrength{-1};
             std::int32_t baseColor{-1};
@@ -109,7 +113,8 @@ namespace Horo::Editor {
         std::uint64_t shadowProgramGeneration_{};
         std::uint64_t liveGeneration_{};
         std::uint32_t gridProgram_{};
-        std::array<std::uint32_t, 3> reloadBuffers_{}, reloadBufferSlots_{};
+        std::array<std::uint32_t, 3> reloadBuffers_{};
+        std::array<std::uint32_t, 3> reloadBufferSlots_{};
         std::uint32_t reloadTextureUnit_{7};
         std::array<std::size_t, 3> reloadBufferBytes_{};
         std::array<Render::MaterialBindingLayout, 3> reloadLayouts_;

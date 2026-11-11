@@ -527,7 +527,7 @@ namespace Horo::Editor {
         void RefreshTerrainDocuments();
         /** @brief Resolve one owner-thread transient palette/selection state for an existing document. */
         [[nodiscard]] std::shared_ptr<TerrainToolSelection> TerrainSelection(DocumentInstanceId instance);
-        [[nodiscard]] Result<std::shared_ptr<TerrainToolSelection>> PrepareTerrainSelection(const TerrainDocumentHost &document);
+        [[nodiscard]] Result<std::shared_ptr<TerrainToolSelection>> PrepareTerrainSelection(const TerrainDocumentHost &document) const;
         /** @brief Validate the exact typed workspace target before dispatching any source or transient command. */
         [[nodiscard]] Result<TerrainDocumentHost *> TerrainTarget(const TerrainToolCommand &intent);
         [[nodiscard]] Result<TerrainDocumentHost *> TerrainTarget(const TerrainDocumentView &view, bool requireFocus);

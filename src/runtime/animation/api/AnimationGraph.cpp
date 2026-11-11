@@ -40,13 +40,33 @@ namespace Horo::Animation {
         using namespace AnimationErrors;
         using namespace GraphCompileDetail;
 
+        /** @brief Orders scalar indices before fallible copies, avoiding noexcept
+         * moves of checked-library storage while sorting owned cold graph data. */
+        template <typename Value> void CanonicalizeOwnedIds(std::vector<Value> &values) {
+            if (std::ranges::is_sorted(values, {}, &Value::id))
+                return;
+            std::vector<std::size_t> order(values.size());
+            for (std::size_t index = 0; index < order.size(); ++index)
+                order[index] = index;
+            std::ranges::sort(order, {}, [&values](const std::size_t index) {
+                return values[index].id;
+            });
+            std::vector<Value> sorted(std::size_t{0});
+            sorted.reserve(values.size());
+            for (const auto index : order) {
+                const auto &original = values[index];
+                sorted.push_back(original);
+            }
+            values.swap(sorted);
+        }
+
         /** @brief Canonicalizes the inert action catalog without changing authored
          * successor/loop semantics. */
         void CanonicalizeActions(AnimationGraphData &data) {
-            std::ranges::sort(data.actionSlots, {}, &GraphActionSlot::id);
-            std::ranges::sort(data.actions, {}, &GraphActionDefinition::id);
+            CanonicalizeOwnedIds(data.actionSlots);
+            CanonicalizeOwnedIds(data.actions);
             for (auto &action : data.actions) {
-                std::ranges::sort(action.sequence.sections, {}, &GraphActionSection::id);
+                CanonicalizeOwnedIds(action.sequence.sections);
                 std::ranges::sort(action.sequence.loops, {}, &GraphActionLoopRegion::id);
                 std::ranges::sort(action.mask.joints, {}, &GraphBoneWeight::joint);
             }
@@ -59,17 +79,17 @@ namespace Horo::Animation {
             const auto byId = [](const auto &left, const auto &right) {
                 return left.id < right.id;
             };
-            std::ranges::sort(data.parameters, byId);
-            std::ranges::sort(data.definitions, byId);
+            CanonicalizeOwnedIds(data.parameters);
+            CanonicalizeOwnedIds(data.definitions);
             for (auto &definition : data.definitions) {
                 std::ranges::sort(definition.inputs, byId);
-                std::ranges::sort(definition.nodes, byId);
+                CanonicalizeOwnedIds(definition.nodes);
                 std::ranges::sort(definition.connections);
                 for (auto &node : definition.nodes) {
                     std::ranges::sort(node.pins, byId);
                     if (auto *machine = std::get_if<GraphStateMachineNode>(&node.payload)) {
                         std::ranges::sort(machine->states, byId);
-                        std::ranges::sort(machine->transitions, byId);
+                        CanonicalizeOwnedIds(machine->transitions);
                     }
                     if (auto *tree = std::get_if<GraphBlendTreeNode>(&node.payload))
                         std::ranges::sort(tree->samples, byId);
@@ -133,9 +153,9 @@ namespace Horo::Animation {
          * program. */
         struct DefinitionTopology final {
             std::map<GraphNodeId, std::size_t> indexes;
-            std::vector<std::vector<std::size_t>> incoming;
-            std::vector<std::vector<std::size_t>> outgoing;
-            std::vector<std::size_t> indegree;
+            std::vector<std::vector<std::size_t>> incoming{std::size_t{0}};
+            std::vector<std::vector<std::size_t>> outgoing{std::size_t{0}};
+            std::vector<std::size_t> indegree = std::vector<std::size_t>(std::size_t{0});
             std::size_t output{};
         };
 
@@ -202,8 +222,8 @@ namespace Horo::Animation {
          * required input. */
         Result<void> IndexEdges(const GraphDefinition &definition, const AnimationGraphCompileContext &context,
                                 DefinitionTopology &topology) {
-            topology.incoming.resize(definition.nodes.size());
-            topology.outgoing.resize(definition.nodes.size());
+            topology.incoming.resize(definition.nodes.size(), std::vector<std::size_t>(std::size_t{0}));
+            topology.outgoing.resize(definition.nodes.size(), std::vector<std::size_t>(std::size_t{0}));
             topology.indegree.resize(definition.nodes.size());
             std::set<GraphEndpoint> destinations;
             for (std::size_t index = 0; index < definition.connections.size(); ++index) {
@@ -483,7 +503,7 @@ namespace Horo::Animation {
         Result<std::vector<GraphCompiledDefinition>> CompileDefinitions(const AnimationGraphData &canonical,
                                                                         const AnimationGraphCompileContext &context,
                                                                         std::set<AnimationClipId> &clips) {
-            std::vector<GraphCompiledDefinition> definitions;
+            std::vector<GraphCompiledDefinition> definitions(std::size_t{0});
             for (const auto &definition : canonical.definitions) {
                 auto compiled = CompileDefinition(definition, canonical, context);
                 if (compiled.HasError())
@@ -705,6 +725,7 @@ namespace Horo::Animation {
 
         /** @brief Defines execution-local operands only; these IDs never claim a persistent graph asset. */
         AnimationGraphData DirectClipDeclarations(const AnimationClipId clip, const SkeletonId skeleton) {
+            using enum Horo::Animation::GraphValueType;
             AnimationGraphData model;
             model.skeleton = skeleton;
             model.entry = GraphDefinitionId::Create(1).Value();
@@ -712,9 +733,9 @@ namespace Horo::Animation {
             const auto output = GraphNodeId::Create(2).Value();
             const auto pin = GraphPinId::Create(1).Value();
             GraphDefinition definition{.id = model.entry};
-            definition.nodes = {{sample, GraphClipNode{clip, {}}, {{pin, GraphPinRole::Result, GraphValueType::Pose, true}}},
-                                {output, GraphOutputNode{}, {{pin, GraphPinRole::Value, GraphValueType::Pose, false}}}};
-            definition.connections = {{{sample, pin}, {output, pin}, GraphValueType::Pose}};
+            definition.nodes = {{sample, GraphClipNode{clip, {}}, {{pin, GraphPinRole::Result, Pose, true}}},
+                                {output, GraphOutputNode{}, {{pin, GraphPinRole::Value, Pose, false}}}};
+            definition.connections = {{{sample, pin}, {output, pin}, Pose}};
             model.definitions.push_back(std::move(definition));
             return model;
         }

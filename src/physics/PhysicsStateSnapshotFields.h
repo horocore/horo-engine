@@ -32,15 +32,19 @@ namespace Horo::Physics::StateDetail {
         static constexpr std::size_t Bytes = 350;
         static constexpr std::size_t PairBytes = 519;
         static constexpr std::size_t EventBytes = 532;
-        std::uint32_t tag{Tag}, version{PhysicsStateSnapshotVersion};
-        std::uint64_t totalBytes{}, solverBytes{}, constructionBytes{};
+        std::uint32_t tag{Tag};
+        std::uint32_t version{PhysicsStateSnapshotVersion};
+        std::uint64_t totalBytes{};
+        std::uint64_t solverBytes{};
+        std::uint64_t constructionBytes{};
         PhysicsStateCompatibility compatibility;
         std::uint32_t worldVersion{1};
         std::uint64_t completedTick{};
         PhysicsContinuousCollisionPolicy continuousCollision;
         std::uint32_t appliedCommands{};
         std::uint64_t droppedEventCount{};
-        std::uint32_t pairCount{}, eventCount{};
+        std::uint32_t pairCount{};
+        std::uint32_t eventCount{};
     };
 
     /** @brief Fixed header has an exact closed field manifest, including explicit

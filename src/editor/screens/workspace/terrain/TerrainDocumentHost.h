@@ -19,10 +19,14 @@ namespace Horo::Editor {
 
     /** @brief Accepted saved-source publication facts copied only by explicit cook commands. */
     struct TerrainSavedSource final {
-        std::filesystem::path root, path;
-        Assets::AssetId asset, workspace;
+        std::filesystem::path root;
+        std::filesystem::path path;
+        Assets::AssetId asset;
+        Assets::AssetId workspace;
         TerrainEditFence fence;
-        Sha256Digest sourceDigest, metadataDigest, layerDigest;
+        Sha256Digest sourceDigest;
+        Sha256Digest metadataDigest;
+        Sha256Digest layerDigest;
     };
 
     /** @brief One owner of an existing imported height-only terrain asset; canonical mutation remains TerrainAuthoringDocument. */
@@ -119,11 +123,14 @@ namespace Horo::Editor {
                                                                      const std::optional<Terrain::TerrainAuthoringLayerBinding> &layers,
                                                                      const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         static constexpr std::uint32_t TileCellCount = 128;
-        std::filesystem::path root_, path_, metadataPath_;
+        std::filesystem::path root_;
+        std::filesystem::path path_;
+        std::filesystem::path metadataPath_;
         DocumentIdentity identity_;
         Assets::AssetId workspace_;
         TerrainAuthoringDocument document_;
-        Assets::AssetSourceIdentity accepted_, acceptedMetadata_;
+        Assets::AssetSourceIdentity accepted_;
+        Assets::AssetSourceIdentity acceptedMetadata_;
         std::optional<Terrain::TerrainAuthoringLayerBinding> layers_;
         std::vector<FoliagePaletteItem> foliageCatalog_;
         std::vector<TerrainLayerSetChoice> layerSets_;
@@ -131,6 +138,7 @@ namespace Horo::Editor {
         bool containerSource_{};
         bool durabilityUnconfirmed_{};
         std::thread::id owner_;
-        bool busy_{}, conflict_{};
+        bool busy_{};
+        bool conflict_{};
     };
 }  // namespace Horo::Editor

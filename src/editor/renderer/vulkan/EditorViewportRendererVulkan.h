@@ -130,7 +130,9 @@ namespace Horo::Editor {
 
         struct DrawSlot {
             Render::RenderBufferHandle buffer;
-            std::uint64_t instance{}, materialIdentity{}, materialRevision{};
+            std::uint64_t instance{};
+            std::uint64_t materialIdentity{};
+            std::uint64_t materialRevision{};
             std::shared_ptr<const Render::ResidentMaterialBinding> material;
         };
 

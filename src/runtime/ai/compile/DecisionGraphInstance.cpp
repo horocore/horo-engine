@@ -11,7 +11,8 @@ namespace Horo::AI {
         }
 
         bool Terminal(AiTaskState state) noexcept {
-            return state == AiTaskState::Succeeded || state == AiTaskState::Failed || state == AiTaskState::Cancelled;
+            using enum Horo::AI::AiTaskState;
+            return state == Succeeded || state == Failed || state == Cancelled;
         }
 
         bool ValidRange(const DecisionGraphInstanceBinding &binding, const CookedDecisionPlan &plan) noexcept {
@@ -44,6 +45,9 @@ namespace Horo::AI {
                 evaluating = true;
                 current = &input;
             }
+
+            StepScope(const StepScope &) = delete;
+            StepScope &operator=(const StepScope &) = delete;
 
             ~StepScope() {
                 current = nullptr;

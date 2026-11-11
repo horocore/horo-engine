@@ -221,13 +221,13 @@ namespace Horo::Editor::SettingsModalInternal {
         SettingGroup(typoGroup.c_str(), ctx.theme.fonts, true);
         const auto familyLabel = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.font_family");
         const auto familyDescription = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.font_family.description");
-        SettingRow(familyLabel.c_str(), familyDescription.c_str(), ctx.theme.fonts, [&] {
+        SettingRow(familyLabel.c_str(), familyDescription.c_str(), ctx.theme.fonts, [&st, &ctx] {
             const auto &families = ctx.theme.fonts.codeFamilies;
             int selected = 0;
             for (std::size_t index = 0; index < families.size(); ++index)
                 if (families[index].name == st.appearance.codeFontFamily)
                     selected = static_cast<int>(index);
-            const ComboItemSource source{.label = [&](int index) {
+            const ComboItemSource source{.label = [&families](int index) {
                 return families[static_cast<std::size_t>(index)].name.c_str();
             }};
             if (!families.empty() && ComboControl("##code-family", &selected, static_cast<int>(families.size()), source, ctx.theme.fonts))
@@ -242,7 +242,7 @@ namespace Horo::Editor::SettingsModalInternal {
             const std::string key = std::string{"code_editor."} + entry.key;
             const auto label = SettingsModal::kTextScope.Text(ctx.localization, key);
             const auto description = SettingsModal::kTextScope.Text(ctx.localization, key + ".description");
-            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&] {
+            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&entry, &st, &ctx] {
                 static_cast<void>(ToggleControl(entry.key, &(st.appearance.codeEditor.*entry.member), ctx.theme.fonts));
             });
         }
@@ -250,7 +250,7 @@ namespace Horo::Editor::SettingsModalInternal {
             const std::string key = std::string{"code_editor."} + entry.key;
             const auto label = SettingsModal::kTextScope.Text(ctx.localization, key);
             const auto description = SettingsModal::kTextScope.Text(ctx.localization, key + ".description");
-            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&] {
+            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&entry, &st, &ctx] {
                 SliderIntControl(entry.key, &(st.appearance.codeEditor.*entry.member), entry.minimum, entry.maximum,
                                  SliderValueFormat::Integer, ctx.theme.fonts);
             });
@@ -326,14 +326,14 @@ namespace Horo::Editor::SettingsModalInternal {
                 button = SettingsModal::kTextScope.Text(ctx.localization, "keymap.recording");
             else if (button.empty())
                 button = SettingsModal::kTextScope.Text(ctx.localization, "keymap.unassigned");
-            SettingRow(label.c_str(), "", ctx.theme.fonts, [&] {
+            SettingRow(label.c_str(), "", ctx.theme.fonts, [&button, &ctx, &st, &id, &profile, &action] {
                 if (Ui::Button({.label = button.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = ctx.theme.fonts.sans}))
                     st.input.recordingAction = id;
                 ImGui::SameLine();
                 if (Ui::Button({.label = SettingsModal::kTextScope.Text(ctx.localization, "keymap.reset").c_str(),
                                 .variant = Ui::ButtonVariant::Secondary,
                                 .font = ctx.theme.fonts.sans})) {
-                    std::erase_if(profile.overrides, [&](const auto &entry) {
+                    std::erase_if(profile.overrides, [&action](const auto &entry) {
                         return entry.action == action.id;
                     });
                     st.input.recordingAction.clear();
@@ -343,7 +343,7 @@ namespace Horo::Editor::SettingsModalInternal {
                 Input::InputBinding captured;
                 if (Ui::CaptureShortcut(captured)) {
                     if (captured.key != Input::Key::Escape) {
-                        std::erase_if(profile.overrides, [&](const auto &entry) {
+                        std::erase_if(profile.overrides, [&action](const auto &entry) {
                             return entry.action == action.id;
                         });
                         profile.overrides.push_back({action.id, {captured}});

@@ -5,7 +5,8 @@
 namespace Horo::Animation::Detail {
     /** @copydoc ScaleGraphSyncTime */
     std::int64_t ScaleGraphSyncTime(const std::int64_t value, const std::int64_t from, const std::int64_t to) noexcept {
-        std::uint64_t quotient = 0, remainder = 0;
+        std::uint64_t quotient = 0;
+        std::uint64_t remainder = 0;
         for (int bit = 63; bit >= 0; --bit) {
             remainder = 2 * remainder + (((static_cast<std::uint64_t>(value) >> bit) & 1U) * static_cast<std::uint64_t>(to));
             quotient = 2 * quotient + remainder / static_cast<std::uint64_t>(from);

@@ -30,7 +30,7 @@ namespace Horo::Render {
 
         bool RasterEnvelopeValid(const RenderGraphExecutionPass &pass, const RenderGraphMaterialRaster &raster) {
             const bool clear =
-                !raster.depthClear || (std::isfinite(*raster.depthClear) && *raster.depthClear >= 0 && *raster.depthClear <= 1);
+                !raster.depthClear.has_value() || (std::isfinite(*raster.depthClear) && *raster.depthClear >= 0 && *raster.depthClear <= 1);
             const std::array valid{pass.kind == RenderPassKind::Graphics,
                                    raster.extent.IsValid(),
                                    raster.draws.size() <= RenderGraphMaterialRaster::MaximumDraws,
@@ -48,7 +48,8 @@ namespace Horo::Render {
             const RenderGraphExecutionRequest &request;
             const RenderGraphMaterialRaster &raster;
             std::span<const RenderGraphResourceUsage> usages;
-            std::array<bool, RenderGraphLimits::HardMaxResources> matched{}, readUsed{};
+            std::array<bool, RenderGraphLimits::HardMaxResources> matched{};
+            std::array<bool, RenderGraphLimits::HardMaxResources> readUsed{};
 
             Result<void> Use(RenderGraphResourceId id, RenderGraphUsageKind kind, RenderGraphAccess access) {
                 const auto found = std::ranges::find(usages, id, &RenderGraphResourceUsage::resource);
@@ -86,11 +87,11 @@ namespace Horo::Render {
                     return color;
                 if (raster.depth.IsValid())
                     return Attachment(raster.depth, raster.depthView, RenderGraphUsageKind::DepthStencilAttachment,
-                                      raster.depthClear ? RenderGraphAccess::Write : RenderGraphAccess::ReadWrite);
+                                      raster.depthClear.has_value() ? RenderGraphAccess::Write : RenderGraphAccess::ReadWrite);
                 return raster.depthView.IsValid() ? InvalidRaster("An absent depth texture cannot have a view.") : Result<void>::Success();
             }
 
-            Result<void> ReadShape(const RenderGraphMaterialRead &read) {
+            Result<void> ReadShape(const RenderGraphMaterialRead &read) const {
                 if (read.buffer.IsValid() == read.texture.IsValid())
                     return InvalidRaster("A material graph input maps exactly one buffer or sampled view.");
                 if (read.buffer.IsValid()) {

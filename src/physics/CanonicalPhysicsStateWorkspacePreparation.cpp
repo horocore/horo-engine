@@ -126,8 +126,8 @@ namespace Horo::Physics::Detail {
         if (auto prepared = value->PreparePayloads(*world, configuration, bounds.Value()); prepared.HasError())
             return Outcome::Failure(prepared.ErrorValue());
         auto workspace = std::unique_ptr<CanonicalPhysicsStateWorkspace>{new CanonicalPhysicsStateWorkspace{std::move(value)}};
-        const auto resourceBytes = CanonicalPhysicsStateResourceBytes(workspace->Resources());
-        if (resourceBytes > configuration.maximumRetainedBytes ||
+        if (const auto resourceBytes = CanonicalPhysicsStateResourceBytes(workspace->Resources());
+            resourceBytes > configuration.maximumRetainedBytes ||
             workspace->RetainedPayloadBytes() > configuration.maximumRetainedBytes - resourceBytes)
             return Outcome::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         return Outcome::Success(std::move(workspace));

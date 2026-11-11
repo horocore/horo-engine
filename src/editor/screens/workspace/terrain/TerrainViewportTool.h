@@ -19,14 +19,18 @@ namespace Horo::Editor {
     public:
         struct Frame final {
             ImDrawList &draw;
-            ImVec2 origin, size;
+            ImVec2 origin;
+            ImVec2 size;
             const EditorViewportCamera &camera;
             Math::ClipDepthRange depth;
             Math::Transform datasetToViewport;
             const TerrainDocumentHost &source;
             bool eligible{};
             const TerrainToolSelection *selection{};
-            bool cookAvailable{}, cookRunning{}, cookCurrent{}, assetCreationAvailable{};
+            bool cookAvailable{};
+            bool cookRunning{};
+            bool cookCurrent{};
+            bool assetCreationAvailable{};
             std::uint64_t cookEpoch{};
             const Application::TerrainAuthoringCookCompletion *cookOutcome{};
         };
@@ -87,8 +91,10 @@ namespace Horo::Editor {
         TerrainDocumentView captured_;
         EditorViewportCamera camera_;
         Math::Transform placement_;
-        ImVec2 origin_{}, extent_{};
+        ImVec2 origin_{};
+        ImVec2 extent_{};
         Math::ClipDepthRange depth_{};
-        bool active_{}, invalid_{};
+        bool active_{};
+        bool invalid_{};
     };
 }  // namespace Horo::Editor

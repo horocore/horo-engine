@@ -30,8 +30,8 @@ namespace Horo::Physics::Detail {
         using Outcome = Result<PhysicsEventEndpoint>;
         if (!body.collision || body.collision->profile != endpoint.profile)
             return Outcome::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
-        const auto *profile = world.simulation.Profile(endpoint.profile);
-        if (!profile || !profile->lifecycleEventsEnabled || profile->layer != endpoint.layer)
+        if (const auto *profile = world.simulation.Profile(endpoint.profile);
+            !profile || !profile->lifecycleEventsEnabled || profile->layer != endpoint.layer)
             return Outcome::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
         if (!Metadata(*body.collision, endpoint, material, surface))
             return Outcome::Failure(MakeError(PhysicsErrors::DescriptorInvalid));

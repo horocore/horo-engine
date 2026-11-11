@@ -110,19 +110,25 @@ namespace Horo::Runtime {
 
     struct RuntimeSceneService::Preparation {
         struct Entry {
+            Entry() = default;
+
+            explicit Entry(const SceneAssetDependency &source) : dependency(source) {}
+
             SceneAssetDependency dependency;
             std::shared_ptr<const std::vector<std::uint8_t>> payload;
             std::optional<Assets::AssetLoadHandle> load;
             std::size_t inspectedParticipants{};
         };
 
-        Preparation(RuntimeSceneDefinition source, const RuntimeSceneConfig sceneConfig, Assets::AssetRegistrySnapshot registrySnapshot)
-            : definition(std::move(source)), config(sceneConfig), snapshot(std::move(registrySnapshot)) {}
+        Preparation(const RuntimeSceneDefinition &source, const RuntimeSceneConfig sceneConfig,
+                    Assets::AssetRegistrySnapshot registrySnapshot)
+            : definition(source), config(sceneConfig), snapshot(std::move(registrySnapshot)) {}
 
         RuntimeSceneDefinition definition;
         RuntimeSceneConfig config;
         Assets::AssetRegistrySnapshot snapshot;
-        std::vector<Entry> entries;
+        // Count construction keeps checked-library empty-vector bookkeeping inside the fallible preparation boundary.
+        std::vector<Entry> entries = std::vector<Entry>(std::size_t{0});
         std::size_t activeLoads{};
         std::size_t residentBytes{};
         std::size_t discoveredReferences{};
@@ -188,14 +194,15 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc RuntimeSceneService::QueuePreparation */
-    Result<void> RuntimeSceneService::QueuePreparation(RuntimeSceneDefinition definition, const RuntimeSceneConfig config) {
-        auto queued = QueuePreparationWithPublicationCheck(std::move(definition), {}, config);
+    Result<void> RuntimeSceneService::QueuePreparation(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config) {
+        auto queued = QueuePreparationWithPublicationCheck(definition, {}, config);
         return queued.HasError() ? Result<void>::Failure(queued.ErrorValue()) : Result<void>::Success();
     }
 
     /** @copydoc RuntimeSceneService::QueuePreparationWithPublicationCheck */
     Result<ScenePublicationReceipt> RuntimeSceneService::QueuePreparationWithPublicationCheck(
-        RuntimeSceneDefinition definition, std::unique_ptr<ScenePublicationCheck> publicationCheck, const RuntimeSceneConfig config) {
+        const RuntimeSceneDefinition &definition, std::unique_ptr<ScenePublicationCheck> publicationCheck,
+        const RuntimeSceneConfig config) {
         if (shutdown_)
             return Result<ScenePublicationReceipt>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
@@ -211,7 +218,7 @@ namespace Horo::Runtime {
             // Receipt storage is admitted before world preparation. Publication fills only bounded values, with no callbacks.
             auto receipt = publicationCheck ? std::make_shared<ScenePublicationDetail::State>() : nullptr;
             operationError_.reset();
-            if (const auto admitted = BeginPreparation(std::move(definition), config); admitted.HasError())
+            if (const auto admitted = BeginPreparation(definition, config); admitted.HasError())
                 return Result<ScenePublicationReceipt>::Failure(admitted.ErrorValue());
             if (pending_.scene && publicationCheck) {
                 const auto composition = publicationCheck->ValidatePreparedComposition(pending_.datasets);
@@ -230,7 +237,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc RuntimeSceneService::QueuePreparationWithRestore */
-    Result<void> RuntimeSceneService::QueuePreparationWithRestore(RuntimeSceneDefinition definition,
+    Result<void> RuntimeSceneService::QueuePreparationWithRestore(const RuntimeSceneDefinition &definition,
                                                                   std::unique_ptr<SceneAggregateRestore> restore,
                                                                   const RuntimeSceneConfig config) {
         if (!restore)
@@ -244,7 +251,7 @@ namespace Horo::Runtime {
         const LifecycleMutation mutation{*this};
         operationError_.reset();
         aggregateRestore_ = std::move(restore);
-        const auto admitted = BeginPreparation(std::move(definition), config);
+        const auto admitted = BeginPreparation(definition, config);
         if (admitted.HasError()) {
             aggregateRestore_->Rollback();
             aggregateRestore_.reset();
@@ -273,14 +280,14 @@ namespace Horo::Runtime {
     Result<void> RuntimeSceneService::PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const {
         prep.entries.reserve(definition.AssetDependencies().size());
         for (const auto &dependency : definition.AssetDependencies()) {
-            prep.entries.push_back(Preparation::Entry{dependency});
+            prep.entries.emplace_back(dependency);
             if (auto reused = ReusePreparationPayload(prep, prep.entries.size() - 1); reused.HasError())
                 return reused;
         }
         return Result<void>::Success();
     }
 
-    Result<void> RuntimeSceneService::BeginPreparation(RuntimeSceneDefinition definition, const RuntimeSceneConfig config) {
+    Result<void> RuntimeSceneService::BeginPreparation(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config) {
         try {
             if (const auto validation = ValidatePreparation(definition, config, assetPreparationServices_.limits, nextRuntimeId_);
                 validation.HasError())
@@ -299,7 +306,7 @@ namespace Horo::Runtime {
             if (const auto checked = CheckDependenciesExist(definition, snapshot); checked.HasError())
                 return checked;
 
-            auto prep = std::make_unique<Preparation>(std::move(definition), config, std::move(snapshot));
+            auto prep = std::make_unique<Preparation>(definition, config, std::move(snapshot));
             if (const auto populated = PopulatePreparationEntries(*prep, prep->definition); populated.HasError())
                 return populated;
 
@@ -563,7 +570,7 @@ namespace Horo::Runtime {
             return Result<void>::Failure(WithAssetContext(MakeError(SceneErrors::AssetMissing), prep.definition.Id(), dependency.id));
         if (record->type != dependency.expectedType)
             return Result<void>::Failure(WithAssetContext(MakeError(SceneErrors::AssetTypeMismatch), prep.definition.Id(), dependency.id));
-        prep.entries.push_back(Preparation::Entry{dependency});
+        prep.entries.emplace_back(dependency);
         return ReusePreparationPayload(prep, prep.entries.size() - 1);
     }
 

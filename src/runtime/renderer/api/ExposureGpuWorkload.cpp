@@ -33,8 +33,7 @@ namespace Horo::Render {
             s.compensationEv = p.timing[2];
             s.initialEv = p.timing[3];
             s.manualEv = s.initialEv;
-            auto prepared = PrepareExposureDispatch(s, w.sourceExtent, p.region, p.timing[0]);
-            if (prepared.HasError())
+            if (auto prepared = PrepareExposureDispatch(s, w.sourceExtent, p.region, p.timing[0]); prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
             return Result<void>::Success();
         }
@@ -107,10 +106,10 @@ namespace Horo::Render {
         /** @brief Accounts for exactly the four retained exposure graph resource uses. */
         bool GraphResourcesValid(const RenderGraphExecutionRequest &request, std::span<const RenderGraphResourceUsage> uses,
                                  const RenderGraphExposureGpu &w) {
+            using enum Horo::Render::RenderGraphResourceKind;
             using enum RenderGraphAccess;
             const std::array ids{w.sceneColor, w.histogram, w.previousExposure, w.outputExposure};
-            const std::array kinds{RenderGraphResourceKind::Texture, RenderGraphResourceKind::Buffer, RenderGraphResourceKind::Buffer,
-                                   RenderGraphResourceKind::Buffer};
+            const std::array kinds{Texture, Buffer, Buffer, Buffer};
             const std::array accesses{Read, ReadWrite, w.resetPrevious ? ReadWrite : Read, Write};
             for (std::size_t i = 0; i < ids.size(); ++i)
                 if (!MatchesUse(request, uses, ids[i], kinds[i], i == 0 ? RenderGraphUsageKind::Sampled : RenderGraphUsageKind::Storage,

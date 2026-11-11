@@ -227,8 +227,7 @@ namespace Horo::Editor {
                 if (prepared.HasError())
                     return Result<Captured>::Failure(prepared.ErrorValue());
                 auto &sources = prepared.Value().sources;
-                const auto *source = sources.inputs.Find(asset_);
-                if (!source || !std::ranges::equal(source->bytes, input.editorPayload))
+                if (const auto *source = sources.inputs.Find(asset_); !source || !std::ranges::equal(source->bytes, input.editorPayload))
                     return Result<Captured>::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
                 auto values = values_ ? values_(cancellation) : Result<PrefabAssetPreviewValues>::Success({});
                 if (values.HasError())

@@ -76,9 +76,9 @@ namespace Horo::Animation::Detail {
         /** @brief Includes all compiler-admitted player ownership in one active occurrence. */
         GraphInstanceOutcome TraverseOccurrence(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                                 const GraphEvaluationInput &input, const bool stage) {
-            if (occurrence.clipPlayer)
+            if (occurrence.clipPlayer.has_value())
                 return TraversePlayer(state, *occurrence.clipPlayer, *occurrence.clipBindingIndex, input, stage, occurrence);
-            if (occurrence.blendTree)
+            if (occurrence.blendTree.has_value())
                 return TraverseTree(state, occurrence, input, stage);
             return {};
         }

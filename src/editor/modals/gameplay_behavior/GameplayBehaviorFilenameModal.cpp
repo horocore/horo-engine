@@ -79,18 +79,18 @@ namespace Horo::Editor {
     }
 
     void GameplayBehaviorFilenameModal::DrawLanguage() {
+        using enum Horo::Editor::GameplayBehaviorKind;
         const auto &fonts = context_.theme.fonts;
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text("type"), Theme::Text(), fonts);
         const std::array languages{Text("lua").c_str(), Text("native").c_str()};
-        int selected = state_.Kind() == GameplayBehaviorKind::Lua ? 0 : 1;
+        int selected = state_.Kind() == Lua ? 0 : 1;
         ImGui::PushItemWidth(-1.0F);
         const bool changed = Ui::ComboControl("##GameplayBehaviorLanguage", &selected, languages.data(), static_cast<int>(languages.size()),
                                               fonts, {.componentSize = Ui::ComponentSize::Medium});
         ImGui::PopItemWidth();
         if (changed) {
-            const GameplayBehaviorKind kind = selected == 0 ? GameplayBehaviorKind::Lua : GameplayBehaviorKind::Native;
-            const std::filesystem::path destination =
-                kind == GameplayBehaviorKind::Lua ? luaDestination_ : projectRoot_ / "source" / "gameplay";
+            const GameplayBehaviorKind kind = selected == 0 ? Lua : Native;
+            const std::filesystem::path destination = kind == Lua ? luaDestination_ : projectRoot_ / "source" / "gameplay";
             state_.SetKind(kind, DestinationText(destination));
             destinationError_ = false;
             RefreshAvailability();

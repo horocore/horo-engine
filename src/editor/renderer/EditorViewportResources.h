@@ -99,9 +99,14 @@ namespace Horo::Editor {
         struct ViewportTargetResources {
             Render::RenderTextureHandle colorTexture;
             Render::RenderTextureHandle depthTexture;
-            Render::RenderTextureHandle displayTexture, presentationTexture;
-            Render::RenderTextureViewHandle displayView, presentationView;
-            Render::ResourceOperationId displayOperation, presentationOperation, displayViewOperation, presentationViewOperation;
+            Render::RenderTextureHandle displayTexture;
+            Render::RenderTextureHandle presentationTexture;
+            Render::RenderTextureViewHandle displayView;
+            Render::RenderTextureViewHandle presentationView;
+            Render::ResourceOperationId displayOperation;
+            Render::ResourceOperationId presentationOperation;
+            Render::ResourceOperationId displayViewOperation;
+            Render::ResourceOperationId presentationViewOperation;
             Render::RenderTextureViewHandle colorView;
             Render::RenderTextureViewHandle depthView;
             Render::RenderTargetHandle target;
@@ -135,7 +140,9 @@ namespace Horo::Editor {
             Render::RenderTextureHandle texture;
             Render::RenderTextureViewHandle view;
             Render::RenderTargetHandle target;
-            Render::ResourceOperationId textureOperation, viewOperation, targetOperation;
+            Render::ResourceOperationId textureOperation;
+            Render::ResourceOperationId viewOperation;
+            Render::ResourceOperationId targetOperation;
             EditorViewportExtent extent;
             Render::DirectionalShadowProfile profile;
         };
@@ -152,7 +159,8 @@ namespace Horo::Editor {
         std::unordered_map<std::uint64_t, ResidentMesh> pendingMeshes_;
         ViewportTargetResources viewportTarget_;
         ViewportTargetResources pendingViewportTarget_;
-        ShadowResources shadowResources_, pendingShadowResources_;
+        ShadowResources shadowResources_;
+        ShadowResources pendingShadowResources_;
         Render::DirectionalShadowProfile requestedShadowProfile_;
         std::uint64_t shadowGeneration_{};
         EditorViewportExtent allocatedExtent_;

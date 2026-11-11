@@ -80,10 +80,15 @@ namespace Horo::Animation::Detail {
         std::uint32_t transitions{};
         std::uint32_t boundaryCrossings{};
         std::vector<PreparedAction> definitions;
-        std::vector<ActionRecord> records, candidateRecords;
-        std::vector<ActionSlotState> slots, candidateSlots;
+        std::vector<ActionRecord> records;
+        std::vector<ActionRecord> candidateRecords;
+        std::vector<ActionSlotState> slots;
+        std::vector<ActionSlotState> candidateSlots;
         std::vector<std::uint32_t> admissions;
-        std::vector<Math::Transform> overlay, committedOverlay, frozen, committedFrozen;
+        std::vector<Math::Transform> overlay;
+        std::vector<Math::Transform> committedOverlay;
+        std::vector<Math::Transform> frozen;
+        std::vector<Math::Transform> committedFrozen;
         std::array<std::vector<GraphActionSlotObservation>, 2> published;
         std::array<std::vector<GraphActionObservation>, 2> completions;
         std::array<std::uint32_t, 2> completionCounts{};

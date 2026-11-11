@@ -90,6 +90,9 @@ namespace Horo::XR {
                 owner.busy = true;
             }
 
+            Operation(const Operation &) = delete;
+            Operation &operator=(const Operation &) = delete;
+
             ~Operation() {
                 owner.Finish();
             }

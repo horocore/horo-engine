@@ -517,7 +517,25 @@ field with the same key overrides the parent value only for that scope.
 
 `Telemetry::CaptureOperationIdentity` supplies numeric lineage with empty diagnostic
 fields and no clock reads or allocation when a classified producer cannot inherit
-arbitrary ambient context. Full `CaptureOperationContext` remains unchanged.
+arbitrary ambient context. Full `CaptureOperationContext` captures inherited
+diagnostic fields as well as operation lineage.
+
+Empty `LogContextSnapshot` values have a null field owner. Copies retain an
+immutable field block across scheduling and worker scopes; `With` constructs a
+separate field block, and the last retaining snapshot releases its storage.
+Numeric identity capture reads a nullable thread-local stack borrow without
+constructing either a stack or diagnostic storage. Stack owners publish that
+borrow after successful construction and clear it before thread-local teardown.
+
+This representation fixes the MSVC checked-library allocations previously
+observed in the `noexcept` identity query. Migration requires rebuilding
+Foundation, JobSystem, log/telemetry producers and SDK consumers of `LogContext.h`
+and `Operation.h`, because the snapshot's private layout changes. Existing
+snapshot, binding and identity function signatures carry the same value and
+isolation semantics. Fresh-thread identity, empty snapshot copy/move, retained
+field lifetime and independent isolated derivation regressions in
+`HoroOperationIdentityAllocationTests` verify the contract, including Windows CI;
+native results are recorded separately.
 
 `LogContextSnapshot::Isolated` is an additive privacy boundary for classified
 operations. Binding one hides all outer fields while preserving explicit inner

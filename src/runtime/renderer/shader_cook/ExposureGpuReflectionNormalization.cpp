@@ -8,25 +8,25 @@ namespace Horo::Render::ExposureGpuCookDetail {
         /** @brief Requires a bounded duplicate-free JSON object from actual Cross output. */
         Json Parse(std::string_view source) {
             if (source.empty() || source.size() > ShaderReflectionCookDetail::MaximumMetadataBytes)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             Foundation::JsonParseGuard guard{24};
             auto result = guard.Parse(source.begin(), source.end());
             if (guard.HasDuplicate() || guard.IsTooDeep() || result.is_discarded() || !result.is_object())
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             return result;
         }
 
         /** @brief Requires the exact fixed local group shape without specialization. */
         void LocalSize(const Json &entry, ExposureGpuStage stage) {
             const auto &size = Rows(entry, "workgroup_size", 3);
-            const bool build = stage == ExposureGpuStage::BuildHistogram;
-            if (size.size() != 3 || Unsigned(size[0]) != (build ? 8u : 256u) || Unsigned(size[1]) != (build ? 8u : 1u) ||
+            if (const bool build = stage == ExposureGpuStage::BuildHistogram;
+                size.size() != 3 || Unsigned(size[0]) != (build ? 8u : 256u) || Unsigned(size[1]) != (build ? 8u : 1u) ||
                 Unsigned(size[2]) != 1)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             for (const auto key : {"workgroup_size_is_spec_constant", "workgroup_size_is_spec_constant_id"})
                 for (const auto &value : Rows(entry, key, 3))
                     if (value != false)
-                        throw EvidenceFailure{__func__, __LINE__};
+                        throw EvidenceFailure{};
         }
 
         /** @brief Rejects foreign entrypoints and validates their actual local-size evidence. */
@@ -34,24 +34,24 @@ namespace Horo::Render::ExposureGpuCookDetail {
             const auto &entries = Rows(json, "entryPoints", 1);
             if (entries.size() != 1 || entries[0].at("name").get_ref<const std::string &>() != EntryName(stage) ||
                 entries[0].at("mode") != "comp")
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             LocalSize(entries[0], stage);
         }
 
         /** @brief Proves each actual field's primitive ABI against the independently parsed native declaration. */
         void FieldMatches(const Json &json, const Field &native) {
             if (json.at("name") != native.name || json.at("type") != native.jsonType || Unsigned(json.at("offset")) != native.offset)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             for (const auto key : {"array", "array_stride", "array_size_is_literal", "matrix_stride", "row_major", "physical_pointer"})
                 if (json.contains(key))
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
         }
 
         /** @brief Requires the complete exact ordered member set. */
         void Fields(const Json &json, const Layout &native) {
             const auto &members = Rows(json, "members", 8);
             if (members.size() != native.fields.size())
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             for (std::size_t i = 0; i < members.size(); ++i)
                 FieldMatches(members[i], native.fields[i]);
         }
@@ -59,10 +59,10 @@ namespace Horo::Render::ExposureGpuCookDetail {
         /** @brief Rejects descriptor arrays, indirect resources and noncanonical register spaces. */
         void Resource(const Json &entry, const Buffer &native) {
             if (Unsigned(entry.at("set")) != 0 || Unsigned(entry.at("binding")) != native.slot)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             for (const auto key : {"array", "physical_pointer", "buffer_reference"})
                 if (entry.contains(key))
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
         }
 
         /** @brief Resolves one exact named resource without accepting duplicate evidence. */
@@ -72,11 +72,11 @@ namespace Horo::Render::ExposureGpuCookDetail {
                 if (row.at("name").get_ref<const std::string &>() != name)
                     continue;
                 if (found)
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
                 found = &row;
             }
             if (!found)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             return *found;
         }
 
@@ -85,18 +85,19 @@ namespace Horo::Render::ExposureGpuCookDetail {
             Resource(entry, native);
             if (Unsigned(entry.at("block_size")) != 0 || entry.value("readonly", false) != native.readonly ||
                 entry.value("writeonly", false))
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
         }
 
         /** @brief Proves the single unsized array and its exact actual element stride. */
         void RuntimeShape(const Json &runtime, const Buffer &native) {
-            const auto &shape = Rows(runtime, "array", 1), &literal = Rows(runtime, "array_size_is_literal", 1);
+            const auto &shape = Rows(runtime, "array", 1);
+            const auto &literal = Rows(runtime, "array_size_is_literal", 1);
             if (shape.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(shape[0]) != 0)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (Unsigned(runtime.at("offset")) != 0 || Unsigned(runtime.at("array_stride")) != native.layout.bytes)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (!native.wrapperMember.empty() && runtime.at("name") != native.wrapperMember)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
         }
 
         /** @brief Proves runtime-array stride and storage layout using actual Cross declarations. */
@@ -105,12 +106,12 @@ namespace Horo::Render::ExposureGpuCookDetail {
             const auto &type = json.at("types").at(entry.at("type").get<std::string>());
             const auto &members = Rows(type, "members", 1);
             if (members.size() != 1)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             const auto &runtime = members[0];
             RuntimeShape(runtime, native);
             if (native.layout.fields.empty()) {
                 if (runtime.at("type") != native.layout.scalarType)
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
             } else
                 Fields(json.at("types").at(runtime.at("type").get<std::string>()), native.layout);
         }
@@ -120,13 +121,13 @@ namespace Horo::Render::ExposureGpuCookDetail {
                       ShaderReflectionCandidate &candidate) {
             Resource(entry, native);
             if (Unsigned(entry.at("block_size")) != 96)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             const auto &type = json.at("types").at(entry.at("type").get<std::string>());
             Fields(type, native.layout);
             const auto &members = Rows(type, "members", 6);
             for (std::size_t i = 0; i < members.size(); ++i) {
                 if (members[i].at("name") != names.parameters[i].name)
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
                 const auto scalar = i == 0 || i >= 4 ? ShaderValueType::Uint32 : ShaderValueType::Float32;
                 candidate.parameters.push_back(
                     {names.parameters[i].id, {5}, scalar, 1, 4, 1, Unsigned(members[i].at("offset")), 0, 0, true, true});
@@ -137,7 +138,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
         void Texture(const Json &entry, const Buffer &native) {
             Resource(entry, native);
             if (entry.at("type") != "texture2D" || entry.value("writeonly", false))
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
         }
 
         /** @brief Rejects every unsupported resource category before normalization. */
@@ -153,12 +154,12 @@ namespace Horo::Render::ExposureGpuCookDetail {
                                         "specialization_constants"};
             for (const auto key : banned)
                 if (!Rows(json, key, 0).empty())
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
             if (!json.at("types").is_object() || json.at("types").size() > 32)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (Rows(json, "ssbos", 3).size() != storage || Rows(json, "separate_images", 1).size() != images ||
                 Rows(json, "ubos", 1).size() != 1)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
         }
     }  // namespace
 
@@ -195,7 +196,7 @@ namespace Horo::Render {
                                      std::span<const SpirvReflectionStage> stages, std::span<const std::string> translations,
                                      std::span<const ShaderReflectionBindingName> names) {
             if (ValidateExposureGpuMetalReflection(manifest, target, names).HasError() || stages.size() != 1 || translations.size() != 1)
-                throw ExposureGpuCookDetail::EvidenceFailure{__func__, __LINE__};
+                throw ExposureGpuCookDetail::EvidenceFailure{};
         }
     }  // namespace
 
@@ -212,7 +213,7 @@ namespace Horo::Render {
             ValidateCaptureEnvelope(manifest, target, stages, translations, names);
             const auto stage = Stage(manifest);
             if (stages[0].stage != ShaderStage::Compute || stages[0].entryPoint != EntryName(stage))
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             const auto native = ParseNative(translations[0], stage);
             auto candidate = Normalize(manifest, Parse(stages[0].json), native, names);
             // Only actual native+JSON float2D evidence can resolve a binary Depth=2 classification.

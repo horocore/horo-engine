@@ -34,8 +34,7 @@ namespace Horo::Editor {
 
     /** @copydoc FoliageSelectionModel::Observe */
     void FoliageSelectionModel::Observe(const TerrainAuthoringDocument &document) {
-        const auto fence = document.Fence();
-        if (document.IsClosed() || fence.session != session_ || fence.dataset != dataset_) {
+        if (const auto fence = document.Fence(); document.IsClosed() || fence.session != session_ || fence.dataset != dataset_) {
             Clear();
             return;
         }

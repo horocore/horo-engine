@@ -40,7 +40,7 @@ namespace Horo::Animation {
             return Result<void>::Failure(MakeError(AnimationAssetErrors::Malformed));
         preparedBytes += payload.bytes.size();
         preparedReferences += payload.dependencies.size();
-        entries.push_back({payload.asset, std::move(type), std::move(payload)});
+        entries.emplace_back(payload.asset, std::move(type), std::move(payload));
         return Result<void>::Success();
     }
 
@@ -56,11 +56,11 @@ namespace Horo::Animation {
             auto payload = EncodeSkeletonAnimationPayload(skeleton.Value(), context);
             if (payload.HasError())
                 return Result<void>::Failure(std::move(payload).ErrorValue());
-            const auto added = Add(std::move(payload).Value(), source.record.type);
-            if (added.HasError())
+            if (const auto added = Add(std::move(payload).Value(), source.record.type); added.HasError())
                 return added;
-            skeletons.push_back({std::make_shared<const SkeletonAsset>(std::move(skeleton).Value()),
-                                 SkeletonAssetGeneration::Create(nextGeneration++).Value()});
+            auto owner = std::make_shared<const SkeletonAsset>(std::move(skeleton).Value());
+            const auto generation = SkeletonAssetGeneration::Create(nextGeneration++).Value();
+            skeletons.emplace_back(std::move(owner), generation);
         }
         return Result<void>::Success();
     }
@@ -87,8 +87,7 @@ namespace Horo::Animation {
             auto payload = EncodeClipAnimationPayload(clip.Value(), skeletonPayload->payload.bytes, context);
             if (payload.HasError())
                 return Result<void>::Failure(std::move(payload).ErrorValue());
-            const auto added = Add(std::move(payload).Value(), source.record.type);
-            if (added.HasError())
+            if (const auto added = Add(std::move(payload).Value(), source.record.type); added.HasError())
                 return added;
             clips.push_back(std::move(clip).Value());
         }

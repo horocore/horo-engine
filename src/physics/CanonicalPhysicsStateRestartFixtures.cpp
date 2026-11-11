@@ -70,7 +70,7 @@ namespace Horo::Physics::Detail {
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
             mapped->shape = created.Value().shape;
-            bindings.bodies.push_back({source.body, created.Value().body});
+            bindings.bodies.emplace_back(source.body, created.Value().body);
             return Result<void>::Success();
         }
     }  // namespace

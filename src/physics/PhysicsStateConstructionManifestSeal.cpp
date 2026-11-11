@@ -15,12 +15,12 @@ namespace Horo::Physics::StateDetail {
     Result<void> ConstructionManifestOwner::Seal(const PhysicsStateConstructionManifest &manifest, PhysicsStateFpControl current) {
         if (sealed_)
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
-        const std::array<bool, 10> owned{Prefix(manifest.shapes.nodes, nodes_),     Prefix(manifest.shapes.edges, edges_),
-                                         Prefix(manifest.shapes.roots, roots_),     Prefix(manifest.bodies, bodies_),
-                                         Prefix(manifest.colliders, colliders_),    Prefix(manifest.materials, materials_),
-                                         Prefix(manifest.joints, joints_),          Prefix(manifest.fixtures, fixtures_),
-                                         Prefix(manifest.queryChildren, children_), Prefix(manifest.owners, owners_)};
-        if (!std::ranges::all_of(owned, [](bool value) {
+        if (const std::array<bool, 10> owned{Prefix(manifest.shapes.nodes, nodes_), Prefix(manifest.shapes.edges, edges_),
+                                             Prefix(manifest.shapes.roots, roots_), Prefix(manifest.bodies, bodies_),
+                                             Prefix(manifest.colliders, colliders_), Prefix(manifest.materials, materials_),
+                                             Prefix(manifest.joints, joints_), Prefix(manifest.fixtures, fixtures_),
+                                             Prefix(manifest.queryChildren, children_), Prefix(manifest.owners, owners_)};
+            !std::ranges::all_of(owned, [](bool value) {
             return value;
         }))
             return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));

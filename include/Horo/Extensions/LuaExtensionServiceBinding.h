@@ -29,13 +29,13 @@ namespace Horo::Extensions {
                                                                   const CancellationToken &cancellation = {},
                                                                   LuaExtensionServiceLimits limits = {});
     /** @brief Product headless-owner operation; resolves the declared import on the actual active host before running Lua.
-     * @param host Actual sole headless composition. @param extension Active package. @param module Importing module.
+     * @param host Actual sole headless composition. @param extension Active package. @param moduleId Importing module.
      * @param importId Manifest-local import. @param policy Actual authenticated script policy/scopes.
      * @param source Authenticated immutable packaged source. @param cancellation Original host token.
      * @param limits Bounded runtime policy. @return Typed result; no provider/VM authority is exposed to Lua.
      */
     [[nodiscard]] Result<std::int64_t> ExecuteHeadlessLuaExtensionService(HeadlessExtensionHost &host, std::string_view extension,
-                                                                          std::string_view module, std::string_view importId,
+                                                                          std::string_view moduleId, std::string_view importId,
                                                                           ScriptCapabilityContextDescriptor policy, std::string_view source,
                                                                           const CancellationToken &cancellation = {},
                                                                           LuaExtensionServiceLimits limits = {});

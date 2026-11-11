@@ -219,7 +219,7 @@ namespace Horo::Application::Internal {
              .requestCancel = [cancel = requestCancellation]() {
             cancel.RequestCancellation();
         }});
-        if (!operationId)
+        if (!operationId.has_value())
             return Result<void>::Failure(MakeError(SaveErrors::OperationInProgress));
         const auto loaded = TryAdmitRuntime(command, *operationId);
         if (loaded.HasError())

@@ -87,16 +87,17 @@ namespace Horo::Gameplay::Detail {
         }
 
         [[nodiscard]] Vfx::VfxSpawnStatus WorldStatus(const GameplayVfxBindingTable &table, Vfx::VfxWorld &world) noexcept {
+            using enum Horo::Vfx::VfxSpawnStatus;
             const auto &compiled = GameplayVfxBindingAccess::State(table);
             for (const auto &binding : compiled.bindings)
                 for (const auto &layer : std::span{binding.layers.data(), binding.layerCount}) {
                     Vfx::VfxSpawnAssetInfo asset;
-                    if (world.InspectSpawnAsset(layer.asset, asset) != Vfx::VfxSpawnStatus::Accepted)
-                        return Vfx::VfxSpawnStatus::MissingAsset;
+                    if (world.InspectSpawnAsset(layer.asset, asset) != Accepted)
+                        return MissingAsset;
                     if (!LayerFits(binding, layer, asset))
-                        return Vfx::VfxSpawnStatus::ParameterSchemaMismatch;
+                        return ParameterSchemaMismatch;
                 }
-            return Vfx::VfxSpawnStatus::Accepted;
+            return Accepted;
         }
 
         [[nodiscard]] Result<void> ValidateWorld(const GameplayVfxBindingTable &table, Vfx::VfxWorld &world) {
@@ -142,6 +143,9 @@ namespace Horo::Gameplay::Detail {
                 state.busy = true;
             }
 
+            ReloadScope(const ReloadScope &) = delete;
+            ReloadScope &operator=(const ReloadScope &) = delete;
+
             ~ReloadScope() {
                 state.busy = false;
             }
@@ -163,9 +167,9 @@ namespace Horo::Gameplay::Detail {
                                 state.results.capacity() * sizeof(GameplayVfxSourceRecord) +
                                 state.sealed.capacity() * sizeof(GameplayVfxSealedTick) +
                                 state.modules.capacity() * sizeof(GameplayVfxModuleSlot);
-            for (const auto &module : state.modules)
+            for (const auto &moduleSlot : state.modules)
                 bytes += sizeof(GameplayVfxModuleState) + sizeof(GameplayVfxClientState) + sizeof(GameplayVfxProducerState) +
-                         sizeof(GameplayVfxContext) + sizeof(GameplayVfxCommittedProducer) + 512U + GrantBytes(module.state->grant);
+                         sizeof(GameplayVfxContext) + sizeof(GameplayVfxCommittedProducer) + 512U + GrantBytes(moduleSlot.state->grant);
             return bytes;
         }
 
@@ -189,19 +193,20 @@ namespace Horo::Gameplay::Detail {
 
     GameplayVfxModuleSlot GameplayVfxHostAccess::MakeModule(const std::shared_ptr<GameplayVfxSceneState> &scene,
                                                             const GameplayVfxGrant &grant) {
-        auto module = std::make_shared<GameplayVfxModuleState>();
-        module->grant = grant;
-        module->scene = scene->scene;
-        module->owner = scene->owner;
+        auto moduleState = std::make_shared<GameplayVfxModuleState>();
+        moduleState->grant = grant;
+        moduleState->scene = scene->scene;
+        moduleState->owner = scene->owner;
         auto client = std::make_shared<GameplayVfxClientState>();
         client->scene = scene;
-        client->module = module;
+        client->module = moduleState;
         client->lifetime = std::make_shared<GameplayVfxScopeLifetime>();
         auto producer = std::make_shared<GameplayVfxProducerState>();
         producer->scene = scene;
-        producer->module = module;
-        return {module, std::shared_ptr<const GameplayVfxContext>{new GameplayVfxContext{std::move(client)}},
-                std::shared_ptr<const GameplayVfxCommittedProducer>{new GameplayVfxCommittedProducer{std::move(producer)}}};
+        producer->module = moduleState;
+        std::shared_ptr<const GameplayVfxContext> context{new GameplayVfxContext{std::move(client)}};
+        std::shared_ptr<const GameplayVfxCommittedProducer> committed{new GameplayVfxCommittedProducer{std::move(producer)}};
+        return {std::move(moduleState), std::move(context), std::move(committed)};
     }
 
     Result<GameplayVfxSceneLease> GameplayVfxHostAccess::Prepare(Vfx::VfxWorld &world, std::shared_ptr<const GameplayVfxBindingTable> table,
@@ -251,10 +256,10 @@ namespace Horo::Gameplay::Detail {
         auto &state = *lease.state;
         state.active = false;
         state.sourceOpen = false;
-        for (auto &module : state.modules) {
-            module.state->active = false;
+        for (const auto &moduleSlot : state.modules) {
+            moduleSlot.state->active = false;
             if (state.world)
-                static_cast<void>(state.world->CancelSpawnOwner(module.state->grant.owner, module.state->grant.ownerGeneration));
+                static_cast<void>(state.world->CancelSpawnOwner(moduleSlot.state->grant.owner, moduleSlot.state->grant.ownerGeneration));
         }
         state.pendingCount = 0;
         state.world = nullptr;
@@ -264,9 +269,9 @@ namespace Horo::Gameplay::Detail {
                                                                             const std::string_view moduleId) noexcept {
         if (!lease.state || VfxContextDetail::Status(*lease.state) != Vfx::VfxSpawnStatus::Accepted)
             return {};
-        for (const auto &module : lease.state->modules)
-            if (module.state->grant.moduleId == moduleId)
-                return module.client;
+        for (const auto &moduleSlot : lease.state->modules)
+            if (moduleSlot.state->grant.moduleId == moduleId)
+                return moduleSlot.client;
         return {};
     }
 
@@ -274,23 +279,24 @@ namespace Horo::Gameplay::Detail {
                                                                                                  const std::string_view moduleId) noexcept {
         if (!lease.state || VfxContextDetail::Status(*lease.state) != Vfx::VfxSpawnStatus::Accepted)
             return {};
-        for (const auto &module : lease.state->modules)
-            if (module.state->grant.moduleId == moduleId)
-                return module.producer;
+        for (const auto &moduleSlot : lease.state->modules)
+            if (moduleSlot.state->grant.moduleId == moduleId)
+                return moduleSlot.producer;
         return {};
     }
 
     Result<std::shared_ptr<const GameplayVfxContext>> GameplayVfxHostAccess::ForkRuntime(
-        const std::shared_ptr<const GameplayVfxContext> &module) {
-        if (!module || !module->IsUsable() || module->state_->lifetime->parent || module->state_->entity.IsValid())
+        const std::shared_ptr<const GameplayVfxContext> &moduleContext) {
+        if (!moduleContext || !moduleContext->IsUsable() || moduleContext->state_->lifetime->parent ||
+            moduleContext->state_->entity.IsValid())
             return Reject<std::shared_ptr<const GameplayVfxContext>>(GameplayVfxErrors::ScopeInvalid);
         try {
-            auto state = std::make_shared<GameplayVfxClientState>(*module->state_);
+            auto state = std::make_shared<GameplayVfxClientState>(*moduleContext->state_);
             state->lifetime = std::make_shared<GameplayVfxScopeLifetime>();
-            state->lifetime->parent = module->state_->lifetime;
+            state->lifetime->parent = moduleContext->state_->lifetime;
             state->entity = {};
             state->callback = false;
-            if (!module->IsUsable())
+            if (!moduleContext->IsUsable())
                 return Reject<std::shared_ptr<const GameplayVfxContext>>(GameplayVfxErrors::ScopeInvalid);
             return Result<std::shared_ptr<const GameplayVfxContext>>::Success(
                 std::shared_ptr<const GameplayVfxContext>{new GameplayVfxContext{std::move(state)}});
@@ -300,17 +306,17 @@ namespace Horo::Gameplay::Detail {
     }
 
     Result<std::shared_ptr<const GameplayVfxContext>> GameplayVfxHostAccess::ForEntity(
-        const std::shared_ptr<const GameplayVfxContext> &module, const GameplayEntityRef entity) {
-        if (!module || !module->IsUsable() || !entity.IsValid() || entity.scene != module->Scene().Value() ||
-            module->state_->entity.IsValid())
+        const std::shared_ptr<const GameplayVfxContext> &moduleContext, const GameplayEntityRef entity) {
+        if (!moduleContext || !moduleContext->IsUsable() || !entity.IsValid() || entity.scene != moduleContext->Scene().Value() ||
+            moduleContext->state_->entity.IsValid())
             return Reject<std::shared_ptr<const GameplayVfxContext>>(GameplayVfxErrors::ScopeInvalid);
         try {
-            auto state = std::make_shared<GameplayVfxClientState>(*module->state_);
+            auto state = std::make_shared<GameplayVfxClientState>(*moduleContext->state_);
             state->lifetime = std::make_shared<GameplayVfxScopeLifetime>();
-            state->lifetime->parent = module->state_->lifetime;
+            state->lifetime->parent = moduleContext->state_->lifetime;
             state->entity = entity;
             state->callback = false;
-            if (!module->IsUsable())
+            if (!moduleContext->IsUsable())
                 return Reject<std::shared_ptr<const GameplayVfxContext>>(GameplayVfxErrors::ScopeInvalid);
             return Result<std::shared_ptr<const GameplayVfxContext>>::Success(
                 std::shared_ptr<const GameplayVfxContext>{new GameplayVfxContext{std::move(state)}});
@@ -378,18 +384,19 @@ namespace Horo::Gameplay::Detail {
 
     Vfx::VfxSpawnStatus GameplayVfxHostAccess::PublishReload(const GameplayVfxSceneLease &lease,
                                                              std::shared_ptr<const GameplayVfxBindingTable> replacement) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (!lease.state)
-            return Vfx::VfxSpawnStatus::StaleScene;
+            return StaleScene;
         auto &state = *lease.state;
-        if (const auto status = VfxContextDetail::Status(state); status != Vfx::VfxSpawnStatus::Accepted)
+        if (const auto status = VfxContextDetail::Status(state); status != Accepted)
             return status;
         if (state.sourceOpen || state.pendingCount != 0 || state.sealCount != 0)
-            return Vfx::VfxSpawnStatus::Reentrant;
+            return Reentrant;
         if (!replacement || replacement->Generation() <= state.table->Generation())
-            return Vfx::VfxSpawnStatus::StaleBinding;
-        if (const auto status = WorldStatus(*replacement, *state.world); status != Vfx::VfxSpawnStatus::Accepted)
+            return StaleBinding;
+        if (const auto status = WorldStatus(*replacement, *state.world); status != Accepted)
             return status;
         state.table = std::move(replacement);
-        return Vfx::VfxSpawnStatus::Accepted;
+        return Accepted;
     }
 }  // namespace Horo::Gameplay::Detail

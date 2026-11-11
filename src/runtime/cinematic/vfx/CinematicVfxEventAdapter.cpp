@@ -8,8 +8,8 @@ namespace Horo::Cinematic {
     namespace {
         /** @brief Admits only finite runtime registration metadata; Preview has no committed VFX source route. */
         bool ValidBinding(const VfxEventBinding &binding) noexcept {
-            const bool context = binding.context == EventRuntimeContext::Runtime || binding.context == EventRuntimeContext::Pie ||
-                                 binding.context == EventRuntimeContext::Headless;
+            using enum Horo::Cinematic::EventRuntimeContext;
+            const bool context = binding.context == Runtime || binding.context == Pie || binding.context == Headless;
             return binding.binding.IsValid() && binding.schema.IsValid() && binding.generation != 0 && context &&
                    !binding.semanticEvent.empty() && binding.semanticEvent.size() <= Gameplay::GameplayVfxBindingLimits::TextBytes &&
                    binding.semanticSchemaVersion != 0;
@@ -163,15 +163,16 @@ namespace Horo::Cinematic {
 
     /** @copydoc CinematicVfxEventAdapter::State::Dispatch */
     EventDispatchOutcome CinematicVfxEventAdapter::State::Dispatch(const EventDispatchRequest &request) noexcept {
+        using enum Horo::Cinematic::EventDispatchOutcome;
         if (std::this_thread::get_id() != lane || busy)
-            return EventDispatchOutcome::HandlerFailed;
+            return HandlerFailed;
         if (revoked)
-            return EventDispatchOutcome::BindingUnavailable;
+            return BindingUnavailable;
         const auto *key = FindRequest(request);
         if (!key)
-            return EventDispatchOutcome::InvalidTarget;
+            return InvalidTarget;
         if (resultCount == results.size())
-            return EventDispatchOutcome::Backpressured;
+            return Backpressured;
         busy = true;
         auto &record = results[resultCount++];
         record = {request.occurrence, request.committedTick, {}};

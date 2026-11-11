@@ -13,6 +13,7 @@
 namespace Horo::Render {
     /** @copydoc MakeVfxShaderManifest */
     ShaderManifest MakeVfxShaderManifest(const ShaderTargetRequirement &target) {
+        using enum Horo::Render::ShaderValueType;
         using namespace VfxShaderParameterIds;
         using enum ShaderResourceKind;
         using enum ShaderResourceAccess;
@@ -25,10 +26,10 @@ namespace Horo::Render {
                              {Material, UniformBuffer, ReadOnly, 1, ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment},
                              {BaseColor, SampledTexture, ReadOnly, 1, ShaderStageVisibility::Fragment},
                              {BaseColorSampler, Sampler, ReadOnly, 1, ShaderStageVisibility::Fragment}};
-        manifest.parameters = {{ClipFromLocal, Instances, ShaderValueType::Float32, 4, 4, MaximumVfxDrawInstances},
-                               {InstanceColor, Instances, ShaderValueType::Float32, 1, 4, MaximumVfxDrawInstances},
-                               {Tint, Material, ShaderValueType::Float32, 1, 4, 1},
-                               {AlphaCutoff, Material, ShaderValueType::Float32, 1, 1, 1}};
+        manifest.parameters = {{ClipFromLocal, Instances, Float32, 4, 4, MaximumVfxDrawInstances},
+                               {InstanceColor, Instances, Float32, 1, 4, MaximumVfxDrawInstances},
+                               {Tint, Material, Float32, 1, 4, 1},
+                               {AlphaCutoff, Material, Float32, 1, 1, 1}};
         manifest.targets = {target};
         return manifest;
     }
@@ -69,7 +70,8 @@ namespace Horo::Render {
 
         /** @brief Describes only two proven disjoint contiguous physical arrays inside the already admitted extent. */
         struct RegularPacking final {
-            std::size_t matrixOffset{}, colorOffset{};
+            std::size_t matrixOffset{};
+            std::size_t colorOffset{};
             bool columnMajor{};
         };
 

@@ -98,14 +98,12 @@ namespace Horo::Extensions {
 
     Result<ScriptModuleUpdateReport> ScriptModuleHostServices::RequestNativeUpdate(const ScriptModuleProgram &candidate) {
         using Output = Result<ScriptModuleUpdateReport>;
-        auto lane = impl_->authority->RequireOpenOwner();
-        if (lane.HasError())
+        if (auto lane = impl_->authority->RequireOpenOwner(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
         auto current = impl_->authority->Source(candidate.Manifest().id, candidate.Module().id);
         if (current.HasError())
             return Output::Failure(current.ErrorValue());
-        auto verified = candidate.VerifyCurrent();
-        if (verified.HasError())
+        if (auto verified = candidate.VerifyCurrent(); verified.HasError())
             return Output::Failure(verified.ErrorValue());
         return Output::Success({.kind = ScriptModuleUpdateKind::RestartRequired,
                                 .diagnostic = MakeError(ExtensionErrors::ScriptInvocationUnavailable,

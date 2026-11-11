@@ -96,7 +96,8 @@ namespace Horo::Application::TerrainCookDetail {
             auto height = Millimeters(source.heightsMeters[std::size_t(z) * source.width + x], source.coordinates.maximumPrecisionError);
             if (height.HasError())
                 return Return::Failure(std::move(height).ErrorValue());
-            const auto cellX = std::min(x, source.width - 2), cellZ = std::min(z, source.height - 2);
+            const auto cellX = std::min(x, source.width - 2);
+            const auto cellZ = std::min(z, source.height - 2);
             Terrain::FoliagePlacementSample sample;
             sample.altitudeMillimeters = height.Value();
             sample.density = 65535;

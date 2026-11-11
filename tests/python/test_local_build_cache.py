@@ -340,6 +340,9 @@ def test_repository_identity_is_shared_by_linked_worktrees(
     independent = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, independent)
     spec.loader.exec_module(independent)
+    # Git emits UTF-8 paths even when the Windows text locale uses another codec.
+    common = Path(independent._git(peer, "rev-parse", "--git-common-dir"))
+    assert common.resolve() == (repo / ".git").resolve()
     assert independent.cache_directory(repo) == independent.cache_directory(peer)
     assert not independent.cache_directory(repo).is_relative_to(repo)
 

@@ -10,7 +10,8 @@
 namespace Horo::Editor::Detail {
     /** @brief Inert unique startup color selection with validation preserved for the host. */
     struct EditorColorOptions final {
-        std::optional<std::filesystem::path> root, lookRoot;
+        std::optional<std::filesystem::path> root;
+        std::optional<std::filesystem::path> lookRoot;
         Render::ExposureSettings exposure;
         bool valid{true};
         bool settingsRequested{};

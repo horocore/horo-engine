@@ -15,8 +15,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
     }
 
     JSValue Values::WriteHandle(const ScriptHandle &handle) {
-        auto valid = authority->ValidateHandle(handle);
-        if (valid.HasError())
+        if (auto valid = authority->ValidateHandle(handle); valid.HasError())
             throw ConversionFailure{valid.ErrorValue()};
         const auto cost = sizeof(HandleBox) + handle.type.capacity() + 1;
         if (handles->values >= handles->maximumValues || cost > handles->maximumBytes - handles->bytes)
@@ -88,13 +87,14 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
 
     JSValue Values::WriteCollection(const ScriptValue &value, Budget &budget, std::size_t depth) {
         switch (value.GetKind()) {
-            case ScriptValue::Kind::Bytes:
+            using enum Horo::Extensions::ScriptValue::Kind;
+            case Bytes:
                 return WriteBytes(*this, value.AsBytes(), budget);
-            case ScriptValue::Kind::Array:
+            case Array:
                 return WriteArray(*this, value.AsArray(), budget, depth);
-            case ScriptValue::Kind::Map:
+            case Map:
                 return WriteMap(*this, value.AsMap(), budget, depth);
-            case ScriptValue::Kind::Struct:
+            case Struct:
                 return WriteStruct(*this, value.AsStruct(), budget, depth);
             default:
                 InvalidValue("Unsupported owned value kind.");

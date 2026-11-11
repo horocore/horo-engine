@@ -361,11 +361,11 @@ namespace Horo::Editor {
             .loadState = ContentBrowserLoadState::Loading,
             .rootKind = browsingSource ? ContentBrowserRootKind::NativeSources : ContentBrowserRootKind::Assets,
         };
-        const auto projectAssets = NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
-        if (IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, projectAssets))
-            directory.roots.push_back({ContentBrowserRootKind::Assets, WorkspacePathText(projectAssets)});
+        if (const auto projectAssets = NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
+            IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, projectAssets))
+            directory.roots.emplace_back(ContentBrowserRootKind::Assets, WorkspacePathText(projectAssets));
         if (IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, sourceRoot))
-            directory.roots.push_back({ContentBrowserRootKind::NativeSources, WorkspacePathText(sourceRoot)});
+            directory.roots.emplace_back(ContentBrowserRootKind::NativeSources, WorkspacePathText(sourceRoot));
         if (!IsContentBrowserDirectoryTargetAllowed(assetRoot, currentDirectory)) {
             directory.loadState = ContentBrowserLoadState::Error;
             return directory;

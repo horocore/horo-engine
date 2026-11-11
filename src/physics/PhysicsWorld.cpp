@@ -319,15 +319,17 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsRuntime::Capability */
     PhysicsCapabilitySupport PhysicsRuntime::Capability(const PhysicsCapability capability) const noexcept {
-        if (capability >= PhysicsCapability::Count)
-            return PhysicsCapabilitySupport::Unknown;
+        using enum Horo::Physics::PhysicsCapability;
+        using enum Horo::Physics::PhysicsCapabilitySupport;
+        if (capability >= Count)
+            return Unknown;
         if (impl_->mode != PhysicsRuntimeMode::Canonical)
-            return PhysicsCapabilitySupport::Unsupported;
-        if (capability == PhysicsCapability::StateSnapshots || capability == PhysicsCapability::AtomicStateRestore)
+            return Unsupported;
+        if (capability == StateSnapshots || capability == AtomicStateRestore)
             return StateCapabilitySupport(*impl_);
         if (!OrdinaryCanonicalCapability(capability))
-            return PhysicsCapabilitySupport::Unsupported;
-        return impl_->state == PhysicsRuntimeState::Ready ? PhysicsCapabilitySupport::Available : PhysicsCapabilitySupport::Unavailable;
+            return Unsupported;
+        return impl_->state == PhysicsRuntimeState::Ready ? Available : Unavailable;
     }
 
     /** @copydoc PhysicsWorld::PhysicsWorld */

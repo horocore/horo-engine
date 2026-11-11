@@ -19,7 +19,7 @@ namespace Horo::Editor::ViewportColorDetail {
     }
 
     /** @brief Preserves one actual void result without manufacturing success. */
-    inline void Take(Result<void> result) {
+    inline void Take(const Result<void> &result) {
         if (result.HasError())
             throw Failure{result.ErrorValue()};
     }

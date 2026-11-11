@@ -8,9 +8,22 @@ namespace Horo::Render::ExposureGpuCookDetail {
         using Words = std::span<const std::uint32_t>;
 
         struct Node {
-            std::uint32_t type{}, storage{}, element{}, root{}, binding{~0u}, set{~0u}, kind{}, width{}, count{}, stride{}, signedness{};
-            bool pointer{}, readonly{};
-            std::vector<std::uint32_t> members, offsets, image;
+            std::uint32_t type{};
+            std::uint32_t storage{};
+            std::uint32_t element{};
+            std::uint32_t root{};
+            std::uint32_t binding{~0u};
+            std::uint32_t set{~0u};
+            std::uint32_t kind{};
+            std::uint32_t width{};
+            std::uint32_t count{};
+            std::uint32_t stride{};
+            std::uint32_t signedness{};
+            bool pointer{};
+            bool readonly{};
+            std::vector<std::uint32_t> members;
+            std::vector<std::uint32_t> offsets;
+            std::vector<std::uint32_t> image;
             std::string name;
         };
 
@@ -24,20 +37,23 @@ namespace Horo::Render::ExposureGpuCookDetail {
             std::vector<Instruction> instructions;
             std::array<std::uint32_t, 5> resources{};
             ExposureGpuStage stage;
-            std::uint32_t entry{}, functions{}, localSizes{}, extensionSet{};
+            std::uint32_t entry{};
+            std::uint32_t functions{};
+            std::uint32_t localSizes{};
+            std::uint32_t extensionSet{};
         };
 
         /** @brief Bounds every binary ID before reading proof state. */
         Node &Id(Proof &proof, std::uint32_t id) {
             if (!id || id >= proof.ids.size())
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             return proof.ids[id];
         }
 
         /** @brief Requires the fixed leading operands before indexing an instruction. */
         void Size(Words words, std::size_t minimum) {
             if (words.size() < minimum)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
         }
 
         /** @brief Extracts only terminated bounded binary names. */
@@ -45,14 +61,14 @@ namespace Horo::Render::ExposureGpuCookDetail {
             const auto *begin = reinterpret_cast<const char *>(words.data());
             const auto end = std::find(begin, begin + words.size_bytes(), '\0');
             if (end == begin + words.size_bytes())
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             return {begin, end};
         }
 
         /** @brief Rejects nested pointer aggregates as well as direct pointer values. */
         bool PointerType(Proof &proof, std::uint32_t type, std::uint32_t depth = 0) {
             if (depth > 16)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             const auto &node = Id(proof, type);
             if (node.pointer)
                 return true;
@@ -73,7 +89,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
         void Values(Proof &proof, Words operands) {
             for (const auto operand : operands)
                 if (Pointer(proof, operand))
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
         }
 
         /** @brief Indexes result types while forbidding duplicate binary definitions. */
@@ -81,7 +97,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
             Size(w, 3);
             auto &node = Id(proof, w[2]);
             if (node.type)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             node.type = w[1];
             (void)Id(proof, w[1]);
         }
@@ -123,15 +139,15 @@ namespace Horo::Render::ExposureGpuCookDetail {
         void EntryPoint(Proof &proof, Words w) {
             Size(w, 4);
             if (proof.entry || w[1] != 5 || Text(w.subspan(3)) != EntryName(proof.stage))
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             proof.entry = w[2];
         }
 
         /** @brief Checks the exact closed native group size independently of JSON. */
         void LocalSize(Proof &proof, Words w) {
-            const bool build = proof.stage == ExposureGpuStage::BuildHistogram;
-            if (w.size() != 6 || w[2] != 17 || w[3] != (build ? 8u : 256u) || w[4] != (build ? 8u : 1u) || w[5] != 1)
-                throw EvidenceFailure{__func__, __LINE__};
+            if (const bool build = proof.stage == ExposureGpuStage::BuildHistogram;
+                w.size() != 6 || w[2] != 17 || w[3] != (build ? 8u : 256u) || w[4] != (build ? 8u : 1u) || w[5] != 1)
+                throw EvidenceFailure{};
             ++proof.localSizes;
         }
 
@@ -144,7 +160,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
             }
             Size(w, 3);
             if (w[1] != proof.entry)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (w[2] == 4461 && w.size() == 4 && w[3] == 32)
                 return;
             LocalSize(proof, w);
@@ -154,7 +170,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
         void Extension(Proof &proof, Words w) {
             Size(w, 3);
             if (proof.extensionSet || Text(w.subspan(2)) != "GLSL.std.450")
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             proof.extensionSet = w[1];
         }
 
@@ -163,13 +179,13 @@ namespace Horo::Render::ExposureGpuCookDetail {
             const auto w = instruction.w;
             if (instruction.op == 17) {
                 if (w.size() != 2 || (w[1] != 1 && w[1] != 4466))
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
             }
             if (instruction.op == 11)
                 Extension(proof, w);
             if (instruction.op == 14)
                 if (w.size() != 3 || w[1] != 0 || w[2] != 1)
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
         }
 
         /** @brief Indexes exact primitive widths and member offsets from the validated module. */
@@ -187,7 +203,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
             Size(w, 4);
             auto &node = Id(proof, w[1]);
             if (w[2] >= 8)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (w[3] == 24 && w[2] == 0)
                 node.readonly = true;
             if (w[3] == 35) {
@@ -252,9 +268,9 @@ namespace Horo::Render::ExposureGpuCookDetail {
         /** @brief Records exact set-zero resource variables without accepting duplicate register evidence. */
         void GlobalVariable(Proof &proof, Words w, Node &node) {
             if (w[3] != 0 && w[3] != 2 && w[3] != 12)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (w.size() != 4 || node.set != 0 || node.binding >= 5 || proof.resources[node.binding])
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             proof.resources[node.binding] = w[2];
         }
 
@@ -262,9 +278,8 @@ namespace Horo::Render::ExposureGpuCookDetail {
         void Variable(Proof &proof, Words w) {
             Size(w, 4);
             auto &node = Id(proof, w[2]);
-            const auto &type = Id(proof, w[1]);
-            if (!type.pointer || type.storage != w[3])
-                throw EvidenceFailure{__func__, __LINE__};
+            if (const auto &type = Id(proof, w[1]); !type.pointer || type.storage != w[3])
+                throw EvidenceFailure{};
             node.root = w[2];
             node.storage = w[3];
             if (w[3] == 1 || w[3] == 4 || w[3] == 7)
@@ -277,19 +292,19 @@ namespace Horo::Render::ExposureGpuCookDetail {
             const auto &node = Id(proof, id);
             if (columns != 1) {
                 if (node.kind != 23 || node.count != columns)
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
                 id = node.element;
             }
             const auto &scalar = Id(proof, id);
             if (scalar.kind != (floating ? 22u : 21u) || scalar.width != 32 || (!floating && scalar.signedness))
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
         }
 
         /** @brief Proves the exact binary exposure-state member types and byte offsets. */
         void StateLayout(Proof &proof, std::uint32_t id) {
             const auto &state = Id(proof, id);
             if (state.kind != 30 || state.members.size() != 6 || state.offsets != std::vector<std::uint32_t>{0, 4, 8, 12, 16, 24})
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             for (std::size_t i = 0; i < 6; ++i)
                 Primitive(proof, state.members[i], i < 2, i >= 4 ? 2u : 1u);
         }
@@ -297,7 +312,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
         /** @brief Proves the complete six-register binary dispatch layout. */
         void DispatchLayout(Proof &proof, const Node &block) {
             if (block.kind != 30 || block.members.size() != 6 || block.offsets != std::vector<std::uint32_t>{0, 16, 32, 48, 64, 80})
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             for (std::size_t i = 0; i < 6; ++i)
                 Primitive(proof, block.members[i], i >= 1 && i <= 3, 4);
         }
@@ -305,12 +320,12 @@ namespace Horo::Render::ExposureGpuCookDetail {
         /** @brief Requires exact unsized storage-array strides and predecessor readonly decoration. */
         void StorageLayout(Proof &proof, const Node &block, std::size_t index) {
             if (block.kind != 30 || block.members.size() != 1 || block.offsets != std::vector<std::uint32_t>{0})
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (index == 2 && !block.readonly)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             const auto &array = Id(proof, block.members[0]);
             if (array.kind != 29 || array.stride != (index == 1 ? 4u : 32u))
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (index == 1)
                 Primitive(proof, array.element, false, 1);
             else
@@ -332,10 +347,10 @@ namespace Horo::Render::ExposureGpuCookDetail {
             const auto &block = Id(proof, pointer.element);
             if (index == 0) {
                 if (block.kind != 25 || block.image.size() != 7)
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
                 Primitive(proof, block.image[0], true, 1);
                 if (!ImageShape(block))
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
                 return;
             }
             if (index == 4)
@@ -352,14 +367,16 @@ namespace Horo::Render::ExposureGpuCookDetail {
                 const auto i = name.id.value - 1;
                 used[i] = true;
                 const auto &node = Id(proof, proof.resources[i]);
-                const auto expected = i == 0 ? 0u : i == 4 ? 2u : 12u;
-                if (node.name != (i == 4 ? "Dispatch" : name.name) || node.storage != expected)
-                    throw EvidenceFailure{__func__, __LINE__};
+                if (const auto expected = i == 0   ? 0u
+                                          : i == 4 ? 2u
+                                                   : 12u;
+                    node.name != (i == 4 ? "Dispatch" : name.name) || node.storage != expected)
+                    throw EvidenceFailure{};
                 ResourceLayout(proof, node, i);
             }
             for (std::size_t i = 0; i < 5; ++i)
                 if (!used[i] && proof.resources[i])
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
         }
 
         /** @brief Tracks every derived pointer back to its actual source storage variable. */
@@ -367,9 +384,8 @@ namespace Horo::Render::ExposureGpuCookDetail {
             Size(w, 5);
             auto &result = Id(proof, w[2]);
             const auto &base = Id(proof, w[3]);
-            const auto &type = Id(proof, result.type);
-            if (!base.root || !type.pointer || type.storage != Id(proof, base.type).storage)
-                throw EvidenceFailure{__func__, __LINE__};
+            if (const auto &type = Id(proof, result.type); !base.root || !type.pointer || type.storage != Id(proof, base.type).storage)
+                throw EvidenceFailure{};
             Values(proof, w.subspan(4));
             result.root = base.root;
         }
@@ -378,25 +394,24 @@ namespace Horo::Render::ExposureGpuCookDetail {
         void Writable(Proof &proof, std::uint32_t pointer) {
             const auto root = Id(proof, pointer).root;
             if (!root)
-                throw EvidenceFailure{__func__, __LINE__};
-            const auto &node = Id(proof, root);
-            if (node.storage == 4 || node.storage == 7)
+                throw EvidenceFailure{};
+            if (const auto &node = Id(proof, root); node.storage == 4 || node.storage == 7)
                 return;
             if (root != proof.resources[1] && root != proof.resources[3])
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
         }
 
         /** @brief Allows direct loads only, with no pointer-valued load or opaque pointer alias. */
         void Load(Proof &proof, Words w) {
             Size(w, 4);
             if (Pointer(proof, w[2]) || !Id(proof, w[3]).root)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
         }
 
         /** @brief Preserves tracked roots only for exact same-type pointer copies. */
         void Copy(Proof &proof, Words w) {
             if (w.size() != 4)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (!Pointer(proof, w[2])) {
                 Values(proof, w.subspan(3));
                 return;
@@ -404,7 +419,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
             auto &result = Id(proof, w[2]);
             const auto &source = Id(proof, w[3]);
             if (!source.root || result.type != source.type)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             result.root = source.root;
         }
 
@@ -412,7 +427,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
         void ScalarOperands(Proof &proof, const Instruction &instruction) {
             const auto w = instruction.w;
             if (Pointer(proof, w[2]))
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             if (instruction.op >= 41 && instruction.op <= 46)
                 return;
             if (instruction.op == 81) {
@@ -428,7 +443,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
             if (instruction.op == 12) {
                 Size(w, 6);
                 if (w[3] != proof.extensionSet)
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
                 Values(proof, w.subspan(5));
                 return;
             }
@@ -447,7 +462,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
             Size(w, 6);
             Writable(proof, w[3]);
             if (Pointer(proof, w[2]))
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             Values(proof, w.subspan(4));
         }
 
@@ -466,7 +481,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
                 return;
             Size(instruction.w, 5);
             if (++proof.functions != 1 || instruction.w[2] != proof.entry)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
         }
 
         /** @brief Handles all admitted direct memory instructions before value-only instruction checks. */
@@ -484,7 +499,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
             }
             if (instruction.op == 62) {
                 if (w.size() != 3)
-                    throw EvidenceFailure{__func__, __LINE__};
+                    throw EvidenceFailure{};
                 Writable(proof, w[1]);
                 Values(proof, w.subspan(2));
                 return true;
@@ -509,7 +524,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
                 return;
             }
             if (!Metadata(instruction.op))
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             Function(proof, instruction);
         }
 
@@ -518,8 +533,8 @@ namespace Horo::Render::ExposureGpuCookDetail {
             for (std::size_t at = 5; at < words.size();) {
                 const auto count = words[at] >> 16;
                 if (!count || count > words.size() - at || proof.instructions.size() == 65536)
-                    throw EvidenceFailure{__func__, __LINE__};
-                proof.instructions.push_back({words[at] & 65535, words.subspan(at, count)});
+                    throw EvidenceFailure{};
+                proof.instructions.emplace_back(words[at] & 65535, words.subspan(at, count));
                 at += count;
             }
         }
@@ -528,7 +543,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
         Proof Decode(Words words, ExposureGpuStage stage) {
             Size(words, 5);
             if (words[0] != 0x07230203 || words[3] < 2 || words[3] > 65536 || words[4])
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             Proof proof;
             proof.stage = stage;
             proof.ids.resize(words[3]);
@@ -536,7 +551,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
             for (const auto &instruction : proof.instructions)
                 Index(proof, instruction);
             if (!proof.entry || proof.localSizes != 1)
-                throw EvidenceFailure{__func__, __LINE__};
+                throw EvidenceFailure{};
             return proof;
         }
     }  // namespace
@@ -544,7 +559,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
     /** @copydoc ProveSpirv */
     void ProveSpirv(std::span<const std::uint8_t> bytes, ExposureGpuStage stage) {
         if (bytes.empty() || bytes.size() > 1024 * 1024 || bytes.size() % 4)
-            throw EvidenceFailure{__func__, __LINE__};
+            throw EvidenceFailure{};
         std::vector<std::uint32_t> words(bytes.size() / 4);
         std::memcpy(words.data(), bytes.data(), bytes.size());
         auto proof = Decode(words, stage);
@@ -555,6 +570,6 @@ namespace Horo::Render::ExposureGpuCookDetail {
         for (const auto &instruction : proof.instructions)
             Execute(proof, instruction);
         if (proof.functions != 1)
-            throw EvidenceFailure{__func__, __LINE__};
+            throw EvidenceFailure{};
     }
 }  // namespace Horo::Render::ExposureGpuCookDetail

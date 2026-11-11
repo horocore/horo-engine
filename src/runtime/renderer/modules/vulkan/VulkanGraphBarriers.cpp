@@ -81,13 +81,14 @@ namespace Horo::Render::Detail {
 
         /** @brief Checks native buffer/image layout placement independently of operation mask selection. */
         bool ValidPlacement(const RenderGraphLogicalState &state, bool texture, const NativeState &native) {
+            using enum Horo::Render::RenderGraphPipelineScope;
             using enum RenderGraphSynchronizationOperation;
             const bool transfer = state.operation == CopySource || state.operation == CopyDestination;
             const bool inputBuffer = state.operation == GraphicsInputBuffer;
-            if (inputBuffer && state.scope != RenderGraphPipelineScope::Graphics)
+            if (inputBuffer && state.scope != Graphics)
                 return false;
             return (texture ? state.layout == native.expected && !inputBuffer : state.layout == RenderGraphTextureLayout::NotApplicable) &&
-                   (transfer || state.scope == RenderGraphPipelineScope::Graphics || state.scope == RenderGraphPipelineScope::Compute);
+                   (transfer || state.scope == Graphics || state.scope == Compute);
         }
 
         /** @brief Admits only native queue scopes implemented by this graphics/transfer command path. */
@@ -105,8 +106,8 @@ namespace Horo::Render::Detail {
         }
 
         bool KnownAccess(RenderGraphSynchronizationAccess access) {
-            return access == RenderGraphSynchronizationAccess::Read || access == RenderGraphSynchronizationAccess::Write ||
-                   access == RenderGraphSynchronizationAccess::ReadWrite;
+            using enum Horo::Render::RenderGraphSynchronizationAccess;
+            return access == Read || access == Write || access == ReadWrite;
         }
 
         /** @brief Rejects unsupported scopes instead of emitting native masks unavailable on a queue. */

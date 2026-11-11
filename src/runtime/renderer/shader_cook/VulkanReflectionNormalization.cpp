@@ -120,8 +120,8 @@ namespace Horo::Render {
         private:
             /** @brief Restricts native resource classes to the implemented read-only raster contract. */
             static bool SupportedBinding(const ShaderResourceBinding &binding) noexcept {
-                const bool kind = binding.kind == ShaderResourceKind::UniformBuffer || binding.kind == ShaderResourceKind::SampledTexture ||
-                                  binding.kind == ShaderResourceKind::Sampler;
+                using enum Horo::Render::ShaderResourceKind;
+                const bool kind = binding.kind == UniformBuffer || binding.kind == SampledTexture || binding.kind == Sampler;
                 return kind && binding.arrayCount == 1 && binding.access == ShaderResourceAccess::ReadOnly;
             }
 
@@ -195,8 +195,8 @@ namespace Horo::Render {
                 if (resource == manifest_.bindings.end() || resource->kind != kind)
                     throw InvalidEvidence{};
                 const auto index = static_cast<std::size_t>(resource - manifest_.bindings.begin());
-                const auto visibility = stage == ShaderStage::Vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment;
-                if (std::exchange(seen[index], true) || (static_cast<unsigned>(resource->stages) & static_cast<unsigned>(visibility)) == 0)
+                if (const auto visibility = stage == ShaderStage::Vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment;
+                    std::exchange(seen[index], true) || (static_cast<unsigned>(resource->stages) & static_cast<unsigned>(visibility)) == 0)
                     throw InvalidEvidence{};
                 return index;
             }
@@ -205,7 +205,8 @@ namespace Horo::Render {
             void Activate(const Json &evidence, const std::size_t index, const ShaderStage stage) {
                 auto &resource = candidate_.bindings[index];
                 auto &mapping = candidate_.targetBindings[index];
-                const auto space = Unsigned(evidence.at("set")), binding = Unsigned(evidence.at("binding"));
+                const auto space = Unsigned(evidence.at("set"));
+                const auto binding = Unsigned(evidence.at("binding"));
                 if (mapping.active && (mapping.nativeSpace != space || mapping.nativeBinding != binding))
                     throw InvalidEvidence{};
                 const auto visibility = stage == ShaderStage::Vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment;

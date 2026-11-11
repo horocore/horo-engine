@@ -431,8 +431,8 @@ namespace Horo::Render::Detail {
             if (attribute.name == "gl_InstanceID") {
                 const auto canonical = MakeVfxShaderManifest(descriptor.target);
                 const auto schema = ComputeShaderInterfaceCompatibilityId(canonical);
-                const auto authored = ComputeShaderInterfaceCompatibilityId(descriptor.manifest);
-                if (instanceId || attribute.type != GL_INT || attribute.arrayCount != 1 ||
+                if (const auto authored = ComputeShaderInterfaceCompatibilityId(descriptor.manifest);
+                    instanceId || attribute.type != GL_INT || attribute.arrayCount != 1 ||
                     descriptor.target.backend != ShaderTargetBackend::OpenGL ||
                     descriptor.target.payloadFormat != ShaderPayloadFormat::Glsl410 || reflection.backend != ShaderTargetBackend::OpenGL ||
                     reflection.interfaceSchemaVersion != descriptor.target.interfaceSchemaVersion ||
@@ -453,8 +453,8 @@ namespace Horo::Render::Detail {
                 return variable.stage == ShaderStage::Vertex && variable.direction == ShaderInterfaceDirection::Input &&
                        variable.location == location;
             });
-            const GLenum meshType = location == 2 ? GL_FLOAT_VEC2 : GL_FLOAT_VEC3;
-            if ((locations & bit) != 0 || match == reflection.stageInterface.end() || attribute.arrayCount != 1 || match->arrayCount != 1 ||
+            if (const GLenum meshType = location == 2 ? GL_FLOAT_VEC2 : GL_FLOAT_VEC3;
+                (locations & bit) != 0 || match == reflection.stageInterface.end() || attribute.arrayCount != 1 || match->arrayCount != 1 ||
                 attribute.type != meshType || attribute.type != ValueType(match->type, match->rows, match->columns) ||
                 (!match->nativeName.empty() && match->nativeName != attribute.name))
                 return Mismatch("Linked user attribute name/type/location differs from cooked reflection and MeshVertex.");

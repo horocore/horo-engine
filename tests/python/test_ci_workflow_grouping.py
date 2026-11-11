@@ -56,7 +56,7 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
-    "HoroFoundationJsonTests",
+    "HoroFoundationJsonTests", "HoroAssetIdAllocationTests", "HoroOperationIdentityAllocationTests",
     "HoroSceneSourceTests", "HoroColorPipelineTests", "HoroColorCreativeLookPackageTests", "HoroPrefabMetricsTests",
     "HoroWorkspaceLayoutPersistenceTests", "HoroWorkspaceRecoveryPublicHeaderConsumer",
     "HoroNavigationProjectSettingsTests", "HoroNavigationProjectSettingsPublicConsumer",
@@ -91,6 +91,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroD3D12InitializationTests", "HoroD3D12ResourceTests",
     "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
     "HoroMultiviewSceneExtractionPublicHeaderConsumer",
+    "HoroReplicationStateCodecTests", "HoroAudioApiTests",
     "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
     "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
     "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
@@ -195,6 +196,39 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
+    assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_windows_checked_stl_regressions_have_headless_build_and_discovery_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    closure = targets("HORO_CI_WINDOWS_TARGETS")
+    for target, dependency in (("HoroAssetIdAllocationTests", "HoroEngine::Assets"),
+                              ("HoroOperationIdentityAllocationTests", "HoroEngine::Foundation"),
+                              ("HoroReplicationStateCodecTests", "HoroEngine::NetworkRuntime"),
+                               ("HoroAudioApiTests", "HoroEngine::AudioApi")):
+        assert target in closure
+        declaration = tests_cmake.index(f"add_executable({target}")
+        assert not any(flag in condition
+                       for condition in cmake_conditions_at(tests_cmake, declaration)
+                       for flag in ("HORO_BUILD_EDITOR_GUI", "HORO_ENABLE_GPU_SMOKE_TESTS",
+                                    "HORO_BUILD_AUDIO_SDL3", "HORO_BUILD_NETWORK_GNS"))
+        links = re.findall(rf"target_link_libraries\(\s*{re.escape(target)}\s+([^)]*)\)", tests_cmake)
+        private_dependencies = set()
+        for arguments in links:
+            visibility = None
+            for argument in arguments.split():
+                if argument in {"PRIVATE", "PUBLIC", "INTERFACE"}:
+                    visibility = argument
+                elif visibility == "PRIVATE":
+                    private_dependencies.add(argument)
+        assert dependency in private_dependencies
+        registration = re.search(rf'horo_register_catch_test\({target} LABELS "([^"]+)"\)', tests_cmake)
+        assert registration is not None
+        assert {"unit", "headless"} <= set(registration.group(1).split(";"))
+    assert "unit/runtime/networking/ReplicationStateCodecProjectionTests.cpp" in tests_cmake
+    assert "unit/runtime/audio/AudioDeviceTimingTests.cpp" in tests_cmake
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+    assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
 
 

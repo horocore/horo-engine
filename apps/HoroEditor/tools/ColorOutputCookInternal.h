@@ -22,7 +22,7 @@ namespace Horo::Editor::Offline::ColorCookDetail {
     }
 
     /** @brief Preserves a failing synchronous validation result. @param result Actual owner result. */
-    inline void Take(Result<void> result) {
+    inline void Take(const Result<void> &result) {
         if (result.HasError())
             throw Failure{result.ErrorValue()};
     }
@@ -46,7 +46,8 @@ namespace Horo::Editor::Offline::ColorCookDetail {
         std::array<Render::ShaderManifest, 3> manifests;
         std::array<Render::ShaderCompilationBatch, 3> compiled;
         ColorOutputAnalyticBundle analytic;
-        std::array<Bytes, 3> wrappers, sources;
+        std::array<Bytes, 3> wrappers;
+        std::array<Bytes, 3> sources;
         std::size_t programCount{2};
     };
 

@@ -57,8 +57,8 @@ namespace Horo::Application::DecisionCookDetail {
             error.domain = ErrorDomainId{"horo.ai"};
             error.message = diagnostics[0].message;
             for (const auto &diagnostic : diagnostics)
-                error.diagnostics.push_back({DiagnosticCode{std::string{diagnostic.code.Value()}}, diagnostic.severity, diagnostic.message,
-                                             diagnostic.source, diagnostic.path});
+                error.diagnostics.emplace_back(DiagnosticCode{std::string{diagnostic.code.Value()}}, diagnostic.severity,
+                                               diagnostic.message, diagnostic.source, diagnostic.path);
             return error;
         }
 

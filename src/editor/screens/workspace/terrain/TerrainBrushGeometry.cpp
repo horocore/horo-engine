@@ -33,10 +33,14 @@ namespace Horo::Editor {
 
         Result<TerrainPatchRect> Bounds(const Terrain::TerrainCanonicalSource &source, double radius,
                                         std::span<const TerrainSculptStamp> stamps) {
-            const double rx = radius / source.coordinates.spacingX, rz = radius / source.coordinates.spacingZ;
+            const double rx = radius / source.coordinates.spacingX;
+            const double rz = radius / source.coordinates.spacingZ;
             if (!std::isfinite(rx) || !std::isfinite(rz))
                 return Result<TerrainPatchRect>::Failure(MakeError(TerrainEditErrors::LimitExceeded));
-            std::uint32_t minX = source.width - 1, minZ = source.height - 1, maxX{}, maxZ{};
+            std::uint32_t minX = source.width - 1;
+            std::uint32_t minZ = source.height - 1;
+            std::uint32_t maxX{};
+            std::uint32_t maxZ{};
             for (const auto &stamp : stamps) {
                 if (!ValidStamp(stamp, source))
                     return Result<TerrainPatchRect>::Failure(MakeError(TerrainEditErrors::Invalid));

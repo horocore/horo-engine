@@ -10,7 +10,9 @@
 namespace Horo::Terrain {
     namespace {
         constexpr std::uint32_t Magic = 0x31414648;  // HFA1, disjoint from raster and type sources.
-        constexpr std::size_t HeaderBytes = 12, PlacementBytes = 52, ReferenceBytes = 72;
+        constexpr std::size_t HeaderBytes = 12;
+        constexpr std::size_t PlacementBytes = 52;
+        constexpr std::size_t ReferenceBytes = 72;
 
         template <typename T> Result<T> Invalid() {
             return Result<T>::Failure(MakeError(TerrainSourceErrors::InvalidBytes));
@@ -58,7 +60,8 @@ namespace Horo::Terrain {
 
         /** @brief Read a bounded placement record; typed zero identities are rejected before publication. */
         bool ReadPlacement(FoliageWire::Reader &reader, TerrainAuthoredPlacement &value) {
-            SerializedTerrainIdentity id{}, type{};
+            SerializedTerrainIdentity id{};
+            SerializedTerrainIdentity type{};
             if (!reader.Bytes(id) || !reader.Bytes(type))
                 return false;
             auto instance = FoliageInstanceId::Create(id);
@@ -81,7 +84,8 @@ namespace Horo::Terrain {
 
         /** @brief Read a fixed-size actual asset binding. */
         bool ReadReference(FoliageWire::Reader &reader, FoliageAuthoringDefinitionReference &value) {
-            SerializedTerrainIdentity asset{}, type{};
+            SerializedTerrainIdentity asset{};
+            SerializedTerrainIdentity type{};
             std::uint64_t revision{};
             if (!reader.Bytes(asset) || !reader.Bytes(type) || !reader.Integer(revision) || !reader.Bytes(value.sourceDigest.bytes))
                 return false;
@@ -168,7 +172,8 @@ namespace Horo::Terrain {
     Result<FoliageAuthoringSourceFootprint> MeasureEncodedFoliageAuthoringSource(std::span<const std::byte> bytes,
                                                                                  const FoliageAuthoringSourceLimits &limits) {
         FoliageWire::Reader reader{bytes};
-        std::uint32_t placements{}, definitions{};
+        std::uint32_t placements{};
+        std::uint32_t definitions{};
         if (auto admitted = ReadHeader(reader, bytes.size(), limits, placements, definitions); admitted.HasError())
             return Result<FoliageAuthoringSourceFootprint>::Failure(admitted.ErrorValue());
         return MeasureFoliageAuthoringSource(placements, definitions, limits);
@@ -218,7 +223,8 @@ namespace Horo::Terrain {
                                                                 const FoliageAuthoringSourceLimits &limits,
                                                                 const CancellationToken &cancel) {
         FoliageWire::Reader reader{bytes};
-        std::uint32_t placements{}, definitions{};
+        std::uint32_t placements{};
+        std::uint32_t definitions{};
         if (auto admitted = ReadHeader(reader, bytes.size(), limits, placements, definitions); admitted.HasError())
             return Result<FoliageAuthoringSource>::Failure(admitted.ErrorValue());
         auto source = ReadSource(reader, placements, definitions, cancel);

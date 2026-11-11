@@ -267,8 +267,10 @@ namespace Horo::Physics::Detail {
     /** @brief Original typed constructor provenance; later body pose/mass/COM
      * changes cannot overwrite it. */
     struct CanonicalConstraintCreation final {
-        PhysicsPose firstFrame, secondFrame;
-        CanonicalConstraintEndpointCreation first, second;
+        PhysicsPose firstFrame;
+        PhysicsPose secondFrame;
+        CanonicalConstraintEndpointCreation first;
+        CanonicalConstraintEndpointCreation second;
         PhysicsStateFpControl floatingPoint;
     };
 

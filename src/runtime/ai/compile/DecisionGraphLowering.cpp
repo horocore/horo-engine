@@ -10,7 +10,8 @@ namespace Horo::AI::Detail {
         }
 
         bool ProviderControl(DecisionControlKind kind) noexcept {
-            return kind == DecisionControlKind::Task || kind == DecisionControlKind::Condition || kind == DecisionControlKind::Service;
+            using enum Horo::AI::DecisionControlKind;
+            return kind == Task || kind == Condition || kind == Service;
         }
 
         Result<BehaviorTreeOperation> DecoratorOperation(DecisionControlKind kind);
@@ -80,7 +81,7 @@ namespace Horo::AI::Detail {
                              const SourceLocation &source) {
             if (!call.asset.IsValid() || call.kind >= DecisionPlanKind::Utility || !call.schema.IsValid())
                 return Invalid<void>(AIErrors::DecisionAssetSubtreeIncompatible);
-            graph.metadata.subtrees.push_back({call.asset, call.kind, call.schema, owner, source});
+            graph.metadata.subtrees.emplace_back(call.asset, call.kind, call.schema, owner, source);
             graph.calls.emplace_back(owner, call);
             return Result<void>::Success();
         }
@@ -112,7 +113,7 @@ namespace Horo::AI::Detail {
             auto owner = DecisionNodeId::Create(edge->sourceNode.Value());
             if (owner.HasError())
                 return Result<void>::Failure(owner.ErrorValue());
-            graph.services.push_back({id, owner.Value(), node.control.serviceMode, node.control.intervalTicks});
+            graph.services.emplace_back(id, owner.Value(), node.control.serviceMode, node.control.intervalTicks);
             return Result<void>::Success();
         }
 
@@ -160,7 +161,7 @@ namespace Horo::AI::Detail {
                 if (executable.HasError())
                     return executable;
                 if (ProviderControl(node.control.kind))
-                    graph.properties.push_back({id, node.properties});
+                    graph.properties.emplace_back(id, node.properties);
                 graph.metadata.nodes.push_back(std::move(metadata).Value());
             }
             return Result<void>::Success();
@@ -182,7 +183,7 @@ namespace Horo::AI::Detail {
                 return Invalid<void>();
             auto binding = action->binding;
             binding.source = NodeSource(binding.source, source);
-            graph.properties.push_back({binding.id, action->properties});
+            graph.properties.emplace_back(binding.id, action->properties);
             graph.metadata.nodes.push_back(std::move(binding));
             return Result<void>::Success();
         }

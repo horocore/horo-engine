@@ -167,7 +167,7 @@ jobs:
         id: python_tests
         if: ${{ !cancelled() && steps.build.outcome == 'success' && (steps.cpp_tests.outcome == 'success' || (github.ref == 'refs/heads/main' && steps.cpp_tests.outcome == 'failure')) }}
         run: |
-          /tmp/horo-coverage/bin/coverage run --source=scripts -m pytest tests/python --quiet
+          /tmp/horo-coverage/bin/coverage run --source=scripts,cmake -m pytest tests/python --quiet
           /tmp/horo-coverage/bin/coverage xml -o build/sonar/python-coverage.xml
 
       - name: Collect fastcov line coverage

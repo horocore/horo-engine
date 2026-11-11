@@ -355,9 +355,9 @@ namespace Horo::Editor {
                 skeleton.HasError())
                 return skeleton;
             const bool clip = component.source.kind == Animation::AnimationSourceKind::Clip;
-            auto source = AppendAsset(clip ? component.source.clip.Asset() : component.source.graph.Asset(), registry, references,
-                                      clip ? "core.animation.clip" : "core.animation.graph");
-            if (source.HasError())
+            if (auto source = AppendAsset(clip ? component.source.clip.Asset() : component.source.graph.Asset(), registry, references,
+                                          clip ? "core.animation.clip" : "core.animation.graph");
+                source.HasError())
                 return source;
             if (component.retarget.IsValid())
                 return AppendAsset(component.retarget.Asset(), registry, references, "core.animation.retarget_profile");

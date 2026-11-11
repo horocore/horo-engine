@@ -49,8 +49,7 @@ namespace Horo::Extensions {
                                     impl_->limits, impl_->cancellation, impl_->executionOwner);
             if (candidate.HasError())
                 return candidate;
-            auto valid = ValidateReplacement(*candidate.Value());
-            if (valid.HasError())
+            if (auto valid = ValidateReplacement(*candidate.Value()); valid.HasError())
                 return Output::Failure(valid.ErrorValue());
             return candidate;
         } catch (...) {
@@ -66,8 +65,7 @@ namespace Horo::Extensions {
             ScriptModuleUpdateReport report;
             report.previousFingerprints = Fingerprints(impl_->imports);
             report.candidateFingerprints = Fingerprints(next.impl_->imports);
-            auto valid = ValidateReplacement(next);
-            if (valid.HasError()) {
+            if (auto valid = ValidateReplacement(next); valid.HasError()) {
                 report.diagnostic = valid.ErrorValue();
                 report.kind = valid.ErrorValue().code.Value() == ExtensionErrors::ScriptExportDescriptorIncompatible.code.Value()
                                   ? ScriptModuleUpdateKind::Breaking
@@ -98,8 +96,7 @@ namespace Horo::Extensions {
         ReapScriptModuleWork(*impl_);
         if (impl_->closed.load(std::memory_order_acquire))
             return Output::Success(impl_->work.empty());
-        auto events = impl_->context.Drain(impl_->limits.maximumEventsPerPoll);
-        if (events.HasError()) {
+        if (auto events = impl_->context.Drain(impl_->limits.maximumEventsPerPoll); events.HasError()) {
             // Real scope/registry revocation is explicit cancellation, unlike an ordinary additive update's admission seal.
             Close();
             return Output::Failure(events.ErrorValue());

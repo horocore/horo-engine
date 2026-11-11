@@ -130,7 +130,9 @@ namespace Horo::Animation::GraphCompileDetail {
 
     namespace {
         struct ActionCounts final {
-            std::uint64_t sections{}, loops{}, masks{};
+            std::uint64_t sections{};
+            std::uint64_t loops{};
+            std::uint64_t masks{};
         };
 
         /** @brief Whole detached catalog must fit before canonical copying. */

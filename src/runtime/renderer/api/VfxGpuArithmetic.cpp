@@ -34,7 +34,12 @@ namespace Horo::Render::VfxGpuDetail {
         }
 
         struct Bounds {
-            double position{}, velocity{}, size{}, rotation{}, angular{}, age{};
+            double position{};
+            double velocity{};
+            double size{};
+            double rotation{};
+            double angular{};
+            double age{};
         };
 
         /** @brief Updates one scalar bound using exact finite source floats. */
@@ -98,7 +103,9 @@ namespace Horo::Render::VfxGpuDetail {
         }
 
         struct ForceBounds {
-            double acceleration{}, center{}, falloff{};
+            double acceleration{};
+            double center{};
+            double falloff{};
         };
 
         /** @brief Conservative per-component magnitude, preserving all four real force kinds. */
@@ -130,8 +137,7 @@ namespace Horo::Render::VfxGpuDetail {
         bool SafeEnvelope(const VfxGpuArithmeticEnvelope &e, const Bounds &seed, const ForceBounds &forces) noexcept {
             constexpr double Safe = double{std::numeric_limits<float>::max()} / 128;
             const auto delta = 4 * (e.maximumPositionMagnitude + forces.center);
-            const auto lengthSquared = 3 * delta * delta;
-            if (lengthSquared > Safe || forces.falloff * std::sqrt(lengthSquared) > Safe)
+            if (const auto lengthSquared = 3 * delta * delta; lengthSquared > Safe || forces.falloff * std::sqrt(lengthSquared) > Safe)
                 return false;
             const auto duration = 2 * static_cast<double>(e.maximumSteps) * e.maximumDeltaSeconds;
             return e.maximumAccelerationMagnitude <= Safe && e.maximumVelocityMagnitude <= Safe && e.maximumRotationMagnitude <= Safe &&

@@ -41,8 +41,10 @@ namespace Horo::Physics::Detail {
     /** @brief Complete cold-resolved immutable inventory, retained with exactly one
      * configured Physics world topology. */
     struct CanonicalPhysicsStateBindingStorage final {
-        std::vector<CanonicalPhysicsStateBodyBinding> nativeBodies, stableBodies;
-        std::vector<CanonicalPhysicsStateJointBinding> nativeJoints, stableJoints;
+        std::vector<CanonicalPhysicsStateBodyBinding> nativeBodies;
+        std::vector<CanonicalPhysicsStateBodyBinding> stableBodies;
+        std::vector<CanonicalPhysicsStateJointBinding> nativeJoints;
+        std::vector<CanonicalPhysicsStateJointBinding> stableJoints;
 
         [[nodiscard]] CanonicalPhysicsStateBindings View() const noexcept {
             return {nativeBodies, stableBodies, nativeJoints, stableJoints};

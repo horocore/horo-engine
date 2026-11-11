@@ -406,7 +406,7 @@ namespace Horo::Physics::Detail {
             return Result<ShapeHandle>::Failure(valid.ErrorValue());
         if (auto admitted = ValidateCanonicalRecipeAdmission(canonical.owner.constructionRecipes, preparedRecipe); admitted.HasError())
             return Result<ShapeHandle>::Failure(admitted.ErrorValue());
-        const auto nativeShape = ObserveCanonicalPhysicsShapeCreation([&] {
+        const auto nativeShape = ObserveCanonicalPhysicsShapeCreation([&descriptor] {
             return CreateNativeShape(descriptor);
         });
         if (nativeShape.HasError())
@@ -439,7 +439,7 @@ namespace Horo::Physics::Detail {
             for (const auto &instance : instances)
                 if (!AddCanonicalPhysicsShapeReservation(FindSceneShape(world, instance.shape)->nativeRequestedBytes, children))
                     return Outcome::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-            auto observed = ObserveCanonicalPhysicsShapeCreation([&] {
+            auto observed = ObserveCanonicalPhysicsShapeCreation([&settings] {
                 using Native = Result<JPH::Ref<JPH::Shape>>;
                 const auto created = settings.Create();
                 if (created.HasError())
@@ -673,7 +673,7 @@ namespace Horo::Physics::Detail {
             using Prepared = Result<CanonicalConstraintBodies>;
             if (world.value == nullptr || !owner.IsValid())
                 return Prepared::Failure(MakeError(PhysicsErrors::WorldInvalid));
-            auto &canonical = *static_cast<CanonicalWorld *>(world.value);
+            const auto &canonical = *static_cast<CanonicalWorld *>(world.value);
             if (!HasCanonicalConstraintCapacity(canonical))
                 return Prepared::Failure(MakeError(PhysicsErrors::CapacityExceeded));
             if (std::holds_alternative<PhysicsBodyAnchor>(descriptor.second) &&

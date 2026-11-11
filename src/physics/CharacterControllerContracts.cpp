@@ -492,13 +492,14 @@ namespace Horo::Character {
         /** @brief Distinguish absent support meaning, query meaning and explicit descriptor policy. */
         bool IsSemanticSourceValid(const std::optional<Physics::PhysicsSurfaceEvidence> &evidence, CharacterSemanticSurfaceSource source,
                                    const std::optional<Physics::SurfaceMaterialId> &fallback) noexcept {
+            using enum Horo::Character::CharacterSemanticSurfaceSource;
             if (!evidence)
-                return source == CharacterSemanticSurfaceSource::None;
+                return source == None;
             if (!IsSemanticEvidenceValid(*evidence))
                 return false;
-            if (source == CharacterSemanticSurfaceSource::Query)
+            if (source == Query)
                 return true;
-            return source == CharacterSemanticSurfaceSource::DescriptorDefault && fallback == evidence->surface;
+            return source == DescriptorDefault && fallback == evidence->surface;
         }
 
         /** @brief Validate independent semantic and slide state without inferring support from physical IDs. */

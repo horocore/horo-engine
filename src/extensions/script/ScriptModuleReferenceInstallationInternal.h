@@ -16,7 +16,8 @@ namespace Horo::Extensions {
         std::shared_ptr<ModuleScriptHostAuthority> host;
         std::shared_ptr<ScriptModuleReferenceCode> code;
         ScriptCapabilityProfile profile;
-        ExtensionCapabilityAdmission consumer, providerAdmission;
+        ExtensionCapabilityAdmission consumer;
+        ExtensionCapabilityAdmission providerAdmission;
         BackendServiceDescriptor descriptor;
         std::optional<ApplicationCapabilityProviderRegistration> capability;
         std::optional<BackendServiceRegistration> service;

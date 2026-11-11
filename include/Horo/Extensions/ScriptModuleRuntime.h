@@ -77,10 +77,10 @@ namespace Horo::Extensions {
     class HeadlessExtensionHost;
     /** @brief Owner-only projection of the actual already-activated native module import; no new registration/admission. */
     [[nodiscard]] Result<ScriptModuleImport> BindNativeModuleScriptImport(NativeExtensionServiceHost &, std::string_view extension,
-                                                                          std::string_view module, std::string_view importId,
+                                                                          std::string_view moduleId, std::string_view importId,
                                                                           std::string alias, ScriptCapabilityProfile);
     [[nodiscard]] Result<ScriptModuleImport> BindHeadlessModuleScriptImport(HeadlessExtensionHost &, std::string_view extension,
-                                                                            std::string_view module, std::string_view importId,
+                                                                            std::string_view moduleId, std::string_view importId,
                                                                             std::string alias, ScriptCapabilityProfile);
 
     /** @brief Canonical immutable plan key; never contains live VM closures or permission authority. */

@@ -2,7 +2,9 @@
 #include "PlatformOfflineQueueImpl.h"
 
 #include <algorithm>
+#include <exception>
 #include <memory>
+#include <new>
 #include <type_traits>
 #include <utility>
 
@@ -156,6 +158,55 @@ namespace Horo::PlatformServices {
 
     }  // namespace
 
+    /** @brief Publishes prepared admission only after the outer returned Result has been constructed. */
+    struct PlatformOfflineQueue::AdmissionCommit final {
+        explicit AdmissionCommit(PlatformOfflineQueue &owner) noexcept : owner(owner), exceptions(std::uncaught_exceptions()) {}
+
+        AdmissionCommit(const AdmissionCommit &) = delete;
+        AdmissionCommit &operator=(const AdmissionCommit &) = delete;
+
+        ~AdmissionCommit() noexcept {
+            if (!fresh && !coalesced)
+                return;
+            if (std::uncaught_exceptions() > exceptions) {
+                if (fresh)
+                    owner.operations_.pop_back();
+                else
+                    owner.operations_[tailIndex].receipts.pop_back();
+                return;
+            }
+            if (coalesced) {
+                // Presence never coalesces: this prepared variant contains only scalar progression data.
+                owner.operations_[tailIndex].operation = combined;
+            } else {
+                if (replacesPresence) {
+                    auto &replaced = owner.operations_[tailIndex];
+                    for (auto &receipt : replaced.receipts) {
+                        if (!IsActive(receipt.state))
+                            continue;
+                        receipt.state = PlatformOfflineIntentState::Superseded;
+                        receipt.terminalAt = now;
+                        --owner.activeIntentCount_;
+                    }
+                    replaced.state = PlatformOfflineOperationState::Terminal;
+                    replaced.terminalAt = now;
+                }
+                ++owner.nextSequence_;
+            }
+            ++owner.activeIntentCount_;
+            ++owner.retainedIntentCount_;
+        }
+
+        PlatformOfflineQueue &owner;
+        int exceptions;
+        std::size_t tailIndex{};
+        TimePoint now{};
+        PlatformOfflineOperation combined;
+        bool fresh{};
+        bool coalesced{};
+        bool replacesPresence{};
+    };
+
     bool PlatformOfflineQueue::ReceiptsRemainLive(const State &state, const TimePoint now) {
         return std::ranges::all_of(state.receipts, [now](const State::Receipt &receipt) {
             return !IsActive(receipt.state) || receipt.expiresAt > now;
@@ -182,8 +233,9 @@ namespace Horo::PlatformServices {
         return active;
     }
 
-    Result<std::optional<PlatformOfflineAdmission>> PlatformOfflineQueue::TryCoalesceTail(State *const tail, PlatformOfflineIntent &intent,
-                                                                                          const TimePoint now) {
+    Result<std::optional<PlatformOfflineAdmission>> PlatformOfflineQueue::TryCoalesceTail(State *const tail,
+                                                                                          const PlatformOfflineIntent &intent,
+                                                                                          const TimePoint now, AdmissionCommit &commit) {
         if (tail == nullptr || tail->state != PlatformOfflineOperationState::Pending || IsPresence(intent.operation) ||
             !ReceiptsRemainLive(*tail, now))
             return Result<std::optional<PlatformOfflineAdmission>>::Success(std::nullopt);
@@ -197,19 +249,19 @@ namespace Horo::PlatformServices {
             return Result<std::optional<PlatformOfflineAdmission>>::Failure(MakeError(OfflineQueueErrors::CapacityExceeded));
 
         tail->receipts.push_back(
-            State::Receipt{.intent = std::move(intent), .admittedAt = now, .expiresAt = *AddAge(now, config_.progressionMaximumAge)});
-        tail->operation = std::move(combined);
-        ++activeIntentCount_;
-        ++retainedIntentCount_;
+            State::Receipt{.intent = intent, .admittedAt = now, .expiresAt = *AddAge(now, config_.progressionMaximumAge)});
+        commit.tailIndex = static_cast<std::size_t>(tail - operations_.data());
+        commit.combined = combined;
+        commit.coalesced = true;
         return Result<std::optional<PlatformOfflineAdmission>>::Success(
             PlatformOfflineAdmission{.disposition = PlatformOfflineAdmissionDisposition::Coalesced, .operation = tail->handle});
     }
 
     /** @copydoc PlatformOfflineQueue::PrepareSupersededPresenceIds */
-    std::vector<PlatformOfflineIntentId> PlatformOfflineQueue::PrepareSupersededPresenceIds(const State *const presenceTail) const {
-        std::vector<PlatformOfflineIntentId> superseded;
+    void PlatformOfflineQueue::PrepareSupersededPresenceIds(const State *const presenceTail,
+                                                            std::vector<PlatformOfflineIntentId> &superseded) const {
         if (presenceTail == nullptr)
-            return superseded;
+            return;
 
         const auto activeCount = static_cast<std::size_t>(std::ranges::count_if(presenceTail->receipts, [](const State::Receipt &receipt) {
             return IsActive(receipt.state);
@@ -218,11 +270,11 @@ namespace Horo::PlatformServices {
         for (const auto &receipt : presenceTail->receipts)
             if (IsActive(receipt.state))
                 superseded.push_back(receipt.intent.id);
-        return superseded;
     }
 
-    Result<PlatformOfflineAdmission> PlatformOfflineQueue::AdmitFresh(PlatformOfflineIntent intent, const TimePoint now,
-                                                                      const TimePoint expiresAt, State *const tail) {
+    Result<PlatformOfflineAdmission> PlatformOfflineQueue::AdmitFresh(const PlatformOfflineIntent &intent, const TimePoint now,
+                                                                      const TimePoint expiresAt, State *const tail,
+                                                                      AdmissionCommit &commit) {
         const bool replacingPresence =
             tail != nullptr && IsPresence(intent.operation) && std::holds_alternative<PlatformOfflinePresenceLane>(intent.lane) &&
             (tail->state == PlatformOfflineOperationState::Pending || tail->state == PlatformOfflineOperationState::Suspended) &&
@@ -239,38 +291,25 @@ namespace Horo::PlatformServices {
             ActiveForSubject(subject) + 1U - replacedCount > config_.perSubjectActiveCapacity || nextSequence_ == 0)
             return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::CapacityExceeded));
 
-        auto superseded = PrepareSupersededPresenceIds(presenceTail);
         const auto presenceTailIndex =
             presenceTail == nullptr ? operations_.size() : static_cast<std::size_t>(presenceTail - operations_.data());
         const auto handle = PlatformOfflineOperationHandle{.generation = config_.generation, .sequence = nextSequence_};
+        PlatformOfflineAdmission admission{.disposition = replacingPresence ? PlatformOfflineAdmissionDisposition::PresenceSuperseded
+                                                                            : PlatformOfflineAdmissionDisposition::Accepted,
+                                           .operation = handle};
+        PrepareSupersededPresenceIds(presenceTail, admission.superseded);
         State freshOperation{.handle = handle,
                              .lane = intent.lane,
                              .operation = intent.operation,
                              .state = PlatformOfflineOperationState::Pending,
-                             .receipts = {State::Receipt{.intent = std::move(intent), .admittedAt = now, .expiresAt = expiresAt}}};
-        PlatformOfflineAdmission admission{.disposition = replacingPresence ? PlatformOfflineAdmissionDisposition::PresenceSuperseded
-                                                                            : PlatformOfflineAdmissionDisposition::Accepted,
-                                           .operation = handle,
-                                           .superseded = std::move(superseded)};
-
+                             .receipts = {State::Receipt{.intent = intent, .admittedAt = now, .expiresAt = expiresAt}}};
         operations_.reserve(operations_.size() + 1U);
-        operations_.push_back(std::move(freshOperation));
-        if (presenceTail != nullptr) {
-            auto &replaced = operations_[presenceTailIndex];
-            for (auto &receipt : replaced.receipts) {
-                if (!IsActive(receipt.state))
-                    continue;
-                receipt.state = PlatformOfflineIntentState::Superseded;
-                receipt.terminalAt = now;
-                --activeIntentCount_;
-            }
-            replaced.state = PlatformOfflineOperationState::Terminal;
-            replaced.terminalAt = now;
-        }
-        ++nextSequence_;
-        ++activeIntentCount_;
-        ++retainedIntentCount_;
-        return Result<PlatformOfflineAdmission>::Success(std::move(admission));
+        operations_.push_back(freshOperation);
+        commit.tailIndex = presenceTailIndex;
+        commit.now = now;
+        commit.replacesPresence = replacingPresence;
+        commit.fresh = true;
+        return Result<PlatformOfflineAdmission>::Success(admission);
     }
 
     /** @copydoc PlatformOfflineQueue::ExpireDue */
@@ -298,34 +337,39 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformOfflineQueue::Admit */
-    Result<PlatformOfflineAdmission> PlatformOfflineQueue::Admit(PlatformOfflineIntent intent, const TimePoint now) {
-        if (const auto observed = ObserveTime(now); observed.HasError())
-            return Result<PlatformOfflineAdmission>::Failure(observed.ErrorValue());
-        if (closed_)
-            return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::QueueUnavailable));
-        if (!IsValidOperation(intent, config_.maximumPresenceDetailBytes))
-            return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::InvalidIntent));
-        if (auto *existing = detail::FindReceipt(operations_, intent.id); existing != nullptr) {
-            if (const auto receipt = std::ranges::find_if(existing->receipts,
-                                                          [&intent](const State::Receipt &candidate) {
-                return candidate.intent.id == intent.id;
-            });
-                receipt->intent != intent)
-                return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::IdentityConflict));
-            return Result<PlatformOfflineAdmission>::Success(
-                PlatformOfflineAdmission{.disposition = PlatformOfflineAdmissionDisposition::JoinedExisting,
-                                         .operation = existing->handle});
+    Result<PlatformOfflineAdmission> PlatformOfflineQueue::Admit(const PlatformOfflineIntent &intent, const TimePoint now) {
+        try {
+            AdmissionCommit commit{*this};
+            if (const auto observed = ObserveTime(now); observed.HasError())
+                return Result<PlatformOfflineAdmission>::Failure(observed.ErrorValue());
+            if (closed_)
+                return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::QueueUnavailable));
+            if (!IsValidOperation(intent, config_.maximumPresenceDetailBytes))
+                return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::InvalidIntent));
+            if (auto *existing = detail::FindReceipt(operations_, intent.id); existing != nullptr) {
+                if (const auto receipt = std::ranges::find_if(existing->receipts,
+                                                              [&intent](const State::Receipt &candidate) {
+                    return candidate.intent.id == intent.id;
+                });
+                    receipt->intent != intent)
+                    return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::IdentityConflict));
+                return Result<PlatformOfflineAdmission>::Success(
+                    PlatformOfflineAdmission{.disposition = PlatformOfflineAdmissionDisposition::JoinedExisting,
+                                             .operation = existing->handle});
+            }
+            const auto lifetime = IsPresence(intent.operation) ? config_.presenceMaximumAge : config_.progressionMaximumAge;
+            const auto expiresAt = AddAge(now, lifetime);
+            if (!expiresAt.has_value())
+                return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::InvalidIntent));
+            auto *const tail = FindTail(intent.lane);
+            auto coalesced = TryCoalesceTail(tail, intent, now, commit);
+            if (coalesced.HasError())
+                return Result<PlatformOfflineAdmission>::Failure(coalesced.ErrorValue());
+            if (auto coalescedAdmission = std::move(coalesced).Value(); coalescedAdmission.has_value())
+                return Result<PlatformOfflineAdmission>::Success(std::move(*coalescedAdmission));
+            return AdmitFresh(intent, now, *expiresAt, tail, commit);
+        } catch (const std::bad_alloc &) {
+            return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::CapacityExceeded));
         }
-        const auto lifetime = IsPresence(intent.operation) ? config_.presenceMaximumAge : config_.progressionMaximumAge;
-        const auto expiresAt = AddAge(now, lifetime);
-        if (!expiresAt.has_value())
-            return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::InvalidIntent));
-        auto *const tail = FindTail(intent.lane);
-        auto coalesced = TryCoalesceTail(tail, intent, now);
-        if (coalesced.HasError())
-            return Result<PlatformOfflineAdmission>::Failure(coalesced.ErrorValue());
-        if (auto coalescedAdmission = std::move(coalesced).Value(); coalescedAdmission.has_value())
-            return Result<PlatformOfflineAdmission>::Success(std::move(*coalescedAdmission));
-        return AdmitFresh(std::move(intent), now, *expiresAt, tail);
     }
 }  // namespace Horo::PlatformServices

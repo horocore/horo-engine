@@ -80,7 +80,7 @@ namespace Horo::Application::DecisionCookDetail {
             auto source = Decode(*file, state);
             if (source.HasError())
                 return Result<void>::Failure(source.ErrorValue());
-            state.inputs.push_back({record.id, record.type, file->sourceDigest, std::move(source).Value()});
+            state.inputs.emplace_back(record.id, record.type, file->sourceDigest, std::move(source).Value());
             return Result<void>::Success();
         }
     }  // namespace

@@ -12,7 +12,8 @@ namespace Horo::Editor {
         constexpr std::size_t MaximumTerrainBytes = MaximumTerrainSamples * 4;
 
         struct Settings final {
-            std::uint32_t width{}, height{};
+            std::uint32_t width{};
+            std::uint32_t height{};
             Terrain::TerrainSourceCoordinates coordinates;
         };
 
@@ -21,13 +22,16 @@ namespace Horo::Editor {
             using Return = Result<Settings>;
             if (values.size() != 7)
                 return Return::Failure(MakeError(Terrain::TerrainSourceErrors::InvalidCoordinates));
-            const auto width = std::get_if<std::int64_t>(&values[0]), height = std::get_if<std::int64_t>(&values[1]);
+            const auto width = std::get_if<std::int64_t>(&values[0]);
+            const auto height = std::get_if<std::int64_t>(&values[1]);
             if (!width || !height || *width < 2 || *height < 2 || *width > Terrain::TerrainDescriptorHardLimits::SamplesPerAxis ||
                 *height > Terrain::TerrainDescriptorHardLimits::SamplesPerAxis ||
                 std::uint64_t(*width) * std::uint64_t(*height) > MaximumTerrainSamples)
                 return Return::Failure(MakeError(Terrain::TerrainSourceErrors::InvalidDimensions));
-            const auto sx = std::get_if<double>(&values[2]), sz = std::get_if<double>(&values[3]), ox = std::get_if<double>(&values[4]),
-                       oz = std::get_if<double>(&values[5]);
+            const auto sx = std::get_if<double>(&values[2]);
+            const auto sz = std::get_if<double>(&values[3]);
+            const auto ox = std::get_if<double>(&values[4]);
+            const auto oz = std::get_if<double>(&values[5]);
             const auto crs = std::get_if<std::string>(&values[6]);
             if (!sx || !sz || !ox || !oz || !crs || !std::isfinite(*sx) || !std::isfinite(*sz) || *sx <= 0 || *sz <= 0 ||
                 !std::isfinite(*ox) || !std::isfinite(*oz) || crs->size() > 64 ||
@@ -69,8 +73,8 @@ namespace Horo::Editor {
                 auto settings = ParseSettings(input.settings);
                 if (settings.HasError())
                     return Return::Failure(std::move(settings).ErrorValue());
-                const auto count = std::uint64_t{settings.Value().width} * settings.Value().height;
-                if (input.sourceBytes.size() != count * 4)
+                if (const auto count = std::uint64_t{settings.Value().width} * settings.Value().height;
+                    input.sourceBytes.size() != count * 4)
                     return Return::Failure(MakeError(Terrain::TerrainSourceErrors::InvalidBytes));
                 for (std::size_t index = 0; index < input.sourceBytes.size(); index += 4) {
                     if (index % 4096 == 0 && cancellation.IsCancellationRequested())

@@ -55,7 +55,7 @@ namespace Horo::Render {
         bool ValidStateValue(const ExposureState &s) noexcept {
             if (static_cast<unsigned>(s.reason) > static_cast<unsigned>(ExposureSampleReason::Invalid))
                 return false;
-            if (s.diagnosticEv && !Bounded(*s.diagnosticEv, -32, 32))
+            if (s.diagnosticEv.has_value() && !Bounded(*s.diagnosticEv, -32, 32))
                 return false;
             if (s.mode == ExposureMode::Manual)
                 return !s.buffer.IsValid() && s.sourceSubmission == 0 && s.diagnosticEv.has_value();
@@ -67,10 +67,10 @@ namespace Horo::Render {
 
     /** @copydoc ValidateExposureSettings */
     Result<void> ValidateExposureSettings(const ExposureSettings &s) {
-        const bool enums = static_cast<unsigned>(s.mode) <= static_cast<unsigned>(ExposureMode::AutomaticHistogram) &&
-                           static_cast<unsigned>(s.timeSource) <= static_cast<unsigned>(ExposureTimeSource::View) &&
-                           static_cast<unsigned>(s.reset) <= static_cast<unsigned>(ExposureResetPolicy::RetainLastValid);
-        if (!enums || !ValidEv(s) || !ValidMeter(s) || !ValidRates(s))
+        if (const bool enums = static_cast<unsigned>(s.mode) <= static_cast<unsigned>(ExposureMode::AutomaticHistogram) &&
+                               static_cast<unsigned>(s.timeSource) <= static_cast<unsigned>(ExposureTimeSource::View) &&
+                               static_cast<unsigned>(s.reset) <= static_cast<unsigned>(ExposureResetPolicy::RetainLastValid);
+            !enums || !ValidEv(s) || !ValidMeter(s) || !ValidRates(s))
             return Result<void>::Failure(MakeError(ExposureErrors::InvalidSettings));
         if (!Bounded(s.manualEv + s.compensationEv, s.minimumEv, s.maximumEv) ||
             !Bounded(s.initialEv + s.compensationEv, s.minimumEv, s.maximumEv))
@@ -81,9 +81,9 @@ namespace Horo::Render {
     /** @copydoc ValidateExposureState */
     Result<void> ValidateExposureState(const ExposureState &s, const TemporalHistoryCompatibility &c, std::uint64_t settingsGeneration,
                                        std::uint64_t submission) {
-        const bool generations = c.IsValid() && s.view == c.view && s.generation == c.exposureGeneration &&
-                                 s.deviceGeneration == c.deviceGeneration && s.settingsGeneration == settingsGeneration;
-        if (!generations || settingsGeneration == 0 || submission == 0 || s.consumeSubmission != submission || !ValidStateValue(s))
+        if (const bool generations = c.IsValid() && s.view == c.view && s.generation == c.exposureGeneration &&
+                                     s.deviceGeneration == c.deviceGeneration && s.settingsGeneration == settingsGeneration;
+            !generations || settingsGeneration == 0 || submission == 0 || s.consumeSubmission != submission || !ValidStateValue(s))
             return Result<void>::Failure(MakeError(ExposureErrors::IncompatibleState));
         return Result<void>::Success();
     }

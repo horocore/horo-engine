@@ -144,8 +144,7 @@ namespace Horo::Editor {
         if (sourceChanged)
             selection_.reset();
         projection_ = std::move(next);
-        const auto &language = kTextScope.Text(context.localization, "connections");
-        if (languageLabel_ != language) {
+        if (const auto &language = kTextScope.Text(context.localization, "connections"); languageLabel_ != language) {
             languageLabel_ = language;
             rowsDirty_ = true;
         }
@@ -328,9 +327,9 @@ namespace Horo::Editor {
                                                                                     : "empty.offline"),
                                           GlobalDockTone::Neutral, context.theme.fonts);
         }
-        const auto interaction = Ui::DrawTable({.id = "##NetworkRecords"}, columns_, std::span<const Ui::TableRow>{rows_.data(), rowsUsed_},
-                                               context.theme.fonts);
-        if (interaction.activatedRow) {
+        if (const auto interaction = Ui::DrawTable({.id = "##NetworkRecords"}, columns_,
+                                                   std::span<const Ui::TableRow>{rows_.data(), rowsUsed_}, context.theme.fonts);
+            interaction.activatedRow.has_value()) {
             const auto index = *interaction.activatedRow;
             selection_ = Selection{s.source, s.revision, ordinals_[index], records_[index]};
         }
@@ -392,8 +391,7 @@ namespace Horo::Editor {
         const std::array providerKeys{"provider.unavailable", "provider.deterministic", "provider.native", "provider.other"};
         DrawGlobalDockWrappedText(width, text(providerKeys[static_cast<std::size_t>(projection_.snapshot.provider)]),
                                   GlobalDockTone::Neutral, context.theme.fonts);
-        const auto &metrics = projection_.snapshot.metrics;
-        if (metrics.enabled) {
+        if (const auto &metrics = projection_.snapshot.metrics; metrics.enabled) {
             ImGui::Spacing();
             DrawEvidenceRow(width, context, text("metric.rtt"),
                             metrics.rttAvailable ? std::format("{} ms", metrics.rttMilliseconds) : text("unavailable"));

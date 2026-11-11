@@ -49,7 +49,8 @@ namespace Horo::Gameplay {
             Vfx::VfxSpawnAssetPreparation value;
             std::vector<Vfx::CpuParticleForceModule> forces;
             std::vector<Vfx::CpuParticlePlane> planes;
-            std::vector<Vfx::CpuParticleCurveKey> size, opacity;
+            std::vector<Vfx::CpuParticleCurveKey> size;
+            std::vector<Vfx::CpuParticleCurveKey> opacity;
             std::vector<Vfx::CpuParticleColorKey> color;
             std::vector<Vfx::CpuParticlePayloadChannel> channels;
             std::vector<Vfx::CpuParticlePayloadModule> modules;
@@ -355,12 +356,13 @@ namespace Horo::Gameplay {
     /** @copydoc GameplayVfxScene::PrepareSealTick */
     Vfx::VfxSpawnStatus GameplayVfxScene::PrepareSealTick(const std::uint64_t tick,
                                                           std::shared_ptr<const Runtime::SceneStructuralReceipt> receipt) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (state_->lane != std::this_thread::get_id())
-            return Vfx::VfxSpawnStatus::ThreadViolation;
+            return ThreadViolation;
         if (state_->sealCount == state_->sealed.size())
-            return Vfx::VfxSpawnStatus::EventQueueFull;
+            return EventQueueFull;
         const auto status = Host::PrepareSealTick(state_->active, tick);
-        if (status == Vfx::VfxSpawnStatus::Accepted) {
+        if (status == Accepted) {
             state_->preparedReceipt = std::move(receipt);
             state_->preparedTick = tick;
         }

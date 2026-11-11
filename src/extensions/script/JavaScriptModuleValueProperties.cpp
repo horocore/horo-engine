@@ -52,6 +52,11 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
                 JSContext *context;
                 const std::uint16_t *text;
 
+                Release(JSContext *owner, const std::uint16_t *value) noexcept : context(owner), text(value) {}
+
+                Release(const Release &) = delete;
+                Release &operator=(const Release &) = delete;
+
                 ~Release() {
                     JS_FreeCStringUTF16(context, text);
                 }
@@ -75,6 +80,11 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             JSContext *context;
             const char *text;
 
+            Release(JSContext *owner, const char *value) noexcept : context(owner), text(value) {}
+
+            Release(const Release &) = delete;
+            Release &operator=(const Release &) = delete;
+
             ~Release() {
                 JS_FreeCString(context, text);
             }
@@ -91,8 +101,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         std::int64_t result{};
         if (JS_ToBigInt64(context, &result, value) < 0)
             InvalidValue("BigInt conversion failed.");
-        Value roundtrip{context, Checked(JS_NewBigInt64(context, result))};
-        if (!JS_IsStrictEqual(context, value, roundtrip.Get()))
+        if (Value roundtrip{context, Checked(JS_NewBigInt64(context, result))}; !JS_IsStrictEqual(context, value, roundtrip.Get()))
             InvalidValue("BigInt is outside the signed 64-bit range.");
         return result;
     }
@@ -103,8 +112,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         std::uint64_t result{};
         if (JS_ToBigUint64(context, &result, value) < 0)
             InvalidValue("BigInt conversion failed.");
-        Value roundtrip{context, Checked(JS_NewBigUint64(context, result))};
-        if (!JS_IsStrictEqual(context, value, roundtrip.Get()))
+        if (Value roundtrip{context, Checked(JS_NewBigUint64(context, result))}; !JS_IsStrictEqual(context, value, roundtrip.Get()))
             InvalidValue("BigInt is outside the unsigned 64-bit range.");
         return result;
     }
@@ -116,8 +124,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
 
     Value Values::Own(JSValueConst object, JSAtom atom) const {
         JSPropertyDescriptor descriptor{};
-        const int found = JS_GetOwnProperty(context, &descriptor, object, atom);
-        if (found <= 0)
+        if (const int found = JS_GetOwnProperty(context, &descriptor, object, atom); found <= 0)
             InvalidValue("A required own data property is absent.");
         Value value{context, descriptor.value};
         Value getter{context, descriptor.getter};
@@ -137,6 +144,11 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             JSContext *context;
             JSPropertyEnum *table;
             std::uint32_t length;
+
+            Release(JSContext *owner, JSPropertyEnum *value, std::uint32_t count) noexcept : context(owner), table(value), length(count) {}
+
+            Release(const Release &) = delete;
+            Release &operator=(const Release &) = delete;
 
             ~Release() {
                 JS_FreePropertyEnum(context, table, length);

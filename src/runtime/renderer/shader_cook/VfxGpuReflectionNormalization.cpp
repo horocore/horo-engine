@@ -64,8 +64,10 @@ namespace Horo::Render::VfxGpuCookDetail {
 
         void Entry(const Json &json, VfxGpuProgramRole role, ShaderStage stage) {
             const auto &entries = Rows(json, "entryPoints", 1);
-            const auto mode = stage == ShaderStage::Compute ? "comp" : stage == ShaderStage::Vertex ? "vert" : "frag";
-            if (entries.size() != 1 || entries[0].at("name").get_ref<const std::string &>() != EntryName(role, stage) ||
+            if (const auto mode = stage == ShaderStage::Compute  ? "comp"
+                                  : stage == ShaderStage::Vertex ? "vert"
+                                                                 : "frag";
+                entries.size() != 1 || entries[0].at("name").get_ref<const std::string &>() != EntryName(role, stage) ||
                 entries[0].at("mode") != mode)
                 throw InvalidEvidence{};
             Specialization(entries[0]);
@@ -114,7 +116,8 @@ namespace Horo::Render::VfxGpuCookDetail {
         }
 
         void RuntimeArray(const Json &field) {
-            const auto &array = Rows(field, "array", 1), &literal = Rows(field, "array_size_is_literal", 1);
+            const auto &array = Rows(field, "array", 1);
+            const auto &literal = Rows(field, "array_size_is_literal", 1);
             if (array.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(array[0]) != 0)
                 throw InvalidEvidence{};
         }
@@ -140,8 +143,8 @@ namespace Horo::Render::VfxGpuCookDetail {
         }
 
         void Storage(const Json &json, const Json &entry, const Buffer &native, std::size_t index, VfxGpuProgramRole role) {
-            const auto names = ResourceNames(role);
-            if (entry.at("name").get_ref<const std::string &>() != names[index] || native.name != names[index] || native.constant)
+            if (const auto names = ResourceNames(role);
+                entry.at("name").get_ref<const std::string &>() != names[index] || native.name != names[index] || native.constant)
                 throw InvalidEvidence{};
             ResourceShape(entry, static_cast<std::uint32_t>(index), 0);
             const bool readonly = !Compute(role) || index == 0 || index == 2;
@@ -216,8 +219,8 @@ namespace Horo::Render::VfxGpuCookDetail {
             if (rows.size() != expected)
                 throw InvalidEvidence{};
             const auto direction = input ? ShaderInterfaceDirection::Input : ShaderInterfaceDirection::Output;
-            const auto count = std::ranges::count(native.interfaces, direction, &ShaderReflectedInterfaceVariable::direction);
-            if (static_cast<std::size_t>(count) != expected)
+            if (const auto count = std::ranges::count(native.interfaces, direction, &ShaderReflectedInterfaceVariable::direction);
+                static_cast<std::size_t>(count) != expected)
                 throw InvalidEvidence{};
             if (!expected)
                 return;

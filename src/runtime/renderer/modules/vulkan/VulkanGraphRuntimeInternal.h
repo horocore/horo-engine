@@ -108,12 +108,14 @@ namespace Horo::Render::Detail {
         struct MaterialPass {
             VulkanMaterialTarget target;
             RenderMaterialExecutionRequest request;
-            RenderGraphExecutionRange draws, barriers;
+            RenderGraphExecutionRange draws;
+            RenderGraphExecutionRange barriers;
         };
 
         std::array<MaterialDraw, RenderMaterialPass::MaximumBatchDraws> materialDraws;
         std::array<MaterialPass, RenderMaterialPass::MaximumPasses> materialPasses;
-        std::size_t materialPassCount{}, materialDrawCount{};
+        std::size_t materialPassCount{};
+        std::size_t materialDrawCount{};
         std::array<VulkanGraphResourceState *, RenderGraphLimits::HardMaxResources> materialPassStates;
         std::size_t materialPassStateCount{};
         VulkanMaterialTarget materialTarget;

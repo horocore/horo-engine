@@ -7,20 +7,20 @@ namespace Horo::Render::ExposureGpuCookDetail {
         constexpr std::array names{"ClearExposureHistogram", "BuildExposureHistogram", "AdaptExposure"};
         const auto index = static_cast<std::size_t>(stage);
         if (index >= names.size())
-            throw EvidenceFailure{__func__, __LINE__};
+            throw EvidenceFailure{};
         return names[index];
     }
 
     /** @copydoc Stage */
     ExposureGpuStage Stage(const ShaderManifest &manifest) {
         if (manifest.entryPoints.size() != 1 || manifest.entryPoints[0].stage != ShaderStage::Compute)
-            throw EvidenceFailure{__func__, __LINE__};
+            throw EvidenceFailure{};
         for (std::size_t index = 0; index < 3; ++index) {
             const auto stage = static_cast<ExposureGpuStage>(index);
             if (manifest.entryPoints[0].name == EntryName(stage))
                 return stage;
         }
-        throw EvidenceFailure{__func__, __LINE__};
+        throw EvidenceFailure{};
     }
 }  // namespace Horo::Render::ExposureGpuCookDetail
 

@@ -270,7 +270,7 @@ namespace Horo::Editor {
                     selected = static_cast<int>(index);
             }
             const float width = textWidth + metrics.paddingX * 2 + layout.control * 0.5F;
-            const Ui::ComboItemSource items{.label = [&](const int index) {
+            const Ui::ComboItemSource items{.label = [&context, &directory](const int index) {
                 return AssetBrowserPane::kTextScope
                     .Text(context.localization, AssetBrowserPane::RootLabelKey(directory.roots[static_cast<std::size_t>(index)].kind))
                     .c_str();

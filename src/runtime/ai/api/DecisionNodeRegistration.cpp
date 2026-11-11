@@ -100,11 +100,12 @@ namespace Horo::AI {
             if (memory.stateBytes > 256ULL * 1024ULL * 1024ULL || memory.scratchBytes > 256ULL * 1024ULL * 1024ULL)
                 return false;
             switch (memory.kind) {
-                case DecisionProviderMemoryKind::UnknownNative:
+                using enum Horo::AI::DecisionProviderMemoryKind;
+                case UnknownNative:
                     return memory.stateBytes == 0 && memory.scratchBytes == 0 && memory.enforcedVmBytes == 0;
-                case DecisionProviderMemoryKind::NativeDeclared:
+                case NativeDeclared:
                     return memory.enforcedVmBytes == 0;
-                case DecisionProviderMemoryKind::EnforcedVm:
+                case EnforcedVm:
                     return contract.descriptor.origin.kind == DecisionDescriptorSourceKind::Script && memory.enforcedVmBytes > 0 &&
                            memory.enforcedVmBytes <= 16ULL * 1024ULL * 1024ULL;
                 default:

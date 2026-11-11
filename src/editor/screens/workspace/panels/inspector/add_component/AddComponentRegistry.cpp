@@ -39,9 +39,9 @@ namespace Horo::Editor {
         const auto action = std::visit([](const auto value) -> AddComponentAction {
             return value;
         }, definition.action);
-        entries_[static_cast<std::size_t>(definition.category)].push_back({std::string{definition.id}, std::string{definition.labelKey},
-                                                                           action, definition.available, true, false,
-                                                                           definition.separatorBefore});
+        entries_[static_cast<std::size_t>(definition.category)].emplace_back(std::string{definition.id}, std::string{definition.labelKey},
+                                                                             action, definition.available, true, false,
+                                                                             definition.separatorBefore);
     }
 
     /** @copydoc AddComponentRegistry::RegisterStatic */
@@ -73,7 +73,7 @@ namespace Horo::Editor {
             const std::string id = "behavior." + behavior.typeId.Value();
             if (!ids.insert(id).second)
                 return Result<void>::Failure(MakeError(duplicate));
-            next.push_back({id, behavior.displayName, behavior.typeId, nullptr, false, behavior.allowMultiple, false});
+            next.emplace_back(id, behavior.displayName, behavior.typeId, nullptr, false, behavior.allowMultiple, false);
         }
         for (const auto &entry : scripts)
             if (!std::holds_alternative<Gameplay::BehaviorTypeId>(entry.action))

@@ -25,8 +25,8 @@ namespace Horo::Extensions {
             if (!input.currentTrust || !input.root.is_absolute() || !Relative(input.source) || input.artifacts.empty() ||
                 input.artifacts.size() > 18)
                 return Invalid("Module capture root/gate/artifact bounds are invalid.");
-            const auto extension = input.runtime == ScriptModuleRuntimeKind::Lua54 ? ".lua" : ".js";
-            if (input.runtime > ScriptModuleRuntimeKind::JavaScriptNg || input.source.extension() != extension)
+            if (const auto extension = input.runtime == ScriptModuleRuntimeKind::Lua54 ? ".lua" : ".js";
+                input.runtime > ScriptModuleRuntimeKind::JavaScriptNg || input.source.extension() != extension)
                 return Invalid("Module source runtime and extension disagree.");
             return Result<void>::Success();
         }
@@ -123,8 +123,7 @@ namespace Horo::Extensions {
         const auto found = std::ranges::find(manifest_.modules, input_.module, &ExtensionModuleManifest::id);
         if (found == manifest_.modules.end())
             return Invalid("Selected module is absent from the signed manifest.");
-        auto valid = ValidateScriptModuleSelectedDeclaration(*found);
-        if (valid.HasError())
+        if (auto valid = ValidateScriptModuleSelectedDeclaration(*found); valid.HasError())
             return valid;
         module_ = &*found;
         return Result<void>::Success();
@@ -139,8 +138,7 @@ namespace Horo::Extensions {
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
         manifest_ = std::move(decoded).Value();
-        auto selected = SelectModule();
-        if (selected.HasError())
+        if (auto selected = SelectModule(); selected.HasError())
             return selected;
         source_.assign(std::bit_cast<const char *>(source->bytes->data()), source->bytes->size());
         if (source_.find('\0') != std::string::npos || !IsValidUtf8ScalarSequence(source_))

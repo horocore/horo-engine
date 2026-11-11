@@ -20,11 +20,17 @@ namespace Horo::Editor {
     [[nodiscard]] std::array<float, 4> EditorViewportFixedMaterialBaseColor() noexcept;
 
     struct EditorViewportShaderParameters final {
-        Math::Mat4 mvp{Math::Mat4::Identity()}, model{Math::Mat4::Identity()};
+        Math::Mat4 mvp{Math::Mat4::Identity()};
+        Math::Mat4 model{Math::Mat4::Identity()};
         std::array<float, 64> shadow{};
-        std::array<float, 16> cascadeSplits{}, atlasRects{};
-        std::array<float, 4> cameraForward{}, shadowBiasFilter{};
-        std::array<float, 4> camera{}, selection{}, shadowSettings{}, shadowCoordinates{};
+        std::array<float, 16> cascadeSplits{};
+        std::array<float, 16> atlasRects{};
+        std::array<float, 4> cameraForward{};
+        std::array<float, 4> shadowBiasFilter{};
+        std::array<float, 4> camera{};
+        std::array<float, 4> selection{};
+        std::array<float, 4> shadowSettings{};
+        std::array<float, 4> shadowCoordinates{};
         std::array<float, 4> baseColor = EditorViewportFixedMaterialBaseColor();
         bool unexposedAcesCg{}; /**< Explicit host recipe: true emits unexposed AP1; false retains legacy display shading. */
         std::array<std::array<float, 64>, 4> lights{};
@@ -38,7 +44,10 @@ namespace Horo::Editor {
     /** @brief Fixed, reflected uniform input for the real storage-backed clustered lit consumer. */
     struct EditorViewportClusteredShaderParameters final {
         EditorViewportShaderParameters common;
-        std::array<float, 4> dimensions{}, depth{}, viewport{}, shadowIdentity{};
+        std::array<float, 4> dimensions{};
+        std::array<float, 4> depth{};
+        std::array<float, 4> viewport{};
+        std::array<float, 4> shadowIdentity{};
         /** @brief Captures exact producer/grid identities after complete-table admission; retains no borrowed data. */
         [[nodiscard]] Result<void> SetScene(const Render::RenderSceneView &scene, const Render::ClusteredLightGrid &grid,
                                             const std::optional<Render::DirectionalShadowFrame> &shadowFrame,

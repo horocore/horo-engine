@@ -9,8 +9,10 @@ namespace Horo::Physics::StateDetail {
     struct RestartInputLimits final {
         PhysicsStateLimits solver;
         PhysicsStateConstructionManifestLimits construction;
-        std::uint32_t maximumEventPairs{}, maximumEvents{};
-        std::size_t maximumWireBytes{}, maximumRetainedBytes{};
+        std::uint32_t maximumEventPairs{};
+        std::uint32_t maximumEvents{};
+        std::size_t maximumWireBytes{};
+        std::size_t maximumRetainedBytes{};
     };
 
     /** @brief Fully owned, immutable canonical input prepared before any native reconstruction.

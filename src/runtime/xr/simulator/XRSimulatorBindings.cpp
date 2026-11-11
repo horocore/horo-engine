@@ -29,12 +29,14 @@ namespace Horo::XR {
 
         std::optional<XRTrackedActionKind> Kind(const Input::ActionValueType type) noexcept {
             switch (type) {
-                case Input::ActionValueType::Digital:
-                    return XRTrackedActionKind::Boolean;
-                case Input::ActionValueType::Axis1D:
-                    return XRTrackedActionKind::Scalar;
-                case Input::ActionValueType::Axis2D:
-                    return XRTrackedActionKind::Vector2;
+                using enum Horo::Input::ActionValueType;
+                using enum Horo::XR::XRTrackedActionKind;
+                case Digital:
+                    return Boolean;
+                case Axis1D:
+                    return Scalar;
+                case Axis2D:
+                    return Vector2;
             }
             return {};
         }

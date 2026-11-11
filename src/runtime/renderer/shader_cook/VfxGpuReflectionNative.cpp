@@ -69,8 +69,7 @@ namespace Horo::Render::VfxGpuCookDetail {
                 const auto field = body.subspan(i * 3, 3);
                 if (field[1] != names[i] || field[2] != ";")
                     throw InvalidEvidence{};
-                const auto expected = Compute(role) || i == 4 ? "uint4" : i == 0 ? "float4x4" : "float4";
-                if (field[0] != expected)
+                if (const auto expected = Compute(role) || i == 4 ? "uint4" : i == 0 ? "float4x4" : "float4"; field[0] != expected)
                     throw InvalidEvidence{};
                 auto value = Primitive(field[0], field[1], buffer.bytes);
                 buffer.bytes += value.bytes;
@@ -260,7 +259,8 @@ namespace Horo::Render::VfxGpuCookDetail {
 
         void Arguments(Tokens tokens, Tokens parameters, std::string_view source, VfxGpuProgramRole role, ShaderStage stage, bool proven,
                        NativeEvidence &result) {
-            std::size_t start = 0, depth = 0;
+            std::size_t start = 0;
+            std::size_t depth = 0;
             for (std::size_t at = 0; at < parameters.size(); ++at) {
                 if (parameters[at] == "(")
                     ++depth;
@@ -287,8 +287,7 @@ namespace Horo::Render::VfxGpuCookDetail {
         NativeEvidence evidence;
         Interfaces(tokens, entry.result, stage, ShaderInterfaceDirection::Output, evidence);
         Arguments(tokens, entry.parameters, source, role, stage, provenReadonly, evidence);
-        const auto expected = stage == ShaderStage::Fragment ? 0 : ResourceNames(role).size();
-        if (evidence.buffers.size() != expected)
+        if (const auto expected = stage == ShaderStage::Fragment ? 0 : ResourceNames(role).size(); evidence.buffers.size() != expected)
             throw InvalidEvidence{};
         return evidence;
     }

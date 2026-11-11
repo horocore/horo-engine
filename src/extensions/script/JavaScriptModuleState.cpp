@@ -110,7 +110,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
 
     State::~State() {
         Cancel();
-        for (auto &entry : pending) {
+        for (const auto &entry : pending) {
             JS_FreeValue(context, entry.resolve);
             JS_FreeValue(context, entry.reject);
         }

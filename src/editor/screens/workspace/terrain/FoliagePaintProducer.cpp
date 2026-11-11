@@ -143,8 +143,7 @@ namespace Horo::Editor {
             if (occupied.contains({x, z}))
                 return Result<void>::Success();
             const auto &source = document.Source();
-            const auto index = std::size_t(z) * source.width + x;
-            if (source.HasHoles() && source.holes[index])
+            if (const auto index = std::size_t(z) * source.width + x; source.HasHoles() && source.holes[index])
                 return Result<void>::Success();
             auto id = Identity(source, active, brush, x, z, tileCells);
             if (id.HasError())
@@ -152,8 +151,7 @@ namespace Horo::Editor {
             if (!DensityAllows(id.Value(), brush.densityPermille))
                 return Result<void>::Success();
             TerrainAuthoredPlacement value{id.Value(), active.source.type, x, z, brush.offsetMeters, brush.scale, brush.yawRadians};
-            const auto prior = document.Placements().find(value.id);
-            if (prior != document.Placements().end()) {
+            if (const auto prior = document.Placements().find(value.id); prior != document.Placements().end()) {
                 if (prior->second != value)
                     return Fail<void>(TerrainEditErrors::Invalid);
                 return Result<void>::Success();
@@ -257,8 +255,7 @@ namespace Horo::Editor {
                                                                          const FoliagePaintBrush &brush,
                                                                          std::span<const TerrainSculptStamp> stamps,
                                                                          const FoliageToolLimits &limits, const CancellationToken &cancel) {
-        auto admitted = Admit(document, fence, active, brush, stamps, limits, cancel);
-        if (admitted.HasError())
+        if (auto admitted = Admit(document, fence, active, brush, stamps, limits, cancel); admitted.HasError())
             return Result<std::vector<Terrain::FoliageInstanceId>>::Failure(admitted.ErrorValue());
         return Query(document, active, brush, stamps, limits, cancel);
     }

@@ -18,7 +18,8 @@ namespace Horo::Animation::Detail {
 
         /** @brief Coordinate neighbors are selected independently of stable sample-ID ordering. */
         std::array<std::size_t, 2> Neighbors(const GraphBlendTreeNode &tree, const float x) noexcept {
-            std::size_t low = tree.samples.size(), high = low;
+            std::size_t low = tree.samples.size();
+            std::size_t high = low;
             for (std::size_t i = 0; i < tree.samples.size(); ++i) {
                 const auto value = tree.samples[i].x;
                 if (value <= x && Nearer(tree, low, i, true))
@@ -83,8 +84,7 @@ namespace Horo::Animation::Detail {
                 const std::array points{Position(tree.samples[Index(tree, triangle.samples[0])]),
                                         Position(tree.samples[Index(tree, triangle.samples[1])]),
                                         Position(tree.samples[Index(tree, triangle.samples[2])])};
-                const auto values = Coordinates(p, points[0], points[1], points[2]);
-                if (Inside(values)) {
+                if (const auto values = Coordinates(p, points[0], points[1], points[2]); Inside(values)) {
                     Store(tree, triangle, values, weights);
                     return {};
                 }

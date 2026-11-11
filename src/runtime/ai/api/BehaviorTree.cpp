@@ -87,13 +87,13 @@ namespace Horo::AI {
         }
 
         [[nodiscard]] bool ValidExecutableDefinition(const BehaviorTreeNode &node) noexcept {
+            using enum Horo::AI::DecisionControlKind;
             const auto kind = node.control.kind;
-            if (kind >= DecisionControlKind::Count)
+            if (kind >= Count)
                 return false;
-            if (kind == DecisionControlKind::Unspecified)
+            if (kind == Unspecified)
                 return node.type.IsValid();
-            const bool provider =
-                kind == DecisionControlKind::Task || kind == DecisionControlKind::Condition || kind == DecisionControlKind::Service;
+            const bool provider = kind == Task || kind == Condition || kind == Service;
             return provider == node.type.IsValid();
         }
 

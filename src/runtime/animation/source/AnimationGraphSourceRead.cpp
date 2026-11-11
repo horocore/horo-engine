@@ -76,7 +76,10 @@ namespace Horo::Animation {
             std::size_t maskEntries{};
             std::size_t blendSamples{};
             std::size_t blendTriangles{};
-            std::size_t actionSlots{}, actions{}, actionSections{}, actionLoops{};
+            std::size_t actionSlots{};
+            std::size_t actions{};
+            std::size_t actionSections{};
+            std::size_t actionLoops{};
         };
 
         /** @brief Decodes one exact finite scalar using the same parameter transport
@@ -301,7 +304,7 @@ namespace Horo::Animation {
         GraphActionSection ActionSection(const Json &value) {
             Keys(value, {"id", "name", "clip", "begin", "end", "next"});
             GraphActionSection result{Id<GraphActionSectionId>(value["id"]),
-                                      value["name"].get<std::string>(),
+                                      value["name"].get_ref<const std::string &>(),
                                       AssetIdentity<AnimationClipId>(value["clip"]),
                                       {Time(value["begin"])},
                                       {Time(value["end"])}};
@@ -345,7 +348,7 @@ namespace Horo::Animation {
                  {"id", "name", "slot", "blendIn", "blendOut", "curve", "interruption", "reverse", "missingJoint", "mask", "sequence"});
             GraphActionDefinition result;
             result.id = Id<GraphActionId>(value["id"]);
-            result.name = value["name"].get<std::string>();
+            result.name = value["name"].get_ref<const std::string &>();
             result.slot = Id<GraphActionSlotId>(value["slot"]);
             result.blendIn = {Time(value["blendIn"])};
             result.blendOut = {Time(value["blendOut"])};
@@ -375,7 +378,7 @@ namespace Horo::Animation {
                 Spend(payload["actionSlots"], budget.actionSlots, context.limits.actionSlots, AnimationGraphHardLimits::ActionSlots));
             for (const auto &slot : payload["actionSlots"]) {
                 Keys(slot, {"id", "name"});
-                data.actionSlots.push_back({Id<GraphActionSlotId>(slot["id"]), slot["name"].get<std::string>()});
+                data.actionSlots.push_back({Id<GraphActionSlotId>(slot["id"]), slot["name"].get_ref<const std::string &>()});
             }
             data.actions.reserve(Spend(payload["actions"], budget.actions, context.limits.actions, AnimationGraphHardLimits::Actions));
             for (const auto &action : payload["actions"]) {
@@ -520,7 +523,7 @@ namespace Horo::Animation {
             if (!value["name"].is_string())
                 Reject(AnimationErrors::GraphMalformed);
             const auto type = EnumValue<GraphValueType>(value["type"], Types);
-            return {Id<GraphParameterId>(value["id"]), value["name"].get<std::string>(), type, Default(value["default"], type)};
+            return {Id<GraphParameterId>(value["id"]), value["name"].get_ref<const std::string &>(), type, Default(value["default"], type)};
         }
 
         /** @brief The migration selector admits only its explicit supported
@@ -579,7 +582,7 @@ namespace Horo::Animation {
                 Keys(dependency, {"assetType", "assetId"});
                 if (!dependency["assetType"].is_string())
                     Reject(AnimationErrors::GraphMalformed);
-                if (!actual.emplace(dependency["assetType"].get<std::string>(), Asset(dependency["assetId"])).second)
+                if (!actual.emplace(dependency["assetType"].get_ref<const std::string &>(), Asset(dependency["assetId"])).second)
                     Reject(AnimationErrors::GraphBindingMismatch);
             }
             const auto projection = ProjectDependencies(data);
@@ -594,6 +597,11 @@ namespace Horo::Animation {
          * basic_json's noexcept destructor. */
         struct SourceTreeGuard final {
             Json &root;
+
+            explicit SourceTreeGuard(Json &value) noexcept : root(value) {}
+
+            SourceTreeGuard(const SourceTreeGuard &) = delete;
+            SourceTreeGuard &operator=(const SourceTreeGuard &) = delete;
 
             /** @brief Empties children before their containers are destroyed; admitted
              * nesting is at most the codec hard ceiling. */
@@ -617,7 +625,7 @@ namespace Horo::Animation {
                 Reject(AnimationErrors::GraphLimitExceeded);
             if (source.starts_with("\xEF\xBB\xBF") || source.find('\0') != std::string_view::npos)
                 Reject(AnimationErrors::GraphMalformed);
-            std::vector<std::set<std::string>> keys;
+            std::vector<std::set<std::string>> keys(std::size_t{0});
             std::size_t values{};
             const auto callback = [&context, &limits, &keys, &values](int depth, Json::parse_event_t event, Json &value) {
                 CheckAdmission(context);
@@ -630,7 +638,7 @@ namespace Horo::Animation {
                     Reject(AnimationErrors::GraphLimitExceeded);
                 if (event == Json::parse_event_t::object_start)
                     keys.emplace_back();
-                if (event == Json::parse_event_t::key && !keys.back().insert(value.get<std::string>()).second)
+                if (event == Json::parse_event_t::key && !keys.back().insert(value.get_ref<const std::string &>()).second)
                     Reject(AnimationErrors::GraphMalformed);
                 if (event == Json::parse_event_t::object_end)
                     keys.pop_back();

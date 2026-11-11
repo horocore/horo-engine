@@ -127,6 +127,11 @@ namespace Horo::Application::Internal {
             Runtime::SceneRuntimeId identity;
             bool committed{};
 
+            Rollback(Impl &value, Runtime::SceneRuntimeId scene) noexcept : owner(value), identity(scene) {}
+
+            Rollback(const Rollback &) = delete;
+            Rollback &operator=(const Rollback &) = delete;
+
             ~Rollback() {
                 if (!committed)
                     owner.Retire(identity);

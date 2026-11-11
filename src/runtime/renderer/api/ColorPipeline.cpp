@@ -26,8 +26,8 @@ namespace Horo::Render {
 
         /** @brief Checks declared quantization against admitted output storage. */
         bool BitDepthValid(const ColorPipelineRequest &r) noexcept {
-            const auto format = r.output.active.format;
-            if (format == RenderTextureFormat::Rgba16Float || format == RenderTextureFormat::Rgba32Float)
+            if (const auto format = r.output.active.format;
+                format == RenderTextureFormat::Rgba16Float || format == RenderTextureFormat::Rgba32Float)
                 return r.outputBitDepth == 10 || r.outputBitDepth == 16;
             return r.outputBitDepth == 8;
         }
@@ -68,10 +68,11 @@ namespace Horo::Render {
 
         /** @brief Checks manual or initial state values against the authored exposure selection. */
         bool ExposureModeCompatible(const ColorPipelineRequest &r) noexcept {
+            using enum Horo::Render::ExposureMode;
             const auto &s = r.exposure;
-            if (r.exposureSettings.mode == ExposureMode::Manual)
-                return s.mode == ExposureMode::Manual && s.diagnosticEv == r.exposureSettings.manualEv + r.exposureSettings.compensationEv;
-            if (s.mode == ExposureMode::AutomaticHistogram)
+            if (r.exposureSettings.mode == Manual)
+                return s.mode == Manual && s.diagnosticEv == r.exposureSettings.manualEv + r.exposureSettings.compensationEv;
+            if (s.mode == AutomaticHistogram)
                 return true;
             return s.reason == ExposureSampleReason::Initial &&
                    s.diagnosticEv == r.exposureSettings.initialEv + r.exposureSettings.compensationEv;

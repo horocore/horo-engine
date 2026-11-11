@@ -547,9 +547,12 @@ namespace Horo::Character::Detail {
         std::vector<Physics::PhysicsQueryHit> hits_;
         std::vector<CharacterFastPathEvent> events_;
         std::vector<CharacterFastPathEvent> publishedEvents_;
-        std::vector<CharacterEventTerminalState> terminalStates_, publishedTerminalStates_;
+        std::vector<CharacterEventTerminalState> terminalStates_;
+        std::vector<CharacterEventTerminalState> publishedTerminalStates_;
         CharacterEventCapture publishedEventFrame_;
-        std::uint64_t stagedEmittedEvents_{}, stagedDroppedEvents_{}, cumulativeDroppedEvents_{};
+        std::uint64_t stagedEmittedEvents_{};
+        std::uint64_t stagedDroppedEvents_{};
+        std::uint64_t cumulativeDroppedEvents_{};
         std::vector<CharacterFastPathImpulse> impulses_;
         std::vector<std::byte> scratch_;
         CharacterFastPathCapacities capacities_{};

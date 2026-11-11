@@ -66,7 +66,7 @@ namespace Horo::Render {
         Result<void> InitializeCommandService(ID3D12InitializationRuntime &runtime, const D3D12InitializationRequest &request) {
             if (request.commandQueues.empty())
                 return Result<void>::Success();
-            auto *resources = runtime.Resources();
+            const auto *resources = runtime.Resources();
             if (!resources)
                 return Result<void>::Failure(
                     D3D12CommandError("render.d3d12.commands_unavailable", "Initialize canonical resources before requesting commands."));

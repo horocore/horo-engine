@@ -222,7 +222,7 @@ private:
     void DrainResolved() noexcept {
         if (attempting_)
             return;
-        for (auto &pin : pins_) {
+        for (const auto &pin : pins_) {
             if (pin) {
                 pin->fixedReserved = false;
                 if (pin->closeRequested)

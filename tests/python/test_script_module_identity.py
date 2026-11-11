@@ -46,6 +46,12 @@ class ScriptModuleIdentityTests(unittest.TestCase):
         source.mkdir()
         _fixture(source, PROJECT_ROOT / "cmake/HoroScriptModuleIdentity.cmake")
         _run("cmake", "-S", str(source), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug")
+        # Compiler identification may emit objects during configure; target builds must not.
+        configured_objects = {path.relative_to(build) for pattern in ("*.o", "*.obj") for path in build.rglob(pattern)}
+        for path in configured_objects:
+            assert (path == Path("CMakeFiles/ShowIncludes/main.obj") or
+                    (len(path.parts) == 4 and path.parts[0] == "CMakeFiles" and
+                     path.parts[-2:] == ("CompilerIdCXX", "CMakeCXXCompilerId.obj"))), path
         identity = build / "identity.txt"
         initial = identity.read_text()
         _run("cmake", "--build", str(build), "--parallel", "1")
@@ -68,8 +74,9 @@ class ScriptModuleIdentityTests(unittest.TestCase):
         _run("cmake", "-S", str(source), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release")
         assert identity.read_text() != added
         assert ":Release" in identity.read_text()
-        assert not list(build.rglob("*.o"))
-        assert not list(build.rglob("*.obj"))
+        assert {path.relative_to(build) for pattern in ("*.o", "*.obj") for path in build.rglob(pattern)} == configured_objects
+        assert not (build / "IdentityProbe.lib").exists()
+        assert not (build / "libIdentityProbe.a").exists()
 
 
 if __name__ == "__main__":

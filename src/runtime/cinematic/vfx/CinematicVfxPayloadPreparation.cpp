@@ -74,7 +74,7 @@ namespace Horo::Cinematic::VfxEventDetail {
 
         /** @brief Projects optional positive scale and a genuine optional unit impact normal. */
         bool Shape(const std::span<const Value> arguments, const VfxEventPayloadProjection &projection, Payload &payload) noexcept {
-            if (projection.scaleArgument)
+            if (projection.scaleArgument.has_value())
                 if (!Number(arguments, *projection.scaleArgument, payload.scale) || payload.scale <= 0.0F)
                     return false;
             if (!projection.impactNormalArguments)

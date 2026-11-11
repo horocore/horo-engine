@@ -9,7 +9,7 @@ namespace Horo::XR {
         bool ValidJointShape(const XRHandJointRecord &record) noexcept {
             if (record.hand >= XRHandedness::Count || record.joint >= XRHandJoint::Count || !record.sample)
                 return false;
-            return !record.radiusMeters || (std::isfinite(*record.radiusMeters) && *record.radiusMeters >= 0);
+            return !record.radiusMeters.has_value() || (std::isfinite(*record.radiusMeters) && *record.radiusMeters >= 0);
         }
     }  // namespace
 

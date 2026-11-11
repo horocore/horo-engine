@@ -15,7 +15,8 @@ namespace Horo::Extensions {
         const JobSystem &jobs;
         ScriptCapabilityProfile profile;
         ScriptModuleBindingCache cache;
-        std::unique_ptr<ScriptModuleReferenceInstallation> reference, predecessorReference;
+        std::unique_ptr<ScriptModuleReferenceInstallation> reference;
+        std::unique_ptr<ScriptModuleReferenceInstallation> predecessorReference;
         const std::thread::id owner{std::this_thread::get_id()};
         std::size_t activeOperations{};
         // Explicit finite embedding profile. Capacity failure never drops or truncates an operation.

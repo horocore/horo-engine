@@ -84,8 +84,7 @@ namespace Horo::Extensions {
                     auto prepared = PrepareRebind(std::move(next));
                     if (prepared.HasError())
                         return Result<void>::Failure(prepared.ErrorValue());
-                    auto ready = prepared.Value()->Validate();
-                    if (ready.HasError())
+                    if (auto ready = prepared.Value()->Validate(); ready.HasError())
                         return ready;
                     if (!prepared.Value()->Commit())
                         return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid));

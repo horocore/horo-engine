@@ -8,6 +8,9 @@ namespace Horo::Physics::StateDetail {
     /** @brief One private unpublished codec/capture slot. Published immutable slots
      * are never passed as a decode destination. */
     struct SolverStorage final {
+        /** @brief Allows MSVC debug-iterator proxy allocation failures to reach cold preparation's error boundary. */
+        SolverStorage() : bodies(0), activeBodyOrder(0), constraints(0), pairs(0), manifolds(0), ccdManifolds(0), activeBodyScratch(0) {}
+
         PhysicsStateLimits limits;
         std::vector<PhysicsStateBody> bodies;
         std::vector<PhysicsStateObjectId> activeBodyOrder;

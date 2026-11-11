@@ -34,11 +34,10 @@ namespace Horo::Render {
 
         /** @brief Requires exact nearest-only filtering and clamp addressing for the two official tables. */
         bool SamplerShapeValid(const RenderSamplerDescriptor &s) noexcept {
+            using enum Horo::Render::RenderSamplerAddressMode;
             const bool filters = s.minFilter == RenderSamplerFilter::Nearest && s.magFilter == RenderSamplerFilter::Nearest &&
                                  s.mipmapMode == RenderSamplerMipmapMode::Nearest;
-            const bool addresses = s.addressU == RenderSamplerAddressMode::ClampToEdge &&
-                                   s.addressV == RenderSamplerAddressMode::ClampToEdge &&
-                                   s.addressW == RenderSamplerAddressMode::ClampToEdge;
+            const bool addresses = s.addressU == ClampToEdge && s.addressV == ClampToEdge && s.addressW == ClampToEdge;
             return filters && addresses;
         }
 
@@ -96,8 +95,8 @@ namespace Horo::Render {
         /** @brief Checks exact payload counts before bounded decoding, then validates both portable hashes. */
         bool PayloadValid(const ColorOutputTableInput &t, std::size_t index) noexcept {
             const std::size_t sourceBytes = 362U * (index == 0 ? 1U : 3U) * 4U;
-            const std::size_t uploadBytes = 362U * (index == 0 ? 1U : 4U) * 4U;
-            if (t.source.size() != sourceBytes || t.upload.size() != uploadBytes)
+            if (const std::size_t uploadBytes = 362U * (index == 0 ? 1U : 4U) * 4U;
+                t.source.size() != sourceBytes || t.upload.size() != uploadBytes)
                 return false;
             return Finite(t.source) && Finite(t.upload) && PaddingValid(t, index) && ComputeSha256(t.source) == t.descriptor.sourceDigest &&
                    ComputeSha256(t.upload) == t.descriptor.uploadDigest;

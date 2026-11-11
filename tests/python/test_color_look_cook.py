@@ -1,10 +1,13 @@
 """Cold input/storage contracts only; real OCIO and GPU results have separate receipts."""
+import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "color_look_cook", Path(__file__).resolve().parents[2] / "scripts/renderer/color_look_cook.py")
@@ -103,6 +106,100 @@ class ColorLookInputTests(unittest.TestCase):
             with self.assertRaises(LOOK.COOK.CookError):
                 LOOK.COOK.publish(destination, lambda stage: LOOK.write_generation(stage, value, reference))
             self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
+
+
+
+class ColorLookPublicationBoundaryTests(unittest.TestCase):
+    def arguments(self, root):
+        values = []
+        for name in ("source", "config", "tool-receipt", "wheel", "numpy-wheel", "output"):
+            values.extend(("--" + name, str(root / name)))
+        return values + ["--numpy-wheel-sha256", "1" * 64]
+
+    def test_cli_requires_explicit_paths_and_preserves_unicode_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "look 空間 🧪"
+            args = LOOK.arguments(self.arguments(root))
+            for name in ("source", "config", "tool_receipt", "wheel", "numpy_wheel", "output"):
+                self.assertEqual(getattr(args, name), root / name.replace("_", "-"))
+            self.assertEqual(args.numpy_wheel_sha256, "1" * 64)
+            self.assertFalse(root.exists())
+        with patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit) as error:
+            LOOK.arguments([])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_invalid_source_is_rejected_before_tool_activation_and_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invalid = source()
+            invalid["encoding"] = "sRGB"
+            (root / "source").write_text(json.dumps(invalid), encoding="utf-8")
+            with patch.object(LOOK.COOK, "load_tool") as tool:
+                with self.assertRaisesRegex(LOOK.COOK.CookError, "Explicit linear AP1"):
+                    LOOK.run(LOOK.arguments(self.arguments(root)))
+                tool.assert_not_called()
+            self.assertFalse((root / "output").exists())
+
+    def test_missing_tool_receipt_reports_failure_without_constructing_processor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "source").write_text(json.dumps(source()), encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with patch.object(LOOK.COOK, "processor") as processor:
+                with patch("sys.stdout", stdout), patch("sys.stderr", stderr):
+                    result = LOOK.main(self.arguments(root))
+                processor.assert_not_called()
+            self.assertEqual(result, 1)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("absolute regular file", stderr.getvalue())
+            self.assertFalse((root / "output").exists())
+
+    def test_cli_bounds_failure_text_without_emitting_a_success_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            message = "synthetic publication failure " * 200
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with patch.object(LOOK, "run", side_effect=LOOK.COOK.CookError(message)):
+                with patch("sys.stdout", stdout), patch("sys.stderr", stderr):
+                    result = LOOK.main(self.arguments(Path(directory)))
+            self.assertEqual(result, 1)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(stderr.getvalue(), message[:2048] + "\n")
+
+    def test_source_digest_binds_original_encoding_while_payload_binds_float_values(self):
+        compact = json.dumps(source(), separators=(",", ":")).encode()
+        spaced = json.dumps(source(), indent=2).encode()
+        first = LOOK.source_model(compact)
+        second = LOOK.source_model(spaced)
+        self.assertEqual(first["sourceSHA256"], hashlib.sha256(compact).hexdigest())
+        self.assertEqual(second["sourceSHA256"], hashlib.sha256(spaced).hexdigest())
+        self.assertNotEqual(first["sourceSHA256"], second["sourceSHA256"])
+        self.assertEqual(LOOK.payload(first), LOOK.payload(second))
+
+    def test_manifest_binds_reference_hash_and_descriptor_to_exact_staged_bytes(self):
+        value = model(source())
+        reference = {"schemaVersion": 1, "scope": "synthetic-codec-integrity", "label": "空間", "sample": -0.0}
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "look"
+            manifest = LOOK.COOK.publish(destination, lambda stage: LOOK.write_generation(stage, value, reference))
+            encoded = (destination / "reference.json").read_bytes()
+            self.assertEqual(json.loads(encoded), reference)
+            self.assertEqual(manifest["reference"]["sha256"], hashlib.sha256(encoded).hexdigest())
+            self.assertEqual(manifest["reference"]["bytes"], len(encoded))
+            self.assertEqual(manifest["descriptor"]["configurationSHA256"], LOOK.COOK.CONFIG_SHA256)
+            self.assertEqual(manifest["descriptor"]["domainMinimum"], value["domainMinimum"])
+            self.assertEqual(manifest["descriptor"]["domainMaximum"], value["domainMaximum"])
+            self.assertEqual(manifest["payload"]["bytes"], len(LOOK.payload(value)))
+            self.assertEqual(json.loads((destination / "manifest.json").read_bytes()), manifest)
+
+    def test_invalid_reference_never_publishes_or_leaves_a_private_stage(self):
+        for reference in ({"oversized": "x" * (128 * 1024)}, {"nonfinite": float("inf")}):
+            with self.subTest(reference=list(reference)), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with self.assertRaises((LOOK.COOK.CookError, ValueError)):
+                    LOOK.COOK.publish(root / "look", lambda stage: LOOK.write_generation(stage, model(source()), reference))
+                self.assertEqual(list(root.iterdir()), [])
 
 
 if __name__ == "__main__":

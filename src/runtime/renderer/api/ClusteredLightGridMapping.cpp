@@ -6,7 +6,8 @@
 namespace Horo::Render {
     namespace {
         double ViewDepth(const ClusteredLightGridDescriptor &descriptor, float deviceDepth) noexcept {
-            const double nearDistance = descriptor.camera.projection.nearPlane, farDistance = descriptor.camera.projection.farPlane;
+            const double nearDistance = descriptor.camera.projection.nearPlane;
+            const double farDistance = descriptor.camera.projection.farPlane;
             if (deviceDepth == 0)
                 return nearDistance;
             if (deviceDepth == 1)
@@ -17,7 +18,8 @@ namespace Horo::Render {
         }
 
         std::uint32_t DepthIndex(const ClusteredLightGridDescriptor &descriptor, double depth) noexcept {
-            const double nearDistance = descriptor.camera.projection.nearPlane, farDistance = descriptor.camera.projection.farPlane;
+            const double nearDistance = descriptor.camera.projection.nearPlane;
+            const double farDistance = descriptor.camera.projection.farPlane;
             const double unit = descriptor.depthPartition == LightClusterDepthPartition::Linear
                                     ? (depth - nearDistance) / (farDistance - nearDistance)
                                     : std::log(depth / nearDistance) / std::log(farDistance / nearDistance);

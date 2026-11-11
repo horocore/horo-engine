@@ -14,10 +14,11 @@ namespace Horo::Vfx::SpawnDetail {
 
         /** @brief Checks exact admitted ownership without interpreting any semantic event. */
         [[nodiscard]] VfxSpawnStatus OwnerStatus(const Detail::VfxWorldSpawnState &state, const VfxSpawnRequest &request) noexcept {
+            using enum Horo::Vfx::VfxSpawnStatus;
             const auto found = std::ranges::find(state.owners, request.owner, &Detail::VfxSpawnOwner::owner);
             if (found == state.owners.end() || found->generation != request.ownerGeneration)
-                return VfxSpawnStatus::StaleOwner;
-            return found->active ? VfxSpawnStatus::Accepted : VfxSpawnStatus::Cancelled;
+                return StaleOwner;
+            return found->active ? Accepted : Cancelled;
         }
 
         /** @brief Rejects mesh placement that the existing sizeXY/local-Z-rotation representation cannot express. */
@@ -31,82 +32,87 @@ namespace Horo::Vfx::SpawnDetail {
         /** @brief Validates all representation and prepared schema facts before queue or dedup state changes. */
         [[nodiscard]] VfxSpawnStatus ValidateOne(Detail::VfxWorldSpawnState &state, const VfxIdentityScope scene,
                                                  const VfxSpawnRequest &request) noexcept {
-            if (const auto valid = ValidateVfxSpawnRequest(request); valid != VfxSpawnStatus::Accepted)
+            using enum Horo::Vfx::VfxSpawnStatus;
+            if (const auto valid = ValidateVfxSpawnRequest(request); valid != Accepted)
                 return valid;
             if (request.scene != scene)
-                return VfxSpawnStatus::StaleScene;
-            if (const auto valid = OwnerStatus(state, request); valid != VfxSpawnStatus::Accepted)
+                return StaleScene;
+            if (const auto valid = OwnerStatus(state, request); valid != Accepted)
                 return valid;
             const auto asset = FindAsset(state, request.effectAsset);
             if (!asset)
-                return VfxSpawnStatus::MissingAsset;
+                return MissingAsset;
             if (request.requirement == VfxRequirementClass::GameplayRequired &&
                 (!asset->requiredGameplay || asset->info.requiredReserve == 0))
-                return VfxSpawnStatus::PermissionDenied;
+                return PermissionDenied;
             if (!SupportedPlacement(*asset, request))
-                return VfxSpawnStatus::UnsupportedRecipe;
-            return ParametersMatch(request.parameters, asset->info) ? VfxSpawnStatus::Accepted : VfxSpawnStatus::ParameterSchemaMismatch;
+                return UnsupportedRecipe;
+            return ParametersMatch(request.parameters, asset->info) ? Accepted : ParameterSchemaMismatch;
         }
 
         [[nodiscard]] VfxSpawnStatus ValidateBatch(Detail::VfxWorldSpawnState &state, const VfxIdentityScope scene,
                                                    const std::span<const VfxSpawnRequest> requests) noexcept {
+            using enum Horo::Vfx::VfxSpawnStatus;
             for (std::size_t layer = 0; layer < requests.size(); ++layer) {
                 const auto &request = requests[layer];
                 if (!SameResolution(requests.front(), request) || request.layerOrdinal != layer)
-                    return VfxSpawnStatus::InvalidRequest;
-                if (const auto valid = ValidateOne(state, scene, request); valid != VfxSpawnStatus::Accepted)
+                    return InvalidRequest;
+                if (const auto valid = ValidateOne(state, scene, request); valid != Accepted)
                     return valid;
             }
-            return VfxSpawnStatus::Accepted;
+            return Accepted;
         }
 
         /** @brief Admission reserves both queue storage and one eventual terminal result per layer. */
         [[nodiscard]] VfxSpawnStatus Credits(const Detail::VfxWorldSpawnState &state, const std::size_t layers) noexcept {
+            using enum Horo::Vfx::VfxSpawnStatus;
             if (state.pendingCount + layers > state.pending.size())
-                return VfxSpawnStatus::EventQueueFull;
+                return EventQueueFull;
             if (state.resultCount + state.pendingCount + layers > state.results.size())
-                return VfxSpawnStatus::ResultQueueFull;
-            return VfxSpawnStatus::Accepted;
+                return ResultQueueFull;
+            return Accepted;
         }
 
         /** @brief Finds a permanent source watermark or unused prepared producer record without publishing it. */
         [[nodiscard]] VfxSpawnStatus ResolveProducer(Detail::VfxWorldSpawnState &state, const VfxSpawnRequest &request,
                                                      Detail::VfxSpawnProducer *&output) noexcept {
+            using enum Horo::Vfx::VfxSpawnStatus;
             for (auto &producer : state.producers) {
                 if (producer.producer != request.occurrence.producer)
                     continue;
                 if (producer.owner != request.owner)
-                    return VfxSpawnStatus::PermissionDenied;
+                    return PermissionDenied;
                 if (producer.sequence >= request.occurrence.sequence)
-                    return VfxSpawnStatus::Duplicate;
+                    return Duplicate;
                 output = &producer;
-                return VfxSpawnStatus::Accepted;
+                return Accepted;
             }
             const auto free = std::ranges::find(state.producers, std::uint64_t{}, &Detail::VfxSpawnProducer::producer);
             if (free == state.producers.end())
-                return VfxSpawnStatus::ResourceBudgetExceeded;
+                return ResourceBudgetExceeded;
             output = &*free;
-            return VfxSpawnStatus::Accepted;
+            return Accepted;
         }
     }  // namespace
 
     VfxSpawnOutcome Enqueue(Detail::VfxWorldSpawnState &state, const VfxIdentityScope scene,
                             const std::span<const VfxSpawnRequest> requests) noexcept {
+        using enum Horo::Vfx::VfxSpawnStatus;
         if (requests.empty() || requests.size() > VfxSpawnHardLimits::Layers)
-            return {.status = VfxSpawnStatus::InvalidRequest};
+            return {.status = InvalidRequest};
         const auto &first = requests.front();
-        if (const auto valid = ValidateBatch(state, scene, requests); valid != VfxSpawnStatus::Accepted)
+        if (const auto valid = ValidateBatch(state, scene, requests); valid != Accepted)
             return MakeVfxSpawnOutcome(first, valid);
         Detail::VfxSpawnProducer *producer{};
-        if (const auto valid = ResolveProducer(state, first, producer); valid != VfxSpawnStatus::Accepted)
+        if (const auto valid = ResolveProducer(state, first, producer); valid != Accepted)
             return MakeVfxSpawnOutcome(first, valid);
         if (first.tick <= state.tick)
-            return MakeVfxSpawnOutcome(first, VfxSpawnStatus::OutOfOrder);
-        if (const auto valid = Credits(state, requests.size()); valid != VfxSpawnStatus::Accepted)
+            return MakeVfxSpawnOutcome(first, OutOfOrder);
+        if (const auto valid = Credits(state, requests.size()); valid != Accepted)
             return MakeVfxSpawnOutcome(first, valid);
         for (const auto &request : requests)
             state.pending[state.pendingCount++] = request;
         *producer = {first.owner, first.occurrence.producer, first.occurrence.sequence};
-        return MakeVfxSpawnOutcome(first, VfxSpawnStatus::Accepted);
+        return MakeVfxSpawnOutcome(first, Accepted);
     }
 }  // namespace Horo::Vfx::SpawnDetail

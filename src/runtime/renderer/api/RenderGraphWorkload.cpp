@@ -356,8 +356,8 @@ namespace Horo::Render {
             }))))
                 return Result<void>::Failure(
                     MakeError(RenderGraphExecutionErrors::InvalidGraph, "UI composition is one explicit paint-only frame stage."));
-            const auto &graph = request.graph;
-            if (!graph.Owner().IsValid() || graph.Resources().size() > RenderGraphLimits::HardMaxResources ||
+            if (const auto &graph = request.graph;
+                !graph.Owner().IsValid() || graph.Resources().size() > RenderGraphLimits::HardMaxResources ||
                 graph.Passes().size() > RenderGraphLimits::HardMaxPasses || request.workloads.size() != graph.Passes().size() ||
                 request.resources.size() != graph.Resources().size())
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));

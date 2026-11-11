@@ -135,7 +135,7 @@ namespace Horo::Extensions::LuaModuleDetail {
     }
 
     int Import(lua_State *lua) {
-        auto &state = Owner(lua);
+        const auto &state = Owner(lua);
         if (!state.Live())
             return luaL_error(lua, "Module authority is revoked.");
         if (lua_gettop(lua) != 1 || lua_type(lua, 1) != LUA_TSTRING)

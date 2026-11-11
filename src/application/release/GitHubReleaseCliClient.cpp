@@ -17,8 +17,10 @@
 #include <vector>
 
 #if defined(_WIN32)
-#include <sddl.h>
 #include <windows.h>
+
+// SDDL uses the Windows SDK type and API partition declarations.
+#include <sddl.h>
 #else
 #include <stdlib.h>
 #include <unistd.h>

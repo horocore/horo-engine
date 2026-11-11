@@ -282,8 +282,8 @@ namespace Horo::Editor {
                                      Label(context, "category_typography"), Label(context, "category_imagery"),
                                      Label(context, "category_shape"),      Label(context, "category_scalar"),
                                      Label(context, "category_enum"),       Label(context, "category_motion")};
-            int category = static_cast<int>(value.literal.index());
-            if (Ui::DrawComboPropRow(Label(context, "category"), "category", category, categories, context.theme.fonts)) {
+            if (int category = static_cast<int>(value.literal.index());
+                Ui::DrawComboPropRow(Label(context, "category"), "category", category, categories, context.theme.fonts)) {
                 value = Runtime::Ui::UiStyleValueSource::Literal(Literal(category));
                 UiInspectorWidgets::CaptureStyle(value.literal, styleText_);
                 changed = true;
@@ -312,10 +312,11 @@ namespace Horo::Editor {
             }
         }
         static_cast<void>(Identity(context, "property_id", pendingProperty_, newProperty_));
-        const bool unique = std::ranges::none_of(presentation_.inlineStyle, [&](const auto &item) {
+        if (const bool unique = std::ranges::none_of(presentation_.inlineStyle,
+                                                     [&](const auto &item) {
             return item.property == pendingProperty_;
         });
-        if (Action(context, "add_override",
+            Action(context, "add_override",
                    pendingProperty_.IsValid() && newProperty_.valid && unique &&
                        presentation_.inlineStyle.size() < Runtime::Ui::MaximumUiStyleProperties &&
                        (propertyIndex_ < 0 ||

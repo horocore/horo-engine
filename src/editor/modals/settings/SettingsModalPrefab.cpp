@@ -38,9 +38,9 @@ namespace Horo::Editor::SettingsModalInternal {
             }
             const auto &profile = draft.view->validation.profile;
             const auto work = profile ? std::optional{profile->MaximumExpansionWorkItems()} : std::nullopt;
-            if (work && draft.workValue != work)
+            if (work.has_value() && draft.workValue != work)
                 draft.work = std::to_string(*work);
-            else if (!work && draft.work != Text(ctx, "settings.prefab.invalid"))
+            else if (!work.has_value() && draft.work != Text(ctx, "settings.prefab.invalid"))
                 draft.work = Text(ctx, "settings.prefab.invalid");
             draft.workValue = work;
         }
@@ -55,13 +55,14 @@ namespace Horo::Editor::SettingsModalInternal {
             }
             draft.error.reset();
             switch (kind) {
-                case PrefabSettingsCommandKind::Save:
+                using enum Horo::Editor::PrefabSettingsCommandKind;
+                case Save:
                     draft.statusKey = "settings.prefab.saved";
                     break;
-                case PrefabSettingsCommandKind::Reload:
+                case Reload:
                     draft.statusKey = "settings.prefab.reloaded";
                     break;
-                case PrefabSettingsCommandKind::Discard:
+                case Discard:
                     draft.statusKey = "settings.prefab.discarded";
                     break;
                 default:
@@ -88,7 +89,7 @@ namespace Horo::Editor::SettingsModalInternal {
             const auto &fonts = ctx.theme.fonts;
             const auto available = ImGui::GetContentRegionAvail().x;
             bool changed{};
-            const auto control = [&] {
+            const auto control = [&draft, &index, &changed, &fonts] {
                 auto &buffer = draft.text[index];
                 changed = Ui::InputTextControl("##prefab-value", buffer.data(), buffer.size(), fonts,
                                                {.error = draft.view->validation.fields[index] != Application::PrefabPolicyFinding::None});
@@ -164,7 +165,7 @@ namespace Horo::Editor::SettingsModalInternal {
         Captions(draft, ctx);
         const auto &label = Text(ctx, "settings.prefab.derived_work");
         const auto &help = Text(ctx, "settings.prefab.derived_help");
-        Ui::SettingRow(label.c_str(), help.c_str(), ctx.theme.fonts, [&] {
+        Ui::SettingRow(label.c_str(), help.c_str(), ctx.theme.fonts, [&draft, &ctx] {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, draft.work, Theme::Text(), ctx.theme.fonts);
         }, "prefab-derived-work", Stacked(label, ctx) ? Ui::SettingRowLayout::Stacked : Ui::SettingRowLayout::Columns);
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, draft.hardSafety, Theme::Dim(), ctx.theme.fonts);

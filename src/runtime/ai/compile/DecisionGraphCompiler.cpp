@@ -34,7 +34,7 @@ namespace Horo::AI {
             return found == bounded.end() ? SourceLocation{"<decision-capture>", 0, 0} : found->location;
         }
 
-        Result<void> ChargeEnvelope(DecisionStorageRequirements &storage, std::size_t bytes, DecisionCompilationLimits limits) {
+        Result<void> ChargeEnvelope(DecisionStorageRequirements &storage, std::size_t bytes, const DecisionCompilationLimits &limits) {
             const auto owned =
                 static_cast<std::uint64_t>(bytes) + sizeof(CookedDecisionPlan) + storage.occurrences * sizeof(DecisionCallOccurrence);
             storage.coreInstanceBytes += sizeof(DecisionGraphInstance);
@@ -58,7 +58,8 @@ namespace Horo::AI {
                                                                     DecisionCompilationLimits limits) {
         const auto reject = [&](const Error &error) {
             std::vector<DecisionAssetValidationDiagnostic> diagnostics;
-            diagnostics.push_back({error.code, DiagnosticSeverity::Error, error.message, RootLocation(root, sources), "executableClosure"});
+            diagnostics.emplace_back(error.code, DiagnosticSeverity::Error, error.message, RootLocation(root, sources),
+                                     "executableClosure");
             return Result<DecisionGraphCompilation>::Success({DecisionAssetValidationReport{std::move(diagnostics)}, {}});
         };
         if (!Detail::ValidDecisionLimits(limits))

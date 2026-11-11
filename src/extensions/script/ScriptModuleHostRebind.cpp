@@ -48,8 +48,7 @@ namespace Horo::Extensions {
             return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
         if (updates.empty() || updates.size() > Impl::MaximumOperations)
             return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationCapacityExceeded));
-        auto unique = UniqueOperations(updates);
-        if (unique.HasError())
+        if (auto unique = UniqueOperations(updates); unique.HasError())
             return Output::Failure(unique.ErrorValue());
         try {
             return RebindOwned(std::move(updates));
@@ -71,8 +70,7 @@ namespace Horo::Extensions {
             if (!SameAliases(operation.context->Imports(), update.imports))
                 return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid,
                                                  "An in-place rebind cannot change the signed operation import aliases."));
-            auto capture = ValidateScriptModuleActiveCapture(*impl_->authority, *operation.program);
-            if (capture.HasError())
+            if (auto capture = ValidateScriptModuleActiveCapture(*impl_->authority, *operation.program); capture.HasError())
                 return Output::Failure(capture.ErrorValue());
             auto next = operation.context->PrepareReplacement(std::move(update.imports));
             if (next.HasError())
@@ -83,7 +81,7 @@ namespace Horo::Extensions {
             auto prepared = operation.runtime->PrepareRebind(next.Value());
             if (prepared.HasError())
                 return Output::Failure(prepared.ErrorValue());
-            candidates.push_back({update.operation, std::move(next).Value(), std::move(prepared).Value(), std::move(report).Value()});
+            candidates.emplace_back(update.operation, std::move(next).Value(), std::move(prepared).Value(), std::move(report).Value());
         }
         return CommitOwned(candidates);
     }
@@ -95,8 +93,7 @@ namespace Horo::Extensions {
         reports.reserve(candidates.size());
         for (auto &candidate : candidates)
             reports.push_back(std::move(candidate.report));
-        auto valid = ValidateCandidates(candidates);
-        if (valid.HasError())
+        if (auto valid = ValidateCandidates(candidates); valid.HasError())
             return Output::Failure(valid.ErrorValue());
         // No callback, VM evaluation, allocation, or owner-lane interleaving occurs between validation and publication.
         // Concurrent Close only latches cancellation; each prepared commit publishes a closed candidate in that race.

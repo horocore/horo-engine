@@ -41,34 +41,34 @@ namespace Horo::Gameplay {
 
         Result<CanonicalEncodedValue> Entry(const BehaviorLifecycleEntry &v, const CanonicalCodecLimits &limits) {
             std::array values{Scalar(limits,
-                                     [&](auto &w) {
+                                     [&v](auto &w) {
                 return w.WriteBytes(std::as_bytes(std::span{v.entity.Bytes()}));
             }),
                               Scalar(limits,
-                                     [&](auto &w) {
+                                     [&v](auto &w) {
                 return w.WriteUInt64(v.generation.value);
             }),
                               Scalar(limits,
-                                     [&](auto &w) {
+                                     [&v](auto &w) {
                 return w.WriteUInt64(v.instance.value);
             }),
                               Scalar(limits,
-                                     [&](auto &w) {
+                                     [&v](auto &w) {
                 return w.WriteUtf8(v.type.Value());
             }),
                               Scalar(limits,
-                                     [&](auto &w) {
+                                     [&v](auto &w) {
                 return w.WriteBool(v.flags.created);
             }),
                               Scalar(limits,
-                                     [&](auto &w) {
+                                     [&v](auto &w) {
                 return w.WriteBool(v.flags.enabledCallbackActive);
             }),
                               Scalar(limits,
-                                     [&](auto &w) {
+                                     [&v](auto &w) {
                 return w.WriteBool(v.flags.started);
             }),
-                              Scalar(limits, [&](auto &w) {
+                              Scalar(limits, [&v](auto &w) {
                 return w.WriteBool(v.flags.enabled);
             })};
             std::vector<CanonicalRecordField> fields;

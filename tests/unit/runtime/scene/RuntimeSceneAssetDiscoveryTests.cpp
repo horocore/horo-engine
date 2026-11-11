@@ -339,9 +339,12 @@ namespace Horo::Runtime {
             fixture.Start();
             REQUIRE(fixture.service.QueuePreparation(Definition(1)).HasValue());
             REQUIRE_FALSE(fixture.Pump(1));
-            fixture.observed.discover = [](std::uint8_t id) {
-                return Result<std::vector<SceneAssetDependency>>::Success(id == 1 ? std::vector{Dependency(2)}
-                                                                                  : std::vector<SceneAssetDependency>{});
+            const auto expansion = Result<std::vector<SceneAssetDependency>>::Success({Dependency(2)});
+            const auto empty = Result<std::vector<SceneAssetDependency>>::Success({});
+            // Prepare fixture descriptors and assertions before injection. The callback
+            // still allocates the owned response copy inside the measured operation.
+            fixture.observed.discover = [expansion, empty](std::uint8_t id) {
+                return id == 1 ? expansion : empty;
             };
         }
 

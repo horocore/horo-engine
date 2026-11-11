@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -249,10 +250,14 @@ namespace Horo::Application::Internal {
         : pollRetirement_(std::move(retirement)), debugger_(std::move(debugger)), runtime_(std::move(runtime)), mode_(mode) {}
 
     NetworkProductHost::~NetworkProductHost() noexcept {
-        Shutdown();
-        auto retired = PollShutdown(64);
-        if (retired.HasError() || !retired.Value())
+        try {
+            Shutdown();
+            auto retired = PollShutdown(64);
+            if (retired.HasError() || !retired.Value())
+                std::terminate();
+        } catch (const std::exception &) {
             std::terminate();
+        }
     }
 
     Result<std::unique_ptr<NetworkProductHost>> NetworkProductHost::Create(Clock &clock, const NetworkProductHostInputs &inputs,

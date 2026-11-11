@@ -139,6 +139,9 @@ namespace Horo::Physics::Detail {
         }
 
         std::span<std::byte> storage_;
-        std::size_t used_{}, live_{}, allocations_{}, foreignReallocations_{};
+        std::size_t used_{};
+        std::size_t live_{};
+        std::size_t allocations_{};
+        std::size_t foreignReallocations_{};
     };
 }  // namespace Horo::Physics::Detail

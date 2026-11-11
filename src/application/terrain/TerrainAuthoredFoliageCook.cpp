@@ -43,7 +43,8 @@ namespace Horo::Application::TerrainCookDetail {
         /** @brief Each sample has one authored placement owner; the dataset's closed far edge belongs to its last real tile. */
         bool InRegion(const Terrain::TerrainAuthoredPlacement &placement, const FoliageTileRegion &region,
                       const Terrain::TerrainCanonicalSource &source) noexcept {
-            const auto endX = region.x + region.width - 1, endZ = region.z + region.height - 1;
+            const auto endX = region.x + region.width - 1;
+            const auto endZ = region.z + region.height - 1;
             const bool x =
                 placement.sampleX >= region.x && (placement.sampleX < endX || (endX == source.width - 1 && placement.sampleX == endX));
             const bool z =

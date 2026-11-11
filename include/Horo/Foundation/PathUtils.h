@@ -19,6 +19,17 @@
 namespace Horo::Foundation::Paths {
 
     /**
+     * @brief Produces native filesystem I/O spelling without changing caller path authority.
+     * @param path Native path selected and validated by the caller.
+     * @return Normalized absolute Windows paths use extended-length drive or UNC spelling.
+     * Other paths and platforms retain their input spelling.
+     * @details Use the result only for filesystem queries, streams or native calls. Keep the
+     * original path for containment, identity and returned directory entries. This conversion
+     * grants no access and does not validate device paths, links or project-root containment.
+     */
+    [[nodiscard]] std::filesystem::path NativeApiPath(const std::filesystem::path &path);
+
+    /**
      * @brief Creates all directories in the given path (like mkdir -p).
      *
      * Wraps std::filesystem::create_directories with Horo error reporting.

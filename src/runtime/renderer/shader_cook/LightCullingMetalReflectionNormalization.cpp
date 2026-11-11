@@ -34,8 +34,8 @@ namespace Horo::Render {
             const auto &entries = Rows(json, "entryPoints", 1);
             if (entries.size() != 1 || entries[0].at("name") != "CullLights" || entries[0].at("mode") != "comp")
                 throw InvalidEvidence{};
-            const auto &size = Rows(entries[0], "workgroup_size", 3);
-            if (size.size() != 3 || Unsigned(size[0]) != 64 || Unsigned(size[1]) != 1 || Unsigned(size[2]) != 1)
+            if (const auto &size = Rows(entries[0], "workgroup_size", 3);
+                size.size() != 3 || Unsigned(size[0]) != 64 || Unsigned(size[1]) != 1 || Unsigned(size[2]) != 1)
                 throw InvalidEvidence{};
             Specialization(entries[0]);
         }

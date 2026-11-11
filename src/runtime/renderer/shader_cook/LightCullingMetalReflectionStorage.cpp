@@ -6,7 +6,9 @@ namespace Horo::Render::LightCullingMetalCookDetail {
     namespace {
         struct Expected {
             std::string_view type;
-            std::uint32_t offset, count{1}, stride{};
+            std::uint32_t offset;
+            std::uint32_t count{1};
+            std::uint32_t stride{};
         };
 
         constexpr std::array LightFields{Expected{"vec4", offsetof(PackedRenderLight, positionRange)},
@@ -32,7 +34,8 @@ namespace Horo::Render::LightCullingMetalCookDetail {
                     throw InvalidEvidence{};
                 return;
             }
-            const auto &array = Rows(json, "array", 1), &literal = Rows(json, "array_size_is_literal", 1);
+            const auto &array = Rows(json, "array", 1);
+            const auto &literal = Rows(json, "array_size_is_literal", 1);
             if (array.size() != 1 || literal.size() != 1 || literal[0] != true)
                 throw InvalidEvidence{};
             if (Unsigned(array[0]) != expected.count || Unsigned(json.at("array_stride")) != expected.stride)
@@ -59,7 +62,8 @@ namespace Horo::Render::LightCullingMetalCookDetail {
         }
 
         void RuntimeShape(const Json &runtime) {
-            const auto &array = Rows(runtime, "array", 1), &literal = Rows(runtime, "array_size_is_literal", 1);
+            const auto &array = Rows(runtime, "array", 1);
+            const auto &literal = Rows(runtime, "array_size_is_literal", 1);
             if (array.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(array[0]) != 0)
                 throw InvalidEvidence{};
             if (Unsigned(runtime.at("offset")) != 0 || !Plain(runtime))
@@ -114,15 +118,15 @@ namespace Horo::Render::LightCullingMetalCookDetail {
 
     void ValidateStorage(const Json &json, const Json &entry, const Buffer &native, std::size_t index) {
         Entry(entry, index < 2);
-        constexpr std::array<std::uint32_t, 4> sizes{sizeof(PackedRenderLight), sizeof(PackedLightCluster), sizeof(PackedLightMembership),
-                                                     sizeof(std::uint32_t)};
-        if (index >= sizes.size() || native.layout.bytes != sizes[index])
+        if (constexpr std::array<std::uint32_t, 4> sizes{sizeof(PackedRenderLight), sizeof(PackedLightCluster),
+                                                         sizeof(PackedLightMembership), sizeof(std::uint32_t)};
+            index >= sizes.size() || native.layout.bytes != sizes[index])
             throw InvalidEvidence{};
         const auto &runtime = Runtime(json, entry, native);
         RuntimeAccess(runtime, index < 2);
         if (index >= 2) {
-            const auto expected = index == 2 ? "uvec4" : "uint";
-            if (runtime.at("type") != expected || native.layout.scalarType != expected || !native.layout.fields.empty())
+            if (const auto expected = index == 2 ? "uvec4" : "uint";
+                runtime.at("type") != expected || native.layout.scalarType != expected || !native.layout.fields.empty())
                 throw InvalidEvidence{};
             return;
         }

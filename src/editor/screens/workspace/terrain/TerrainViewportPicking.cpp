@@ -7,7 +7,9 @@
 namespace Horo::Editor {
     namespace {
         struct Point final {
-            double x{}, y{}, z{};
+            double x{};
+            double y{};
+            double z{};
         };
 
         Point Sub(Point a, Point b) noexcept {
@@ -24,7 +26,9 @@ namespace Horo::Editor {
 
         /** @brief Double-precision two-sided ray/triangle intersection preserves canonical interpolation. */
         std::optional<double> Triangle(Point origin, Point direction, Point a, Point b, Point c, double minimum, double maximum) noexcept {
-            const auto edge1 = Sub(b, a), edge2 = Sub(c, a), p = Cross(direction, edge2);
+            const auto edge1 = Sub(b, a);
+            const auto edge2 = Sub(c, a);
+            const auto p = Cross(direction, edge2);
             const double determinant = Dot(edge1, p);
             if (std::abs(determinant) < 1e-15)
                 return {};
@@ -34,8 +38,7 @@ namespace Horo::Editor {
             if (u < -1e-10 || u > 1.0 + 1e-10)
                 return {};
             const auto q = Cross(t, edge1);
-            const double v = Dot(direction, q) * inverse;
-            if (v < -1e-10 || u + v > 1.0 + 1e-10)
+            if (const double v = Dot(direction, q) * inverse; v < -1e-10 || u + v > 1.0 + 1e-10)
                 return {};
             const double distance = Dot(edge2, q) * inverse;
             if (!std::isfinite(distance) || distance < minimum || distance > maximum)
@@ -47,7 +50,8 @@ namespace Horo::Editor {
         bool Clip(double origin, double direction, double maximum, double &begin, double &end) noexcept {
             if (direction == 0)
                 return origin >= 0 && origin <= maximum;
-            double a = -origin / direction, b = (maximum - origin) / direction;
+            double a = -origin / direction;
+            double b = (maximum - origin) / direction;
             if (a > b)
                 std::swap(a, b);
             begin = std::max(begin, a);
@@ -85,7 +89,8 @@ namespace Horo::Editor {
 
         /** @brief Validated local ray retains the original world-distance parameter under affine transformation. */
         struct LocalRay final {
-            Point origin, direction;
+            Point origin;
+            Point direction;
         };
 
         Result<LocalRay> TransformRay(const Math::Transform &transform, const Math::Ray &ray) {
@@ -107,9 +112,11 @@ namespace Horo::Editor {
 
         /** @brief One monotonic DDA axis owns its boundary/extent checks. */
         struct Axis final {
-            std::uint32_t cell{}, samples{};
+            std::uint32_t cell{};
+            std::uint32_t samples{};
             int step{};
-            double next{}, delta{};
+            double next{};
+            double delta{};
 
             bool Advance() {
                 if ((step < 0 && cell == 0) || (step > 0 && cell + 1 >= samples - 1))
@@ -153,9 +160,9 @@ namespace Horo::Editor {
 
         /** @brief Choose the nearest hit on the canonical source diagonal. */
         std::optional<double> Nearest(std::optional<double> first, std::optional<double> second) {
-            if (first && second)
+            if (first.has_value() && second.has_value())
                 return std::min(*first, *second);
-            return first ? first : second;
+            return first.has_value() ? first : second;
         }
 
         /** @brief Bounded traversal scratch; no live runtime/renderer or mutable document is retained. */
@@ -164,12 +171,15 @@ namespace Horo::Editor {
             const Math::Ray &world;
             LocalRay local;
             TerrainSurfacePickMode mode;
-            Axis x, z;
-            double begin{}, end{};
+            Axis x;
+            Axis z;
+            double begin{};
+            double end{};
 
             /** @brief Intersect one validated source cell, with explicit hole restoration policy. */
             PickResult Hit() const {
-                const auto cx = x.cell, cz = z.cell;
+                const auto cx = x.cell;
+                const auto cz = z.cell;
                 const std::array<std::size_t, 4> indices{std::size_t(cz) * source.width + cx, std::size_t(cz) * source.width + cx + 1,
                                                          std::size_t(cz + 1) * source.width + cx,
                                                          std::size_t(cz + 1) * source.width + cx + 1};
@@ -178,7 +188,8 @@ namespace Horo::Editor {
                     return PickResult::Failure(solid.ErrorValue());
                 if (!solid.Value() && mode == TerrainSurfacePickMode::VisibleSurface)
                     return PickResult::Success({});
-                const double sx = source.coordinates.spacingX, sz = source.coordinates.spacingZ;
+                const double sx = source.coordinates.spacingX;
+                const double sz = source.coordinates.spacingZ;
                 const Point a{cx * sx, source.heightsMeters[indices[0]], cz * sz};
                 const Point b{(cx + 1) * sx, source.heightsMeters[indices[1]], cz * sz};
                 const Point c{cx * sx, source.heightsMeters[indices[2]], (cz + 1) * sz};
@@ -186,10 +197,11 @@ namespace Horo::Editor {
                 const double cellEnd = std::min({x.next, z.next, end});
                 const auto hit = Nearest(Triangle(local.origin, local.direction, a, c, b, begin, cellEnd),
                                          Triangle(local.origin, local.direction, b, c, d, begin, cellEnd));
-                if (!hit)
+                if (!hit.has_value())
                     return PickResult::Success({});
-                const double px = local.origin.x + local.direction.x * *hit, py = local.origin.y + local.direction.y * *hit,
-                             pz = local.origin.z + local.direction.z * *hit;
+                const double px = local.origin.x + local.direction.x * *hit;
+                const double py = local.origin.y + local.direction.y * *hit;
+                const double pz = local.origin.z + local.direction.z * *hit;
                 return PickResult::Success(TerrainSurfaceHit{{px / sx, pz / sz},
                                                              world.origin + world.direction * static_cast<float>(*hit),
                                                              static_cast<float>(py),
@@ -201,7 +213,8 @@ namespace Horo::Editor {
                 const double cellEnd = std::min({x.next, z.next, end});
                 if (cellEnd >= end)
                     return false;
-                const bool crossX = x.next <= z.next, crossZ = z.next <= x.next;
+                const bool crossX = x.next <= z.next;
+                const bool crossZ = z.next <= x.next;
                 if (crossX && !x.Advance())
                     return false;
                 if (crossZ && !z.Advance())
@@ -228,13 +241,16 @@ namespace Horo::Editor {
         };
 
         /** @brief Clip and construct the actual heightfield traversal from an admitted local ray. */
-        PickResult Traverse(const Terrain::TerrainCanonicalSource &source, const Math::Ray &ray, LocalRay local, std::size_t maximum,
+        PickResult Traverse(const Terrain::TerrainCanonicalSource &source, const Math::Ray &ray, const LocalRay &local, std::size_t maximum,
                             const CancellationToken &cancel, TerrainSurfacePickMode mode) {
-            const double ox = local.origin.x / source.coordinates.spacingX, oz = local.origin.z / source.coordinates.spacingZ;
-            const double dx = local.direction.x / source.coordinates.spacingX, dz = local.direction.z / source.coordinates.spacingZ;
+            const double ox = local.origin.x / source.coordinates.spacingX;
+            const double oz = local.origin.z / source.coordinates.spacingZ;
+            const double dx = local.direction.x / source.coordinates.spacingX;
+            const double dz = local.direction.z / source.coordinates.spacingZ;
             if (!std::isfinite(ox) || !std::isfinite(oz) || !std::isfinite(dx) || !std::isfinite(dz))
                 return PickResult::Failure(MakeError(TerrainEditErrors::Invalid));
-            double begin = ray.minimumDistance, end = ray.maximumDistance;
+            double begin = ray.minimumDistance;
+            double end = ray.maximumDistance;
             if (!Clip(ox, dx, source.width - 1, begin, end) || !Clip(oz, dz, source.height - 1, begin, end))
                 return PickResult::Success({});
             Walk walk{source, ray, local, mode, MakeAxis(ox, dx, begin, source.width), MakeAxis(oz, dz, begin, source.height), begin, end};

@@ -6,7 +6,9 @@ namespace Horo::Physics::Detail {
     /** @brief Runtime-owned exact native build tuple; payload contains no published
      * capability or replacement clock. */
     struct CanonicalPhysicsStateBuildIdentity final {
-        Sha256Digest build, solver, platform;
+        Sha256Digest build;
+        Sha256Digest solver;
+        Sha256Digest platform;
         PhysicsStateFpControl floatingPoint;
     };
 

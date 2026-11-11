@@ -10,10 +10,13 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("ui_paint_fixture", ROOT / ".github/scripts/ui_paint_fixture.py")
 FIXTURE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FIXTURE)
+requires_posix = pytest.mark.skipif(FIXTURE.os.name != "posix", reason='UI shader handoff confinement requires Linux/macOS descriptor-relative no-follow file access and POSIX paths')
 
 
 @pytest.fixture
 def handoff(tmp_path, monkeypatch):
+    if FIXTURE.os.name != "posix":
+        pytest.skip('UI shader handoff confinement requires Linux/macOS descriptor-relative no-follow file access and POSIX paths')
     monkeypatch.setattr(FIXTURE, "identity", lambda source: {"sha": "a" * 40, "run_id": "42", "attempt": "1"})
     root = tmp_path / "handoff"
     root.mkdir()
@@ -66,6 +69,7 @@ def test_catalog_rejects_unclosed_repeated_entries_without_regex_backtracking(mo
 
 
 @pytest.mark.parametrize("target", ["private/var", "/private/var"])
+@requires_posix
 def test_only_fixed_macos_system_alias_is_translated(monkeypatch, target):
     monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(FIXTURE.os, "readlink", lambda path: target)
@@ -74,12 +78,14 @@ def test_only_fixed_macos_system_alias_is_translated(monkeypatch, target):
 
 
 @pytest.mark.parametrize("path", ["/private/var/folders/input", "/unrelated/input", "/various/input"])
+@requires_posix
 def test_alias_translation_does_not_resolve_other_path_prefixes(monkeypatch, path):
     monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
     assert FIXTURE.absolute_data_path(Path(path)) == Path(path)
 
 
 @pytest.mark.parametrize("target", ["/unexpected-root", "private/var/../../unexpected-root", "/private/var/other"])
+@requires_posix
 def test_unexpected_macos_system_alias_is_rejected(monkeypatch, target):
     monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(FIXTURE.os, "readlink", lambda path: target)
@@ -87,6 +93,7 @@ def test_unexpected_macos_system_alias_is_rejected(monkeypatch, target):
         FIXTURE.absolute_data_path(Path("/var/folders/fixture/manifest.json"))
 
 
+@requires_posix
 def test_missing_macos_system_alias_is_rejected(monkeypatch):
     monkeypatch.setattr(FIXTURE.platform, "system", lambda: "Darwin")
 
@@ -113,6 +120,7 @@ def test_bounded_reads_actual_macos_temporary_root_alias(tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["directory", "file"])
+@requires_posix
 def test_bounded_rejects_caller_controlled_symlink_components(tmp_path, kind):
     physical = tmp_path.resolve()
     outside = physical / "outside"
@@ -200,6 +208,8 @@ def test_apple_does_not_execute_any_tool_when_handoff_is_invalid(handoff, monkey
 
 @pytest.fixture
 def installed_apple_tools(tmp_path, monkeypatch):
+    if FIXTURE.os.name != "posix":
+        pytest.skip('UI shader handoff confinement requires Linux/macOS descriptor-relative no-follow file access and POSIX paths')
     tools = tmp_path.resolve() / "installed"
     tools.mkdir()
     (tools / "metal").write_bytes(b"installed compiler")
@@ -366,6 +376,7 @@ def test_only_metal_consumers_wait_for_the_selected_same_run_shader_producer(nam
     assert_native_guard(block)
 
 
+@requires_posix
 def test_producer_rejects_unattested_executable_before_any_process_or_output(tmp_path, monkeypatch):
     executable = tmp_path / "unattested-tool"
     executable.write_bytes(b"not the canonical executable")

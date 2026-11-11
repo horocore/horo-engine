@@ -93,12 +93,12 @@ namespace Horo::Runtime {
         Result<void> ValidateGroupEntry(std::span<const RuntimeEntityGroupEntry> entries, std::size_t index, bool uniformLineage,
                                         std::size_t partitionCount) {
             const auto &entry = entries[index];
-            if (entry.parentInGroup && (*entry.parentInGroup >= index || entry.info.parent))
+            if (entry.parentInGroup.has_value() && (*entry.parentInGroup >= index || entry.info.parent))
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity, "Group parent must precede its child."));
             if (entry.members.size() > 64 || (uniformLineage && entry.spawnLineage != entries.front().spawnLineage))
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
-            const bool partitionValid =
-                uniformLineage ? !entry.restorePartition : entry.restorePartition && *entry.restorePartition < partitionCount;
+            const bool partitionValid = uniformLineage ? !entry.restorePartition.has_value()
+                                                       : entry.restorePartition.has_value() && *entry.restorePartition < partitionCount;
             if (!partitionValid)
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
             return ValidateGroupLineage(entry.spawnLineage);
@@ -107,7 +107,9 @@ namespace Horo::Runtime {
         /** @brief Shared whole-batch accounting; private restore admission cannot bypass lower service-clamped budgets. */
         Result<void> ValidateGroupEntries(std::span<const RuntimeEntityGroupEntry> entries, const SceneRestoreStructuralLimits &limits,
                                           bool uniformLineage, std::size_t partitionCount) {
-            std::size_t physics{}, references{}, lineage{};
+            std::size_t physics{};
+            std::size_t references{};
+            std::size_t lineage{};
             for (std::size_t index = 0; index < entries.size(); ++index) {
                 const auto &entry = entries[index];
                 if (auto valid = ValidateGroupEntry(entries, index, uniformLineage, partitionCount); valid.HasError())

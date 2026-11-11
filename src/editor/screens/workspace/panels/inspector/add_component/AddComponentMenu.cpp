@@ -26,8 +26,8 @@ namespace Horo::Editor {
                 if (drawn && entry.separatorBefore)
                     Ui::ContextMenuSeparator();
                 const auto &text = entry.localized ? context.localization.Get("editor", entry.label) : entry.label;
-                const std::string itemLabel = text + "###" + entry.id;
-                if (Ui::ContextMenuItem(itemLabel.c_str(), nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, {},
+                if (const std::string itemLabel = text + "###" + entry.id;
+                    Ui::ContextMenuItem(itemLabel.c_str(), nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, {},
                                         registry.IsAvailable(entry, state)))
                     selected = entry.action;
                 drawn = true;

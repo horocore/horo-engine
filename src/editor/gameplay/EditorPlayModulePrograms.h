@@ -23,11 +23,14 @@ namespace Horo::Editor {
     private:
         std::shared_ptr<Extensions::ScriptModuleHostServices> host_;
         Extensions::ScriptCapabilityScope project_{Extensions::ScriptCapabilityScopeKind::Project};
-        std::optional<Extensions::ScriptCapabilityScope> runtime_, scene_, operationScope_;
+        std::optional<Extensions::ScriptCapabilityScope> runtime_;
+        std::optional<Extensions::ScriptCapabilityScope> scene_;
+        std::optional<Extensions::ScriptCapabilityScope> operationScope_;
         std::unique_ptr<Extensions::ScriptModuleOperation> operation_;
         Runtime::SceneRuntimeId sceneId_{};
         const void *actualRuntime_{};
-        bool executing_{}, closePending_{};
+        bool executing_{};
+        bool closePending_{};
         std::optional<Extensions::ScriptExportVersion> requestedUpdate_;
         std::optional<Extensions::ScriptModuleUpdateReport> updateReport_;
         Result<void> ApplyRequestedUpdate();

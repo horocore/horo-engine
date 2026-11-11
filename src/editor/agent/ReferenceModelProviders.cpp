@@ -87,7 +87,7 @@ namespace Horo::Agent {
                                   std::size_t size, std::size_t count,
                                   void *user) {  // NOSONAR: libcurl requires this exact C callback signature.
             auto &state = *static_cast<HttpContext *>(user);
-            if (size != 0 && count > std::numeric_limits<std::size_t>::max() / size) {
+            if (size != 0 && count > (std::numeric_limits<std::size_t>::max)() / size) {
                 state.oversized = true;
                 return 0;
             }
@@ -139,7 +139,7 @@ namespace Horo::Agent {
             curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
             curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
             curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(config.timeout.count()));
-            curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, std::min(5000L, static_cast<long>(config.timeout.count())));
+            curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (std::min)(5000L, static_cast<long>(config.timeout.count())));
             if (body != nullptr) {
                 curl_easy_setopt(curl, CURLOPT_POST, 1L);
                 curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body->data());
@@ -175,7 +175,7 @@ namespace Horo::Agent {
         ModelOutcome HttpRequest(const ModelProviderConfig &config, Protocol protocol, std::string_view path, const std::string *body,
                                  const std::string *bearer, std::stop_token stop, const std::function<bool(std::string_view)> &consume) {
             if (!ValidEndpoint(config.endpoint, protocol) || config.timeout.count() <= 0 ||
-                config.timeout.count() > std::numeric_limits<long>::max() || !consume) {
+                config.timeout.count() > (std::numeric_limits<long>::max)() || !consume) {
                 return {ModelError{ModelErrorCode::InvalidRequest, "Invalid model provider endpoint or timeout", std::nullopt}};
             }
             if (stop.stop_requested())

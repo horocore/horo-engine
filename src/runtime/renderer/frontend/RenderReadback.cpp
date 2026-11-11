@@ -129,7 +129,8 @@ namespace Horo::Render {
 
             std::shared_ptr<RetainedAccounting> accounting;
             std::vector<std::byte> storage;
-            std::size_t offset{}, count{};
+            std::size_t offset{};
+            std::size_t count{};
             RenderReadbackId id;
             RenderTimelinePoint completion;
             bool charged{};
@@ -188,12 +189,16 @@ namespace Horo::Render {
 
     /** @copydoc RenderReadbackResult::Id */
     RenderReadbackId RenderReadbackResult::Id() const noexcept {
-        return prepared_ ? prepared_->id : (implementation_ == nullptr ? RenderReadbackId{} : implementation_->id);
+        if (prepared_)
+            return prepared_->id;
+        return implementation_ == nullptr ? RenderReadbackId{} : implementation_->id;
     }
 
     /** @copydoc RenderReadbackResult::Completion */
     RenderTimelinePoint RenderReadbackResult::Completion() const noexcept {
-        return prepared_ ? prepared_->completion : (implementation_ == nullptr ? RenderTimelinePoint{} : implementation_->completion);
+        if (prepared_)
+            return prepared_->completion;
+        return implementation_ == nullptr ? RenderTimelinePoint{} : implementation_->completion;
     }
 
     /** @copydoc RenderReadbackResult::Bytes */
@@ -251,11 +256,11 @@ namespace Horo::Render {
         }
 
         /** @brief Reclaims only fully unreferenced generations, with an explicit acquire from consumer lease release. */
-        [[nodiscard]] std::size_t CollectPreparedResults() noexcept {
+        [[nodiscard]] std::size_t CollectPreparedResults() const noexcept {
             if (!core_.OnOwnerThread())
                 return 0;
             std::size_t count{};
-            for (auto &slot : preparedPool_) {
+            for (const auto &slot : preparedPool_) {
                 if (slot->leases.load(std::memory_order_acquire) != 0 || slot.use_count() != 1 || !slot->id.IsValid())
                     continue;
                 slot->ReleaseCharge();
@@ -280,8 +285,8 @@ namespace Horo::Render {
                 return !slot->id.IsValid();
             });
             RenderReadbackId id;
-            detail::QueueAdmissionFailure failure{};
-            if (!core_.TryAdmitPrepared(free != preparedPool_.end() && HasResultCapacity(descriptor.byteCount),
+            if (detail::QueueAdmissionFailure failure{};
+                !core_.TryAdmitPrepared(free != preparedPool_.end() && HasResultCapacity(descriptor.byteCount),
                                         [&descriptor, &free](RenderReadbackId request) noexcept {
                 ReadbackRecord record{.id = request, .descriptor = descriptor};
                 record.prepared = *free;
@@ -299,8 +304,7 @@ namespace Horo::Render {
         /** @brief Exposes only the exact nonterminal submitted request's aligned completion destination. */
         [[nodiscard]] RenderReadbackPreparedMapping WritablePrepared(RenderReadbackId id) noexcept {
             ReadbackRecord *record{};
-            const auto status = FindPrepared(id, record);
-            if (status != Status::Complete)
+            if (const auto status = FindPrepared(id, record); status != Status::Complete)
                 return {status, {}};
             if (record->state != Submitted)
                 return {Status::InvalidTransition, {}};
@@ -310,8 +314,7 @@ namespace Horo::Render {
         /** @brief Transfers pending charge into immutable result charge only after exact reached completion equality. */
         [[nodiscard]] Status CompletePrepared(RenderReadbackId id, RenderTimelinePoint reached) noexcept {
             ReadbackRecord *record{};
-            const auto status = FindPrepared(id, record);
-            if (status != Status::Complete)
+            if (const auto status = FindPrepared(id, record); status != Status::Complete)
                 return status;
             if (!reached.IsValid() || reached != record->completion)
                 return Status::InvalidTransition;
@@ -333,11 +336,9 @@ namespace Horo::Render {
         /** @brief Moves the immutable generation lease from the record; storage cannot be reused while consumers retain it. */
         [[nodiscard]] Status AcquirePrepared(RenderReadbackId id, std::shared_ptr<const detail::PreparedReadbackPayload> &output) noexcept {
             ReadbackRecord *record{};
-            const auto status = FindPrepared(id, record);
-            if (status != Status::Complete)
+            if (const auto status = FindPrepared(id, record); status != Status::Complete)
                 return status;
-            const auto state = PreparedState(record->state);
-            if (state != Status::Complete)
+            if (const auto state = PreparedState(record->state); state != Status::Complete)
                 return state;
             if (record->preparedAcquired)
                 return Status::InvalidTransition;
@@ -349,8 +350,7 @@ namespace Horo::Render {
         /** @brief Returns an exact issued retirement fact only after acquired-result consumer quiescence. */
         [[nodiscard]] Status RetirePreparedResult(RenderReadbackId id) noexcept {
             ReadbackRecord *record{};
-            const auto status = FindPrepared(id, record);
-            if (status != Status::Complete)
+            if (const auto status = FindPrepared(id, record); status != Status::Complete)
                 return status;
             if (record->state != Ready || !record->preparedAcquired)
                 return Status::InvalidTransition;
@@ -520,8 +520,8 @@ namespace Horo::Render {
             std::size_t bytes = sizeof(RenderReadbackQueue) + sizeof(Impl) + sizeof(RetainedAccounting);
             if (!AddPayload(bytes, core_.RecordStoragePayloadBytes()))
                 return SIZE_MAX;
-            const auto inventory = pool.capacity();
-            if (!AddPayload(bytes, inventory * sizeof(std::shared_ptr<detail::PreparedReadbackPayload>)))
+            if (const auto inventory = pool.capacity();
+                !AddPayload(bytes, inventory * sizeof(std::shared_ptr<detail::PreparedReadbackPayload>)))
                 return SIZE_MAX;
             for (const auto &slot : pool)
                 if (!AddPayload(bytes, sizeof(detail::PreparedReadbackPayload)) || !AddPayload(bytes, slot->storage.capacity()))

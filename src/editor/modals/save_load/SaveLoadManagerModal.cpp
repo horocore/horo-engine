@@ -130,6 +130,7 @@ namespace Horo::Editor {
 
     /** @copydoc SaveLoadManagerModal::DrawActions */
     void SaveLoadManagerModal::DrawActions() {
+        using enum Horo::Editor::PlaySaveCommandKind;
         const auto binding = binding_.lock();
         const bool pending = !binding || binding->saveCommand || (snapshot_ && snapshot_->operationPending);
         const bool ready = available_ && snapshot_ && snapshot_->availability == PlaySaveAvailability::Ready;
@@ -137,11 +138,11 @@ namespace Horo::Editor {
         (void)Ui::InputTextControl("##PlaySaveName", displayName_, 128, context_.theme.fonts);
         const bool admitted = ready && !pending;
         const bool selection = admitted && selected_.has_value();
-        Action("save", PlaySaveCommandKind::SaveNew, admitted);
-        Action("load", PlaySaveCommandKind::Load, selection);
-        Action("delete", PlaySaveCommandKind::Delete, selection);
-        Action("refresh", PlaySaveCommandKind::Refresh, available_ && !pending);
-        Action("cancel", PlaySaveCommandKind::Cancel, available_ && pending);
+        Action("save", SaveNew, admitted);
+        Action("load", Load, selection);
+        Action("delete", Delete, selection);
+        Action("refresh", Refresh, available_ && !pending);
+        Action("cancel", Cancel, available_ && pending);
     }
 
     /** @copydoc SaveLoadManagerModal::DrawStatus */

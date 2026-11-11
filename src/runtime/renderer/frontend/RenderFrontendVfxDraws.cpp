@@ -11,7 +11,8 @@
 namespace Horo::Render {
     namespace {
         struct DrawChunk final {
-            std::uint32_t batch{}, count{};
+            std::uint32_t batch{};
+            std::uint32_t count{};
         };
 
         struct OrderPreparation final {
@@ -83,7 +84,7 @@ namespace Horo::Render {
     void RenderFrontend::ReleaseUnborrowedVfxDraws() noexcept {
         if (!vfxScheduling_)
             return;
-        for (auto &slot : vfxScheduling_->slots)
+        for (const auto &slot : vfxScheduling_->slots)
             if (slot.use_count() == 1)
                 for (auto &order : slot->orders) {
                     order.draws.clear();
@@ -109,8 +110,7 @@ namespace Horo::Render {
             return Result<void>::Failure(mesh.ErrorValue());
         if (const auto target = BackendInstance(workload.target); target.HasError())
             return Result<void>::Failure(target.ErrorValue());
-        const auto *depth = VfxAttachment(builder, workload.depth);
-        if (!depth || !IsLiveTarget(workload.target, depth->extent))
+        if (const auto *depth = VfxAttachment(builder, workload.depth); !depth || !IsLiveTarget(workload.target, depth->extent))
             return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
         std::size_t sampled{};
         for (const auto &resource : draw.slot->material_->Descriptor().resources) {
@@ -245,7 +245,7 @@ namespace Horo::Render {
     Result<void> RenderFrontend::PublishVfxDrawFrames(VfxDrawPreparation &preparation) {
         auto &orders = preparation.orders;
         const auto orderCount = preparation.orderCount;
-        for (auto &plan : std::span{orders}.first(orderCount)) {
+        for (const auto &plan : std::span{orders}.first(orderCount)) {
             if (plan.next != plan.order->instances.size())
                 return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
             for (const auto &draw : plan.order->draws)
@@ -268,8 +268,8 @@ namespace Horo::Render {
             schedule.recordCount != orderCount)
             return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
         for (std::size_t index = 0; index < orderCount; ++index) {
-            const auto *current = std::get_if<RenderGraphVfx>(&schedule.records[index].workload);
-            if (!current || current->order != orders[index].workload.order || schedule.records[index].pass != orders[index].pass ||
+            if (const auto *current = std::get_if<RenderGraphVfx>(&schedule.records[index].workload);
+                !current || current->order != orders[index].workload.order || schedule.records[index].pass != orders[index].pass ||
                 current->stage != orders[index].workload.stage || current->color != orders[index].workload.color ||
                 current->depth != orders[index].workload.depth || current->snapshot.data_ != orders[index].workload.snapshot.data_ ||
                 !SameView(*current, capturedView))
@@ -308,7 +308,7 @@ namespace Horo::Render {
                            : Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
             return builder.AddUsage({pass, id, RenderGraphAccess::Read, kind});
         };
-        for (auto &plan : std::span{orders}.first(orderCount))
+        for (const auto &plan : std::span{orders}.first(orderCount))
             for (const auto &draw : plan.order->draws) {
                 const std::array reads{std::pair{draw.vertices, RenderGraphUsageKind::VertexBuffer},
                                        std::pair{draw.indices, RenderGraphUsageKind::IndexBuffer},
@@ -328,7 +328,7 @@ namespace Horo::Render {
         auto &orders = preparation.orders;
         const auto orderCount = preparation.orderCount;
         for (auto &plan : std::span{orders}.first(orderCount)) {
-            for (auto &draw : plan.order->draws)
+            for (const auto &draw : plan.order->draws)
                 if (draw.slot && draw.slot->drawPreparation_ == plan.order)
                     draw.slot->drawPreparation_ = nullptr;
             plan.order->preparingDraws = false;
@@ -345,7 +345,7 @@ namespace Horo::Render {
         const auto orderCount = preparation.orderCount;
         for (std::size_t index = 0; index < orderCount; ++index) {
             auto &plan = orders[index];
-            for (auto &draw : plan.order->draws)
+            for (const auto &draw : plan.order->draws)
                 draw.slot->CaptureDraw(plan.workload, draw.firstOrder, plan.order->instances[draw.firstOrder].batch, draw.mesh);
             plan.order->nativePrepared = true;
             std::get<RenderGraphVfx>(schedule.records[index].workload).target = plan.workload.target;
@@ -364,7 +364,7 @@ namespace Horo::Render {
         if (const auto captured = CaptureVfxDrawOrders(preparation, schedule, bindings.size()); captured.HasError())
             return captured;
         bool committed = false;
-        const auto clear = [&](VfxDrawPreparation *state) noexcept {
+        const auto clear = [this, &committed](VfxDrawPreparation *state) noexcept {
             ClearVfxDrawPreparation(*state, committed);
         };
         std::unique_ptr<VfxDrawPreparation, decltype(clear)> transaction{&preparation, clear};

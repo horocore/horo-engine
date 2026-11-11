@@ -42,7 +42,8 @@ namespace Horo {
                 std::size_t users{};
             };
 
-            mutable std::vector<AdmissionWake> admissionWakes;
+            // A size constructor lets checked-library proxy allocation fail through the owning construction boundary.
+            mutable std::vector<AdmissionWake> admissionWakes = std::vector<AdmissionWake>(std::size_t{0});
         };
         friend class CancellationSource;
         friend class JobSystem;

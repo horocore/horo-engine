@@ -4,7 +4,8 @@
 
 namespace Horo::Physics::Detail {
     struct PhysicsStateEventCounts final {
-        std::size_t pairs{}, events{};
+        std::size_t pairs{};
+        std::size_t events{};
     };
 
     [[nodiscard]] bool StatePairLess(const PhysicsStateEventPair &one, const PhysicsStateEventPair &two) noexcept;

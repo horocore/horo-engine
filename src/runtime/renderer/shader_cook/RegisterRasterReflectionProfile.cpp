@@ -50,12 +50,12 @@ namespace Horo::Render {
         }
 
         bool ParameterNames(const ShaderManifest &manifest, const ShaderReflectionBindingName &name) {
-            const auto count = std::ranges::count(manifest.parameters, name.id, &ShaderParameter::binding);
-            if (name.parameters.size() != static_cast<std::size_t>(count))
+            if (const auto count = std::ranges::count(manifest.parameters, name.id, &ShaderParameter::binding);
+                name.parameters.size() != static_cast<std::size_t>(count))
                 return false;
             for (const auto &member : name.parameters) {
-                const auto declared = std::ranges::find(manifest.parameters, member.id, &ShaderParameter::id);
-                if (declared == manifest.parameters.end() || declared->binding != name.id || !Identifier(member.name))
+                if (const auto declared = std::ranges::find(manifest.parameters, member.id, &ShaderParameter::id);
+                    declared == manifest.parameters.end() || declared->binding != name.id || !Identifier(member.name))
                     return false;
                 if (std::ranges::count(name.parameters, member.id, &ShaderReflectionParameterName::id) != 1 ||
                     std::ranges::count(name.parameters, member.name, &ShaderReflectionParameterName::name) != 1)
@@ -66,13 +66,14 @@ namespace Horo::Render {
 
         std::optional<std::size_t> ResourceClass(const ShaderResourceKind kind) noexcept {
             switch (kind) {
-                case ShaderResourceKind::UniformBuffer:
+                using enum Horo::Render::ShaderResourceKind;
+                case UniformBuffer:
                     return 0;
-                case ShaderResourceKind::SampledTexture:
+                case SampledTexture:
                     return 1;
-                case ShaderResourceKind::Sampler:
+                case Sampler:
                     return 2;
-                case ShaderResourceKind::StorageBuffer:
+                case StorageBuffer:
                     return 3;
                 default:
                     return std::nullopt;
@@ -93,7 +94,7 @@ namespace Horo::Render {
             std::array<std::size_t, 4> counts{};
             for (const auto &binding : manifest.bindings) {
                 const auto category = ResourceClass(binding.kind);
-                if (!category || binding.access != ShaderResourceAccess::ReadOnly || binding.arrayCount != 1)
+                if (!category.has_value() || binding.access != ShaderResourceAccess::ReadOnly || binding.arrayCount != 1)
                     return false;
                 if (++counts[*category] > ResourceMaximum(*category, target))
                     return false;

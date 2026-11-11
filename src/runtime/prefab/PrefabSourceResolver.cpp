@@ -174,7 +174,7 @@ namespace Horo::Prefab {
             }
             state.scope.push_back(placement.placementLocalId);
             const PopBackGuard scopeGuard{state.scope};
-            state.originChain.push_back({PrefabCompositionOrigin::Nested, document.assetId, asset, placement.placementLocalId});
+            state.originChain.emplace_back(PrefabCompositionOrigin::Nested, document.assetId, asset, placement.placementLocalId);
             const PopBackGuard originGuard{state.originChain};
             const auto begin = state.objects.size();
             if (auto expanded = ExpandSource(state, *nested, nestedDepth + 1, variantDepth); expanded.HasError())

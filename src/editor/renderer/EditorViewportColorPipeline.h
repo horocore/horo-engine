@@ -84,8 +84,10 @@ namespace Horo::Editor {
             Render::RenderGraphLogicalState state;
         };
 
-        std::array<BufferState, 32> acceptedStates_, pendingStates_;
-        std::size_t acceptedStateCount_{}, pendingStateCount_{};
+        std::array<BufferState, 32> acceptedStates_;
+        std::array<BufferState, 32> pendingStates_;
+        std::size_t acceptedStateCount_{};
+        std::size_t pendingStateCount_{};
         bool tablesUsed_{};
         /** @brief Returns exact accepted graph state or known real initial-upload/host-write state. */
         [[nodiscard]] Render::RenderGraphLogicalState BufferInitialState(Render::RenderBufferHandle buffer,
@@ -98,14 +100,17 @@ namespace Horo::Editor {
         void PublishBufferStates() noexcept;
 
         struct Slot final {
-            Render::RenderBufferHandle histogram, seed, output;
+            Render::RenderBufferHandle histogram;
+            Render::RenderBufferHandle seed;
+            Render::RenderBufferHandle output;
             std::array<Render::RenderBufferHandle, 2> uniform;
             std::array<std::array<std::shared_ptr<const Render::ResidentMaterialBinding>, SlotCount + 1>, 2> bindings;
             Render::ExposureState produced;
         };
 
         struct Program final {
-            Render::RenderShaderModuleHandle vertex, fragment;
+            Render::RenderShaderModuleHandle vertex;
+            Render::RenderShaderModuleHandle fragment;
             Render::RenderPipelineHandle pipeline;
             Render::MaterialBindingLayout layout;
             std::unique_ptr<Render::MaterialBindingTable> materials;
@@ -194,17 +199,26 @@ namespace Horo::Editor {
         std::optional<Render::ColorTransformSelection> selection_;
         std::array<Render::RenderBufferHandle, 2> geometry_;
         Render::RenderMeshHandle mesh_;
-        Render::RenderTextureViewHandle boundScene_, boundDisplay_;
+        Render::RenderTextureViewHandle boundScene_;
+        Render::RenderTextureViewHandle boundDisplay_;
         std::uint64_t materialRevision_{};
         EditorViewportColorStatus status_{EditorViewportColorStatus::Unavailable};
         std::shared_ptr<Render::IResidentExposureGpuKernel> kernel_;
         Render::ExposureSettings settings_;
-        Render::ExposureState previous_, empty_;
+        Render::ExposureState previous_;
+        Render::ExposureState empty_;
         Render::ExposureGpuDispatchParameters dispatch_;
         Render::FramebufferExtent extent_;
         Render::RenderViewId view_;
-        std::uint64_t generation_{}, settingsGeneration_{1}, acceptedSubmission_{};
-        std::size_t candidateSlot_{}, nextSlot_{}, activeSlots_{SlotCount};
-        bool candidate_{}, encoded_{}, reset_{true}, resetQueued_{};
+        std::uint64_t generation_{};
+        std::uint64_t settingsGeneration_{1};
+        std::uint64_t acceptedSubmission_{};
+        std::size_t candidateSlot_{};
+        std::size_t nextSlot_{};
+        std::size_t activeSlots_{SlotCount};
+        bool candidate_{};
+        bool encoded_{};
+        bool reset_{true};
+        bool resetQueued_{};
     };
 }  // namespace Horo::Editor

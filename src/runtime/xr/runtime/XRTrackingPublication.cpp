@@ -121,9 +121,10 @@ namespace Horo::XR::RuntimeInternal {
         }
 
         XRTrackedDeviceState SourceState(const CollectedRole &role, const XRTrackedDeviceRecord *prior) noexcept {
-            if (!role.observed && prior && prior->state == XRTrackedDeviceState::Disconnected)
-                return XRTrackedDeviceState::Disconnected;
-            return role.located ? XRTrackedDeviceState::Tracked : XRTrackedDeviceState::TrackingLost;
+            using enum Horo::XR::XRTrackedDeviceState;
+            if (!role.observed && prior && prior->state == Disconnected)
+                return Disconnected;
+            return role.located ? Tracked : TrackingLost;
         }
 
         std::optional<DeviceUpdate> CollectDeviceUpdate(const std::span<const TrackingSourceEvidence> sources,
@@ -162,9 +163,9 @@ namespace Horo::XR::RuntimeInternal {
 
         Result<DeviceUpdates> PrepareDeviceUpdates(const std::span<const TrackingSourceEvidence> sources,
                                                    const std::span<const XRTrackedDeviceRecord> existing) {
+            using enum Horo::XR::XRTrackedDeviceRole;
             DeviceUpdates result;
-            constexpr std::array roles{XRTrackedDeviceRole::Head, XRTrackedDeviceRole::LeftController, XRTrackedDeviceRole::RightController,
-                                       XRTrackedDeviceRole::LeftHand, XRTrackedDeviceRole::RightHand};
+            constexpr std::array roles{Head, LeftController, RightController, LeftHand, RightHand};
             for (const auto role : roles) {
                 const auto prior = std::ranges::find(existing, role, &XRTrackedDeviceRecord::role);
                 const auto update = CollectDeviceUpdate(sources, role, prior == existing.end() ? nullptr : std::to_address(prior));

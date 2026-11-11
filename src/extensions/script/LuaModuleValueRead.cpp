@@ -24,6 +24,11 @@ namespace Horo::Extensions::LuaModuleDetail {
             lua_State *lua;
             int top;
 
+            Top(lua_State *value, int saved) noexcept : lua(value), top(saved) {}
+
+            Top(const Top &) = delete;
+            Top &operator=(const Top &) = delete;
+
             ~Top() {
                 lua_settop(lua, top);
             }
@@ -106,8 +111,7 @@ namespace Horo::Extensions::LuaModuleDetail {
         while (lua_next(lua, index)) {
             if (!lua_isinteger(lua, -2))
                 Invalid("Arrays cannot contain named properties.");
-            const auto key = lua_tointeger(lua, -2);
-            if (key < 1 || static_cast<std::uint64_t>(key) > length)
+            if (const auto key = lua_tointeger(lua, -2); key < 1 || static_cast<std::uint64_t>(key) > length)
                 Invalid("Array keys must be dense and one-based.");
             budget.Charge(0);
             ++count;
@@ -135,8 +139,7 @@ namespace Horo::Extensions::LuaModuleDetail {
                 return String(lua, index, budget, depth, true);
             case P::Handle: {
                 auto handle = Unbox(index, BoxKind::Handle);
-                auto valid = authority->ValidateHandle(*handle.AsHandle());
-                if (valid.HasError())
+                if (auto valid = authority->ValidateHandle(*handle.AsHandle()); valid.HasError())
                     throw Failure{valid.ErrorValue()};
                 return handle;
             }
@@ -148,8 +151,7 @@ namespace Horo::Extensions::LuaModuleDetail {
     ScriptValue Values::Read(int index, const ScriptExportTypeReference &type, const ScriptExportDescriptor &api, Budget &budget,
                              std::size_t depth) {
         budget.Charge(depth);
-        const auto *box = GetBox(index);
-        if (box && box->kind == BoxKind::Null) {
+        if (const auto *box = GetBox(index); box && box->kind == BoxKind::Null) {
             if (type.nullability != ScriptExportNullability::Nullable)
                 Invalid("Null is not allowed here.");
             return ScriptValue::Null();
