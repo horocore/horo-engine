@@ -15,7 +15,7 @@ ACC-001.1 / HORO-1805 is already delivered and is not reimplemented.
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Added bounded SPSC cue/catalog transport, timeline, frame-captured appearance, safe-area arrangement and canonical paint extraction; regression cases written, not executed | Host localization/shaping/presentation composition, settings activation and actual native rendered evidence |
 | ACC-001.3 color | HORO-1807 / #1851 | Added independent numeric target, validated matrices and snapshot-backed synchronous query; regression cases written, not executed | Complete-image GPU pass and real backend evidence; existing ColorPipelinePlan explicitly provides cold admission only |
-| ACC-001.4 input | HORO-1808 / #1852 | Added bounded router digital/sticky interpretation, explicit sample time, owned cancellation releases, profile-v2 migration and conflict validation; regression sources not executed | Compile/run router regressions and consumers; compose host withdrawal and rebinding UI; integrate scoped persistence from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
+| ACC-001.4 input | HORO-1808 / #1852 | Added bounded router interpretation, explicit time and owned cancellation, profile-v2 migration and conflict validation; existing Input Mapping panel exposes exact-duration policy drafts; C++ regressions not executed | Compile/run router and editor regressions/consumers; compose host withdrawal; integrate scoped persistence/capture from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
 | ACC-001.5 visual | HORO-1809 / #1853 | Added UI scale/contrast snapshot with readable typography floor, visual-safety snapshot and typed effect suppression seam; regression cases written, not executed | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Existing Runtime UI semantics; added optional platform transport interface, honest no-op Unsupported adapter and opt-in bounded semantic QA journal; tests written, not executed | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Added inert domain contribution, typed tick snapshot for all seven preferences and revision-only hint adapter; lost/stale hint tests written, not executed | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
@@ -328,4 +328,24 @@ the sole heavy slot. No ACC heavy process or background waiter was launched.
 Full Sonar IDE, CLI secrets and Codacy preflight remains incomplete pending the
 serialized analysis slot and supported preparation path; cloud configuration
 authentication remains a separate previously recorded gap. Host withdrawal,
-rebinding UI, scoped persistence integration and gyro are still acceptance work.
+rebinding UI execution, scoped persistence integration and gyro are still acceptance work.
+
+## Input Mapping accessibility editing
+
+The existing digital-binding view now opens a typed property draft for toggle,
+sticky modifiers, hold and repeat durations. It commits only on Apply through
+the existing full-profile validation/cancellation owner, preserves other bindings
+and uses the ordinary save/reload controls. Exact millisecond text preserves
+microseconds; invalid input is retained without implicit clamping or substitution.
+Configuration revision and full original binding checks reject stale drafts,
+including replacement/restoration of an otherwise equal mapping. The form uses
+shared controls, wrapped labels and paired English/Turkish copy.
+
+New model/GUI regression sources are registered with `HoroEditorPresentationTests`.
+They remain uncompiled/unexecuted; mouse, keyboard, focus, hover/disabled and
+native theme interaction still need the allocated GUI composition and manual
+review. The paired-copy/SDK Python pass after these edits is **26 passed**.
+`git diff --check` and formatting passed. Native and full quality validation are
+still incomplete under the main coordinator's heavy-slot hold. The own Input
+Mapping code fork still needs authorized integration with Input's unpublished
+scoped capture/persistence changes; no sibling worktree source was changed.

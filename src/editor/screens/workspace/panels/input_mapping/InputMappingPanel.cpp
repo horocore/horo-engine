@@ -140,6 +140,7 @@ namespace Horo::Editor {
     void InputMappingPanel::OnDetach() {
         bindingCaptureContext_.Reset();
         listeningAction_.reset();
+        accessibilityAction_.reset();
         router_ = nullptr;
     }
 
@@ -248,10 +249,25 @@ namespace Horo::Editor {
                 if (ImGui::SliderFloat(InputMappingPanel::kTextScope.Text(context.localization, "deadzone").c_str(), &deadzone, 0.0F, 0.95F,
                                        "%.2f")) {
                     UpdateBindingDeadzone(*router_, selectedAction, bindings, bindingIndex, deadzone, statusMessage_);
+                    ImGui::PopID();
+                    return;
+                }
+                ImGui::PopID();
+            }
+            if (selectedAction.valueType == Input::ActionValueType::Digital) {
+                ImGui::PushID(static_cast<int>(bindingIndex));
+                const auto &label = LocalizedText(context.localization, "accessibility.edit");
+                if (Ui::Button({.label = label.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
+                    accessibilityAction_ = selectedAction.id;
+                    accessibilityBinding_ = bindingIndex;
+                    accessibilityConfigurationRevision_ = router_->RoutingState({}).configurationRevision;
+                    accessibilityBaseline_ = binding;
+                    accessibilityDraft_ = BindingAccessibilityEditorDraft::FromPolicy(binding.accessibility);
                 }
                 ImGui::PopID();
             }
         }
+        DrawAccessibilityControls(selectedAction, context);
         const std::string &rebind = InputMappingPanel::kTextScope.Text(context.localization, "rebind");
         if (Ui::Button({.label = rebind.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
             listeningAction_ = selectedAction.id;

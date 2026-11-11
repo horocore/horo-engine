@@ -142,8 +142,31 @@ modal/focus/time cancellation, accepted and rejected rebinding, scoped name
 lifetimes, ended-owner coalescing, device/player generations, sticky reset,
 capacity rollback, owner-boundary reclamation and allocation-free action reads.
 They remain **uncompiled and unexecuted** pending the shared native build slot.
-Rebinding UI exposure, host withdrawal integration and gyro support still require
-implementation and tests. This checkpoint does not qualify ACC-001.4.
+The existing Input Mapping panel now exposes an explicit per-binding accessibility
+draft for digital actions. It uses shared controls and paired English/Turkish copy,
+without introducing another profile file or settings authority. Millisecond text
+accepts dot/comma decimals with at most three fractional digits and preserves
+integer microseconds exactly. Invalid/incomplete text stays visible, Apply is
+disabled, and Cancel leaves the profile unchanged. Duration bounds and a positive
+repeat interval remain enforced even for inactive fields.
+
+Apply checks the original exact configuration revision and full binding before
+copying the current effective profile. A stale draft, removed/replaced binding or
+non-digital action cannot publish. The ordinary `SetProfile` performs conflict
+admission and lifecycle cancellation; peer bindings and action defaults remain
+intact. Existing profile save/reload controls persist these same version-two values.
+The edit form wraps localized labels without shrinking typography. The existing
+deadzone edit returns after profile replacement so its old binding references are
+not read after invalidation.
+
+Model and headless GUI regression sources cover exact decimal round trips,
+invalid fields, bounds, stale generation/ABA rejection, peer preservation,
+canonical codec round trips and sticky conflicts, plus paired locale/narrow form
+drawing. These C++ tests have not compiled or run. The paired localization and
+SDK Python pass is now **26 passed**, which does not qualify native behavior or
+visual interaction. Input workstream rebinding capture/persistence integration,
+host withdrawal composition and gyro remain implementation/qualification work.
+This checkpoint does not qualify ACC-001.4.
 Input's independently owned scoped persistence/capture work must be
 integrated without replacing its strengthened validation or adding another save
 path. That work and this version-two change currently live in separate unpushed
