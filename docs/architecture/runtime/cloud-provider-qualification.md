@@ -146,6 +146,15 @@ with the initialized tool PATH reported `ready_for_local_check` in report
 This prerequisite result does not verify connected-mode authentication, Workspace
 Trust, C++ sensor execution, secrets, Codacy findings or cloud configuration drift.
 
+A separate lightweight Linux/amd64 container probe executed only tool version
+commands in an existing local image: GCC 15.2.0, CMake 4.2.3 and Ninja 1.13.2 were
+available. The container had no network or host mounts, a read-only filesystem,
+one CPU and a 256 MiB limit, and exited successfully. No configure, compilation,
+test or private SDK check ran. Linux contract execution is therefore a feasible
+next qualification step once explicitly allocated the shared heavy-work slot,
+but the probe itself proves only tool availability. macOS/vendor qualification
+and actual Linux test results remain missing.
+
 The renewed acceptance audit confirmed all six native GitHub children and the Jira
 identities in the delivery table. Architecture/metadata/mutation children are merged
 but the metadata and mutation Jira states still differ from GitHub. Transport,
