@@ -8,6 +8,8 @@
 #include "PrefabMetricsTestSupport.h"
 #include "PrefabSpawnTestSupport.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -210,6 +212,74 @@ namespace Horo::Prefab::MetricTest {
                   << " interrupted_cpp_requested_bytes=" << interrupted.requestedBytes
                   << " cancellation_us=" << std::chrono::duration_cast<std::chrono::microseconds>(returnedAt - state.requestedAt).count()
                   << '\n';
+    }
+
+    TEST_CASE("Prefab canonical parse expand cook and committed spawn enforce bounded qualification samples",
+              "[prefab][prefab-metrics][qualification][performance]") {
+        const auto limits = Limits();
+        const auto source = Read("multi.prefab");
+        Sources sources{PrefabMetricHandles{}};
+        const auto resolver = sources.Resolver({});
+        const auto instance = PrefabInstanceId::Create(41).Value();
+        const auto target = AssetCookTargetId::Parse("linux-x64").Value();
+        const auto qualify = [](const char *phase, const char *cache, const std::size_t inputBytes, const auto &operation) {
+            std::array<std::chrono::microseconds, 16> elapsed;
+            Tests::AllocationProbe::Measurement maximum;
+            for (std::size_t index = 0; index < elapsed.size(); ++index) {
+                Tests::AllocationProbe::Measurement allocations;
+                const auto begin = std::chrono::steady_clock::now();
+                bool succeeded{};
+                {
+                    Tests::AllocationProbe::ScopedMeasurement measurement;
+                    succeeded = operation();
+                    allocations = measurement.Snapshot();
+                }
+                elapsed[index] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
+                INFO("phase=" << phase << " sample=" << index);
+                REQUIRE(succeeded);
+                CHECK(allocations.requests <= 4096);
+                CHECK(allocations.requestedBytes <= 4U * 1024U * 1024U);
+                CHECK(elapsed[index] < std::chrono::milliseconds{250});
+                maximum.requests = std::max(maximum.requests, allocations.requests);
+                maximum.requestedBytes = std::max(maximum.requestedBytes, allocations.requestedBytes);
+                maximum.largestRequest = std::max(maximum.largestRequest, allocations.largestRequest);
+            }
+            std::ranges::sort(elapsed);
+            const auto median = (elapsed[elapsed.size() / 2 - 1] + elapsed[elapsed.size() / 2]) / 2;
+            std::cout << "prefab-pipeline-qualification build=" << HORO_PREFAB_QUALIFICATION_BUILD_TYPE
+                      << " platform=" << HORO_PREFAB_QUALIFICATION_PLATFORM << " phase=" << phase << " cache=" << cache
+                      << " objects_per_operation=2 input_bytes=" << inputBytes << " samples=" << elapsed.size()
+                      << " maximum_cpp_requests=" << maximum.requests << " maximum_cpp_requested_bytes=" << maximum.requestedBytes
+                      << " largest_cpp_request=" << maximum.largestRequest << " median_us=" << median.count()
+                      << " maximum_us=" << elapsed.back().count() << '\n';
+        };
+        qualify("parse", "disabled", source.size(), [&] {
+            return PrefabDocument::Parse(source, limits).HasValue();
+        });
+        qualify("expand", "disabled", source.size(), [&] {
+            return resolver.Resolve(Test::Asset(2), instance, limits).HasValue();
+        });
+        qualify("cook", "disabled", source.size(), [&] {
+            return CookPrefabTemplate(resolver, sources.registry.Snapshot(), Test::Asset(2), {}, target, limits).HasValue();
+        });
+        SpawnTest::Fixture fixture;
+        fixture.Warm();
+        const auto templateBytes = CookedPrefab::Create(fixture.Data(), limits);
+        REQUIRE(templateBytes.HasValue());
+        const auto request = fixture.Request();
+        qualify("spawn_commit", "warm-template", templateBytes.Value().Bytes().size(), [&] {
+            const auto spawned = fixture.context->Spawn(request);
+            if (spawned.HasError())
+                return false;
+            if (fixture.service->Advance(fixture.tick).HasError())
+                return false;
+            if (fixture.scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, fixture.Frame()).HasError())
+                return false;
+            if (fixture.service->Advance(fixture.tick).HasError())
+                return false;
+            return spawned.Value().State() == PrefabSpawnState::Committed;
+        });
+        CHECK(fixture.Count() == 33);
     }
 
     TEST_CASE("Prefab disabled measurements allocate no producer-side memory", "[prefab][prefab-metrics]") {
