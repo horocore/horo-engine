@@ -54,9 +54,11 @@ restore/release protocol; camera lease release does not bypass scalar restoratio
 Existing four-field `SequenceFrameCameraCutKey` initializers retain hard cuts.
 The appended fields declare `transitionTier`, `fallback`, `transitionDuration`
 and `transitionCurve`. Hard cuts require zero duration. Blends require a positive
-integer duration fitting inside the sequence and the camera track, an earlier
-source key, and completion by the next key. Invalid vocabulary, overlapping
-windows and missing sources fail activation before a lease or player is retained.
+integer duration fitting inside the sequence. Required blends need an earlier
+source key and completion by the next key or track end. Unsupported overlapping
+windows and missing sources use an authored hard-cut fallback or fail typed
+activation before a lease or player is retained. Invalid vocabulary and malformed
+numeric durations fail frame-plan validation.
 Rebuild consumers of Cinematic Runtime and Camera Runtime together because the
 in-process key, crossing-request and owner layouts and the `Create` signature
 have changed. The additional fields make transition intent part of the canonical

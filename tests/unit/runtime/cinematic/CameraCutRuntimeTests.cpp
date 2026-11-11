@@ -240,6 +240,29 @@ namespace Horo::Cinematic {
         CHECK_FALSE(fixture.Commit().overrideOwner.has_value());
     }
 
+    TEST_CASE("Authored hard cut fallback admits unsupported camera transition layouts", "[unit][cinematic][camera]") {
+        Fixture fixture;
+        auto activation = TransitionActivation();
+        auto keys = std::vector<SequenceFrameCameraCutKey>(activation.plan.CameraKeys().begin(), activation.plan.CameraKeys().end());
+        SequenceTime position = 6;
+        float expected = 20.0F;
+        SECTION("Missing source uses the authored hard cut") {
+            keys.front().transitionTier = CameraTransitionTier::SingleViewBlend;
+            keys.front().transitionDuration = 1;
+            keys.front().fallback = CameraTransitionFallback::HardCut;
+            position = 3;
+            expected = 10.0F;
+        }
+        SECTION("An overlapping track end uses the authored hard cut") {
+            keys.back().transitionDuration = 4;
+            keys.back().fallback = CameraTransitionFallback::HardCut;
+        }
+        activation.plan = Take(SequenceFrameEvaluationPlan::Create(10, SequenceLoopMode::Once, 4, {}, {}, keys));
+        fixture.StartTransition(std::move(activation));
+        fixture.Seek(position);
+        CHECK(fixture.Commit().selected.values.position.x == expected);
+    }
+
     TEST_CASE("Incompatible authored lenses require explicit fallback and blend cancellation uses the current base",
               "[unit][cinematic][camera]") {
         Fixture fixture;

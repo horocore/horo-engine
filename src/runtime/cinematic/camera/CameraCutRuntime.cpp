@@ -51,17 +51,6 @@ namespace Horo::Cinematic {
                 if (keys[index].track != keys.front().track || keys[index].time <= keys[index - 1].time)
                     return Result<void>::Failure(MakeError(Runtime::CameraErrors::InvalidTarget));
             }
-            for (std::size_t index = 0; index < keys.size(); ++index) {
-                const auto &key = keys[index];
-                if (key.transitionTier == CameraTransitionTier::HardCut)
-                    continue;
-                // A geometric transition needs an authored source and may not overlap the next cut or track end.
-                const auto end = index + 1 < keys.size() ? keys[index + 1].time : settings.trackEnd;
-                if (index == 0 || key.transitionDuration > end - key.time)
-                    return Result<void>::Failure(MakeError(Runtime::CameraErrors::IncompatibleTransition));
-                if (key.transitionTier == CameraTransitionTier::DualViewCrossFade && key.fallback != CameraTransitionFallback::HardCut)
-                    return Result<void>::Failure(MakeError(Runtime::CameraErrors::UnsupportedTransition));
-            }
             return ValidateBindings(settings, keys);
         }
 
@@ -79,17 +68,24 @@ namespace Horo::Cinematic {
             return Result<Runtime::EntityRef>::Success(*entity);
         }
 
+        /** @brief Applies the authored fallback before retaining any player or camera state. */
+        Result<CameraTransitionTier> AdmitFallback(const SequenceFrameCameraCutKey &key, const ErrorCodeDescriptor &reason) {
+            if (key.fallback == CameraTransitionFallback::HardCut)
+                return Result<CameraTransitionTier>::Success(CameraTransitionTier::HardCut);
+            return Result<CameraTransitionTier>::Failure(MakeError(reason));
+        }
+
         /** @brief Admits an effective mode and compatible endpoints before acquiring player or camera state. */
         Result<CameraTransitionTier> AdmitTransition(const SequenceFrameCameraCutKey &key, const Runtime::CameraService &camera,
                                                      const Runtime::RuntimeSceneView scene, const Runtime::EntityRef previous,
-                                                     const Runtime::EntityRef current) {
-            if (key.transitionTier != CameraTransitionTier::SingleViewBlend)
+                                                     const Runtime::EntityRef current, const SequenceTime windowEnd) {
+            if (key.transitionTier == CameraTransitionTier::HardCut)
                 return Result<CameraTransitionTier>::Success(CameraTransitionTier::HardCut);
-            if (camera.TransitionSupport() != Runtime::CameraTransitionSupport::SingleViewBlend) {
-                if (key.fallback != CameraTransitionFallback::HardCut)
-                    return Result<CameraTransitionTier>::Failure(MakeError(Runtime::CameraErrors::UnsupportedTransition));
-                return Result<CameraTransitionTier>::Success(CameraTransitionTier::HardCut);
-            }
+            if (key.transitionTier == CameraTransitionTier::DualViewCrossFade ||
+                camera.TransitionSupport() != Runtime::CameraTransitionSupport::SingleViewBlend)
+                return AdmitFallback(key, Runtime::CameraErrors::UnsupportedTransition);
+            if (!previous.IsValid() || key.transitionDuration > windowEnd - key.time)
+                return AdmitFallback(key, Runtime::CameraErrors::IncompatibleTransition);
             if (key.fallback == CameraTransitionFallback::HardCut)
                 return Result<CameraTransitionTier>::Success(CameraTransitionTier::SingleViewBlend);
             const auto source = Runtime::ResolveSceneCamera(scene, previous);
@@ -136,7 +132,8 @@ namespace Horo::Cinematic {
             if (entity.HasError())
                 return Result<CinematicCameraPlayback>::Failure(entity.ErrorValue());
             const auto &key = keys[index];
-            const auto admitted = AdmitTransition(key, camera, scene, previous, entity.Value());
+            const auto windowEnd = index + 1 < keys.size() ? keys[index + 1].time : cuts.trackEnd;
+            const auto admitted = AdmitTransition(key, camera, scene, previous, entity.Value(), windowEnd);
             if (admitted.HasError())
                 return Result<CinematicCameraPlayback>::Failure(admitted.ErrorValue());
             bound[index] = {key.time, entity.Value(), admitted.Value(), key.fallback, key.transitionDuration, key.transitionCurve};

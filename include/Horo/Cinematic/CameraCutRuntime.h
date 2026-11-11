@@ -37,8 +37,9 @@ namespace Horo::Cinematic {
      * ignore activation blend durations. Camera-only plans clear scalar blend windows before session admission;
      * mixed scalar plans retain their blend windows, and every plan retains its explicit restore policy.
      * Authored key transition durations use exact final player time with Linear or SmoothStep weight. SingleViewBlend
-     * samples both current scene cameras and delegates pose/lens interpolation to CameraService. Blends require an earlier
-     * camera key and end before the next key/track end. DualViewCrossFade has no admitted compositor in this composition;
+     * samples both current scene cameras and delegates pose/lens interpolation to CameraService. Required blends need an earlier
+     * camera key and completion by the next key/track end. Unsupported layouts use only an authored hard-cut fallback.
+     * DualViewCrossFade has no admitted compositor in this composition;
      * it returns UnsupportedTransition unless the key explicitly permits a HardCut fallback. Projection incompatibility
      * similarly uses only the key's declared fallback. Failed publication cancels the player and releases its lease.
      * Hosts call Publish after commands/ticks and before CameraService::Commit, then
