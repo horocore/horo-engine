@@ -23,6 +23,22 @@ namespace Horo::PlatformServices::TestSupport {
             REQUIRE(snapshot.Value().terminal->ErrorValue() != nullptr);
             CHECK(snapshot.Value().terminal->ErrorValue()->code.Value() == error.code.Value());
         }
+
+        /** @brief Replaces the session between cloud admission and provider completion for any typed result. */
+        template <typename Submit>
+        void RejectStaleCloudResult(const Operation operation, MockPlatformServicesResponse response, Submit submit) {
+            MockPlatformServicesBackend backend;
+            Prepare(backend, {operation});
+            response.delay = 1ms;
+            REQUIRE(backend.SetResponse(operation, std::move(response)).HasValue());
+            const auto pending = submit(backend);
+            REQUIRE(pending.HasValue());
+            REQUIRE(backend.SetCloudSubject(CloudSubject(2, std::byte{2})).HasValue());
+            REQUIRE(backend.AdvanceClock(1ms).HasValue());
+            REQUIRE(backend.DispatchDueCompletions() == 1);
+            TerminalError(backend, pending.Value(), CloudObjectErrors::StaleSession);
+            CHECK(backend.VerifyExpectations().HasValue());
+        }
     }  // namespace
 
     TEST_CASE("Cloud providers expose precise Null or complete scripted opaque operations", "[platform-services][cloud][conformance]") {
@@ -187,6 +203,7 @@ namespace Horo::PlatformServices::TestSupport {
             REQUIRE(pending.HasValue());
             REQUIRE(backend.DispatchDueCompletions() == 1);
             CHECK(backend.Requests().Query(pending.Value()).Value().state == PlatformRequestState::Failed);
+            TerminalError(backend, pending.Value(), CloudObjectErrors::PartialTransfer);
             CHECK(backend.Requests().Query(pending.Value()).Value().terminal->Value() == nullptr);
         }
         SECTION("conflict and quota do not become success or automatic retries") {
@@ -205,6 +222,47 @@ namespace Horo::PlatformServices::TestSupport {
             }
         }
         CHECK(backend.VerifyExpectations().HasValue());
+    }
+
+    TEST_CASE("Every opaque cloud result is fenced by the current session", "[platform-services][cloud][conformance]") {
+        const auto write = CloudWrite();
+        const auto commit = CloudCommit(write);
+        MockPlatformServicesResponse response;
+        SECTION("metadata page") {
+            response.payload = CloudObjectPage{.subject = write.subject,
+                                               .sessionGeneration = write.subject.SessionGeneration(),
+                                               .objects = {*commit.committedObject}};
+            RejectStaleCloudResult(Operation::ListCloudObjects, std::move(response), [&write](MockPlatformServicesBackend &backend) {
+                return backend.ListCloudObjects({.subject = write.subject, .pageSize = 1});
+            });
+        }
+        SECTION("complete read") {
+            response.payload = CloudBlobReadResult{.subject = write.subject,
+                                                   .sessionGeneration = write.subject.SessionGeneration(),
+                                                   .head = *commit.committedObject,
+                                                   .bytes = write.bytes};
+            RejectStaleCloudResult(Operation::ReadCloudBlob, std::move(response), [&write](MockPlatformServicesBackend &backend) {
+                return backend.ReadCloudObject(CloudBlobReadRequest{write.subject, write.key, 1});
+            });
+        }
+        SECTION("delete commit") {
+            auto deletion = commit;
+            deletion.committedObject.reset();
+            response.payload = deletion;
+            RejectStaleCloudResult(Operation::DeleteCloudObject, std::move(response),
+                                   [&write, &commit](MockPlatformServicesBackend &backend) {
+                return backend.DeleteCloudObject({write.subject, write.key, commit.committedObject->revision, write.mutation});
+            });
+        }
+        SECTION("quota observation") {
+            response.payload = CloudQuotaObservation{.subject = write.subject,
+                                                     .sessionGeneration = write.subject.SessionGeneration(),
+                                                     .usedBytes = 1,
+                                                     .objectCount = 1};
+            RejectStaleCloudResult(Operation::QueryCloudQuota, std::move(response), [&write](MockPlatformServicesBackend &backend) {
+                return backend.QueryCloudQuota(write.subject);
+            });
+        }
     }
 
     TEST_CASE("Cloud provider normalization preserves categories without native text", "[platform-services][cloud][conformance]") {
