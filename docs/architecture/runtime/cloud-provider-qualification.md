@@ -16,7 +16,12 @@ mutation-ID deduplication guarantee.
 | PLS-005.5, #1911, HORO-1867 | Explicit fail-closed Null cloud entry points; scripted list/read/write/delete/quota; current-session validation, finite transfer slots and redacted typed failures | Test execution and external production providers must be recorded separately |
 | PLS-005.6, #1912, HORO-1868 | `PlatformCloudProviderConformanceTests` exercises both available public providers through `ICloudService`; existing atomic-model tests cover revision races and exact replay | Blocked on #1887/HORO-1843 and #1916/HORO-1872 plus actual private-provider/cross-platform evidence |
 
-The delivery branch starts at `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`.
+The delivery branch originally started at `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`
+and was rebased onto local parent `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`.
+All nine delivery commits retained identical patches in `git range-diff`. The parent
+adds only the C11 admission-fixture configuration fix; the main checkout's other
+uncommitted fixes, including the CRT allocation-fault correction, are not included.
+The parent is not yet published to origin; no fetch or push was used for this rebase.
 Open-ticket identities were checked against GitHub and Jira on 11 November 2026.
 No Jira status or GitHub issue state is changed by this delivery.
 
@@ -72,9 +77,12 @@ or late provider evidence never acknowledges an unknown remote outcome as succes
 ## Execution evidence
 
 Windows MSVC Debug configure and the `HoroPlatformRequestTests` build completed on
-11 November 2026 under `scripts.dev.heavy_build_lock`, keyed by the shared Git common
-directory. The pre-build 30-second CPU sample was 6.6%, available memory 40.34%.
-Build parallelism was 1 and `CTEST_PARALLEL_LEVEL=1`.
+11 November 2026. The helper invoked `scripts.dev.heavy_build_lock` and reported the
+shared Git-common-directory cache identity, but did not inspect its actual lock
+handle. That initial run is not evidence of physical canonical-lock exclusivity:
+later coordination found that sandbox virtualization can redirect an apparently
+identical cache path. The pre-build 30-second CPU sample was 6.6%, available memory
+40.34%. Build parallelism was 1 and `CTEST_PARALLEL_LEVEL=1`.
 
 The initial full target run reported 194/196 passed, with two failures. The mock
 oversize test still expected the old generic diagnostic; its fixture is migrated to
@@ -87,8 +95,12 @@ The owning hung test was stopped after stack capture; it is a failed verificatio
 not a passed or skipped test. No allocation guard or test has been disabled.
 This run predates the final staging/error edits and does not validate those inputs.
 
-Subsequent CTest runs use `--timeout 300 -j1 --output-on-failure` under the same
-shared lock. Heavy reruns wait for the main Windows validation block to finish.
+The local verification wrappers now require `psutil.Process().open_files()` to show
+the exact physical canonical `heavy-build.lock` handle after acquisition and before
+any heavy operation. A redirected/private path or inspection error stops the job;
+there is no fallback. This guard is prepared but has not yet been exercised by a
+new heavy run. Subsequent CTest runs use `--timeout 300 -j1 --output-on-failure`.
+Heavy reruns wait for the main Windows validation block or an explicit bounded slot.
 Final build, public-consumer, cloud-suite and full-target results are pending.
 The analysis helper now honors `CMAKE_BUILD_PARALLEL_LEVEL` when preparing compiler
 contexts, retaining its previous default when unset. Qualification sets it to `1`;
@@ -169,6 +181,10 @@ qualification, the full request suite and final Sonar IDE/secrets/Codacy evidenc
 remain open. The owner reports exact temporary-source restoration and canonical
 lock release; its bounded slot was returned to the main validation work. There
 is no reported push or provider certification, and no source is imported here.
+The later main-parent C11 fix `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08` is now
+the base of this cloud branch. The main owner reports its Full11 Windows ALL build
+and provider-admission test passed. This removes the known C11 source prerequisite;
+it does not rerun or qualify the external identity lifecycle or this cloud branch.
 
 ADR-134's header currently says **Proposed**, while the normative platform-services
 architecture references it as the ratified baseline. This delivery follows the
