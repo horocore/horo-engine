@@ -222,6 +222,39 @@ namespace Horo::Prefab {
             CHECK(candidate.Value().Objects()[1].key.object.SourceObject() == LocalObjectId{4});
         }
 
+        TEST_CASE("Prefab variant stress admits the hard inheritance depth and rejects its next edge",
+                  "[unit][prefab][resolver][variant][stress]") {
+            constexpr std::uint8_t depth = static_cast<std::uint8_t>(PrefabHardLimits::VariantInheritanceDepth);
+            Assets::AssetRegistry registry;
+            std::vector<Assets::AssetRecord> records;
+            std::vector<PrefabDependencySource> sources;
+            for (std::uint8_t index = 1; index <= depth + 2; ++index) {
+                const auto asset = ResolverAsset(index);
+                records.push_back(ResolverRecord(asset, "assets/prefabs/" + std::to_string(index) + ".prefab"));
+                if (index == 1) {
+                    sources.push_back({ResolverDocument(asset, {ResolverObject(0)}), ResolverRevision(index)});
+                    continue;
+                }
+                const auto parent = static_cast<std::uint8_t>(index - 1);
+                PrefabComposition composition{.variantParent = PrefabAssetReference::Create(ResolverAsset(parent)).Value(),
+                                              .variantAuthoredAgainst = ResolverRevision(parent)};
+                sources.push_back({ResolverDocument(asset, {}, std::move(composition), {ResolverAsset(parent)}), ResolverRevision(index)});
+            }
+            PublishResolverRegistry(registry, std::move(records));
+            const auto snapshot = BuildPrefabSourceResolverSnapshot(registry.Snapshot(), std::move(sources), ResolverLimits());
+            REQUIRE(snapshot.HasValue());
+            const auto instance = PrefabInstanceId::Create(1).Value();
+            const auto accepted = snapshot.Value().Resolve(ResolverAsset(depth + 1), instance, ResolverLimits());
+            REQUIRE(accepted.HasValue());
+            REQUIRE(accepted.Value().Objects().size() == 1);
+            CHECK(accepted.Value().Objects().front().sourcePrefab == ResolverAsset(1));
+            const auto rejected = snapshot.Value().Resolve(ResolverAsset(depth + 2), instance, ResolverLimits());
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::HierarchyDepthExceeded.code.Value());
+            CHECK(accepted.Value().Objects().front().sourcePrefab == ResolverAsset(1));
+            REQUIRE(snapshot.Value().Resolve(ResolverAsset(depth + 1), instance, ResolverLimits()).HasValue());
+        }
+
         TEST_CASE("Prefab source resolver rejects malformed cyclic source graphs", "[unit][prefab][resolver][malformed]") {
             const auto first = ResolverAsset(1);
             const auto second = ResolverAsset(2);
