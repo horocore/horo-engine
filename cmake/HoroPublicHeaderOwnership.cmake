@@ -644,6 +644,7 @@ horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
     Horo/Audio/AudioResampler.h
 )
 
+# Resident playback and its explicit host-context lifetime opt-in share this boundary.
 horo_configure_target_header_boundary(HoroAudioPlayback PUBLIC_HEADERS
     Horo/Audio/AudioVoicePlayback.h
     Horo/Audio/AudioRepeatedPlayback.h

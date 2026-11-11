@@ -41,6 +41,7 @@ namespace Horo::Audio {
         std::vector<Voice> voices;
         std::vector<AudioVoiceSnapshot> projection;
         std::uint64_t lastControlFrame{};
+        bool hostContextClosed{};
 
         /** @brief All structural capacities are reserved before this owner is published. */
         State(const AudioRepeatedPlaybackConfig &settings, AudioVoiceStateMachine prepared)
@@ -152,13 +153,20 @@ namespace Horo::Audio {
             return receipt;
         }
 
+        /** @brief Resolve lifecycle ownership before admission; producer identity remains scene-scoped. */
+        AudioSceneContextHandle ExecutionContext(const AudioPlaybackRequest &request) const noexcept {
+            if (request.sceneLifecycle == AudioSceneLifecyclePolicy::KeepAliveInHostContext && config.hostContext)
+                return *config.hostContext;
+            return request.sceneContext;
+        }
+
         /** @brief Produce the existing normalized typed command path for the exact retained voice. */
         bool Commands(AudioRepeatedPlaybackReceipt &receipt, const AudioRepeatedPlaybackRequest &request,
                       const AudioVoiceControl control) const noexcept {
             ScheduledAudioCommandBatch batch;
             batch.target = request.target;
             batch.commandCount = 1;
-            batch.commands[0] = {{config.runtime, config.epoch, request.playback.sceneContext},
+            batch.commands[0] = {{config.runtime, config.epoch, ExecutionContext(request.playback)},
                                  AudioVoiceControlRequest{.voice = receipt.voice,
                                                           .control = control,
                                                           .operationSequence = request.sequence}};
@@ -210,6 +218,9 @@ namespace Horo::Audio {
                 return Result<void>::Failure(valid.ErrorValue());
             if (!ValidBindingIdentity(binding, policy))
                 return Result<void>::Failure(MakeError(AudioErrors::PlaybackRequestInvalid));
+            if (hostContextClosed && (config.hostContext == binding.prototype.sceneContext ||
+                                      binding.prototype.sceneLifecycle == AudioSceneLifecyclePolicy::KeepAliveInHostContext))
+                return Result<void>::Failure(MakeError(AudioErrors::VoiceAdmissionClosed));
             if (!SupportedBinding(binding, policy))
                 return Result<void>::Failure(MakeError(AudioErrors::OperationUnsupported));
             if (policy.variation) {
@@ -335,7 +346,7 @@ namespace Horo::Audio {
             auto &voice = voices[receipt.voice.slot - 1];
             voice.playback = std::move(prepared).Value();
             voice.lane = request.lane;
-            voice.scene = request.playback.sceneContext;
+            voice.scene = ExecutionContext(request.playback);
             voice.bucket = lane.bucket;
             voice.receipt = receipt;
             voice.pending = true;
@@ -401,7 +412,8 @@ namespace Horo::Audio {
 
         /** @brief Validate owner identity independently of conversion and storage bounds. */
         static bool ValidConfigIdentity(const AudioRepeatedPlaybackConfig &config) noexcept {
-            return config.runtime.IsValid() && config.epoch != 0 && config.clockGeneration != 0 && config.discontinuityRevision != 0;
+            return config.runtime.IsValid() && config.epoch != 0 && config.clockGeneration != 0 && config.discontinuityRevision != 0 &&
+                   (!config.hostContext || (config.hostContext->IsValid() && config.hostContext->owner == config.runtime));
         }
 
         /** @brief Bound every structural capacity and supported conversion shape before allocating ownership. */
@@ -511,7 +523,9 @@ namespace Horo::Audio {
         bool SupportedBinding(const AudioPlaybackBinding &binding, const AudioRepeatedPlaybackPolicy &policy) const noexcept {
             const auto kind = binding.prototype.sound.kind;
             return (policy.variation ? kind == AudioSoundReferenceKind::Variation : kind == AudioSoundReferenceKind::Clip) &&
-                   Supported(binding.prototype.playback) && binding.prototype.sceneLifecycle == AudioSceneLifecyclePolicy::StopOnUnload;
+                   Supported(binding.prototype.playback) &&
+                   (binding.prototype.sceneLifecycle == AudioSceneLifecyclePolicy::StopOnUnload ||
+                    (config.hostContext && !hostContextClosed));
         }
 
         /** @brief Attach the authoritative eligibility decision before any real playback reservation. */

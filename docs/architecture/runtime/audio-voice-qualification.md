@@ -30,12 +30,15 @@ to remain reusable after failed preparation.
 
 Persistent ambience belongs to a separately host-owned context under ADR-062;
 it is not an exception allowing scene-owned voices to survive scene unload.
-`KeepAliveInHostContext` is currently an authored/request policy, not an
-implemented transfer operation: `AudioRepeatedPlayback` explicitly rejects that
-binding. There is no production host-context promotion transaction in this
-worktree. Persistent scene ambience therefore remains an acceptance gap; changing
-the executor to ignore an unload barrier would violate ownership rather than
-implement that policy.
+`AudioRepeatedPlaybackConfig::hostContext` is an explicit host-admitted process
+context. When supplied, `KeepAliveInHostContext` allocates the voice and its
+returned command scope in that context from initial admission. The producer lane
+retains its source scene identity. Source unload closes that lane but leaves
+already admitted playback and pending starts under the host's ownership. Host
+retirement cancels them and closes further persistent admission. No live callback
+resource is reparented, and no scene unload barrier is bypassed. The host still
+validates source/context admission and registers the host context with its
+transport before accepting producer work.
 The present reset path cancels the old voice identity. Resume/restart across a
 new device epoch must use the explicit migration transaction owned by AUD-007.7;
 the executor does not silently resume, restart, fall back to Null, or transfer old
@@ -67,6 +70,7 @@ Jira parent identities all resolve to HORO-550.
 | One terminal outcome, stale generation isolation | AudioVoiceStateMachineTests; full registries at 1, 64, 256 and 1024 slots, four reuse cycles |
 | Deterministic capacity decisions | AudioVoiceAdmissionTests; all eight policies at 1, 64, 256 and 1024 physical slots, repeated identical inputs, plus existing rank/bucket/cooldown tests |
 | Cursor and loop phase through virtualization | AudioVoiceVirtualizationTests, AudioVoiceRenderStreamTests; partitioned resident advancement and real stream worker realization |
+| Resident playback at configured ceilings | AudioVoiceVirtualizationTests; 1, 64, 256 and 1024 actual prepared PCM owners, alternating physical/virtual execution, loop phase, pause/resume and cancellation with no callback allocation/free |
 | Retrigger and variation | AudioRepeatedPlaybackTests |
 | Copied routing/spatial state | AudioVoiceRenderRuntimeTests; real PCM, mixer, retained publications and completed-block acknowledgement |
 | Unload/reset with active and terminal voices | AudioVoiceRenderRuntimeTests; Ready, Scheduled, Playing, Paused, Virtual, Stopping and all four terminal outcomes |
@@ -74,8 +78,9 @@ Jira parent identities all resolve to HORO-550.
 | Pending schedules, callbacks and reset reconciliation | AudioLifecycleReconcilerTests, AudioCommandStagingTests, ScheduledAudioCommandBatchTests |
 | Actual Null callback dispatch | AudioVoiceRenderNullTests and NullAudioBackendTests; deterministic backend, not physical hardware evidence |
 | Synthetic device loss with pending controls | AudioFrontendTests; production frontend closes admission, cancels unexecuted controls and releases the registry only after Null detachment |
+| Persistent resident ambience and schedules | AudioRepeatedPlaybackTests; explicit host opt-in, source/host retirement, host-scoped pending starts, real looping PCM, pause/resume and reset cancellation |
 
-The tested configured ceilings are not a claim of qualification at the identity
+The configured regression ceilings are not a claim of qualification at the identity
 limit of 1,048,576 slots. Unit policy tests, synchronous render tests and worker
 stream tests do not establish long-running hardware stress or every cross-product
 of source type, policy, device format and operating system.
@@ -95,6 +100,17 @@ of source type, policy, device format and operating system.
 
 ## Validation record
 
+Public migration: `AudioRepeatedPlaybackConfig` adds one trailing optional
+`hostContext`, defaulting to empty. Existing aggregate callers retain their
+scene-stop behavior and continue to reject KeepAlive requests without host
+opt-in. Callers adopting persistence must supply an admitted host context and
+dispatch returned command scopes, rather than reconstructing the source scope.
+`AudioRepeatedPlayback.h` remains solely owned by HoroAudioPlayback in the public
+header registry; its dedicated public consumer covers aggregate compatibility,
+the default and typed host-context assignment. Rebuild native consumers for this
+configuration-layout change; serialized scene data is unchanged. No target
+dependency is added.
+
 Initial base: `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`, verified against actual
 `origin` branch advertisement on 2026-11-11. The three Audio commits were later
 rebased without content changes onto the unpublished local parent
@@ -105,7 +121,16 @@ rebased without content changes onto the unpublished local parent
 Build/test and quality results must be recorded after execution. Required targets
 are HoroAudioApiTests, HoroAudioPlaybackTests, HoroAudioVoiceRenderTests,
 HoroAudioCommandTests, HoroAudioNullTests, HoroAudioEditorPreviewTests and
-HoroAudioDspTests. Run
+HoroAudioDspTests, plus HoroAudioPlaybackPublicHeaderConsumer. Reconfigure after
+the header-consumer and ownership-registry changes. Run
 native MSVC Debug, serial builds and CTest with the shared
 `scripts/dev.py heavy_build_lock`; source inspection alone does not satisfy this
 validation.
+
+Current validation is pending an explicitly allocated bounded slot. No updated
+native test or full quality-preflight pass is claimed. The first historical
+five-target build predates the final source edits, and its CTest filter matched
+zero tests. Formatting and diff checks do not replace runtime qualification.
+Before configure/build/test or analyzer compilation, verify the actual open
+Windows lock handle against the canonical shared heavy-build lock, not merely the
+cache identity. Use one build worker and `CTEST_PARALLEL_LEVEL=1`.
