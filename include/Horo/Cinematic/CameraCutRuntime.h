@@ -108,6 +108,12 @@ namespace Horo::Cinematic {
         [[nodiscard]] Result<void> ValidateScene(Runtime::RuntimeSceneView scene) const;
         [[nodiscard]] Result<void> ReleaseLease();
         [[nodiscard]] Result<void> PublishPosition(Runtime::RuntimeSceneView scene, const SequencePlayerSnapshot &state);
+        /** @brief Submits one admitted transition from camera values resolved at this owner safe point.
+         * @param scene Current exact scene borrow shared by both endpoint resolutions.
+         * @param key Eligible index in the copied bound camera track.
+         * @param position Final authored player time inside the selected key's interval.
+         * @param destination Current destination including its producer discontinuity revision.
+         * @return Owner submission outcome or typed interpolation failure after the authored fallback is considered. */
         [[nodiscard]] Result<void> SubmitPosition(Runtime::RuntimeSceneView scene, std::size_t key, SequenceTime position,
                                                   const Runtime::CameraProposal &destination);
         [[nodiscard]] bool IsSeekDiscontinuity(const SequencePlayerSnapshot &state) const noexcept;

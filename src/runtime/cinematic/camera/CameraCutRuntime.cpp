@@ -261,6 +261,7 @@ namespace Horo::Cinematic {
         return submitted;
     }
 
+    /** @copydoc CinematicCameraPlayback::SubmitPosition */
     Result<void> CinematicCameraPlayback::SubmitPosition(const Runtime::RuntimeSceneView scene, const std::size_t key,
                                                          const SequenceTime position, const Runtime::CameraProposal &destination) {
         const auto &cut = cuts_[key];
