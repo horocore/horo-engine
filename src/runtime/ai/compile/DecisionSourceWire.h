@@ -11,12 +11,12 @@ namespace Horo::AI::Detail {
             write(writer, value);
     }
 
-    template <typename T, typename Read> std::vector<T> ReadSequence(DecisionReader &reader, std::size_t maximum, Read read) {
+    template <typename T, typename Decode> std::vector<T> ReadSequence(DecisionReader &reader, std::size_t maximum, Decode decode) {
         const auto count = reader.Count(maximum);
         std::vector<T> values;
         values.reserve(count);
         for (std::size_t index = 0; index < count && reader.Valid(); ++index)
-            values.push_back(read(reader));
+            values.push_back(decode(reader));
         return values;
     }
 
