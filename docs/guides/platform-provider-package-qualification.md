@@ -102,7 +102,24 @@ through the ordinary headless test registry. Inclusion is not a passed run.
 Native configure/build/tests and final local quality preflight remain pending;
 this ledger must not be interpreted as completed parent acceptance.
 
-## Credential and external qualification gaps
+## Session delivery, credential and external qualification gaps
+
+PLS-006 owns account/session replacement and old-scope observer withdrawal. At
+this worktree's current base, the native lifecycle host's `OnComplete` delegates
+directly to the request store. An immutable terminal result does not authorize
+delivery into a replacement account scope. PLS-006 checkpoint
+`471caf6c76860844cc13c48d2ce876086e55fb58` contains the admission-revision and
+weak-state delivery guard in `OnComplete`, private handles and two `Submit`
+metadata assignments. Source review confirms these Host hunks do not overlap the
+PLS-002 `Close` change. Its native/frontend handle groundwork is
+`70bba8aa2406853b970df3da99da6417033b3355`; the associated move-before-binding fix is
+`98e62aaa164b5af7df2f340c8be7f83cacfb231d`. These checkpoints and their execution
+evidence are not integrated here; current observer regressions and final quality
+are still pending at the source owner. The PLS-002
+failed-Close subscription regression verifies shutdown withdrawal only. It does
+not prove account-switch withdrawal, including a session change between two
+observer deliveries. Keep this integration gate open without mutating historical
+terminal results or invoking user callbacks under provider locks.
 
 HORO-1782 / #1826 owns credential provider references. The existing version-2
 operations table's `initializeServices(candidate, requiredMask, outMask)` accepts
