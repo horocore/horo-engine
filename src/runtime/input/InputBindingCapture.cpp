@@ -57,11 +57,13 @@ namespace Horo::Input {
                                         .key = static_cast<Key>(index),
                                         .requiredModifiers = snapshot.modifiers};
             if (const auto button = PressedButton(snapshot.pointer.buttons))
-                return InputBinding{.kind = BindingControlKind::PointerButton, .pointerButton = static_cast<PointerButton>(*button)};
+                return InputBinding{.kind = BindingControlKind::PointerButton,
+                                    .pointerButton = static_cast<PointerButton>(*button),
+                                    .requiredModifiers = snapshot.modifiers};
             if (snapshot.pointer.wheelX != 0.0F)
-                return InputBinding{.kind = BindingControlKind::PointerWheelX};
+                return InputBinding{.kind = BindingControlKind::PointerWheelX, .requiredModifiers = snapshot.modifiers};
             if (snapshot.pointer.wheelY != 0.0F)
-                return InputBinding{.kind = BindingControlKind::PointerWheelY};
+                return InputBinding{.kind = BindingControlKind::PointerWheelY, .requiredModifiers = snapshot.modifiers};
             for (const auto &pad : snapshot.gamepads) {
                 auto &baseline = *std::ranges::find(baselines, pad.id, &GamepadState::id);
                 if (const auto binding = GamepadBinding(pad, baseline, valueType))

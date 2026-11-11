@@ -109,6 +109,34 @@ namespace {
         REQUIRE(result.binding->rawControl == 0);
     }
 
+    TEST_CASE("Keyboard and pointer captures preserve modifiers without imposing them on gamepads", "[input][rebinding]") {
+        CaptureFixture fixture;
+        auto &collector = fixture.Begin();
+        collector.SetModifiers({.control = true, .shift = true});
+        bool gamepad{};
+        SECTION("Key") {
+            collector.SetKey(Key::K, true);
+        }
+        SECTION("Pointer button") {
+            collector.SetPointerButton(PointerButton::Secondary, true);
+        }
+        SECTION("Horizontal wheel") {
+            collector.AddPointerWheel(1.0F, 0.0F);
+        }
+        SECTION("Vertical wheel") {
+            collector.AddPointerWheel(0.0F, 1.0F);
+        }
+        SECTION("Gamepad") {
+            REQUIRE(collector.SetGamepadButton(fixture.pad, GamepadButton::East, true));
+            gamepad = true;
+        }
+        const auto result = fixture.Poll();
+        REQUIRE(result.status == BindingCaptureStatus::Captured);
+        REQUIRE(result.binding);
+        const ModifierState expected = gamepad ? ModifierState{} : ModifierState{.control = true, .shift = true};
+        CHECK(result.binding->requiredModifiers == expected);
+    }
+
     TEST_CASE("Rebinding cancels on Escape focus loss modal preemption and reused device generations", "[input][rebinding]") {
         CaptureFixture fixture;
         auto &collector = fixture.Begin();
