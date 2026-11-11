@@ -785,6 +785,21 @@ namespace {
         REQUIRE(snapshot.pointer.deltaY == 0.0F);
     }
 
+    TEST_CASE("Profile composition retains its storage bound while allowing replacements at capacity", "[unit][runtime][input]") {
+        InputBindingProfile lower{.profileId = "lower"};
+        for (std::size_t index = 0; index < 4096; ++index)
+            lower.overrides.push_back({ActionId{"action." + std::to_string(index)}, {}});
+        const InputBindingProfile replacement{.profileId = "replacement", .overrides = {{ActionId{"action.0"}, {KeyBinding(Key::A)}}}};
+        const auto replaced = MergeBindingProfiles(lower, replacement);
+        REQUIRE(replaced.HasValue());
+        CHECK(replaced.Value().overrides.size() == 4096);
+        CHECK(replaced.Value().overrides.front().bindings.front().key == Key::A);
+        const InputBindingProfile overflow{.profileId = "overflow", .overrides = {{ActionId{"one.too.many"}, {}}}};
+        CHECK(MergeBindingProfiles(lower, overflow).HasError());
+        CHECK(lower.overrides.size() == 4096);
+        CHECK(lower.overrides.front().bindings.empty());
+    }
+
     TEST_CASE("Mixed keyboard and gamepad players own distinct controls and modifiers", "[unit][runtime][input]") {
         RawInputCollector collector;
         InputRouter router;

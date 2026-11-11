@@ -460,9 +460,12 @@ namespace Horo::Input {
         merged.profileId = higher.profileId.empty() ? lower.profileId : higher.profileId;
         for (const BindingOverride &overrideValue : higher.overrides) {
             const auto existing = std::ranges::find(merged.overrides, overrideValue.action, &BindingOverride::action);
-            if (existing == merged.overrides.end())
+            if (existing == merged.overrides.end()) {
+                if (merged.overrides.size() == 4096)
+                    return Result<InputBindingProfile>::Failure(
+                        MakeError(Errors::ProfileMalformed, "Composed input profile exceeds 4096 action overrides."));
                 merged.overrides.push_back(overrideValue);
-            else
+            } else
                 *existing = overrideValue;
         }
         return Result<InputBindingProfile>::Success(std::move(merged));
