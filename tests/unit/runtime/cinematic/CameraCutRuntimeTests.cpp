@@ -115,10 +115,12 @@ namespace Horo::Cinematic {
 
     TEST_CASE("Smooth camera blends use the authored bounded curve and reverse seeks reconstruct their source",
               "[unit][cinematic][camera]") {
+        const SequenceTime duration = GENERATE(3, 4);
+        const float expected = duration == 3 ? 12.5925926F : 11.5625F;
         Fixture fixture;
         auto activation = TransitionActivation(CameraTransitionTier::SingleViewBlend, CameraBlendCurve::SmoothStep);
         auto keys = std::vector<SequenceFrameCameraCutKey>(activation.plan.CameraKeys().begin(), activation.plan.CameraKeys().end());
-        keys[1].transitionDuration = 4;
+        keys[1].transitionDuration = duration;
         activation.plan = Take(SequenceFrameEvaluationPlan::Create(10, SequenceLoopMode::Once, 4, {}, {}, keys));
         auto settings = fixture.Settings();
         settings.trackEnd = 10;
@@ -126,11 +128,11 @@ namespace Horo::Cinematic {
             CinematicCameraPlayback::Activate(fixture.runtime, fixture.camera, std::move(activation), settings, fixture.scene->View())));
         REQUIRE(fixture.runtime.Play(fixture.playback->Player()).HasValue());
         fixture.Seek(6);
-        CHECK(fixture.Commit().selected.values.position.x == Catch::Approx(11.5625F));
+        CHECK(fixture.Commit().selected.values.position.x == Catch::Approx(expected));
         fixture.Seek(9);
         CHECK(fixture.Commit().selected.values.position.x == 20.0F);
         fixture.Seek(6);
-        CHECK(fixture.Commit().selected.values.position.x == Catch::Approx(11.5625F));
+        CHECK(fixture.Commit().selected.values.position.x == Catch::Approx(expected));
     }
 
     TEST_CASE("Unavailable dual view transitions require an authored hard cut before admitting player state", "[unit][cinematic][camera]") {

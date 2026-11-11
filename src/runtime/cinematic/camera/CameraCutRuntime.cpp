@@ -273,10 +273,10 @@ namespace Horo::Cinematic {
         if (cut.fallback == CameraTransitionFallback::HardCut &&
             source.Value().values.projection.kind != destination.values.projection.kind)
             return camera_->Submit(*lease_, destination);
-        auto weight = static_cast<float>(static_cast<double>(elapsed) / static_cast<double>(cut.duration));
+        auto weight = static_cast<double>(elapsed) / static_cast<double>(cut.duration);
         if (cut.curve == CameraBlendCurve::SmoothStep)
-            weight = weight * weight * (3.0F - 2.0F * weight);
-        const auto blended = camera_->SubmitBlend(*lease_, source.Value(), destination, weight);
+            weight = weight * weight * (3.0 - 2.0 * weight);
+        const auto blended = camera_->SubmitBlend(*lease_, source.Value(), destination, static_cast<float>(weight));
         if (blended.HasError() && cut.fallback == CameraTransitionFallback::HardCut &&
             (blended.ErrorValue().code.Value() == Runtime::CameraErrors::IncompatibleTransition.code.Value() ||
              blended.ErrorValue().code.Value() == Runtime::CameraErrors::UnsupportedTransition.code.Value()))
