@@ -140,6 +140,14 @@ namespace Horo::AI {
     private:
         QueryExecution(QueryExecutionInputs inputs, QueryGeneratorProvenance provenance, QueryScoringPlan scoring,
                        QueryExecutionSettings settings, std::unique_ptr<IQueryExecutionSource> source);
+        /** @brief Checks that the owner synchronized this tick and can advance without overlapping work. */
+        [[nodiscard]] bool CanAdvance(std::uint64_t tick) const noexcept;
+        /** @brief Advances candidate work once generation has completed. */
+        void AdvanceCandidates(QueryExecutionBudget budget);
+        /** @brief Polls accepted work and determines whether this synchronization is terminal. */
+        [[nodiscard]] std::optional<QueryExecutionStatus> TerminalAt(std::uint64_t tick, bool finishEarly);
+        /** @brief Reduces the eligible prefix and returns its final publication status. */
+        [[nodiscard]] QueryExecutionStatus ReduceWinners(QueryExecutionStatus status);
         void Generate();
         void ScoreCandidate();
         void Poll();

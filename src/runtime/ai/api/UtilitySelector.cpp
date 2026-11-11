@@ -113,6 +113,21 @@ namespace Horo::AI {
             }
             return Result<std::optional<double>>::Success(eligible && UnitValue(score) ? std::optional{score} : std::nullopt);
         }
+
+        /** @brief Keeps the first stable option on an equal score. */
+        bool IsBetterScore(const std::optional<double> score, const std::optional<UtilitySelection> &selection) noexcept {
+            return score && (!selection || *score > selection->score);
+        }
+
+        /** @brief Reserves complete evaluation against each distinct budget before reading keys. */
+        bool ReserveWork(AiWorkBudget &agent, AiWorkBudget &global, const std::size_t units) noexcept {
+            if (std::min(agent.Remaining(), global.Remaining()) < units)
+                return false;
+            (void)agent.Consume(units);
+            if (&agent != &global)
+                (void)global.Consume(units);
+            return true;
+        }
     }  // namespace
 
     /** @copydoc UtilitySelector::Capture */
@@ -148,20 +163,17 @@ namespace Horo::AI {
         if (revision.HasError())
             return Evaluation::Failure(std::move(revision).ErrorValue());
         UtilityEvaluation result{.blackboardRevision = revision.Value()};
-        if (std::min(agentBudget.Remaining(), globalBudget.Remaining()) < workUnits_) {
+        if (!ReserveWork(agentBudget, globalBudget, workUnits_)) {
             result.budgetExhausted = true;
             return Evaluation::Success(result);
         }
-        (void)agentBudget.Consume(workUnits_);
-        if (&agentBudget != &globalBudget)
-            (void)globalBudget.Consume(workUnits_);
         const EvidenceWriter writer{evidence, result};
         for (const auto &option : options_) {
             auto score = ScoreOption(snapshot, option, writer);
             if (score.HasError())
                 return Evaluation::Failure(std::move(score).ErrorValue());
             writer.Append({option.id, {}, score.Value()});
-            if (score.Value() && (!result.selection || *score.Value() > result.selection->score))
+            if (IsBetterScore(score.Value(), result.selection))
                 result.selection = UtilitySelection{option.id, option.action, *score.Value()};
         }
         return Evaluation::Success(result);

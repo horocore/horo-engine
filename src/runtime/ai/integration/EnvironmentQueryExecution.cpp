@@ -34,6 +34,13 @@ namespace Horo::AI {
                    provenance.revision > 0 && settings.submittedTick < settings.deadlineTick;
         }
 
+        /** @brief Checks finite generation, ranking and admission work bounds. */
+        [[nodiscard]] bool WithinLimits(const QueryExecutionSettings &settings, const std::size_t maximumResults) noexcept {
+            return settings.maximumCandidates > 0 && settings.maximumCandidates <= EnvironmentQuerySchemaLimits::MaximumResults &&
+                   settings.bestCount > 0 && settings.bestCount <= maximumResults && settings.generatorWorkUnits > 0 &&
+                   settings.generatorWorkUnits <= EnvironmentQuerySchemaLimits::MaximumResults * 16U;
+        }
+
         /** @brief Rejects a generator that returns a different publication or more than its admitted capacity. */
         [[nodiscard]] bool MatchesGeneration(const QueryGenerationResult &generation, const QueryGeneratorOutput &output) noexcept {
             const auto &actual = generation.provenance;
@@ -71,9 +78,7 @@ namespace Horo::AI {
             provenance.generator != scoring.generator_ || provenance.provider != scoring.generatorProvider_ ||
             scoring.tieBreak_ != QueryScoreTieBreak::StableIndex)
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
-        if (settings.maximumCandidates == 0 || settings.maximumCandidates > EnvironmentQuerySchemaLimits::MaximumResults ||
-            settings.bestCount == 0 || settings.bestCount > scoring.maximumResults_ || settings.generatorWorkUnits == 0 ||
-            settings.generatorWorkUnits > EnvironmentQuerySchemaLimits::MaximumResults * 16U)
+        if (!WithinLimits(settings, scoring.maximumResults_))
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         return Admission::Success(std::unique_ptr<QueryExecution>(
             new QueryExecution(std::move(inputs), provenance, std::move(scoring), settings, std::move(source))));
@@ -124,7 +129,7 @@ namespace Horo::AI {
 
     /** @copydoc QueryExecution::Advance */
     void QueryExecution::Advance(const std::uint64_t tick, const QueryExecutionBudget budget) {
-        if (published_ || cancelled_ || result_.error || pending_ || tick != lastSync_ || tick <= lastAdvance_)
+        if (!CanAdvance(tick))
             return;
         lastAdvance_ = tick;
         if (!source_->IsCurrent(inputs_)) {
@@ -133,8 +138,17 @@ namespace Horo::AI {
         }
         if (!generated_ && Charge(budget, GenerationCost(settings_)))
             Generate();
-        if (!generated_)
-            return;
+        if (generated_)
+            AdvanceCandidates(budget);
+    }
+
+    /** @copydoc QueryExecution::CanAdvance */
+    bool QueryExecution::CanAdvance(const std::uint64_t tick) const noexcept {
+        return !published_ && !cancelled_ && !result_.error && !pending_ && tick == lastSync_ && tick > lastAdvance_;
+    }
+
+    /** @copydoc QueryExecution::AdvanceCandidates */
+    void QueryExecution::AdvanceCandidates(const QueryExecutionBudget budget) {
         const auto scoringCost = std::max<std::size_t>(1, scoring_.stages_.size());
         while (scores_.size() < result_.generated) {
             if (!scoringReserved_ && !Charge(budget, scoringCost))
@@ -186,42 +200,52 @@ namespace Horo::AI {
             Publish(QueryExecutionStatus::Cancelled);
         else if (stale_ || !source_->IsCurrent(inputs_))
             Publish(QueryExecutionStatus::StaleInputs);
-        else {
-            if (pending_ && tick <= settings_.deadlineTick)
-                Poll();
-            if (result_.error)
-                Publish(QueryExecutionStatus::Failed);
-            else if (generated_ && scores_.size() == result_.generated)
-                Publish(QueryExecutionStatus::Completed);
-            else if (finishEarly || tick >= settings_.deadlineTick)
-                Publish(settings_.allowPartial
-                            ? QueryExecutionStatus::PartialSuccess
-                            : (tick >= settings_.deadlineTick ? QueryExecutionStatus::TimedOut : QueryExecutionStatus::Failed));
-        }
+        else if (const auto status = TerminalAt(tick, finishEarly))
+            Publish(*status);
         return published_;
+    }
+
+    /** @copydoc QueryExecution::TerminalAt */
+    std::optional<QueryExecutionStatus> QueryExecution::TerminalAt(const std::uint64_t tick, const bool finishEarly) {
+        const bool deadlineReached = tick >= settings_.deadlineTick;
+        if (pending_ && tick <= settings_.deadlineTick)
+            Poll();
+        if (result_.error)
+            return QueryExecutionStatus::Failed;
+        if (generated_ && scores_.size() == result_.generated)
+            return QueryExecutionStatus::Completed;
+        if (!finishEarly && !deadlineReached)
+            return std::nullopt;
+        if (settings_.allowPartial)
+            return QueryExecutionStatus::PartialSuccess;
+        return deadlineReached ? QueryExecutionStatus::TimedOut : QueryExecutionStatus::Failed;
+    }
+
+    /** @copydoc QueryExecution::ReduceWinners */
+    QueryExecutionStatus QueryExecution::ReduceWinners(const QueryExecutionStatus status) {
+        auto selected = scoring_.SelectBest(scores_, settings_.bestCount);
+        if (selected.HasError()) {
+            result_.error = std::move(selected).ErrorValue();
+            return QueryExecutionStatus::Failed;
+        }
+        for (const auto &score : selected.Value())
+            result_.winners.push_back({items_[score.itemIndex], score});
+        if (!result_.winners.empty())
+            return status;
+        if (status == QueryExecutionStatus::PartialSuccess)
+            return lastSync_ >= settings_.deadlineTick ? QueryExecutionStatus::TimedOut : QueryExecutionStatus::Failed;
+        const bool invalidScore = std::ranges::any_of(scores_, [](const auto &score) {
+            return score.status == QueryScoreStatus::InvalidScore;
+        });
+        return invalidScore ? QueryExecutionStatus::Failed : status;
     }
 
     /** @brief Reduces the completed candidate prefix and publishes exactly once. */
     void QueryExecution::Publish(QueryExecutionStatus status) {
         StopTest();
         result_.evaluated = scores_.size();
-        if (status == QueryExecutionStatus::Completed || status == QueryExecutionStatus::PartialSuccess) {
-            auto selected = scoring_.SelectBest(scores_, settings_.bestCount);
-            if (selected.HasError()) {
-                result_.error = std::move(selected).ErrorValue();
-                status = QueryExecutionStatus::Failed;
-            } else {
-                for (const auto &score : selected.Value())
-                    result_.winners.push_back({items_[score.itemIndex], score});
-                if (result_.winners.empty() && status == QueryExecutionStatus::PartialSuccess)
-                    status = lastSync_ >= settings_.deadlineTick ? QueryExecutionStatus::TimedOut : QueryExecutionStatus::Failed;
-                if (status == QueryExecutionStatus::Completed && result_.winners.empty() &&
-                    std::ranges::any_of(scores_, [](const auto &score) {
-                    return score.status == QueryScoreStatus::InvalidScore;
-                }))
-                    status = QueryExecutionStatus::Failed;
-            }
-        }
+        if (status == QueryExecutionStatus::Completed || status == QueryExecutionStatus::PartialSuccess)
+            status = ReduceWinners(status);
         if (status != QueryExecutionStatus::Failed)
             result_.error.reset();
         result_.status = status;
