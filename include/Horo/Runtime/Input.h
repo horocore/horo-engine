@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Result.h"
 
 #include <array>
+#include <compare>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -271,6 +272,15 @@ namespace Horo::Input {
         std::vector<float> rawAxes;
     };
 
+    /** @brief Host-provided monotonic sample boundary for deterministic semantic hold/repeat interpretation.
+     * @details The host chooses a stable real or replay time domain for a router session. Input never samples a clock implicitly.
+     * Equal timestamps are permitted. Missing time is explicit; frame ordinal is never interpreted as elapsed time.
+     */
+    struct InputSampleTime final {
+        std::uint64_t microseconds{};
+        [[nodiscard]] constexpr auto operator<=>(const InputSampleTime &) const noexcept = default;
+    };
+
     /** @brief Immutable value snapshot committed once after platform event polling. */
     struct RawInputSnapshot {
         FrameNumber frame{0};
@@ -286,6 +296,7 @@ namespace Horo::Input {
         WindowInputState window{};
 
         std::array<SensorSample, static_cast<std::size_t>(SensorKind::Count)> sensors{}; /**< Owned permission-filtered sensor evidence. */
+        std::optional<InputSampleTime> sampleTime; /**< Exact host sample boundary; never synthesized from physical transitions. */
 
         [[nodiscard]] const ButtonState &State(Key key) const noexcept;
         [[nodiscard]] const ButtonState &State(PointerButton button) const noexcept;
@@ -300,7 +311,11 @@ namespace Horo::Input {
         RawInputCollector(const RawInputCollector &) = delete;
         RawInputCollector &operator=(const RawInputCollector &) = delete;
 
-        void BeginFrame(FrameNumber frame);
+        /** @brief Starts collection with an explicit optional host time boundary.
+         * @param frame Correlation ordinal, never a duration. @param sampleTime Stable monotonic/replay time, or unavailable.
+         * @details Every call replaces time metadata, including clearing an earlier timestamp when none is provided.
+         */
+        void BeginFrame(FrameNumber frame, std::optional<InputSampleTime> sampleTime = std::nullopt);
         void SetKey(Key key, bool down);
         void SetPointerButton(PointerButton button, bool down);
         void SetPointerPosition(float x, float y);
@@ -848,7 +863,10 @@ namespace Horo::Input {
     /** @brief Headless-capable composition that owns collection, immutable frame commit, and semantic routing. */
     class InputService {
     public:
-        void BeginFrame(FrameNumber frame);
+        /** @brief Starts the canonical collection path with host-owned semantic timing.
+         * @param frame Correlation ordinal. @param sampleTime Explicit time carried unchanged into the committed immutable snapshot.
+         */
+        void BeginFrame(FrameNumber frame, std::optional<InputSampleTime> sampleTime = std::nullopt);
         [[nodiscard]] RawInputCollector &Collector() noexcept;
         [[nodiscard]] InputRouter &Router() noexcept;
         [[nodiscard]] const RawInputSnapshot &CommitFrame();

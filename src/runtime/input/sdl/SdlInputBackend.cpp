@@ -502,7 +502,7 @@ namespace Horo::Input {
     }
 
     void SdlInputBackend::BeginFrame(const FrameNumber frame) {
-        impl_->collector.BeginFrame(frame);
+        impl_->collector.BeginFrame(frame, InputSampleTime{SDL_GetTicksNS() / 1000});
         for (auto &touch : impl_->touches)
             if (touch.terminal)
                 touch = {};

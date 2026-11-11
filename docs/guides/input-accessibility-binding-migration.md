@@ -70,6 +70,24 @@ private to HoroInput, and EditorServices already depends on Input.
 
 ## Qualification status
 
+The canonical raw snapshot now also carries optional `InputSampleTime` metadata in
+integer microseconds. `RawInputCollector::BeginFrame` and `InputService::BeginFrame`
+accept that explicit host value; the existing one-argument call remains source
+compatible through a default unavailable argument. Typed pointers to those member
+functions must adopt the new signature, and C++ consumers must rebuild.
+Every BeginFrame replaces the metadata, so an unavailable time never reuses an old
+timestamp or interprets a frame ordinal as elapsed time. Equal timestamps are
+valid, and physical key/button facts are not synthesized by time publication.
+
+SDL's platform adapter supplies `SDL_GetTicksNS()/1000` at the actual collection
+boundary. The terminal simulator workflow supplies the runtime owner's admitted
+presentation duration instead, making its selected logical/replay time explicit.
+An invalid negative runtime duration yields unavailable metadata rather than an
+unsigned wrap. Mapping itself performs no system-clock call. New regression
+sources cover legacy/no-time collection, equality/maximum timestamps, clearing
+missing time, the canonical action-collection commit and native SDL publication.
+They do not yet qualify timed router consumption or device hardware.
+
 Regression sources cover legacy read/current write, policy round trip, layered
 profile replacement, malformed numeric and boolean types, unknown fields,
 duration bounds, version skew and sticky/physical conflict detection. They have

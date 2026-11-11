@@ -1190,8 +1190,9 @@ namespace Horo::Input {
         return router_ && router_->CaptureActive(token_);
     }
 
-    void InputService::BeginFrame(const FrameNumber frame) {
-        collector_.BeginFrame(frame);
+    /** @copydoc InputService::BeginFrame */
+    void InputService::BeginFrame(const FrameNumber frame, const std::optional<InputSampleTime> sampleTime) {
+        collector_.BeginFrame(frame, sampleTime);
     }
 
     RawInputCollector &InputService::Collector() noexcept {

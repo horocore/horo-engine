@@ -56,11 +56,13 @@ namespace Horo::Input {
 
     RawInputCollector::~RawInputCollector() = default;
 
-    void RawInputCollector::BeginFrame(const FrameNumber frame) {
+    /** @copydoc RawInputCollector::BeginFrame */
+    void RawInputCollector::BeginFrame(const FrameNumber frame, const std::optional<InputSampleTime> sampleTime) {
         RawInputSnapshot &next = impl_->snapshots[impl_->write];
         const RawInputSnapshot &previous = impl_->snapshots[1 - impl_->write];
         next = previous;
         next.frame = frame;
+        next.sampleTime = sampleTime;
         next.text.clear();
         next.pointer.deltaX = 0.0F;
         next.pointer.deltaY = 0.0F;

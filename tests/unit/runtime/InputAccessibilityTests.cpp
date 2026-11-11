@@ -1,10 +1,44 @@
 #include "Horo/Runtime/InputAccessibility.h"
+#include "Horo/Runtime/InputCollection.h"
 #include "support/AllocationProbe.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 
 namespace Horo::Input {
+    TEST_CASE("Input sample time is explicit immutable metadata and does not carry forward when unavailable",
+              "[input][accessibility][time]") {
+        InputService input;
+        input.BeginFrame(1, InputSampleTime{1000});
+        input.Collector().SetKey(Key::K, true);
+        const auto &first = input.CommitFrame();
+        REQUIRE(first.sampleTime == InputSampleTime{1000});
+        REQUIRE(first.State(Key::K).pressed);
+        REQUIRE(input.Router().Snapshot().sampleTime == first.sampleTime);
+        input.BeginFrame(5000);
+        const auto &missing = input.CommitFrame();
+        REQUIRE_FALSE(missing.sampleTime.has_value());
+        REQUIRE(missing.State(Key::K).down);
+        REQUIRE_FALSE(missing.State(Key::K).pressed);
+        input.BeginFrame(5001, InputSampleTime{1000});
+        REQUIRE(input.CommitFrame().sampleTime == InputSampleTime{1000});
+        input.BeginFrame(5002, InputSampleTime{std::numeric_limits<std::uint64_t>::max()});
+        REQUIRE(input.CommitFrame().sampleTime->microseconds == std::numeric_limits<std::uint64_t>::max());
+    }
+
+    TEST_CASE("Canonical action collection preserves the exact host time in its raw snapshot publication",
+              "[input][accessibility][time][collection]") {
+        RawInputCollector collector;
+        InputRouter router;
+        auto context = router.PushContext(InputContextId{"gameplay"}, InputContextKind::Gameplay);
+        auto port = router.ActionCollection(context).Value();
+        collector.BeginFrame(7, InputSampleTime{1234567});
+        auto frame = port.Begin(collector.Commit()).Value();
+        REQUIRE(frame.Commit().HasValue());
+        REQUIRE(router.Snapshot().frame == 7);
+        REQUIRE(router.Snapshot().sampleTime == InputSampleTime{1234567});
+    }
+
     namespace {
         /** @brief Builds a complete wire document while letting malformed policy values reach the real parser unchanged. */
         std::string AccessibilityProfileJson(const std::string_view policy,
