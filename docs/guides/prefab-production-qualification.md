@@ -1,7 +1,7 @@
 # Prefab production qualification
 
 This ledger tracks HORO-1007 / #1007 / [PFB-008] against stacked base
-`f51e0c0f44cd0f4c7931d288a5dde794e3316dfd` on
+`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08` on
 `feat/HORO-1007_prefab_production_qualification`. Source inspection and newly
 written assertions below are implementation evidence. Execution results must be
 recorded separately before an acceptance criterion is considered qualified.
@@ -88,8 +88,13 @@ release-stage tests alone cannot establish that full distribution matrix.
 
 ## Local validation record
 
-Initial worktree was clean and detached at the stated base. The dedicated branch
-was created without modifying the main checkout. Initial Windows Debug configure
+Initial worktree was clean and detached at
+`f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`. The dedicated branch was created
+without modifying the main checkout. Its six delivery commits were subsequently
+rebased without conflicts onto the verified local parent
+`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`. At that point origin still referenced
+the initial base. Final preflight must use the new local parent SHA.
+Initial Windows Debug configure
 failed during the compiler ABI probe with MSVC C1902, before any Prefab test ran.
 The isolated local runner will use CMake's Embedded MSVC debug information format
 on retry. The queued retry was cancelled before configure/compiler/CTest children
