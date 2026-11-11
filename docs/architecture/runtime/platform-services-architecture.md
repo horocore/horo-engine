@@ -681,6 +681,16 @@ callers cannot turn a read completion into an unconditional write.
 Presence updates are coalesced. If `SetPresence` is called many times before
 the backend finishes the previous update, only the most recent state is sent.
 
+Frontend-issued request handles additionally carry a weak cancellation-issuance
+capability. Numeric request ID/generation equality alone does not authorize a
+cancellation through another frontend. Moving a frontend transfers this authority;
+closing or retaining an old frontend cannot retarget an old handle to a new backend
+that reuses numeric request identities. This is provenance, not a second request
+store or session authority. Backend/store-only handles must be cancelled through
+their owning backend/store, while public consumers use the issuing frontend.
+See [session lifecycle migration](../../guides/platform-session-lifecycle-migration.md)
+for the private C++ layout and cancellation-contract migration.
+
 ## Service Categories
 
 ### Achievements

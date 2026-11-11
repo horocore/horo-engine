@@ -29,6 +29,7 @@ unsigned horo_test_provider_destroyed(const FixtureAudit *);
 unsigned horo_test_provider_post_destroy_callbacks(const FixtureAudit *);
 HoroExtensionStatus horo_test_provider_session_changed(FixtureAudit *, std::uint64_t, std::uint32_t);
 HoroExtensionStatus horo_test_provider_emit(FixtureAudit *, std::uint64_t, std::uint64_t);
+HoroExtensionStatus horo_test_provider_emit_revision(FixtureAudit *, std::uint64_t, std::uint64_t, std::uint64_t);
 HoroExtensionStatus horo_test_provider_emit_failure(FixtureAudit *, std::uint64_t, std::uint64_t, std::uint32_t);
 HoroExtensionStatus horo_test_provider_emit_held(FixtureAudit *, std::uint64_t, std::uint64_t);
 unsigned horo_test_provider_held_ready(const FixtureAudit *);

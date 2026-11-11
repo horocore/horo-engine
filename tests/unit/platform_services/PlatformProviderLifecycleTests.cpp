@@ -240,6 +240,52 @@ TEST_CASE("Session revision change fences an in-flight native completion", "[pla
     REQUIRE(host->Close().HasValue());
 }
 
+TEST_CASE("Session invalidation terminates old work before callbacks and cancels native work once",
+          "[platform-services][lifecycle][session]") {
+    Rig rig;
+    rig.Publish();
+    SECTION("Provider accepts cancellation") {}
+    SECTION("Provider rejects cancellation") {
+        horo_test_provider_cancel_status(rig.audit.get(), HORO_EXTENSION_ERROR_INIT_FAILED);
+    }
+    auto started = rig.Start();
+    REQUIRE(started.HasValue());
+    auto host = std::move(started).Value();
+    auto request = host->UnlockAchievement({1});
+    REQUIRE(request.HasValue());
+    CHECK(host->DispatchCompletions(0) == 0);
+    unsigned observed{};
+    auto subscription = host->OnComplete(request.Value(), [&](const auto &snapshot) {
+        REQUIRE(snapshot.terminal);
+        REQUIRE(snapshot.terminal->HasError());
+        CHECK(snapshot.terminal->ErrorValue()->code.Value() == PlatformSessionErrors::StaleSession.code.Value());
+        ++observed;
+    });
+    REQUIRE(subscription.HasValue());
+    REQUIRE(horo_test_provider_session_changed(rig.audit.get(), 2, 3) == HORO_EXTENSION_SUCCESS);
+    CHECK(host->DispatchCompletions(64) == 0);
+    CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Failed);
+    CHECK(observed == 1);
+    CHECK(std::ranges::count(Events(*rig.audit), 'X') == 1);
+    CHECK(horo_test_provider_destroyed(rig.audit.get()) == 0);
+    REQUIRE(horo_test_provider_session_changed(rig.audit.get(), 3, 2) == HORO_EXTENSION_SUCCESS);
+    auto current = host->UnlockAchievement({2});
+    REQUIRE(current.HasValue());
+    CHECK(host->DispatchCompletions(64) == 0);
+    CHECK(std::ranges::count(Events(*rig.audit), 'X') == 1);
+    REQUIRE(horo_test_provider_emit(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value) ==
+            HORO_EXTENSION_SUCCESS);
+    CHECK(host->DispatchCompletions(64) == 1);
+    CHECK(observed == 1);
+    CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Failed);
+    CHECK(host->Query(current.Value()).Value().state == PlatformRequestState::Running);
+    REQUIRE(horo_test_provider_emit_revision(rig.audit.get(), current.Value().Id().value, current.Value().Generation().value, 3) ==
+            HORO_EXTENSION_SUCCESS);
+    CHECK(host->DispatchCompletions(64) == 1);
+    CHECK(host->Query(current.Value()).Value().state == PlatformRequestState::Succeeded);
+    REQUIRE(host->Close().HasValue());
+}
+
 TEST_CASE("Queued caller cancellation is terminal once without native submission or callback reentry",
           "[platform-services][lifecycle][cancellation]") {
     Rig rig;
@@ -333,6 +379,10 @@ TEST_CASE("Timeout releases caller and observer despite unsupported native cance
     callbackOwner.reset();
     CHECK(!callbackLifetime.expired());
     const auto deadline = host->Query(request.Value()).Value().timing.admittedAt + std::chrono::seconds{5};
+    SECTION("Session remains current at the deadline") {}
+    SECTION("Session invalidation cannot replace an expired admission deadline") {
+        REQUIRE(horo_test_provider_session_changed(rig.audit.get(), 2, 3) == HORO_EXTENSION_SUCCESS);
+    }
     CHECK(host->DispatchCompletions(64, deadline + std::chrono::milliseconds{1}) == 0);
     CHECK(observed == 1);
     CHECK(callbackLifetime.expired());

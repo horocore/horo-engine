@@ -150,12 +150,14 @@ namespace Horo::PlatformServices {
         PlatformRequestHandle &operator=(const PlatformRequestHandle &) = delete;
 
         PlatformRequestHandle(PlatformRequestHandle &&other) noexcept
-            : id_(std::exchange(other.id_, {})), generation_(std::exchange(other.generation_, {})) {}
+            : id_(std::exchange(other.id_, {})), generation_(std::exchange(other.generation_, {})),
+              frontendAuthority_(std::move(other.frontendAuthority_)) {}
 
         PlatformRequestHandle &operator=(PlatformRequestHandle &&other) noexcept {
             if (this != &other) {
                 id_ = std::exchange(other.id_, {});
                 generation_ = std::exchange(other.generation_, {});
+                frontendAuthority_ = std::move(other.frontendAuthority_);
             }
             return *this;
         }
@@ -178,12 +180,15 @@ namespace Horo::PlatformServices {
     private:
         friend class PlatformRequestStore;
         friend class PlatformProviderLifecycleHost;
+        friend class PlatformServicesFrontend;
 
         PlatformRequestHandle(const PlatformRequestId id, const PlatformRequestGeneration generation) noexcept
             : id_(id), generation_(generation) {}
 
         PlatformRequestId id_;
         PlatformRequestGeneration generation_;
+        // A weak issuance capability never keeps frontend/backend/request state alive.
+        std::weak_ptr<const void> frontendAuthority_;
     };
 
     /** @brief Outcome of an idempotent request-state mutation. */
