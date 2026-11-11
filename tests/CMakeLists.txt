@@ -217,6 +217,46 @@ function(horo_register_catch_test target)
     horo_ci_catch_properties(${target})
 endfunction()
 
+add_executable(HoroRuntimeConsoleTests
+    unit/runtime/console/CommandRegistryTests.cpp
+    unit/runtime/console/CommandExecutorTests.cpp
+    unit/runtime/console/ConsoleVariableTests.cpp
+    unit/runtime/console/ConsoleVariableSetTests.cpp
+    unit/runtime/console/ConsoleBuiltinsTests.cpp
+    unit/runtime/console/ConsolePresentationTests.cpp
+    unit/runtime/console/OverlayLayoutTests.cpp
+    unit/runtime/console/ConsolePrivacyTests.cpp
+    unit/runtime/console/ConsoleStartupTests.cpp)
+target_link_libraries(HoroRuntimeConsoleTests PRIVATE HoroEngine::RuntimeConsole HoroEngine::RuntimeConsoleStartup HoroEngine::RuntimeConsoleUi)
+horo_register_catch_test(HoroRuntimeConsoleTests)
+add_executable(HoroRuntimeConsoleProductTests
+    unit/runtime/console/ConsoleProductTests.cpp
+    unit/runtime/console/ConsoleTelemetryBindingsTests.cpp
+    unit/runtime/console/ConsoleSupportBindingsTests.cpp)
+target_link_libraries(HoroRuntimeConsoleProductTests PRIVATE HoroEngine::RuntimeConsoleDefaults)
+horo_register_catch_test(HoroRuntimeConsoleProductTests)
+if(HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Editor" OR HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Development")
+    add_executable(HoroRuntimeConsoleSceneTests unit/runtime/console/ConsoleSceneBindingsTests.cpp)
+    target_link_libraries(HoroRuntimeConsoleSceneTests PRIVATE HoroEngine::RuntimeConsoleScene HoroEngine::RuntimeConsoleDefaults HoroEngine::RuntimeScene)
+    horo_register_catch_test(HoroRuntimeConsoleSceneTests)
+endif()
+add_test(NAME HoroRuntimeConsoleSdkContract COMMAND ${CMAKE_COMMAND}
+    "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
+    "-DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/runtime_console_sdk"
+    "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/runtime_console_sdk_contract"
+    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+    "-DCMAKE_LINKER=${CMAKE_LINKER}"
+    "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+    "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+    "-DGENERATOR=${CMAKE_GENERATOR}"
+    "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+    "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+    "-DBUILD_CONFIG=$<CONFIG>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeConsoleSdkContract.cmake")
+set_tests_properties(HoroRuntimeConsoleSdkContract PROPERTIES LABELS "runtime;console;sdk;headless;ci-windows" RUN_SERIAL TRUE TIMEOUT 120)
+
 add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp)
 target_compile_features(HoroModelProviderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAdapters Catch2::Catch2WithMain)

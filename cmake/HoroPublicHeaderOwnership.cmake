@@ -1,5 +1,28 @@
 include_guard(GLOBAL)
 
+horo_configure_target_header_boundary(HoroRuntimeConsole PUBLIC_HEADERS
+    Horo/Debug/CommandRegistry.h
+    Horo/Debug/CommandExecutor.h
+    Horo/Debug/ConsoleVariable.h
+    Horo/Debug/ConsoleVariableSet.h
+    Horo/Debug/ConsoleBuiltins.h
+)
+horo_configure_target_header_boundary(HoroRuntimeConsoleStartup PUBLIC_HEADERS
+    Horo/Debug/ConsoleStartup.h
+)
+horo_configure_target_header_boundary(HoroRuntimeConsoleUi PUBLIC_HEADERS
+    Horo/Debug/ConsolePresentation.h
+    Horo/Debug/OverlayLayout.h
+)
+horo_configure_target_header_boundary(HoroRuntimeConsoleDefaults PUBLIC_HEADERS
+    Horo/Debug/ConsoleProduct.h
+    Horo/Debug/ConsoleTelemetryBindings.h
+    Horo/Debug/ConsoleSupportBindings.h
+)
+horo_configure_target_header_boundary(HoroRuntimeConsoleScene PUBLIC_HEADERS
+    Horo/Debug/ConsoleSceneBindings.h
+)
+
 horo_configure_target_header_boundary(HoroSceneIdentity PUBLIC_HEADERS
     Horo/Runtime/Scene/SceneIdentity.h
 )
