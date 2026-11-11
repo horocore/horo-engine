@@ -185,6 +185,12 @@ The later main-parent C11 fix `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08` is now
 the base of this cloud branch. The main owner reports its Full11 Windows ALL build
 and provider-admission test passed. This removes the known C11 source prerequisite;
 it does not rerun or qualify the external identity lifecycle or this cloud branch.
+The identity owner has also rebased onto that parent: binding `b7a4587c7` maps to
+`09067bc34`, friends recovery `f67fb91f5` to `5e7babc79`, and evidence `9b01ed358`
+to `61759df2e`, with reported branch head `f4bc46fe2`. Its seven-patch range diff
+was unchanged. The 83-case success remains evidence from the earlier base; no
+rebased native/reconfigure/quality execution or push is reported. These references
+track external evidence only and do not import that branch into cloud delivery.
 
 ADR-134's header currently says **Proposed**, while the normative platform-services
 architecture references it as the ratified baseline. This delivery follows the
