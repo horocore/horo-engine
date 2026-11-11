@@ -309,6 +309,32 @@ def test_wrong_worktree_compilation_database_is_rejected(tmp_path: Path):
         sonar.prepare(tmp_path, tmp_path / "cache", [], database, 2)
 
 
+@pytest.mark.parametrize("generator", ["Ninja", "Unix Makefiles"])
+def test_cpp_preparation_uses_one_build_worker(tmp_path: Path, monkeypatch, generator: str):
+    build = tmp_path / "build"
+    build.mkdir()
+    database = build / "compile_commands.json"
+    database.write_text("[]")
+    (build / "CMakeCache.txt").write_text(
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={tmp_path}\nCMAKE_GENERATOR:INTERNAL={generator}\n")
+    source = tmp_path / "input.cpp"
+    source.write_text("int input;\n")
+    entry = {"source": source, "target": "src/CMakeFiles/Input.dir/input.cpp.o"}
+    commands = []
+
+    def record(command, *unused):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sonar, "quality_run", record)
+    monkeypatch.setattr(sonar, "validate_compile_commands", lambda *unused: None)
+    monkeypatch.setattr(sonar, "compiler_entries", lambda *unused: [entry])
+    sonar.prepare(tmp_path, tmp_path / "cache", [source], database, 2)
+    builds = [command for command in commands if "--build" in command]
+    assert len(builds) == 1
+    assert builds[0][builds[0].index("--parallel") + 1] == "1"
+
+
 def test_compiler_entries_require_in_build_object_target(tmp_path: Path):
     database = tmp_path / "compile_commands.json"
     database.write_text(json.dumps([{"directory": str(tmp_path), "file": "source.cpp", "command": "c++ -c source.cpp"}]))
