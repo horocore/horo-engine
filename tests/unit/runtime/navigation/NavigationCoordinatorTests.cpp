@@ -145,6 +145,30 @@ namespace Horo::Navigation {
         }
     }
 
+    TEST_CASE("A throwing first path request does not fail later compatible batch members", "[unit][navigation][coordinator]") {
+        JobSystem jobs{{.workerCount = 0}};
+        auto world = std::move(NavigationWorldLifecycle::Create(4)).Value();
+        Activate(world, std::make_unique<ControlledBackend>(nullptr, true));
+        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
+        auto input = Input();
+        input.request.start.x = 2;
+        const auto failed = Admit(coordinator, world, input);
+        input = Input(Caller(2));
+        input.request.start.x = 3;
+        const auto healthy = Admit(coordinator, world, input);
+        REQUIRE(coordinator.Dispatch(1) == 2);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        const NavigationPathCaller callers[]{Caller(), Caller(2)};
+        REQUIRE(coordinator.Commit(Current(callers)) == 2);
+        const auto failure = coordinator.Take(failed);
+        const auto success = coordinator.Take(healthy);
+        REQUIRE(failure);
+        CHECK(ErrorIs(*failure, NavigationErrors::ProviderFailed));
+        REQUIRE(success);
+        CHECK(success->result.HasValue());
+        CHECK(coordinator.IsDrained());
+    }
+
     TEST_CASE("Running cancellation holds slot and provider lifetime until worker drain", "[unit][navigation][coordinator]") {
         HeldConsumerFixture retained;
         auto &coordinator = retained.owner.coordinator;

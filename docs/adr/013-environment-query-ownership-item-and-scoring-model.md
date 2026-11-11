@@ -6,7 +6,7 @@
 - **Scope**: EQS orchestration, typed providers, plans/items/contexts, scoring, safe points, deterministic/adaptive budgets, cache identity and cancellation
 - **Issue**: [GAI-004.1](https://github.com/HoroCore/horo-engine/issues/1346)
 - **Jira**: [HORO-1346](https://horo-engine.atlassian.net/browse/HORO-1346)
-- **Normative document**: [Navigation And AI Architecture — EQS](../architecture/runtime/navigation-and-ai-architecture.md#environment-query-system-eqs)
+- **Normative document**: [Navigation And AI Architecture â€” EQS](../architecture/runtime/navigation-and-ai-architecture.md#environment-query-system-eqs)
 
 ## Context
 
@@ -278,3 +278,13 @@ Physics capability dependency. It checks the exact host publication and returns
 binary clearance from a bounded, blocking-only ray or overlap. The host supplies
 local-frame geometry and retires the probe on source replacement. Capacity
 backpressure admits no request. A stale binding cancels outstanding work.
+
+The Navigation adapter is owned by AINavigationIntegration, whose explicit
+dependencies are AI and NavigationRuntime. QueryNavigationProbe submits one
+bounded request to the injected NavigationCoordinator and consumes only its
+owner-published terminal record. It never dispatches or commits the coordinator,
+resets provider quotas or accesses backend storage. The host keeps the coordinator
+alive until probe cancellation/retirement, then drains provider jobs through the
+existing Navigation lifecycle. Reachable paths expose finite non-negative cost;
+partial or budget-limited paths remain incomparable, while exact provider errors
+retain their original domain and code.

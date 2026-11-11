@@ -1756,6 +1756,12 @@ add_library(HoroEngine::AISightIntegration ALIAS HoroAISightIntegration)
 target_compile_features(HoroAISightIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISightIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::Physics)
 
+# Explicit tactical Navigation composition keeps the AI core independent of Navigation owners.
+add_library(HoroAINavigationIntegration STATIC runtime/ai/integration/EnvironmentQueryNavigation.cpp)
+add_library(HoroEngine::AINavigationIntegration ALIAS HoroAINavigationIntegration)
+target_compile_features(HoroAINavigationIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAINavigationIntegration PUBLIC HoroEngine::AI HoroEngine::NavigationRuntime)
+
 add_library(HoroGameplayPerceptionIntegration STATIC gameplay/runtime/PerceptionEventSource.cpp)
 add_library(HoroEngine::GameplayPerceptionIntegration ALIAS HoroGameplayPerceptionIntegration)
 target_compile_features(HoroGameplayPerceptionIntegration PUBLIC cxx_std_20)
