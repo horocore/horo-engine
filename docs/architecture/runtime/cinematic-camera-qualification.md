@@ -1,7 +1,8 @@
 # Cinematic camera qualification
 
 Evidence scope is the CIN-003 delivery branch based on
-`f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`. GitHub and Jira were read on
+`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`. The delivery commits were rebased
+onto this local parent C11 admission-fixture fix without conflicts. GitHub and Jira were read on
 2026-11-11. Tracking status is recorded without changing external work items.
 
 | Child | GitHub / Jira | Tracking status | Implementation and acceptance evidence |
