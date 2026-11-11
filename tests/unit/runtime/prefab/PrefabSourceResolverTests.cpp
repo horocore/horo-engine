@@ -1,3 +1,4 @@
+#include "Horo/Prefab/PrefabDiagnostics.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 
@@ -253,6 +254,51 @@ namespace Horo::Prefab {
             CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::HierarchyDepthExceeded.code.Value());
             CHECK(accepted.Value().Objects().front().sourcePrefab == ResolverAsset(1));
             REQUIRE(snapshot.Value().Resolve(ResolverAsset(depth + 1), instance, ResolverLimits()).HasValue());
+        }
+
+        TEST_CASE("Prefab deep nested failure remains publishable through bounded structured diagnostics",
+                  "[unit][prefab][resolver][diagnostics][stress]") {
+            constexpr std::uint8_t count = static_cast<std::uint8_t>(PrefabHardLimits::NestedPrefabDepth + 2);
+            Assets::AssetRegistry registry;
+            std::vector<Assets::AssetRecord> records;
+            std::vector<PrefabDependencySource> sources;
+            for (std::uint8_t index = 1; index <= count; ++index) {
+                const auto asset = ResolverAsset(index);
+                records.push_back(ResolverRecord(asset, "assets/prefabs/" + std::to_string(index) + ".prefab"));
+                if (index == count) {
+                    sources.push_back({ResolverDocument(asset, {ResolverObject(0)}), ResolverRevision(index)});
+                    continue;
+                }
+                const auto next = static_cast<std::uint8_t>(index + 1);
+                PrefabComposition composition{
+                    .nestedPlacements = {{.placementLocalId = {1},
+                                          .sourcePrefab = PrefabAssetReference::Create(ResolverAsset(next)).Value(),
+                                          .authoredAgainst = ResolverRevision(next)}}};
+                sources.push_back(
+                    {ResolverDocument(asset, {ResolverObject(0)}, std::move(composition), {ResolverAsset(next)}), ResolverRevision(index)});
+            }
+            PublishResolverRegistry(registry, std::move(records));
+            const auto snapshot = BuildPrefabSourceResolverSnapshot(registry.Snapshot(), std::move(sources), ResolverLimits());
+            REQUIRE(snapshot.HasValue());
+            const auto instance = PrefabInstanceId::Create(41).Value();
+            const auto rejected = snapshot.Value().Resolve(ResolverAsset(1), instance, ResolverLimits());
+            REQUIRE(rejected.HasError());
+            const auto &error = rejected.ErrorValue();
+            REQUIRE(error.code.Value() == PrefabErrors::HierarchyDepthExceeded.code.Value());
+            CHECK(error.message.size() <= MaximumPrefabDiagnosticMessageBytes);
+            CHECK(error.message.find(ResolverAsset(1).ToString()) != std::string::npos);
+            CHECK(error.message.find(ResolverAsset(count - 1).ToString()) != std::string::npos);
+            const auto diagnostic =
+                MakePrefabDiagnosticRecord(PrefabDiagnosticCategory::Expansion, PrefabDiagnosticOperation::Expand, error,
+                                           {.prefabAsset = ResolverAsset(1),
+                                            .revision = ResolverRevision(1),
+                                            .registryRevision = registry.Snapshot().Revision(),
+                                            .instance = instance});
+            REQUIRE(diagnostic.HasValue());
+            CHECK(diagnostic.Value().code == error.code);
+            CHECK(diagnostic.Value().revision == ResolverRevision(1));
+            CHECK(MakePrefabBuildOutputRecord(diagnostic.Value()).message == error.message);
+            REQUIRE(snapshot.Value().Resolve(ResolverAsset(count), instance, ResolverLimits()).HasValue());
         }
 
         TEST_CASE("Prefab source resolver rejects malformed cyclic source graphs", "[unit][prefab][resolver][malformed]") {
