@@ -157,6 +157,14 @@ during this audit; the main validation owner must grant the next bounded slot.
 
 ## External evidence and blockers
 
+The source audit also confirms an application/profile integration gap:
+`save-game-and-persistence.md` explicitly records no live `CloudSaveCoordinator`
+transfer/retry implementation in this tree. The existing revision sidecar and the
+new Save/transport compatibility fixtures cannot prove a production journal,
+reconnect reconciliation or durable local publication after a remote outcome.
+Those remain with the SAV-006 coordinator owner; this transport delivery must not
+create a replacement durable queue or claim end-to-end synchronization success.
+
 The private SDK packages, provider accounts, native atomic commit/dedupe evidence,
 Linux/macOS execution and platform certification have not been supplied or run here.
 They are unavailable evidence, never a successful unsupported test of a real SDK.
