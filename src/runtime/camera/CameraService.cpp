@@ -101,11 +101,13 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(CameraErrors::IncompatibleTransition));
         const auto source = CameraRotation(from.values);
         const auto destination = CameraRotation(to.values);
-        if (source.HasError() || destination.HasError())
-            return Result<void>::Failure(MakeError(CameraErrors::IncompatibleTransition));
+        if (source.HasError())
+            return Result<void>::Failure(WithCause(MakeError(CameraErrors::IncompatibleTransition), source.ErrorValue()));
+        if (destination.HasError())
+            return Result<void>::Failure(WithCause(MakeError(CameraErrors::IncompatibleTransition), destination.ErrorValue()));
         const auto rotation = Math::TrySlerp(source.Value(), destination.Value(), weight);
         if (rotation.HasError())
-            return Result<void>::Failure(rotation.ErrorValue());
+            return Result<void>::Failure(WithCause(MakeError(CameraErrors::IncompatibleTransition), rotation.ErrorValue()));
         auto blended = to;
         auto &values = blended.values;
         values.position = from.values.position * (1.0F - weight) + to.values.position * weight;
