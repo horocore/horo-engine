@@ -144,8 +144,12 @@ This proposed seam is neither a mutable session owner nor credential storage or 
 cloud journal. The coordinator retains its existing protected durable partition.
 Authenticated stable-binding resolution remains a private-broker precondition and
 provider qualification gate. No seam implementation is copied or consumed here.
-The owner reports `4e718b2` as a frontend const-view compile correction only; no
-subsequent successful compile/test result or qualified integration SHA is available.
+The owner reports `4e718b2` as a frontend const-view compile correction only. The
+candidate seam is now recorded in local commit `b7a4587c7`; both its public header
+and implementation are present in that Git object. No compile/test/quality or push
+evidence is reported, and that commit is not integrated here. After issuer restart,
+the trusted mapping owner must resolve the expected binding again for the existing
+durable partition. A local source SHA does not discharge the qualification gate.
 
 ADR-134's header currently says **Proposed**, while the normative platform-services
 architecture references it as the ratified baseline. This delivery follows the
