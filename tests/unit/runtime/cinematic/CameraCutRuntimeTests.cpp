@@ -173,6 +173,18 @@ namespace Horo::Cinematic {
         CHECK(rejected.ErrorValue().code.Value() == CameraErrors::IncompatibleTransition.code.Value());
         CHECK(fixture.Commit().selected.values.position == blended.selected.values.position);
         CHECK(fixture.camera.SubmitBlend(lease, from, to, std::numeric_limits<float>::quiet_NaN()).HasError());
+        auto orthographic = from;
+        orthographic.values.projection.kind = Render::RenderProjectionKind::Orthographic;
+        orthographic.values.projection.orthographicHeight = 2.0F;
+        to.values.projection.orthographicHeight = 10.0F;
+        to.values.projection.nearPlane = 0.5F;
+        to.values.projection.farPlane = 200.0F;
+        REQUIRE(fixture.camera.SubmitBlend(lease, orthographic, to, 0.25F).HasValue());
+        const auto lens = fixture.Commit().selected.values.projection;
+        CHECK(lens.kind == Render::RenderProjectionKind::Orthographic);
+        CHECK(lens.orthographicHeight == 4.0F);
+        CHECK(lens.nearPlane == Catch::Approx(0.2F));
+        CHECK(lens.farPlane == 125.0F);
     }
 
     TEST_CASE("Host capability admission rejects a required blend and permits only authored fallback", "[unit][cinematic][camera]") {
