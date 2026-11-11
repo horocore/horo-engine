@@ -119,7 +119,10 @@ namespace Horo::Runtime {
             values.projection.orthographicHeight = std::lerp(a.orthographicHeight, b.orthographicHeight, weight);
         values.projection.nearPlane = std::lerp(a.nearPlane, b.nearPlane, weight);
         values.projection.farPlane = std::lerp(a.farPlane, b.farPlane, weight);
-        return Submit(lease, blended);
+        if (!ValidProposal(blended, true))
+            return Result<void>::Failure(MakeError(CameraErrors::IncompatibleTransition));
+        slots_[index.Value()].proposal = blended;
+        return Result<void>::Success();
     }
 
     /** @copydoc CameraService::Withdraw */

@@ -88,9 +88,13 @@ Global playback blend windows remain scalar playback settings. A camera-only pla
 before session admission, including looping playback. Mixed scalar plans retain
 their original blend windows and required restore evidence; all plans retain their
 explicit restore policy. Malformed blend settings still fail typed validation.
-Successful selection performs no allocation and has fixed bounds: at most 64 keys,
+Hard cuts and compatible single-view selection perform no allocation and have
+fixed bounds of at most 64 keys,
 32 simultaneous view claims and a hierarchy depth of 64 entities. Activation may allocate;
 scene borrows and callback lifetimes follow the existing runtime plan contract.
+Exceptional interpolation/fallback diagnostics use the existing owned error
+representation. A finite camera pair whose intermediate pose cannot be represented
+returns `IncompatibleCameraTransition` and uses its authored fallback.
 
 The editor viewport controller owns a distinct preview context and stable-address
 session state. Its programmatic Start/Advance/Seek/Stop camera-preview entry points

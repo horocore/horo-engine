@@ -7,6 +7,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -365,6 +366,33 @@ namespace Horo::Cinematic {
         CHECK(before.selected.values.position.x == after.selected.values.position.x + 400.0F);
         CHECK(fixture.runtime.Snapshot(fixture.playback->Player()).Value().position == 6);
         CHECK(fixture.scene->View().Get(*fixture.scene->View().Find({2})).Value().localTransform->translation.x == 26.0F);
+    }
+
+    TEST_CASE("Unrepresentable intermediate camera views preserve typed failure and authored fallback", "[unit][cinematic][camera]") {
+        const auto fallback = GENERATE(CameraTransitionFallback::Fail, CameraTransitionFallback::HardCut);
+        Fixture fixture;
+        Math::Transform source;
+        source.translation = {100'000'000.0F, 0.0F, 0.0F};
+        auto destination = source;
+        destination.rotation = Math::Quaternion::FromAxisAngle({0.0F, 1.0F, 0.0F}, Math::Pi);
+        SceneCommandBuffer commands;
+        commands.SetLocalTransform(*fixture.scene->View().Find({1}), source);
+        commands.SetLocalTransform(*fixture.scene->View().Find({2}), destination);
+        REQUIRE(fixture.scene->Commit(commands).HasValue());
+        fixture.StartTransition(TransitionActivation(CameraTransitionTier::SingleViewBlend, CameraBlendCurve::Linear, fallback));
+        REQUIRE(fixture.runtime.Seek(fixture.playback->Player(), 6).HasValue());
+        const auto published = fixture.playback->Publish(fixture.scene->View());
+        if (fallback == CameraTransitionFallback::Fail) {
+            REQUIRE(published.HasError());
+            CHECK(published.ErrorValue().code.Value() == CameraErrors::IncompatibleTransition.code.Value());
+            CHECK_FALSE(fixture.Commit().overrideOwner.has_value());
+        } else {
+            REQUIRE(published.HasValue());
+            const auto selected = fixture.Commit();
+            CHECK(selected.overrideOwner.has_value());
+            CHECK(selected.selected.camera == *fixture.scene->View().Find({2}));
+            CHECK(selected.selected.values.target.z > 0.9F);
+        }
     }
 
     TEST_CASE("Camera-only admission ignores blend windows while mixed scalar plans preserve restore validation",

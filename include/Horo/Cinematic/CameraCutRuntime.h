@@ -33,7 +33,7 @@ namespace Horo::Cinematic {
      * @brief Production adapter that proposes final-position camera transitions through the final camera owner.
      * @details Both borrowed services must outlive this adapter and remain at stable addresses. Camera keys/bindings
      * are copied at activation; scene views are borrowed only within each call. No backend or source pointer is retained.
-     * Successful frame selection is bounded by MaximumFrameCameraCuts and performs no allocation. Baseline camera cuts
+     * Hard cuts and compatible single-view selection are bounded by MaximumFrameCameraCuts and perform no allocation. Baseline camera cuts
      * ignore activation blend durations. Camera-only plans clear scalar blend windows before session admission;
      * mixed scalar plans retain their blend windows, and every plan retains its explicit restore policy.
      * Authored key transition durations use exact final player time with Linear or SmoothStep weight. SingleViewBlend
