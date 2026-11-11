@@ -426,6 +426,43 @@ namespace Horo::Tests::VoiceRenderFixture {
             CHECK(rig.frontend->DrainTransportResults(results) == 0);
         }
 
+        TEST_CASE("Null device loss closes active playback and reconciles pending controls before releasing voice ownership",
+                  "[audio][frontend][lifecycle][qualification]") {
+            PreviewRig rig;
+            rig.Activate();
+            rig.Control(AudioVoiceControl::Start);
+            const auto handle = rig.frontend->Snapshot().voice;
+            const auto pending = rig.frontend->Transport({handle, AudioVoiceControl::Pause});
+            REQUIRE(pending.HasValue());
+            REQUIRE(pending.Value().status == AudioCommandStagingStatus::Ok);
+            REQUIRE(rig.output->null->InjectDeviceLoss(Audio::Backend::DeviceLossCause::Disconnected).HasValue());
+            const auto loss = rig.frontend->Pump({1, 1'000'000'000});
+            REQUIRE(loss.HasError());
+            CHECK(loss.ErrorValue().code.Value() == AudioErrors::DeviceLost.code.Value());
+            CHECK(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closing);
+            CHECK(rig.registry->Snapshot(handle).HasValue());
+            CHECK(rig.frontend->Transport({handle, AudioVoiceControl::Resume}).HasError());
+            REQUIRE(rig.output->null->AdvanceControl().HasValue());
+            REQUIRE(rig.output->null->AdvanceCallback().HasValue());
+            CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasError());
+            CHECK(rig.registry->Snapshot(handle).HasValue());  // Silence/quiescence alone cannot release a voice.
+            REQUIRE(rig.output->null->AdvanceControl().HasValue());
+            CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasError());
+            REQUIRE(rig.output->null->AdvanceControl().HasValue());
+            CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasError());
+            REQUIRE(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closed);
+            CHECK(rig.registry->Snapshot(handle).HasError());
+            CHECK(rig.frontend->Snapshot().pendingOperations == 0);
+            std::array<AudioFrontendOperationResult, 2> results;
+            REQUIRE(rig.frontend->DrainTransportResults(results) == 2);
+            CHECK(results[0].disposition == AudioFrontendOperationDisposition::Applied);
+            CHECK(results[1].acceptedSequence == pending.Value().sequence);
+            CHECK(results[1].disposition == AudioFrontendOperationDisposition::Cancelled);
+            CHECK(rig.frontend->DrainTransportResults(results) == 0);
+            CHECK(rig.output->null->AdvanceCallback().HasError());
+            CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasValue());
+        }
+
         TEST_CASE("Audio document fences source changes and retains asynchronous preview until close", "[editor][audio][document]") {
             PreviewRig rig;
             auto opened = Editor::AudioEditorDocument::Open(Document(), 1);

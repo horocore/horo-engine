@@ -318,9 +318,15 @@ namespace Horo::Audio {
                   : record.command.scope != s.descriptor.scope)
             return &AudioErrors::HandleOwnerMismatch;
         if (reset || std::holds_alternative<AudioSceneUnloadCommand>(record.command.payload)) {
-            const auto *error = s.Control({s.voice, AudioVoiceControl::Cancel});
+            AudioVoiceState current{};
+            if (const auto *error = s.registry->CheckState(s.voice, current))
+                return error;
+            // A barrier retires the context, including voices that already published their terminal outcome.
+            const auto *error = IsTerminalAudioVoiceState(current) ? nullptr : s.Control({s.voice, AudioVoiceControl::Cancel});
+            if (error)
+                return error;
             s.callback.callbackSequence = record.sequence;
-            return error;
+            return nullptr;
         }
         if (const auto *publication = std::get_if<AudioPublishVoiceStateCommand>(&record.command.payload)) {
             return s.ApplyPublication(*publication, record.sequence);

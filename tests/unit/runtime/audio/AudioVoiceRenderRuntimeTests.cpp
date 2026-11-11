@@ -1,6 +1,64 @@
 #include "AudioVoiceRenderTestFixture.h"
 
 namespace Horo::Tests::VoiceRenderFixture {
+    TEST_CASE("Lifecycle barriers preserve every existing terminal outcome and cancel active resident voices",
+              "[audio][voice_render][lifecycle][qualification]") {
+        for (const bool reset : {false, true}) {
+            for (const auto state : {AudioVoiceState::Ready, AudioVoiceState::Scheduled, AudioVoiceState::Playing, AudioVoiceState::Paused,
+                                     AudioVoiceState::Virtual, AudioVoiceState::Stopping, AudioVoiceState::Stopped,
+                                     AudioVoiceState::Finished, AudioVoiceState::Cancelled, AudioVoiceState::Failed}) {
+                CAPTURE(reset, state);
+                Rig rig;
+                REQUIRE(rig.voice->Apply(rig.Publish()) == nullptr);
+                const auto handle = rig.voice->Voice();
+                if (state != AudioVoiceState::Ready) {
+                    REQUIRE(rig.registry->Transition(handle, AudioVoiceState::Scheduled).HasValue());
+                    if (state != AudioVoiceState::Scheduled)
+                        REQUIRE(rig.registry->Transition(handle, AudioVoiceState::Playing).HasValue());
+                    if (state == AudioVoiceState::Cancelled)
+                        REQUIRE(rig.registry->Cancel(handle).HasValue());
+                    else if (state != AudioVoiceState::Playing) {
+                        if (state == AudioVoiceState::Stopped)
+                            REQUIRE(rig.registry->Transition(handle, AudioVoiceState::Stopping).HasValue());
+                        if (state != AudioVoiceState::Scheduled)
+                            REQUIRE(rig.registry->Transition(handle, state).HasValue());
+                    }
+                }
+                const auto prior = rig.registry->State(handle).Value();
+                if (IsTerminalAudioVoiceState(prior)) {
+                    REQUIRE(rig.voice->Render(16).terminal);
+                    CHECK_FALSE(rig.voice->Render(16).terminal);
+                }
+                const auto barrier = reset ? rig.staging.StageReset() : rig.staging.StageSceneUnload(Scope.scene);
+                REQUIRE(barrier.status == AudioCommandStagingStatus::Ok);
+                const auto record = ConsumePublished(rig.staging);
+                const auto allocations = AllocationProbe::Count();
+                const auto frees = AllocationProbe::FreeCount();
+                const auto *error = rig.voice->Apply(record);
+                const auto output = rig.voice->Render(16);
+                rig.voice->EndBlock();
+                const auto allocationEnd = AllocationProbe::Count();
+                const auto freeEnd = AllocationProbe::FreeCount();
+                REQUIRE(error == nullptr);
+                REQUIRE(output.error == nullptr);
+                CHECK(output.terminal == !IsTerminalAudioVoiceState(prior));
+                CHECK(allocationEnd == allocations);
+                CHECK(freeEnd == frees);
+                CHECK(rig.registry->State(handle).Value() == (IsTerminalAudioVoiceState(prior) ? prior : AudioVoiceState::Cancelled));
+                CHECK_FALSE(rig.voice->Render(16).terminal);
+                for (const auto *plane : output.input.samples.planes)
+                    CHECK(std::all_of(plane, plane + 16, [](const float sample) {
+                        return sample == 0.0F;
+                    }));
+                CHECK(rig.voice->Apply(record) == &AudioErrors::CommandBufferInvalid);
+                rig.voice->Close();
+                CHECK_FALSE(rig.voice->CompleteShutdown(false));
+                REQUIRE(rig.voice->CompleteShutdown(true));
+                CHECK(rig.registry->State(handle).HasError());
+            }
+        }
+    }
+
     TEST_CASE("Voice render publication copies source state and executes actual resident PCM and mixer", "[audio][voice_render]") {
         Rig rig;
         auto request = Request();

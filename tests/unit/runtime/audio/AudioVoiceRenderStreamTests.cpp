@@ -113,6 +113,42 @@ namespace Horo::Tests::VoiceRenderFixture {
         rig.Finish(*runtime);
     }
 
+    TEST_CASE("Stream lifecycle barriers cancel realization and preserve completed outcomes without releasing worker pins",
+              "[audio][voice_render][stream][lifecycle][qualification]") {
+        for (const bool reset : {false, true}) {
+            for (const auto control : {AudioVoiceControl::StartVirtual, AudioVoiceControl::Stop, AudioVoiceControl::Cancel}) {
+                CAPTURE(reset, control);
+                StreamRig rig{true};
+                auto plan = Plan(Asset());
+                auto staging = Staging();
+                auto runtime = rig.CreateVirtual(*plan, staging);
+                REQUIRE(runtime->Render(2).error == nullptr);
+                StreamRig::Control(*runtime, staging, AudioVoiceControl::Realize);
+                if (control != AudioVoiceControl::StartVirtual)
+                    StreamRig::Control(*runtime, staging, control);
+                const auto cursor = runtime->Cursor();
+                const auto barrier = reset ? staging.StageReset() : staging.StageSceneUnload(Scope.scene);
+                REQUIRE(barrier.status == AudioCommandStagingStatus::Ok);
+                REQUIRE(runtime->Apply(ConsumePublished(staging)) == nullptr);
+                const auto ended = runtime->Render(16);
+                REQUIRE(ended.error == nullptr);
+                CHECK(ended.terminal);
+                CHECK_FALSE(runtime->Render(16).terminal);
+                CHECK(runtime->Cursor().frame == cursor.frame);
+                for (const auto *plane : ended.input.samples.planes)
+                    CHECK(std::all_of(plane, plane + 16, [](const float sample) {
+                        return sample == 0.0F;
+                    }));
+                runtime->EndBlock();
+                (void)runtime->Reconcile();
+                CHECK(rig.service->Retire(rig.stream).HasError());
+                runtime->Close();
+                CHECK_FALSE(runtime->CompleteShutdown(false));
+                rig.Finish(*runtime, 0);
+            }
+        }
+    }
+
     TEST_CASE("Virtual stream advances during preparation and catches up without callback decode", "[audio][virtualization][stream]") {
         StreamRig rig{true};
         auto plan = Plan(Asset());
@@ -346,6 +382,9 @@ namespace Horo::Tests::VoiceRenderFixture {
         CHECK(actualFrames == 8);
         CHECK(terminal);
         CHECK(runtime->Render(1).input.samples.planes[0][0] == 0.0F);
+        REQUIRE(staging.StageSceneUnload(Scope.scene).status == AudioCommandStagingStatus::Ok);
+        REQUIRE(runtime->Apply(ConsumePublished(staging)) == nullptr);
+        CHECK_FALSE(runtime->Render(1).terminal);
         rig.Finish(*runtime);
     }
 }  // namespace Horo::Tests::VoiceRenderFixture
