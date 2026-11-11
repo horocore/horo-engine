@@ -2,6 +2,7 @@ struct WaveProbeState final {
     SourceProbe probe{.container = AudioContainerIds::Wave, .codec = AudioCodecIds::Pcm};
     std::uint16_t blockAlign{};
     std::optional<std::uint64_t> dataBytes;
+    bool samplerChunkSeen{};
 };
 
 struct WaveEncoding final {
@@ -105,11 +106,12 @@ struct WaveEncoding final {
             return Result<void>::Failure(MakeImportError(AudioErrors::SourceInvalid));
         state.dataBytes = byteCount;
     } else if (EqualFour(header, "smpl")) {
-        if (!state.probe.loops.empty())
+        if (state.samplerChunkSeen)
             return Result<void>::Failure(MakeImportError(AudioErrors::SourceInvalid));
         auto loops = ParseWaveLoops(reader, offset, byteCount);
         if (loops.HasError())
             return Result<void>::Failure(loops.ErrorValue());
+        state.samplerChunkSeen = true;
         state.probe.loops = std::move(loops).Value();
     }
     return Result<void>::Success();
