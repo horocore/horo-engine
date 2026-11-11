@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Ui/UiAccessibilityChanges.h"
 #include "Horo/Runtime/Ui/UiAccessibilityReview.h"
+#include "Horo/Runtime/Ui/UiCaptionRenderer.h"
 #include "Horo/Runtime/Ui/UiCaptionSettings.h"
 #include "Horo/Runtime/Ui/UiCaptions.h"
 #include "Horo/Runtime/Ui/UiVisualAccessibility.h"
@@ -10,6 +11,8 @@ using namespace Horo::Runtime::Ui;
 static_assert(std::is_member_function_pointer_v<decltype(&UiAccessibilitySnapshot::ReadingOrder)>);
 static_assert(std::is_member_function_pointer_v<decltype(&UiAccessibilitySnapshot::FocusOrder)>);
 static_assert(std::is_member_function_pointer_v<decltype(&UiAccessibilitySnapshot::FocusState)>);
+static_assert(!std::is_copy_constructible_v<CaptionRenderer>);
+static_assert(std::is_nothrow_move_constructible_v<CaptionRenderer>);
 
 int main() {
     CaptionTimeline captions;

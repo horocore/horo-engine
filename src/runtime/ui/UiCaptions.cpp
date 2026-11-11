@@ -268,4 +268,9 @@ namespace Horo::Runtime::Ui {
     std::span<const CaptionActiveCue> CaptionTimeline::Cues() const noexcept {
         return {active_.data(), count_};
     }
+
+    /** @copydoc CaptionTimeline::Tick */
+    std::uint64_t CaptionTimeline::Tick() const noexcept {
+        return tick_;
+    }
 }  // namespace Horo::Runtime::Ui

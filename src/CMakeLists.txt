@@ -748,6 +748,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
         runtime/ui/UiCaptions.cpp
+        runtime/ui/UiCaptionRenderer.cpp
         runtime/ui/UiCaptionSettings.cpp
         runtime/ui/UiVisualAccessibility.cpp
         runtime/ui/UiElementPresentation.cpp

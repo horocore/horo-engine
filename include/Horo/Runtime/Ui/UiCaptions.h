@@ -95,8 +95,8 @@ namespace Horo::Runtime::Ui {
     struct CaptionAppearance final {
         bool enabled{};
         float fontScale{1.0F};
-        std::array<float, 4> textColor{1, 1, 1, 1};
-        std::array<float, 4> backgroundColor{0, 0, 0, 1};
+        std::array<float, 4> textColor{1, 1, 1, 1};       /**< Encoded sRGB RGB and linear alpha; decoded at paint extraction. */
+        std::array<float, 4> backgroundColor{0, 0, 0, 1}; /**< Encoded sRGB RGB and linear alpha, multiplied by backgroundOpacity. */
         float backgroundOpacity{0.75F};
         CaptionPosition position{CaptionPosition::Bottom};
         bool showSpeaker{true};
@@ -106,6 +106,7 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Validates finite colors, scale, margins and closed anchor policy. @return True when valid. */
         [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] bool operator==(const CaptionAppearance &) const noexcept = default;
     };
 
     /** @brief Measured caption input from the existing localized text shaper/layout owner. */
@@ -177,6 +178,8 @@ namespace Horo::Runtime::Ui {
          * @return Borrowed current-session active and pending cues, valid until mutation.
          */
         [[nodiscard]] std::span<const CaptionActiveCue> Cues() const noexcept;
+        /** @brief Returns the simulation tick last supplied to BeginFrame. @return Current semantic presentation boundary. */
+        [[nodiscard]] std::uint64_t Tick() const noexcept;
 
     private:
         /** @brief Cancels active values without forgetting previously issued session generations. */

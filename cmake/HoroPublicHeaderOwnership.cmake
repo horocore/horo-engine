@@ -373,6 +373,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiAccessibilityChanges.h
     Horo/Runtime/Ui/UiAccessibilityReview.h
       Horo/Runtime/Ui/UiCaptions.h
+      Horo/Runtime/Ui/UiCaptionRenderer.h
       Horo/Runtime/Ui/UiCaptionSettings.h
       Horo/Runtime/Ui/UiVisualAccessibility.h
     Horo/Runtime/Ui/UiIdentity.h

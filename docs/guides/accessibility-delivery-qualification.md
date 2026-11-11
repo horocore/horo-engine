@@ -13,7 +13,7 @@ ACC-001.1 / HORO-1805 is already delivered and is not reimplemented.
 
 | Child | Jira / GitHub | Implementation and evidence | Remaining acceptance / dependencies |
 |---|---|---|---|
-| ACC-001.2 captions | HORO-1806 / #1850 | Added bounded SPSC cue/catalog transport, timeline, frame-captured appearance and safe-area arrangement; regression cases written, not executed | Localization/presentation composition, host settings activation and actual rendered integration |
+| ACC-001.2 captions | HORO-1806 / #1850 | Added bounded SPSC cue/catalog transport, timeline, frame-captured appearance, safe-area arrangement and canonical paint extraction; regression cases written, not executed | Host localization/shaping/presentation composition, settings activation and actual native rendered evidence |
 | ACC-001.3 color | HORO-1807 / #1851 | Added independent numeric target, validated matrices and snapshot-backed synchronous query; regression cases written, not executed | Complete-image GPU pass and real backend evidence; existing ColorPipelinePlan explicitly provides cold admission only |
 | ACC-001.4 input | HORO-1808 / #1852 | Added standalone mapping-owned digital/sticky affordance state and deterministic boundary tests, not executed | Connect to router cancellation/release ownership and existing conflict validator; persistence depends on INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
 | ACC-001.5 visual | HORO-1809 / #1853 | Added UI scale/contrast snapshot with readable typography floor, visual-safety snapshot and typed effect suppression seam; regression cases written, not executed | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
@@ -252,3 +252,50 @@ and offline SDK metadata tests repeated after rebase: **25 passed**. Native ACC
 compilation, GUI interaction and full local quality analysis remain unexecuted.
 No heavy slot was granted by that integration message; the main regression queue
 retains priority. No remote fetch or push was used to locate the local parent.
+
+## Resumed initiative audit and remaining ownership
+
+Live GitHub acceptance bodies were re-read for parent #1813 and every child
+#1849--#1856. Parent and implementation children remain open; #1849 is closed.
+The closed decision is supported by the normative architecture's explicit owners,
+typed transports and non-gating rule, but its status does not qualify all later
+product compositions. A persistent active goal now covers every remaining child,
+integrated acceptance, regression and qualification rather than stopping at a local
+checkpoint. No Jira or issue state was changed by this audit.
+
+| Dependency/evidence | Owner and required next input |
+|---|---|
+| ACC C++ regression and staged consumer execution | Main CI coordinator grants one bounded serial headless configure/build/CTest slot; ACC verifies the physical canonical lock handle before using it. No waiter is queued. |
+| GUI contrast render and theme checks | ACC needs a subsequent GUI-enabled build/test composition under the same serialized slot, then actual popup/focus/narrow-state interaction checks. |
+| Pre-publication domain validation and shared settings menu | CFG owning workstream provides candidate validation/activation integration; ACC composes its inert domain contributions without another resolver. |
+| Binding lifetime/conflict/persistence integration | Input owning workstream supplies the standard persistence/capture path; ACC extends affordance policy through that same authority. Gyro additionally needs actual supported hardware. |
+| Complete-image color execution | Renderer/ACC integration must retain composed UI through the final display-linear transform and verify available real backends; cold admission is insufficient. |
+| Native bridge interoperability | ACC/Platform implements adapters; platform QA supplies real Windows UIA, macOS accessibility and Linux AT-SPI interoperability evidence. None is inferred from Null or headless tests. |
+| Cloud configuration comparison | Codacy account authentication must permit the read-only configuration fetch; its current failure remains independent of local tool readiness. |
+
+## Caption paint extraction integration
+
+`CaptionRenderer` now reserves bounded scratch and the ordinary `UiRenderExtractor`
+at setup. It uses the host's existing retained elements, prepared localized/shaped
+glyphs and stable font generations; it creates no alternate UI tree, localization
+resolver or native handles. It requires the exact queue catalog lease and coherent
+frame appearance and the host's exact locale-selection/localization-snapshot
+commitment. The copied commitment is evidence supplied by the existing text owner,
+not a new authority or proof of translation correctness. Future cues do not paint, Sound/Music respect the display
+preference, and disabling publishes an empty paint snapshot. It emits canonical
+background/text commands with safe-area clipping, decodes encoded sRGB appearance
+colors into linear UI paint, and combines background alpha with opacity.
+
+New regressions exercise the actual canonical extraction boundary: allocation-free
+successful paint, independent semantic time, settings coherence/retry, catalog
+identity, duplicate rejection, invalid glyph/resource ranges, capacity exhaustion,
+snapshot lifetime after source/presenter destruction, and three reference aspect
+ratios. The staged Runtime UI consumer includes the new public header. These C++
+tests have not run. Application localization/shaping and native presentation still
+need composition and real rendered evidence; this extraction is not reported as
+completed caption acceptance or a platform qualification.
+The additive public API is owned by Runtime UI with no dependency expansion or
+existing caller removal. Animated hosts must pass the actual canonical frame lease;
+the presenter forwards it to the existing extractor's lineage/pinning overload,
+preserving queued-reader retirement. It never fabricates a frame or completion
+receipt. Existing non-animated extraction remains explicit and separately bounded.

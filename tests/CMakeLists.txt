@@ -4958,6 +4958,7 @@ add_executable(HoroRuntimeUiAccessibilityTests
         unit/runtime/ui/UiNullAccessibilityBridgeTests.cpp
         unit/runtime/ui/UiAccessibilityReviewTests.cpp
         unit/runtime/ui/UiCaptionTests.cpp
+        unit/runtime/ui/UiCaptionRendererTests.cpp
         unit/runtime/ui/UiAccessibilityTests.cpp
         unit/runtime/ui/UiAccessibilityChangesTests.cpp
         unit/runtime/ui/UiAccessibilityDeliveryTests.cpp
