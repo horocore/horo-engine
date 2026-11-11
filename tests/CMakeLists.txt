@@ -244,6 +244,7 @@ set_tests_properties(HoroInputAccessibilityPublicHeaderConsumer PROPERTIES LABEL
 add_executable(HoroVisualAccessibilityTests
         unit/runtime/VisualAccessibilityTests.cpp
         unit/runtime/VisualSafetyTests.cpp
+        unit/runtime/ContrastTests.cpp
 )
 target_link_libraries(HoroVisualAccessibilityTests PRIVATE HoroEngine::VisualAccessibility)
 horo_register_catch_test(HoroVisualAccessibilityTests LABELS "unit;accessibility;headless")
@@ -251,6 +252,11 @@ add_executable(HoroVisualAccessibilityContractConsumer support/VisualAccessibili
 target_link_libraries(HoroVisualAccessibilityContractConsumer PRIVATE HoroEngine::VisualAccessibility)
 add_test(NAME HoroVisualAccessibilityContractConsumer COMMAND HoroVisualAccessibilityContractConsumer)
 set_tests_properties(HoroVisualAccessibilityContractConsumer PROPERTIES LABELS "unit;accessibility;headless;public_headers")
+add_executable(HoroContrastContractConsumer support/ContrastContractConsumer.cpp)
+target_link_libraries(HoroContrastContractConsumer PRIVATE HoroEngine::VisualAccessibility)
+add_test(NAME HoroContrastContractConsumer COMMAND HoroContrastContractConsumer)
+set_tests_properties(HoroContrastContractConsumer PROPERTIES LABELS "unit;accessibility;headless;public_headers")
+
 add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp)
 target_compile_features(HoroModelProviderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAdapters Catch2::Catch2WithMain)

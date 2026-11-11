@@ -16,6 +16,7 @@ add_library(HoroVisualAccessibility STATIC
         runtime/accessibility/VisualAccessibility.cpp
         runtime/accessibility/VisualAccessibilitySettings.cpp
         runtime/accessibility/VisualSafetySettings.cpp
+        runtime/accessibility/Contrast.cpp
 )
 add_library(HoroEngine::VisualAccessibility ALIAS HoroVisualAccessibility)
 target_compile_features(HoroVisualAccessibility PUBLIC cxx_std_20)
