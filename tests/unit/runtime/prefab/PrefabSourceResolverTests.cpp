@@ -143,6 +143,58 @@ namespace Horo::Prefab {
             CHECK(accepted.Objects().size() == 2);
         }
 
+        TEST_CASE("Prefab nested fanout admits exact expansion and preserves retained candidates on overflow",
+                  "[unit][prefab][resolver][stress]") {
+            const auto outer = ResolverAsset(1);
+            const auto leaf = ResolverAsset(2);
+            Assets::AssetRegistry registry;
+            PublishResolverRegistry(registry, {ResolverRecord(outer, "assets/prefabs/outer.prefab"),
+                                               ResolverRecord(leaf, "assets/prefabs/leaf.prefab")});
+            constexpr std::uint32_t placements = 64;
+            PrefabComposition composition;
+            for (std::uint32_t index = 1; index <= placements; ++index) {
+                composition.nestedPlacements.push_back({.placementLocalId = {index},
+                                                        .sourcePrefab = PrefabAssetReference::Create(leaf).Value(),
+                                                        .authoredAgainst = ResolverRevision(2)});
+            }
+            const auto snapshot =
+                BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
+                                                  {{ResolverDocument(outer, {ResolverObject(0)}, std::move(composition), {leaf}),
+                                                    ResolverRevision(1)},
+                                                   {ResolverDocument(leaf, {ResolverObject(0), ResolverObject(17, LocalObjectId{0})}),
+                                                    ResolverRevision(2)}},
+                                                  ResolverLimits());
+            REQUIRE(snapshot.HasValue());
+            PrefabProjectPolicy policy;
+            policy.maximumDirectNestedPlacements = placements;
+            policy.maximumNestedPrefabDepth = 1;
+            policy.maximumObjectCount = 1 + 2 * placements;
+            const auto instance = PrefabInstanceId::Create(1).Value();
+            const auto accepted = snapshot.Value().Resolve(outer, instance, ResolverLimits(policy));
+            REQUIRE(accepted.HasValue());
+            REQUIRE(accepted.Value().Objects().size() == policy.maximumObjectCount);
+            for (std::uint32_t index = 0; index < placements; ++index) {
+                const auto &object = accepted.Value().Objects()[1 + 2 * index];
+                REQUIRE(object.key.object.NestedInstanceScope().size() == 1);
+                CHECK(object.key.object.NestedInstanceScope().front() == LocalObjectId{index + 1});
+                CHECK(accepted.Value().Objects()[2 + 2 * index].key.object.SourceObject() == LocalObjectId{17});
+            }
+            --policy.maximumObjectCount;
+            for (unsigned attempt = 0; attempt < 3; ++attempt) {
+                const auto rejected = snapshot.Value().Resolve(outer, instance, ResolverLimits(policy));
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::ObjectCountExceeded.code.Value());
+                CHECK(accepted.Value().Objects().size() == 1 + 2 * placements);
+                CHECK(snapshot.Value().DependencyGraph().Nodes().size() == 2);
+            }
+            CancellationSource cancellation;
+            cancellation.RequestCancellation();
+            const auto cancelled = snapshot.Value().Resolve(outer, instance, ResolverLimits(), cancellation.Token());
+            REQUIRE(cancelled.HasError());
+            CHECK(cancelled.ErrorValue().code.Value() == PrefabErrors::Cancelled.code.Value());
+            CHECK(accepted.Value().Objects().size() == 1 + 2 * placements);
+        }
+
         TEST_CASE("Prefab source resolver inherits a variant parent hierarchy", "[unit][prefab][resolver][variant]") {
             const auto base = ResolverAsset(1);
             const auto variant = ResolverAsset(2);
