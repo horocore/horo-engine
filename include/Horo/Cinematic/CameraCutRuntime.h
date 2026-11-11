@@ -30,12 +30,17 @@ namespace Horo::Cinematic {
     };
 
     /**
-     * @brief Production adapter that proposes final-position hard cuts through the final camera owner.
+     * @brief Production adapter that proposes final-position camera transitions through the final camera owner.
      * @details Both borrowed services must outlive this adapter and remain at stable addresses. Camera keys/bindings
      * are copied at activation; scene views are borrowed only within each call. No backend or source pointer is retained.
      * Successful frame selection is bounded by MaximumFrameCameraCuts and performs no allocation. Baseline camera cuts
      * ignore activation blend durations. Camera-only plans clear scalar blend windows before session admission;
      * mixed scalar plans retain their blend windows, and every plan retains its explicit restore policy.
+     * Authored key transition durations use exact final player time with Linear or SmoothStep weight. SingleViewBlend
+     * samples both current scene cameras and delegates pose/lens interpolation to CameraService. Blends require an earlier
+     * camera key and end before the next key/track end. DualViewCrossFade has no admitted compositor in this composition;
+     * it returns UnsupportedTransition unless the key explicitly permits a HardCut fallback. Projection incompatibility
+     * similarly uses only the key's declared fallback. Failed publication cancels the player and releases its lease.
      * Hosts call Publish after commands/ticks and before CameraService::Commit, then
      * extract only that committed camera. Destruction closes playback and releases its lease at this same owner safe point.
      * The session retains terminal players until its host performs the existing restore/release protocol.
@@ -90,6 +95,10 @@ namespace Horo::Cinematic {
         struct BoundCut final {
             SequenceTime time{};
             Runtime::EntityRef camera;
+            CameraTransitionTier tier{CameraTransitionTier::HardCut};
+            CameraTransitionFallback fallback{CameraTransitionFallback::Fail};
+            SequenceTime duration{};
+            CameraBlendCurve curve{CameraBlendCurve::Linear};
         };
 
         CinematicCameraPlayback(CinematicRuntimeService &runtime, Runtime::CameraService &camera, const SequencePlayerHandle &player,
@@ -98,6 +107,8 @@ namespace Horo::Cinematic {
         [[nodiscard]] Result<void> ValidateScene(Runtime::RuntimeSceneView scene) const;
         [[nodiscard]] Result<void> ReleaseLease();
         [[nodiscard]] Result<void> PublishPosition(Runtime::RuntimeSceneView scene, const SequencePlayerSnapshot &state);
+        [[nodiscard]] Result<void> SubmitPosition(Runtime::RuntimeSceneView scene, std::size_t key, SequenceTime position,
+                                                  const Runtime::CameraProposal &destination);
         [[nodiscard]] bool IsSeekDiscontinuity(const SequencePlayerSnapshot &state) const noexcept;
         CinematicRuntimeService *runtime_{};
         Runtime::CameraService *camera_{};

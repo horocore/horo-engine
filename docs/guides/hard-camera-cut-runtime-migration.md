@@ -51,13 +51,38 @@ the owner's current base or another eligible claim, never a saved camera pointer
 The session service retains terminal players until the host performs its existing
 restore/release protocol; camera lease release does not bypass scalar restoration.
 
-This target implements hard cuts only. Global playback blend windows do not delay
-or interpolate camera selection. A camera-only plan clears scalar blend windows
+Existing four-field `SequenceFrameCameraCutKey` initializers retain hard cuts.
+The appended fields declare `transitionTier`, `fallback`, `transitionDuration`
+and `transitionCurve`. Hard cuts require zero duration. Blends require a positive
+integer duration fitting inside the sequence and the camera track, an earlier
+source key, and completion by the next key. Invalid vocabulary, overlapping
+windows and missing sources fail activation before a lease or player is retained.
+Rebuild consumers of Cinematic Runtime and Camera Runtime together because the
+in-process key and owner layouts and the `Create` signature have changed. The
+additional fields make transition intent part of the canonical immutable key.
+No persisted sequence-asset encoding is changed by this frame-plan API extension.
+
+`CameraService::Create` accepts the host's `CameraTransitionSupport`. Its default
+admits the implemented CPU `SingleViewBlend`; hosts selecting the baseline product
+policy pass `HardCutOnly`. Capability admission is independent of backend names.
+`SingleViewBlend` evaluates Linear or SmoothStep weight from final player time,
+then delegates quaternion slerp, position and compatible projection/lens
+interpolation to the camera owner. Both endpoints are resolved from the same
+current scene borrow on every publication, including seeks, reverse playback and
+origin changes. Published frames retain copied values.
+
+The current one-view composition returns `UnsupportedCameraTransition` for a
+required `DualViewCrossFade`. An explicitly authored `HardCut` fallback admits the
+destination cut. A denied one-view capability follows the same rule.
+Perspective/orthographic mixing returns `IncompatibleCameraTransition` unless
+that key explicitly permits a hard cut. The frontend currently has no admitted
+dual-view camera compositor or two-view budget contract. Enabling real cross-fade
+requires that frontend contract and native qualification before exposing support.
+
+Global playback blend windows remain scalar playback settings. A camera-only plan clears scalar blend windows
 before session admission, including looping playback. Mixed scalar plans retain
 their original blend windows and required restore evidence; all plans retain their
 explicit restore policy. Malformed blend settings still fail typed validation.
-No SingleViewBlend or DualViewCrossFade capability
-is admitted by this baseline path, and no implicit transition fallback is chosen.
 Successful selection performs no allocation and has fixed bounds: at most 64 keys,
 32 simultaneous view claims and a hierarchy depth of 64 entities. Activation may allocate;
 scene borrows and callback lifetimes follow the existing runtime plan contract.

@@ -24,6 +24,13 @@ namespace Horo::Runtime {
         Count
     };
 
+    /** @brief Host-admitted one-view transition policy for this camera owner. */
+    enum class CameraTransitionSupport : std::uint8_t {
+        HardCutOnly,
+        SingleViewBlend,
+        Count
+    };
+
     /** @brief Host-issued complete context fence, immutable for the owner's lifetime. */
     struct CameraViewContext final {
         CameraViewContextId view;
@@ -76,8 +83,10 @@ namespace Horo::Runtime {
     public:
         static constexpr std::size_t MaximumOverrides = 32;
         /** @brief Creates one generation-scoped final owner. @param context Complete host fence.
+         * @param transitions Host-admitted capability; no frontend compositor is admitted by this one-view owner.
          * @return Owner or typed invalid/unsupported context failure. */
-        [[nodiscard]] static Result<CameraService> Create(const CameraViewContext &context);
+        [[nodiscard]] static Result<CameraService> Create(const CameraViewContext &context,
+                                                          CameraTransitionSupport transitions = CameraTransitionSupport::SingleViewBlend);
         CameraService(const CameraService &) = delete;
         CameraService &operator=(const CameraService &) = delete;
         /** @brief Transfers a prepared owner and closes the moved-from owner.
@@ -94,6 +103,13 @@ namespace Horo::Runtime {
          * @pre Scene facts were resolved against the current owner-safe-point scene, normally with ResolveSceneCamera.
          * @return Success or typed stale/target/lifecycle failure, with no partial replacement. */
         [[nodiscard]] Result<void> Submit(const CameraOverrideLease &lease, const CameraProposal &proposal);
+        /** @brief Interpolates compatible camera pose and lens in the final camera owner.
+         * @param lease Exact live override lease. @param from Current source in the same scene epoch.
+         * @param to Current destination in the same scene epoch, including its discontinuity revision.
+         * @param weight Finite destination weight in [0,1].
+         * @return Success or typed invalid lease/target/unsupported/incompatible transition, without partial replacement. */
+        [[nodiscard]] Result<void> SubmitBlend(const CameraOverrideLease &lease, const CameraProposal &from, const CameraProposal &to,
+                                               float weight);
         /** @brief Retains a live lease while removing its current proposal before first-key/end-policy handoff.
          * @param lease Exact live lease. @return Success or typed stale/lifecycle failure. */
         [[nodiscard]] Result<void> Withdraw(const CameraOverrideLease &lease);
@@ -113,6 +129,11 @@ namespace Horo::Runtime {
             return context_;
         }
 
+        /** @brief Returns host-admitted transition support. @return Immutable one-view capability. */
+        [[nodiscard]] CameraTransitionSupport TransitionSupport() const noexcept {
+            return transitions_;
+        }
+
     private:
         struct Slot final {
             std::uint32_t generation{1};
@@ -120,7 +141,8 @@ namespace Horo::Runtime {
             std::optional<CameraProposal> proposal;
         };
 
-        explicit CameraService(const CameraViewContext &context) noexcept : context_(context) {}
+        explicit CameraService(const CameraViewContext &context, CameraTransitionSupport transitions) noexcept
+            : context_(context), transitions_(transitions) {}
 
         [[nodiscard]] Result<std::size_t> Resolve(const CameraOverrideLease &lease) const;
         [[nodiscard]] bool ValidProposal(const CameraProposal &proposal, bool isOverride) const noexcept;
@@ -131,6 +153,7 @@ namespace Horo::Runtime {
         [[nodiscard]] bool HasCommittedFrame(std::uint64_t renderedFrame) const noexcept;
         [[nodiscard]] bool EligibleBase(const std::optional<CameraProposal> &base) const noexcept;
         CameraViewContext context_;
+        CameraTransitionSupport transitions_;
         std::array<Slot, MaximumOverrides> slots_{};
         std::optional<CameraSelectionSnapshot> committed_;
         bool admissionOpen_{true};

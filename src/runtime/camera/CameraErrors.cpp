@@ -17,4 +17,8 @@ namespace Horo::Runtime::CameraErrors {
     const ErrorCodeDescriptor InvalidTarget = Describe("CameraInvalidTarget", "Camera target is unavailable or invalid.");
     const ErrorCodeDescriptor CameraUnavailable = Describe("CameraUnavailable", "No eligible camera can be committed for this view.");
     const ErrorCodeDescriptor InvalidFrame = Describe("CameraInvalidFrame", "Camera frame or selection epoch cannot advance.");
+    const ErrorCodeDescriptor UnsupportedTransition =
+        Describe("UnsupportedCameraTransition", "Requested camera transition is unavailable.");
+    const ErrorCodeDescriptor IncompatibleTransition =
+        Describe("IncompatibleCameraTransition", "Camera transition endpoints are incompatible.");
 }  // namespace Horo::Runtime::CameraErrors

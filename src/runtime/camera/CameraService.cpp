@@ -3,19 +3,37 @@
 #include "Horo/Runtime/Camera/CameraErrors.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace Horo::Runtime {
+    namespace {
+        /** @brief Converts a valid view orientation to the shared scene quaternion convention. */
+        Result<Math::Quaternion> CameraRotation(const Render::RenderCameraView &view) {
+            const auto matrix = Math::TryLookAt(view.position, view.target, view.up);
+            if (matrix.HasError())
+                return Result<Math::Quaternion>::Failure(matrix.ErrorValue());
+            const auto inverse = Math::TryInverseAffine(matrix.Value());
+            if (inverse.HasError())
+                return Result<Math::Quaternion>::Failure(inverse.ErrorValue());
+            const auto pose = Math::TryDecomposeAffineTRS(inverse.Value());
+            if (pose.HasError())
+                return Result<Math::Quaternion>::Failure(pose.ErrorValue());
+            return Result<Math::Quaternion>::Success(pose.Value().rotation);
+        }
+    }  // namespace
+
     /** @copydoc CameraService::Create */
-    Result<CameraService> CameraService::Create(const CameraViewContext &context) {
-        if (!context.view.IsValid() || !context.scene.IsValid() || context.domain >= CameraViewDomain::Count)
+    Result<CameraService> CameraService::Create(const CameraViewContext &context, const CameraTransitionSupport transitions) {
+        if (!context.view.IsValid() || !context.scene.IsValid() || context.domain >= CameraViewDomain::Count ||
+            transitions >= CameraTransitionSupport::Count)
             return Result<CameraService>::Failure(MakeError(CameraErrors::InvalidContext));
-        return Result<CameraService>::Success(CameraService{context});
+        return Result<CameraService>::Success(CameraService{context, transitions});
     }
 
     CameraService::CameraService(CameraService &&other) noexcept
-        : context_(other.context_), slots_(std::move(other.slots_)), committed_(std::move(other.committed_)),
-          admissionOpen_(other.admissionOpen_) {
+        : context_(other.context_), transitions_(other.transitions_), slots_(std::move(other.slots_)),
+          committed_(std::move(other.committed_)), admissionOpen_(other.admissionOpen_) {
         other.Shutdown();
     }
 
@@ -67,6 +85,41 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(CameraErrors::InvalidTarget));
         slots_[index.Value()].proposal = proposal;
         return Result<void>::Success();
+    }
+
+    /** @copydoc CameraService::SubmitBlend */
+    Result<void> CameraService::SubmitBlend(const CameraOverrideLease &lease, const CameraProposal &from, const CameraProposal &to,
+                                            const float weight) {
+        const auto index = Resolve(lease);
+        if (index.HasError())
+            return Result<void>::Failure(index.ErrorValue());
+        if (transitions_ != CameraTransitionSupport::SingleViewBlend)
+            return Result<void>::Failure(MakeError(CameraErrors::UnsupportedTransition));
+        if (!ValidProposal(from, true) || !ValidProposal(to, true) || !std::isfinite(weight) || weight < 0.0F || weight > 1.0F)
+            return Result<void>::Failure(MakeError(CameraErrors::InvalidTarget));
+        if (from.values.projection.kind != to.values.projection.kind)
+            return Result<void>::Failure(MakeError(CameraErrors::IncompatibleTransition));
+        const auto source = CameraRotation(from.values);
+        const auto destination = CameraRotation(to.values);
+        if (source.HasError() || destination.HasError())
+            return Result<void>::Failure(MakeError(CameraErrors::IncompatibleTransition));
+        const auto rotation = Math::TrySlerp(source.Value(), destination.Value(), weight);
+        if (rotation.HasError())
+            return Result<void>::Failure(rotation.ErrorValue());
+        auto blended = to;
+        auto &values = blended.values;
+        values.position = from.values.position * (1.0F - weight) + to.values.position * weight;
+        values.target = values.position + rotation.Value().Rotate({0.0F, 0.0F, -1.0F});
+        values.up = rotation.Value().Rotate({0.0F, 1.0F, 0.0F});
+        const auto &a = from.values.projection;
+        const auto &b = to.values.projection;
+        if (b.kind == Render::RenderProjectionKind::Perspective)
+            values.projection.verticalFovRadians = std::lerp(a.verticalFovRadians, b.verticalFovRadians, weight);
+        else
+            values.projection.orthographicHeight = std::lerp(a.orthographicHeight, b.orthographicHeight, weight);
+        values.projection.nearPlane = std::lerp(a.nearPlane, b.nearPlane, weight);
+        values.projection.farPlane = std::lerp(a.farPlane, b.farPlane, weight);
+        return Submit(lease, blended);
     }
 
     /** @copydoc CameraService::Withdraw */
