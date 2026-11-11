@@ -1,4 +1,6 @@
 #include "Horo/Runtime/Ui/UiAccessibilityChanges.h"
+#include "Horo/Runtime/Ui/UiCaptionSettings.h"
+#include "Horo/Runtime/Ui/UiCaptions.h"
 
 #include <type_traits>
 
@@ -8,6 +10,11 @@ static_assert(std::is_member_function_pointer_v<decltype(&UiAccessibilitySnapsho
 static_assert(std::is_member_function_pointer_v<decltype(&UiAccessibilitySnapshot::FocusState)>);
 
 int main() {
+    CaptionTimeline captions;
+    if (captions.Reset(1).HasError())
+        return 1;
+    if (!captions.Cues().empty())
+        return 1;
     const auto owner = UiOwnershipGeneration::Create(1).Value();
     SerializedUiId bytes{};
     bytes.back() = 1;

@@ -131,7 +131,9 @@ set_target_properties(HoroNetworkApi PROPERTIES EXPORT_NAME NetworkApi POSITION_
 set_target_properties(HoroSaveApi PROPERTIES EXPORT_NAME SaveApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroGameplayApi PROPERTIES EXPORT_NAME GameplayApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroAI PROPERTIES EXPORT_NAME AI POSITION_INDEPENDENT_CODE ON)
+set_target_properties(HoroCaptionTransport PROPERTIES EXPORT_NAME CaptionTransport)
 export(TARGETS HoroFoundation HoroSecurityEnvelope HoroNetworkApi HoroSaveApi HoroGameplayApi HoroAI
+       HoroCaptionTransport
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayTargets.cmake")
 # Physics is an explicit SDK component. The minimal gameplay export remains solver-free;

@@ -217,6 +217,11 @@ function(horo_register_catch_test target)
     horo_ci_catch_properties(${target})
 endfunction()
 
+add_executable(HoroCaptionTransportPublicHeaderConsumer support/CaptionTransportPublicHeaderConsumer.cpp)
+target_link_libraries(HoroCaptionTransportPublicHeaderConsumer PRIVATE HoroEngine::CaptionTransport)
+add_test(NAME HoroCaptionTransportPublicHeaderConsumer COMMAND HoroCaptionTransportPublicHeaderConsumer)
+set_tests_properties(HoroCaptionTransportPublicHeaderConsumer PROPERTIES LABELS "unit;accessibility;headless;public_headers")
+
 add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp)
 target_compile_features(HoroModelProviderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAdapters Catch2::Catch2WithMain)
@@ -4912,6 +4917,7 @@ add_executable(HoroRuntimeUiDiagnosticsTests
 target_compile_features(HoroRuntimeUiDiagnosticsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiDiagnosticsTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiAccessibilityTests
+        unit/runtime/ui/UiCaptionTests.cpp
         unit/runtime/ui/UiAccessibilityTests.cpp
         unit/runtime/ui/UiAccessibilityChangesTests.cpp
         unit/runtime/ui/UiAccessibilityDeliveryTests.cpp

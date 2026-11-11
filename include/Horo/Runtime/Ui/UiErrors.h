@@ -8,6 +8,10 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::Runtime::Ui::UiErrors {
+    /** @brief Caption session, catalog, appearance or presentation input is malformed. */
+    extern const ErrorCodeDescriptor CaptionInvalid;
+    /** @brief Caption setup could not reserve its bounded owned storage. */
+    extern const ErrorCodeDescriptor CaptionCapacityExceeded;
     /** @brief No explicit Runtime UI owner or requested optional responsibility is composed. */
     extern const ErrorCodeDescriptor CapabilityUnavailable;
     /** @brief Explicit module policy withholds the requested Runtime UI operation. */

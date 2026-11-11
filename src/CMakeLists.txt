@@ -8,6 +8,10 @@ add_library(HoroFoundation STATIC ${HORO_FOUNDATION_SOURCES})
 
 add_library(HoroEngine::Foundation ALIAS HoroFoundation)
 
+add_library(HoroCaptionTransport INTERFACE)
+add_library(HoroEngine::CaptionTransport ALIAS HoroCaptionTransport)
+target_compile_features(HoroCaptionTransport INTERFACE cxx_std_20)
+
 target_compile_features(HoroFoundation PUBLIC cxx_std_20)
 target_compile_definitions(HoroFoundation PUBLIC HORO_ENABLE_TELEMETRY=$<BOOL:${HORO_ENABLE_TELEMETRY}>)
 target_include_directories(HoroFoundation
@@ -722,6 +726,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingStorePreparation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
+        runtime/ui/UiCaptions.cpp
+        runtime/ui/UiCaptionSettings.cpp
         runtime/ui/UiElementPresentation.cpp
         runtime/ui/UiElementAuthoringProjection.cpp
         runtime/ui/UiStyleAssetValidation.cpp
@@ -879,7 +885,7 @@ target_link_libraries(HoroUiAnimationIntegrationInternal INTERFACE HoroEngine::R
 
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
 target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
-target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::SceneIdentity HoroEngine::Foundation HoroEngine::Assets
+target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::SceneIdentity HoroEngine::Foundation HoroEngine::Assets HoroEngine::CaptionTransport
         PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz HoroThirdParty::Unicode)
 target_include_directories(HoroRuntimeUi PRIVATE
         $<TARGET_PROPERTY:HoroRationalDurationInternal,INTERFACE_INCLUDE_DIRECTORIES>)

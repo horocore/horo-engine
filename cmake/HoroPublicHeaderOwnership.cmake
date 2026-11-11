@@ -23,6 +23,11 @@ horo_configure_target_header_boundary(HoroSceneCook PUBLIC_HEADERS
 # include/Horo requires assigning it to exactly one production target here.
 message(STATUS "Configuring target-specific public header boundaries")
 
+horo_configure_target_header_boundary(HoroCaptionTransport PUBLIC_HEADERS
+    Horo/Accessibility/CaptionTransport.h
+)
+
+
 horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/FoundationErrorDomains.h
     Horo/Foundation/AssetCookTargetId.h
@@ -352,6 +357,8 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiImageResource.h
     Horo/Runtime/Ui/UiAccessibility.h
     Horo/Runtime/Ui/UiAccessibilityChanges.h
+      Horo/Runtime/Ui/UiCaptions.h
+      Horo/Runtime/Ui/UiCaptionSettings.h
     Horo/Runtime/Ui/UiIdentity.h
     Horo/Runtime/Ui/UiBinding.h
     Horo/Runtime/Ui/UiBindingStore.h
