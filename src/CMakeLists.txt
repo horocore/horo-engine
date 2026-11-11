@@ -12,6 +12,14 @@ add_library(HoroCaptionTransport INTERFACE)
 add_library(HoroEngine::CaptionTransport ALIAS HoroCaptionTransport)
 target_compile_features(HoroCaptionTransport INTERFACE cxx_std_20)
 
+add_library(HoroVisualAccessibility STATIC
+        runtime/accessibility/VisualAccessibility.cpp
+        runtime/accessibility/VisualAccessibilitySettings.cpp
+)
+add_library(HoroEngine::VisualAccessibility ALIAS HoroVisualAccessibility)
+target_compile_features(HoroVisualAccessibility PUBLIC cxx_std_20)
+target_link_libraries(HoroVisualAccessibility PUBLIC HoroEngine::Foundation)
+
 target_compile_features(HoroFoundation PUBLIC cxx_std_20)
 target_compile_definitions(HoroFoundation PUBLIC HORO_ENABLE_TELEMETRY=$<BOOL:${HORO_ENABLE_TELEMETRY}>)
 target_include_directories(HoroFoundation

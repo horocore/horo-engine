@@ -27,6 +27,9 @@ horo_configure_target_header_boundary(HoroCaptionTransport PUBLIC_HEADERS
     Horo/Accessibility/CaptionTransport.h
 )
 
+horo_configure_target_header_boundary(HoroVisualAccessibility PUBLIC_HEADERS
+    Horo/Accessibility/VisualAccessibility.h
+)
 
 horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/FoundationErrorDomains.h
