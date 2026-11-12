@@ -53,7 +53,7 @@ namespace Horo::Extensions {
             return HORO_EXTENSION_SUCCESS;
         }
 
-        bool RequestValid(const HoroExtensionServiceRequest *request, HoroExtensionServiceResult *result) noexcept {
+        bool RequestValid(const HoroExtensionServiceRequest *request, const HoroExtensionServiceResult *result) noexcept {
             return request && result && result->structSize == sizeof(*result) && request->structSize == sizeof(*request) &&
                    Text(request->method) && request->argumentCount <= HORO_EXTENSION_SERVICE_MAX_ARGUMENTS &&
                    (request->argumentCount == 0 || request->arguments);

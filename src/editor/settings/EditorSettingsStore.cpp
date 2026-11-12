@@ -93,7 +93,7 @@ namespace Horo::Editor {
             std::vector<std::unordered_set<std::string>> objects;
             bool duplicate = false;
             const auto parsed =
-                nlohmann::json::parse(text, [&objects, &duplicate](int, nlohmann::json::parse_event_t event, nlohmann::json &value) {
+                nlohmann::json::parse(text, [&objects, &duplicate](int, nlohmann::json::parse_event_t event, const nlohmann::json &value) {
                 using Event = nlohmann::json::parse_event_t;
                 if (event == Event::object_start)
                     objects.emplace_back();
