@@ -156,7 +156,7 @@ namespace Horo::Gameplay {
             std::size_t nodes{};
             std::vector<std::set<std::string>> fields;
 
-            bool Visit(const int depth, const Json::parse_event_t event, Json &value) {
+            bool Visit(const int depth, const Json::parse_event_t event, const Json &value) {
                 if (++nodes > GameplayVfxBindingLimits::JsonNodes || depth > static_cast<int>(GameplayVfxBindingLimits::JsonDepth))
                     Fail(GameplayVfxErrors::LimitExceeded);
                 if ((event == Json::parse_event_t::object_start || event == Json::parse_event_t::array_start) &&
@@ -192,7 +192,7 @@ namespace Horo::Gameplay {
             return VfxBindingDetail::Reject<GameplayVfxBindingDocument>(GameplayVfxErrors::LimitExceeded);
         try {
             ParseBudget budget;
-            auto parsed = Json::parse(bytes, [&budget](int depth, Json::parse_event_t event, Json &value) {
+            auto parsed = Json::parse(bytes, [&budget](int depth, Json::parse_event_t event, const Json &value) {
                 return budget.Visit(depth, event, value);
             });
             auto document = Document(parsed);

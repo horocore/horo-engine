@@ -55,7 +55,7 @@ namespace Horo::Physics::Detail {
             return Outcome::Success(std::move(plan));
         }
 
-        Result<ConstructionPlan> Adapt(StateDetail::ConstructionRecipePool &pool, Result<ConstructionPlan> result) {
+        Result<ConstructionPlan> Adapt(const StateDetail::ConstructionRecipePool &pool, Result<ConstructionPlan> result) {
             if (result.HasError() && OptionalRecipeFailure(pool, result.ErrorValue()))
                 return Result<ConstructionPlan>::Success({});
             return result;

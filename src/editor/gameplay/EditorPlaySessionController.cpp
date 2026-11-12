@@ -61,7 +61,7 @@ namespace Horo::Editor {
         };
 
         /** @brief Contains allocation failure while the original runtime and all live gameplay scopes remain intact. */
-        Result<Gameplay::BehaviorRuntimeReloadSnapshot> CaptureReloadSafely(Gameplay::BehaviorRuntime &runtime) {
+        Result<Gameplay::BehaviorRuntimeReloadSnapshot> CaptureReloadSafely(const Gameplay::BehaviorRuntime &runtime) {
             try {
                 return runtime.CaptureReloadSnapshot();
             } catch (const std::bad_alloc &) {

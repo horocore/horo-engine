@@ -159,7 +159,7 @@ namespace Horo::Gameplay {
                 return result;
             }
 
-            Result<void> ValidatePending(Runtime::RuntimeScene &scene) const {
+            Result<void> ValidatePending(const Runtime::RuntimeScene &scene) const {
                 return BehaviorRuntimeRestoreAccess::Matches(*owner_->pending, scene.View().RuntimeId())
                            ? Result<void>::Success()
                            : Result<void>::Failure(BehaviorRestoreError("Pending candidate belongs to another actual Scene."));

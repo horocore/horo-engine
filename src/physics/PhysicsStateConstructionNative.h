@@ -8,9 +8,9 @@ namespace Horo::Physics::Detail {
      */
     [[nodiscard]] Result<void> ConfigureCanonicalConstructionRecipes(CanonicalRuntimeHandle, StateDetail::ConstructionRecipePool *);
     [[nodiscard]] Result<StateDetail::ConstructionRecipeLease> AcquireCanonicalSceneShapeRecipe(CanonicalWorldHandle, ShapeHandle);
-    [[nodiscard]] Result<void> ValidateCanonicalRecipeAdmission(StateDetail::ConstructionRecipePool *,
+    [[nodiscard]] Result<void> ValidateCanonicalRecipeAdmission(const StateDetail::ConstructionRecipePool *,
                                                                 const StateDetail::ConstructionRecipeLease *);
     [[nodiscard]] Result<StateDetail::ConstructionRecipeLease> ValidateCanonicalCreatedRecipe(
-        StateDetail::ConstructionRecipePool *, const StateDetail::ConstructionRecipeLease *,
+        const StateDetail::ConstructionRecipePool *, const StateDetail::ConstructionRecipeLease *,
         const std::optional<PhysicsStateFpControl> &actualControl, const Sha256Digest &actualRecipe);
 }  // namespace Horo::Physics::Detail

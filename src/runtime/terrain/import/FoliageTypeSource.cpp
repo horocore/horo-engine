@@ -21,11 +21,11 @@ namespace Horo::Terrain {
                 wire.Bytes(value.Bytes());
             }
 
-            void Boolean(bool &value) {
+            void Boolean(const bool value) {
                 wire.Integer(static_cast<std::uint8_t>(value));
             }
 
-            void Revision(FoliageDefinitionRevision &value) {
+            void Revision(const FoliageDefinitionRevision &value) {
                 wire.Integer(value.Value());
             }
 

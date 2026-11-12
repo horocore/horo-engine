@@ -10,7 +10,7 @@ namespace Horo::Gameplay::VfxContextDetail {
                     {moduleState.grant.producer, moduleState.nextSequence}};
         }
 
-        [[nodiscard]] GameplayVfxResolveOutcome Resolve(Detail::GameplayVfxSceneState &scene,
+        [[nodiscard]] GameplayVfxResolveOutcome Resolve(const Detail::GameplayVfxSceneState &scene,
                                                         const Detail::GameplayVfxModuleState &moduleState, const GameplayVfxEventKey key,
                                                         const GameplayVfxEventPayload &payload, const GameplayVfxReceipt &receipt,
                                                         const std::span<Vfx::VfxSpawnRequest> output) noexcept {

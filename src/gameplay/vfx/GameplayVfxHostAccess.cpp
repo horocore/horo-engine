@@ -86,7 +86,7 @@ namespace Horo::Gameplay::Detail {
             return true;
         }
 
-        [[nodiscard]] Vfx::VfxSpawnStatus WorldStatus(const GameplayVfxBindingTable &table, Vfx::VfxWorld &world) noexcept {
+        [[nodiscard]] Vfx::VfxSpawnStatus WorldStatus(const GameplayVfxBindingTable &table, const Vfx::VfxWorld &world) noexcept {
             using enum Horo::Vfx::VfxSpawnStatus;
             const auto &compiled = GameplayVfxBindingAccess::State(table);
             for (const auto &binding : compiled.bindings)
@@ -100,7 +100,7 @@ namespace Horo::Gameplay::Detail {
             return Accepted;
         }
 
-        [[nodiscard]] Result<void> ValidateWorld(const GameplayVfxBindingTable &table, Vfx::VfxWorld &world) {
+        [[nodiscard]] Result<void> ValidateWorld(const GameplayVfxBindingTable &table, const Vfx::VfxWorld &world) {
             const auto status = WorldStatus(table, world);
             if (status == Vfx::VfxSpawnStatus::MissingAsset)
                 return Reject<void>(GameplayVfxErrors::AssetUnavailable);
@@ -116,7 +116,7 @@ namespace Horo::Gameplay::Detail {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<std::vector<Vfx::VfxSpawnAssetInfo>> ReloadPalette(Vfx::VfxWorld &world,
+        [[nodiscard]] Result<std::vector<Vfx::VfxSpawnAssetInfo>> ReloadPalette(const Vfx::VfxWorld &world,
                                                                                 const GameplayVfxBindingDocument &document) {
             std::vector<Vfx::VfxSpawnAssetInfo> palette;
             palette.reserve(Vfx::VfxSpawnHardLimits::Effects);
