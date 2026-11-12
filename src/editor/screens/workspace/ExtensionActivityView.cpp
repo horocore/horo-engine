@@ -270,7 +270,8 @@ namespace Horo::Editor {
                 PrepareLayout(entry);
             return;
         }
-        std::vector<Entry> next;
+        // Preserve bad_alloc propagation when MSVC debug allocates the empty vector's iterator proxy.
+        std::vector<Entry> next(std::size_t{0});
         next.reserve(host_->Prepared().size());
         for (const auto &projection : host_->Prepared()) {
             next.push_back(PrepareEntry(projection, locale));
