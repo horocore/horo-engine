@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
 import pytest
 
@@ -267,3 +268,18 @@ printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$3" >> "$GITHUB_ENV"
     else:
         assert result.ret == 0, result.stderr.str()
         assert environment.read_text() == f'previous=value\nHORO_EDITOR_VULKAN_ASSET_ROOT={root}\n'
+
+
+def test_sonar_build_covers_the_excluded_clustered_cook_contract():
+    tests_cmake = (ROOT / 'tests/CMakeLists.txt').read_text(encoding='utf-8')
+    registration = tests_cmake.split('add_test(NAME HoroEditorClusteredLightingShaderCookContract', 1)[1]
+    registration = registration.split('set_tests_properties(', 1)[0]
+    dependency = re.search(r'"-DCOOK=\$<TARGET_FILE:([^>]+)>"', registration)
+    assert dependency is not None
+    target = dependency.group(1)
+    declarations = (ROOT / 'apps/HoroEditor/cmake/ShaderTools.cmake').read_text(encoding='utf-8')
+    assert re.search(r'add_executable\(\s*' + re.escape(target) + r'\s+EXCLUDE_FROM_ALL\b', declarations)
+    build = next(line.strip() for line in sonar_coverage_job().splitlines()
+                 if line.strip().startswith('cmake --build --preset sonar'))
+    arguments = shlex.split(build)
+    assert target in arguments[arguments.index('--target') + 1:]
