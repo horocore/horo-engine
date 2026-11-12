@@ -98,8 +98,7 @@ namespace Horo::Application::Internal {
         auto services = Extensions::ScriptModuleHostServices::CreateConfiguringHeadless(host, *impl_->moduleJobs);
         if (services.HasError())
             return Result<void>::Failure(services.ErrorValue());
-        auto reference = services.Value()->PrepareReference(program.Value()->RequestsReference());
-        if (reference.HasError())
+        if (auto reference = services.Value()->PrepareReference(program.Value()->RequestsReference()); reference.HasError())
             return reference;
         impl_->moduleProgram = std::move(program).Value();
         impl_->moduleServices = std::move(services).Value();

@@ -59,8 +59,8 @@ namespace Horo::Extensions {
             if (part.empty() || (part.size() > 1 && part.front() == '0'))
                 return Result<std::uint16_t>::Failure(Invalid().ErrorValue());
             std::uint16_t value{};
-            const auto parsed = std::from_chars(part.data(), part.data() + part.size(), value);
-            if (parsed.ec != std::errc{} || parsed.ptr != part.data() + part.size())
+            if (const auto parsed = std::from_chars(part.data(), part.data() + part.size(), value);
+                parsed.ec != std::errc{} || parsed.ptr != part.data() + part.size())
                 return Result<std::uint16_t>::Failure(Invalid().ErrorValue());
             return Result<std::uint16_t>::Success(value);
         }

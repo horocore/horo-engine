@@ -119,8 +119,7 @@ namespace Horo::Application::Internal {
             if (std::ranges::find(moduleEntry->roles, Extensions::ExtensionModuleRole::ScriptProvider) == moduleEntry->roles.end())
                 return Denied<std::string>();
             if (options.moduleOperation) {
-                auto valid = Extensions::ValidateScriptModuleSelectedDeclaration(*moduleEntry);
-                if (valid.HasError())
+                if (auto valid = Extensions::ValidateScriptModuleSelectedDeclaration(*moduleEntry); valid.HasError())
                     return Result<std::string>::Failure(valid.ErrorValue());
                 return Result<std::string>::Success({});
             }

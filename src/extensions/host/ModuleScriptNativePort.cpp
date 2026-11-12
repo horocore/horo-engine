@@ -123,8 +123,7 @@ namespace Horo::Extensions {
 
     Result<ModuleScriptSourceLease> ModuleScriptHostAuthority::Source(std::string_view package, std::string_view moduleId) const {
         using Output = Result<ModuleScriptSourceLease>;
-        auto lane = RequireOpenOwner();
-        if (lane.HasError())
+        if (auto lane = RequireOpenOwner(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
         auto selected = Consumer(*impl_->state, package, moduleId);
         if (selected.HasError())
@@ -143,8 +142,7 @@ namespace Horo::Extensions {
     Result<ModuleScriptResolvedImport> ModuleScriptHostAuthority::Resolve(std::string_view package, std::string_view moduleId,
                                                                           std::string_view id) const {
         using Output = Result<ModuleScriptResolvedImport>;
-        auto lane = RequireOpenOwner();
-        if (lane.HasError())
+        if (auto lane = RequireOpenOwner(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
         auto consumer = Consumer(*impl_->state, package, moduleId);
         if (consumer.HasError())
@@ -163,8 +161,7 @@ namespace Horo::Extensions {
         if (evidence.HasError())
             return Output::Failure(evidence.ErrorValue());
         auto actual = std::move(evidence).Value();
-        auto shape = CaptureActualDescriptor(*impl_->state, actual);
-        if (shape.HasError())
+        if (auto shape = CaptureActualDescriptor(*impl_->state, actual); shape.HasError())
             return Output::Failure(shape.ErrorValue());
         auto port = std::shared_ptr<const ModuleScriptNativePort>{
             new ModuleScriptNativePort{std::make_unique<ModuleScriptNativePort::Impl>(impl_->state, std::move(actual))}};
