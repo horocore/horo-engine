@@ -248,11 +248,12 @@ namespace Horo::Network {
         /** @brief Real Scene owner for transaction rollback tests; callbacks borrow it until dispatch retires. */
         struct SceneFixture final {
             CancellationSource cancellation;
+            const CancellationToken frameCancellation{cancellation.Token()};
             const Runtime::FrameContext frame;
             Runtime::RuntimeSceneService scene;
 
-            // MSVC 19.44 needs constructor initialization for this frame borrowing the preceding cancellation source.
-            SceneFixture() : frame{1, {}, 0.0, 0, {}, false, cancellation.Token()} {
+            // The frame borrows a fixture-owned token whose lifetime covers every scene phase.
+            SceneFixture() : frame{1, {}, 0.0, 0, {}, false, frameCancellation} {
                 REQUIRE(scene.Startup({}).HasValue());
                 Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
                 Runtime::RuntimeEntityDefinition definition;
