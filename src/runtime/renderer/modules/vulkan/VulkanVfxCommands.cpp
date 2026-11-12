@@ -79,7 +79,10 @@ namespace Horo::Render::Detail {
                         return Result<void>::Failure(prepared.ErrorValue());
                 }
             } else if (resource.image) {
-                if (!source.sampledTexture.IsValid() || ++samples > 1)
+                if (!source.sampledTexture.IsValid())
+                    return Result<void>::Failure(Invalid("VFX sampled input is not declared by the graph."));
+                ++samples;
+                if (samples > 1)
                     return Result<void>::Failure(Invalid("VFX sampled input is not declared by the graph."));
                 const auto &sample = bindings[source.sampledTexture.value - 1];
                 if (resource.image != sample.image || resource.state != sample.state || resource.image == target.color.image ||

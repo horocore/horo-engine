@@ -15,8 +15,11 @@ namespace Horo::Render::RegisterRasterCookDetail {
             for (std::size_t at = open + 1; at < tokens.size(); ++at) {
                 if (tokens[at] == "(")
                     ++depth;
-                else if (tokens[at] == ")" && --depth == 0)
-                    return at;
+                else if (tokens[at] == ")") {
+                    --depth;
+                    if (depth == 0)
+                        return at;
+                }
             }
             throw InvalidEvidence{};
         }

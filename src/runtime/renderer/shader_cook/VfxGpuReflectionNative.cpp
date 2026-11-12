@@ -23,8 +23,11 @@ namespace Horo::Render::VfxGpuCookDetail {
             for (std::size_t at = open + 1; at < tokens.size(); ++at) {
                 if (tokens[at] == "(")
                     ++depth;
-                if (tokens[at] == ")" && --depth == 0)
-                    return at;
+                if (tokens[at] == ")") {
+                    --depth;
+                    if (depth == 0)
+                        return at;
+                }
             }
             throw InvalidEvidence{};
         }
