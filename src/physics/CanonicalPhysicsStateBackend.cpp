@@ -36,7 +36,18 @@ namespace Horo::Physics::Detail {
         (void)impl_->candidate.release();
         impl_->candidate.reset(static_cast<CanonicalWorld *>(previous.value));
         impl_->owner = restored;
-        std::swap(impl_->ownerMap, impl_->candidateMap);
+        // Aggregate std::swap move-constructs four vectors, allocating MSVC debug iterator proxies.
+        // Exchange the retained buffers directly so publication stays allocation-free and non-throwing.
+        auto &ownerMap = impl_->ownerMap;
+        auto &candidateMap = impl_->candidateMap;
+        ownerMap.bodies.swap(candidateMap.bodies);
+        ownerMap.joints.swap(candidateMap.joints);
+        ownerMap.shapesByHandle.swap(candidateMap.shapesByHandle);
+        ownerMap.shapeRecords.swap(candidateMap.shapeRecords);
+        std::swap(ownerMap.sceneBodies, candidateMap.sceneBodies);
+        std::swap(ownerMap.queryBodies, candidateMap.queryBodies);
+        std::swap(ownerMap.sceneShapes, candidateMap.sceneShapes);
+        std::swap(ownerMap.sceneJoints, candidateMap.sceneJoints);
     }
 
     /** @copydoc CanonicalPhysicsStateWorkspace::CanonicalPhysicsStateWorkspace */

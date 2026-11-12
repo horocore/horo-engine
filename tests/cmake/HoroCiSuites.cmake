@@ -290,6 +290,18 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroEditorNavigationBakeHostTests
 )
 
+if(WIN32)
+    list(APPEND HORO_CI_WINDOWS_TARGETS
+        HoroProcessImageIdentityTests
+        HoroPhysicsStateCodecTests
+        HoroPhysicsStateHostLifecycleTests)
+    if(HORO_BUILD_PHYSICS_NATIVE)
+        list(APPEND HORO_CI_WINDOWS_TARGETS
+            HoroPhysicsStateWorldTests
+            HoroPhysicsStateNativeTests)
+    endif()
+endif()
+
 set(HORO_CI_NAVIGATION_TARGETS
     HoroNavigationProjectSettingsTests
     HoroNavigationProjectSettingsPublicConsumer

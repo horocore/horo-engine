@@ -958,6 +958,26 @@ target_include_directories(HoroPhysicsStateCodecTests PRIVATE
 target_link_libraries(HoroPhysicsStateCodecTests PRIVATE HoroEngine::Physics Threads::Threads)
 horo_register_catch_test(HoroPhysicsStateCodecTests LABELS "unit;physics;state;headless")
 
+if(WIN32)
+    # Only this native qualification target sees the exact non-installed Windows implementation check.
+    set(_horo_windows_image_test_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/windows-process-image-test")
+    file(MAKE_DIRECTORY "${_horo_windows_image_test_headers}")
+    configure_file("${PROJECT_SOURCE_DIR}/src/platform/process_image/ProcessImageWindowsInternal.h"
+        "${_horo_windows_image_test_headers}/ProcessImageWindowsInternal.h" COPYONLY)
+    add_executable(HoroProcessImageIdentityChild support/ProcessImageIdentityWindowsChild.cpp)
+    target_compile_features(HoroProcessImageIdentityChild PRIVATE cxx_std_20)
+    target_link_libraries(HoroProcessImageIdentityChild PRIVATE HoroPlatformProcessImageInternal)
+    add_executable(HoroProcessImageIdentityTests
+        support/AllocationProbe.cpp unit/platform/ProcessImageIdentityWindowsTests.cpp)
+    target_include_directories(HoroProcessImageIdentityTests PRIVATE
+        "${_horo_windows_image_test_headers}" "${CMAKE_CURRENT_SOURCE_DIR}/support")
+    target_link_libraries(HoroProcessImageIdentityTests PRIVATE HoroPlatformProcessImageInternal)
+    target_compile_definitions(HoroProcessImageIdentityTests PRIVATE
+        HORO_PROCESS_IMAGE_CHILD_PATH=L"$<TARGET_FILE:HoroProcessImageIdentityChild>")
+    add_dependencies(HoroProcessImageIdentityTests HoroProcessImageIdentityChild)
+    horo_register_catch_test(HoroProcessImageIdentityTests LABELS "unit;platform;process-image;headless;ci-windows")
+endif()
+
 add_executable(HoroPhysicsStatePublicHeaderConsumer support/PhysicsStatePublicHeaderConsumer.cpp)
 target_compile_features(HoroPhysicsStatePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPhysicsStatePublicHeaderConsumer PRIVATE HoroEngine::Physics)
