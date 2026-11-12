@@ -35,8 +35,15 @@ namespace Horo::Extensions::LuaModuleDetail {
     };
 
     struct Box final {
+        Box() = default;
+        Box(const Box &) = delete;
+        Box &operator=(const Box &) = delete;
+        Box(Box &&) = delete;
+        Box &operator=(Box &&) = delete;
+
         BoxKind kind{BoxKind::Null};
-        std::vector<std::byte> encoded;
+        // Checked-library bookkeeping must fail before Lua receives the owner.
+        std::vector<std::byte> encoded = std::vector<std::byte>(std::size_t{0});
         std::shared_ptr<Ledger> ledger;
         std::size_t cost{};
         ~Box();

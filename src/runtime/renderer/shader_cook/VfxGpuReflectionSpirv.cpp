@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstring>
+#include <span>
+#include <string>
 
 namespace Horo::Render::VfxGpuCookDetail {
     namespace {
@@ -61,12 +64,15 @@ namespace Horo::Render::VfxGpuCookDetail {
         }
 
         std::string Text(Words words) {
-            const auto *bytes = reinterpret_cast<const char *>(words.data());
-            const auto length = words.size_bytes();
-            const auto end = std::find(bytes, bytes + length, '\0');
-            if (end == bytes + length)
+            const auto bytes = std::as_bytes(words);
+            const auto end = std::ranges::find(bytes, std::byte{0});
+            if (end == bytes.end())
                 throw InvalidEvidence{};
-            return {bytes, end};
+            std::string text(static_cast<std::size_t>(end - bytes.begin()), '\0');
+            std::transform(bytes.begin(), end, text.begin(), [](std::byte value) {
+                return std::to_integer<char>(value);
+            });
+            return text;
         }
 
         bool PointerType(Proof &proof, std::uint32_t type, std::uint32_t depth = 0) {
@@ -226,9 +232,8 @@ namespace Horo::Render::VfxGpuCookDetail {
                     throw InvalidEvidence{};
                 proof.extensionSet = w[1];
             }
-            if (instruction.op == 14)
-                if (w.size() != 3 || w[1] != 0 || w[2] != 1)
-                    throw InvalidEvidence{};
+            if (instruction.op == 14 && (w.size() != 3 || w[1] != 0 || w[2] != 1))
+                throw InvalidEvidence{};
             if (instruction.op == 17)
                 Capability(w);
         }

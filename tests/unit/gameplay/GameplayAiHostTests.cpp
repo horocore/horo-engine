@@ -6,8 +6,8 @@
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
+#include <bit>
 #include <catch2/generators/catch_generators.hpp>
-#include <cstring>
 #include <memory>
 
 namespace Horo::Gameplay {
@@ -27,9 +27,8 @@ namespace Horo::Gameplay {
             REQUIRE(symbol != nullptr);
             using Capture = bool (*)(const std::shared_ptr<const GameplayAiContext> &, AI::AgentHandle, bool, bool, AI::TaskHandle &,
                                      std::shared_ptr<const Telemetry::OperationContext> &);
-            Capture capture{};
-            static_assert(sizeof(capture) == sizeof(symbol));
-            std::memcpy(&capture, &symbol, sizeof(capture));
+            static_assert(sizeof(Capture) == sizeof(symbol));
+            const auto capture = std::bit_cast<Capture>(symbol);
             std::shared_ptr<const Telemetry::OperationContext> diagnostics;
             REQUIRE(capture(context, agent, isolated, includeFields, task, diagnostics));
             REQUIRE(diagnostics);

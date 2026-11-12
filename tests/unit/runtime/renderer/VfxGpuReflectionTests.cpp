@@ -137,6 +137,20 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Captured VFX extension names require a terminator inside their own instruction", "[unit][renderer][shader][vfx][capture]") {
+    const Capture capture;
+    REQUIRE_FALSE(Qualified(capture).empty());
+    auto words = Words(capture.spirv);
+    const auto imported = Find(words, [](auto instruction) {
+        return (instruction[0] & 65535) == 11;
+    });
+    const auto count = Width(words, imported);
+    REQUIRE(count > 2);
+    for (auto at = imported + 2; at < imported + count; ++at)
+        words[at] = 0x41414141U;
+    Rejected(capture, words);
+}
+
 TEST_CASE("Actual GPU VFX capture retains validated producer bytes", "[unit][renderer][shader][vfx][capture]") {
     const Capture capture;
     CHECK(FormatSha256(ComputeSha256(std::as_bytes(std::span{capture.spirv}))) ==

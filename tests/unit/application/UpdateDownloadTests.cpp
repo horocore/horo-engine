@@ -1,3 +1,4 @@
+#include "../../support/OwnedTestDirectory.h"
 #include "Horo/Release/UpdateDownloadSession.h"
 #include "Horo/Release/UpdateHttpDownload.h"
 #include "Horo/Release/UpdateStageReady.h"
@@ -5,8 +6,8 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
-#include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -23,19 +24,10 @@ using namespace Horo::Release;
 
 namespace {
     class TemporaryStage final {
+        Horo::Tests::OwnedTestDirectory directory_{"update-download"};
+
     public:
-        TemporaryStage()
-            : path(std::filesystem::temp_directory_path() /
-                   ("horo-update-download-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
-            std::filesystem::create_directories(path);
-        }
-
-        ~TemporaryStage() {
-            std::error_code error;
-            std::filesystem::remove_all(path, error);
-        }
-
-        std::filesystem::path path;
+        const std::filesystem::path path{directory_.Path()};
     };
 
     class AcceptingProvider final : public Horo::Security::SignatureProvider {
@@ -64,7 +56,7 @@ namespace {
 
     [[nodiscard]] Horo::Security::ArtifactVerifier Verifier() {
         auto roots = std::make_shared<Horo::Security::TrustedRootStore>();
-        std::vector<std::byte> key(65U, std::byte{1});
+        std::vector key(65U, std::byte{1});
         key.front() = std::byte{0x04};
         REQUIRE(roots->Add({.publisherId = "com.horo.updates", .keyId = "key-1", .publicKey = std::move(key)}).HasValue());
         return {std::make_shared<AcceptingProvider>(), std::move(roots)};
@@ -110,12 +102,12 @@ namespace {
                     character = static_cast<char>(character - 'a' + 'A');
             }
         }
-        std::string inventory = std::string{UpdateFileInventoryHeader} + std::string{name} + '\t' + std::to_string(content.size()) + '\t' +
-                                digestText + "\t0755\tentrypoint\n";
+        std::string inventory =
+            std::format("{}{}\t{}\t{}\t0755\tentrypoint\n", UpdateFileInventoryHeader, name, content.size(), digestText);
         if (extraFile && declareExtra) {
             const auto extraDigest = Horo::ComputeSha256(std::as_bytes(std::span{extraFile->second}));
-            inventory += std::string{extraFile->first} + '\t' + std::to_string(extraFile->second.size()) + '\t' +
-                         Horo::FormatSha256(extraDigest) + "\t0644\tcontent\n";
+            inventory +=
+                std::format("{}\t{}\t{}\t0644\tcontent\n", extraFile->first, extraFile->second.size(), Horo::FormatSha256(extraDigest));
         }
         if (includeInventory)
             REQUIRE(

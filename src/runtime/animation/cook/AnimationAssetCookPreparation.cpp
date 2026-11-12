@@ -3,6 +3,7 @@
 #include "AnimationGraphSourceInternal.h"
 
 #include <algorithm>
+#include <memory>
 
 namespace Horo::Animation {
     namespace {
@@ -21,14 +22,14 @@ namespace Horo::Animation {
 
     const PreparedAnimationCook::State::Entry *PreparedAnimationCook::State::Find(Assets::AssetId id) const noexcept {
         const auto found = std::ranges::find(entries, id, &Entry::id);
-        return found == entries.end() ? nullptr : &*found;
+        return found == entries.end() ? nullptr : std::to_address(found);
     }
 
     const PreparedAnimationCook::State::Skeleton *PreparedAnimationCook::State::FindSkeleton(SkeletonId id) const noexcept {
         const auto found = std::ranges::find_if(skeletons, [&](const auto &value) {
             return value.owner->Data().skeleton == id;
         });
-        return found == skeletons.end() ? nullptr : &*found;
+        return found == skeletons.end() ? nullptr : std::to_address(found);
     }
 
     Result<void> PreparedAnimationCook::State::Add(AnimationCookedPayload payload, Assets::AssetTypeId type) {

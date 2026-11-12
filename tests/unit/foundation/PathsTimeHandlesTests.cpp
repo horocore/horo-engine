@@ -25,7 +25,7 @@ namespace {
     }
 
     TEST_CASE("Project Path Resolves Portable UTF-8 To The Exact Native Path", "[unit][foundation]") {
-        const auto root = std::filesystem::temp_directory_path() / u8"\u5de5\u7a0b";
+        const auto root = std::filesystem::current_path() / u8"\u5de5\u7a0b";
         const std::u8string_view encoded{u8"assets/\u56fe \u011e/\u6a21\u578b.txt"};
         const std::string portable{encoded.begin(), encoded.end()};
         const auto relative = Horo::ProjectPath::Parse(portable);
@@ -38,7 +38,7 @@ namespace {
     }
 
     TEST_CASE("Path Prefix Uses Normalized Components", "[unit][foundation]") {
-        const std::filesystem::path root = std::filesystem::temp_directory_path() / "horo-path-prefix-test";
+        const std::filesystem::path root = std::filesystem::current_path() / "horo-path-prefix-test";
         REQUIRE(Horo::Foundation::Paths::HasPathPrefix(root, root / "nested/file.txt"));
         REQUIRE(Horo::Foundation::Paths::HasPathPrefix(root, root));
         REQUIRE_FALSE(Horo::Foundation::Paths::HasPathPrefix(root, root.parent_path() / "outside/file.txt"));

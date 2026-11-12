@@ -109,7 +109,7 @@ namespace Horo::Gameplay {
         Fixture fixture;
         auto old = fixture.runtime.CapabilityAtSafePoint();
         bool denied{};
-        std::thread foreign([&] {
+        std::jthread foreign([&fixture, &denied] {
             denied = fixture.context->ResolveAgent(fixture.scene.agent.agent.agent).HasError();
         });
         foreign.join();

@@ -285,9 +285,9 @@ namespace Horo::Tests::VoiceRenderFixture {
             }
             std::array<AudioVoiceHandle, 8> admitted;
             for (auto &voice : admitted) {
-                const auto created = registry->CreateVoice();
-                REQUIRE(created.HasValue());
-                voice = created.Value();
+                const auto admittedVoice = registry->CreateVoice();
+                REQUIRE(admittedVoice.HasValue());
+                voice = admittedVoice.Value();
             }
             CHECK(registry->CreateVoice().HasError());
             REQUIRE(registry->BeginShutdown().HasValue());

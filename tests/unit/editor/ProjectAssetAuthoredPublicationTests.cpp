@@ -13,9 +13,18 @@ using namespace Horo;
 using namespace Horo::Assets;
 
 namespace {
+    /** @brief Distinguishes the deliberately injected native publication failure. */
+    class NativePublicationFailure final : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
     class PublicationFiles final : public TestSupport::NativePublicationFiles {
     public:
-        std::size_t writes{}, promotions{}, failWrite{}, failPromotion{};
+        std::size_t writes{};
+        std::size_t promotions{};
+        std::size_t failWrite{};
+        std::size_t failPromotion{};
         std::function<void()> beforePromotion;
         std::function<void()> beforeRemoval;
 
@@ -83,7 +92,8 @@ TEST_CASE("Authored assets publish ordinary identity without invented import pro
     second.asset = Identity("00000000-0000-0000-0000-000000000072");
     second.destination = ProjectPath::Parse("assets/layers/second.horoasset").Value();
     project.batch.items.push_back(second);
-    bool observedStage{}, hiddenUntilComplete = true;
+    bool observedStage{};
+    bool hiddenUntilComplete = true;
     project.files.beforePromotion = [&] {
         observedStage = true;
         hiddenUntilComplete = hiddenUntilComplete && project.registry.Snapshot().Records().empty();
@@ -166,7 +176,7 @@ TEST_CASE("Authored source failure compensates only owned files before registry 
     }
     SECTION("Native publication callback throws before its commit") {
         project.files.beforePromotion = [] {
-            throw std::runtime_error("native publication failure");
+            throw NativePublicationFailure("native publication failure");
         };
     }
     REQUIRE(project.committer.CommitAuthored(project.batch).HasError());
@@ -225,7 +235,7 @@ TEST_CASE("Authored cancellation and reentrancy keep publication ownership expli
         CHECK(project.files.writes == 0);
     }
     SECTION("Cancellation at a native boundary compensates committed owned payload") {
-        project.files.beforePromotion = [&] {
+        project.files.beforePromotion = [&cancellation] {
             cancellation.RequestCancellation();
         };
         REQUIRE(project.committer.CommitAuthored(project.batch, cancellation.Token()).HasError());
@@ -233,7 +243,8 @@ TEST_CASE("Authored cancellation and reentrancy keep publication ownership expli
         CHECK(project.committer.LastReceipt().promotedFiles == project.committer.LastReceipt().rolledBackFiles);
     }
     SECTION("Nested publication is rejected without clobbering outer receipt") {
-        bool attempted{}, rejected{};
+        bool attempted{};
+        bool rejected{};
         project.files.beforePromotion = [&] {
             attempted = true;
             rejected = project.committer.CommitAuthored(project.batch).HasError();
@@ -254,12 +265,17 @@ TEST_CASE("Authored mutation lease excludes both coordinator and native writers 
     Editor::ProjectMutationCoordinator competing(project.files);
     const Editor::ProjectMutationRequest request{project.directory.Path(), Editor::ProjectMutationOwner::Save, "competing-authored-writer"};
     bool rollback{};
-    SECTION("Successful publication") {}
+    SECTION("Successful publication") {
+        // Keep the default successful path; the sibling section injects the promotion failure.
+    }
     SECTION("Sidecar promotion failure compensates committed payload") {
         rollback = true;
         project.files.failPromotion = 2;
     }
-    std::size_t probes{}, coordinatorRejected{}, nativeRejected{}, removals{};
+    std::size_t probes{};
+    std::size_t coordinatorRejected{};
+    std::size_t nativeRejected{};
+    std::size_t removals{};
     const auto probe = [&project, &competing, &request, &probes, &coordinatorRejected, &nativeRejected] {
         ++probes;
         const auto local = project.mutations.TryAcquire(request);

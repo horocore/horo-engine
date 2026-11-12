@@ -10,6 +10,18 @@
 #include <imgui.h>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Applies the loading view's primary action after its button is activated. */
+        ProjectLoadingViewCommand PrimaryProjectLoadingCommand(ProjectLoadingViewState &state, const EditorGuiContext &ctx) {
+            using enum ProjectLoadingViewCommand;
+            if (state.hasFailed)
+                return state.canRetry ? Retry : Back;
+            state.isCancelled = true;
+            state.statusText = ProjectLoadingTextScope.Text(ctx.localization, "status.cancelling");
+            return Cancel;
+        }
+    }  // namespace
+
     /** @copydoc DrawProjectLoadingView */
     ProjectLoadingViewCommand DrawProjectLoadingView(ProjectLoadingViewState &state, const EditorGuiContext &ctx,
                                                      const GuiContentRegion &contentRegion) {
@@ -117,13 +129,7 @@ namespace Horo::Editor {
                         .font = ctx.theme.fonts.sansCompact,
                         .baseFontSize = Theme::FontPx::SansCompact,
                         .componentSize = Ui::ComponentSize::Medium})) {
-            if (state.hasFailed)
-                command = state.canRetry ? Retry : Back;
-            else {
-                state.isCancelled = true;
-                state.statusText = ProjectLoadingTextScope.Text(ctx.localization, "status.cancelling");
-                command = Cancel;
-            }
+            command = PrimaryProjectLoadingCommand(state, ctx);
         }
         if (twoActions) {
             if (stacked)

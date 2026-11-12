@@ -1,6 +1,8 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "LuaModuleValues.h"
 
+#include <utility>
+
 namespace Horo::Extensions::LuaModuleDetail {
     Box::~Box() {
         if (ledger && cost) {
@@ -11,8 +13,8 @@ namespace Horo::Extensions::LuaModuleDetail {
 
     int CollectBox(lua_State *lua) {
         if (auto **box = static_cast<Box **>(lua_touserdata(lua, 1)); box) {
-            delete *box;
-            *box = nullptr;
+            // No Lua API call may longjmp across the reclaimed C++ owner.
+            const std::unique_ptr<Box> owner{std::exchange(*box, nullptr)};
         }
         return 0;
     }

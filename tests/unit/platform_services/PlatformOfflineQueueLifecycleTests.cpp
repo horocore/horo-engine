@@ -61,8 +61,8 @@ namespace {
     }
 
     /** @brief Admits one intent or records a focused test setup failure. */
-    PlatformOfflineAdmission Admit(PlatformOfflineQueue &queue, PlatformOfflineIntent intent, const std::chrono::seconds at) {
-        auto admitted = queue.Admit(std::move(intent), At(at));
+    PlatformOfflineAdmission Admit(PlatformOfflineQueue &queue, const PlatformOfflineIntent &intent, const std::chrono::seconds at) {
+        auto admitted = queue.Admit(intent, At(at));
         REQUIRE(admitted.HasValue());
         return std::move(admitted).Value();
     }

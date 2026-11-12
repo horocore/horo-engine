@@ -23,6 +23,24 @@ namespace Horo::Editor {
             binding.scale = scale;
             return binding;
         }
+
+        /** @brief Resolves the final canonical shortcut token, retaining modifiers already validated by the parser. */
+        std::optional<Input::InputBinding> BindShortcutKey(Input::InputBinding &binding, const std::string_view token) {
+            for (int index = 1; index < static_cast<int>(Input::Key::Count); ++index) {
+                const auto key = static_cast<Input::Key>(index);
+                const auto glyph = Input::CanonicalGlyph({Input::BindingControlKind::Key, static_cast<std::uint16_t>(key)});
+                std::string label{glyph.label};
+                std::erase(label, ' ');
+                std::ranges::transform(label, label.begin(), [](const unsigned char c) {
+                    return static_cast<char>(std::toupper(c));
+                });
+                if (label == token) {
+                    binding.key = key;
+                    return binding;
+                }
+            }
+            return std::nullopt;
+        }
     }  // namespace
 
     std::vector<Input::ActionDescriptor> BuildEditorInputActions() {
@@ -117,22 +135,8 @@ namespace Horo::Editor {
             std::ranges::transform(token, token.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::toupper(c));
             });
-            if (separator == std::string_view::npos) {
-                for (int index = 1; index < static_cast<int>(Input::Key::Count); ++index) {
-                    const auto key = static_cast<Input::Key>(index);
-                    const auto glyph = Input::CanonicalGlyph({Input::BindingControlKind::Key, static_cast<std::uint16_t>(key)});
-                    std::string label{glyph.label};
-                    std::erase(label, ' ');
-                    std::ranges::transform(label, label.begin(), [](const unsigned char c) {
-                        return static_cast<char>(std::toupper(c));
-                    });
-                    if (label == token) {
-                        binding.key = key;
-                        return binding;
-                    }
-                }
-                return std::nullopt;
-            }
+            if (separator == std::string_view::npos)
+                return BindShortcutKey(binding, token);
             bool *modifier = token == "CTRL"    ? &binding.requiredModifiers.control
                              : token == "SHIFT" ? &binding.requiredModifiers.shift
                              : token == "ALT"   ? &binding.requiredModifiers.alt

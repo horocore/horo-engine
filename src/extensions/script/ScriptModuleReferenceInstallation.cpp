@@ -40,7 +40,9 @@ namespace Horo::Extensions {
         }
     }  // namespace
 
-    ScriptModuleReferenceInstallation::ScriptModuleReferenceInstallation(std::unique_ptr<Impl> value) : impl_(std::move(value)) {}
+    /** @copydoc ScriptModuleReferenceInstallation::ScriptModuleReferenceInstallation */
+    ScriptModuleReferenceInstallation::ScriptModuleReferenceInstallation(ConstructionKey, std::unique_ptr<Impl> value)
+        : impl_(std::move(value)) {}
 
     ScriptModuleReferenceInstallation::~ScriptModuleReferenceInstallation() {
         Close();
@@ -73,7 +75,7 @@ namespace Horo::Extensions {
         auto code = std::make_shared<ScriptModuleReferenceCode>(std::move(schema).Value(), std::move(graph).Value(), generation);
         auto state =
             std::make_unique<Impl>(std::move(host), std::move(code), profile, std::move(caller).Value(), std::move(provider).Value());
-        auto owner = std::unique_ptr<ScriptModuleReferenceInstallation>{new ScriptModuleReferenceInstallation{std::move(state)}};
+        auto owner = std::make_unique<ScriptModuleReferenceInstallation>(ConstructionKey{}, std::move(state));
         if (auto registered = Register(*owner->impl_); registered.HasError())
             return Output::Failure(registered.ErrorValue());
         return Output::Success(std::move(owner));

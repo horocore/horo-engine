@@ -13,8 +13,7 @@ namespace {
     class AiModule final : public IGameModule {
     public:
         Result<void> Register(GameRegistrationContext &context) override {
-            auto first = context.ai.Register({AI::TaskId::Create(411).Value(), {}, AI::AiTaskAuthoring::Native});
-            if (first.HasError())
+            if (auto first = context.ai.Register({AI::TaskId::Create(411).Value(), {}, AI::AiTaskAuthoring::Native}); first.HasError())
                 return first;
             return context.ai.Register({AI::TaskId::Create(412).Value(), {}, AI::AiTaskAuthoring::Script});
         }
@@ -46,6 +45,12 @@ namespace {
 namespace {
     std::uint32_t *decisionLifecycleCounters{};
 
+    /** @brief Identifies a deliberate rejection by the unloadable native fixture factory. */
+    class FixtureFactoryRejection final : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
     /** @brief Real generated decision-node callbacks live in the unloadable fixture image. */
     class FixtureDecisionNode final : public Horo::AI::IBehaviorTreeExecutor {
     public:
@@ -59,7 +64,7 @@ namespace {
 
         explicit FixtureDecisionNode(std::span<const Horo::AI::BehaviorTreeProperty> properties) {
             if (std::get<bool>(properties.front().value))
-                throw std::runtime_error("fixture factory rejection");
+                throw FixtureFactoryRejection("fixture factory rejection");
         }
 
         Horo::Result<Horo::AI::AiTaskState> Start(const Horo::AI::BehaviorTreeEvaluationContext &,
@@ -103,8 +108,8 @@ extern "C" HORO_GAME_EXPORT Horo::Gameplay::IGameModule *CreateGameModule() noex
     return std::make_unique<AiModule>().release();
 }
 
-extern "C" HORO_GAME_EXPORT void DestroyGameModule(Horo::Gameplay::IGameModule *module) noexcept {
-    const std::unique_ptr<Horo::Gameplay::IGameModule> owned{module};
+extern "C" HORO_GAME_EXPORT void DestroyGameModule(Horo::Gameplay::IGameModule *instance) noexcept {
+    const std::unique_ptr<Horo::Gameplay::IGameModule> owned{instance};
 }
 
 /** @brief Exercises the module-emitted frontend while its diagnostic allocator remains host-issued. */
