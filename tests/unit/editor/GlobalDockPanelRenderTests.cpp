@@ -772,7 +772,7 @@ TEST_CASE("World Composition renders empty populated filtered error and narrow l
 TEST_CASE("Content browser publishes real asset and native roots and hides source leases", "[editor][content-browser][source]") {
     using namespace Horo::Editor;
     Horo::Tests::OwnedTestDirectory owned{"content roots"};
-    const auto project = owned.Path() / "My Game ö";
+    const auto project = owned.Path() / u8"My Game ö_日本";
     const auto assets = project / "Assets";
     const auto scripts = assets / "Scripts";
     const auto source = project / "source";
@@ -792,7 +792,8 @@ TEST_CASE("Content browser publishes real asset and native roots and hides sourc
     REQUIRE(native.roots.size() == 2);
     CHECK(native.roots.back().kind == ContentBrowserRootKind::NativeSources);
     CHECK(native.rootKind == ContentBrowserRootKind::NativeSources);
-    CHECK(native.absoluteRootPath == std::filesystem::weakly_canonical(source).string());
+    const auto expectedRoot = std::filesystem::weakly_canonical(source).u8string();
+    CHECK(native.absoluteRootPath == std::string(expectedRoot.begin(), expectedRoot.end()));
     REQUIRE(native.entries.size() == 1);
     CHECK(native.entries.front().displayName == "Slide.cpp");
     CHECK_FALSE(native.entries.front().registered);

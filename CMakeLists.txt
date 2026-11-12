@@ -40,7 +40,8 @@ include(CTest)
 include(CMakePackageConfigHelpers)
 
 if(MSVC)
-    add_compile_options(/FS)
+    # Source and narrow literals are UTF-8 independently of the Windows code page.
+    add_compile_options(/FS "$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

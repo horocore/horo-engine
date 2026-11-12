@@ -13,6 +13,15 @@ The build system is designed to be:
 - explicit about dependencies between modules
 - easy to extend without breaking downstream targets
 
+## Source Encoding
+
+C++ source files and narrow string literals use UTF-8. MSVC builds apply
+`/utf-8` to C++ translation units so Unicode literals and filesystem fixtures
+do not depend on the developer machine's ANSI code page. Existing native
+workspace style tests retain their exact Japanese filename and displayed-label
+checks. The headless workspace style suite is mandatory in Windows CI. C
+translation units and non-MSVC compiler flags are unchanged.
+
 ## CMake Presets
 
 CMake presets live in `CMakePresets.json` and `CMakeUserPresets.json` (optional,
