@@ -9,7 +9,10 @@
 #include <catch2/catch_message.hpp>
 #include <chrono>
 #include <functional>
+#include <new>
+#include <optional>
 #include <thread>
+#include <type_traits>
 
 namespace Horo::Runtime {
     namespace {
@@ -400,6 +403,194 @@ namespace Horo::Runtime {
 }  // namespace Horo::Runtime
 
 namespace Horo::Runtime {
+    using Horo::Tests::AllocationProbe::ScopedFailure;
+    using Horo::Tests::AllocationProbe::ScopedMeasurement;
+
+    TEST_CASE("Scene builder empty construction remains allocation free with checked storage", "[scene][definition_storage][allocation]") {
+        static_assert(std::is_nothrow_constructible_v<SceneDefinitionBuilder, SceneDefinitionId, SceneDefinitionRevision>);
+        std::optional<SceneDefinitionBuilder> builder;
+        {
+            ScopedFailure denied(0);
+            builder.emplace(SceneDefinitionId{17}, SceneDefinitionRevision{1});
+        }
+        const auto source = Definition(1);
+        builder->Add(source.Entities().front());
+        auto built = Take(std::move(*builder).Build());
+        CHECK(built.Entities().size() == 1);
+    }
+
+    TEST_CASE("Scene builder first append propagates every cold storage allocation failure", "[scene][definition_storage][allocation]") {
+        const auto source = Definition(1);
+        const auto &entity = source.Entities().front();
+        SceneDefinitionBuilder measured{{17}, {1}};
+        std::size_t requests{};
+        {
+            ScopedMeasurement capture;
+            measured.Add(entity);
+            requests = capture.Snapshot().requests;
+        }
+        REQUIRE(requests > 0);
+        for (std::size_t index = 0; index < requests; ++index) {
+            INFO(index);
+            SceneDefinitionBuilder builder{{17}, {1}};
+            bool failed{};
+            {
+                ScopedFailure injected(index);
+                try {
+                    builder.Add(entity);
+                } catch (const std::bad_alloc &) {
+                    failed = true;
+                }
+            }
+            REQUIRE(failed);
+            builder.Add(entity);
+            const auto built = Take(std::move(builder).Build());
+            REQUIRE(built.Entities().size() == 1);
+            CHECK(built.Entities().front().object == entity.object);
+        }
+    }
+
+    TEST_CASE("Scene builder growth failure preserves previously authored entities", "[scene][definition_storage][allocation]") {
+        const auto source = Definition(1);
+        const auto &first = source.Entities().front();
+        const auto &second = source.Entities().back();
+        SceneDefinitionBuilder measured{{17}, {1}};
+        measured.Add(first);
+        std::size_t requests{};
+        {
+            ScopedMeasurement capture;
+            measured.Add(second);
+            requests = capture.Snapshot().requests;
+        }
+        REQUIRE(requests > 0);
+        for (std::size_t index = 0; index < requests; ++index) {
+            INFO(index);
+            SceneDefinitionBuilder builder{{17}, {1}};
+            builder.Add(first);
+            bool failed{};
+            {
+                ScopedFailure injected(index);
+                try {
+                    builder.Add(second);
+                } catch (const std::bad_alloc &) {
+                    failed = true;
+                }
+            }
+            REQUIRE(failed);
+            const auto built = Take(std::move(builder).Build());
+            REQUIRE(built.Entities().size() == 1);
+            CHECK(built.Entities().front().object == first.object);
+        }
+    }
+
+    TEST_CASE("Scene builder copy and owner transfer preserve independent authored storage", "[scene][definition_storage][allocation]") {
+        static_assert(std::is_nothrow_move_constructible_v<SceneDefinitionBuilder>);
+        const auto source = Definition(1);
+        SceneDefinitionBuilder original{{17}, {1}};
+        original.Add(source.Entities().front());
+        SceneDefinitionBuilder copied(original);
+        std::optional<SceneDefinitionBuilder> transferred;
+        {
+            ScopedFailure denied(0);
+            transferred.emplace(std::move(original));
+        }
+        const auto moved = Take(std::move(*transferred).Build());
+        copied.Add(source.Entities().back());
+        const auto detached = Take(std::move(copied).Build());
+        original.Add(source.Entities().front());
+        const auto reused = Take(std::move(original).Build());
+        CHECK(moved.Entities().size() == 1);
+        CHECK(detached.Entities().size() == 2);
+        CHECK(reused.Entities().size() == 1);
+        CHECK(moved.Entities().data() != detached.Entities().data());
+        CHECK(moved.Entities().data() != reused.Entities().data());
+    }
+
+    TEST_CASE("Scene definition copies unwind allocation failures before changing the source", "[scene][definition_storage][allocation]") {
+        const auto source = Definition(1);
+        const auto *entities = source.Entities().data();
+        const auto *assets = source.AssetDependencies().data();
+        std::optional<RuntimeSceneDefinition> measured;
+        std::size_t requests{};
+        {
+            ScopedMeasurement capture;
+            measured.emplace(source);
+            requests = capture.Snapshot().requests;
+        }
+        REQUIRE(requests > 0);
+        CHECK(measured->Entities().data() != entities);
+        CHECK(measured->AssetDependencies().data() != assets);
+        for (std::size_t index = 0; index < requests; ++index) {
+            INFO(index);
+            std::optional<RuntimeSceneDefinition> destination;
+            bool failed{};
+            {
+                ScopedFailure injected(index);
+                try {
+                    destination.emplace(source);
+                } catch (const std::bad_alloc &) {
+                    failed = true;
+                }
+            }
+            REQUIRE(failed);
+            CHECK_FALSE(destination.has_value());
+            CHECK(source.Entities().data() == entities);
+            CHECK(source.AssetDependencies().data() == assets);
+            CHECK(source.Revision().value == 1);
+        }
+    }
+
+    TEST_CASE("Scene definition assignment prepares storage before replacing its prior value", "[scene][definition_storage][allocation]") {
+        const auto source = Definition(2);
+        auto measured = Definition(1);
+        std::size_t requests{};
+        {
+            ScopedMeasurement capture;
+            measured = source;
+            requests = capture.Snapshot().requests;
+        }
+        REQUIRE(requests > 0);
+        for (std::size_t index = 0; index < requests; ++index) {
+            INFO(index);
+            auto destination = Definition(1);
+            const auto *prior = destination.Entities().data();
+            bool failed{};
+            {
+                ScopedFailure injected(index);
+                try {
+                    destination = source;
+                } catch (const std::bad_alloc &) {
+                    failed = true;
+                }
+            }
+            REQUIRE(failed);
+            CHECK(destination.Entities().data() == prior);
+            CHECK(destination.Revision().value == 1);
+            CHECK(source.Revision().value == 2);
+        }
+    }
+
+    TEST_CASE("Scene definition result transfer performs no allocation", "[scene][definition_storage][allocation]") {
+        static_assert(std::is_nothrow_move_constructible_v<RuntimeSceneDefinition>);
+        static_assert(std::is_nothrow_move_constructible_v<Result<RuntimeSceneDefinition>>);
+        auto source = Definition(1);
+        const auto *entities = source.Entities().data();
+        const auto *assets = source.AssetDependencies().data();
+        std::optional<Result<RuntimeSceneDefinition>> destination;
+        {
+            ScopedFailure denied(0);
+            destination.emplace(Result<RuntimeSceneDefinition>::Success(std::move(source)));
+        }
+        REQUIRE(destination->HasValue());
+        CHECK(destination->Value().Entities().data() == entities);
+        CHECK(destination->Value().AssetDependencies().data() == assets);
+        CHECK(source.Entities().empty());
+        CHECK(source.AssetDependencies().empty());
+        CHECK(source.TriggerVolumeEvidence().empty());
+    }
+}  // namespace Horo::Runtime
+
+namespace Horo::Runtime {
     TEST_CASE("Scene closure expansion preserves nonempty trigger proof and every authored entity field",
               "[scene][assets][discovery][trigger][preservation]") {
         Fixture fixture;
@@ -439,5 +630,35 @@ namespace Horo::Runtime {
         CHECK(fixture.observed.prepares == 1);
         CHECK(fixture.observed.publications == 1);
         // This verifies canonical Scene closure reconstruction, not native Physics activation.
+    }
+}  // namespace Horo::Runtime
+
+namespace Horo::Runtime {
+    TEST_CASE("Scene definition component construction propagates checked allocation failures", "[scene][definition_storage][allocation]") {
+        static_assert(std::is_aggregate_v<RuntimeComponentSet>);
+        std::size_t requests{};
+        {
+            ScopedMeasurement capture;
+            RuntimeComponentSet components;
+            requests = capture.Snapshot().requests;
+        }
+        for (std::size_t index = 0; index < requests; ++index) {
+            INFO(index);
+            bool failed{};
+            {
+                ScopedFailure injected(index);
+                try {
+                    RuntimeComponentSet components;
+                } catch (const std::bad_alloc &) {
+                    failed = true;
+                }
+            }
+            REQUIRE(failed);
+        }
+        const RuntimeComponentSet recovered;
+        CHECK(recovered.colliders.empty());
+        CHECK(recovered.physicsConstraints.empty());
+        CHECK(recovered.behaviors.empty());
+        CHECK(recovered.gameplayComponents.empty());
     }
 }  // namespace Horo::Runtime

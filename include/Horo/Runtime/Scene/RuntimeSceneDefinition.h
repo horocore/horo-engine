@@ -21,6 +21,7 @@
 #include "Horo/Runtime/Scene/SceneIdentity.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -49,10 +50,10 @@ namespace Horo::Runtime {
         std::optional<AI::AiControllerComponent> aiController;
         std::optional<CharacterControllerComponent> characterController;
         std::optional<RigidBodyComponent> rigidBody;
-        std::vector<ColliderComponent> colliders;
-        std::vector<PhysicsConstraintComponent> physicsConstraints;
-        std::vector<Gameplay::BehaviorComponent> behaviors;
-        std::vector<Gameplay::SerializedComponent> gameplayComponents;
+        std::vector<ColliderComponent> colliders = std::vector<ColliderComponent>(std::size_t{0});
+        std::vector<PhysicsConstraintComponent> physicsConstraints = std::vector<PhysicsConstraintComponent>(std::size_t{0});
+        std::vector<Gameplay::BehaviorComponent> behaviors = std::vector<Gameplay::BehaviorComponent>(std::size_t{0});
+        std::vector<Gameplay::SerializedComponent> gameplayComponents = std::vector<Gameplay::SerializedComponent>(std::size_t{0});
         [[nodiscard]] bool operator==(const RuntimeComponentSet &) const noexcept = default;
     };
 
@@ -93,6 +94,19 @@ namespace Horo::Runtime {
     /** @brief Validated immutable runtime-scene construction input. */
     class RuntimeSceneDefinition final {
     public:
+        /** @brief Copies one detached immutable definition. @param other Definition to copy.
+         * @throws std::bad_alloc If owned storage cannot be copied. */
+        RuntimeSceneDefinition(const RuntimeSceneDefinition &other);
+        /** @brief Replaces this definition after its detached copy is complete. @param other Definition to copy.
+         * @return This definition. @throws std::bad_alloc Leaving this definition unchanged. */
+        RuntimeSceneDefinition &operator=(const RuntimeSceneDefinition &other);
+        /** @brief Transfers owned storage without allocation. @param other Definition whose views become empty. */
+        RuntimeSceneDefinition(RuntimeSceneDefinition &&other) noexcept;
+        /** @brief Transfers owned storage without allocation. @param other Definition whose views become empty.
+         * @return This definition. */
+        RuntimeSceneDefinition &operator=(RuntimeSceneDefinition &&other) noexcept;
+        /** @brief Releases the owned immutable storage. */
+        ~RuntimeSceneDefinition();
         /** @brief Returns the stable logical scene identity. */
         [[nodiscard]] SceneDefinitionId Id() const noexcept;
         /** @brief Returns the authored content revision represented by this definition. */
@@ -106,15 +120,12 @@ namespace Horo::Runtime {
 
     private:
         friend class SceneDefinitionBuilder;
-        RuntimeSceneDefinition(SceneDefinitionId id, SceneDefinitionRevision revision, std::vector<RuntimeEntityDefinition> entities,
-                               std::vector<SceneAssetDependency> assetDependencies,
-                               std::vector<TriggerVolumeMigrationEvidence> triggerVolumeEvidence) noexcept;
+        struct Storage;
+        RuntimeSceneDefinition(SceneDefinitionId id, SceneDefinitionRevision revision, std::unique_ptr<Storage> storage) noexcept;
 
         SceneDefinitionId id_;
         SceneDefinitionRevision revision_;
-        std::vector<RuntimeEntityDefinition> entities_;
-        std::vector<SceneAssetDependency> assetDependencies_;
-        std::vector<TriggerVolumeMigrationEvidence> triggerVolumeEvidence_;
+        std::unique_ptr<const Storage> storage_;
     };
 
     /** @brief Mutable load-time builder that validates before producing an immutable definition. */
@@ -123,28 +134,42 @@ namespace Horo::Runtime {
         /** @brief Creates a builder for one logical scene and authored revision. @param id Non-zero logical scene identity.
          * @param revision Authored content revision. */
         SceneDefinitionBuilder(SceneDefinitionId id, SceneDefinitionRevision revision) noexcept;
-        /** @brief Appends one typed entity definition in stable authored order. @param entity Complete authored entity
-         * payload. */
-        void Add(RuntimeEntityDefinition entity);
+        /** @brief Copies one detached builder. @param other Builder to copy.
+         * @throws std::bad_alloc If owned storage cannot be copied. */
+        SceneDefinitionBuilder(const SceneDefinitionBuilder &other);
+        /** @brief Replaces this builder after its detached copy is complete. @param other Builder to copy.
+         * @return This builder. @throws std::bad_alloc Leaving this builder unchanged. */
+        SceneDefinitionBuilder &operator=(const SceneDefinitionBuilder &other);
+        /** @brief Transfers builder ownership without allocation. @param other Builder that remains reusable. */
+        SceneDefinitionBuilder(SceneDefinitionBuilder &&other) noexcept;
+        /** @brief Transfers builder ownership without allocation. @param other Builder that remains reusable.
+         * @return This builder. */
+        SceneDefinitionBuilder &operator=(SceneDefinitionBuilder &&other) noexcept;
+        /** @brief Releases detached authored storage. */
+        ~SceneDefinitionBuilder();
+        /** @brief Copies one typed entity in stable authored order. @param entity Borrowed complete authored payload.
+         * @throws std::bad_alloc Leaving previously authored entities unchanged. */
+        void Add(const RuntimeEntityDefinition &entity);
         /** @brief Adds one required cooked asset, deduplicating an identical requirement. @param dependency Stable asset
          * identity and expected type. @return Success, or a typed error for an invalid or conflicting requirement. */
-        [[nodiscard]] Result<void> RequireAsset(SceneAssetDependency dependency);
+        [[nodiscard]] Result<void> RequireAsset(const SceneAssetDependency &dependency);
         /** @brief Adds exact migration constraints, rejecting duplicate objects and conflicting project evidence.
          * @param evidence Owned portable proof naming a canonical producer pair.
          * @return Success or InvalidDefinition; Build verifies component correspondence and requires the material asset.
          */
-        [[nodiscard]] Result<void> RequireTriggerVolume(TriggerVolumeMigrationEvidence evidence);
+        [[nodiscard]] Result<void> RequireTriggerVolume(const TriggerVolumeMigrationEvidence &evidence);
         /** @brief Validates authored values and projects enabled navigation surface AssetIds as core.navmesh requirements.
          * @return Immutable definition
          * or the first typed validation error. */
         [[nodiscard]] Result<RuntimeSceneDefinition> Build() &&;
 
     private:
+        using Storage = RuntimeSceneDefinition::Storage;
+        /** @brief Materializes cold authored storage at a fallible mutation boundary. */
+        Storage &MutableStorage();
         SceneDefinitionId id_;
         SceneDefinitionRevision revision_;
-        std::vector<RuntimeEntityDefinition> entities_;
-        std::vector<SceneAssetDependency> assetDependencies_;
-        std::vector<TriggerVolumeMigrationEvidence> triggerVolumeEvidence_;
+        std::unique_ptr<Storage> storage_;
     };
 
     /** @brief Validates one runtime entity payload independently of hierarchy membership. @param entity Entity payload to

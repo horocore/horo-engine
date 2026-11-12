@@ -28,6 +28,20 @@ namespace Horo::Assets {
         };
     }  // namespace
 
+    /** @copydoc AssetLoadResult::AssetLoadResult */
+    AssetLoadResult::AssetLoadResult(AssetId selected, AssetRegistryRevision revision, const std::vector<std::uint8_t> &payload)
+        : id(selected), sourceRegistryRevision(revision), bytes(payload) {}
+
+    /** @copydoc AssetLoadResult::AssetLoadResult */
+    AssetLoadResult::AssetLoadResult(AssetId selected, AssetRegistryRevision revision, std::vector<std::uint8_t> &&payload)
+        : id(selected), sourceRegistryRevision(revision) {
+        bytes.swap(payload);
+    }
+
+    /** @copydoc AssetLoadResult::AssetLoadResult */
+    AssetLoadResult::AssetLoadResult(AssetLoadResult &&other)
+        : AssetLoadResult(other.id, other.sourceRegistryRevision, std::move(other.bytes)) {}
+
     /** @copydoc Internal::ReadExactArtifact */
     Result<std::vector<std::uint8_t>> Internal::ReadExactArtifact(std::istream &input, const std::size_t expectedBytes,
                                                                   const CancellationToken &cancellation) {

@@ -543,7 +543,9 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(
                     WithAssetContext(MakeError(SceneErrors::AssetBudgetExceeded), preparation_->definition.Id(), entry.dependency.id));
             preparation_->residentBytes += result.bytes.size();
-            entry.payload = std::make_shared<const std::vector<std::uint8_t>>(std::move(result.bytes));
+            auto payload = std::make_shared<std::vector<std::uint8_t>>(std::size_t{0});
+            payload->swap(result.bytes);
+            entry.payload = std::move(payload);
         }
         if (auto discovered = DiscoverPreparationDependencies(cancellation); discovered.HasError())
             return discovered;
@@ -665,7 +667,7 @@ namespace Horo::Runtime {
         if (auto complete = CompletePreparationDefinition(); complete.HasError())
             return complete;
 
-        std::vector<RuntimeScene::ResolvedAsset> assets;
+        std::vector<RuntimeScene::ResolvedAsset> assets(std::size_t{0});
         assets.reserve(preparation_->entries.size());
         for (Preparation::Entry &entry : preparation_->entries)
             assets.emplace_back(std::move(entry.dependency), std::move(entry.payload));
@@ -786,7 +788,7 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeSceneService::StageCandidate */
     Result<void> RuntimeSceneService::StageCandidate(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config,
                                                      const Assets::AssetRegistryRevision revision,
-                                                     std::vector<RuntimeScene::ResolvedAsset> assets) {
+                                                     std::vector<RuntimeScene::ResolvedAsset> &&assets) {
         try {
             auto candidate = RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, revision, std::move(assets));
             if (candidate.HasError())
@@ -900,7 +902,7 @@ namespace Horo::Runtime {
                 return reject(phases.ErrorValue());
             if (auto prepared = PrepareParticipantPhase(definition, SceneActivationPhase::InitialPlacement); prepared.HasError())
                 return reject(prepared.ErrorValue());
-            std::vector<SceneInitialPlacement> placements;
+            std::vector<SceneInitialPlacement> placements(std::size_t{0});
             for (const auto &candidate : pending_.candidates) {
                 const auto projected = candidate->InitialPlacements();
                 if (projected.size() > pending_.scene->View().SlotCount() - placements.size())

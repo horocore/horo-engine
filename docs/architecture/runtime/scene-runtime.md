@@ -118,14 +118,66 @@ vector uses a fallible empty count constructor so checked-library bookkeeping ca
 unwind through that same preparation boundary.
 
 This avoids an allocating MSVC checked-vector move of the definition before the
-queue method can catch allocation failure. It does not change the public definition
-or entity aggregate layouts, their storage/move traits, activation publication timing,
-or the original asset discovery last-good transaction. Lvalue and rvalue callers
+queue method can catch allocation failure. It preserves entity aggregate layouts,
+activation publication timing and the original asset discovery last-good transaction. Lvalue and rvalue callers
 remain source-compatible; an rvalue definition is no longer consumed at admission.
 Exact pointer-to-member signatures for the three queue methods must use
 `const RuntimeSceneDefinition&` instead of a value parameter, and dependent binaries
 must be rebuilt. The original exhaustive Scene discovery allocation regression is
 retained without narrowing its failure window or excluding checked-library work.
+
+Definitions and builders now transfer one private unique storage owner. Empty
+builder construction and definition/builder moves remain allocation-free and
+`noexcept`, including checked MSVC libraries; no vector object is moved through
+`Result<RuntimeSceneDefinition>`. This preserves the saved-scene decode handoff's
+nothrow result-transfer requirement. Copies still detach all authored storage;
+copy assignment prepares that detached copy before replacing the destination.
+Moved-from definition views are empty, and moved-from builders remain reusable.
+
+The first authored mutation or `Build` materializes cold storage with fallible
+empty-vector constructors. `Add`, `RequireAsset` and `RequireTriggerVolume`
+borrow const input and copy it into owned storage. Geometric capacity growth
+prepares and copies existing authored values before swapping the completed
+buffer, avoiding checked element moves inside `noexcept`. This adds one cold
+storage allocation per materialized owner; no frame-path allocation or throughput
+claim is introduced. Existing Scene discovery allocation sweeps remain intact,
+and the scene discovery suite is mandatory in Windows CI.
+
+The private parent, navigation, physics and AI validation indexes use ordered storage in checked MSVC builds:
+that library's hash-vector constructor allocates an iterator proxy inside
+`noexcept`. Ordered construction lets allocation failure reach the same Scene
+preparation error boundary. Other profiles retain hash lookup; checked lookup is
+logarithmic and no throughput claim is made. Authored order, duplicate rejection,
+parent resolution and publication decisions are unchanged.
+
+This is an in-memory C++ ABI change, not a wire/schema migration. Rebuild clients
+and update exact pointer-to-member types for the three builder mutation methods
+from value parameters to const references. Rvalue inputs are no longer consumed
+by those mutation calls. Scene admission, source decoding and cell/prefab
+production continue to build detached definitions before publication.
+
+`RuntimeComponentSet` keeps its aggregate fields and layout. Its four empty
+component buffers use fallible count construction so checked-library allocation
+failures during slot construction reach the preparation rollback boundary.
+Default construction can therefore throw `std::bad_alloc`; callers requiring
+construction under memory pressure must retain their allocation-error boundary.
+The exhaustive discovery rollback sweep and a component-construction fault sweep
+cover this behavior.
+
+Publication swaps the already prepared active and pending aggregate buffers.
+The pending slot temporarily retains the retired aggregate through restore
+completion observers, then releases it in the existing reverse-owner order.
+The transfer adapter only borrows that slot, so no checked-vector construction
+or extra heap allocation occurs inside the no-fail publication cutoff.
+
+The cold resolved-asset handoff now borrows an rvalue buffer through private
+preparation calls and swaps it into fallibly constructed Scene storage. This
+avoids checked-vector moves inside `noexcept`. The public `RuntimeScene`
+constructor consequently takes an rvalue vector reference; callers that retained
+an lvalue buffer must make an explicit detached copy and pass that copy with
+`std::move`. `CreateResolved` transfers its prepared buffer, while `CloneActive`
+explicitly copies the active buffer within its allocation-error boundary. Rebuild
+clients for this C++ ABI change; payload and serialized schemas are unchanged.
 
 `RuntimeSceneService::QueuePreparation` is the single activation admission path.
 The former public prepare/candidate activation pair does not exist. Assetless

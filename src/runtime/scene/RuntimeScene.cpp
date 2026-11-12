@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <format>
 #include <limits>
+#include <map>
 #include <new>
 #include <ranges>
 #include <string>
@@ -293,9 +294,11 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeScene::RuntimeScene */
     RuntimeScene::RuntimeScene(const SceneRuntimeId runtimeId, const SceneDefinitionId definitionId, const SceneDefinitionRevision revision,
                                const RuntimeSceneConfig config, const Assets::AssetRegistryRevision assetRevision,
-                               std::vector<ResolvedAsset> assets)
+                               std::vector<ResolvedAsset> &&assets)
         : viewLifetime_(std::make_shared<const std::uint8_t>(0)), runtimeId_(runtimeId), definitionId_(definitionId),
-          definitionRevision_(revision), assetRegistryRevision_(assetRevision), assets_(std::move(assets)), config_(config) {}
+          definitionRevision_(revision), assetRegistryRevision_(assetRevision), assets_(std::size_t{0}), config_(config) {
+        assets_.swap(assets);
+    }
 
     /** @copydoc RuntimeScene::Create */
     Result<std::unique_ptr<RuntimeScene>> RuntimeScene::Create(const RuntimeSceneDefinition &definition, const SceneRuntimeId runtimeId,
@@ -309,7 +312,7 @@ namespace Horo::Runtime {
     Result<std::unique_ptr<RuntimeScene>> RuntimeScene::CreateResolved(const RuntimeSceneDefinition &definition,
                                                                        const SceneRuntimeId runtimeId, const RuntimeSceneConfig config,
                                                                        const Assets::AssetRegistryRevision assetRevision,
-                                                                       std::vector<ResolvedAsset> assets) {
+                                                                       std::vector<ResolvedAsset> &&assets) {
         if (!runtimeId.IsValid() || config.maximumGeneration == 0)
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Runtime identity and maximum generation must be non-zero.");
@@ -327,12 +330,18 @@ namespace Horo::Runtime {
         scene->storage_.slots.reserve(definition.Entities().size());
         scene->storage_.authoredIndex.reserve(definition.Entities().size());
 
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+        std::optional<std::map<std::uint64_t, EntityId>> parentIndex;
+#else
         std::optional<std::unordered_map<std::uint64_t, EntityId>> parentIndex;
+#endif
         if (std::ranges::any_of(definition.Entities(), [](const auto &entity) {
             return entity.parent.has_value();
         })) {
             parentIndex.emplace();
+#if !defined(_MSVC_STL_VERSION) || _ITERATOR_DEBUG_LEVEL == 0
             parentIndex->reserve(definition.Entities().size());
+#endif
         }
         for (const RuntimeEntityDefinition &entity : definition.Entities()) {
             RuntimeEntityCreateInfo info{entity.localTransform, std::nullopt, entity.object, entity.primitiveMesh, entity.components};
@@ -365,8 +374,9 @@ namespace Horo::Runtime {
             return Result<std::unique_ptr<RuntimeScene>>::Failure(MakeError(Vfx::VfxErrors::SceneCloneUnavailable));
         std::unique_ptr<RuntimeScene> clone;
         try {
+            auto assets = active_.scene->assets_;
             clone = std::make_unique<RuntimeScene>(runtimeId, active_.scene->definitionId_, active_.scene->definitionRevision_,
-                                                   active_.scene->config_, active_.scene->assetRegistryRevision_, active_.scene->assets_);
+                                                   active_.scene->config_, active_.scene->assetRegistryRevision_, std::move(assets));
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Unable to allocate cloned Scene lifetime evidence.");

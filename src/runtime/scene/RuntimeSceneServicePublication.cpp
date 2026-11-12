@@ -19,14 +19,17 @@ namespace Horo::Runtime {
 
     /** @brief Private no-fail transfer retaining the retired Scene through save operation completion. */
     struct RuntimeSceneService::AggregateTransfer final : IStagedRestoreAggregatePublication {
-        explicit AggregateTransfer(RuntimeSceneService &service) noexcept : service(service) {}
+        explicit AggregateTransfer(RuntimeSceneService &service) noexcept : service(service), retired(service.pending_) {}
 
         void PublishPrepared() noexcept override {
             for (const auto &candidate : service.pending_.candidates)
                 candidate->Publish();
             service.pending_.restore = std::move(service.aggregateRestore_);
-            retired = std::move(service.active_);
-            service.active_ = std::move(service.pending_);
+            // Reuse the prepared buffers: publication cannot allocate checked-library iterator proxies.
+            service.active_.scene.swap(service.pending_.scene);
+            service.active_.candidates.swap(service.pending_.candidates);
+            std::swap(service.active_.datasets, service.pending_.datasets);
+            service.active_.restore.swap(service.pending_.restore);
             if (service.publicationReceipt_) {
                 const auto view = service.active_.scene->View();
                 service.publicationReceipt_->snapshot = {ScenePublicationStatus::Published, view.RuntimeId(), view.StructuralRevision(),
@@ -35,7 +38,7 @@ namespace Horo::Runtime {
         }
 
         RuntimeSceneService &service;
-        SceneAggregate retired;
+        SceneAggregate &retired;
     };
 
     /** @copydoc RuntimeSceneService::PreparePendingPublication */

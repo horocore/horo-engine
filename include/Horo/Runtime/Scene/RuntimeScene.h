@@ -934,12 +934,13 @@ namespace Horo::Runtime {
         /** @brief Constructs one cold Scene owner and its non-owning view lifetime observation.
          * @param runtimeId Exact runtime incarnation. @param definitionId Logical definition.
          * @param revision Authored revision. @param config Generation policy.
-         * @param assetRevision Registry revision used for preparation. @param assets Owned resolved payloads.
+         * @param assetRevision Registry revision used for preparation. @param assets Resolved payload buffer consumed by swap.
+         * Callers retaining a buffer must explicitly copy it before passing the detached copy as an rvalue.
          * @throws std::bad_alloc When the cold lifetime observation cannot be allocated.
          * @pre Construction, storage queries, mutation and destruction occur on the same owner thread.
          */
         RuntimeScene(SceneRuntimeId runtimeId, SceneDefinitionId definitionId, SceneDefinitionRevision revision, RuntimeSceneConfig config,
-                     Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> assets);
+                     Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> &&assets);
         RuntimeScene(const RuntimeScene &) = delete;
         RuntimeScene &operator=(const RuntimeScene &) = delete;
         RuntimeScene(RuntimeScene &&) = delete;
@@ -970,7 +971,7 @@ namespace Horo::Runtime {
         [[nodiscard]] static Result<std::unique_ptr<RuntimeScene>> CreateResolved(const RuntimeSceneDefinition &definition,
                                                                                   SceneRuntimeId runtimeId, RuntimeSceneConfig config,
                                                                                   Assets::AssetRegistryRevision assetRevision,
-                                                                                  std::vector<ResolvedAsset> assets);
+                                                                                  std::vector<ResolvedAsset> &&assets);
 
         struct Slot {
             std::uint32_t generation{1};
@@ -1000,10 +1001,10 @@ namespace Horo::Runtime {
 
         /** @brief Copyable transactional state without a runtime-domain identity. */
         struct RuntimeSceneStorage {
-            std::vector<BaselineAttachment> baselines;
-            std::vector<Slot> slots;
-            std::vector<std::uint32_t> freeList;
-            std::vector<std::pair<SceneObjectId, EntityId>> authoredIndex;
+            std::vector<BaselineAttachment> baselines = std::vector<BaselineAttachment>(std::size_t{0});
+            std::vector<Slot> slots = std::vector<Slot>(std::size_t{0});
+            std::vector<std::uint32_t> freeList = std::vector<std::uint32_t>(std::size_t{0});
+            std::vector<std::pair<SceneObjectId, EntityId>> authoredIndex = std::vector<std::pair<SceneObjectId, EntityId>>(std::size_t{0});
         };
 
         struct CommandApplier;
@@ -1203,7 +1204,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> BeginPreparation(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config);
         /** @brief Stages the validated runtime scene and its detached participant candidates without publication. */
         [[nodiscard]] Result<void> StageCandidate(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config,
-                                                  Assets::AssetRegistryRevision revision, std::vector<RuntimeScene::ResolvedAsset> assets);
+                                                  Assets::AssetRegistryRevision revision,
+                                                  std::vector<RuntimeScene::ResolvedAsset> &&assets);
         [[nodiscard]] Result<void> PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const;
         [[nodiscard]] Result<void> ReusePreparationPayload(Preparation &preparation, std::size_t entry) const;
         [[nodiscard]] Result<void> AppendPreparationDependency(const SceneAssetDependency &dependency);

@@ -7,13 +7,49 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <map>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 
 namespace Horo::Runtime {
+    /** @brief Owns authored vectors behind one allocation-free transferable handle. */
+    struct RuntimeSceneDefinition::Storage final {
+        Storage() = default;
+        Storage(const Storage &) = default;
+        Storage &operator=(const Storage &) = delete;
+        Storage(Storage &&) = delete;
+        Storage &operator=(Storage &&) = delete;
+        ~Storage() = default;
+
+        std::vector<RuntimeEntityDefinition> entities = std::vector<RuntimeEntityDefinition>(std::size_t{0});
+        std::vector<SceneAssetDependency> assetDependencies = std::vector<SceneAssetDependency>(std::size_t{0});
+        std::vector<TriggerVolumeMigrationEvidence> triggerVolumeEvidence = std::vector<TriggerVolumeMigrationEvidence>(std::size_t{0});
+    };
+
     namespace {
+        /** @brief Copies cold authored values before swapping a completed growth allocation.
+         * Checked-library element moves can allocate inside noexcept; growth copies instead of relocating them. */
+        template <class T> void AppendDetached(std::vector<T> &values, const T &value) {
+            if (values.size() < values.capacity()) {
+                values.emplace_back(value);
+                return;
+            }
+            const auto maximum = values.max_size();
+            if (values.size() == maximum)
+                throw std::length_error("Scene authored storage exceeds its maximum size.");
+            const auto capacity = values.capacity();
+            const auto growth = capacity > maximum - capacity ? maximum : capacity * 2;
+            std::vector<T> prepared(std::size_t{0});
+            prepared.reserve(std::max(values.size() + 1, growth));
+            for (const auto &existing : values)
+                prepared.emplace_back(existing);
+            prepared.emplace_back(value);
+            values.swap(prepared);
+        }
+
         [[nodiscard]] Result<void> Failure(const ErrorCodeDescriptor &code, std::string message) {
             return Result<void>::Failure(MakeError(code, std::move(message)));
         }
@@ -57,7 +93,7 @@ namespace Horo::Runtime {
 
         /** @brief Validates behavior payloads and enforces unique instance identities. */
         [[nodiscard]] bool ValidBehaviors(const std::span<const Gameplay::BehaviorComponent> behaviors) {
-            std::vector<Gameplay::BehaviorInstanceId> behaviorIds;
+            std::vector<Gameplay::BehaviorInstanceId> behaviorIds(std::size_t{0});
             behaviorIds.reserve(behaviors.size());
             for (const Gameplay::BehaviorComponent &behavior : behaviors) {
                 if (Gameplay::ValidateBehaviorComponent(behavior).HasError() ||
@@ -119,7 +155,7 @@ namespace Horo::Runtime {
 
         /** @brief Validates navigation identities and cross-component references across the complete scene. */
         [[nodiscard]] Result<void> ValidateNavigationComponents(const std::span<const RuntimeEntityDefinition> entities) {
-            std::vector<NavigationSceneComponentView> navigationComponents;
+            std::vector<NavigationSceneComponentView> navigationComponents(std::size_t{0});
             navigationComponents.reserve(entities.size());
             for (const RuntimeEntityDefinition &entity : entities) {
                 navigationComponents.push_back(
@@ -159,7 +195,7 @@ namespace Horo::Runtime {
 
         /** @brief Validates Physics identities and explicit body references across the complete scene. */
         [[nodiscard]] Result<void> ValidatePhysicsComponents(const std::span<const RuntimeEntityDefinition> entities) {
-            std::vector<PhysicsSceneComponentView> physicsComponents;
+            std::vector<PhysicsSceneComponentView> physicsComponents(std::size_t{0});
             physicsComponents.reserve(entities.size());
             for (const RuntimeEntityDefinition &entity : entities) {
                 if (auto character = ValidateCharacterPhysicsReferences(entity, entities); character.HasError())
@@ -174,7 +210,7 @@ namespace Horo::Runtime {
 
         /** @brief Validates AI payloads and stable agent identities across the complete scene. */
         [[nodiscard]] Result<void> ValidateAiComponents(const std::span<const RuntimeEntityDefinition> entities) {
-            std::vector<AI::AiSceneComponentView> aiComponents;
+            std::vector<AI::AiSceneComponentView> aiComponents(std::size_t{0});
             aiComponents.reserve(entities.size());
             for (const RuntimeEntityDefinition &entity : entities)
                 aiComponents.push_back({.agent = entity.components.aiAgent ? &*entity.components.aiAgent : nullptr,
@@ -192,8 +228,13 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateEntityHierarchy(const std::vector<RuntimeEntityDefinition> &entities) {
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+            // Checked hash storage allocates a proxy inside a noexcept constructor.
+            std::map<std::uint64_t, std::size_t> indices;
+#else
             std::unordered_map<std::uint64_t, std::size_t> indices;
             indices.reserve(entities.size());
+#endif
             for (std::size_t index = 0; index < entities.size(); ++index) {
                 if (const Result<void> valid = ValidateRuntimeEntityDefinition(entities[index]); valid.HasError())
                     return valid;
@@ -326,11 +367,30 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneDefinition::RuntimeSceneDefinition */
     RuntimeSceneDefinition::RuntimeSceneDefinition(SceneDefinitionId id, SceneDefinitionRevision revision,
-                                                   std::vector<RuntimeEntityDefinition> entities,
-                                                   std::vector<SceneAssetDependency> assetDependencies,
-                                                   std::vector<TriggerVolumeMigrationEvidence> triggerVolumeEvidence) noexcept
-        : id_(id), revision_(revision), entities_(std::move(entities)), assetDependencies_(std::move(assetDependencies)),
-          triggerVolumeEvidence_(std::move(triggerVolumeEvidence)) {}
+                                                   std::unique_ptr<Storage> storage) noexcept
+        : id_(id), revision_(revision), storage_(std::move(storage)) {}
+
+    /** @copydoc RuntimeSceneDefinition::RuntimeSceneDefinition */
+    RuntimeSceneDefinition::RuntimeSceneDefinition(const RuntimeSceneDefinition &other)
+        : id_(other.id_), revision_(other.revision_), storage_(other.storage_ ? std::make_unique<Storage>(*other.storage_) : nullptr) {}
+
+    /** @copydoc RuntimeSceneDefinition::operator= */
+    RuntimeSceneDefinition &RuntimeSceneDefinition::operator=(const RuntimeSceneDefinition &other) {
+        if (this != &other) {
+            RuntimeSceneDefinition prepared(other);
+            *this = std::move(prepared);
+        }
+        return *this;
+    }
+
+    /** @copydoc RuntimeSceneDefinition::RuntimeSceneDefinition */
+    RuntimeSceneDefinition::RuntimeSceneDefinition(RuntimeSceneDefinition &&other) noexcept = default;
+
+    /** @copydoc RuntimeSceneDefinition::operator= */
+    RuntimeSceneDefinition &RuntimeSceneDefinition::operator=(RuntimeSceneDefinition &&other) noexcept = default;
+
+    /** @copydoc RuntimeSceneDefinition::~RuntimeSceneDefinition */
+    RuntimeSceneDefinition::~RuntimeSceneDefinition() = default;
 
     /** @copydoc RuntimeSceneDefinition::Id */
     SceneDefinitionId RuntimeSceneDefinition::Id() const noexcept {
@@ -344,38 +404,69 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneDefinition::Entities */
     std::span<const RuntimeEntityDefinition> RuntimeSceneDefinition::Entities() const noexcept {
-        return entities_;
+        return storage_ ? std::span<const RuntimeEntityDefinition>{storage_->entities} : std::span<const RuntimeEntityDefinition>{};
     }
 
     /** @copydoc RuntimeSceneDefinition::AssetDependencies */
     std::span<const SceneAssetDependency> RuntimeSceneDefinition::AssetDependencies() const noexcept {
-        return assetDependencies_;
+        return storage_ ? std::span<const SceneAssetDependency>{storage_->assetDependencies} : std::span<const SceneAssetDependency>{};
     }
 
     /** @copydoc RuntimeSceneDefinition::TriggerVolumeEvidence */
     std::span<const TriggerVolumeMigrationEvidence> RuntimeSceneDefinition::TriggerVolumeEvidence() const noexcept {
-        return triggerVolumeEvidence_;
+        return storage_ ? std::span<const TriggerVolumeMigrationEvidence>{storage_->triggerVolumeEvidence}
+                        : std::span<const TriggerVolumeMigrationEvidence>{};
     }
 
     /** @copydoc SceneDefinitionBuilder::SceneDefinitionBuilder */
     SceneDefinitionBuilder::SceneDefinitionBuilder(SceneDefinitionId id, SceneDefinitionRevision revision) noexcept
         : id_(id), revision_(revision) {}
 
+    /** @copydoc SceneDefinitionBuilder::SceneDefinitionBuilder */
+    SceneDefinitionBuilder::SceneDefinitionBuilder(const SceneDefinitionBuilder &other)
+        : id_(other.id_), revision_(other.revision_), storage_(other.storage_ ? std::make_unique<Storage>(*other.storage_) : nullptr) {}
+
+    /** @copydoc SceneDefinitionBuilder::operator= */
+    SceneDefinitionBuilder &SceneDefinitionBuilder::operator=(const SceneDefinitionBuilder &other) {
+        if (this != &other) {
+            SceneDefinitionBuilder prepared(other);
+            *this = std::move(prepared);
+        }
+        return *this;
+    }
+
+    /** @copydoc SceneDefinitionBuilder::SceneDefinitionBuilder */
+    SceneDefinitionBuilder::SceneDefinitionBuilder(SceneDefinitionBuilder &&other) noexcept = default;
+
+    /** @copydoc SceneDefinitionBuilder::operator= */
+    SceneDefinitionBuilder &SceneDefinitionBuilder::operator=(SceneDefinitionBuilder &&other) noexcept = default;
+
+    /** @copydoc SceneDefinitionBuilder::~SceneDefinitionBuilder */
+    SceneDefinitionBuilder::~SceneDefinitionBuilder() = default;
+
+    /** @copydoc SceneDefinitionBuilder::MutableStorage */
+    SceneDefinitionBuilder::Storage &SceneDefinitionBuilder::MutableStorage() {
+        if (!storage_)
+            storage_ = std::make_unique<Storage>();
+        return *storage_;
+    }
+
     /** @copydoc SceneDefinitionBuilder::Add */
-    void SceneDefinitionBuilder::Add(RuntimeEntityDefinition entity) {
-        entities_.push_back(std::move(entity));
+    void SceneDefinitionBuilder::Add(const RuntimeEntityDefinition &entity) {
+        AppendDetached(MutableStorage().entities, entity);
     }
 
     /** @copydoc SceneDefinitionBuilder::RequireAsset */
-    Result<void> SceneDefinitionBuilder::RequireAsset(SceneAssetDependency dependency) {
+    Result<void> SceneDefinitionBuilder::RequireAsset(const SceneAssetDependency &dependency) {
         if (!dependency.id.IsValid() || dependency.expectedType.Value().empty())
             return Failure(SceneErrors::InvalidAssetDependency,
                            "Runtime scene asset dependency must have a non-zero identity and valid type.");
-        const auto found = std::ranges::find(assetDependencies_, dependency.id, [](const SceneAssetDependency &value) {
+        auto &dependencies = MutableStorage().assetDependencies;
+        const auto found = std::ranges::find(dependencies, dependency.id, [](const SceneAssetDependency &value) {
             return value.id;
         });
-        if (found == assetDependencies_.end()) {
-            assetDependencies_.push_back(std::move(dependency));
+        if (found == dependencies.end()) {
+            AppendDetached(dependencies, dependency);
             return Result<void>::Success();
         }
         if (found->expectedType != dependency.expectedType)
@@ -384,14 +475,15 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SceneDefinitionBuilder::RequireTriggerVolume */
-    Result<void> SceneDefinitionBuilder::RequireTriggerVolume(TriggerVolumeMigrationEvidence evidence) {
+    Result<void> SceneDefinitionBuilder::RequireTriggerVolume(const TriggerVolumeMigrationEvidence &evidence) {
         const auto &binding = evidence.binding;
         if (!evidence.object.IsValid() || evidence.body.value == 0 || evidence.collider.value == 0 ||
             binding.collisionSchemaFingerprint == 0 || !binding.profile.IsValid() || binding.materialSourceRevision == 0 ||
             binding.materialPayloadDigest == Sha256Digest{} || !binding.material.id.IsValid() ||
             binding.material.expectedType.Value() != "core.physics_material")
             return Failure(SceneErrors::InvalidDefinition, "Trigger migration requires exact project schema and material evidence.");
-        for (const auto &existing : triggerVolumeEvidence_) {
+        auto &constraints = MutableStorage().triggerVolumeEvidence;
+        for (const auto &existing : constraints) {
             if (existing.object == evidence.object)
                 return Failure(SceneErrors::InvalidDefinition, "Duplicate trigger migration evidence names the same object.");
             if (existing.binding.collisionSchemaFingerprint != binding.collisionSchemaFingerprint ||
@@ -403,7 +495,7 @@ namespace Horo::Runtime {
         }
         if (auto required = RequireAsset(binding.material); required.HasError())
             return required;
-        triggerVolumeEvidence_.push_back(std::move(evidence));
+        AppendDetached(constraints, evidence);
         return Result<void>::Success();
     }
 
@@ -430,27 +522,27 @@ namespace Horo::Runtime {
             return Result<RuntimeSceneDefinition>::Failure(
                 MakeError(SceneErrors::InvalidDefinition, "Runtime scene identity must be non-zero."));
 
-        if (const Result<void> valid = ValidateEntityHierarchy(entities_); valid.HasError())
+        auto &data = MutableStorage();
+        if (const Result<void> valid = ValidateEntityHierarchy(data.entities); valid.HasError())
             return Result<RuntimeSceneDefinition>::Failure(valid.ErrorValue());
 
-        if (auto assets = RequireNavigationAssets(*this, entities_); assets.HasError())
+        if (auto assets = RequireNavigationAssets(*this, data.entities); assets.HasError())
             return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
-        if (auto assets = RequireCharacterAssets(*this, entities_); assets.HasError())
+        if (auto assets = RequireCharacterAssets(*this, data.entities); assets.HasError())
             return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
-        if (auto assets = RequireAnimationAssets(*this, entities_); assets.HasError())
+        if (auto assets = RequireAnimationAssets(*this, data.entities); assets.HasError())
             return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
-        if (auto evidence = ValidateTriggerEvidence(entities_, triggerVolumeEvidence_); evidence.HasError())
+        if (auto evidence = ValidateTriggerEvidence(data.entities, data.triggerVolumeEvidence); evidence.HasError())
             return Result<RuntimeSceneDefinition>::Failure(evidence.ErrorValue());
 
-        std::ranges::sort(triggerVolumeEvidence_, {}, &TriggerVolumeMigrationEvidence::object);
+        std::ranges::sort(data.triggerVolumeEvidence, {}, &TriggerVolumeMigrationEvidence::object);
 
-        std::ranges::sort(assetDependencies_, {}, [](const SceneAssetDependency &dependency) {
+        std::ranges::sort(data.assetDependencies, {}, [](const SceneAssetDependency &dependency) {
             return dependency.id;
         });
-        if (Result<void> components = ValidateAuthoredComponents(entities_); components.HasError())
+        if (Result<void> components = ValidateAuthoredComponents(data.entities); components.HasError())
             return Result<RuntimeSceneDefinition>::Failure(components.ErrorValue());
 
-        return Result<RuntimeSceneDefinition>::Success(
-            RuntimeSceneDefinition{id_, revision_, std::move(entities_), std::move(assetDependencies_), std::move(triggerVolumeEvidence_)});
+        return Result<RuntimeSceneDefinition>::Success(RuntimeSceneDefinition{id_, revision_, std::move(storage_)});
     }
 }  // namespace Horo::Runtime
