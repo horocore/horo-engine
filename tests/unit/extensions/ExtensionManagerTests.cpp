@@ -8,6 +8,7 @@
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Security/SecurityErrors.h"
+#include "OwnedTestDirectory.h"
 #include "SecurityTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -95,16 +96,11 @@ namespace Horo::Extensions::Tests {
     }
 
     struct ExtensionManagerTestFixture {
-        fs::path tempDir;
+        Horo::Tests::OwnedTestDirectory ownedDirectory{"extension"};
+        fs::path tempDir{ownedDirectory.Path() / "plugins"};
 
         ExtensionManagerTestFixture() {
-            tempDir = fs::temp_directory_path() / "horo_extension_tests" / "plugins";
             fs::create_directories(tempDir);
-        }
-
-        ~ExtensionManagerTestFixture() {
-            std::error_code ec;
-            fs::remove_all(tempDir, ec);
         }
 
 #ifdef HORO_ABI_FIXTURE_0
