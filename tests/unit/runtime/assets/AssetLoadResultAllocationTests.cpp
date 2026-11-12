@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <new>
 #include <optional>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -29,6 +30,38 @@ namespace {
 #endif
     }
 }  // namespace
+
+TEST_CASE("Asset identity formatting propagates every allocation failure without changing canonical bytes",
+          "[assets][allocation][identity]") {
+    constexpr std::array<std::uint8_t, 16> bytes{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+                                                 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10};
+    const auto identity = Horo::Assets::AssetId::FromBytes(bytes);
+    const std::string expected = "01234567-89ab-cdef-fedc-ba9876543210";
+    REQUIRE(identity.ToString() == expected);
+    CHECK(Horo::Assets::AssetId{}.ToString() == "00000000-0000-0000-0000-000000000000");
+    std::size_t requests{};
+    {
+        ScopedMeasurement measurement;
+        static_cast<void>(identity.ToString());
+        requests = measurement.Snapshot().requests;
+    }
+    RequireCheckedDestinationAllocation(requests);
+    for (std::size_t index = 0; index < requests; ++index) {
+        INFO(index);
+        bool failed{};
+        {
+            ScopedFailure failure(index);
+            try {
+                static_cast<void>(identity.ToString());
+            } catch (const std::bad_alloc &) {
+                failed = true;
+            }
+        }
+        REQUIRE(failed);
+        CHECK(identity.Bytes() == bytes);
+        CHECK(identity.ToString() == expected);
+    }
+}
 
 TEST_CASE("Asset load envelope default storage propagates every allocation failure", "[assets][allocation][load]") {
     static_assert(!std::is_nothrow_default_constructible_v<AssetLoadResult>);
