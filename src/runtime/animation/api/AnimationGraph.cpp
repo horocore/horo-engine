@@ -10,6 +10,74 @@
 #include <type_traits>
 
 namespace Horo::Animation {
+    /** @copydoc AnimationGraphData::AnimationGraphData */
+    AnimationGraphData::AnimationGraphData(AnimationGraphData &&other)
+        : schemaVersion(other.schemaVersion), contractVersion(other.contractVersion), id(other.id), skeleton(other.skeleton),
+          entry(other.entry) {
+        parameters.swap(other.parameters);
+        definitions.swap(other.definitions);
+        actionSlots.swap(other.actionSlots);
+        actions.swap(other.actions);
+    }
+
+    /** @copydoc GraphCompiledDefinition::GraphCompiledDefinition */
+    GraphCompiledDefinition::GraphCompiledDefinition(GraphCompiledDefinition &&other)
+        : id(other.id), outputInstruction(other.outputInstruction), callDepth(other.callDepth),
+          evaluationInstructions(other.evaluationInstructions), sourceMapCallEntries(other.sourceMapCallEntries) {
+        inputs.swap(other.inputs);
+        instructions.swap(other.instructions);
+    }
+
+    /** @copydoc AnimationGraphCookedData::AnimationGraphCookedData */
+    AnimationGraphCookedData::AnimationGraphCookedData(AnimationGraphCookedData &&other)
+        : contractVersion(other.contractVersion), id(other.id), skeleton(other.skeleton), entry(other.entry) {
+        parameters.swap(other.parameters);
+        actionSlots.swap(other.actionSlots);
+        actions.swap(other.actions);
+        definitions.swap(other.definitions);
+    }
+
+    /** @copydoc AnimationGraphProgram::AnimationGraphProgram */
+    AnimationGraphProgram::AnimationGraphProgram(AnimationGraphProgram &&other)
+        : memory_(other.memory_), skeletonBinding_(other.skeletonBinding_), id_(other.id_), sourceClip_(other.sourceClip_),
+          skeleton_(other.skeleton_), entry_(other.entry_) {
+        occurrences_.swap(other.occurrences_);
+        stateMachines_.swap(other.stateMachines_);
+        clipBindings_.swap(other.clipBindings_);
+        parameters_.swap(other.parameters_);
+        actionSlots_.swap(other.actionSlots_);
+        actions_.swap(other.actions_);
+        definitions_.swap(other.definitions_);
+        clips_.swap(other.clips_);
+    }
+
+    /** @copydoc GraphBlendSampleBinding::GraphBlendSampleBinding */
+    GraphBlendSampleBinding::GraphBlendSampleBinding(GraphBlendSampleBinding &&other)
+        : player(other.player), clip(other.clip), member(other.member) {
+        coverage.swap(other.coverage);
+    }
+
+    /** @copydoc GraphInstructionOccurrence::GraphInstructionOccurrence */
+    GraphInstructionOccurrence::GraphInstructionOccurrence(GraphInstructionOccurrence &&other)
+        : source(other.source), definitionIndex(other.definitionIndex), instructionIndex(other.instructionIndex), output(other.output),
+          outputProducer(other.outputProducer), clipPlayer(other.clipPlayer), clipBindingIndex(other.clipBindingIndex),
+          parameterRead(other.parameterRead), actionSlot(other.actionSlot), stateMachine(other.stateMachine), phase(other.phase),
+          blendScratch(other.blendScratch), blendTree(other.blendTree), blendParameters(other.blendParameters) {
+        callPath.swap(other.callPath);
+        inputs.swap(other.inputs);
+        guards.swap(other.guards);
+        jointMask.swap(other.jointMask);
+        clipCoverage.swap(other.clipCoverage);
+        blendSamples.swap(other.blendSamples);
+    }
+
+    /** @copydoc GraphStateMachineBinding::GraphStateMachineBinding */
+    GraphStateMachineBinding::GraphStateMachineBinding(GraphStateMachineBinding &&other)
+        : beginOccurrence(other.beginOccurrence), endOccurrence(other.endOccurrence), conditionOffset(other.conditionOffset),
+          poses(other.poses) {
+        branches.swap(other.branches);
+    }
+
     namespace GraphCompileDetail {
         /** @copydoc Failure */
         Error Failure(const ErrorCodeDescriptor &code, GraphSourceLocation location) {
@@ -264,15 +332,24 @@ namespace Horo::Animation {
             return Result<void>::Success();
         }
 
+        /** @brief Copies a validated payload directly into a detached owner.
+         * @param destination Unpublished payload distinct from source.
+         * @param source Validated payload to copy.
+         * @throws std::bad_alloc When payload storage cannot be allocated. */
+        void CopyGraphPayload(GraphNodePayload &destination, const GraphNodePayload &source) {
+            // Variant copy assignment can move a temporary through allocating checked-STL noexcept constructors.
+            std::visit([&destination]<typename Payload>(const Payload &payload) {
+                destination.emplace<Payload>(payload);
+            }, source);
+        }
+
         /** @brief Materializes exact typed operands after their source instructions
          * have been emitted. */
-        GraphInstruction EmitInstruction(const GraphDefinition &definition, const AnimationGraphData &data,
-                                         const DefinitionTopology &topology, std::size_t index,
-                                         const std::vector<std::uint32_t> &registers) {
+        void EmitInstruction(const GraphDefinition &definition, const AnimationGraphData &data, const DefinitionTopology &topology,
+                             std::size_t index, const std::vector<std::uint32_t> &registers, GraphInstruction &instruction) {
             const auto &node = definition.nodes[index];
-            GraphInstruction instruction;
             instruction.source = {definition.id, node.id, {}};
-            instruction.payload = node.payload;
+            CopyGraphPayload(instruction.payload, node.payload);
             instruction.pins = node.pins;
             for (const auto edgeIndex : topology.incoming[index]) {
                 const auto &edge = definition.connections[edgeIndex];
@@ -300,7 +377,6 @@ namespace Horo::Animation {
                     if (const auto *definitionId = std::get_if<GraphDefinitionId>(&state.source))
                         instruction.stateDefinitions.push_back(
                             static_cast<std::uint32_t>(Find(data.definitions, *definitionId) - data.definitions.data()));
-            return instruction;
         }
 
         /** @brief Builds a stable-id topological schedule and exact operand/source map
@@ -319,15 +395,17 @@ namespace Horo::Animation {
             GraphCompiledDefinition result;
             result.id = definition.id;
             result.inputs = definition.inputs;
+            result.instructions.reserve(definition.nodes.size());
             std::vector<std::uint32_t> registers(definition.nodes.size());
             while (!ready.empty()) {
                 if (auto state = Admission(context); state.HasError())
                     return Result<GraphCompiledDefinition>::Failure(state.ErrorValue());
                 const auto index = *ready.begin();
                 ready.erase(ready.begin());
-                auto instruction = EmitInstruction(definition, data, topology, index, registers);
-                registers[index] = static_cast<std::uint32_t>(result.instructions.size());
-                result.instructions.push_back(std::move(instruction));
+                const auto registerIndex = static_cast<std::uint32_t>(result.instructions.size());
+                auto &instruction = result.instructions.emplace_back();
+                EmitInstruction(definition, data, topology, index, registers, instruction);
+                registers[index] = registerIndex;
                 for (const auto next : topology.outgoing[index])
                     if (--topology.indegree[next] == 0)
                         ready.insert(next);
@@ -500,18 +578,17 @@ namespace Horo::Animation {
 
         /** @brief Compiles the complete detached definition set and collects even
          * inactive clip dependencies before publication. */
-        Result<std::vector<GraphCompiledDefinition>> CompileDefinitions(const AnimationGraphData &canonical,
-                                                                        const AnimationGraphCompileContext &context,
-                                                                        std::set<AnimationClipId> &clips) {
-            std::vector<GraphCompiledDefinition> definitions(std::size_t{0});
+        Result<void> CompileDefinitions(const AnimationGraphData &canonical, const AnimationGraphCompileContext &context,
+                                        std::set<AnimationClipId> &clips, std::vector<GraphCompiledDefinition> &definitions) {
+            definitions.reserve(canonical.definitions.size());
             for (const auto &definition : canonical.definitions) {
                 auto compiled = CompileDefinition(definition, canonical, context);
                 if (compiled.HasError())
-                    return Result<std::vector<GraphCompiledDefinition>>::Failure(compiled.ErrorValue());
+                    return Result<void>::Failure(compiled.ErrorValue());
                 CollectClips(compiled.Value(), clips);
                 definitions.push_back(std::move(compiled).Value());
             }
-            return Result<std::vector<GraphCompiledDefinition>>::Success(std::move(definitions));
+            return Result<void>::Success();
         }
 
         /** @brief State authoring payloads are not valid in any pre-state source
@@ -587,15 +664,19 @@ namespace Horo::Animation {
         }
 
         /** @brief Projects supplied instructions into the existing semantic validator, never selecting an execution order. */
-        GraphDefinition CookedValidationDefinition(const GraphCompiledDefinition &compiled) {
-            GraphDefinition result{.id = compiled.id, .inputs = compiled.inputs};
+        void CookedValidationDefinition(const GraphCompiledDefinition &compiled, GraphDefinition &result) {
+            result.id = compiled.id;
+            result.inputs = compiled.inputs;
+            result.nodes.reserve(compiled.instructions.size());
             for (const auto &instruction : compiled.instructions) {
-                result.nodes.push_back({instruction.source.node, instruction.payload, instruction.pins});
+                auto &node = result.nodes.emplace_back();
+                node.id = instruction.source.node;
+                CopyGraphPayload(node.payload, instruction.payload);
+                node.pins = instruction.pins;
                 for (const auto &input : instruction.inputs)
                     result.connections.push_back(
                         {{input.source.node, input.source.pin}, {instruction.source.node, input.destination}, input.type});
             }
-            return result;
         }
 
         /** @brief Builds bounded validation-only declarations after whole-candidate cold admission. */
@@ -607,8 +688,11 @@ namespace Horo::Animation {
             model.parameters = data.parameters;
             model.actionSlots = data.actionSlots;
             model.actions = data.actions;
-            for (const auto &definition : data.definitions)
-                model.definitions.push_back(CookedValidationDefinition(definition));
+            model.definitions.reserve(data.definitions.size());
+            for (const auto &definition : data.definitions) {
+                auto &destination = model.definitions.emplace_back();
+                CookedValidationDefinition(definition, destination);
+            }
             Canonicalize(model);
             return model;
         }
@@ -636,7 +720,9 @@ namespace Horo::Animation {
             if (found == topology.indexes.end() || ready.empty() || found->second != *ready.begin())
                 return Result<std::size_t>::Failure(Failure(GraphMalformed, instruction.source));
             // This checks already supplied code. It neither chooses a schedule nor emits a replacement program.
-            if (EmitInstruction(definition, model, topology, found->second, registers) != instruction)
+            GraphInstruction expected;
+            EmitInstruction(definition, model, topology, found->second, registers, expected);
+            if (expected != instruction)
                 return Result<std::size_t>::Failure(Failure(GraphMalformed, instruction.source));
             return Result<std::size_t>::Success(found->second);
         }
@@ -773,10 +859,9 @@ namespace Horo::Animation {
         result.parameters_ = canonical.parameters;
         result.entry_ = entry.Value();
         std::set<AnimationClipId> clips;
-        auto definitions = CompileDefinitions(canonical, context, clips);
+        auto definitions = CompileDefinitions(canonical, context, clips, result.definitions_);
         if (definitions.HasError())
             return Result<AnimationGraphProgram>::Failure(definitions.ErrorValue());
-        result.definitions_ = std::move(definitions).Value();
         if (auto calls = BoundCalls(result.definitions_, context); calls.HasError())
             return Result<AnimationGraphProgram>::Failure(calls.ErrorValue());
         CollectActionClips(canonical, clips);

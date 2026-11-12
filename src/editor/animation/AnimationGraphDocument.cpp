@@ -40,6 +40,12 @@ namespace Horo::Editor {
         struct AnimationDocumentRoot final {
             Animation::AnimationGraphData data;
             std::string bytes;
+
+            AnimationDocumentRoot(Animation::AnimationGraphData &&source, std::string &&sourceBytes)
+                : data(std::move(source)), bytes(std::size_t{0}, char{}) {
+                // Prepare checked iterator ownership before transferring the completed text.
+                bytes.swap(sourceBytes);
+            }
         };
 
         /** @brief Private lifetime token distinguishes even accidentally duplicated host document identities. */
@@ -58,13 +64,25 @@ namespace Horo::Editor {
 
         /** @brief Source-only stable-ID deltas; no runtime state or complete graph snapshots. */
         struct Delta final {
-            std::vector<Change<GraphDefinition>> definitions;
-            std::vector<Change<GraphParameter>> parameters;
+            std::vector<Change<GraphDefinition>> definitions = std::vector<Change<GraphDefinition>>(std::size_t{0});
+            std::vector<Change<GraphParameter>> parameters = std::vector<Change<GraphParameter>>(std::size_t{0});
             GraphDefinitionId beforeEntry;
             GraphDefinitionId afterEntry;
             std::uint64_t beforeState{};
             std::uint64_t afterState{};
             std::size_t bytes{sizeof(Delta)};
+
+            Delta() = default;
+            Delta(const Delta &) = default;
+            Delta &operator=(const Delta &) = default;
+            Delta &operator=(Delta &&) noexcept = default;
+
+            Delta(Delta &&source)
+                : beforeEntry(source.beforeEntry), afterEntry(source.afterEntry), beforeState(source.beforeState),
+                  afterState(source.afterState), bytes(source.bytes) {
+                definitions.swap(source.definitions);
+                parameters.swap(source.parameters);
+            }
         };
 
         /** @brief Charges actual variable-size storage retained by a semantic parameter value. */
@@ -90,20 +108,36 @@ namespace Horo::Editor {
             return bytes;
         }
 
-        /** @brief Builds exact semantic deltas from canonically sorted source collections. */
-        template <typename T> std::vector<Change<T>> Changes(const std::vector<T> &before, const std::vector<T> &after) {
-            std::vector<Change<T>> changes;
+        /** @brief Counts reversible semantic entries before reserving their owned storage. */
+        template <typename T> std::size_t ChangeCount(const std::vector<T> &before, const std::vector<T> &after) {
+            std::size_t count{};
             for (const auto &value : before) {
                 const auto found = std::ranges::find(after, value.id, &T::id);
-                if (found == after.end())
-                    changes.push_back({value, {}});
-                else if (*found != value)
-                    changes.push_back({value, *found});
+                if (found == after.end() || *found != value)
+                    ++count;
             }
             for (const auto &value : after)
                 if (std::ranges::find(before, value.id, &T::id) == before.end())
-                    changes.push_back({{}, value});
-            return changes;
+                    ++count;
+            return count;
+        }
+
+        /** @brief Builds exact semantic deltas from canonically sorted source collections. */
+        template <typename T> void Changes(const std::vector<T> &before, const std::vector<T> &after, std::vector<Change<T>> &changes) {
+            // Relocating an existing Change would invoke checked STL noexcept moves.
+            changes.reserve(ChangeCount(before, after));
+            for (const auto &value : before) {
+                const auto found = std::ranges::find(after, value.id, &T::id);
+                if (found == after.end() || *found != value) {
+                    auto &change = changes.emplace_back();
+                    change.before.emplace(value);
+                    if (found != after.end())
+                        change.after.emplace(*found);
+                }
+            }
+            for (const auto &value : after)
+                if (std::ranges::find(before, value.id, &T::id) == before.end())
+                    changes.emplace_back().after.emplace(value);
         }
 
         /** @brief Charges actual retained vector capacities after detached delta construction. */
@@ -121,9 +155,14 @@ namespace Horo::Editor {
         /** @brief Replaces or inserts one semantic value; the canonical validator admits final topology. */
         template <typename T> void Put(std::vector<T> &values, const T &value) {
             const auto found = std::ranges::find(values, value.id, &T::id);
-            if (found == values.end())
-                values.push_back(value);
-            else
+            if (found == values.end()) {
+                std::vector<T> replacement(std::size_t{0});
+                replacement.reserve(values.size() + 1);
+                for (const auto &retained : values)
+                    replacement.emplace_back(retained);
+                replacement.emplace_back(value);
+                values.swap(replacement);
+            } else
                 *found = value;
         }
 
@@ -175,12 +214,18 @@ namespace Horo::Editor {
             if (bytes.HasError())
                 return Result<std::shared_ptr<const Root>>::Failure(bytes.ErrorValue());
             return Result<std::shared_ptr<const Root>>::Success(
-                std::make_shared<const Root>(Root{std::move(validated).Value(), std::move(bytes).Value()}));
+                std::make_shared<const Root>(std::move(validated).Value(), std::move(bytes).Value()));
         }
 
         /** @brief Unknown enum values cannot authorize discard. */
         bool ValidPolicy(const AnimationDocumentDiscardPolicy policy) {
             return policy == AnimationDocumentDiscardPolicy::RequireClean || policy == AnimationDocumentDiscardPolicy::DiscardChanges;
+        }
+
+        /** @brief Identifies the original source version used by both open and reload dirty-state admission. */
+        bool HasCurrentSourceVersion(const AnimationGraphData &source) noexcept {
+            return source.schemaVersion == CurrentAnimationGraphSchemaVersion &&
+                   source.contractVersion == CurrentAnimationGraphContractVersion;
         }
     }  // namespace
 
@@ -247,7 +292,7 @@ namespace Horo::Editor {
         auto impl = std::make_unique<Impl>(limits);
         impl->identity = std::move(identity);
         impl->root = std::move(root).Value();
-        if (source.schemaVersion != CurrentAnimationGraphSchemaVersion || source.contractVersion != CurrentAnimationGraphContractVersion)
+        if (!HasCurrentSourceVersion(source))
             impl->dirty = true;
         else
             impl->savedRoot = impl->root;
@@ -306,12 +351,13 @@ namespace Horo::Editor {
             return Result<void>::Success();
         const auto &before = impl_->root->data;
         const auto &after = root.Value()->data;
-        Delta delta{Changes(before.definitions, after.definitions),
-                    Changes(before.parameters, after.parameters),
-                    before.entry,
-                    after.entry,
-                    impl_->currentState,
-                    impl_->nextState};
+        Delta delta;
+        Changes(before.definitions, after.definitions, delta.definitions);
+        Changes(before.parameters, after.parameters, delta.parameters);
+        delta.beforeEntry = before.entry;
+        delta.afterEntry = after.entry;
+        delta.beforeState = impl_->currentState;
+        delta.afterState = impl_->nextState;
         delta.bytes += Bytes(delta.definitions) + Bytes(delta.parameters);
         auto history = impl_->history.Prepare(std::move(delta));
         if (!history)
@@ -411,8 +457,7 @@ namespace Horo::Editor {
         impl_->history.Clear();
         impl_->currentState = impl_->nextState++;
         impl_->firstState = impl_->currentState;
-        impl_->dirty =
-            source.schemaVersion != CurrentAnimationGraphSchemaVersion || source.contractVersion != CurrentAnimationGraphContractVersion;
+        impl_->dirty = !HasCurrentSourceVersion(source);
         impl_->savedRoot = impl_->dirty ? nullptr : impl_->root;
         ++impl_->revision;
         return Result<void>::Success();

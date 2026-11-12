@@ -401,7 +401,7 @@ namespace Horo::Animation {
                     });
                 });
             });
-            return Result<std::string>::Success(out.Finish());
+            return out.Finish();
         } catch (const Rejection &failure) {
             return Result<std::string>::Failure(MakeError(*failure.code));
         }

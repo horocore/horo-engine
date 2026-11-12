@@ -10,8 +10,21 @@ namespace Horo::Animation::GraphCompileDetail {
         /** @brief Captures validated compatibility values, not borrowed asset
          * lifetimes. */
         struct GraphDependencies final {
+            /** @brief Creates detached buffers; checked-library allocation failure propagates. */
+            GraphDependencies() = default;
+            GraphDependencies(const GraphDependencies &) = default;
+            GraphDependencies &operator=(const GraphDependencies &) = default;
+
+            /** @brief Prepares bookkeeping before transferring owned buffers. @param other Source owner.
+             * @throws std::bad_alloc Leaving source buffers unchanged. */
+            GraphDependencies(GraphDependencies &&other) : skeleton(other.skeleton) {
+                clips.swap(other.clips);
+            }
+
+            GraphDependencies &operator=(GraphDependencies &&) noexcept = default;
+
             GraphSkeletonBinding skeleton{};
-            std::vector<AnimationClipDescriptor> clips{};
+            std::vector<AnimationClipDescriptor> clips = std::vector<AnimationClipDescriptor>(std::size_t{0});
         };
 
         /** @brief Requires the exact typed dependency set and one pinned skeleton
@@ -42,7 +55,20 @@ namespace Horo::Animation::GraphCompileDetail {
 
         /** @brief Detached preallocated instance access plan under construction. */
         struct OccurrencePlan final {
-            std::vector<GraphInstructionOccurrence> occurrences{};
+            /** @brief Creates detached buffers; checked-library allocation failure propagates. */
+            OccurrencePlan() = default;
+            OccurrencePlan(const OccurrencePlan &) = default;
+            OccurrencePlan &operator=(const OccurrencePlan &) = default;
+
+            /** @brief Prepares bookkeeping before transferring owned buffers. @param other Source owner.
+             * @throws std::bad_alloc Leaving source buffers unchanged. */
+            OccurrencePlan(OccurrencePlan &&other) : memory(other.memory) {
+                occurrences.swap(other.occurrences);
+            }
+
+            OccurrencePlan &operator=(OccurrencePlan &&) noexcept = default;
+
+            std::vector<GraphInstructionOccurrence> occurrences = std::vector<GraphInstructionOccurrence>(std::size_t{0});
             GraphMemoryRequirements memory{};
         };
 
@@ -130,11 +156,28 @@ namespace Horo::Animation::GraphCompileDetail {
         /** @brief One bounded compile-time call frame; no process-local pointer is
          * published. */
         struct OccurrenceFrame final {
+            /** @brief Creates detached buffers; checked-library allocation failure propagates. */
+            OccurrenceFrame() = default;
+            OccurrenceFrame(const OccurrenceFrame &) = default;
+            OccurrenceFrame &operator=(const OccurrenceFrame &) = default;
+
+            /** @brief Prepares bookkeeping before transferring owned buffers. @param other Source owner.
+             * @throws std::bad_alloc Leaving source buffers unchanged. */
+            OccurrenceFrame(OccurrenceFrame &&other)
+                : definition(other.definition), next(other.next), inputs(other.inputs), callerInstruction(other.callerInstruction),
+                  completion(other.completion) {
+                path.swap(other.path);
+                slots.swap(other.slots);
+                producers.swap(other.producers);
+            }
+
+            OccurrenceFrame &operator=(OccurrenceFrame &&) noexcept = default;
+
             std::uint32_t definition{};
             std::size_t next{};
-            std::vector<GraphSourceLocation> path{};
-            std::vector<GraphWorkingSlot> slots{};
-            std::vector<std::uint32_t> producers{};
+            std::vector<GraphSourceLocation> path = std::vector<GraphSourceLocation>(std::size_t{0});
+            std::vector<GraphWorkingSlot> slots = std::vector<GraphWorkingSlot>(std::size_t{0});
+            std::vector<std::uint32_t> producers = std::vector<std::uint32_t>(std::size_t{0});
             std::map<GraphInterfaceId, GraphOccurrenceInput> inputs{};
             std::optional<std::uint32_t> callerInstruction{};
             std::optional<GraphInstructionOccurrence> completion{};
@@ -223,7 +266,7 @@ namespace Horo::Animation::GraphCompileDetail {
             const auto &entry = definitions[program.EntryIndex()];
             plan.memory.callDepth = entry.callDepth;
             plan.occurrences.reserve(static_cast<std::size_t>(entry.evaluationInstructions));
-            std::vector<OccurrenceFrame> frames;
+            std::vector<OccurrenceFrame> frames = std::vector<OccurrenceFrame>(std::size_t{0});
             frames.reserve(entry.callDepth);
             frames.push_back(Frame(program.EntryIndex(), definitions));
             while (!frames.empty()) {

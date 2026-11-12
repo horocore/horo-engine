@@ -473,6 +473,14 @@ struct HistoryEntry {
 History has bounded item and memory budgets. Evicting old entries never changes
 the current document.
 
+Preparing a history candidate and its owned semantic deltas may allocate, and
+allocation failure must unwind before publication. Checked Windows STL iterator
+bookkeeping must be prepared through fallible construction rather than hidden
+inside a `noexcept` container move or default constructor. Animation document
+roots construct directly in shared storage and swap completed source text;
+reserved delta storage is filled in place. These cold authoring operations keep
+existing immutable captures, source bytes and history unchanged on failure.
+
 Committed history entries own immutable command deltas required for undo/redo.
 Command objects must not depend on external mutable UI state or live pointers after commit.
 

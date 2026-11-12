@@ -29,7 +29,7 @@ namespace Horo::Animation::GraphCompileDetail {
             /** @brief Captures immutable dependency compatibility for this detached
              * compilation. */
             Builder(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context, const GraphSkeletonBinding &skeleton,
-                    std::vector<AnimationClipDescriptor> clips)
+                    std::vector<AnimationClipDescriptor> &&clips)
                 : program_(program), context_(context) {
                 plan_.skeleton = skeleton;
                 plan_.clips = std::move(clips);
@@ -256,7 +256,7 @@ namespace Horo::Animation::GraphCompileDetail {
 
     /** @copydoc BindStateNodes */
     Result<BoundPlan> BindStateNodes(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context,
-                                     const GraphSkeletonBinding &skeleton, std::vector<AnimationClipDescriptor> clips) {
+                                     const GraphSkeletonBinding &skeleton, std::vector<AnimationClipDescriptor> &&clips) {
         try {
             return Result<BoundPlan>::Success(Builder{program, context, skeleton, std::move(clips)}.Build());
         } catch (const Rejection &rejection) {

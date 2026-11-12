@@ -71,7 +71,7 @@ namespace Horo::Animation {
     /** @brief Immutable parameter declaration, never a gameplay parameter store. */
     struct GraphParameter final {
         GraphParameterId id{};
-        std::string name{}; /**< Bounded ASCII identifier for display/binding;
+        std::string name = std::string(std::size_t{0}, char{}); /**< Bounded ASCII identifier for display/binding;
                                identity remains id. */
         GraphValueType type{GraphValueType::Float};
         GraphParameterValue defaultValue{0.0F};
@@ -144,7 +144,7 @@ namespace Horo::Animation {
      * compilation. */
     struct GraphBoneMask final {
         float defaultWeight{1.0F}; /**< Applies to joints not explicitly listed. */
-        std::vector<GraphBoneWeight> joints{};
+        std::vector<GraphBoneWeight> joints = std::vector<GraphBoneWeight>(std::size_t{0});
         bool operator==(const GraphBoneMask &) const = default;
     };
 
@@ -252,8 +252,8 @@ namespace Horo::Animation {
         GraphParameterId x{};
         GraphParameterId y{}; /**< Absent for 1D. */
         GraphBlendOutside outside{GraphBlendOutside::ClampToDomain};
-        std::vector<GraphBlendSample> samples{};
-        std::vector<GraphBlendTriangle> triangles{};
+        std::vector<GraphBlendSample> samples = std::vector<GraphBlendSample>(std::size_t{0});
+        std::vector<GraphBlendTriangle> triangles = std::vector<GraphBlendTriangle>(std::size_t{0});
         GraphSyncGroupId group{};
         GraphSyncPolicy sync{};
         bool operator==(const GraphBlendTreeNode &) const = default;
@@ -341,7 +341,7 @@ namespace Horo::Animation {
                                                     loops. */
         GraphStateInterruption interruption{GraphStateInterruption::None};
         GraphStateBlendCurve curve{GraphStateBlendCurve::Linear};
-        std::vector<GraphStateCondition> conditions{};
+        std::vector<GraphStateCondition> conditions = std::vector<GraphStateCondition>(std::size_t{0});
         bool operator==(const GraphStateTransition &) const = default;
     };
 
@@ -349,8 +349,8 @@ namespace Horo::Animation {
      * bounded asset data. */
     struct GraphStateMachineNode final {
         GraphStateId initial{};
-        std::vector<GraphState> states{};
-        std::vector<GraphStateTransition> transitions{};
+        std::vector<GraphState> states = std::vector<GraphState>(std::size_t{0});
+        std::vector<GraphStateTransition> transitions = std::vector<GraphStateTransition>(std::size_t{0});
         bool operator==(const GraphStateMachineNode &) const = default;
     };
 
@@ -372,7 +372,7 @@ namespace Horo::Animation {
      * metadata, while id is authoritative. */
     struct GraphActionSlot final {
         GraphActionSlotId id{};
-        std::string name{};
+        std::string name = std::string(std::size_t{0}, char{});
         bool operator==(const GraphActionSlot &) const = default;
     };
 
@@ -380,7 +380,7 @@ namespace Horo::Animation {
      * sequence. */
     struct GraphActionSection final {
         GraphActionSectionId id{};
-        std::string name{};
+        std::string name = std::string(std::size_t{0}, char{});
         AnimationClipId clip{};
         AnimationTime begin{};
         AnimationTime end{};
@@ -414,8 +414,8 @@ namespace Horo::Animation {
      * player ownership. */
     struct GraphActionSequence final {
         GraphActionSectionId entry{};
-        std::vector<GraphActionSection> sections{};
-        std::vector<GraphActionLoopRegion> loops{};
+        std::vector<GraphActionSection> sections = std::vector<GraphActionSection>(std::size_t{0});
+        std::vector<GraphActionLoopRegion> loops = std::vector<GraphActionLoopRegion>(std::size_t{0});
         bool operator==(const GraphActionSequence &) const = default;
     };
     /** @brief Whether a new interrupt request may replace the active action.
@@ -442,7 +442,7 @@ namespace Horo::Animation {
      */
     struct GraphActionDefinition final {
         GraphActionId id{};
-        std::string name{};
+        std::string name = std::string(std::size_t{0}, char{});
         GraphActionSlotId slot{};
         GraphActionSequence sequence{};
         GraphBoneMask mask{};
@@ -471,7 +471,7 @@ namespace Horo::Animation {
     struct GraphNode final {
         GraphNodeId id{};
         GraphNodePayload payload{};
-        std::vector<GraphPin> pins{};
+        std::vector<GraphPin> pins = std::vector<GraphPin>(std::size_t{0});
         bool operator==(const GraphNode &) const = default;
     };
 
@@ -493,24 +493,35 @@ namespace Horo::Animation {
     /** @brief Reusable acyclic definition with one pose output. */
     struct GraphDefinition final {
         GraphDefinitionId id{};
-        std::vector<GraphInterfaceInput> inputs{};
-        std::vector<GraphNode> nodes{};
-        std::vector<GraphConnection> connections{};
+        std::vector<GraphInterfaceInput> inputs = std::vector<GraphInterfaceInput>(std::size_t{0});
+        std::vector<GraphNode> nodes = std::vector<GraphNode>(std::size_t{0});
+        std::vector<GraphConnection> connections = std::vector<GraphConnection>(std::size_t{0});
         bool operator==(const GraphDefinition &) const = default;
     };
 
     /** @brief Complete detached schema-5 candidate retaining pose/state policies
      * and adding typed blend spaces and sync groups. */
     struct AnimationGraphData final {
+        /** @brief Creates detached fields; checked-library bookkeeping may throw std::bad_alloc. */
+        AnimationGraphData() = default;
+        /** @brief Copies detached fields. @param other Value to copy. @throws std::bad_alloc If copying cannot allocate. */
+        AnimationGraphData(const AnimationGraphData &other) = default;
+        /** @brief Copies fields. @param other Value to copy. @return This value. @throws std::bad_alloc If copying cannot allocate. */
+        AnimationGraphData &operator=(const AnimationGraphData &other) = default;
+        /** @brief Prepares empty buffers before transferring ownership. @param other Source whose buffers become empty.
+         * @throws std::bad_alloc Leaving the source unchanged when buffer bookkeeping cannot allocate. */
+        AnimationGraphData(AnimationGraphData &&other);
+        /** @brief Replaces buffers without allocation. @param other Source to consume. @return This value. */
+        AnimationGraphData &operator=(AnimationGraphData &&other) noexcept = default;
         std::uint32_t schemaVersion{CurrentAnimationGraphSchemaVersion};
         AnimationGraphContractVersion contractVersion{CurrentAnimationGraphContractVersion};
         AnimationGraphId id{};
         SkeletonId skeleton{};
         GraphDefinitionId entry{};
-        std::vector<GraphParameter> parameters{};
-        std::vector<GraphDefinition> definitions{};
-        std::vector<GraphActionSlot> actionSlots{};
-        std::vector<GraphActionDefinition> actions{};
+        std::vector<GraphParameter> parameters = std::vector<GraphParameter>(std::size_t{0});
+        std::vector<GraphDefinition> definitions = std::vector<GraphDefinition>(std::size_t{0});
+        std::vector<GraphActionSlot> actionSlots = std::vector<GraphActionSlot>(std::size_t{0});
+        std::vector<GraphActionDefinition> actions = std::vector<GraphActionDefinition>(std::size_t{0});
         bool operator==(const AnimationGraphData &) const = default;
     };
 
@@ -610,23 +621,34 @@ namespace Horo::Animation {
     struct GraphInstruction final {
         GraphSourceLocation source{};
         GraphNodePayload payload{};
-        std::vector<GraphPin> pins{};
-        std::vector<GraphCompiledInput> inputs{};
+        std::vector<GraphPin> pins = std::vector<GraphPin>(std::size_t{0});
+        std::vector<GraphCompiledInput> inputs = std::vector<GraphCompiledInput>(std::size_t{0});
         std::optional<std::uint32_t> parameterIndex{};
         std::optional<std::uint32_t> actionSlot{};
         std::array<std::uint32_t, 2> blendParameters{};
         std::optional<std::uint32_t> definitionIndex{};
-        std::vector<std::uint32_t> stateDefinitions{}; /**< Definition indexes for state call edges; clips
-                                                          are excluded. */
+        std::vector<std::uint32_t> stateDefinitions = std::vector<std::uint32_t>(std::size_t{0}); /**< Definition indexes for state call
+                                                          edges; clips are excluded. */
         bool operator==(const GraphInstruction &) const = default;
     };
 
     /** @brief Canonical subprogram; all data dependencies precede their consumer.
      */
     struct GraphCompiledDefinition final {
+        /** @brief Creates detached fields; checked-library bookkeeping may throw std::bad_alloc. */
+        GraphCompiledDefinition() = default;
+        /** @brief Copies detached fields. @param other Value to copy. @throws std::bad_alloc If copying cannot allocate. */
+        GraphCompiledDefinition(const GraphCompiledDefinition &other) = default;
+        /** @brief Copies fields. @param other Value to copy. @return This value. @throws std::bad_alloc If copying cannot allocate. */
+        GraphCompiledDefinition &operator=(const GraphCompiledDefinition &other) = default;
+        /** @brief Prepares empty buffers before transferring ownership. @param other Source whose buffers become empty.
+         * @throws std::bad_alloc Leaving the source unchanged when buffer bookkeeping cannot allocate. */
+        GraphCompiledDefinition(GraphCompiledDefinition &&other);
+        /** @brief Replaces buffers without allocation. @param other Source to consume. @return This value. */
+        GraphCompiledDefinition &operator=(GraphCompiledDefinition &&other) noexcept = default;
         GraphDefinitionId id{};
-        std::vector<GraphInterfaceInput> inputs{};
-        std::vector<GraphInstruction> instructions{};
+        std::vector<GraphInterfaceInput> inputs = std::vector<GraphInterfaceInput>(std::size_t{0});
+        std::vector<GraphInstruction> instructions = std::vector<GraphInstruction>(std::size_t{0});
         std::uint32_t outputInstruction{};
         std::uint32_t callDepth{};
         std::uint64_t evaluationInstructions{}; /**< Counts repeated subgraph calls,
@@ -673,10 +695,21 @@ namespace Horo::Animation {
 
     /** @brief One exact immutable clip/player member admitted by the compiler. */
     struct GraphBlendSampleBinding final {
+        /** @brief Creates detached fields; checked-library bookkeeping may throw std::bad_alloc. */
+        GraphBlendSampleBinding() = default;
+        /** @brief Copies detached fields. @param other Value to copy. @throws std::bad_alloc If copying cannot allocate. */
+        GraphBlendSampleBinding(const GraphBlendSampleBinding &other) = default;
+        /** @brief Copies fields. @param other Value to copy. @return This value. @throws std::bad_alloc If copying cannot allocate. */
+        GraphBlendSampleBinding &operator=(const GraphBlendSampleBinding &other) = default;
+        /** @brief Prepares empty buffers before transferring ownership. @param other Source whose buffers become empty.
+         * @throws std::bad_alloc Leaving the source unchanged when buffer bookkeeping cannot allocate. */
+        GraphBlendSampleBinding(GraphBlendSampleBinding &&other);
+        /** @brief Replaces buffers without allocation. @param other Source to consume. @return This value. */
+        GraphBlendSampleBinding &operator=(GraphBlendSampleBinding &&other) noexcept = default;
         std::uint32_t player{};
         std::uint32_t clip{};
         std::uint32_t member{};
-        std::vector<std::uint8_t> coverage{};
+        std::vector<std::uint8_t> coverage = std::vector<std::uint8_t>(std::size_t{0});
         bool operator==(const GraphBlendSampleBinding &) const = default;
     };
 
@@ -685,12 +718,23 @@ namespace Horo::Animation {
      * real writer; inline state clips use their exact clip binding/player access.
      */
     struct GraphInstructionOccurrence final {
+        /** @brief Creates detached fields; checked-library bookkeeping may throw std::bad_alloc. */
+        GraphInstructionOccurrence() = default;
+        /** @brief Copies detached fields. @param other Value to copy. @throws std::bad_alloc If copying cannot allocate. */
+        GraphInstructionOccurrence(const GraphInstructionOccurrence &other) = default;
+        /** @brief Copies fields. @param other Value to copy. @return This value. @throws std::bad_alloc If copying cannot allocate. */
+        GraphInstructionOccurrence &operator=(const GraphInstructionOccurrence &other) = default;
+        /** @brief Prepares empty buffers before transferring ownership. @param other Source whose buffers become empty.
+         * @throws std::bad_alloc Leaving the source unchanged when buffer bookkeeping cannot allocate. */
+        GraphInstructionOccurrence(GraphInstructionOccurrence &&other);
+        /** @brief Replaces buffers without allocation. @param other Source to consume. @return This value. */
+        GraphInstructionOccurrence &operator=(GraphInstructionOccurrence &&other) noexcept = default;
         GraphSourceLocation source{};
-        std::vector<GraphSourceLocation> callPath{}; /**< Root-to-leaf stable call nodes; repeated calls remain
-                                                        distinct. */
+        std::vector<GraphSourceLocation> callPath = std::vector<GraphSourceLocation>(std::size_t{0}); /**< Root-to-leaf stable call nodes;
+                                                        repeated calls remain distinct. */
         std::uint32_t definitionIndex{};
         std::uint32_t instructionIndex{};
-        std::vector<GraphOccurrenceInput> inputs{};
+        std::vector<GraphOccurrenceInput> inputs = std::vector<GraphOccurrenceInput>(std::size_t{0});
         GraphWorkingSlot output{};
         std::uint32_t outputProducer{}; /**< Exact Clip/Blend/Parameter writer; self
                                            for writes, earlier for aliases. */
@@ -700,12 +744,12 @@ namespace Horo::Animation {
         std::optional<std::uint32_t> actionSlot{};
         std::optional<std::uint32_t> stateMachine{};
         GraphOccurrencePhase phase{GraphOccurrencePhase::Evaluate};
-        std::vector<GraphStateGuard> guards{};
-        std::vector<float> jointMask{};           /**< Complete dense blend mask, bound to exact
-                                                     skeleton order. */
-        std::vector<std::uint8_t> clipCoverage{}; /**< Complete dense authored-track
+        std::vector<GraphStateGuard> guards = std::vector<GraphStateGuard>(std::size_t{0});
+        std::vector<float> jointMask = std::vector<float>(std::size_t{0});                  /**< Complete dense blend mask, bound to exact
+                                                            skeleton order. */
+        std::vector<std::uint8_t> clipCoverage = std::vector<std::uint8_t>(std::size_t{0}); /**< Complete dense authored-track
                                                      coverage for a clip writer. */
-        std::vector<GraphBlendSampleBinding> blendSamples{};
+        std::vector<GraphBlendSampleBinding> blendSamples = std::vector<GraphBlendSampleBinding>(std::size_t{0});
         std::optional<GraphWorkingSlot> blendScratch{};
         std::optional<std::uint32_t> blendTree{};
         std::array<std::uint32_t, 2> blendParameters{};
@@ -726,12 +770,23 @@ namespace Horo::Animation {
     /** @brief Compiler-owned complete machine occurrence; no runtime pointer or
      * generation is retained. */
     struct GraphStateMachineBinding final {
+        /** @brief Creates detached fields; checked-library bookkeeping may throw std::bad_alloc. */
+        GraphStateMachineBinding() = default;
+        /** @brief Copies detached fields. @param other Value to copy. @throws std::bad_alloc If copying cannot allocate. */
+        GraphStateMachineBinding(const GraphStateMachineBinding &other) = default;
+        /** @brief Copies fields. @param other Value to copy. @return This value. @throws std::bad_alloc If copying cannot allocate. */
+        GraphStateMachineBinding &operator=(const GraphStateMachineBinding &other) = default;
+        /** @brief Prepares empty buffers before transferring ownership. @param other Source whose buffers become empty.
+         * @throws std::bad_alloc Leaving the source unchanged when buffer bookkeeping cannot allocate. */
+        GraphStateMachineBinding(GraphStateMachineBinding &&other);
+        /** @brief Replaces buffers without allocation. @param other Source to consume. @return This value. */
+        GraphStateMachineBinding &operator=(GraphStateMachineBinding &&other) noexcept = default;
         std::uint32_t beginOccurrence{};
         std::uint32_t endOccurrence{};
         std::uint32_t conditionOffset{};
         std::array<GraphWorkingSlot, 4> poses{}; /**< Committed/candidate composed and committed/candidate frozen
                                                     source buffers. */
-        std::vector<GraphStateBranch> branches{};
+        std::vector<GraphStateBranch> branches = std::vector<GraphStateBranch>(std::size_t{0});
         bool operator==(const GraphStateMachineBinding &) const = default;
     };
 
@@ -773,14 +828,25 @@ namespace Horo::Animation {
      *          must bound every table before allocation and encode fields explicitly.
      */
     struct AnimationGraphCookedData final {
+        /** @brief Creates detached fields; checked-library bookkeeping may throw std::bad_alloc. */
+        AnimationGraphCookedData() = default;
+        /** @brief Copies detached fields. @param other Value to copy. @throws std::bad_alloc If copying cannot allocate. */
+        AnimationGraphCookedData(const AnimationGraphCookedData &other) = default;
+        /** @brief Copies fields. @param other Value to copy. @return This value. @throws std::bad_alloc If copying cannot allocate. */
+        AnimationGraphCookedData &operator=(const AnimationGraphCookedData &other) = default;
+        /** @brief Prepares empty buffers before transferring ownership. @param other Source whose buffers become empty.
+         * @throws std::bad_alloc Leaving the source unchanged when buffer bookkeeping cannot allocate. */
+        AnimationGraphCookedData(AnimationGraphCookedData &&other);
+        /** @brief Replaces buffers without allocation. @param other Source to consume. @return This value. */
+        AnimationGraphCookedData &operator=(AnimationGraphCookedData &&other) noexcept = default;
         AnimationGraphContractVersion contractVersion{CurrentAnimationGraphContractVersion};
         AnimationGraphId id{};
         SkeletonId skeleton{};
         GraphDefinitionId entry{};
-        std::vector<GraphParameter> parameters;
-        std::vector<GraphActionSlot> actionSlots;
-        std::vector<GraphActionDefinition> actions;
-        std::vector<GraphCompiledDefinition> definitions;
+        std::vector<GraphParameter> parameters = std::vector<GraphParameter>(std::size_t{0});
+        std::vector<GraphActionSlot> actionSlots = std::vector<GraphActionSlot>(std::size_t{0});
+        std::vector<GraphActionDefinition> actions = std::vector<GraphActionDefinition>(std::size_t{0});
+        std::vector<GraphCompiledDefinition> definitions = std::vector<GraphCompiledDefinition>(std::size_t{0});
     };
 
     namespace Detail {
@@ -791,6 +857,15 @@ namespace Horo::Animation {
      * own mutable state. */
     class AnimationGraphProgram final {
     public:
+        /** @brief Copies detached fields. @param other Value to copy. @throws std::bad_alloc If copying cannot allocate. */
+        AnimationGraphProgram(const AnimationGraphProgram &other) = default;
+        /** @brief Copies fields. @param other Value to copy. @return This value. @throws std::bad_alloc If copying cannot allocate. */
+        AnimationGraphProgram &operator=(const AnimationGraphProgram &other) = default;
+        /** @brief Prepares empty buffers before transferring ownership. @param other Source whose buffers become empty.
+         * @throws std::bad_alloc Leaving the source unchanged when buffer bookkeeping cannot allocate. */
+        AnimationGraphProgram(AnimationGraphProgram &&other);
+        /** @brief Replaces buffers without allocation. @param other Source to consume. @return This value. */
+        AnimationGraphProgram &operator=(AnimationGraphProgram &&other) noexcept = default;
         /** @brief Compiles a detached candidate without publication or I/O.
          * @param data Current schema-6 candidate; migrate supported earlier source
          * contracts explicitly first.

@@ -65,11 +65,26 @@ namespace Horo::Animation::GraphCompileDetail {
     /** @brief Complete detached immutable dependency/access plan before program
      * publication. */
     struct BoundPlan final {
+        /** @brief Creates detached buffers; checked-library allocation failure propagates. */
+        BoundPlan() = default;
+        BoundPlan(const BoundPlan &) = default;
+        BoundPlan &operator=(const BoundPlan &) = default;
+
+        /** @brief Prepares bookkeeping before transferring owned buffers. @param other Source owner.
+         * @throws std::bad_alloc Leaving source buffers unchanged. */
+        BoundPlan(BoundPlan &&other) : skeleton(other.skeleton), memory(other.memory) {
+            clips.swap(other.clips);
+            occurrences.swap(other.occurrences);
+            stateMachines.swap(other.stateMachines);
+        }
+
+        BoundPlan &operator=(BoundPlan &&) noexcept = default;
+
         GraphSkeletonBinding skeleton{};
-        std::vector<AnimationClipDescriptor> clips{};
+        std::vector<AnimationClipDescriptor> clips = std::vector<AnimationClipDescriptor>(std::size_t{0});
         GraphMemoryRequirements memory{};
-        std::vector<GraphInstructionOccurrence> occurrences{};
-        std::vector<GraphStateMachineBinding> stateMachines{};
+        std::vector<GraphInstructionOccurrence> occurrences = std::vector<GraphInstructionOccurrence>(std::size_t{0});
+        std::vector<GraphStateMachineBinding> stateMachines = std::vector<GraphStateMachineBinding>(std::size_t{0});
     };
 
     /** @brief Adds one existing cursor per declared action slot to either complete
@@ -90,5 +105,5 @@ namespace Horo::Animation::GraphCompileDetail {
     /** @brief Expands actual guarded clip/subgraph branches into the same
      * compiler-owned occurrence plan. */
     Result<BoundPlan> BindStateNodes(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context,
-                                     const GraphSkeletonBinding &skeleton, std::vector<AnimationClipDescriptor> clips);
+                                     const GraphSkeletonBinding &skeleton, std::vector<AnimationClipDescriptor> &&clips);
 }  // namespace Horo::Animation::GraphCompileDetail
