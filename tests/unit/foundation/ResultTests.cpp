@@ -7,6 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -37,6 +38,36 @@ namespace {
         REQUIRE((result.HasValue()));
         REQUIRE((!result.HasError()));
         REQUIRE((result.Value() == 42));
+    }
+
+    TEST_CASE("Result constructs immovable successful values in final storage", "[unit][foundation]") {
+        struct Immovable {
+            explicit Immovable(int &input) : value(input) {}
+
+            Immovable(const Immovable &) = delete;
+            Immovable(Immovable &&) = delete;
+            int &value;
+        };
+
+        int input = 42;
+        const auto result = Horo::Result<Immovable>::SuccessInPlace(input);
+        REQUIRE(result.HasValue());
+        REQUIRE(&result.Value().value == &input);
+        input = 43;
+        REQUIRE(result.Value().value == 43);
+    }
+
+    TEST_CASE("Result in-place construction propagates value constructor exceptions", "[unit][foundation]") {
+        struct Rejected {
+            explicit Rejected(int &attempts) {
+                ++attempts;
+                throw std::runtime_error("value construction failed");
+            }
+        };
+
+        int attempts{};
+        REQUIRE_THROWS_AS(Horo::Result<Rejected>::SuccessInPlace(attempts), std::runtime_error);
+        REQUIRE(attempts == 1);
     }
 
     TEST_CASE("Assertion helpers follow the build policy", "[unit][foundation]") {

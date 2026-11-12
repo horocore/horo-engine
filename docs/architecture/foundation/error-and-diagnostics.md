@@ -88,6 +88,21 @@ Use `Result` for:
 Do not use `Result` for ordinary query absence when `std::optional<T>` fully
 describes the outcome.
 
+`Result<T>::SuccessInPlace(args...)` constructs `T` directly in the result's
+value storage. Constructor exceptions propagate to the caller before a result
+is published. It supports immovable values and avoids intermediate value moves;
+it does not change the existing `Success(T)`, result copy/move, or error contracts.
+Callers must still respect the exception contract of their chosen constructor.
+
+The animation source writer uses this additive factory to construct its final
+bounded string from the completed private buffer. This is a cold serialization
+copy: checked Windows STL string moves may allocate inside a `noexcept` move
+constructor and terminate during allocation failure. Direct construction keeps
+that final allocation fallible. Existing callers need no migration; the writer
+and serializer return the result as a prvalue, preserving C++17 copy elision.
+Foundation regressions cover immovable values and constructor exceptions;
+animation allocation regressions cover the actual string publication boundary.
+
 ## Error Model
 
 ```cpp

@@ -15,6 +15,16 @@ namespace Horo {
             return Result(std::move(value));
         }
 
+        /**
+         * @brief Constructs the successful value directly in its result storage.
+         * @param args Arguments forwarded to the value constructor.
+         * @return A successful result owning the constructed value, without intermediate value moves.
+         * @throws Any exception raised by the value constructor.
+         */
+        template <typename... Args> [[nodiscard]] static Result SuccessInPlace(Args &&...args) {
+            return Result(std::in_place_type<T>, std::forward<Args>(args)...);
+        }
+
         [[nodiscard]] static Result Failure(Error error) {
             return Result(std::move(error));
         }
@@ -68,6 +78,9 @@ namespace Horo {
         }
 
     private:
+        template <typename... Args>
+        explicit Result(std::in_place_type_t<T>, Args &&...args) : m_value(std::in_place_type<T>, std::forward<Args>(args)...) {}
+
         explicit Result(T value) : m_value(std::move(value)) {}
 
         explicit Result(Error error) : m_value(std::move(error)) {}
