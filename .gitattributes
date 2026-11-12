@@ -3,7 +3,8 @@
 # The reviewed native patch manifest requires identical bytes on every checkout.
 /cmake/patches/gns/horo-gns-selected-root-v1.patch -text
 # Captured shader evidence is authenticated by its original byte digest.
-/tests/fixtures/shaders/vfx_locked/** -text
+/tests/fixtures/shaders/*_locked/** -text
+/tests/fixtures/shaders/register_raster_*/** -text
 # Produced color packages authenticate the original manifest and reference bytes.
 /tests/fixtures/renderer/color/creative-look-produced/** -text
 # Prefab reference revisions and canonical artifacts authenticate exact source bytes.
