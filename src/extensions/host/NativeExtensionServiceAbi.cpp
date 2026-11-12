@@ -91,14 +91,14 @@ namespace Horo::Extensions {
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             *result = {.structSize = sizeof(*result), .failureCode = HORO_EXTENSION_SERVICE_RETIRED};
             const auto &client = *static_cast<NativeServiceImportClient *>(opaque);
-            const auto nativeModule = client.module.lock();
+            const auto nativeModule = client.moduleState.lock();
             if (!nativeModule || !nativeModule->committed.load(std::memory_order_acquire))
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             try {
                 const auto provider = client.provider.lock();
                 if (!provider)
                     return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
-                auto value = InvokeSelectedNativeServiceImport(*nativeModule, client.import, *provider,
+                auto value = InvokeSelectedNativeServiceImport(*nativeModule, client.resolvedImport, *provider,
                                                                {View(request->method),
                                                                 {request->arguments, request->argumentCount},
                                                                 request->cancellation},

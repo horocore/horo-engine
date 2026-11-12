@@ -134,7 +134,7 @@ namespace Horo::Application::Internal {
             return ExecuteCapturedModuleProgram(*impl_->moduleServices, impl_->moduleProgram, impl_->project.Lease(),
                                                 impl_->operation.Lease(), context, options.refreshReference);
         }
-        auto result = Extensions::ExecuteHeadlessLuaExtensionService(host, options.package, options.module, options.import,
+        auto result = Extensions::ExecuteHeadlessLuaExtensionService(host, options.package, options.moduleId, options.importId,
                                                                      ScriptPolicy(options, *impl_->packet, impl_->project),
                                                                      impl_->packet->source, context.Cancellation());
         if (result.HasError())

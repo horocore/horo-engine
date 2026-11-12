@@ -9,7 +9,7 @@
 
 namespace Horo::Extensions {
     struct ModuleScriptNativeEvidence final {
-        ResolvedExtensionServiceImport import;
+        ResolvedExtensionServiceImport resolvedImport;
         ExtensionCapabilityHandle consumer;
         ExtensionCapabilityHandle provider;
         BackendServiceCodeLease code;

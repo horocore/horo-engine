@@ -133,7 +133,7 @@ namespace Horo::Extensions {
                     return script;
             }
             for (const auto &client : nativeModule->clients) {
-                auto provider = FindNativeService(*nativeModule->host.lock(), client->import);
+                auto provider = FindNativeService(*nativeModule->host.lock(), client->resolvedImport);
                 if (provider.HasError())
                     return Result<void>::Failure(provider.ErrorValue());
                 client->provider = provider.Value();

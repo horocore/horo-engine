@@ -62,14 +62,14 @@ namespace Horo::Application::Internal {
 
         Result<void> Identities(ExtensionScriptOptions &options, const Cli::CliCommandRequest &request) {
             auto package = String(request, "extension-id");
-            auto module = String(request, "module");
-            auto import = options.moduleOperation ? Result<std::string>::Success({}) : String(request, "import");
+            auto moduleId = String(request, "module");
+            auto importId = options.moduleOperation ? Result<std::string>::Success({}) : String(request, "import");
             auto publisher = String(request, "publisher");
-            if (package.HasError() || module.HasError() || import.HasError() || publisher.HasError())
+            if (package.HasError() || moduleId.HasError() || importId.HasError() || publisher.HasError())
                 return Invalid<void>();
             options.package = std::move(package).Value();
-            options.module = std::move(module).Value();
-            options.import = std::move(import).Value();
+            options.moduleId = std::move(moduleId).Value();
+            options.importId = std::move(importId).Value();
             options.publisher = std::move(publisher).Value();
             return Result<void>::Success();
         }

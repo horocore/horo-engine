@@ -5,7 +5,8 @@
 namespace Horo::Extensions {
     ModuleScriptNativeEvidence::ModuleScriptNativeEvidence(ResolvedExtensionServiceImport resolved, ExtensionCapabilityHandle caller,
                                                            ExtensionCapabilityHandle providerGrant, BackendServiceCodeLease executable)
-        : import(std::move(resolved)), consumer(std::move(caller)), provider(std::move(providerGrant)), code(std::move(executable)) {}
+        : resolvedImport(std::move(resolved)), consumer(std::move(caller)), provider(std::move(providerGrant)),
+          code(std::move(executable)) {}
 
     ModuleScriptNativePort::ModuleScriptNativePort(std::unique_ptr<Impl> state) : impl_(std::move(state)) {}
 
@@ -30,7 +31,7 @@ namespace Horo::Extensions {
                                                  owner.ExtensionId(), owner.ModuleId(), owner.Generation());
             if (authority.HasError())
                 return Output::Failure(authority.ErrorValue());
-            auto imported = state.services->BindImport(std::move(authority).Value(), v.import);
+            auto imported = state.services->BindImport(std::move(authority).Value(), v.resolvedImport);
             if (imported.HasError())
                 return Output::Failure(imported.ErrorValue());
             return state.services->ResolveImported<NativeScalarService>(std::move(imported).Value());
