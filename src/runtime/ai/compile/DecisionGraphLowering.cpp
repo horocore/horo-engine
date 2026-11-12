@@ -156,9 +156,9 @@ namespace Horo::AI::Detail {
                 const auto id = metadata.Value().id;
                 if (auto call = LowerCall(graph, node, id, metadata.Value().source); call.HasError())
                     return call;
-                auto executable = node.control.kind == DecisionControlKind::Service ? LowerService(graph, *tree, node, id)
-                                                                                    : LowerControl(graph, *tree, node, id);
-                if (executable.HasError())
+                if (auto executable = node.control.kind == DecisionControlKind::Service ? LowerService(graph, *tree, node, id)
+                                                                                        : LowerControl(graph, *tree, node, id);
+                    executable.HasError())
                     return executable;
                 if (ProviderControl(node.control.kind))
                     graph.properties.emplace_back(id, node.properties);
@@ -233,14 +233,15 @@ namespace Horo::AI::Detail {
                            .blackboardSchema = source.blackboard,
                            .requiredBlackboardSchemaVersion = source.blackboardVersion,
                            .source = source.location};
-        auto lowered = std::visit([&](const auto &body) -> Result<void> {
+        if (auto lowered = std::visit(
+                [&](const auto &body) -> Result<void> {
             using Body = std::decay_t<decltype(body)>;
             if constexpr (std::is_same_v<Body, std::shared_ptr<const BehaviorTreeAsset>>)
                 return LowerTree(result, source, body);
             else
                 return LowerStateMachine(result, body, source.location);
         }, source.body);
-        if (lowered.HasError())
+            lowered.HasError())
             return Result<LoweredDecisionGraph>::Failure(lowered.ErrorValue());
         return Result<LoweredDecisionGraph>::Success(std::move(result));
     }

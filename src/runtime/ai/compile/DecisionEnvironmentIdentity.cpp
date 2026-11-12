@@ -130,8 +130,7 @@ namespace Horo::AI::Detail {
             // Logical kernel layout is platform-sensitive; this identity is not a portable raw-object snapshot.
             writer.Unsigned(sizeof(void *), 1);
             writer.Unsigned(sizeof(BlackboardValue), 4);
-            auto schemas = WriteSchemas(writer, environment);
-            if (schemas.HasError())
+            if (auto schemas = WriteSchemas(writer, environment); schemas.HasError())
                 return Result<Sha256Digest>::Failure(schemas.ErrorValue());
             WriteSequence<DecisionNodeContract>(writer, environment.nodes->Contracts(), DecisionNodeGeneration::MaximumNodes,
                                                 WriteContract);
