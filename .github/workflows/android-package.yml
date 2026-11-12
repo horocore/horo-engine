@@ -56,14 +56,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          keytool -genkeypair -keystore "$RUNNER_TEMP/qualification.p12" -storetype PKCS12 -alias qualification -keyalg RSA -keysize 2048 -validity 2 -dname CN=HoroQualification -storepass qualification -keypass qualification
+          qualification_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+          echo "::add-mask::$qualification_password"
+          export HORO_ANDROID_STORE_PASSWORD="$qualification_password"
+          export HORO_ANDROID_KEY_PASSWORD="$qualification_password"
+          printf 'HORO_ANDROID_STORE_PASSWORD=%s\nHORO_ANDROID_KEY_PASSWORD=%s\n' "$qualification_password" "$qualification_password" >> "$GITHUB_ENV"
+          keytool -genkeypair -keystore "$RUNNER_TEMP/qualification.p12" -storetype PKCS12 -alias qualification -keyalg RSA -keysize 2048 -validity 2 -dname CN=HoroQualification -storepass:env HORO_ANDROID_STORE_PASSWORD -keypass:env HORO_ANDROID_KEY_PASSWORD
       - name: Build two isolated signed packages and compare evidence
         shell: bash
         env:
           PACKAGE_PROFILE: ${{ matrix.profile }}
           HORO_ANDROID_KEY_ALIAS: qualification
-          HORO_ANDROID_STORE_PASSWORD: qualification
-          HORO_ANDROID_KEY_PASSWORD: qualification
         run: |
           set -euo pipefail
           export HORO_ANDROID_KEYSTORE="$RUNNER_TEMP/qualification.p12"
