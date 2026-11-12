@@ -56,6 +56,8 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
+    "HoroUiStyleWorkspaceTests",
+    "HoroFoundationJobSystemTests", "HoroRuntimeSceneAssetDiscoveryTests", "HoroAssetLoadResultAllocationTests",
     "HoroFoundationJsonTests", "HoroAssetIdAllocationTests", "HoroOperationIdentityAllocationTests",
     "HoroSceneSourceTests", "HoroColorPipelineTests", "HoroColorCreativeLookPackageTests", "HoroPrefabMetricsTests",
     "HoroWorkspaceLayoutPersistenceTests", "HoroWorkspaceRecoveryPublicHeaderConsumer",
@@ -618,7 +620,7 @@ def test_animation_graph_has_windows_execution_and_sonar_consumer_closure() -> N
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     for target in ("HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer"):
         assert target in targets("HORO_CI_WINDOWS_TARGETS")
-        assert tests_cmake.index(f"add_executable({target}") < tests_cmake.index("horo_finalize_ci_suites()")
+        assert tests_cmake.index(f"add_executable({target}") < tests_cmake.index("cmake_language(DEFER CALL horo_finalize_ci_suites)")
     assert 'LABELS "unit;animation;headless;public_headers;ci-windows"' in tests_cmake
     for source in ("AnimationGraphTests.cpp", "AnimationGraphBindingTests.cpp", "AnimationGraphSourceTests.cpp"):
         assert f"unit/runtime/animation/{source}" in tests_cmake

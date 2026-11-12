@@ -5424,6 +5424,14 @@ add_executable(HoroRuntimeSavedSceneBootstrapTests
 target_compile_features(HoroRuntimeSavedSceneBootstrapTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSavedSceneBootstrapTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSavedSceneBootstrapTests PRIVATE HoroEngine::RuntimeScene)
+add_executable(HoroAssetLoadResultAllocationTests
+        unit/runtime/assets/AssetLoadResultAllocationTests.cpp
+        support/AllocationProbe.cpp
+)
+target_include_directories(HoroAssetLoadResultAllocationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroAssetLoadResultAllocationTests PRIVATE HoroEngine::Assets)
+horo_register_catch_test(HoroAssetLoadResultAllocationTests LABELS "unit;assets;headless;allocation")
+
 add_executable(HoroAssetIdAllocationTests
         unit/runtime/assets/AssetIdAllocationTests.cpp
         support/AllocationProbe.cpp
@@ -6771,7 +6779,8 @@ target_compile_features(HoroInspectorBehaviorPublicHeaderConsumer PRIVATE cxx_st
 target_link_libraries(HoroInspectorBehaviorPublicHeaderConsumer PRIVATE HoroEngine::EditorModel)
 target_sources(HoroInspectorBehaviorBindingTests PRIVATE $<TARGET_OBJECTS:HoroInspectorBehaviorPublicHeaderConsumer>)
 
-horo_finalize_ci_suites()
+# Direct CTest contracts below also need the finalized CI and coverage memberships.
+cmake_language(DEFER CALL horo_finalize_ci_suites)
 
 add_library(HoroXRProjectSettingsConsumer OBJECT public_headers/XRProjectSettingsConsumer.cpp)
 target_link_libraries(HoroXRProjectSettingsConsumer PRIVATE HoroEngine::XRRuntime)
