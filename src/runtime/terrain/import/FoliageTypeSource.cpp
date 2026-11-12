@@ -179,8 +179,7 @@ namespace Horo::Terrain {
                 return Result<void>::Failure(MakeError(TerrainSourceErrors::Cancelled));
             if (!source.asset.IsValid())
                 return Result<void>::Failure(MakeError(TerrainSourceErrors::InvalidBytes));
-            auto definition = FoliageTypeDefinition::Create(source.definition, configuration, capabilities);
-            if (definition.HasError())
+            if (auto definition = FoliageTypeDefinition::Create(source.definition, configuration, capabilities); definition.HasError())
                 return Result<void>::Failure(definition.ErrorValue());
             return Result<void>::Success();
         }
