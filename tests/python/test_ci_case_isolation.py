@@ -291,7 +291,11 @@ horo_ci_catch_properties({target})
     namespace = Path(runner_temp.name) / "hci" / hashlib.sha256(identity.encode()).hexdigest()[:16]
     assert (namespace / "identity.txt").read_text(encoding="utf-8") == identity
     properties = {item["name"]: item["value"] for item in manifest(build)["tests"][0]["properties"]}
-    assert Path(properties["WORKING_DIRECTORY"]) == namespace / "work"
+    # CMake resolves the runtime root to its long Win32 spelling; Python's
+    # temporary root may retain an 8.3 parent such as RUNNER~1. Require the
+    # same directory, then exercise the actual CTest environment below so
+    # the classic-I/O path budget is checked on the spelling used at runtime.
+    assert Path(properties["WORKING_DIRECTORY"]).samefile(namespace / "work")
     run("cmake", "--build", str(build), "--parallel", "1")
     run("ctest", "--test-dir", str(build), "--output-on-failure")
 
