@@ -246,9 +246,9 @@ namespace Horo::Editor {
                 defaults.push_back(*binding);
             actions.push_back({Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
                                Input::InputContextId{kEditorWorkspaceInputContext}, false, defaults});
-            for (const auto &override : profile.overrides)
-                if (override.action.Value() == entry.command.id.value)
-                    defaults = override.bindings;
+            for (const auto &bindingOverride : profile.overrides)
+                if (bindingOverride.action.Value() == entry.command.id.value)
+                    defaults = bindingOverride.bindings;
             commands_.push_back({entry.command.id.value, std::move(defaults)});
         }
         commandBindingsValid_ = Input::ValidateBindingProfile(EditorKeymapActions(profile, actions), profile).IsValid();

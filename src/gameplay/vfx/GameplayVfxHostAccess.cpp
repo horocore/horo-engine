@@ -199,11 +199,11 @@ namespace Horo::Gameplay::Detail {
         moduleState->owner = scene->owner;
         auto client = std::make_shared<GameplayVfxClientState>();
         client->scene = scene;
-        client->module = moduleState;
+        client->moduleState = moduleState;
         client->lifetime = std::make_shared<GameplayVfxScopeLifetime>();
         auto producer = std::make_shared<GameplayVfxProducerState>();
         producer->scene = scene;
-        producer->module = moduleState;
+        producer->moduleState = moduleState;
         std::shared_ptr<const GameplayVfxContext> context{new GameplayVfxContext{std::move(client)}};
         std::shared_ptr<const GameplayVfxCommittedProducer> committed{new GameplayVfxCommittedProducer{std::move(producer)}};
         return {std::move(moduleState), std::move(context), std::move(committed)};
@@ -327,14 +327,14 @@ namespace Horo::Gameplay::Detail {
 
     /** @copydoc GameplayVfxHostAccess::RetireEntityClient */
     void GameplayVfxHostAccess::RetireEntityClient(const std::shared_ptr<const GameplayVfxContext> &client) noexcept {
-        if (!client || client->state_->module->owner != std::this_thread::get_id() || !client->state_->entity.IsValid())
+        if (!client || client->state_->moduleState->owner != std::this_thread::get_id() || !client->state_->entity.IsValid())
             return;
         client->state_->retired = true;
         client->state_->callback = false;
     }
 
     void GameplayVfxHostAccess::RevokeClient(const std::shared_ptr<const GameplayVfxContext> &client) noexcept {
-        if (client && client->state_->module->owner == std::this_thread::get_id())
+        if (client && client->state_->moduleState->owner == std::this_thread::get_id())
             client->state_->lifetime->revoked = true;
     }
 
@@ -351,7 +351,7 @@ namespace Horo::Gameplay::Detail {
     }
 
     void GameplayVfxHostAccess::LeaveCallback(const std::shared_ptr<const GameplayVfxContext> &client) noexcept {
-        if (client && client->state_->module->owner == std::this_thread::get_id())
+        if (client && client->state_->moduleState->owner == std::this_thread::get_id())
             client->state_->callback = false;
     }
 

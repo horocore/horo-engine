@@ -3374,13 +3374,13 @@ namespace Horo::Editor {
     }
 
     static const Render::RenderBackendModuleInfo *SelectInteractiveBackend(EditorGuiOptions &options) {
-        const auto *module = ResolveCompiledBackendModuleInfo(options.rendererBackend);
-        if (!module || !module->supportsInteractivePresentation) {
+        const auto *backendModule = ResolveCompiledBackendModuleInfo(options.rendererBackend);
+        if (!backendModule || !backendModule->supportsInteractivePresentation) {
             LOG_CRITICAL("editor.renderer", "Requested renderer component '%s' is unavailable.", options.rendererBackend.c_str());
             return nullptr;
         }
-        options.rendererBackend = module->id.Value();
-        return module;
+        options.rendererBackend = backendModule->id.Value();
+        return backendModule;
     }
 
     /** @brief Validates startup inputs and composes the editor's installed modules. */
