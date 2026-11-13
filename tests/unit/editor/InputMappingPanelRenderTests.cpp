@@ -188,7 +188,14 @@ namespace {
         fixture.Draw(900);
         REQUIRE_FALSE(fixture.gui.input.IsContextActive(fixture.workspace));
         fixture.collector.BeginFrame(2);
-        fixture.collector.SetKey(Input::Key::D, true);
+        bool analog{};
+        SECTION("Keyboard replacement") {
+            fixture.collector.SetKey(Input::Key::D, true);
+        }
+        SECTION("Negative analog gesture preserves negative action direction") {
+            analog = true;
+            REQUIRE(fixture.collector.SetGamepadAxis(fixture.pad, Input::GamepadAxis::LeftX, -1.0F));
+        }
         fixture.gui.input.BeginFrame(fixture.collector.Commit());
         fixture.Draw(900);
         const auto paths = Input::ResolveBindingProfilePaths({}, fixture.home.directory.Path());
@@ -198,11 +205,18 @@ namespace {
         REQUIRE(saved.Value().overrides.size() == 1);
         const auto &updated = saved.Value().overrides.front().bindings;
         REQUIRE(updated.size() == 2);
-        CHECK(updated[0].key == Input::Key::D);
-        CHECK(updated[0].scale == -1.0F);
+        CHECK(updated[0].kind == (analog ? Input::BindingControlKind::GamepadAxis : Input::BindingControlKind::Key));
+        if (!analog)
+            CHECK(updated[0].key == Input::Key::D);
+        CHECK(updated[0].scale == (analog ? 1.0F : -1.0F));
         CHECK(updated[0].component == 0);
         CHECK(updated[1] == bindings[1]);
         CHECK(fixture.gui.input.Profile().overrides == saved.Value().overrides);
+        fixture.collector.BeginFrame(3);
+        fixture.gui.input.BeginFrame(fixture.collector.Commit());
+        fixture.collector.BeginFrame(4);
+        fixture.gui.input.BeginFrame(fixture.collector.Commit());
+        CHECK(fixture.gui.input.ReadAction(fixture.workspace, action).x == -1.0F);
     }
 
     TEST_CASE("Hidden Input Mapping releases its capture without retiring another modal owner", "[editor][input][gui]") {

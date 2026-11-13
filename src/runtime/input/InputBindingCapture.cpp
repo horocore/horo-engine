@@ -27,6 +27,11 @@ namespace Horo::Input {
             return std::nullopt;
         }
 
+        /** @brief Orients an analog capture gesture toward a positive output; Digital controls remain boolean. */
+        float CaptureScale(const float value, const ActionValueType valueType) noexcept {
+            return valueType != ActionValueType::Digital && value < 0.0F ? -1.0F : 1.0F;
+        }
+
         /** @brief Selects canonical controls before raw fallback without using adapter display labels as identity. */
         std::optional<InputBinding> GamepadBinding(const GamepadState &gamepad, GamepadState &baseline, const ActionValueType valueType) {
             if (const auto button = PressedButton(gamepad.buttons))
@@ -36,13 +41,13 @@ namespace Horo::Input {
             if (const auto axis = MovedAxis(gamepad.axes, baseline.axes))
                 return InputBinding{.kind = BindingControlKind::GamepadAxis,
                                     .gamepadAxis = static_cast<GamepadAxis>(*axis),
-                                    .scale = valueType != ActionValueType::Digital && gamepad.axes[*axis] < 0.0F ? -1.0F : 1.0F,
+                                    .scale = CaptureScale(gamepad.axes[*axis], valueType),
                                     .deadzoneKind = DeadzoneKind::Axial,
                                     .deadzone = 0.15F};
             if (const auto axis = MovedAxis(gamepad.rawAxes, baseline.rawAxes))
                 return InputBinding{.kind = BindingControlKind::RawGamepadAxis,
                                     .rawControl = static_cast<std::uint16_t>(*axis),
-                                    .scale = valueType != ActionValueType::Digital && gamepad.rawAxes[*axis] < 0.0F ? -1.0F : 1.0F,
+                                    .scale = CaptureScale(gamepad.rawAxes[*axis], valueType),
                                     .deadzoneKind = DeadzoneKind::Axial,
                                     .deadzone = 0.15F};
             return std::nullopt;
@@ -61,9 +66,13 @@ namespace Horo::Input {
                                     .pointerButton = static_cast<PointerButton>(*button),
                                     .requiredModifiers = snapshot.modifiers};
             if (snapshot.pointer.wheelX != 0.0F)
-                return InputBinding{.kind = BindingControlKind::PointerWheelX, .requiredModifiers = snapshot.modifiers};
+                return InputBinding{.kind = BindingControlKind::PointerWheelX,
+                                    .requiredModifiers = snapshot.modifiers,
+                                    .scale = CaptureScale(snapshot.pointer.wheelX, valueType)};
             if (snapshot.pointer.wheelY != 0.0F)
-                return InputBinding{.kind = BindingControlKind::PointerWheelY, .requiredModifiers = snapshot.modifiers};
+                return InputBinding{.kind = BindingControlKind::PointerWheelY,
+                                    .requiredModifiers = snapshot.modifiers,
+                                    .scale = CaptureScale(snapshot.pointer.wheelY, valueType)};
             for (const auto &pad : snapshot.gamepads) {
                 auto &baseline = *std::ranges::find(baselines, pad.id, &GamepadState::id);
                 if (const auto binding = GamepadBinding(pad, baseline, valueType))

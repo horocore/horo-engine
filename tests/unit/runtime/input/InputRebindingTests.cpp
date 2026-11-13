@@ -3,6 +3,7 @@
 #include "support/OwnedTestDirectory.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <thread>
 
 namespace {
@@ -135,6 +136,38 @@ namespace {
         REQUIRE(result.binding);
         const ModifierState expected = gamepad ? ModifierState{} : ModifierState{.control = true, .shift = true};
         CHECK(result.binding->requiredModifiers == expected);
+    }
+
+    TEST_CASE("Negative axis and wheel capture orientation follows the action value shape", "[input][rebinding]") {
+        CaptureFixture fixture;
+        const auto shape = GENERATE(ActionValueType::Digital, ActionValueType::Axis1D, ActionValueType::Axis2D);
+        REQUIRE(
+            fixture.input.Router()
+                .SetActionMap({{ActionId{"jump"}, shape, fixture.gameplayId, true, {{.kind = BindingControlKind::Key, .key = Key::Space}}}})
+                .HasValue());
+        auto capture = InputBindingCapture::Create(fixture.input.Router(), fixture.owner, ActionId{"jump"});
+        REQUIRE(capture.HasValue());
+        fixture.capture.emplace(std::move(capture).Value());
+        auto &collector = fixture.Begin();
+        SECTION("Canonical axis") {
+            REQUIRE(collector.SetGamepadAxis(fixture.pad, GamepadAxis::LeftX, -1.0F));
+        }
+        SECTION("Raw axis") {
+            // The fixture's raw trigger starts at -1; move to center, then deliberately back.
+            REQUIRE(collector.SetRawGamepadAxis(fixture.raw, 0, 0.0F));
+            REQUIRE(fixture.Poll().status == BindingCaptureStatus::Pending);
+            REQUIRE(fixture.Begin().SetRawGamepadAxis(fixture.raw, 0, -1.0F));
+        }
+        SECTION("Horizontal wheel") {
+            collector.AddPointerWheel(-1.0F, 0.0F);
+        }
+        SECTION("Vertical wheel") {
+            collector.AddPointerWheel(0.0F, -1.0F);
+        }
+        const auto result = fixture.Poll();
+        REQUIRE(result.status == BindingCaptureStatus::Captured);
+        REQUIRE(result.binding);
+        CHECK(result.binding->scale == (shape == ActionValueType::Digital ? 1.0F : -1.0F));
     }
 
     TEST_CASE("Rebinding cancels on Escape focus loss modal preemption and reused device generations", "[input][rebinding]") {

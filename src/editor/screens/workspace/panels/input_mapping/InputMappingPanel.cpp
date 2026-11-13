@@ -376,7 +376,7 @@ namespace Horo::Editor {
                 // Replacing a physical control preserves its role in a composite action.
                 const auto &previous = change.bindings[*listeningBinding_];
                 captured.component = previous.component;
-                captured.scale = previous.scale;
+                captured.scale *= previous.scale;
                 change.bindings[*listeningBinding_] = captured;
             } else {
                 change.bindings.push_back(captured);
