@@ -33,8 +33,9 @@ It was rebased with autostash onto the verified local parent
 `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`. All 48 changed/untracked paths were
 preserved: 47 retained identical content hashes; `tests/CMakeLists.txt` contains
 the new parent C11 fixture configuration plus the same two task additions.
-There is no task-specific commit, remote branch or PR yet. This is an acceptance
-audit and local implementation checkpoint, not completed delivery.
+At that initial audit there was no task-specific commit, remote branch or PR.
+The subsequent delivery checkpoint is recorded below; neither record establishes
+completed acceptance.
 
 ## Diagnostic and transaction matrix
 
@@ -83,6 +84,15 @@ The branch now includes published parent
 editor JSON reader; resolution retains the bounded SAX validation and ordinary
 DOM parse, including duplicate-key rejection. The saved source checkpoint is
 retained locally outside delivery artifacts.
+
+Two traceable commits were pushed to the normal delivery branch on 2026-11-13:
+`d87e7b8ff1a2504aaeeab473a106172b88206c15` adds nonblocking physical-lock
+admission; `fd8aff61b4800b3a9c3984d5498486ab4601e154` contains the configuration
+integration and regressions. A full quality-preflight admission attempt also
+found the physical lock busy. Consequently Sonar IDE, CLI secrets and Codacy
+have **not run** and there is no analysis report to cite. A review/CI draft may
+carry these explicit gaps under the user's 2026-11-13 delivery authorization;
+the branch must not be represented as qualified or ready to merge.
 
 Completed local checks:
 
