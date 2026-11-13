@@ -29,6 +29,14 @@ it must not be attributed to that older remote snapshot.
 
 No parent/child issue state or ADR approval state was changed by this delivery.
 
+The Runtime UI semantic extractor, change publisher and QA journal are contracts
+with executable unit coverage; the current application paint host does not yet
+compose their publication/recording path. Native bridge and QA review tooling
+therefore also require real host semantic extraction, publication and observation,
+in addition to the remaining native adapters and editor shared-control metadata.
+Paint geometry alone is not an accessibility role/focus source. No native support
+or recorded application event is inferred from the standalone journal tests.
+
 ## Native verification
 
 Each batch used its exact recorded source snapshot, native MSVC 19.44 Debug with
