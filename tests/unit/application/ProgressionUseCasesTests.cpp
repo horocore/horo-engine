@@ -294,12 +294,11 @@ TEST_CASE("Progression real Null and scripted frontend profiles preserve availab
             CHECK(unsupported.ErrorValue().code == semantics.error->code);
         }
         CHECK(mock->Calls().empty());
-        const auto checksBeforeClose = semantics.calls;
         REQUIRE(frontend.Close().HasValue());
         const auto closed = useCases.Submit(fact, 1);
         REQUIRE(closed.HasError());
         CHECK(closed.ErrorValue().code == FrontendErrors::Unavailable.code);
-        CHECK(semantics.calls == checksBeforeClose);
+        CHECK(semantics.calls == (nullProfile ? 0u : 2u));
         CHECK(mock->Calls().empty());
     }
 }
