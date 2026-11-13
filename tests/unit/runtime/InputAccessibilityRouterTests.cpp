@@ -5,6 +5,36 @@
 
 namespace Horo::Input {
     namespace {
+        /** @brief Drives a complete South-button sample while preserving normal frame-end cleanup. */
+        void SampleSouthButton(InputService &input, VirtualGamepad &pad, const FrameNumber frame, const bool down) {
+            input.Router().EndFrame();
+            input.BeginFrame(frame);
+            REQUIRE((down ? pad.Press(GamepadButton::South) : pad.Release(GamepadButton::South)));
+            static_cast<void>(input.CommitFrame());
+        }
+
+        /** @brief Builds the nearly full mapping inventory and two-binding target used to exercise atomic capacity refusal. */
+        std::vector<ActionDescriptor> CapacityActions(const ActionId &target) {
+            std::vector<ActionDescriptor> actions;
+            for (std::size_t index = 0; index < MaximumAccessibilityMappings - 1; ++index) {
+                InputBinding binding{.kind = BindingControlKind::RawGamepadButton, .rawControl = static_cast<std::uint16_t>(index % 256)};
+                const auto modifier = index / 256;
+                binding.requiredModifiers = {.control = (modifier & 1) != 0, .shift = (modifier & 2) != 0};
+                binding.accessibility.digital.toggle = true;
+                actions.push_back({ActionId{"play.capacity." + std::to_string(index)},
+                                   ActionValueType::Digital,
+                                   InputContextId{"play"},
+                                   false,
+                                   {binding}});
+            }
+            InputBinding first{.kind = BindingControlKind::Key, .key = Key::K};
+            first.accessibility.digital.toggle = true;
+            auto second = first;
+            second.key = Key::L;
+            actions.push_back({target, ActionValueType::Digital, InputContextId{"play"}, false, {first, second}});
+            return actions;
+        }
+
         struct MappingFixture final {
             InputService input;
             InputContextToken context;
@@ -366,24 +396,15 @@ namespace Horo::Input {
         static_cast<void>(input.CommitFrame());
         REQUIRE(input.Router().AssignGamepad(0, oldDevice));
         REQUIRE_FALSE(input.Router().ReadAction(context, action, 0).down);
-        input.Router().EndFrame();
-        input.BeginFrame(2);
-        REQUIRE(pad.Press(GamepadButton::South));
-        static_cast<void>(input.CommitFrame());
+        SampleSouthButton(input, pad, 2, true);
         REQUIRE(input.Router().ReadAction(context, action, 0).down);
         REQUIRE(input.Router().AssignGamepad(1, oldDevice));
         REQUIRE_FALSE(input.Router().ReadAction(context, action).released);
         REQUIRE(input.Router().ReadAction(context, action, 0).released);
         REQUIRE_FALSE(input.Router().ReadAction(context, action, 1).down);
-        input.Router().EndFrame();
-        input.BeginFrame(3);
-        REQUIRE(pad.Release(GamepadButton::South));
-        static_cast<void>(input.CommitFrame());
+        SampleSouthButton(input, pad, 3, false);
         REQUIRE_FALSE(input.Router().ReadAction(context, action, 1).down);
-        input.Router().EndFrame();
-        input.BeginFrame(4);
-        REQUIRE(pad.Press(GamepadButton::South));
-        static_cast<void>(input.CommitFrame());
+        SampleSouthButton(input, pad, 4, true);
         REQUIRE(input.Router().ReadAction(context, action, 1).down);
         input.Router().EndFrame();
         input.BeginFrame(5);
@@ -399,15 +420,9 @@ namespace Horo::Input {
         static_cast<void>(input.CommitFrame());
         REQUIRE(input.Router().AssignGamepad(1, replacement));
         REQUIRE_FALSE(input.Router().ReadAction(context, action, 1).down);
-        input.Router().EndFrame();
-        input.BeginFrame(7);
-        REQUIRE(pad.Release(GamepadButton::South));
-        static_cast<void>(input.CommitFrame());
+        SampleSouthButton(input, pad, 7, false);
         REQUIRE_FALSE(input.Router().ReadAction(context, action, 1).down);
-        input.Router().EndFrame();
-        input.BeginFrame(8);
-        REQUIRE(pad.Press(GamepadButton::South));
-        static_cast<void>(input.CommitFrame());
+        SampleSouthButton(input, pad, 8, true);
         const auto fresh = input.Router().ReadActionEvidence(context, action, 1);
         REQUIRE(fresh.value.down);
         REQUIRE(fresh.source.has_value());
@@ -417,22 +432,8 @@ namespace Horo::Input {
     TEST_CASE("Mapping capacity refusal rolls back consumed raw edges and every uncommitted candidate",
               "[input][accessibility][router][capacity]") {
         InputService input;
-        std::vector<ActionDescriptor> actions;
-        for (std::size_t index = 0; index < MaximumAccessibilityMappings - 1; ++index) {
-            InputBinding binding{.kind = BindingControlKind::RawGamepadButton, .rawControl = static_cast<std::uint16_t>(index % 256)};
-            const auto modifier = index / 256;
-            binding.requiredModifiers = {.control = (modifier & 1) != 0, .shift = (modifier & 2) != 0};
-            binding.accessibility.digital.toggle = true;
-            actions.push_back(
-                {ActionId{"play.capacity." + std::to_string(index)}, ActionValueType::Digital, InputContextId{"play"}, false, {binding}});
-        }
-        InputBinding first{.kind = BindingControlKind::Key, .key = Key::K};
-        first.accessibility.digital.toggle = true;
-        auto second = first;
-        second.key = Key::L;
         const ActionId target{"play.target"};
-        actions.push_back({target, ActionValueType::Digital, InputContextId{"play"}, false, {first, second}});
-        REQUIRE(input.Router().SetActionMap(std::move(actions)).HasValue());
+        REQUIRE(input.Router().SetActionMap(CapacityActions(target)).HasValue());
         auto old = input.Router().PushContext(InputContextId{"play"}, InputContextKind::Gameplay);
         input.BeginFrame(1);
         const auto device = input.Collector().ConnectGamepad("Capacity fixture", false, 256);

@@ -8,6 +8,23 @@
 #include <utility>
 
 namespace Horo::Input {
+    namespace {
+        /** @brief Measures the complete three-player read path, keeping test assertions outside the allocation probe. */
+        std::array<ActionEvidence, 3> ReadPlayerEvidenceWithoutAllocation(InputRouter &router, const InputContextToken &context,
+                                                                          const ActionId &action) {
+            std::array<ActionEvidence, 3> evidence;
+            Horo::Tests::AllocationProbe::Measurement allocations;
+            {
+                Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+                for (PlayerId player = 0; player < evidence.size(); ++player)
+                    evidence[player] = router.ReadActionEvidence(context, action, player);
+                allocations = probe.Snapshot();
+            }
+            CHECK(allocations.requests == 0);
+            return evidence;
+        }
+    }  // namespace
+
     TEST_CASE("Zero detection thresholds preserve neutral gyro and stick rates and their real edges",
               "[input][accessibility][gyroscope][neutral]") {
         const std::array bindings{InputBinding{.kind = BindingControlKind::GyroscopeAxis},
@@ -74,16 +91,7 @@ namespace Horo::Input {
         REQUIRE(router.AssignGamepad(0, firstId));
         REQUIRE(router.AssignGamepad(1, secondId));
         auto context = router.PushContext(play, InputContextKind::Gameplay);
-        ActionEvidence a, b, missing;
-        Horo::Tests::AllocationProbe::Measurement allocations;
-        {
-            Horo::Tests::AllocationProbe::ScopedMeasurement probe;
-            a = router.ReadActionEvidence(context, look, 0);
-            b = router.ReadActionEvidence(context, look, 1);
-            missing = router.ReadActionEvidence(context, look, 2);
-            allocations = probe.Snapshot();
-        }
-        CHECK(allocations.requests == 0);
+        const auto [a, b, missing] = ReadPlayerEvidenceWithoutAllocation(router, context, look);
         CHECK(a.value.x == 0.25F);
         CHECK(b.value.x == 0.75F);
         CHECK(missing.value.x == 0);
@@ -336,8 +344,7 @@ namespace Horo::Input {
         REQUIRE(router.ReadAction(context, action).x == 0);
     }
 
-    TEST_CASE("Inactive binding fields cannot disguise a duplicate physical control or sticky overlap",
-              "[input][accessibility][bindings][conflicts]") {
+    TEST_CASE("Inactive binding fields cannot disguise a duplicate physical control", "[input][accessibility][bindings][conflicts]") {
         const InputContextId context{"play"};
         InputRouter router;
         for (const auto &first :
@@ -362,6 +369,11 @@ namespace Horo::Input {
                         .HasError());
             REQUIRE(router.RoutingState({}).configurationRevision == revision);
         }
+    }
+
+    TEST_CASE("Axis and wheel chords preserve modifier conflict rules", "[input][accessibility][bindings][conflicts]") {
+        const InputContextId context{"play"};
+        InputRouter router;
         for (auto first : {InputBinding{.kind = BindingControlKind::GamepadAxis}, InputBinding{.kind = BindingControlKind::RawGamepadAxis},
                            InputBinding{.kind = BindingControlKind::PointerWheelX}, InputBinding{.kind = BindingControlKind::PointerWheelY},
                            GyroscopeBinding(SensorAxis::Y)}) {
@@ -384,6 +396,11 @@ namespace Horo::Input {
                                        {ActionId{"play.second"}, ActionValueType::Axis2D, context, true, {second}}})
                         .HasValue());
         }
+    }
+
+    TEST_CASE("Inactive pointer fields cannot disguise a sticky key overlap", "[input][accessibility][bindings][conflicts]") {
+        const InputContextId context{"play"};
+        InputRouter router;
         InputBinding sticky{.kind = BindingControlKind::Key, .key = Key::K, .requiredModifiers = {.control = true}};
         sticky.accessibility.stickyModifiers = true;
         InputBinding plain{.kind = BindingControlKind::Key, .key = Key::K, .pointerButton = PointerButton::Secondary};
