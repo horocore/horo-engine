@@ -9,6 +9,7 @@
 #include "editor/renderer/metal/SdlMetalPresentationPort.h"
 #include "runtime/renderer/frontend/RenderFrontendResourceAccess.h"
 #include "runtime/renderer/modules/metal/MetalResourceInstances.h"
+#include "support/VfxGpuQualification.h"
 #include "support/VfxTestSupport.h"
 
 #import <Metal/Metal.h>
@@ -19,8 +20,11 @@
 #include <catch2/catch_approx.hpp>
 #include <chrono>
 #include <cstring>
+#include <iostream>
 #include <optional>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace Horo::Render::Test {
     namespace {
@@ -104,9 +108,10 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Defines authored seed inputs shared by two real CPU simulators and the actual GPU preparation. */
-        ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}) {
+        ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}, bool variedSeed = false,
+                                        std::uint32_t count = Count) {
             auto d = Vfx::Tests::ValidParticleDescriptorData();
-            d.maximumParticles = Count;
+            d.maximumParticles = count;
             d.shape = ParticleEmitterShape::Point;
             d.spawnRate = {0, 0};
             d.initialSpeed = {0, 0};
@@ -121,6 +126,12 @@ namespace Horo::Render::Test {
             d.sortMode = ParticleSortMode::None;
             d.simulationPreference = preference;
             d.gpuReadback = readback;
+            if (variedSeed) {
+                d.shape = ParticleEmitterShape::Box;
+                d.initialSpeed = {.1, .3};
+                d.initialSize = {.2, .4};
+                d.lifetimeSeconds = {9, 10};
+            }
             return Vfx::Tests::ParticleDescriptor(d);
         }
 
@@ -141,7 +152,7 @@ namespace Horo::Render::Test {
          * or native material qualification. Native GPU program/resource evidence is exercised independently below.
          */
         ParticleCookAdmission CookAdmission(const ParticleSystemDescriptor &source) {
-            const auto profile = Value(GetParticleCookProfile(ParticleCookTier::Compact));
+            const auto profile = Value(GetParticleCookProfile(ParticleCookTier::Standard));
             const ParticleMaterialEvidence material{source.Data().material, ParticleMaterialAvailability::Available};
             auto cooked = Value(BuildParticleSystemCookPlan(source, profile, material, Vfx::Tests::ParticleErrorRegistry(),
                                                             "native-vfx-prepared-particles-fixture"));
@@ -175,12 +186,14 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Creates the genuine canonical CPU oracle; it never produces runtime GPU output. */
-        CpuParticleSimulator Cpu() {
-            return Value(CpuParticleSimulator::Create(Source(SimulationPreference::RequireCPU), {.buffer = Buffer(),
-                                                                                                 .activation = Effect(),
-                                                                                                 .effectSeed = 0x123456789abcdef0ULL,
-                                                                                                 .maximumBurstParticles = Count,
-                                                                                                 .forces = Forces}));
+        CpuParticleSimulator Cpu(std::span<const CpuParticleForceModule> forces = Forces, bool variedSeed = false,
+                                 std::uint32_t count = Count) {
+            return Value(CpuParticleSimulator::Create(Source(SimulationPreference::RequireCPU, {}, variedSeed, count),
+                                                      {.buffer = Buffer(),
+                                                       .activation = Effect(),
+                                                       .effectSeed = 0x123456789abcdef0ULL,
+                                                       .maximumBurstParticles = count,
+                                                       .forces = forces}));
         }
 
         /** @brief Projects complete CPU seed streams, without private slot layout or native pointers. */
@@ -204,7 +217,7 @@ namespace Horo::Render::Test {
         }
 
         /** @brief Requires actual selected frontend feature admission before constructing the host's immutable resolver facts. */
-        VfxResolution Resolution(const RenderFrontend &frontend) {
+        VfxResolution Resolution(const RenderFrontend &frontend, std::uint32_t count) {
             const auto &support = frontend.Capabilities().support;
             REQUIRE(support.features.Supports(RenderCapability::VfxGpuSimulation));
             REQUIRE(support.features.Supports(RenderCapability::VfxGpuDraw));
@@ -213,12 +226,12 @@ namespace Horo::Render::Test {
                 facts[i] = {static_cast<VfxCapability>(i), VfxCapabilitySupport::Unsupported};
             facts[static_cast<std::size_t>(VfxCapability::CpuSimulation)].support = VfxCapabilitySupport::Available;
             facts[static_cast<std::size_t>(VfxCapability::GpuSimulation)].support = VfxCapabilitySupport::Available;
-            const VfxResourceLimits limits{Count, 0, 0, 0, 8U * 1024U * 1024U, 10, 10};
+            const VfxResourceLimits limits{count, 0, 0, 0, 128U * 1024U * 1024U, 10, 10};
             const auto caps =
                 Value(VfxCapabilities::Create(Value(VfxCapabilityRevision::Create(support.deviceIncarnation)), facts, limits));
             // Product policy requires positive ceilings for every category. Actual capability counts stay zero and
             // unsupported above, so a policy ceiling never invents usable decals, lights or volumes.
-            const VfxResourceLimits policyLimits{Count, 1, 1, 1, 8U * 1024U * 1024U, 10, 10};
+            const VfxResourceLimits policyLimits{count, 1, 1, 1, 128U * 1024U * 1024U, 10, 10};
             const auto policy =
                 Value(VfxQualityPolicy::Create({Value(VfxQualityPolicyRevision::Create(1)), VfxQualityProfile::Standard, policyLimits, 1}));
             VfxResolutionRequest request{.hostMode = VfxHostMode::Interactive,
@@ -228,9 +241,9 @@ namespace Horo::Render::Test {
                                          .requirements = {.category = VfxEffectCategory::Particle,
                                                           .preference = SimulationPreference::RequireGPU,
                                                           .requirementClass = VfxRequirementClass::Cosmetic,
-                                                          .requestedCount = Count,
-                                                          .minimumAuthoredCount = Count,
-                                                          .bytesPerElement = 1024U * 1024U,
+                                                          .requestedCount = count,
+                                                          .minimumAuthoredCount = count,
+                                                          .bytesPerElement = (128U * 1024U * 1024U) / count,
                                                           .cpuWorkMilliseconds = 1,
                                                           .gpuWorkMilliseconds = 1,
                                                           .hasCpuKernel = true,
@@ -242,7 +255,10 @@ namespace Horo::Render::Test {
         /** @brief Owns one separate unfocused SDL/native fixture and every real frontend/world lifetime. */
         class Fixture final {
         public:
-            explicit Fixture(const std::filesystem::path &root) : family_(LoadFamily(root)), oracle_(Cpu()) {}
+            explicit Fixture(const std::filesystem::path &root, std::span<const CpuParticleForceModule> forces = Forces,
+                             bool variedSeed = false, std::uint32_t count = Count)
+                : family_(LoadFamily(root)), forces_(forces), variedSeed_(variedSeed), count_(count),
+                  oracle_(Cpu(forces, variedSeed, count)) {}
 
             ~Fixture() {
                 ReleaseGate();
@@ -288,33 +304,33 @@ namespace Horo::Render::Test {
             void Prepare(bool observe, std::chrono::nanoseconds timeout = 5s) {
                 if (observe)
                     PrepareReadback(timeout);
-                auto seed = Cpu();
-                Value(seed.Advance({.deltaSeconds = 0, .burstCount = Count, .tick = 0}));
+                auto seed = Cpu(forces_, variedSeed_, count_);
+                Value(seed.Advance({.deltaSeconds = 0, .burstCount = count_, .tick = 0}));
                 const auto view = Value(seed.Extract());
-                std::array<ParticleSimulationId, Count> ids;
-                for (std::uint32_t i = 0; i < Count; ++i)
+                std::vector<ParticleSimulationId> ids(count_);
+                for (std::uint32_t i = 0; i < count_; ++i)
                     ids[i] = Value(seed.HandleAtDenseIndex(i)).particle;
                 GpuParticleSimulatorCreateInfo info;
                 info.scene = Effect().scope;
                 info.activation = Effect();
                 info.buffer = Buffer();
                 info.effectSeed = 0x123456789abcdef0ULL;
-                info.resolution = Resolution(*frontend_);
+                info.resolution = Resolution(*frontend_, count_);
                 REQUIRE(info.resolution.domain == ResolvedSimulationDomain::GPU);
                 info.initialization = GpuParticleInitialization::PreparedParticles;
                 info.requiredFeatures = GpuParticleRequiredFeature::None;
                 info.initial = {SeedView(view), ids};
-                info.forces = Forces;
-                info.layoutLimits = {1024U * 1024U, frontend_->Capabilities().support.limits.maxBufferBytes};
-                info.maximumRetainedBytes = 6U * 1024U * 1024U;
+                info.forces = forces_;
+                info.layoutLimits = {128U * 1024U * 1024U, frontend_->Capabilities().support.limits.maxBufferBytes};
+                info.maximumRetainedBytes = 64U * 1024U * 1024U;
                 info.maximumPendingSteps = 2;
-                info.maximumSteps = 16;
+                info.maximumSteps = 128;
                 info.maximumDeltaSeconds = Delta;
                 VfxGpuReadbackDescriptor policy;
                 if (observe)
-                    policy = {true, 1,     VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
-                              1,    Count, Count * VfxGpuObservationWords::Bytes,     1};
-                const auto source = Source(SimulationPreference::RequireGPU, policy);
+                    policy = {true, 1,      VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
+                              1,    count_, count_ * VfxGpuObservationWords::Bytes,    1};
+                const auto source = Source(SimulationPreference::RequireGPU, policy, variedSeed_, count_);
                 CHECK(source.Data().gpuReadback.enabled == observe);
                 INFO("Cold GPU logical admission: actual selected domain, finite PreparedParticles state, shared policy and payload "
                      "ledger.");
@@ -327,8 +343,9 @@ namespace Horo::Render::Test {
                 Accepted(logical->Activate(receipt_));
                 std::array<VfxGpuEmitterPreparation, 1> gpu;
                 gpu[0] = {Effect(), source.Data().emitter, std::move(logical)};
-                INFO("Transfer actual activated GPU owner into canonical VfxWorld: one emitter, eight lanes, four bounded frame slots.");
-                world_ = Value(VfxWorld::Prepare(Effect().scope, {}, gpu, {4, Count, 4, 4, 1024U * 1024U}));
+                INFO("Transfer actual activated GPU owner into canonical VfxWorld: one emitter, authored particle count, four bounded "
+                     "frame slots.");
+                world_ = Value(VfxWorld::Prepare(Effect().scope, {}, gpu, {4, count_, 4, 4, 128U * 1024U * 1024U}));
                 REQUIRE_FALSE(gpu[0].simulator);
                 Accepted(world_->Play(Effect()));
                 CHECK(Capture().GpuBatches()[0].generation == 1);
@@ -343,6 +360,14 @@ namespace Horo::Render::Test {
                 return *frontend_;
             }
 
+            /** @brief Reports the actual selected native device outside the measured batch. */
+            std::string DeviceName() const {
+                id<MTLDevice> device = (__bridge id<MTLDevice>)bridge_.Device();
+                const char *name = device.name.UTF8String;
+                REQUIRE(name);
+                return name;
+            }
+
             const VfxGpuPreparationReceipt &Receipt() const {
                 return receipt_;
             }
@@ -352,8 +377,8 @@ namespace Horo::Render::Test {
             }
 
             /** @brief Uses the scene owner exact-next-tick producer without dispatching GPU work. */
-            void PrepareStep() {
-                const auto report = world_->PrepareGpuSteps(Delta);
+            void PrepareStep(float deltaSeconds = Delta) {
+                const auto report = world_->PrepareGpuSteps(deltaSeconds);
                 REQUIRE(report.status == GpuParticleStepStatus::Complete);
             }
 
@@ -434,10 +459,10 @@ namespace Horo::Render::Test {
 
             /** @brief Compares actual normalized GPU observations against a separately executed canonical CPU oracle. */
             void CheckOracle(RenderReadbackResult &result) {
-                Value(oracle_.Advance({.deltaSeconds = Delta, .burstCount = step_.tick == 0 ? Count : 0, .tick = step_.tick}));
+                Value(oracle_.Advance({.deltaSeconds = Delta, .burstCount = step_.tick == 0 ? count_ : 0, .tick = step_.tick}));
                 const auto cpu = Value(oracle_.Extract());
-                REQUIRE(result.Bytes().size() == Count * VfxGpuObservationWords::Bytes);
-                for (std::uint32_t i = 0; i < Count; ++i)
+                REQUIRE(result.Bytes().size() == count_ * VfxGpuObservationWords::Bytes);
+                for (std::uint32_t i = 0; i < count_; ++i)
                     CheckParticle(result.Bytes().subspan(i * VfxGpuObservationWords::Bytes, VfxGpuObservationWords::Bytes), cpu, i);
             }
 
@@ -579,7 +604,7 @@ namespace Horo::Render::Test {
             /** @brief Reserves the existing queue only for explicit actual supported observation admission. */
             void PrepareReadback(std::chrono::nanoseconds timeout) {
                 REQUIRE(frontend_->Capabilities().support.features.Supports(RenderCapability::VfxGpuReadback));
-                const auto bytes = Count * VfxGpuObservationWords::Bytes;
+                const auto bytes = count_ * VfxGpuObservationWords::Bytes;
                 Value(frontend_->PrepareVfxGpuReadbackStorage({bytes, bytes, bytes, 16, 1}, {1, bytes, 16}, 1024U * 1024U, timeout));
             }
 
@@ -709,8 +734,12 @@ namespace Horo::Render::Test {
                 const std::array expected{cpu.positionX[index], cpu.positionY[index],       cpu.positionZ[index], cpu.velocityX[index],
                                           cpu.velocityY[index], cpu.velocityZ[index],       cpu.sizeX[index],     cpu.sizeY[index],
                                           cpu.rotation[index],  cpu.angularVelocity[index], cpu.age[index],       cpu.maximumAge[index]};
-                for (std::size_t i = 0; i < expected.size(); ++i)
-                    CHECK(std::bit_cast<float>(words[i + 2]) == Catch::Approx(expected[i]).margin(.00002F).epsilon(.0002F));
+                for (std::size_t i = 0; i < expected.size(); ++i) {
+                    const auto tolerance = Vfx::Tests::GpuPropertyTolerances[i];
+                    INFO("policy=" << Vfx::Tests::GpuQualificationPolicyVersion << " property=" << tolerance.name << " particle=" << index
+                                   << " tick=" << step_.tick);
+                    CHECK(Vfx::Tests::GpuPropertyMatches(std::bit_cast<float>(words[i + 2]), expected[i], tolerance));
+                }
                 CHECK(words[VfxGpuObservationWords::PackedColor] == cpu.packedColor[index]);
                 CHECK(words[VfxGpuObservationWords::CustomFlags] == cpu.customFlags[index]);
                 CHECK(words[VfxGpuObservationWords::Alive] == 1);
@@ -720,6 +749,9 @@ namespace Horo::Render::Test {
             }
 
             CookedVfxGpuPrograms family_;
+            std::span<const CpuParticleForceModule> forces_;
+            bool variedSeed_;
+            std::uint32_t count_;
             CpuParticleSimulator oracle_;
             SDL_Window *window_{};
             std::unique_ptr<Editor::SdlMetalPresentationPort> presentation_;
@@ -737,6 +769,70 @@ namespace Horo::Render::Test {
             __strong id<MTLSharedEvent> gate_{nil};
         };
     }  // namespace
+
+    void RunEquivalentMetalVfxGpu(const std::filesystem::path &root) {
+        if (MTLCreateSystemDefaultDevice() == nil)
+            SKIP(VfxErrors::UnsupportedCapability.code.Value() << ": no native Metal compute device is available");
+        for (std::size_t scenario = 0; scenario < 4; ++scenario) {
+            INFO("force scenario=" << scenario);
+            const auto forces = scenario < 3 ? std::span{Forces}.subspan(scenario, 1) : std::span{Forces};
+            Fixture fixture(root, forces, true);
+            fixture.Initialize();
+            REQUIRE_FALSE(fixture.Frontend().Capabilities().support.synthetic);
+            if (!fixture.Frontend().Capabilities().support.features.Supports(RenderCapability::VfxGpuSimulation))
+                SKIP(VfxErrors::UnsupportedCapability.code.Value() << ": selected native device has no qualified VFX compute support");
+            fixture.Prepare(true);
+            for (unsigned step = 0; step < 12; ++step) {
+                fixture.Pump();
+                fixture.PrepareStep();
+                fixture.Submit();
+                fixture.AwaitAccepted();
+                fixture.WaitComplete();
+                auto result = fixture.Acquire();
+                fixture.CheckOracle(result);
+            }
+        }
+    }
+
+    void RunBudgetMetalVfxGpu(const std::filesystem::path &root) {
+        if (MTLCreateSystemDefaultDevice() == nil)
+            SKIP(VfxErrors::UnsupportedCapability.code.Value() << ": no native Metal compute device is available");
+        constexpr std::uint32_t particles = 65'536;
+        constexpr unsigned warmup = 8;
+        constexpr unsigned samples = 64;
+        constexpr double budgetMilliseconds = 16.667;
+        constexpr float deltaSeconds = 1.0F / 60.0F;
+        Fixture fixture(root, std::span{Forces}.first(3), true, particles);
+        fixture.Initialize();
+        REQUIRE_FALSE(fixture.Frontend().Capabilities().support.synthetic);
+        if (!fixture.Frontend().Capabilities().support.features.Supports(RenderCapability::VfxGpuSimulation))
+            SKIP(VfxErrors::UnsupportedCapability.code.Value() << ": selected native device has no qualified VFX compute support");
+        fixture.Prepare(false);
+        const auto device = fixture.DeviceName();
+        std::array<double, samples> milliseconds{};
+        for (unsigned step = 0; step < warmup + samples; ++step) {
+            const auto started = std::chrono::steady_clock::now();
+            fixture.PrepareStep(deltaSeconds);
+            fixture.Submit();
+            fixture.AwaitAccepted();
+            fixture.WaitComplete();
+            const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+            if (step >= warmup)
+                milliseconds[step - warmup] = elapsed;
+        }
+        const auto diagnostics = Value(fixture.Frontend().GpuReadbackDiagnostics());
+        CHECK(diagnostics.preparedCpuBytes == 0);
+        CHECK(diagnostics.reservedSlots == 0);
+        CHECK(diagnostics.observationCopyCalls == 0);
+        CHECK(diagnostics.copiedBytes == 0);
+        std::ranges::sort(milliseconds);
+        const auto p95 = milliseconds[60];
+        std::cout << "VFX budgetPolicy=1 backend=metal device=" << device << " particles=" << particles
+                  << " forces=gravity,wind,attraction extent=64x64 deltaSeconds=" << deltaSeconds << " warmup=" << warmup
+                  << " samples=" << samples << " metric=CPU-wall-presentation-compute-draw-completion p50Ms=" << milliseconds[31]
+                  << " p95Ms=" << p95 << " maxMs=" << milliseconds.back() << " budgetP95Ms=" << budgetMilliseconds << '\n';
+        CHECK(p95 <= budgetMilliseconds);
+    }
 
     void RunDisabledMetalVfxGpu(const std::filesystem::path &root) {
         Fixture fixture(root);

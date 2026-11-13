@@ -159,6 +159,8 @@ dependency direction in [System Design](./foundation/system-design.md).
   CPU/GPU particle systems, VFX graphs, decals, and volumetric effects.
 - [VFX Foundation Contract Qualification](./runtime/vfx-foundation-contract-qualification.md):
   determinism, allocation, parser, identity, buffer, tier, path, and platform evidence.
+- [GPU Particle Simulation Qualification](./runtime/vfx-gpu-simulation-qualification.md):
+  versioned force-equivalence tolerances, native budget workloads and compute-less tiers.
 - [Cinematic Foundation Contract Qualification](./runtime/cinematic-foundation-contract-qualification.md):
   identity byte order, hostile sequence parsing, deterministic sampling, allocation budget, and platform matrix.
 - [Character Controller Architecture](./runtime/character-controller-architecture.md):
