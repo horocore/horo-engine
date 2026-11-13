@@ -191,3 +191,15 @@ The refreshed PR target is `origin/codex/editor-improvements` at
 intact. The resumed full-scope local preflight attempt against that target stopped
 at the busy physical build lock before starting an analyzer child. No current
 Sonar IDE, CLI secrets or local Codacy result is inferred from hosted checks.
+
+
+## Separate native parity outcome
+
+`HoroVulkanVfxGpuParity` selects the hidden `[vfx-parity]` case directly and runs
+all four twelve-step force scenarios. Its CTest result is independent of the
+legacy command suite. Missing compute returns visible skip code 4; passing
+unrelated command tests cannot turn that skipped qualification into a pass.
+The GPU-enabled Linux CI selection includes this entry and the ordinary command
+suite. High-count budget entries remain separate. The explicit selection also
+avoids relying on the ordinary suite's truncated success output to infer which
+qualification case ran.

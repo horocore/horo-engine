@@ -526,7 +526,7 @@ namespace VulkanVfxGpuSmoke {
     }
 
     TEST_CASE("Vulkan actual registered backend executes genuine PreparedParticles compute draw and normalized CPU parity",
-              "[integration][renderer][vulkan][gpu][vfx]") {
+              "[.][integration][renderer][vulkan][gpu][vfx][vfx-parity]") {
         const auto package = Package();
         if (package.empty() || !std::filesystem::is_directory(package))
             SKIP("Genuine portable Vulkan cooked fixture is absent; no runtime cooking or native substitute.");

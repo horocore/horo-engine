@@ -274,7 +274,7 @@ jobs:
         if: runner.os == 'Linux'
         run: >-
           ctest --test-dir build/ci --no-tests=error --output-on-failure
-          --timeout 90 -R '^HoroVulkanCommandExecutionSmoke$' --output-junit vulkan-commands.xml
+          --timeout 90 -R '^(HoroVulkanCommandExecutionSmoke|HoroVulkanVfxGpuParity)$' --output-junit vulkan-commands.xml
       - name: Qualify the real Vulkan GUI and WSI pair
         if: runner.os == 'Linux'
         run: |

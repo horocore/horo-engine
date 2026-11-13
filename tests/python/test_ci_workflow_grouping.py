@@ -521,11 +521,17 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
                    "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
         assert selected.search(f"{target}::representative case [tag]")
         assert not selected.search(f"{target}Unrelated::case")
-    assert "-R '^HoroVulkanCommandExecutionSmoke$'" in native_job
+    smoke_selection = re.search(r"--timeout 90 -R '([^']+)'", native_job)
+    assert smoke_selection is not None
+    smoke_selected = re.compile(smoke_selection.group(1))
+    assert smoke_selected.fullmatch("HoroVulkanCommandExecutionSmoke")
+    assert smoke_selected.fullmatch("HoroVulkanVfxGpuParity")
+    assert not smoke_selected.fullmatch("HoroVulkanVfxGpuBudget")
     assert not selected.search("UnrelatedTests::case")
     assert "continue-on-error" not in shader_qualification_steps(native_job)
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
+    assert 'add_test(NAME HoroVulkanVfxGpuParity COMMAND HoroVulkanCommandExecutionSmoke "[vfx-parity]")' in tests_cmake
     assert 'FAIL_REGULAR_EXPRESSION "Validation Error;VUID-"' in tests_cmake
 
 

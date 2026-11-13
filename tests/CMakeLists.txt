@@ -6400,6 +6400,10 @@ if (HORO_BUILD_RENDER_VULKAN)
         set_tests_properties(HoroVulkanCommandExecutionSmoke PROPERTIES
                 LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE SKIP_RETURN_CODE 4
                 FAIL_REGULAR_EXPRESSION "Validation Error;VUID-")
+        add_test(NAME HoroVulkanVfxGpuParity COMMAND HoroVulkanCommandExecutionSmoke "[vfx-parity]")
+        set_tests_properties(HoroVulkanVfxGpuParity PROPERTIES
+                LABELS "gpu;vulkan;renderer;vfx;qualification" TIMEOUT 90 RUN_SERIAL TRUE SKIP_RETURN_CODE 4
+                FAIL_REGULAR_EXPRESSION "Validation Error;VUID-")
         add_test(NAME HoroVulkanVfxGpuBudget COMMAND HoroVulkanCommandExecutionSmoke "[vfx-budget]")
         set_tests_properties(HoroVulkanVfxGpuBudget PROPERTIES
                 LABELS "gpu;vulkan;renderer;vfx;qualification;performance" TIMEOUT 120 RUN_SERIAL TRUE SKIP_RETURN_CODE 4
