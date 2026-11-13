@@ -564,6 +564,47 @@ def test_partial_codacy_file_execution_is_incomplete():
                for item in tools.execution_errors(payload, ["tool"]))
 
 
+@pytest.mark.parametrize("source_id,managed_id,accepted", [
+    (None, None, False), ("other", None, False), ("horocore", None, True),
+    (None, "horocore", True), ("other", "horocore", True), ("horocore", "other", False),
+])
+def test_ide_connection_admission_preserves_managed_login_precedence(
+        tmp_path: Path, source_id: str | None, managed_id: str | None, accepted: bool):
+    source, profile = tmp_path / "source", tmp_path / "managed"
+    key = "sonarlint.connectedMode.connections.sonarcloud"
+    for path, connection_id in ((source, source_id), (profile, managed_id)):
+        if connection_id:
+            support.write_json(path / "User/settings.json", {key: [{"connectionId": connection_id}]})
+    before = {path: path.read_bytes() for path in tmp_path.rglob("settings.json")}
+    if accepted:
+        preflight.require_ide_connection(profile, source, "horocore")
+    else:
+        with pytest.raises(AnalysisError, match="not configured"):
+            preflight.require_ide_connection(profile, source, "horocore")
+    assert {path: path.read_bytes() for path in tmp_path.rglob("settings.json")} == before
+
+
+@pytest.mark.parametrize("connections", ["invalid", ["invalid"], {}])
+def test_malformed_ide_connections_are_actionable(tmp_path: Path, connections):
+    source, profile = tmp_path / "source", tmp_path / "managed"
+    support.write_json(source / "User/settings.json", {
+        "sonarlint.connectedMode.connections.sonarqube": connections,
+    })
+    with pytest.raises(AnalysisError, match="Expected a list of connection objects"):
+        preflight.require_ide_connection(profile, source, "horocore")
+
+
+def test_missing_ide_connection_does_not_compile_or_acquire_a_session(tmp_path: Path):
+    root, repository_cache = tmp_path / "checkout", tmp_path / "cache"
+    args = SimpleNamespace(code_user_data=tmp_path / "source", connection_id="horocore")
+    with patch.object(preflight, "prepare") as prepare, patch.object(preflight, "SessionPool") as pool:
+        with pytest.raises(AnalysisError, match="CLI credentials do not establish IDE authentication"):
+            preflight.sonar_check(root, repository_cache / "worktree", repository_cache, [root / "sample.cpp"], args)
+    prepare.assert_not_called()
+    pool.assert_not_called()
+    assert not repository_cache.exists()
+
+
 def test_private_profile_preserves_user_settings_and_credentials(tmp_path: Path):
     import base64
     import sqlite3

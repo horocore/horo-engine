@@ -89,6 +89,13 @@ without JSONC comments. An absent settings file supplies no connections, not imp
 authentication. Inline-token-only connections must be migrated to VS Code
 SecretStorage first. Environment tokens used by the CLI are not an IDE connection.
 
+The requested connection ID must exist in the source or managed profile before
+native preparation or a managed session is started. A missing connection fails
+immediately with an actionable setup error. Existing managed connection metadata
+retains the same precedence as profile seeding, preserving a login made in the
+managed window. Metadata presence does not prove authentication, trust, project
+synchronization or C++ sensor execution; those checks still run normally.
+
 There are at most two Sonar sessions per common Git repository. Each active
 session has a lease; further requests wait. Idle sessions are reused, or the
 oldest idle one is evicted for another worktree. The helper validates a random

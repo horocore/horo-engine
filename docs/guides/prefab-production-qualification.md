@@ -104,6 +104,23 @@ release-stage tests alone cannot establish that full distribution matrix.
 
 ## Local validation record
 
+The missing-connection investigation also identified unnecessary work in the
+preflight itself: it prepared C++ inputs and started an IDE before discovering
+that the requested connection metadata was absent. The follow-up uses one shared
+connection reader for early admission and profile seeding. Missing or malformed
+metadata now fails before preparation/session acquisition; existing managed
+login precedence and read-only source settings remain unchanged. Connection
+metadata is not treated as authentication or C++ sensor evidence.
+
+The focused preflight, Prefab CI and migration-generator run passed 75 Python
+tests. The broader preflight/profile/extension/process/native-input regression
+run passed 211 tests with six explicit skips: five symlink cases lacked Windows
+creation privilege, and one actual GCC/Ninja transfer test requires Linux.
+The new gate includes missing/wrong connections, retained managed connections,
+malformed metadata and no-compile/no-session admission tests. Existing encrypted
+credential and Workspace Trust tests passed. Full actual-input three-provider
+preflight still needs its separate physical-slot admission after these edits.
+
 The first admitted evening batch completed on exact local checkout
 `ec3804e46` with MSVC Windows Release and the editor/render/input/audio adapters
 disabled. `cmake --build build/pq-release --target HoroPrefabTests --parallel 1`
