@@ -2560,7 +2560,9 @@ add_executable(HoroPrefabMetricsTests unit/runtime/prefab/PrefabMetricsTests.cpp
 target_compile_features(HoroPrefabMetricsTests PRIVATE cxx_std_20)
 target_include_directories(HoroPrefabMetricsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_compile_definitions(HoroPrefabMetricsTests PRIVATE
-    HORO_PREFAB_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/prefab-reference-corpus")
+    HORO_PREFAB_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/prefab-reference-corpus"
+    HORO_PREFAB_QUALIFICATION_BUILD_TYPE="$<CONFIG>"
+    HORO_PREFAB_QUALIFICATION_PLATFORM="${CMAKE_SYSTEM_NAME}")
 target_link_libraries(HoroPrefabMetricsTests PRIVATE
     HoroEngine::PrefabSceneExpansion HoroEngine::PrefabRuntime HoroEngine::GameplayRuntime)
 horo_register_catch_test(HoroPrefabMetricsTests LABELS "unit;prefab;headless;metrics"

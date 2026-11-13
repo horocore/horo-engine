@@ -1,7 +1,9 @@
+#include "Horo/Prefab/PrefabDiagnostics.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "PrefabSourceExpansionInternal.h"
 
 #include <algorithm>
+#include <format>
 
 namespace Horo::Prefab::Detail {
     namespace {
@@ -39,17 +41,26 @@ namespace Horo::Prefab::Detail {
             }
         };
 
-        /** @brief Captures exact canonical graph failure context without publishing any source hierarchy. */
+        /** @brief Captures bounded canonical graph failure context without publishing any source hierarchy. */
         Result<void> Fail(Inspection &inspection, const ErrorCodeDescriptor &error, std::optional<Assets::AssetId> next = {}) {
             inspection.operation.failureChain = inspection.operation.active;
             if (next)
                 inspection.operation.failureChain.push_back(*next);
             auto failure = MakeError(error);
-            for (const auto &edge : inspection.operation.originChain) {
+            const auto appendEdge = [&failure](const PrefabCompositionOriginStep &edge) {
                 failure.message += edge.kind == PrefabCompositionOrigin::Variant ? " VariantParent " : " NestedPlacement ";
                 failure.message += edge.owner.ToString() + " -> " + edge.source.ToString();
                 if (edge.placement)
                     failure.message += " placement=" + std::to_string(edge.placement->value);
+            };
+            for (const auto &edge : inspection.operation.originChain)
+                appendEdge(edge);
+            // Reserve space for the resolver's enclosing instance and source-chain context.
+            if (failure.message.size() > MaximumPrefabDiagnosticMessageBytes / 2 && !inspection.operation.originChain.empty()) {
+                failure.message = MakeError(error).message;
+                failure.message +=
+                    std::format(" ({} composition edges, intermediate edges omitted)", inspection.operation.originChain.size());
+                appendEdge(inspection.operation.originChain.back());
             }
             return Result<void>::Failure(std::move(failure));
         }

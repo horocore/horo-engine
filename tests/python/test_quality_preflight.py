@@ -410,6 +410,33 @@ def test_cpp_preparation_uses_one_build_worker(tmp_path: Path, monkeypatch, gene
     assert builds[0][builds[0].index("--parallel") + 1] == "1"
 
 
+@pytest.mark.parametrize("generator", ["Ninja", "Unix Makefiles"])
+@pytest.mark.parametrize("parallel", [None, "1", "2"])
+def test_compiler_context_build_stays_single_worker(tmp_path: Path, monkeypatch, generator, parallel):
+    build = tmp_path / "build"
+    build.mkdir()
+    database = build / "compile_commands.json"
+    database.write_text("[]", encoding="utf-8")
+    (build / "CMakeCache.txt").write_text(
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={tmp_path.resolve()}\nCMAKE_GENERATOR:INTERNAL={generator}\n", encoding="utf-8")
+    source = tmp_path / "source.cpp"
+    target = "CMakeFiles/Owner.dir/source.cpp.o"
+    commands = []
+    if parallel is None:
+        monkeypatch.delenv("CMAKE_BUILD_PARALLEL_LEVEL", raising=False)
+    else:
+        monkeypatch.setenv("CMAKE_BUILD_PARALLEL_LEVEL", parallel)
+    monkeypatch.setattr(sonar, "validate_compile_commands", lambda *_: None)
+    monkeypatch.setattr(sonar, "compiler_entries", lambda *_: [{"source": source, "target": target}])
+    monkeypatch.setattr(sonar, "quality_run", lambda argv, *_: commands.append(argv) or
+                        SimpleNamespace(returncode=0, stdout="", stderr=""))
+
+    sonar.prepare(tmp_path, tmp_path / "cache", [source], database, 2)
+
+    expected_target = "Owner" if generator == "Unix Makefiles" else target
+    assert commands[1] == ["cmake", "--build", str(build), "--parallel", "1", "--target", expected_target]
+
+
 def test_compiler_entries_require_in_build_object_target(tmp_path: Path):
     database = tmp_path / "compile_commands.json"
     database.write_text(json.dumps([{"directory": str(tmp_path), "file": "source.cpp", "command": "c++ -c source.cpp"}]))
