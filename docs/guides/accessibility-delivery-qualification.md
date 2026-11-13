@@ -22,11 +22,11 @@ does not permit a background waiter or interrupting another job.
 
 | Child | Jira / GitHub | Implementation and evidence | Remaining acceptance / dependencies |
 |---|---|---|---|
-| ACC-001.2 captions | HORO-1806 / #1850 | Added bounded SPSC cue/catalog transport, timeline, frame-captured appearance, safe-area arrangement and canonical paint extraction; regression cases written, not executed | Host localization/shaping/presentation composition, settings activation and actual native rendered evidence |
+| ACC-001.2 captions | HORO-1806 / #1850 | SPSC cue/catalog transport, timeline, appearance, safe-area arrangement, canonical paint/lifetimes and public consumers compiled and passed in the 49-case UI batch at df38a89 | Host localization/shaping/presentation composition, settings activation and actual native rendered evidence |
 | ACC-001.3 color | HORO-1807 / #1851 | Independent numeric target, matrices and snapshot-backed query compiled; focused numeric/query/contract cases passed in the 11-case semantic batch at 6308740 | Complete-image GPU pass and real backend evidence; existing ColorPipelinePlan explicitly provides cold admission only |
 | ACC-001.4 input | HORO-1808 / #1852 | MSVC Input/public consumers: 88/88 cases passed at dcf772e. CharacterInput/public consumer: 16/16 passed at 6308740, including clock failure and repeat intent. Editor host drains ended-context records; Input Mapping has exact-duration policy drafts | SDL and GUI/application qualification; integrate scoped persistence/capture from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
-| ACC-001.5 visual | HORO-1809 / #1853 | UI scale/contrast snapshot with typography floor remains unexecuted. Visual-safety snapshot/tagged numeric suppression passed in the 11-case semantic batch at 6308740 | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
-| ACC-001.6 bridge | HORO-1810 / #1854 | Existing Runtime UI semantics; added optional platform transport interface, honest no-op Unsupported adapter and opt-in bounded semantic QA journal; tests written, not executed | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
+| ACC-001.5 visual | HORO-1809 / #1853 | UI scale/contrast snapshot and typography floor passed in the 49-case UI batch at df38a89. Visual-safety snapshot/tagged numeric suppression passed in the 11-case semantic batch at 6308740 | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
+| ACC-001.6 bridge | HORO-1810 / #1854 | Runtime UI semantics, optional platform transport, honest Null Unsupported adapter, desired preference and bounded opt-in semantic QA journal passed in the 49-case UI batch at df38a89 | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Inert contribution, typed seven-preference snapshot, revision-only hints and allocation-failure retry passed in the 11-case semantic batch at 6308740 | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
 | ACC-001.8 tooling | HORO-1812 / #1856 | Numeric contrast and direct contract consumer passed in the 11-case semantic batch. Contrast panel/theme tests remain unexecuted; CI selection/scope reporting and 55-criterion open inventory are present | Qualify all four tools, execute theme/native checks and complete the applicability/observed evidence matrix; depends on all above |
 
@@ -97,6 +97,22 @@ edits. Heavy checks use the existing shared `heavy_build_lock`, serial build and
 CTest execution.
 
 ## Current local verification
+
+At clean `df38a89c2006ef57f0e33a7b91e2c37a4b05bd1b`, the captions/Runtime UI
+batch configured and built seven targets on native MSVC Debug. All affected
+Runtime UI, CaptionTransport and PlatformAccessibility staged headers compiled.
+Exact discovery admitted the complete RuntimeUiAccessibility family and three
+explicit public consumers: **49/49 passed, zero skipped**, in 0.72 seconds.
+Evidence: `build/acc-caption-results.xml` and `build/acc-caption-discovery.json`.
+This covers callback/SPSC allocation and lifetime invariants, timeline/session and
+replay bounds, appearance revisions, canonical caption paint extraction, retained
+paint ownership, reference aspect ratios, semantic reading/focus/announcement
+contracts, QA journal and truthful Unsupported native behavior. The batch used
+the canonical verified physical handle/resource guards and serial build/CTest,
+then released the lock. This is headless model/extraction evidence: actual host
+localization/shaping/presentation, visible glyphs, native screen readers and
+platform interoperability remain unqualified. GUI tool and application translation
+units still need their separate GUI-enabled build and interaction checks.
 
 At clean `6308740ffc1b7167f2ffc7ef98044b1ffbe02837`, two separate bounded
 MSVC Debug batches also passed. The Foundation-only semantic batch built seven
@@ -173,7 +189,8 @@ from a color role or certify the complete editor.
 check also verified each new public header has exactly one registry entry, every
 new implementation unit is listed once, and new UI error references are declared.
 This is not a substitute for CMake configure or staged consumer compilation.
-Outside the Input, Character and Foundation-only semantic scopes above, new C++ tests have **not** run.
+Outside the Input, Character, Foundation-only semantic and Runtime UI scopes above,
+new C++ tests have **not** run.
 The display-independent offline SDK compatibility pass ran with a short worktree
 temporary root: `python -m pytest -q --tb=short --basetemp build/acc-pytest
 tests/python/test_extension_sdk_compatibility.py`: **24 passed**. The earlier
