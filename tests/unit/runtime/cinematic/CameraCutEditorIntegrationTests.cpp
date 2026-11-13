@@ -60,13 +60,16 @@ namespace Horo::Editor {
             CHECK(fixture.controller.ViewportScene().camera.position == selection.selected.values.position);
             CHECK(fixture.controller.ViewportScene().camera.target == selection.selected.values.target);
             CHECK(fixture.controller.ViewportScene().camera.up == selection.selected.values.up);
-            const auto &previewLens = fixture.controller.ViewportScene().camera.projection;
+            const auto &previewCamera = fixture.controller.ViewportScene().camera;
             const auto &runtimeLens = selection.selected.values.projection;
-            CHECK(previewLens.kind == runtimeLens.kind);
-            CHECK(previewLens.verticalFovRadians == runtimeLens.verticalFovRadians);
-            CHECK(previewLens.orthographicHeight == runtimeLens.orthographicHeight);
-            CHECK(previewLens.nearPlane == runtimeLens.nearPlane);
-            CHECK(previewLens.farPlane == runtimeLens.farPlane);
+            const auto expectedProjection = runtimeLens.kind == Render::RenderProjectionKind::Perspective
+                                                ? Runtime::CameraProjection::Perspective
+                                                : Runtime::CameraProjection::Orthographic;
+            CHECK(previewCamera.projection == expectedProjection);
+            CHECK(previewCamera.verticalFovRadians == runtimeLens.verticalFovRadians);
+            CHECK(previewCamera.orthographicHeight == runtimeLens.orthographicHeight);
+            CHECK(previewCamera.nearPlane == runtimeLens.nearPlane);
+            CHECK(previewCamera.farPlane == runtimeLens.farPlane);
         }
         fixture.controller.StopCameraCutPreview();
         CHECK(fixture.controller.ViewportScene().camera.IsValid());
