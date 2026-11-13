@@ -20,7 +20,8 @@ namespace Horo::Audio {
             config.hostContext = AudioSceneContextHandle{Runtime(), 9, 1};
             auto created = AudioRepeatedPlayback::Create(config);
             REQUIRE(created.HasValue());
-            CHECK(created.Value().Bind(binding, {}).HasValue());
+            auto owner = std::move(created).Value();
+            CHECK(owner.Bind(binding, {}).HasValue());
         }
 
         TEST_CASE("Host-owned pending starts survive source unload and terminate at host retirement",
