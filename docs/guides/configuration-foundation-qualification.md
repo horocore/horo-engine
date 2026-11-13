@@ -73,6 +73,36 @@ source entry describes intended coverage and does not by itself establish a pass
 
 ## Execution evidence
 
+### CI follow-up on the first delivery head
+
+All three workflows for `e7b809b3326f493d6642aa4e5e4600fe4d003b2a` reached
+terminal state before the next delivery update. Android package qualification
+passed. Windows/MSVC completed compilation, then its selected native CTest run
+reported one failure among 5,214 cases: the concurrent configuration reader.
+The new core configuration, module, security and editor-store suites were absent
+from that focused Windows selection; their pass cannot be inferred from this
+run. The follow-up adds them and their public consumers to Windows membership.
+
+Linux/GCC and macOS/Clang compilation failed because adding the owned-directory
+fixture exposed both `Horo::Tests` and `Horo::Editor::Tests` to unqualified fixture
+lookups. Follow-up source fully qualifies those GUI fixtures. Windows follow-up
+uses a retained delete-shared read handle and bounded transient-open handling;
+the existing concurrent-reader assertions remain mandatory and unchanged in
+strength. These changes still need executable confirmation.
+
+The Sonar coverage producer failed downloading Lua with a TLS error. Its
+dependent analysis job reported missing complete coverage inputs. Neither result
+establishes clean configuration analysis. Codacy's read-only API mapped 42 of 50
+changed paths to the exact first head and returned 28 findings; eight unmapped
+paths remain unknown. New long transaction/render/test flows are being split by
+responsibility while retaining assertions. Contextual file-size findings and
+the remaining server findings are retained rather than declared pre-existing
+or silently accepted. Local evidence files are under ignored `build/` and are
+not committed as generated reports.
+
+Follow-up static CI grouping and localization checks: 45 tests passed. Native
+and complete local Sonar IDE/secrets/Codacy qualification remain incomplete.
+
 The current implementation has **not yet completed C++ qualification**. On
 2026-11-13 the user replaced named-grant scheduling with nonblocking physical
 lock admission. The first resumed core batch found the canonical lock busy and

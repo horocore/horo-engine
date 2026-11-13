@@ -7,9 +7,17 @@
 #include <array>
 #include <cstddef>
 #include <fstream>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <utility>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace Horo {
     namespace {
@@ -18,6 +26,59 @@ namespace Horo {
             result += suffix;
             return result;
         }
+
+#if defined(_WIN32)
+        /** @brief Preserves the native failure identity without including configuration bytes. */
+        [[nodiscard]] Error WindowsReadFailure(const std::filesystem::path &path, const DWORD nativeError) {
+            auto error = PlatformFileInternal::FsError(PlatformErrors::ConfigurationReadFailed, path);
+            error.message += " Win32 error: " + std::to_string(nativeError);
+            return error;
+        }
+
+        /** @brief Opens one load-time document through bounded transient replacement conflicts.
+         * @param path Native input identity. @param nativeError Receives the last native failure, or zero on success.
+         * @return An owned handle for the caller to close, or INVALID_HANDLE_VALUE after at most sixteen attempts. */
+        [[nodiscard]] HANDLE OpenWindowsDocument(const std::filesystem::path &path, DWORD &nativeError) {
+            constexpr unsigned maximumAttempts = 16;
+            for (unsigned attempt = 0; attempt < maximumAttempts; ++attempt) {
+                const HANDLE handle = CreateFileW(PlatformFileInternal::NativeApiPath(path).c_str(), GENERIC_READ,
+                                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+                nativeError = handle == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+                const bool transient =
+                    nativeError == ERROR_SHARING_VIOLATION || nativeError == ERROR_ACCESS_DENIED || nativeError == ERROR_DELETE_PENDING;
+                if (handle != INVALID_HANDLE_VALUE || !transient || attempt + 1 == maximumAttempts)
+                    return handle;
+                Sleep(1);
+            }
+            return INVALID_HANDLE_VALUE;
+        }
+
+        /** @brief Retains the opened document through concurrent native rename/replacement without denying delete sharing. */
+        [[nodiscard]] Result<std::string> ReadWindowsDocument(const std::filesystem::path &path, const std::size_t maximumBytes) {
+            DWORD nativeError = ERROR_SUCCESS;
+            const HANDLE handle = OpenWindowsDocument(path, nativeError);
+            if (handle == INVALID_HANDLE_VALUE)
+                return Result<std::string>::Failure(WindowsReadFailure(path, nativeError));
+            const auto close = [](void *file) {
+                static_cast<void>(CloseHandle(file));
+            };
+            const std::unique_ptr<void, decltype(close)> file{handle, close};
+            std::string document;
+            document.reserve(std::min<std::size_t>(maximumBytes, 64 * 1024));
+            std::array<char, 8192> buffer{};
+            for (;;) {
+                DWORD count = 0;
+                if (!ReadFile(file.get(), buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr))
+                    return Result<std::string>::Failure(WindowsReadFailure(path, GetLastError()));
+                if (count == 0)
+                    return Result<std::string>::Success(std::move(document));
+                if (document.size() > maximumBytes || count > maximumBytes - document.size())
+                    return Result<std::string>::Failure(PlatformFileInternal::FsError(PlatformErrors::ConfigurationFileTooLarge, path));
+                document.append(buffer.data(), count);
+            }
+        }
+#endif
     }  // namespace
 
     /** @copydoc ConfigurationFileStore::ConfigurationFileStore */
@@ -27,11 +88,14 @@ namespace Horo {
     Result<std::string> ConfigurationFileStore::Read(const std::filesystem::path &path, const ConfigurationLimits &limits) const {
         if (path.empty())
             return Result<std::string>::Failure(PlatformFileInternal::FsError(PlatformErrors::ConfigurationReadFailed, path));
+        const auto maximumBytes = std::min(limits.maximumDocumentBytes, ConfigurationLimits{}.maximumDocumentBytes);
+#if defined(_WIN32)
+        return ReadWindowsDocument(path, maximumBytes);
+#else
         std::ifstream input(PlatformFileInternal::NativeApiPath(path), std::ios::binary);
         if (!input)
             return Result<std::string>::Failure(PlatformFileInternal::FsError(PlatformErrors::ConfigurationReadFailed, path));
 
-        const auto maximumBytes = std::min(limits.maximumDocumentBytes, ConfigurationLimits{}.maximumDocumentBytes);
         std::string document;
         document.reserve(std::min<std::size_t>(maximumBytes, 64 * 1024));
         std::array<char, 8192> buffer{};
@@ -48,6 +112,7 @@ namespace Horo {
         if (input.bad())
             return Result<std::string>::Failure(PlatformFileInternal::FsError(PlatformErrors::ConfigurationReadFailed, path));
         return Result<std::string>::Success(std::move(document));
+#endif
     }
 
     /** @copydoc ConfigurationFileStore::Write */

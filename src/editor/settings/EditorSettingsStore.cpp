@@ -601,6 +601,52 @@ namespace Horo::Editor {
         return out;
     }
 
+    namespace {
+        /** @brief Translates a native persistence failure at the legacy editor string-error boundary. */
+        bool ReportPersistenceFailure(const Error &error, std::string *outError) {
+            if (outError)
+                *outError = error.message;
+            return false;
+        }
+
+        /** @brief Owns the exclusive writer lease through private preparation and tracked publication. */
+        bool PublishSettingsDocument(EditorSettingsDocument &doc, const std::string &text, std::string *outError) {
+            NativeDurableFileSystem files;
+            auto lockPath = doc.path;
+            lockPath += ".lock";
+            auto lock = files.TryAcquireExclusive(lockPath, "horo.editor.settings");
+            if (lock.HasError())
+                return ReportPersistenceFailure(lock.ErrorValue(), outError);
+            auto prepared = doc.path;
+            prepared += ".tmp";
+            const auto removed = files.RemoveDurable(prepared);
+            if (removed.HasError())
+                return ReportPersistenceFailure(removed.ErrorValue(), outError);
+            bool created = false;
+            const auto written = files.WritePrivateDurable(prepared, std::as_bytes(std::span{text.data(), text.size()}), created);
+            if (written.HasError()) {
+                if (created)
+                    static_cast<void>(files.RemoveDurable(prepared));
+                return ReportPersistenceFailure(written.ErrorValue(), outError);
+            }
+            AtomicFileReplacementReceipt receipt;
+            const auto published = files.AtomicReplaceTracked(prepared, doc.path, receipt);
+            if (published.HasError() && !receipt.WasCommitted()) {
+                static_cast<void>(files.RemoveDurable(prepared));
+                return ReportPersistenceFailure(published.ErrorValue(), outError);
+            }
+            if (published.HasError())
+                LOG_WARN("editor.settings", "Settings replacement committed with a durability diagnostic: code=%s.",
+                         published.ErrorValue().code.Value().c_str());
+
+            doc.loadedFromDisk = true;
+            doc.parseError = false;
+            doc.error = published.HasError() ? published.ErrorValue().message : std::string{};
+            LOG_DEBUG("editor.settings", "editor_settings.json published atomically.");
+            return true;
+        }
+    }  // namespace
+
     /** @copydoc SaveEditorSettingsDocument */
     bool SaveEditorSettingsDocument(EditorSettingsDocument *doc, std::string *outError, const ConfigurationSnapshot *configuration) {
         if (outError) {
@@ -646,48 +692,6 @@ namespace Horo::Editor {
                 *outError = "Editor settings exceed the supported size.";
             return false;
         }
-        NativeDurableFileSystem files;
-        auto lockPath = doc->path;
-        lockPath += ".lock";
-        auto lock = files.TryAcquireExclusive(lockPath, "horo.editor.settings");
-        if (lock.HasError()) {
-            if (outError)
-                *outError = lock.ErrorValue().message;
-            return false;
-        }
-        auto prepared = doc->path;
-        prepared += ".tmp";
-        const auto removed = files.RemoveDurable(prepared);
-        if (removed.HasError()) {
-            if (outError)
-                *outError = removed.ErrorValue().message;
-            return false;
-        }
-        bool created = false;
-        const auto written = files.WritePrivateDurable(prepared, std::as_bytes(std::span{text.data(), text.size()}), created);
-        if (written.HasError()) {
-            if (created)
-                static_cast<void>(files.RemoveDurable(prepared));
-            if (outError)
-                *outError = written.ErrorValue().message;
-            return false;
-        }
-        AtomicFileReplacementReceipt receipt;
-        const auto published = files.AtomicReplaceTracked(prepared, doc->path, receipt);
-        if (published.HasError() && !receipt.WasCommitted()) {
-            static_cast<void>(files.RemoveDurable(prepared));
-            if (outError)
-                *outError = published.ErrorValue().message;
-            return false;
-        }
-        if (published.HasError())
-            LOG_WARN("editor.settings", "Settings replacement committed with a durability diagnostic: code=%s.",
-                     published.ErrorValue().code.Value().c_str());
-
-        doc->loadedFromDisk = true;
-        doc->parseError = false;
-        doc->error = published.HasError() ? published.ErrorValue().message : std::string{};
-        LOG_DEBUG("editor.settings", "editor_settings.json published atomically.");
-        return true;
+        return PublishSettingsDocument(*doc, text, outError);
     }
 }  // namespace Horo::Editor

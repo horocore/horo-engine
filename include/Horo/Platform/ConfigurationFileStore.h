@@ -23,6 +23,8 @@ namespace Horo {
          * @param path Native configuration path.
          * @param limits Input limits applied while streaming the file.
          * @return Complete document text or a typed read/limit error.
+         * @note Load-time I/O, not a frame-hot operation. Windows bounds transient replacement-open conflicts
+         * to sixteen attempts; once opened, one retained handle supplies the complete document.
          */
         [[nodiscard]] Result<std::string> Read(const std::filesystem::path &path, const ConfigurationLimits &limits = {}) const;
 

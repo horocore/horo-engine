@@ -655,6 +655,7 @@ namespace {
         std::jthread secondWriter{write, std::cref(second)};
         while (completed.load() != 2) {
             const auto read = store.Read(path);
+            INFO(read.HasError() ? read.ErrorValue().message : "Configuration read succeeded");
             REQUIRE(read.HasValue());
             CHECK((read.Value() == firstDocument || read.Value() == secondDocument));
         }
