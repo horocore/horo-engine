@@ -25,8 +25,11 @@ iterator proxy inside a `noexcept` boundary; an allocation failure there termina
 before the playback factory can translate it. The immutable coefficient bank now
 uses an owned fixed array, whose move cannot allocate a container proxy. Ordinary
 preparation allocations remain covered by the existing factory failure path.
-The sweep probes 64 allocation positions and still requires all registry slots
-to remain reusable after failed preparation.
+The published parent measures the complete successful preparation allocation
+count, injects failure at every observed position and checks the following
+successful position. Every failed preparation must leave all registry slots
+reusable. This qualification retains that measured sweep rather than a fixed
+failure-count cutoff.
 
 Persistent ambience belongs to a separately host-owned context under ADR-062;
 it is not an exception allowing scene-owned voices to survive scene unload.
@@ -118,6 +121,14 @@ rebased without content changes onto the unpublished local parent
 `git range-diff` confirmed all three patches were preserved. Delivery branch:
 `feat/HORO-559_voice_lifecycle_qualification`.
 
+On 2026-11-13, the delivery branch was rebased onto published
+`origin/codex/editor-improvements` at
+`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`, verified by fetch and the actual remote
+advertisement. The parent's equivalent fixed-array resampler ownership and
+measured allocation-failure sweep were preserved during conflict resolution.
+The topic retains deterministic initialization of invalid evaluator selection
+and its lifecycle/persistence/qualification changes.
+
 Build/test and quality results must be recorded after execution. Required targets
 are HoroAudioApiTests, HoroAudioPlaybackTests, HoroAudioVoiceRenderTests,
 HoroAudioCommandTests, HoroAudioNullTests, HoroAudioEditorPreviewTests and
@@ -127,10 +138,12 @@ native MSVC Debug, serial builds and CTest with the shared
 `scripts/dev.py heavy_build_lock`; source inspection alone does not satisfy this
 validation.
 
-Current validation is pending an explicitly allocated bounded slot. No updated
+Current validation requires a bounded batch admitted by the physical shared lock. No updated
 native test or full quality-preflight pass is claimed. The first historical
 five-target build predates the final source edits, and its CTest filter matched
 zero tests. Formatting and diff checks do not replace runtime qualification.
 Before configure/build/test or analyzer compilation, verify the actual open
 Windows lock handle against the canonical shared heavy-build lock, not merely the
-cache identity. Use one build worker and `CTEST_PARALLEL_LEVEL=1`.
+cache identity. Acquire nonblocking; a busy lock defers the batch without leaving
+a waiter. The 2026-11-13 policy removes the former named-grant scheduling gate.
+Use one build worker and `CTEST_PARALLEL_LEVEL=1`.
