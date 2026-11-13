@@ -14,6 +14,7 @@ namespace Horo::Editor {
         int component{};
         std::array<char, 32> calibration{};
         std::array<char, 32> sensitivity{};
+        int source{};
         /** @brief Copies exact finite float text from an existing binding. @param binding Original binding.
          * @return Independent draft; the existing deadzone/modifier policy is preserved separately by the request baseline. */
         [[nodiscard]] static GyroscopeBindingEditorDraft FromBinding(const Input::InputBinding &binding) noexcept;

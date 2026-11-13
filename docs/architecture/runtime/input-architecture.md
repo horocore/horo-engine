@@ -476,6 +476,22 @@ snapshot model.
 
 ### Deadzone And Normalization
 
+Controller gyroscopes use an explicit `GyroscopeSource::AssignedGamepad` binding.
+The copied SI sample belongs to the exact `GamepadDeviceId` incarnation in the raw
+snapshot; ordinary player assignment and transition consumption apply before
+semantic publication. Platform motion remains a separate explicit source, never
+a fallback for an unavailable controller. Desired source/calibration live in the
+canonical binding profile, not in a second motion-preference authority.
+
+The host derives controller collection interest from validated effective bindings
+at configuration boundaries. SDL enables supported native sensors only for
+requested, bound-window, focused collection. Disablement, focus/window changes
+and disconnect neutralize old evidence. A native enable failure is unavailable,
+not support. Queued SDL events from a retired collection epoch are rejected using
+the SDL event-clock cutoff; sensor timestamps remain copied nanoseconds in their
+independent native clock domain. No rate integration, clock-epoch conversion,
+player assignment or profile discovery occurs in the platform adapter.
+
 Deadzone policy is binding/context-specific, not a single global constant:
 
 ```text

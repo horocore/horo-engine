@@ -18,14 +18,15 @@ exclusively by HoroInput; no native/backend dependency or alternate profile stor
 is introduced. The staged header and explicit accessibility consumer cover the
 new type. Existing neutral bindings require no source edits.
 
-A gyro binding projects the existing platform `SensorKind::Gyroscope` sample into
+A platform gyro binding projects the existing `SensorKind::Gyroscope` sample into
 an analog action. `SensorAxis` selects native device X/Y/Z without guessing a
-camera, display rotation or gamepad/player assignment. The native platform owns
+camera or display rotation. The native platform owns
 sensor enablement, permission and lifecycle. Only Available, finite SI samples
 with a positive native timestamp contribute. Unsupported, disabled, pending,
 suspended and failed samples contribute zero. This change does not create native
 sensor availability; the existing Android sensor collector is a producer, while
-SDL controller motion collection and hardware qualification remain separate work.
+the assigned-controller extension below uses SDL's controller sensor path.
+Physical hardware qualification remains separate work.
 
 `radiansPerSecondAtFullScale` is finite in inclusive [0.001, 1000]. Values at or
 beyond that magnitude saturate to a signed unit rate, followed by the ordinary
@@ -43,14 +44,56 @@ The unreleased canonical version-two vocabulary adds a gyro-only object:
 ```
 
 It is required for GyroscopeAxis, forbidden for other kinds and rejected in
-version one. Its two fields are exact: axis is an integer 0..2, calibration is a
-finite bounded number, and unknown/missing fields fail. Control kind is checked
+version one. Axis is an integer 0..2 and calibration is a finite bounded number;
+the optional explicit source is described below. Unknown/missing fields fail. Control kind is checked
 before byte-enum narrowing, rejecting negative, wrapped, boolean or floating
 aliases. The ordinary serializer, atomic save, parser, merge and live SetProfile
 remain the persistence/install path. Older version-two readers lacking this new
 control must reject it rather than silently drop it. Digital actions and enabled
 digital affordances cannot use a gyro binding. Duplicate or conflicting physical
 gyro axes remain conflicts despite different calibration, scale or output component.
+
+### Assigned-controller source and ABI migration
+
+`GyroscopeBindingPolicy::source` is appended with the default `Platform` value;
+existing two-argument aggregate initialization retains its meaning. Select
+`AssignedGamepad` explicitly for per-device motion. `GamepadState::gyroscope`
+owns the copied sample, and `RawInputCollector::SetGamepadGyroscopeSample` and
+`VirtualGamepad::SetGyroscopeSample` admit the exact connected incarnation.
+Invalid, regressing, stale-handle or unfocused available publications fail
+without mutation. Unavailability clears values/timing; focus loss suspends
+available motion and reconnect begins unsupported. There is no platform fallback.
+
+Rebuild every caller of `Input.h`, including Character, Runtime UI input/debugger,
+Android/XR integration and SDL/editor composition: both binding and raw gamepad
+layouts change. The reason is explicit source ownership and immutable device
+evidence, rather than interpreting a process-wide sensor as an assigned player.
+Header ownership and dependencies remain unchanged: `Input.h` belongs exclusively
+to HoroInput, and SDL native types remain private. Gameplay command recordings
+retain their existing format; copied raw snapshots naturally retain the new
+device-owned sample. Do not mix pre-extension and rebuilt binary layouts.
+
+The unreleased version-two gyro object may now contain `"source": 1` for an
+assigned controller. Missing source or integer zero means platform; the writer
+omits zero so existing platform profiles keep their canonical bytes. Only integer
+0/1 is admitted before enum narrowing. Older readers reject controller fields
+they do not understand. All ordinary profile admission, atomic save/reload and
+conflict checks remain authoritative. Physical identity includes source and axis,
+so platform and controller bindings are distinct while controller calibration
+changes cannot hide a duplicate.
+
+The editor draft and profile summary expose the source with paired localized
+copy. Host composition derives SDL interest only when the canonical configuration
+revision changes. Native enable/disable happens at the next collection boundary
+or focus/hotplug lifecycle change, not from an action read or a per-frame profile
+scan. Sensor admission is opt-in and reports Unsupported, Disabled, Suspended,
+AwaitingSample or NativeFailure truthfully. Disable/re-enable and window replacement
+burn queued event-clock evidence; native sensor timestamps are nanoseconds and
+are never multiplied by 1000 or compared with the host epoch.
+
+New core, editor and real SDL virtual-device regression sources cover this path.
+Their native execution is pending at this source edit; no physical controller or
+native interaction qualification is claimed by adding them.
 
 Physical identity comparisons also ignore fields inactive for the selected kind:
 changing `key` on a gyro/gamepad/wheel binding, for example, never creates a new

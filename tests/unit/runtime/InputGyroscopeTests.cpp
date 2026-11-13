@@ -8,6 +8,121 @@
 #include <utility>
 
 namespace Horo::Input {
+    TEST_CASE("Assigned controller gyro uses exact player device ownership and independent physical sources",
+              "[input][accessibility][gyroscope][assignment]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        VirtualGamepad first{collector}, second{collector};
+        const auto firstId = first.Connect("first"), secondId = second.Connect("second");
+        REQUIRE(first.SetGyroscopeSample({SensorAvailability::Available, {0, 1, 0}, 0, 100}));
+        REQUIRE(second.SetGyroscopeSample({SensorAvailability::Available, {0, 3, 0}, 0, 100}));
+        REQUIRE(collector.SetSensorSample(SensorKind::Gyroscope, {SensorAvailability::Available, {0, -4, 0}, 0, 100}));
+        InputBinding controller{.kind = BindingControlKind::GyroscopeAxis,
+                                .digitalThreshold = 0.1F,
+                                .gyroscope = {SensorAxis::Y, 4, GyroscopeSource::AssignedGamepad}};
+        auto platform = controller;
+        platform.gyroscope.source = GyroscopeSource::Platform;
+        const ActionId look{"look"}, phone{"phone"};
+        const InputContextId play{"play"};
+        InputRouter router;
+        REQUIRE(router
+                    .SetActionMap({{look, ActionValueType::Axis1D, play, true, {controller}},
+                                   {phone, ActionValueType::Axis1D, play, true, {platform}}})
+                    .HasValue());
+        router.BeginFrame(collector.Commit());
+        REQUIRE(router.AssignGamepad(0, firstId));
+        REQUIRE(router.AssignGamepad(1, secondId));
+        auto context = router.PushContext(play, InputContextKind::Gameplay);
+        ActionEvidence a, b, missing;
+        Horo::Tests::AllocationProbe::Measurement allocations;
+        {
+            Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+            a = router.ReadActionEvidence(context, look, 0);
+            b = router.ReadActionEvidence(context, look, 1);
+            missing = router.ReadActionEvidence(context, look, 2);
+            allocations = probe.Snapshot();
+        }
+        CHECK(allocations.requests == 0);
+        CHECK(a.value.x == 0.25F);
+        CHECK(b.value.x == 0.75F);
+        CHECK(missing.value.x == 0);
+        REQUIRE(a.source.has_value());
+        REQUIRE(b.source.has_value());
+        CHECK(a.source->gamepad == firstId);
+        CHECK(b.source->gamepad == secondId);
+        CHECK(a.source->modality == InputModality::Motion);
+        CHECK(CanonicalGlyph(a.source->glyph).label == "Controller gyroscope Y");
+        CHECK(a.value.pressed);
+        CHECK(b.value.pressed);
+        CHECK_FALSE(router.ReadAction(context, look, 0).pressed);
+        CHECK(router.ReadAction(context, phone, 0).x == -1);
+        collector.BeginFrame(2);
+        first.Disconnect();
+        router.BeginFrame(collector.Commit());
+        CHECK(router.ReadAction(context, look, 0).x == 0);
+        CHECK(router.ReadAction(context, look, 1).x == 0.75F);
+    }
+
+    TEST_CASE("Controller gyro sample admission burns stale handles and unavailable timing without reviving unfocused input",
+              "[input][accessibility][gyroscope][lifecycle]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        const auto id = collector.ConnectGamepad("gyro");
+        const SensorSample available{SensorAvailability::Available, {1, 2, 3}, 0, 10};
+        REQUIRE(collector.SetGamepadGyroscopeSample(id, available));
+        auto malformed = available;
+        malformed.value[2] = std::numeric_limits<float>::infinity();
+        CHECK_FALSE(collector.SetGamepadGyroscopeSample(id, malformed));
+        malformed = available;
+        malformed.timestampNanoseconds = 9;
+        CHECK_FALSE(collector.SetGamepadGyroscopeSample(id, malformed));
+        CHECK(collector.Commit().FindGamepad(id)->gyroscope.value == available.value);
+        collector.BeginFrame(2);
+        REQUIRE(collector.SetGamepadGyroscopeSample(id, {SensorAvailability::Disabled, {1, 2, 3}, 99, 900}));
+        const auto cleared = collector.Commit().FindGamepad(id)->gyroscope;
+        CHECK(cleared.timestampNanoseconds == 0);
+        CHECK(cleared.counter == 0);
+        CHECK((cleared.value == std::array<float, 3>{}));
+        collector.BeginFrame(3);
+        REQUIRE(collector.SetGamepadGyroscopeSample(id, {SensorAvailability::Available, {1, 0, 0}, 0, 1}));
+        collector.SetWindowState({.focused = false});
+        CHECK_FALSE(collector.SetGamepadGyroscopeSample(id, available));
+        CHECK(collector.Commit().FindGamepad(id)->gyroscope.availability == SensorAvailability::Suspended);
+        collector.BeginFrame(4);
+        collector.SetWindowState({.focused = true});
+        REQUIRE(collector.DisconnectGamepad(id));
+        const auto replacement = collector.ConnectGamepad("replacement");
+        CHECK(replacement != id);
+        CHECK_FALSE(collector.SetGamepadGyroscopeSample(id, available));
+        const auto &current = collector.Commit();
+        REQUIRE(current.FindGamepad(replacement) != nullptr);
+        CHECK(current.FindGamepad(replacement)->gyroscope.availability == SensorAvailability::Unsupported);
+    }
+
+    TEST_CASE("Controller gyro source round trips canonically without changing old platform profile bytes",
+              "[input][accessibility][gyroscope][profile]") {
+        InputBinding binding{.kind = BindingControlKind::GyroscopeAxis};
+        InputBindingProfile profile{.profileId = "gyro", .overrides = {{ActionId{"look"}, {binding}}}};
+        const auto original = SerializeBindingProfile(profile);
+        REQUIRE(original.HasValue());
+        auto document = nlohmann::json::parse(original.Value());
+        CHECK_FALSE(document["overrides"][0]["bindings"][0]["gyroscope"].contains("source"));
+        profile.overrides[0].bindings[0].gyroscope.source = GyroscopeSource::AssignedGamepad;
+        const auto encoded = SerializeBindingProfile(profile);
+        REQUIRE(encoded.HasValue());
+        const auto decoded = ParseBindingProfile(encoded.Value());
+        REQUIRE(decoded.HasValue());
+        CHECK(decoded.Value().overrides[0].bindings[0] == profile.overrides[0].bindings[0]);
+        for (const auto &source :
+             {nlohmann::json(-1), nlohmann::json(2), nlohmann::json(256), nlohmann::json(true), nlohmann::json(1.5), nlohmann::json("1"),
+              nlohmann::json(nullptr), nlohmann::json(std::numeric_limits<std::uint64_t>::max())}) {
+            document["overrides"][0]["bindings"][0]["gyroscope"]["source"] = source;
+            CHECK(ParseBindingProfile(document.dump()).HasError());
+        }
+        profile.overrides[0].bindings[0].gyroscope.source = GyroscopeSource::Count;
+        CHECK(SerializeBindingProfile(profile).HasError());
+    }
+
     namespace {
         /** @brief Supplies real canonical profiles and collection, without a sensor/backend test authority. */
         struct GyroscopeFixture final {

@@ -50,10 +50,11 @@ namespace Horo::Editor {
             const auto rate = ParseNumber(draft.calibration);
             const auto scale = ParseNumber(draft.sensitivity);
             if (!rate || !scale || draft.axis < 0 || draft.axis >= static_cast<int>(Input::SensorAxis::Count) || draft.component < 0 ||
-                draft.component > 1 || baseline.kind != Input::BindingControlKind::GyroscopeAxis)
+                draft.component > 1 || draft.source < 0 || draft.source >= static_cast<int>(Input::GyroscopeSource::Count) ||
+                baseline.kind != Input::BindingControlKind::GyroscopeAxis)
                 return std::nullopt;
             auto binding = baseline;
-            binding.gyroscope = {static_cast<Input::SensorAxis>(draft.axis), *rate};
+            binding.gyroscope = {static_cast<Input::SensorAxis>(draft.axis), *rate, static_cast<Input::GyroscopeSource>(draft.source)};
             binding.component = static_cast<std::uint8_t>(draft.component);
             binding.scale = *scale;
             return binding.gyroscope.IsValid() ? std::optional{binding} : std::nullopt;
@@ -136,6 +137,10 @@ namespace Horo::Editor {
                 ImGui::TextWrapped("%s", request_.action.Value().c_str());
                 Ui::Hint(Text("gyro.hint").c_str(), fonts);
                 const std::array axis{Text("gyro.axis_x").c_str(), Text("gyro.axis_y").c_str(), Text("gyro.axis_z").c_str()};
+                const std::array sources{Text("gyro.source_platform").c_str(), Text("gyro.source_gamepad").c_str()};
+                ImGui::TextWrapped("%s", Text("gyro.source").c_str());
+                static_cast<void>(
+                    Ui::ComboControl("##GyroscopeSource", &draft_.source, sources.data(), static_cast<int>(sources.size()), fonts));
                 ImGui::TextWrapped("%s", Text("gyro.axis").c_str());
                 static_cast<void>(Ui::ComboControl("##GyroscopeAxis", &draft_.axis, axis.data(), static_cast<int>(axis.size()), fonts));
                 if (twoDimensional_) {
@@ -195,7 +200,7 @@ namespace Horo::Editor {
     /** @copydoc GyroscopeBindingEditorDraft::FromBinding */
     GyroscopeBindingEditorDraft GyroscopeBindingEditorDraft::FromBinding(const Input::InputBinding &binding) noexcept {
         return {static_cast<int>(binding.gyroscope.axis), binding.component, FormatNumber(binding.gyroscope.radiansPerSecondAtFullScale),
-                FormatNumber(binding.scale)};
+                FormatNumber(binding.scale), static_cast<int>(binding.gyroscope.source)};
     }
 
     /** @copydoc GyroscopeBindingEditorDraft::Evaluate */

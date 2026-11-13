@@ -276,6 +276,7 @@ namespace Horo::Input {
         std::array<float, static_cast<std::size_t>(GamepadAxis::Count)> axes{};
         std::vector<ButtonState> rawButtons;
         std::vector<float> rawAxes;
+        SensorSample gyroscope; /**< Owned SI sample for this exact device incarnation; unsupported unless explicitly collected. */
     };
 
     /** @brief Host-provided monotonic sample boundary for deterministic semantic hold/repeat interpretation.
@@ -359,6 +360,13 @@ namespace Horo::Input {
         [[nodiscard]] bool DisconnectGamepad(GamepadDeviceId id);
         [[nodiscard]] bool SetGamepadButton(GamepadDeviceId id, GamepadButton button, bool down);
         [[nodiscard]] bool SetGamepadAxis(GamepadDeviceId id, GamepadAxis axis, float value);
+        /** @brief Publishes copied SI gyro evidence for one exact connected device incarnation without allocation.
+         * @param id Current device handle. @param sample Available radians/second or an explicit unavailable state.
+         * @return False without mutation for stale devices, invalid samples or available data while unfocused.
+         * Available timestamps must be positive and nonregressing; unavailable data is zeroed and resets the timestamp domain.
+         * @pre Host serializes collection and explicitly owns native sensor enablement.
+         */
+        [[nodiscard]] bool SetGamepadGyroscopeSample(GamepadDeviceId id, SensorSample sample) noexcept;
         [[nodiscard]] bool SetRawGamepadButton(GamepadDeviceId id, std::size_t button, bool down);
         [[nodiscard]] bool SetRawGamepadAxis(GamepadDeviceId id, std::size_t axis, float value);
         [[nodiscard]] const RawInputSnapshot &Commit();
@@ -438,7 +446,7 @@ namespace Horo::Input {
         GamepadAxis,
         RawGamepadButton,
         RawGamepadAxis,
-        GyroscopeAxis, /**< Platform motion sensor, independent of gamepad assignment. */
+        GyroscopeAxis, /**< Explicit platform or assigned-controller motion source. */
     };
     /** @brief Deadzone transformation applied before action aggregation. */
     enum class DeadzoneKind : std::uint8_t {
@@ -479,6 +487,13 @@ namespace Horo::Input {
         Count
     };
 
+    /** @brief Physical motion source; unavailable sources never fall back to another sensor. */
+    enum class GyroscopeSource : std::uint8_t {
+        Platform,
+        AssignedGamepad,
+        Count
+    };
+
     /** @brief Gyroscope normalization before the ordinary binding deadzone, scale and component projection.
      * @details The platform supplies radians/second in its documented device coordinates. A magnitude equal
      * to radiansPerSecondAtFullScale produces a unit axis; scale supplies sensitivity/inversion. This is a
@@ -488,7 +503,8 @@ namespace Horo::Input {
     struct GyroscopeBindingPolicy final {
         SensorAxis axis{SensorAxis::X};
         float radiansPerSecondAtFullScale{1.0F};
-        /** @brief Checks the axis and finite inclusive [0.001, 1000] rad/s calibration. @return Whether admitted. */
+        GyroscopeSource source{GyroscopeSource::Platform}; /**< AssignedGamepad uses the ordinary exact player/device filter. */
+        /** @brief Checks the source, axis and finite inclusive [0.001, 1000] rad/s calibration. @return Whether admitted. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] bool operator==(const GyroscopeBindingPolicy &) const noexcept = default;
     };
@@ -1068,6 +1084,10 @@ namespace Horo::Input {
         [[nodiscard]] bool Press(GamepadButton button);
         [[nodiscard]] bool Release(GamepadButton button);
         [[nodiscard]] bool SetAxis(GamepadAxis axis, float value);
+        /** @brief Publishes gyro facts through the ordinary device-owned collector path.
+         * @param sample Copied SI evidence. @return Whether the current connected incarnation admitted it.
+         */
+        [[nodiscard]] bool SetGyroscopeSample(SensorSample sample) noexcept;
 
         [[nodiscard]] GamepadDeviceId Id() const noexcept {
             return id_;

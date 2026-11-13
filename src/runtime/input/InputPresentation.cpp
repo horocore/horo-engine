@@ -44,7 +44,10 @@ namespace Horo::Input {
                 break;
             case GyroscopeAxis:
                 source.modality = Motion;
-                source.glyph.control = static_cast<std::uint16_t>(binding.gyroscope.axis);
+                source.glyph.control = static_cast<std::uint16_t>(binding.gyroscope.axis) +
+                                       (binding.gyroscope.source == GyroscopeSource::AssignedGamepad ? 3 : 0);
+                if (binding.gyroscope.source == GyroscopeSource::AssignedGamepad)
+                    source.gamepad = device;
                 break;
         }
         return source;
@@ -83,7 +86,12 @@ namespace Horo::Input {
                 label = LabelAt(axes, id.control);
                 break;
             case GyroscopeAxis: {
-                static constexpr std::array<std::string_view, 3> gyro{"Gyroscope X", "Gyroscope Y", "Gyroscope Z"};
+                static constexpr std::array<std::string_view, 6> gyro{"Gyroscope X",
+                                                                      "Gyroscope Y",
+                                                                      "Gyroscope Z",
+                                                                      "Controller gyroscope X",
+                                                                      "Controller gyroscope Y",
+                                                                      "Controller gyroscope Z"};
                 label = LabelAt(gyro, id.control);
                 break;
             }

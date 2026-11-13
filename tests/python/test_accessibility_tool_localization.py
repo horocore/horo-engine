@@ -49,5 +49,6 @@ def test_gyroscope_editor_copy_is_paired_and_covers_modal_and_validation() -> No
     for filename in ("InputMappingPanel.cpp", "InputGyroscopeEditor.cpp"):
         rendered |= set(re.findall(r'"gyro\.([a-z_]+)"', (folder / filename).read_text(encoding="utf-8")))
     assert rendered <= keys
-    assert {"add", "edit", "title", "hint", "axis", "component", "calibration", "sensitivity", "invalid", "apply_failed"} <= keys
+    assert {"add", "edit", "title", "hint", "axis", "component", "calibration", "sensitivity", "invalid", "apply_failed",
+            "source", "source_platform", "source_gamepad"} <= keys
     assert all(catalog[prefix + key]["text"] for catalog in catalogs for key in keys)

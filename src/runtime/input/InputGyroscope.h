@@ -7,10 +7,10 @@
 
 namespace Horo::Input::Detail {
     /** @brief Reads one available finite SI sample without allocation or time integration.
-     * @param snapshot Immutable platform facts. @param policy Validated physical calibration.
+     * @param sample Immutable facts from the explicitly selected source. @param policy Validated physical calibration.
      * @return Saturated unit rate, or zero for unavailable/malformed evidence.
      */
-    [[nodiscard]] float ReadGyroscopeAxis(const RawInputSnapshot &snapshot, const GyroscopeBindingPolicy &policy) noexcept;
+    [[nodiscard]] float ReadGyroscopeAxis(const SensorSample &sample, const GyroscopeBindingPolicy &policy) noexcept;
     /** @brief Decodes gyro-only fields without allowing legacy documents or other controls to hide motion configuration.
      * @param binding Canonical binding JSON. @param kind Already decoded control kind. @param schema Validated wire version.
      * @return Admitted calibration or a typed malformed-profile error.
