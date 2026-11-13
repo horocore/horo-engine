@@ -15,16 +15,16 @@ remaining children remain To Do in Jira and open in GitHub.
 
 | Jira / GitHub / alias | Existing implementation and executable evidence | Added qualification or remaining acceptance evidence |
 | --- | --- | --- |
-| HORO-1076 / #1076 / PFB-008.1 | `PrefabDiagnostics.cpp`, `PrefabDiagnosticsTests.cpp` cover stable descriptors, typed foreign causes, identity, exact bounded context and Build Output projection. | A new regression covers deep resolver failures crossing the message budget. Long composition/source-chain messages now summarize omitted intermediate entries while retaining endpoints and the originating error. Native execution and production publication integration remain unqualified. A closed GitHub issue does not resolve the Jira status discrepancy. |
-| HORO-1077 / #1077 / PFB-008.2 | `PrefabMetricsTests.cpp`, `PrefabMetricCookHostTests.cpp` cover bounded tags, real parse/resolve/cache/cook, zero-allocation disabled producers, terminal receipt and retired telemetry generations. | Run the existing metrics and host targets. Logical span events qualify only the implemented telemetry boundary. |
-| HORO-1078 / #1078 / PFB-008.3 | `PrefabDebugSnapshot.cpp`, `PrefabDebugSnapshotTests.cpp`, `ScenePrefabDebugSnapshotTests.cpp` cover immutable owned evidence, provenance, cancellation and explicit zero/exact-prefix truncation. | Run both model and scene targets. |
+| HORO-1076 / #1076 / PFB-008.1 | `PrefabDiagnostics.cpp`, `PrefabDiagnosticsTests.cpp` cover stable descriptors, typed foreign causes, identity, exact bounded context and Build Output projection. | A new regression covers deep resolver failures crossing the message budget. Long composition/source-chain messages now summarize omitted intermediate entries while retaining endpoints and the originating error. Windows Release model and deep resolver cases passed in the 120-case core run; production publication integration remains unqualified. A closed GitHub issue does not resolve the Jira status discrepancy. |
+| HORO-1077 / #1077 / PFB-008.2 | `PrefabMetricsTests.cpp`, `PrefabMetricCookHostTests.cpp` cover bounded tags, real parse/resolve/cache/cook, zero-allocation disabled producers, terminal receipt and retired telemetry generations. | The Windows Release metrics target passed all nine cases, including zero-allocation terminal producers. The host target remains pending. Logical span events qualify only the implemented telemetry boundary. |
+| HORO-1078 / #1078 / PFB-008.3 | `PrefabDebugSnapshot.cpp`, `PrefabDebugSnapshotTests.cpp`, `ScenePrefabDebugSnapshotTests.cpp` cover immutable owned evidence, provenance, cancellation and explicit zero/exact-prefix truncation. | The model cases passed in the Windows Release core run. The Scene target remains pending. |
 | HORO-1079 / #1079 / PFB-008.4 | `PrefabDiagnosticsTests.cpp` projects bounded source hints to Build Output. `SourceFileOpenService` and workspace source operations own containment, routing and localized failures. | New source-service test checks Prefab routing/focus, a moved source hint and missing handler. Current-revision AssetId/member/property/edge navigation remains unqualified. |
 | HORO-1080 / #1080 / PFB-008.5 | Frozen `tests/fixtures/prefab-reference-corpus`, `PrefabReferenceCorpusTests.cpp`, `ScenePrefabExpansionQualificationTests.cpp`, `PrefabSceneCookQualificationTests.cpp` cover deterministic graph/override/nested/cook/runtime semantics. | Reuse the committed corpus and independent semantic oracles. |
 | HORO-1081 / #1081 / PFB-008.6 | `PrefabParserFuzzTests.cpp` and `PrefabParserPersistenceFuzzTests.cpp` cover deterministic malformed recipes, shrinking/replay, native recovery publication and exact retained state. | Run both dedicated CTest entries. See `tests/unit/runtime/prefab/PrefabParserFuzzMatrix.md` for input and recipe bounds. |
-| HORO-1082 / #1082 / PFB-008.7 | `PrefabLimitProfile`, existing graph work exhaustion, parser byte admission, override bounds and Scene expansion boundary tests. | New shared graph stress and nested fanout tests exercise exact admission, overflow, ordering and retained results. A deterministic in-flight cancellation test records allocation requests/bytes and enforces fewer requests than uninterrupted resolution plus a 250 ms cancellation-return ceiling. Execution and peak allocated bytes remain unverified. |
+| HORO-1082 / #1082 / PFB-008.7 | `PrefabLimitProfile`, existing graph work exhaustion, parser byte admission, override bounds and Scene expansion boundary tests. | New shared graph stress and nested fanout tests exercise exact admission, overflow, ordering and retained results. A deterministic in-flight cancellation test records allocation requests/bytes and enforces fewer requests than uninterrupted resolution plus a 250 ms cancellation-return ceiling. Windows Release stress and cancellation cases passed. Peak live allocated bytes remain unmeasured. |
 | HORO-1083 / #1083 / PFB-008.8 | Prefab document/session/workspace tests cover separate histories, explicit external conflict decisions, recovery, preview source drift and joined worker shutdown. | New deferred-stage test covers edit/reload/close before completion. Publication reentrancy now also probes reload/close/save. Full cross-document apply/rebase transaction races depend on their owning product contracts. |
 | HORO-1084 / #1084 / PFB-008.9 | Cook generation/template provider, release executor/package and project migration tests already exist. | New host test removes authored scene/root/nested sources, reloads the published scene and verifies a failed recook retains that generation. OS, GUI and distribution execution remains a matrix obligation. |
-| HORO-1085 / #1085 / PFB-008.10 | Existing reference corpus, Gameplay host, Editor product, cook/release and migration suites exercise real subsystem entry points. | New pipeline qualification measures real parse/expand/cook and committed-spawn samples against explicit allocation and latency ceilings. Native results, larger-workload Release measurements and integrated create-through-package evidence remain required for final acceptance. |
+| HORO-1085 / #1085 / PFB-008.10 | Existing reference corpus, Gameplay host, Editor product, cook/release and migration suites exercise real subsystem entry points. | New pipeline qualification measures real parse/expand/cook and committed-spawn samples against explicit allocation and latency ceilings. Windows Release two-object and 256-object cohorts passed their allocation and latency gates. Integrated create-through-package and peak-memory evidence remain required for final acceptance. |
 
 Open predecessor status alone does not establish a missing implementation.
 The base contains `a9bda3bfa` (HORO-1031 canonical source layers), `b9168b03d`
@@ -103,6 +103,51 @@ packaged-player/OS execution and measured performance gates. Existing headless
 release-stage tests alone cannot establish that full distribution matrix.
 
 ## Local validation record
+
+The second admitted evening batch completed at
+`0acf531d32d5c71112fbf47e96eb1bf420b87c9d`. Windows MSVC Release built
+`HoroPrefabMetricsTests` and passed all nine discovered CTest cases, with zero
+failures or skips, in 0.33 seconds. The exact command used the
+`^HoroPrefabMetricsTests::` prefix, one worker, `--no-tests=error`, verbose output
+and JUnit capture. Together with the core batch, 129 distinct native test cases
+passed; this does not include the separate editor/cook/corpus/fuzz targets.
+
+The host was Windows 11 build 26300, AMD64 Family 26 Model 68 Stepping 0,
+with one logical processor selected (affinity 15). Instrumentation and expansion
+cache were disabled for the pipeline samples; spawn used the warmed immutable
+template provider. The captured source graph has two nodes and no edges. The
+fixture cook target is `linux-x64`; running this fixture on Windows does not
+establish Linux runtime qualification. Small and hard-limit cohorts respectively
+use 16 and four samples. The scene grows across committed spawns and is retired
+after the cohort.
+
+| Objects | Phase | Median / maximum microseconds | Maximum C++ allocation requests | Maximum cumulative requested bytes |
+| --- | --- | --- | --- | --- |
+| 2 | Parse | 16 / 21 | 221 | 12,778 |
+| 2 | Expand | 2 / 17 | 29 | 2,832 |
+| 2 | Cook | 5 / 25 | 71 | 7,927 |
+| 2 | Spawn/commit | 52 / 132 | 201 | 155,036 |
+| 256 | Parse | 1,568 / 1,674 | 13,963 | 725,654 |
+| 256 | Expand | 177 / 184 | 1,569 | 503,230 |
+| 256 | Cook | 422 / 432 | 1,892 | 750,964 |
+| 256 | Spawn/commit | 1,188 / 1,321 | 11,077 | 5,081,499 |
+
+Canonical source sizes were 949 and 108,823 bytes; runtime template payloads were
+525 and 46,753 bytes. In-flight cancellation on the 256-object source returned
+33 microseconds after the request. Uninterrupted resolution used 1,569 C++
+allocation requests/503,230 cumulative bytes; interrupted resolution used
+1,308 requests/92,775 bytes and preserved the earlier accepted result. The
+shutdown assertions retired all behavior instances in both cohorts. These are
+owner-thread C++ allocation counts and cumulative bytes, not peak live allocation,
+process RSS, native allocator or GPU measurements. No before/after speedup or
+cross-platform performance conclusion is claimed.
+
+The batch exited 0 and released the canonical physical lock, then yielded to
+other topics. Evidence is retained in
+`build/prefab-qualification/resume-metrics-current.log`,
+`metrics-ctest-0acf531.log`, `metrics-lock-proof-0acf531.json`,
+`metrics-ctest.xml` and `performance-environment.json` in that same local evidence
+directory. Generated measurements are not committed.
 
 The missing-connection investigation also identified unnecessary work in the
 preflight itself: it prepared C++ inputs and started an IDE before discovering
