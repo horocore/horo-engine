@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 
 namespace Horo::Editor {
@@ -43,6 +44,63 @@ namespace Horo::Editor {
                     return "workspace.input_mapping.type.axis_2d";
             }
             return "workspace.input_mapping.type.unknown";
+        }
+
+        /** @brief Projects typed observed availability, independent of the desired binding source. */
+        const char *GyroscopeAvailabilityKey(const Input::SensorAvailability availability) noexcept {
+            using enum Input::SensorAvailability;
+            switch (availability) {
+                case Unsupported:
+                    return "gyro.availability_unsupported";
+                case Disabled:
+                    return "gyro.availability_disabled";
+                case PermissionRequired:
+                    return "gyro.availability_permission_required";
+                case Suspended:
+                    return "gyro.availability_suspended";
+                case AwaitingSample:
+                    return "gyro.availability_awaiting_sample";
+                case NativeFailure:
+                    return "gyro.availability_native_failure";
+                case Available:
+                    return "gyro.availability_available";
+            }
+            return "gyro.availability_unknown";
+        }
+
+        /** @brief Encodes both incarnation fields without allocating; decimal uint32/uint64 plus separator fit in 32 bytes. */
+        std::array<char, 48> DeviceCardId(const Input::GamepadDeviceId device) noexcept {
+            std::array<char, 48> id{};
+            const auto slot = std::to_chars(id.data(), id.data() + id.size(), device.slot);
+            *slot.ptr = ':';
+            const auto generation = std::to_chars(slot.ptr + 1, id.data() + id.size() - 1, device.sessionGeneration);
+            *generation.ptr = '\0';
+            return id;
+        }
+
+        /** @brief Offers the normal local slots while retaining an existing larger player ID without narrowing or mutation. */
+        void DrawDeviceAssignment(const Input::GamepadDeviceId device, Input::InputRouter &router, const EditorGuiContext &context) {
+            const auto player = router.PlayerForGamepad(device);
+            const bool custom = player && *player >= 4;
+            std::array<char, 16> customNumber{};
+            if (custom)
+                (void)std::to_chars(customNumber.data(), customNumber.data() + customNumber.size() - 1,
+                                    static_cast<std::uint64_t>(*player) + 1);
+            const std::array<const char *, 6> items{InputMappingPanel::kTextScope.Text(context.localization, "unassigned").c_str(),
+                                                    "1",
+                                                    "2",
+                                                    "3",
+                                                    "4",
+                                                    customNumber.data()};
+            int assignment = player ? (custom ? 5 : static_cast<int>(*player) + 1) : 0;
+            ImGui::TextWrapped("%s", InputMappingPanel::kTextScope.Text(context.localization, "player").c_str());
+            ImGui::SetNextItemWidth(std::max(1.0F, ImGui::GetContentRegionAvail().x));
+            if (Ui::ComboControl("Player", &assignment, items.data(), custom ? 6 : 5, context.theme.fonts)) {
+                if (assignment == 0)
+                    router.UnassignGamepad(device);
+                else if (assignment <= 4)
+                    (void)router.AssignGamepad(static_cast<Input::PlayerId>(assignment - 1), device);
+            }
         }
 
         const char *KeyName(const Input::Key key) noexcept {
@@ -314,6 +372,21 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc DrawInputDeviceCard */
+    void DrawInputDeviceCard(const Input::GamepadState &gamepad, Input::InputRouter &router, const EditorGuiContext &context) {
+        const auto id = DeviceCardId(gamepad.id);
+        Ui::ScopedCard card(id.data(), {0.0F, 0.0F}, Theme::Layout::CardPad, Theme::Layout::CardPad, Theme::Bg2(), true);
+        ImGui::TextWrapped("%s", gamepad.name.c_str());
+        ImGui::TextWrapped("%s %u / %s %llu", InputMappingPanel::kTextScope.Text(context.localization, "slot").c_str(), gamepad.id.slot,
+                           InputMappingPanel::kTextScope.Text(context.localization, "generation").c_str(),
+                           static_cast<unsigned long long>(gamepad.id.sessionGeneration));
+        ImGui::TextWrapped("%s: %s", InputMappingPanel::kTextScope.Text(context.localization, "gyro.status").c_str(),
+                           InputMappingPanel::kTextScope
+                               .Text(context.localization, GyroscopeAvailabilityKey(gamepad.gyroscope.availability))
+                               .c_str());
+        DrawDeviceAssignment(gamepad.id, router, context);
+    }
+
     void InputMappingPanel::DrawDevices(const EditorGuiContext &context) {
         if (router_ == nullptr)
             return;
@@ -322,29 +395,8 @@ namespace Horo::Editor {
             ImGui::TextUnformatted(InputMappingPanel::kTextScope.Text(context.localization, "no_devices").c_str());
             return;
         }
-        for (const Input::GamepadState &gamepad : gamepads) {
-            const std::string cardId = std::format("device-{}", gamepad.id.slot);
-            Ui::ScopedCard card(cardId.c_str(), {0.0F, 78.0F});
-            ImGui::TextUnformatted(gamepad.name.c_str());
-            ImGui::Text("%s %u / %s %llu", InputMappingPanel::kTextScope.Text(context.localization, "slot").c_str(), gamepad.id.slot,
-                        InputMappingPanel::kTextScope.Text(context.localization, "generation").c_str(),
-                        static_cast<unsigned long long>(gamepad.id.sessionGeneration));
-            int assignment =
-                router_->PlayerForGamepad(gamepad.id).has_value() ? static_cast<int>(*router_->PlayerForGamepad(gamepad.id)) + 1 : 0;
-            const std::array<std::string, 5> assignmentLabels{InputMappingPanel::kTextScope.Text(context.localization, "unassigned"), "1",
-                                                              "2", "3", "4"};
-            const std::array<const char *, 5> assignmentItems{assignmentLabels[0].c_str(), assignmentLabels[1].c_str(),
-                                                              assignmentLabels[2].c_str(), assignmentLabels[3].c_str(),
-                                                              assignmentLabels[4].c_str()};
-            ImGui::SetNextItemWidth(140.0F);
-            if (ImGui::Combo(InputMappingPanel::kTextScope.Text(context.localization, "player").c_str(), &assignment,
-                             assignmentItems.data(), assignmentItems.size())) {
-                if (assignment == 0)
-                    router_->UnassignGamepad(gamepad.id);
-                else
-                    static_cast<void>(router_->AssignGamepad(static_cast<Input::PlayerId>(assignment - 1), gamepad.id));
-            }
-        }
+        for (const Input::GamepadState &gamepad : gamepads)
+            DrawInputDeviceCard(gamepad, *router_, context);
     }
 
     void InputMappingPanel::DrawProfiles(const EditorGuiContext &context) {

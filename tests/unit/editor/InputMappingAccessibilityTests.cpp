@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <imgui_internal.h>
+#include <limits>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -13,7 +16,94 @@ namespace Horo::Editor {
             field.fill('\0');
             std::ranges::copy(text, field.begin());
         }
+
+        /** @brief Observes actual shared-card output after its automatic sizing settles. */
+        struct DeviceCardObservation final {
+            ImGuiID id{};
+            ImVec2 size;
+            std::string text;
+        };
+
+        /** @brief Captures rendered text and geometry without introducing a second device/assignment model. */
+        DeviceCardObservation ObserveDeviceCard(const Input::GamepadState &device, Tests::EditorGuiContextFixture &fixture,
+                                                const float width) {
+            DeviceCardObservation result;
+            for (int frame = 0; frame < 3; ++frame) {
+                fixture.imgui.BeginFrame();
+                ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
+                ImGui::SetNextWindowSize({width, 680}, ImGuiCond_Always);
+                ImGui::Begin("Input device observation");
+                ImGui::LogToBuffer();
+                DrawInputDeviceCard(device, fixture.input, fixture.context);
+                result.id = ImGui::GetItemID();
+                result.size = ImGui::GetItemRectSize();
+                result.text = GImGui->LogBuffer.c_str();
+                ImGui::LogFinish();
+                ImGui::End();
+                fixture.imgui.EndFrame();
+            }
+            return result;
+        }
     }  // namespace
+
+    TEST_CASE("Controller cards show observed gyro availability with wrapped localized content and preserve assignment",
+              "[editor][input][accessibility][gyroscope][headless]") {
+        const std::array states{std::pair{Input::SensorAvailability::Unsupported, "gyro.availability_unsupported"},
+                                std::pair{Input::SensorAvailability::Disabled, "gyro.availability_disabled"},
+                                std::pair{Input::SensorAvailability::PermissionRequired, "gyro.availability_permission_required"},
+                                std::pair{Input::SensorAvailability::Suspended, "gyro.availability_suspended"},
+                                std::pair{Input::SensorAvailability::AwaitingSample, "gyro.availability_awaiting_sample"},
+                                std::pair{Input::SensorAvailability::NativeFailure, "gyro.availability_native_failure"},
+                                std::pair{Input::SensorAvailability::Available, "gyro.availability_available"}};
+        for (const float width : {220.0F, 700.0F}) {
+            Input::RawInputCollector collector;
+            Tests::EditorGuiContextFixture fixture{{width, 720}};
+            const auto catalogs = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+            for (const char *locale : {"en-US", "tr-TR"})
+                REQUIRE(fixture.localization.LoadCatalogFile(catalogs / (std::string{locale} + ".json")));
+            collector.BeginFrame(1);
+            const auto device =
+                collector.ConnectGamepad("Extended controller name with non-ASCII ÇĞÜ İı and a deliberately long hardware label");
+            fixture.input.BeginFrame(collector.Commit());
+            REQUIRE(fixture.input.AssignGamepad(255, device));
+            std::uint64_t frame = 1;
+            for (const char *locale : {"en-US", "tr-TR"}) {
+                REQUIRE(fixture.localization.Prepare({locale}));
+                REQUIRE(fixture.localization.ActivatePrepared());
+                for (const auto [state, key] : states) {
+                    CAPTURE(width, locale, state);
+                    collector.BeginFrame(++frame);
+                    REQUIRE(collector.SetGamepadGyroscopeSample(device, {state, {1, 2, 3}, 0, static_cast<std::int64_t>(frame)}));
+                    fixture.input.BeginFrame(collector.Commit());
+                    const auto revision = fixture.input.RoutingState({}).assignmentRevision;
+                    const auto observed = ObserveDeviceCard(*fixture.input.Snapshot().FindGamepad(device), fixture, width);
+                    CHECK(observed.text.find(InputMappingPanel::kTextScope.Text(fixture.localization, key)) != std::string::npos);
+                    CHECK(observed.size.y > 78.0F);
+                    CHECK(observed.size.x <= width);
+                    CHECK(fixture.input.PlayerForGamepad(device) == Input::PlayerId{255});
+                    CHECK(fixture.input.RoutingState({}).assignmentRevision == revision);
+                }
+            }
+        }
+    }
+
+    TEST_CASE("Controller card identity burns the full device incarnation including high generation bits",
+              "[editor][input][accessibility][gyroscope][lifecycle]") {
+        const std::array ids{Input::GamepadDeviceId{0, 1}, Input::GamepadDeviceId{0, std::numeric_limits<std::uint64_t>::max()},
+                             Input::GamepadDeviceId{std::numeric_limits<std::uint32_t>::max(), std::numeric_limits<std::uint64_t>::max()}};
+        std::array<Input::RawInputSnapshot, 3> snapshots;
+        Tests::EditorGuiContextFixture fixture;
+        std::array<ImGuiID, 3> observed{};
+        for (std::size_t index = 0; index < ids.size(); ++index) {
+            snapshots[index].frame = index + 1;
+            snapshots[index].gamepads.push_back({.id = ids[index], .name = "Controller"});
+            fixture.input.BeginFrame(snapshots[index]);
+            observed[index] = ObserveDeviceCard(snapshots[index].gamepads[0], fixture, 700).id;
+            REQUIRE(observed[index] != 0);
+        }
+        CHECK(observed[0] != observed[1]);
+        CHECK(observed[1] != observed[2]);
+    }
 
     TEST_CASE("Input accessibility editor preserves exact microseconds through decimal millisecond drafts",
               "[editor][input][accessibility][model]") {

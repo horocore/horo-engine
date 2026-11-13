@@ -51,6 +51,13 @@ namespace Horo::Editor {
     [[nodiscard]] BindingAccessibilityDraftCommand DrawBindingAccessibilityDraft(BindingAccessibilityEditorDraft &draft,
                                                                                  const EditorGuiContext &context);
 
+    /** @brief Draws one live device's observed motion availability and canonical player assignment.
+     * @param gamepad Exact device facts from the current snapshot. @param router Assignment authority on the UI owner thread.
+     * @param context Current localization and shared controls. Rendering never enables sensors or edits binding preferences.
+     * @pre Caller has an active ImGui window; the snapshot and services outlive this call.
+     */
+    void DrawInputDeviceCard(const Input::GamepadState &gamepad, Input::InputRouter &router, const EditorGuiContext &context);
+
     /** @brief Workspace surface for action maps, live devices, profile persistence, and typed rebinding. */
     class InputMappingPanel final : public IWorkspacePanel {
     public:

@@ -109,6 +109,21 @@ reported held when the admitted threshold was zero. Zero remains neutral, a fres
 nonzero rate produces one press, and returning to zero produces a release. This
 corrects edge derivation without changing threshold admission or wire values.
 
+The device page reports the actual copied gyro availability, separately from the
+desired binding source. Device cards wrap labels and size to their content, use
+the shared player selector and preserve existing assignments outside the four
+normal local-player choices. Card identities include the complete device
+generation, so a reconnect cannot inherit the old device's popup/selection ID.
+Rendering this status never enables collection or changes a binding preference.
+
+The shared combo now admits Dear ImGui keyboard navigation and activation, skips
+disabled options, wraps long option text at the semantic font size and displays
+focus separately from error styling. Mouse-down activation and existing item
+selector identities are retained. Selecting the current value closes without
+reporting a change, avoiding unnecessary settings/profile publication. Public
+signatures and header ownership are unchanged. New real-ImGui input/render tests
+cover these behaviors; native execution remains pending at this source edit.
+
 Physical identity comparisons also ignore fields inactive for the selected kind:
 changing `key` on a gyro/gamepad/wheel binding, for example, never creates a new
 physical control. The same identity helper governs duplicate and chord/sticky
