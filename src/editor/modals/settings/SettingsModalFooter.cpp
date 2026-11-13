@@ -24,6 +24,56 @@ namespace Horo::Editor::SettingsModalInternal {
     using namespace Ui;
     using Theme::ScopedTextStyle;
 
+    namespace {
+        /** @brief Selects localized feedback from typed transaction state without reading draft values. */
+        const char *StatusTextKey(const SettingsState &state) {
+            switch (state.status) {
+                case SettingsModalStatus::Loaded:
+                    return "configuration.loaded";
+                case SettingsModalStatus::Applied:
+                    return "configuration.applied";
+                case SettingsModalStatus::Defaults:
+                    return "configuration.defaults";
+                case SettingsModalStatus::Failure:
+                    if (state.configurationFailure && (state.configurationFailure->code.Value() == "configuration.draft_stale" ||
+                                                       state.configurationFailure->code.Value() == "editor.settings.draft_stale"))
+                        return "configuration.stale";
+                    return "configuration.invalid";
+                case SettingsModalStatus::None:
+                    return static_cast<SettingsTab>(state.activeTab) == SettingsTab::ProjectConfiguration
+                               ? "configuration.project_persist_hint"
+                               : "configuration.persist_hint";
+            }
+            return "configuration.persist_hint";
+        }
+
+        /** @brief Restores one validated default preview through the shared authority without committing it. */
+        void RestoreDefaultDraft(SettingsState &state, EditorSettingsService &settings) {
+            LOG_INFO("editor.settings", "Restore Defaults clicked — draft reset to factory defaults.");
+            if (static_cast<SettingsTab>(state.activeTab) == SettingsTab::ProjectConfiguration) {
+                if (state.projectConfiguration) {
+                    const auto restored = state.projectConfiguration->RestoreDefaults();
+                    state.configurationFailure = restored.HasError() ? std::optional<Error>{restored.ErrorValue()} : std::nullopt;
+                    state.status = restored.HasError() ? SettingsModalStatus::Failure : SettingsModalStatus::Defaults;
+                }
+                return;
+            }
+            LoadSettingsForModal(state, settings);
+            const auto restored = state.configuration->RestoreDefaults();
+            if (restored.HasError()) {
+                state.configurationFailure = restored.ErrorValue();
+                state.status = SettingsModalStatus::Failure;
+                return;
+            }
+            auto defaults = DefaultEditorSettings();
+            ApplyEditorConfigurationSnapshot(*state.configuration->Preview(), defaults);
+            ApplySettingsToDraft(state, defaults);
+            state.appearance.pendingThemeIndex = state.appearance.themeIndex;
+            state.configurationPreviewed = true;
+            state.status = SettingsModalStatus::Defaults;
+        }
+    }  // namespace
+
     void DrawFooterStatus(const SettingsState &st, const EditorGuiContext &ctx, const float footerPaddingX, const float actionsStartX) {
         ImGui::SetCursorPos({footerPaddingX, (ImGui::GetWindowHeight() - ImGui::GetTextLineHeight()) * 0.5F});
         if (st.dirty || (st.configuration && !st.configuration->Draft().proposedValues.empty()) ||
@@ -43,29 +93,7 @@ namespace Horo::Editor::SettingsModalInternal {
             textColor = Err();
         ImGui::PushStyleColor(ImGuiCol_Text, textColor);
         const auto navigationHint = SettingsModal::kTextScope.Text(ctx.localization, "navigation.save_policy_first");
-        const char *statusKey = static_cast<SettingsTab>(st.activeTab) == SettingsTab::ProjectConfiguration
-                                    ? "configuration.project_persist_hint"
-                                    : "configuration.persist_hint";
-        switch (st.status) {
-            case SettingsModalStatus::Loaded:
-                statusKey = "configuration.loaded";
-                break;
-            case SettingsModalStatus::Applied:
-                statusKey = "configuration.applied";
-                break;
-            case SettingsModalStatus::Defaults:
-                statusKey = "configuration.defaults";
-                break;
-            case SettingsModalStatus::Failure:
-                statusKey = "configuration.invalid";
-                if (st.configurationFailure && (st.configurationFailure->code.Value() == "configuration.draft_stale" ||
-                                                st.configurationFailure->code.Value() == "editor.settings.draft_stale"))
-                    statusKey = "configuration.stale";
-                break;
-            case SettingsModalStatus::None:
-                break;
-        }
-        const auto status = SettingsModal::kTextScope.Text(ctx.localization, statusKey);
+        const auto &status = SettingsModal::kTextScope.Text(ctx.localization, StatusTextKey(st));
         const char *message = st.navigationProjectDraftDirty ? navigationHint.c_str() : status.c_str();
         if (hasFeedback)
             message = st.modalFeedback.c_str();
@@ -114,28 +142,7 @@ namespace Horo::Editor::SettingsModalInternal {
                     .font = ctx.theme.fonts.sansCompact,
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {
-            LOG_INFO("editor.settings", "Restore Defaults clicked — draft reset to factory defaults.");
-            if (project) {
-                if (st.projectConfiguration) {
-                    const auto restored = st.projectConfiguration->RestoreDefaults();
-                    st.configurationFailure = restored.HasError() ? std::optional<Error>{restored.ErrorValue()} : std::nullopt;
-                    st.status = restored.HasError() ? SettingsModalStatus::Failure : SettingsModalStatus::Defaults;
-                }
-            } else {
-                LoadSettingsForModal(st, settings);
-                const auto restored = st.configuration->RestoreDefaults();
-                if (restored.HasError()) {
-                    st.configurationFailure = restored.ErrorValue();
-                    st.status = SettingsModalStatus::Failure;
-                } else {
-                    auto defaults = DefaultEditorSettings();
-                    ApplyEditorConfigurationSnapshot(*st.configuration->Preview(), defaults);
-                    ApplySettingsToDraft(st, defaults);
-                    st.appearance.pendingThemeIndex = st.appearance.themeIndex;
-                    st.configurationPreviewed = true;
-                    st.status = SettingsModalStatus::Defaults;
-                }
-            }
+            RestoreDefaultDraft(st, settings);
         }
         ImGui::SameLine(0.0F, gap);
         if (Button({.label = cancelLabel.c_str(),

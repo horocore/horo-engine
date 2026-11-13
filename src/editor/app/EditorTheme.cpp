@@ -395,17 +395,9 @@ namespace Horo::Editor::Theme {
         return ActiveTokens();
     }
 
-    void RefreshThemeList(const char *additionalPath, const char *userThemesPath) {
-        ThemeList().clear();
-
-        // Built-in themes
-        {
-            ThemeEntry e;
-            e.name = "Horo Dark";
-            e.isBuiltIn = true;
-            ThemeList().push_back(std::move(e));
-        }
-        {
+    namespace {
+        /** @brief Constructs the unchanged Midnight built-in palette without publishing it. */
+        ThemeEntry MakeMidnightTheme() {
             ThemeEntry e;
             e.name = "Midnight";
             e.isBuiltIn = true;
@@ -437,9 +429,11 @@ namespace Horo::Editor::Theme {
             e.colors["PlotHistogram"] = ImVec4{0.447F, 0.282F, 0.847F, 1.0F};
             e.colors["TableBorderStrong"] = ImVec4{0.149F, 0.169F, 0.216F, 1.0F};
             e.colors["TableBorderLight"] = ImVec4{0.149F, 0.169F, 0.216F, 0.5F};
-            ThemeList().push_back(std::move(e));
+            return e;
         }
-        {
+
+        /** @brief Constructs the unchanged Light built-in palette without publishing it. */
+        ThemeEntry MakeLightTheme() {
             ThemeEntry e;
             e.name = "Light";
             e.isBuiltIn = true;
@@ -471,12 +465,28 @@ namespace Horo::Editor::Theme {
             e.colors["PlotHistogram"] = ImVec4{0.016F, 0.647F, 0.988F, 1.0F};
             e.colors["TableBorderStrong"] = ImVec4{0.784F, 0.780F, 0.773F, 1.0F};
             e.colors["TableBorderLight"] = ImVec4{0.784F, 0.780F, 0.773F, 0.5F};
+            return e;
+        }
+    }  // namespace
+
+    /** @copydoc RefreshThemeList */
+    void RefreshThemeList(const char *additionalPath, const char *userThemesPath) {
+        ThemeList().clear();
+
+        // Built-in themes
+        {
+            ThemeEntry e;
+            e.name = "Horo Dark";
+            e.isBuiltIn = true;
             ThemeList().push_back(std::move(e));
         }
+        ThemeList().push_back(MakeMidnightTheme());
+        ThemeList().push_back(MakeLightTheme());
 
         AppendCustomThemes(additionalPath, userThemesPath);
     }
 
+    /** @copydoc LoadThemeFromJson */
     bool LoadThemeFromJson(const char *path, ThemeEntry &outEntry) {
         if (path == nullptr)
             return false;

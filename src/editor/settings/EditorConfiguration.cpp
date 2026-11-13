@@ -21,6 +21,27 @@ namespace Horo::Editor {
                 std::terminate();
             }
         }
+
+        /** @brief Builds one inert user appearance descriptor with canonical source admission. */
+        SettingDescriptor AppearanceSetting(const char *key, const SettingValueType type, SettingValue value,
+                                            SettingValidation validation = {}, std::string label = {}) {
+            SettingDescriptor descriptor{.key = SettingKey{key},
+                                         .type = type,
+                                         .defaultValue = std::move(value),
+                                         .scope = SettingScope::User,
+                                         .reloadPolicy = ReloadPolicy::NextFrame,
+                                         .sensitivity = SettingSensitivity::Public,
+                                         .sourcePolicy =
+                                             ConfigurationSourcePolicy{.allowedSources = ConfigurationSourceMask::Invocation |
+                                                                                         ConfigurationSourceMask::Environment |
+                                                                                         ConfigurationSourceMask::Session |
+                                                                                         ConfigurationSourceMask::User |
+                                                                                         ConfigurationSourceMask::PackagedProfile},
+                                         .validation = std::move(validation)};
+            if (!label.empty())
+                descriptor.label = SettingLabelKey{.namespaceId = "editor", .key = std::move(label)};
+            return descriptor;
+        }
     }  // namespace
 
     /** @copydoc ToConfigurationThemeValue */
@@ -79,57 +100,41 @@ namespace Horo::Editor {
 
     /** @copydoc MakeEditorSettingsContribution */
     ModuleConfigurationContribution MakeEditorSettingsContribution(const EditorSettings &settings) {
-        const auto setting = [](const char *key, const SettingValueType type, SettingValue value, SettingValidation validation = {},
-                                std::string label = {}) {
-            SettingDescriptor descriptor{.key = SettingKey{key},
-                                         .type = type,
-                                         .defaultValue = std::move(value),
-                                         .scope = SettingScope::User,
-                                         .reloadPolicy = ReloadPolicy::NextFrame,
-                                         .sensitivity = SettingSensitivity::Public,
-                                         .sourcePolicy =
-                                             ConfigurationSourcePolicy{.allowedSources = ConfigurationSourceMask::Invocation |
-                                                                                         ConfigurationSourceMask::Environment |
-                                                                                         ConfigurationSourceMask::Session |
-                                                                                         ConfigurationSourceMask::User |
-                                                                                         ConfigurationSourceMask::PackagedProfile},
-                                         .validation = std::move(validation)};
-            if (!label.empty())
-                descriptor.label = SettingLabelKey{.namespaceId = "editor", .key = std::move(label)};
-            return descriptor;
-        };
         ModuleConfigurationContribution
             contribution{.module = ModuleId{"horo.editor.services"},
                          .ownerPrefix = "editor",
-                         .settings =
-                             {setting(kThemeKey, SettingValueType::String, std::string{ToConfigurationThemeValue(settings.themePreset)},
-                                      SettingStringRules{.choices = {"horo_dark", "midnight", "light"}}, "settings.appearance.color_theme"),
-                              setting(kPackageThemeKey, SettingValueType::String, settings.themeId,
-                                      SettingStringRules{.maximumBytes = 256,
-                                                         .allowedCharacters = "abcdefghijklmnopqrstuvwxyz0123456789._-"},
-                                      "settings.configuration.theme_package"),
-                              setting(kAccentColorKey, SettingValueType::String, settings.accentColorHex,
-                                      SettingStringRules{.minimumBytes = 7,
-                                                         .maximumBytes = 7,
-                                                         .requiredPrefix = "#",
-                                                         .allowedCharacters = "0123456789abcdefABCDEF"},
-                                      "settings.appearance.accent_color"),
-                              setting(kUiScaleKey, SettingValueType::Integer, static_cast<std::int64_t>(settings.uiScalePercent),
-                                      SettingIntegerRange{75, 200}, "settings.appearance.ui_scale"),
-                              setting(kCodeFontSizeKey, SettingValueType::Integer, static_cast<std::int64_t>(settings.codeFontSizePx),
-                                      SettingIntegerRange{14, 24}, "settings.appearance.code_font_size")}};
-        contribution.settings.push_back(setting("editor.appearance.code_font_family", SettingValueType::String, settings.codeFontFamily,
-                                                SettingStringRules{.minimumBytes = 1, .maximumBytes = 128},
-                                                "settings.code_editor.font_family"));
+                         .settings = {AppearanceSetting(kThemeKey, SettingValueType::String,
+                                                        std::string{ToConfigurationThemeValue(settings.themePreset)},
+                                                        SettingStringRules{.choices = {"horo_dark", "midnight", "light"}},
+                                                        "settings.appearance.color_theme"),
+                                      AppearanceSetting(kPackageThemeKey, SettingValueType::String, settings.themeId,
+                                                        SettingStringRules{.maximumBytes = 256,
+                                                                           .allowedCharacters = "abcdefghijklmnopqrstuvwxyz0123456789._-"},
+                                                        "settings.configuration.theme_package"),
+                                      AppearanceSetting(kAccentColorKey, SettingValueType::String, settings.accentColorHex,
+                                                        SettingStringRules{.minimumBytes = 7,
+                                                                           .maximumBytes = 7,
+                                                                           .requiredPrefix = "#",
+                                                                           .allowedCharacters = "0123456789abcdefABCDEF"},
+                                                        "settings.appearance.accent_color"),
+                                      AppearanceSetting(kUiScaleKey, SettingValueType::Integer,
+                                                        static_cast<std::int64_t>(settings.uiScalePercent), SettingIntegerRange{75, 200},
+                                                        "settings.appearance.ui_scale"),
+                                      AppearanceSetting(kCodeFontSizeKey, SettingValueType::Integer,
+                                                        static_cast<std::int64_t>(settings.codeFontSizePx), SettingIntegerRange{14, 24},
+                                                        "settings.appearance.code_font_size")}};
+        contribution.settings.push_back(
+            AppearanceSetting("editor.appearance.code_font_family", SettingValueType::String, settings.codeFontFamily,
+                              SettingStringRules{.minimumBytes = 1, .maximumBytes = 128}, "settings.code_editor.font_family"));
         for (const auto &entry : CodeEditorBooleanSettings())
-            contribution.settings.push_back(setting((std::string{"editor.code."} + entry.key).c_str(), SettingValueType::Boolean,
-                                                    settings.codeEditor.*entry.member, {},
-                                                    std::string{"settings.code_editor."} + entry.key));
+            contribution.settings.push_back(AppearanceSetting((std::string{"editor.code."} + entry.key).c_str(), SettingValueType::Boolean,
+                                                              settings.codeEditor.*entry.member, {},
+                                                              std::string{"settings.code_editor."} + entry.key));
         for (const auto &entry : CodeEditorIntegerSettings())
-            contribution.settings.push_back(setting((std::string{"editor.code."} + entry.key).c_str(), SettingValueType::Integer,
-                                                    static_cast<std::int64_t>(settings.codeEditor.*entry.member),
-                                                    SettingIntegerRange{entry.minimum, entry.maximum},
-                                                    std::string{"settings.code_editor."} + entry.key));
+            contribution.settings.push_back(AppearanceSetting((std::string{"editor.code."} + entry.key).c_str(), SettingValueType::Integer,
+                                                              static_cast<std::int64_t>(settings.codeEditor.*entry.member),
+                                                              SettingIntegerRange{entry.minimum, entry.maximum},
+                                                              std::string{"settings.code_editor."} + entry.key));
         contribution.settings.push_back(
             {.key = SettingKey{"editor.theme.override_path"},
              .type = SettingValueType::String,

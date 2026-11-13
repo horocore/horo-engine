@@ -70,6 +70,46 @@ namespace Horo::Editor::SettingsModalInternal {
                 DrawValue(candidate.Value());
             }
         }
+
+        /** @brief Draws one admitted primitive field without mutating the shared draft. */
+        bool DrawFieldControl(ConfigurationSettingsSession &session, const ConfigurationSettingField &field,
+                              const EditorGuiContext &context, const ConfigurationSource source) {
+            auto *buffer = session.EditBuffer(field.descriptor.key);
+            bool changed = false;
+            const auto &label =
+                SettingsModal::kTextScope.Text(context.localization, source == ConfigurationSource::Project ? "configuration.project_value"
+                                                                                                            : "configuration.user_value");
+            Ui::SettingRow(label.c_str(), nullptr, context.theme.fonts, [&] {
+                if (field.descriptor.type == SettingValueType::Boolean) {
+                    bool value = *buffer == "true";
+                    changed = Ui::ToggleControl("##configuration-value", &value, context.theme.fonts, false);
+                    if (changed)
+                        *buffer = value ? "true" : "false";
+                } else {
+                    changed = Ui::InputTextControl("##configuration-value", *buffer, ConfigurationLimits{}.maximumStringValueBytes,
+                                                   context.theme.fonts, {.error = field.error.has_value()});
+                }
+            }, field.descriptor.key.Value().c_str(), Ui::SettingRowLayout::Stacked);
+            return changed;
+        }
+
+        /** @brief Applies a copied field identity because stale-edit recovery can replace every session row. */
+        void ApplyFieldEdit(SettingsState &state, ConfigurationSettingsSession &session, const SettingKey key) {
+            const auto edited = session.Edit(key, *session.EditBuffer(key));
+            if (edited.HasError()) {
+                state.configurationFailure = edited.ErrorValue();
+                state.status = SettingsModalStatus::Failure;
+            } else {
+                state.configurationFailure.reset();
+                state.status = SettingsModalStatus::None;
+            }
+            if (session.Draft().source == ConfigurationSource::User && edited.HasValue() && key.Value() == "editor.theme.active" &&
+                session.Preview()) {
+                const auto &theme = std::get<std::string>(session.Preview()->Get(key));
+                state.appearance.pendingThemeIndex = static_cast<int>(ThemePresetFromConfigurationValue(theme));
+                state.configurationPreviewed = true;
+            }
+        }
     }  // namespace
 
     /** @copydoc DrawConfiguration */
@@ -106,38 +146,8 @@ namespace Horo::Editor::SettingsModalInternal {
                 SettingsModal::kTextScope.Text(context.localization, source == ConfigurationSource::Project ? "configuration.project_public"
                                                                                                             : "configuration.public");
             ImGui::TextWrapped("%s", publicPolicy.c_str());
-            bool changed = false;
-            auto *buffer = session.EditBuffer(key);
-            const auto &label =
-                SettingsModal::kTextScope.Text(context.localization, source == ConfigurationSource::Project ? "configuration.project_value"
-                                                                                                            : "configuration.user_value");
-            SettingRow(label.c_str(), nullptr, context.theme.fonts, [&] {
-                if (field.descriptor.type == SettingValueType::Boolean) {
-                    bool value = *buffer == "true";
-                    changed = ToggleControl("##configuration-value", &value, context.theme.fonts, false);
-                    if (changed)
-                        *buffer = value ? "true" : "false";
-                } else {
-                    changed = InputTextControl("##configuration-value", *buffer, ConfigurationLimits{}.maximumStringValueBytes,
-                                               context.theme.fonts, {.error = field.error.has_value()});
-                }
-            }, key.Value().c_str(), SettingRowLayout::Stacked);
-            if (changed) {
-                const auto editedKey = key;
-                const auto edited = session.Edit(editedKey, *buffer);
-                if (edited.HasError()) {
-                    state.configurationFailure = edited.ErrorValue();
-                    state.status = SettingsModalStatus::Failure;
-                } else {
-                    state.configurationFailure.reset();
-                    state.status = SettingsModalStatus::None;
-                }
-                if (source == ConfigurationSource::User && edited.HasValue() && editedKey.Value() == "editor.theme.active" &&
-                    session.Preview()) {
-                    const auto &theme = std::get<std::string>(session.Preview()->Get(editedKey));
-                    state.appearance.pendingThemeIndex = static_cast<int>(ThemePresetFromConfigurationValue(theme));
-                    state.configurationPreviewed = true;
-                }
+            if (DrawFieldControl(session, field, context, source)) {
+                ApplyFieldEdit(state, session, key);
                 return;
             }
             if (field.error) {
