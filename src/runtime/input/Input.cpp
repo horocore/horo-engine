@@ -1387,8 +1387,8 @@ namespace Horo::Input {
         moveY_ = move.y;
         lookX_ = look.x;
         lookY_ = look.y;
-        pendingJump_ = pendingJump_ || jump.pressed;
-        pendingInteract_ = pendingInteract_ || interact.pressed;
+        pendingJump_ = pendingJump_ || jump.pressed || jump.repeated;
+        pendingInteract_ = pendingInteract_ || interact.pressed || interact.repeated;
         moveDown_ = move.down;
         pendingMovePressed_ = pendingMovePressed_ || move.pressed;
         pendingMoveReleased_ = pendingMoveReleased_ || move.released;

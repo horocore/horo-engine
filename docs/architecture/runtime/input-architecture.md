@@ -311,6 +311,12 @@ clears a builder at player/session ownership changes. Recording stores the
 already assigned value frames; replay feeds those frames directly to simulation,
 without repeating action routing or OS events.
 
+For jump and interact, configured semantic repeat edges enter the same pending
+command latch as activation edges. Multiple edges before a fixed tick coalesce
+into one command. A repeat therefore survives a presentation frame with no tick,
+but does not fire again on later catch-up ticks. Movement transition bits retain
+their physical/semantic transition meaning and do not turn repeats into presses.
+
 The concrete frame also carries the move action's `down`, `pressed`, and
 `released` bits. These preserve existing semantic callbacks even when opposing
 movement bindings cancel the axis value; their edges follow the same once-per-

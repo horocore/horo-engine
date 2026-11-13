@@ -941,6 +941,8 @@ namespace Horo::Input {
          * @param context Gameplay context; inactive or unfocused input neutralizes held and pending commands.
          * @param player Optional player assignment owned by this builder.
          * @details Edges survive presentation frames with no fixed tick and fire on the next tick only.
+         *          Jump and interact accept activation and configured semantic repeat edges. Multiple
+         *          pending edges coalesce into one command; catch-up ticks do not repeat that command.
          *          Call once per committed snapshot after all higher-priority input consumers have run.
          */
         void Capture(InputRouter &router, const InputContextToken &context, std::optional<PlayerId> player = std::nullopt);

@@ -73,6 +73,57 @@ namespace {
             REQUIRE((recording.Next() == command));
     }
 
+    TEST_CASE("Gameplay Repeat Commands Survive Zero Tick Frames And Fire Once", "[unit][runtime][input][accessibility]") {
+        InputService input;
+        const InputContextId gameplayId{"gameplay"};
+        auto jumpBinding = KeyBinding(Key::Space);
+        auto interactBinding = KeyBinding(Key::K);
+        jumpBinding.accessibility.digital = {.repeat = true, .repeatDelayMicroseconds = 50, .repeatIntervalMicroseconds = 20};
+        interactBinding.accessibility = jumpBinding.accessibility;
+        REQUIRE(input.Router()
+                    .SetActionMap({{ActionId{"jump"}, ActionValueType::Digital, gameplayId, true, {jumpBinding}},
+                                   {ActionId{"interact"}, ActionValueType::Digital, gameplayId, true, {interactBinding}}})
+                    .HasValue());
+        auto gameplay = input.Router().PushContext(gameplayId, InputContextKind::Gameplay);
+        GameplayInputFrameBuilder builder{ActionId{"move"}, ActionId{"look"}, ActionId{"jump"}, ActionId{"interact"}};
+        FrameNumber frame{};
+        const auto capture = [&](const std::uint64_t time, const bool down, const bool focused = true) {
+            input.Router().EndFrame();
+            input.BeginFrame(++frame, InputSampleTime{time});
+            input.Collector().SetKey(Key::Space, down);
+            input.Collector().SetKey(Key::K, down);
+            input.Collector().SetWindowState({.focused = focused});
+            static_cast<void>(input.CommitFrame());
+            builder.Capture(input.Router(), gameplay);
+        };
+        capture(0, false);
+        capture(10, true);
+        const auto activation = builder.Consume(1);
+        REQUIRE(activation.jumpPressed);
+        REQUIRE(activation.interactPressed);
+        REQUIRE(builder.Consume(2) == GameplayInputFrame{.tick = 2});
+
+        capture(60, true);  // Repeat, followed by a presentation frame without a repeat.
+        builder.Capture(input.Router(), gameplay);
+        capture(61, true);
+        const auto repeat = builder.Consume(3);
+        REQUIRE(repeat.jumpPressed);
+        REQUIRE(repeat.interactPressed);
+        REQUIRE(builder.Consume(4) == GameplayInputFrame{.tick = 4});
+
+        capture(80, true);
+        capture(100, true);  // Two repeats coalesce before the next fixed tick.
+        REQUIRE(builder.Consume(5).jumpPressed);
+        REQUIRE(builder.Consume(6) == GameplayInputFrame{.tick = 6});
+        capture(120, true);
+        capture(121, true, false);  // Losing ownership clears an unconsumed repeat.
+        REQUIRE(builder.Consume(7) == GameplayInputFrame{.tick = 7});
+        capture(130, false);
+        capture(140, true);
+        builder.Reset();
+        REQUIRE(builder.Consume(8) == GameplayInputFrame{.tick = 8});
+    }
+
     TEST_CASE("Gameplay Capture Neutralizes Pending Commands When Ownership Changes", "[unit][runtime][input]") {
         RawInputCollector collector;
         InputRouter router;
