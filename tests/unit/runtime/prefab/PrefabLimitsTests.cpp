@@ -3,6 +3,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <utility>
 
 namespace Horo::Prefab {
@@ -113,6 +114,22 @@ namespace Horo::Prefab {
         REQUIRE(exhausted.HasError());
         REQUIRE(exhausted.ErrorValue().code.Value() == PrefabErrors::WorkBudgetExceeded.code.Value());
         REQUIRE(budget.Remaining() == 0);
+    }
+
+    TEST_CASE("Prefab oversized work charge rejects without wrapping or consuming subsequent admission", "[unit][prefab][limits][stress]") {
+        const auto profile = PrefabLimitProfile::Create({});
+        REQUIRE(profile.HasValue());
+        PrefabExpansionBudget budget{profile.Value()};
+        const auto capacity = budget.Remaining();
+        const auto rejected = budget.Consume(std::numeric_limits<std::size_t>::max());
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::WorkBudgetExceeded.code.Value());
+        CHECK(budget.Remaining() == capacity);
+        REQUIRE(budget.Consume(0).HasValue());
+        CHECK(budget.Remaining() == capacity);
+        REQUIRE(budget.Consume(capacity).HasValue());
+        REQUIRE(budget.Consume(0).HasValue());
+        CHECK(budget.Remaining() == 0);
     }
 
     TEST_CASE("Prefab expansion budget move transfers its single work authority", "[unit][prefab][limits]") {
