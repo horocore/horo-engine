@@ -86,6 +86,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Input::InputContextToken context;
         Input::GameplayInputFrameBuilder gameplayFrames{Input::ActionId{kGameplayMoveAction}, {}, {}, {}};
         std::optional<Input::InputBindingProfile> previousProfile;
+        std::optional<Input::BindingProfilePaths> profilePaths;
     };
 
     /** @brief Borrowed contribution catalogs; application-owned panel/status registrations outlive the screen. */

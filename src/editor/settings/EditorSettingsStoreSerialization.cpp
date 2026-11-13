@@ -204,9 +204,7 @@ namespace Horo::Editor::SettingsStoreInternal {
             out << "  \"input\": {\n";
             out << R"(    "orbitSensitivity": )" << settings.orbitSensitivity << ",\n";
             out << R"(    "panSensitivity": )" << settings.panSensitivity << ",\n";
-            out << R"(    "invertOrbitY": )" << BoolString(source.invertOrbitY) << ",\n";
-            const auto profile = Input::SerializeBindingProfile(source.keymap.profile);
-            out << R"(    "bindingProfile": )" << profile.Value() << "\n";
+            out << R"(    "invertOrbitY": )" << BoolString(source.invertOrbitY) << "\n";
             out << "  },\n";
         }
 

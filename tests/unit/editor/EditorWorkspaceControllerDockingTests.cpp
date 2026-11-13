@@ -200,7 +200,7 @@ namespace {
 
         REQUIRE(
             (controller.ViewModel().activityBarLayout.FindSlot("horo.viewport") == ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
-        REQUIRE_FALSE(controller.ViewModel().activityBarLayout.FindSlot("horo.input_mapping").has_value());
+        REQUIRE((controller.ViewModel().activityBarLayout.FindSlot("horo.input_mapping") == ActivityBarSlot{ActivityBarRail::Right, 2, 0}));
     }
 
     TEST_CASE("Dropping Into The Lower Half Splits The Left Dock", "[unit][editor]") {

@@ -8,6 +8,7 @@
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/platform/PlatformDiagnosticsPane.h"
 #include "editor/screens/workspace/panels/hierarchy/HierarchyPanel.h"
+#include "editor/screens/workspace/panels/input_mapping/InputMappingPanel.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
 #include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
@@ -29,6 +30,7 @@ namespace Horo::Editor {
                                         const std::span<const GlobalDockPaneFactory> globalDockPaneFactories) {
         registry.RegisterPanel(std::make_shared<HierarchyPanel>());
         registry.RegisterPanel(std::make_shared<InspectorPanel>());
+        registry.RegisterPanel(std::make_shared<InputMappingPanel>());
         registry.RegisterPanel(std::make_shared<FoliagePaletteTab>());
         auto globalDock = std::make_shared<GlobalDockPanel>();
         static_cast<void>(globalDock->RegisterPane(std::make_unique<PlatformDiagnosticsPane>()));

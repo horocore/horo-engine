@@ -452,6 +452,7 @@ namespace Horo::Input {
         InputContextId context;
         bool required{false};
         std::vector<InputBinding> defaultBindings;
+        [[nodiscard]] friend bool operator==(const ActionDescriptor &, const ActionDescriptor &) noexcept = default;
     };
 
     /** @brief Resolved digital, 1D, or 2D value and frame-edge semantics. */
@@ -509,31 +510,54 @@ namespace Horo::Input {
         Unsupported
     };
 
-    /** @brief Borrowed static canonical fallback; no icon package or native API is required. */
+    /** @brief Borrowed presentation text; canonical fallback has static storage and needs no icon package. */
     struct InputGlyphPresentation {
         InputGlyphId id;
         InputGlyphSupport support{InputGlyphSupport::Unsupported};
         std::string_view label;
     };
 
+    /** @brief Optional host-composed package presentation, independent of physical mapping and semantic routing. */
+    class IInputGlyphProvider {
+    public:
+        virtual ~IInputGlyphProvider() = default;
+        /** @brief Resolves one canonical control using package-owned labels.
+         * @param id Stable control identity. @param device Exact device generation, when available.
+         * @return Borrowed presentation, or Unsupported. All returned storage must outlive its consumers.
+         * @pre The host retains the provider and its package lease while any descriptor or presentation borrows them.
+         */
+        [[nodiscard]] virtual InputGlyphPresentation Resolve(InputGlyphId id, std::optional<GamepadDeviceId> device) const noexcept = 0;
+    };
+
     /** @brief Resolves a typed binding to a stable canonical source. @param binding Effective binding. @param device Exact gamepad when
-     * known. @return Copied source; raw controls have Unknown modality. */
+     * known. @return Copied source, including numbered raw-gamepad controls. */
     [[nodiscard]] ActionSource CanonicalActionSource(const InputBinding &binding, std::optional<GamepadDeviceId> device = {}) noexcept;
     /** @brief Resolves a glyph without allocation or device-name checks. @param id Stable canonical control. @return Static label or typed
      * Unsupported. */
     [[nodiscard]] InputGlyphPresentation CanonicalGlyph(InputGlyphId id) noexcept;
+    /** @brief Resolves optional package presentation with canonical text fallback.
+     * @param id Stable control identity. @param provider Borrowed host-pinned provider, or nullptr.
+     * @param device Exact source device generation, when available.
+     * @return Provider text for the same supported identity, otherwise canonical text. No allocation or persistent identity changes occur.
+     */
+    [[nodiscard]] InputGlyphPresentation ResolveInputGlyph(InputGlyphId id, const IInputGlyphProvider *provider = nullptr,
+                                                           std::optional<GamepadDeviceId> device = {}) noexcept;
 
     /** @brief Complete profile-level binding replacement for one action. */
     struct BindingOverride {
         ActionId action;
         std::vector<InputBinding> bindings;
+        [[nodiscard]] friend bool operator==(const BindingOverride &, const BindingOverride &) noexcept = default;
     };
 
-    /** @brief Schema-versioned collection of per-action binding overrides. */
+    /** @brief Schema-versioned collection of per-action binding overrides.
+     * @details Schema 1 supports a 1–256-byte UTF-8 profile identity, at most 4096 overrides and 64 bindings per override.
+     */
     struct InputBindingProfile {
         std::uint32_t schemaVersion{1};
         std::string profileId{"default"};
         std::vector<BindingOverride> overrides;
+        [[nodiscard]] friend bool operator==(const InputBindingProfile &, const InputBindingProfile &) noexcept = default;
     };
 
     /** @brief Typed validation failure or conflict category. */
@@ -586,6 +610,13 @@ namespace Horo::Input {
     [[nodiscard]] Result<std::string> SerializeBindingProfile(const InputBindingProfile &profile);
     /** @brief Loads and parses a bounded profile file. */
     [[nodiscard]] Result<InputBindingProfile> LoadBindingProfile(const std::filesystem::path &path);
+    /**
+     * @brief Loads ordered optional profile layers as one candidate without changing a router.
+     * @param paths Low-to-high priority host-resolved paths. Empty paths and missing files are skipped.
+     * @return Complete merged profile, or the first read, schema or structural error. The caller validates
+     * effective action conflicts through InputRouter::SetProfile before activation.
+     */
+    [[nodiscard]] Result<InputBindingProfile> LoadBindingProfileLayers(std::span<const std::filesystem::path> paths);
     /** @brief Atomically replaces a profile file after validation and serialization. */
     [[nodiscard]] Result<void> SaveBindingProfileAtomically(const std::filesystem::path &path, const InputBindingProfile &profile);
 
@@ -603,6 +634,50 @@ namespace Horo::Input {
     };
 
     class InputRouter;
+
+    /** @brief Host-resolved profile paths in the normative low-to-high priority order. */
+    struct BindingProfilePaths {
+        std::filesystem::path projectDefaults;
+        std::filesystem::path editorUser;
+        std::filesystem::path projectUser;
+    };
+
+    /**
+     * @brief Resolves a project-user profile beneath the host's user configuration home.
+     * @param userHome Absolute platform user configuration home.
+     * @param projectId Stable project identity, validated as one portable UTF-8 filename component.
+     * @return The contained .horo/input/projects/<projectId>.json path, or a path/identity diagnostic.
+     * @pre The host protects the admitted parent namespace against concurrent replacement while accessing the result.
+     */
+    [[nodiscard]] Result<std::filesystem::path> ResolveProjectBindingProfilePath(const std::filesystem::path &userHome,
+                                                                                 std::string_view projectId);
+    /** @brief Resolves all profile layers beneath their admitted project and platform-user roots.
+     * @param projectRoot Absolute project root, or empty for an editor-global scope.
+     * @param userHome Absolute platform user configuration home. @param projectId Stable identity, or empty for global-only use.
+     * @return Contained layer paths, or a path/identity diagnostic before profile I/O.
+     * @pre The host protects the admitted parent namespaces against replacement through subsequent I/O.
+     */
+    [[nodiscard]] Result<BindingProfilePaths> ResolveBindingProfilePaths(const std::filesystem::path &projectRoot,
+                                                                         const std::filesystem::path &userHome,
+                                                                         std::string_view projectId = {});
+
+    /** @brief User-owned persistence scope selected by an editor or runtime rebinding flow. */
+    enum class BindingProfileScope : std::uint8_t {
+        EditorUser,
+        ProjectUser
+    };
+
+    /**
+     * @brief Validates, persists and activates one complete per-action replacement through the same router.
+     * @param router Borrowed semantic authority, unchanged on read, validation or pre-publication write failure.
+     * @param paths Host-admitted paths. The host owns project identity and namespace containment.
+     * @param scope User layer to update. Other layers retain their authored contents.
+     * @param change Complete replacement bindings for one registered action. An empty list requests unbinding.
+     * @return Success after atomic persistence and activation, or the actionable read, conflict or persistence error.
+     * @pre The caller serializes this operation with router mutation and profile writers on the owner thread.
+     */
+    [[nodiscard]] Result<void> CommitBindingProfileChange(InputRouter &router, const BindingProfilePaths &paths, BindingProfileScope scope,
+                                                          BindingOverride change);
     class InputActionCollection;
     class InputCollectionFrame;
     class InputActionSourceToken;
@@ -742,6 +817,12 @@ namespace Horo::Input {
         [[nodiscard]] const InputBindingProfile &Profile() const noexcept;
         /** @brief Atomically validates and applies a complete profile. */
         [[nodiscard]] Result<void> SetProfile(InputBindingProfile profile);
+        /** @brief Loads the normative layers and activates overrides for this router's registered actions.
+         * @param paths Host-resolved project/global/project-user files.
+         * @return Success or a read, schema or conflict error preserving the active profile.
+         * @details Inactive editor/module/game actions remain stored in their source files and do not become router registrations.
+         */
+        [[nodiscard]] Result<void> ReloadProfile(const BindingProfilePaths &paths);
         /** @brief Resolves and consumes an action transition for an eligible matching context. */
         [[nodiscard]] ActionValue ReadAction(const InputContextToken &context, const ActionId &action,
                                              std::optional<PlayerId> player = std::nullopt);
@@ -749,7 +830,7 @@ namespace Horo::Input {
          * @brief Resolves and consumes the same action as ReadAction, including canonical source evidence.
          * @param context Exact live matching context.
          * @param action Registered action identity.
-         * @param player Optional exact gamepad assignment filter.
+         * @param player Optional exact player assignment, including keyboard/pointer ownership.
          * @return Neutral evidence when blocked/missing. CapacityExceeded atomically refuses this action's transitions;
          *         previously admitted consumers are preserved. Meaningful evidence comes only from unconsumed press edges.
          * @details Call this or ReadAction once per action per frame. Exact simultaneous sources prefer keyboard/mouse,
@@ -787,13 +868,24 @@ namespace Horo::Input {
         void UnassignGamepad(GamepadDeviceId gamepad) noexcept;
         /** @brief Finds the player assigned to the exact connected device generation. */
         [[nodiscard]] std::optional<PlayerId> PlayerForGamepad(GamepadDeviceId gamepad) const noexcept;
+        /** @brief Assigns the shared keyboard/pointer to one player, or disables player-scoped delivery.
+         * @param player Explicit owner, or nullopt to unassign. Player zero owns it initially.
+         * @details Reads without a player retain aggregate editor/global delivery. Mutation invalidates assignment-scoped collection
+         * tokens.
+         */
+        void AssignKeyboardMouse(std::optional<PlayerId> player) noexcept;
+        /** @brief Returns the keyboard/pointer owner. @return Assigned player, or nullopt when unassigned. */
+        [[nodiscard]] std::optional<PlayerId> PlayerForKeyboardMouse() const noexcept;
 
     private:
         friend class InputActionCollection;
+        friend class InputBindingCapture;
         friend class InputCollectionFrame;
         friend class InputActionSourceToken;
         friend struct InputCollectionLifetime;
         void CommitRawFrame(const RawInputSnapshot &snapshot);
+        /** @brief Neutralizes terminal rebinding delivery before the capture owner releases its context. */
+        void FinishBindingCapture() noexcept;
         friend class IInputCaptureOwner;
         friend class InputContextToken;
         friend class PointerCaptureToken;
@@ -804,6 +896,57 @@ namespace Horo::Input {
         [[nodiscard]] bool CaptureActive(std::uint64_t token) const noexcept;
         struct Impl;
         std::unique_ptr<Impl> impl_;
+    };
+
+    /** @brief Explicit terminal or pending result of a rebinding capture. */
+    enum class BindingCaptureStatus : std::uint8_t {
+        Pending,
+        Captured,
+        Cancelled
+    };
+
+    /** @brief One typed capture result. The binding is populated only for Captured. */
+    struct BindingCaptureResult {
+        BindingCaptureStatus status{BindingCaptureStatus::Pending};
+        std::optional<InputBinding> binding;
+    };
+
+    /** @brief Shared editor/runtime rebinding capture over committed snapshots and central context admission. */
+    class InputBindingCapture final {
+    public:
+        /** @brief Transfers transient capture state and cancels the source. @param other Capture to transfer. */
+        InputBindingCapture(InputBindingCapture &&other) noexcept;
+        /** @brief Replaces transient state and cancels the source. @param other Capture to transfer. @return This capture. */
+        InputBindingCapture &operator=(InputBindingCapture &&other) noexcept;
+        InputBindingCapture(const InputBindingCapture &) = delete;
+        InputBindingCapture &operator=(const InputBindingCapture &) = delete;
+        /** @brief Starts a capture after the host establishes an exclusive input context.
+         * @param router Host-owned semantic authority. @param context Exact eligible capture context.
+         * @param action Registered action whose value shape controls axis capture policy.
+         * @return A move-only transient capture, or an inactive-context error.
+         * @details Only creation copies baseline gamepad storage. The host retains context ownership through terminal delivery.
+         */
+        [[nodiscard]] static Result<InputBindingCapture> Create(const InputRouter &router, const InputContextToken &context,
+                                                                const ActionId &action);
+        /** @brief Polls one later committed frame without allocating or retaining snapshot borrows.
+         * @param router Same live router. @param context Same live capture context.
+         * @return First keyboard, pointer or gamepad binding, pending, or cancellation after Escape/focus/context/device/configuration
+         * loss.
+         * @details Held axes must move from their captured baseline; resting unknown-controller triggers cannot bind themselves.
+         * Terminal captures remain cancelled on later polls. Polling a different router only compares the stored identity.
+         * Terminal delivery neutralizes routing for that frame and blocks lower contexts through the following close frame.
+         */
+        [[nodiscard]] BindingCaptureResult Poll(InputRouter &router, const InputContextToken &context);
+
+    private:
+        InputBindingCapture() = default;
+        const InputRouter *routerIdentity_{};
+        std::weak_ptr<InputCollectionLifetime> routerLifetime_;
+        InputRoutingState routing_;
+        ActionValueType valueType_{ActionValueType::Digital};
+        FrameNumber frame_{};
+        bool terminal_{};
+        std::vector<GamepadState> baselines_;
     };
 
     /** @brief Headless-capable composition that owns collection, immutable frame commit, and semantic routing. */

@@ -10,6 +10,7 @@
 #include "editor/EditorServiceErrors.h"
 #include "editor/input/EditorInputActions.h"
 
+#include <array>
 #include <string>
 #include <utility>
 
@@ -22,6 +23,34 @@ namespace Horo::Editor {
         void LogCommitFailure(const char *stage, const Error &error) {
             LOG_ERROR("editor.settings", "Settings commit failed at %s: code=%s message=%s", stage, error.code.Value().c_str(),
                       error.message.c_str());
+        }
+
+        /** @brief Validates a proposed global profile against the currently admitted project layers before any persistence. */
+        Result<void> ValidateEffectiveBindings(const Input::InputBindingProfile &global,
+                                               const std::optional<Input::BindingProfilePaths> &paths,
+                                               const std::span<const Input::ActionDescriptor> contributions, const bool projectChange) {
+            Input::InputBindingProfile effective = global;
+            if (paths && projectChange) {
+                const std::array defaults{paths->projectDefaults};
+                auto project = Input::LoadBindingProfileLayers(defaults);
+                if (project.HasError())
+                    return Result<void>::Failure(project.ErrorValue());
+                auto merged = Input::MergeBindingProfiles(project.Value(), global);
+                if (merged.HasError())
+                    return Result<void>::Failure(merged.ErrorValue());
+                const std::array overrides{paths->projectUser};
+                auto user = Input::LoadBindingProfileLayers(overrides);
+                if (user.HasError())
+                    return Result<void>::Failure(user.ErrorValue());
+                merged = Input::MergeBindingProfiles(merged.Value(), user.Value());
+                if (merged.HasError())
+                    return Result<void>::Failure(merged.ErrorValue());
+                effective = std::move(merged).Value();
+            }
+            const auto validation = Input::ValidateBindingProfile(EditorKeymapActions(effective, contributions), effective);
+            if (!validation.IsValid())
+                return Result<void>::Failure(SettingsError(SettingsErrors::ValidationFailed, validation.diagnostics.front().message));
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -62,10 +91,12 @@ namespace Horo::Editor {
             return Result<EditorSettingsSnapshot>::Failure(std::move(error));
         }
 
-        if (!Input::ValidateBindingProfile(EditorKeymapActions(candidate.keymap.profile, m_contributedActions), candidate.keymap.profile)
-                 .IsValid())
-            return Result<EditorSettingsSnapshot>::Failure(
-                SettingsError(SettingsErrors::ValidationFailed, "Editor keymap conflicts with a live module command."));
+        if (const auto bindings = ValidateEffectiveBindings(candidate.keymap.profile, m_inputProfilePaths, m_contributedActions,
+                                                            candidate.keymap != m_committed.keymap);
+            bindings.HasError()) {
+            LogCommitFailure("input layer validation", bindings.ErrorValue());
+            return Result<EditorSettingsSnapshot>::Failure(bindings.ErrorValue());
+        }
 
         auto appearanceDraft = MakeEditorAppearanceConfigurationDraft(m_configuration.Snapshot(), candidate);
         appearanceDraft.baseRevision = draft.baseConfigurationRevision.value_or(m_configurationRevision);
@@ -174,6 +205,11 @@ namespace Horo::Editor {
     /** @copydoc EditorSettingsService::ContributedInputActions */
     std::span<const Input::ActionDescriptor> EditorSettingsService::ContributedInputActions() const noexcept {
         return m_contributedActions;
+    }
+
+    /** @copydoc EditorSettingsService::SetInputProfilePaths */
+    void EditorSettingsService::SetInputProfilePaths(std::optional<Input::BindingProfilePaths> paths) {
+        m_inputProfilePaths = std::move(paths);
     }
 
 }  // namespace Horo::Editor

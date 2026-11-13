@@ -1,6 +1,8 @@
 #include "EditorWorkspaceScreen.h"
+#include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "PlatformProjectSettingsOwner.h"
+#include "editor/input/EditorInputActions.h"
 #include "editor/screens/NavigationErrors.h"
 
 namespace Horo::Editor::WorkspaceScreenDetail {
@@ -165,6 +167,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         static_cast<void>(contributions_.statusItems.Update("horo.status.document", EditorStatusItemContent{.available = false}));
         static_cast<void>(contributions_.statusItems.Update("horo.status.selection", EditorStatusItemContent{.available = false}));
         contributions_.panels.DetachAll();
+        settings_.SetInputProfilePaths(std::nullopt);
+        input_.profilePaths.reset();
         RestoreWorkspaceInputProfile();
         input_.context.Reset();
         viewportSceneState_.Clear();
@@ -175,7 +179,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::RestoreWorkspaceInputProfile */
     void EditorWorkspaceScreen::RestoreWorkspaceInputProfile() {
         if (input_.previousProfile.has_value()) {
-            if (const Result<void> restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError()) {
+            const auto profile = settings_.Snapshot().settings.keymap.profile;
+            if (const Result<void> restored = ActivateEditorInputProfile(input_.router, profile, settings_.ContributedInputActions());
+                restored.HasError()) {
                 LOG_ERROR("editor.input", "Unable to restore editor input profile: %s", restored.ErrorValue().message.c_str());
             }
             input_.previousProfile.reset();

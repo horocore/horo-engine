@@ -2804,6 +2804,7 @@ target_link_libraries(HoroPrefabSceneExpansion PUBLIC HoroEngine::PrefabAuthorin
 add_library(HoroInput STATIC
         runtime/input/RawInputCollector.cpp
         runtime/input/Input.cpp
+        runtime/input/InputBindingCapture.cpp
         runtime/input/InputCollection.cpp
         runtime/input/InputPresentation.cpp
         runtime/input/InputErrors.cpp

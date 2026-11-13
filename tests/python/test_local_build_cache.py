@@ -333,6 +333,15 @@ def test_nonblocking_heavy_admission_never_enters_busy_body_and_can_retry_after_
     assert entered
 
 
+def test_heavy_lock_supports_nonblocking_admission(repository: tuple[Path, Path, str]) -> None:
+    repo, _, _ = repository
+    with cache.heavy_build_lock(repo, blocking=False):
+        with pytest.raises(BlockingIOError):
+            enter_blocked_context(cache.heavy_build_lock(repo, blocking=False))
+    with cache.heavy_build_lock(repo, blocking=False):
+        pass
+
+
 def test_reader_lock_releases_when_build_raises(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository
     assert cache.prepare_cache(repo, successful_build) == 0

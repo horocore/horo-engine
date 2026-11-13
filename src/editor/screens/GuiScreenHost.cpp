@@ -760,6 +760,10 @@ namespace Horo::Editor {
                     actions.push_back({Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
                                        Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults)});
                 }
+                const auto profile = inputRouter_->Profile();
+                if (const auto applied = ActivateEditorInputProfile(*inputRouter_, profile, actions); applied.HasError())
+                    LOG_ERROR("editor.input", "Keeping last valid input actions after module command update: %s",
+                              applied.ErrorValue().message.c_str());
                 settingsService_->SetContributedInputActions(std::move(actions));
                 extensionCommandRevision_ = revision;
             }

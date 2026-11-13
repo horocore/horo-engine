@@ -73,12 +73,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         host_.SetCurrentProjectRoot(controller_->ProjectRoot());
         LoadProjectInputProfile(controller_->ProjectRoot());
         if (auto attached = AttachXrInput(); attached.HasError()) {
-            if (input_.previousProfile) {
-                if (auto restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError())
-                    LOG_ERROR("editor.input", "Failed to restore the host profile after XR admission: %s",
-                              restored.ErrorValue().message.c_str());
-                input_.previousProfile.reset();
-            }
+            RestoreWorkspaceInputProfile();
+            input_.profilePaths.reset();
             return attached;
         }
         RestoreExtensionWorkspace();
@@ -94,11 +90,15 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const auto platformSources = activation.Candidate().platformServices;
         if (auto committed = activation.Commit(); committed.HasError()) {
             contributions_.panels.DetachAll();
+            DetachXrInput();
+            RestoreWorkspaceInputProfile();
+            input_.profilePaths.reset();
             viewportSceneState_.Clear();
             controller_.reset();
             return committed;
         }
         platformSources_ = platformSources;
+        settings_.SetInputProfilePaths(input_.profilePaths);
         return Result<void>::Success();
     }
 
