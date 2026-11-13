@@ -39,6 +39,33 @@ For ACC-001.7 the bus carries only `ConfigurationRevision`; every simulation tic
 captures the authoritative configuration even when hints are lost or stale.
 Assist values never become bus state and cannot bypass server authority.
 
+### ACC-001.1 decision audit (2026-11-13)
+
+[ACC-001.1 / #1849](https://github.com/horocore/horo-engine/issues/1849)
+is a closed ownership decision, not delivery of the seven runtime children. Its
+current body retains unchecked acceptance boxes and older Audio/PostProcessing
+wording. The controlling sources are
+[ADR-015](../adr/015-accessibility-ownership-typed-transport-and-non-gating-policy.md)
+and the normative accessibility architecture. ADR-015 still labels itself
+`Proposed`; this audit does not change its approval state or reopen the issue.
+The normative architecture governs the implementation independently of that
+metadata.
+
+| Decision obligation | Current source evidence | Audit boundary |
+|---|---|---|
+| Name each authority and typed transport | ADR-015's ownership table covers captions, color, input, native bridge, gameplay, UI scale/contrast, motion/flash and developer validation | Present as a written contract; does not establish host activation |
+| Keep settings authoritative outside the bus | Domain contributions are inert; `GameplayAssistTickSnapshot`, `ColorAccessibilitySnapshot`, caption/UI/safety and platform views retain immutable configuration. `GameplayAccessibilityStateEvent` contains only a revision, and its sole production publisher is `GameplayAssistSettingsAdapter::NotifyCommitted` | The mandatory host tick capture is not integrated; no claim that event delivery activates assists |
+| Preserve independent consumers and non-gating | `src/CMakeLists.txt` creates CaptionTransport, VisualAccessibility, GameplayAccessibility and PlatformAccessibility without quality/tier selection. `cmake/HoroDependencyPolicy.cmake` keeps visual/gameplay targets Foundation-only and caption transport dependency-free; the bridge consumes RuntimeUi semantics | Source inspection supports independent library composition. Native/backend/product support still requires configured builds and actual host capability evidence |
+
+The caption contract therefore must not be reduced to an Audio event consumer,
+and color queries must not obtain their authority from an executing renderer.
+The final SDR shader currently encodes composed display-linear color but has no
+accessibility matrix input; `ColorPipelinePlan` remains a cold metadata/pin
+candidate without an execution or publication owner. A new enum, CPU transform,
+or shader-only edit would not prove ACC-001.3 complete. Implementation must also
+provide the real composed-image execution, cooked shader ABI migration and
+backend/native evidence. No existing decision is reimplemented by this audit.
+
 ## Evidence boundaries
 
 Native Windows, macOS and Linux support requires the corresponding adapter and
