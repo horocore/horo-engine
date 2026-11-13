@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <sstream>
 
@@ -93,12 +94,17 @@ namespace Horo::Cli {
     }
 
     TEST_CASE("JSON CLI failures preserve shared GUI and MCP meaning and every stable exit category") {
+        std::ifstream input(HORO_CLI_OUTPUT_FIXTURE);
+        REQUIRE(input.good());
+        const auto fixture = Json::parse(input);
         for (std::size_t index = 0; index < HostErrorFixture::Descriptors.size(); ++index) {
             std::ostringstream output, diagnostics;
             auto translator = Translator();
             const auto error = HostErrorFixture::Failure(index);
             const auto translated = translator.Translate(error);
             REQUIRE(translated);
+            const auto name = HostErrorFixture::Descriptors[index].code.Value().substr(std::string_view{"project.translation."}.size());
+            CHECK(static_cast<int>(HostErrorFixture::Categories[index]) == fixture.at("exitCategories").at(name));
             const auto gui = Hosts::TranslateGuiError(*translated, Hosts::GuiErrorSurface::Inline);
             const auto mcp = Json::parse(Hosts::TranslateMcpError(*translated));
             CliOutputPresenter presenter(Descriptor(), {31}, std::move(translator), output, diagnostics, CliProgressOutputMode::Json,
@@ -107,6 +113,8 @@ namespace Horo::Cli {
                   static_cast<int>(HostErrorFixture::Categories[index]));
             const auto envelope = Json::parse(output.str());
             RequireEnvelope(envelope);
+            for (const auto &field : fixture.at("requiredEnvelopeFields"))
+                CHECK(envelope.contains(field.get<std::string>()));
             CHECK(envelope["error"] == Json::parse(gui.detail.Json()));
             CHECK(envelope["error"] == mcp["data"]);
             CHECK(envelope["result"].is_null());
@@ -143,6 +151,18 @@ namespace Horo::Cli {
         const auto first = output.str();
         CHECK(presenter.Progress({"late", 1, "Late"}).HasError());
         CHECK(output.str() == first);
+    }
+
+    TEST_CASE("A failed diagnostic stream preserves a truthful machine exit on writable stdout", "[cli][output]") {
+        std::ostringstream output, diagnostics;
+        diagnostics.setstate(std::ios::badbit);
+        CliOutputPresenter presenter(Descriptor(), {31}, Translator(), output, diagnostics, CliProgressOutputMode::Json, false);
+        CHECK(presenter.Complete(Success()).exitCode == 1);
+        const auto envelope = Json::parse(output.str());
+        RequireEnvelope(envelope);
+        CHECK(envelope.at("exitCode") == 1);
+        CHECK(envelope.at("status") == "failed");
+        CHECK(envelope.at("error").at("code") == CliErrors::HostFailure.code.Value());
     }
 
     TEST_CASE("Machine CLI schemas do not depend on TTY detection") {

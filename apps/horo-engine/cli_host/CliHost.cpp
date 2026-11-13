@@ -3,6 +3,7 @@
 #include "CliHostCommands.h"
 #include "CliHostErrorTranslation.h"
 #include "CliHostInterrupts.h"
+#include "CliHostProgressPump.h"
 #include "ExtensionScriptCliHost.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Cli/CliOptionParser.h"
@@ -200,12 +201,54 @@ namespace Horo::Application::Internal {
                     {"horo.observability.smoke"},  {"horo.package.manage"},       {"horo.navigation.bake"}};
         }
 
+        /** @brief Admits mutation authority before application startup and preserves the same policy for dispatch. */
+        Result<CliDispatchPolicy> AdmitDispatchPolicy(const CliCommandDescriptor &descriptor) {
+            CliDispatchPolicy policy{.activeHost = CliHostKind::HoroEngine,
+                                     .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
+                                     .grantedCapabilities = CommandCapabilities()};
+            if (static_cast<unsigned>(descriptor.sideEffects) > static_cast<unsigned>(policy.maximumSideEffects))
+                return Result<CliDispatchPolicy>::Failure(MakeError(CliErrors::SideEffectUnauthorized));
+            return Result<CliDispatchPolicy>::Success(std::move(policy));
+        }
+
+        /** @brief Reads the already typed and policy-admitted timeout without consulting ambient configuration. */
+        std::uint64_t InvocationTimeout(const CliCommandRequest &request, const CliCommandDescriptor &descriptor) {
+            const auto found = std::ranges::find(request.options, "timeout-ms", &CliParsedOption::name);
+            return found == request.options.end() ? descriptor.timeout.defaultMilliseconds
+                                                  : static_cast<std::uint64_t>(std::get<std::int64_t>(found->values.front().value));
+        }
+
+        /** @brief Owns progress presentation through dispatch and joins its writer before committing terminal output. */
+        int DispatchCommand(CliDispatcher &dispatcher, const CliCommandRequest &request, CliInvocationContext context,
+                            CliOutputPresenter &presenter, CliInvocationStopController &stop, const bool protocol, const bool terminal) {
+            CliProgressMailbox mailbox;
+            std::optional<CliHostProgressPump> progress;
+            if (!protocol)
+                progress.emplace(mailbox, presenter, stop, terminal);
+            context.progress = protocol ? nullptr : &mailbox;
+            const auto result = dispatcher.Dispatch(request, context);
+            if (progress) {
+                if (const auto presented = progress->Finish(); presented.HasError())
+                    return CompleteError(presenter, presented.ErrorValue());
+            }
+            return presenter.Complete(result).exitCode;
+        }
+
         /** @brief Owns a mutable admitted dispatcher before invoking its borrowed application services. */
         int ExecuteCommand(CliCommandRegistry registry, const std::span<const CliCommandDescriptor> descriptors,
-                           const CliCommandRequest &request, HostObservabilityIdentity identity, CliOutputPresenter &presenter) {
-            CliInvocationStopController stop{std::chrono::milliseconds{0}};
+                           const CliCommandRequest &request, HostObservabilityIdentity identity, CliOutputPresenter &presenter,
+                           const bool terminal) {
+            const auto *descriptor = registry.Find(request.command);
+            if (descriptor == nullptr)
+                return CompleteError(presenter, MakeError(CliErrors::ExecutionContextInvalid));
+            auto dispatchPolicy = AdmitDispatchPolicy(*descriptor);
+            if (dispatchPolicy.HasError())
+                return CompleteError(presenter, dispatchPolicy.ErrorValue());
+            const auto timeout = InvocationTimeout(request, *descriptor);
+            CliInvocationStopController stop{std::chrono::milliseconds{timeout}};
+            const bool protocol = request.command.segments == std::vector<std::string>{"mcp", "serve"};
             NativeCliInterrupts interrupts;
-            if (request.command.segments != std::vector<std::string>{"mcp", "serve"}) {
+            if (!protocol) {
                 if (const auto started = interrupts.Start(stop); started.HasError())
                     return CompleteError(presenter, started.ErrorValue());
             }
@@ -216,31 +259,30 @@ namespace Horo::Application::Internal {
             PackageCliHost packages;
             NavigationCliHost navigation;
             if (const auto activated = ActivateSession(session, std::move(identity), toolchain, processes, script, request, stop.Token());
-                activated.HasError())
+                activated.HasError()) {
+                if (stop.Reason() == CliStopReason::TimedOut)
+                    return CompleteError(presenter, WrapError(CliErrors::ExecutionTimedOut, activated.ErrorValue(),
+                                                              "CLI startup exceeded its invocation deadline."));
                 return CompleteError(presenter, activated.ErrorValue());
+            }
             auto configuration = Configuration();
             if (configuration.HasError())
                 return CompleteError(presenter, configuration.ErrorValue());
             auto adapters = CommandAdapters(descriptors, session.observability, packages, navigation);
             adapters.push_back(MakeExtensionScriptCommandAdapter(script, *session.extensions));
             adapters.push_back(MakeModuleScriptCommandAdapter(script, *session.extensions));
-            auto admitted = CliDispatcher::Create(std::move(registry), std::move(adapters),
-                                                  {.activeHost = CliHostKind::HoroEngine,
-                                                   .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
-                                                   .grantedCapabilities = CommandCapabilities()});
+            auto admitted = CliDispatcher::Create(std::move(registry), std::move(adapters), std::move(dispatchPolicy).Value());
             if (admitted.HasError())
                 return CompleteError(presenter, admitted.ErrorValue());
             CliDispatcher dispatcher = std::move(admitted).Value();
-            CliProgressMailbox mailbox;
-            const auto result = dispatcher.Dispatch(request, {.invocation = {1},
-                                                              .configuration = &configuration.Value(),
-                                                              .cancellation = stop.Token(),
-                                                              .forceCancellation = stop.ForceToken(),
-                                                              .stopControl = &stop,
-                                                              .progress = &mailbox});
-            if (const auto progress = mailbox.Take(); progress)
-                static_cast<void>(presenter.Progress(*progress));
-            return presenter.Complete(result).exitCode;
+            return DispatchCommand(dispatcher, request,
+                                   {.invocation = {1},
+                                    .configuration = &configuration.Value(),
+                                    .cancellation = stop.Token(),
+                                    .forceCancellation = stop.ForceToken(),
+                                    .stopControl = &stop,
+                                    .timeoutMilliseconds = timeout},
+                                   presenter, stop, protocol, terminal);
         }
     }  // namespace
 
@@ -280,7 +322,7 @@ namespace Horo::Application::Internal {
         // Closed adapters return domain failures as Results. Native lifecycle/path operations and container
         // construction can still fail through these standard exception contracts at the process boundary.
         try {
-            return ExecuteCommand(std::move(registry).Value(), descriptors, parsed.Value(), std::move(identity), presenter);
+            return ExecuteCommand(std::move(registry).Value(), descriptors, parsed.Value(), std::move(identity), presenter, terminal);
         } catch (const std::system_error &) {
             return presenter.HostFailure().exitCode;
         } catch (const std::length_error &) {

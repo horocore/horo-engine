@@ -156,6 +156,8 @@ namespace Horo::Application {
     /** @copydoc HostObservabilitySession::GenerateDiagnosticBundle */
     Result<Diagnostics::DiagnosticBundleSummary> HostObservabilitySession::GenerateDiagnosticBundle(
         const HostDiagnosticBundleRequest &request) const {
+        if (const auto destination = Diagnostics::ValidateDiagnosticBundleDestination(request.outputPath); destination.HasError())
+            return Result<Diagnostics::DiagnosticBundleSummary>::Failure(destination.ErrorValue());
         static_cast<void>(Log::Logger::Flush());
 
         Diagnostics::DiagnosticBundleRequest bundle;

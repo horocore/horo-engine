@@ -433,8 +433,7 @@ namespace Horo::Cli {
         }
 
         [[nodiscard]] Result<void> ValidateTimeoutPolicy(const CliTimeoutPolicy &timeout) {
-            if ((timeout.defaultMilliseconds == 0) != (timeout.maximumMilliseconds == 0) ||
-                timeout.defaultMilliseconds > timeout.maximumMilliseconds)
+            if (timeout.defaultMilliseconds > timeout.maximumMilliseconds)
                 return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid, "CLI timeout policy is invalid."));
             return Result<void>::Success();
         }
