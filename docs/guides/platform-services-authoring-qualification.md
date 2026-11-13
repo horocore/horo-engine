@@ -532,7 +532,7 @@ and owned staging cleanup. Standard, allocation and nonstandard post-commit exce
 regressions require the whole project to remain with the original commit witness,
 no created notification and a reconciliation diagnostic. New visible summaries use
 aligned English/Turkish loading messages. These regressions remain **unexecuted**
-pending granted native execution. Existing enum values and persisted project data do not
+pending physical admission for native execution. Existing enum values and persisted project data do not
 change; rebuild affected EditorServices/header consumers for the additive enum.
 
 ## Current requirement audit
@@ -545,9 +545,10 @@ eligible descriptors without bespoke modal wiring, typed inline diagnostics,
 preview rollback, stale-revision rejection and localized layouts in both theme
 layers. Both issues remain open at this audit. Existing specialized prefab,
 navigation and collision drafts are implementation evidence, not the released
-generic contract required by these issues. The current SettingDescriptor also has
-no validator/presentation callback seam; inventing another module session would not
-satisfy the stated acceptance criterion.
+generic contract required by these issues. This PLS checkout's SettingDescriptor
+has no validation/presentation metadata seam. The published CFG draft described
+below adds that metadata, but its editing session still targets User values;
+inventing another PLS module session would not satisfy the stated acceptance criterion.
 
 | Requirement | Current authoritative source/evidence | Remaining proof or dependency |
 | --- | --- | --- |
@@ -560,12 +561,24 @@ satisfy the stated acceptance criterion.
 | PLS-003.7 authoring surface | Inert typed contribution exists; no PLS-specific modal/session added | Released CFG-001.5 contract from owner, common transaction integration, localized controls and actual UI/lifecycle verification |
 | PLS-003.8 integrated qualification | Shared six-source capture, ordinary-open fences, creation, recoverable 0.4.0 adoption, paired publication and regression sources | Execute all affected native/consumer scopes and actual routes; complete Settings dependency and final Sonar IDE/secrets/Codacy preflight |
 
-The shared-board filter still has no released CFG status/handoff. Under the
-13 November authorization a missing named grant is not a blocker. Current physical
-lock contention defers the bounded native and analysis attempts, while independent
-source, review and delivery work continues. Do not treat another worktree's run as qualification of these
-inputs. Real SDK/account/authentication, external storage/OS durability and missing
-compatible display/device evidence remain explicitly separate from model passes.
+On 13 November the CFG owner published [draft PR #3556](https://github.com/horocore/horo-engine/pull/3556),
+commit `e7b809b3326f493d6642aa4e5e4600fe4d003b2a`. Inspection of that published commit,
+without copying dirty sibling files, confirms inert descriptor validation and label
+metadata, descriptor enumeration, and ConfigurationService::Prepare. Its shared
+ConfigurationSettingsSession::Reload fixes the draft source and candidate selection
+to User, filters editability through AllowsSource(User), and Apply persists through
+EditorSettingsService::CommitConfiguration. The eight PLS descriptors explicitly
+admit only Project, so this draft alone cannot edit or durably publish PLS policy.
+The remaining dependency is a common source-aware project transaction and lifecycle
+boundary; weakening PLS source policy to User would violate the portable authority.
+The CFG draft's new native contracts are themselves still unqualified.
+
+Under the 13 November authorization a missing named grant is not a blocker.
+Current physical lock contention defers the bounded native and analysis attempts,
+while independent source, review and delivery work continues. Do not treat another
+worktree's run as qualification of these inputs. Real SDK/account/authentication,
+external storage/OS durability and missing compatible display/device evidence remain
+explicitly separate from model passes.
 
 Queued creation revoked by scheduler shutdown is now reconciled from an exact
 retained Cancelled job snapshot. The service releases its own mutex before calling
@@ -576,6 +589,17 @@ zero-worker Shutdown(Cancel) regression requires no entropy, files or created ev
 and exactly one queued revision notice after repeated queries. It remains unexecuted.
 
 ## Outstanding integrated evidence
+
+The 13 November delivery checkpoint is [draft PR #3559](https://github.com/horocore/horo-engine/pull/3559).
+Its initial pushed head is `cc6c2aad4e1aab27a0d6f59b9105eb56d7e34031`.
+The lightweight Python command
+`python -m pytest -q --tb=short tests/python/test_local_build_cache.py`
+completed with **26 passed, 2 skipped** on this checkout. It includes the new
+nonblocking contention/retry regression using an isolated fixture lock, not the
+canonical build lock. These tests launch no compiler or analyzer and do not
+qualify the C++ implementation. Required native and full quality admission attempts
+found the canonical physical lock busy and started no children; there is still no
+final-input analyzer report.
 
 - Execute the new project-creation and 0.4.0 migration regressions on the actual
   native worktree; prepared source and successful Python generators are not C++ evidence.
