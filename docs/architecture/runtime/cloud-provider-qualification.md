@@ -30,6 +30,12 @@ Draft PR [#3554](https://github.com/horocore/horo-engine/pull/3554) publishes th
 initial delivery at `d29beafd55452c77bf69ff97fe54ed1721d8fdfc`. The later explicit
 resume verified published target `139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`;
 the topic merge base remains `3df476ff`, and published topic history is preserved.
+Read-only `git merge-tree --write-tree` review exposed simultaneous Windows-list
+insertions in the new target. Placing the cloud entries beside existing Platform
+entries removes those conflicts; the resulting candidate tree
+`30129a14d5f7f13e5e22f63f76f6eee16b7dd8f6` contains both sets of additions. No
+branch merge, rebase or history rewrite was performed. This tree review is not a
+native build or test of the integrated candidate.
 Android qualification and Sonar workflows have terminated, while the macOS job
 in CI run `43426488651` remains active. No second push is admitted until that run
 terminates. Hosted Codacy check
@@ -256,7 +262,7 @@ Those remain with the SAV-006 coordinator owner; this transport delivery must no
 create a replacement durable queue or claim end-to-end synchronization success.
 
 The private SDK packages, provider accounts, native atomic commit/dedupe evidence,
-Linux/macOS execution and platform certification have not been supplied or run here.
+private-provider Linux/macOS execution and platform certification have not been supplied or run here.
 They are unavailable evidence, never a successful unsupported test of a real SDK.
 
 #1887/HORO-1843 owns provider package lifecycle qualification and still depends on
