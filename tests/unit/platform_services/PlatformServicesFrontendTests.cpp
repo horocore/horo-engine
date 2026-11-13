@@ -86,11 +86,12 @@ namespace Horo::PlatformServices {
         RequireError(frontend.QueryFriendsLeaderboard({subject, {}, 0, 1}), FrontendErrors::InvalidRequest);
         RequireError(frontend.WriteStat({subject, {}, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.ReadCloudObject(CloudReadRequest{subject, {}}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), CloudObjectErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), CloudObjectErrors::InvalidRequest);
         const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{1}});
         REQUIRE(key.HasValue());
-        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}),
+                     CloudObjectErrors::PayloadTooLarge);
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 5}), FrontendErrors::InvalidRequest);
@@ -325,7 +326,11 @@ namespace Horo::PlatformServices {
         auto created = PlatformServicesFrontend::Create(backend, backend->snapshot, session);
         REQUIRE(created.HasValue());
         auto enabled = std::move(created).Value();
-        REQUIRE(enabled.WriteCloudObject(MutationWrite(subject)).HasValue());
+        auto submittedWrite = enabled.WriteCloudObject(MutationWrite(subject));
+        REQUIRE(submittedWrite.HasValue());
+        auto writeHandle = std::move(submittedWrite).Value();
+        REQUIRE(enabled.RequestCancel(writeHandle).HasValue());
+        CHECK(backend->requests.Query(writeHandle).Value().state == PlatformRequestState::Cancelling);
         auto write = MutationWrite(subject);
         const auto revision = ProviderObjectRevision::Copy(std::array{std::byte{5}});
         REQUIRE(revision.HasValue());
@@ -333,7 +338,12 @@ namespace Horo::PlatformServices {
                                       .key = write.key,
                                       .expectedRevision = revision.Value(),
                                       .mutation = write.mutation};
-        REQUIRE(enabled.DeleteCloudObject(remove).HasValue());
+        auto submittedDelete = enabled.DeleteCloudObject(remove);
+        REQUIRE(submittedDelete.HasValue());
+        auto deleteHandle = std::move(submittedDelete).Value();
+        REQUIRE(enabled.RequestCancel(deleteHandle).HasValue());
+        CHECK(backend->requests.Query(deleteHandle).Value().state == PlatformRequestState::Cancelling);
+        CHECK(backend->cancelCalls == 2);
         REQUIRE(enabled.QueryCloudQuota(subject).HasValue());
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 3);
         write.mutation = {};

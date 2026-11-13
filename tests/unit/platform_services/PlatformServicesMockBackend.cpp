@@ -8,6 +8,18 @@ namespace Horo::PlatformServices::TestSupport {
 
     MockPlatformServicesBackend::~MockPlatformServicesBackend() = default;
 
+    /** @copydoc MockPlatformServicesBackend::SetCloudSubject */
+    Result<void> MockPlatformServicesBackend::SetCloudSubject(std::optional<PlatformSubjectHandle> subject) {
+        if (impl_->closed_ ||
+            (subject && (subject->ProviderGeneration() != impl_->providerGeneration ||
+                         (subject != impl_->cloudSubject && subject->SessionGeneration().value <= impl_->lastCloudSession.value))))
+            return Result<void>::Failure(MakeError(CloudObjectErrors::StaleSession));
+        if (subject)
+            impl_->lastCloudSession = subject->SessionGeneration();
+        impl_->cloudSubject = std::move(subject);
+        return Result<void>::Success();
+    }
+
     Result<void> MockPlatformServicesBackend::ExpectSequence(std::vector<MockPlatformServicesOperation> operations) {
         if (impl_->expectedSequenceConfigured_ || impl_->expectationsVerified_ || !impl_->calls.empty() ||
             operations.size() > MaximumExpectedCalls || std::ranges::any_of(operations, [](const MockPlatformServicesOperation operation) {
@@ -36,7 +48,8 @@ namespace Horo::PlatformServices::TestSupport {
             return detail::Failure<void>();
         }
 
-        Impl::ScriptedResponse scripted{.payload = std::move(response.payload),
+        Impl::ScriptedResponse scripted{.providerFailure = response.providerFailure,
+                                        .payload = std::move(response.payload),
                                         .delayMilliseconds = detail::ToMilliseconds(response.delay),
                                         .timeoutAfterMilliseconds =
                                             response.timeoutAfter
@@ -48,8 +61,12 @@ namespace Horo::PlatformServices::TestSupport {
                                                 : std::nullopt,
                                         .cancellationDelayMilliseconds = detail::ToMilliseconds(response.cancellationDelay),
                                         .acknowledgeCancellation = response.acknowledgeCancellation};
-        if (response.failure)
-            scripted.error = MakeError(*response.failure->descriptor, std::move(response.failure->message));
+        if (response.failure) {
+            // Cloud diagnostics never retain arbitrary provider/payload/account text supplied by a script.
+            scripted.error = detail::IsCloudOperation(operation)
+                                 ? MakeError(*response.failure->descriptor)
+                                 : MakeError(*response.failure->descriptor, std::move(response.failure->message));
+        }
 
         impl_->responses[detail::OperationIndex(operation)].push_back(std::move(scripted));
         ++impl_->scriptedResponseCount;

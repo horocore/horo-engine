@@ -7,6 +7,22 @@
 namespace Horo::PlatformServices {
     using TestSupport::AvailableCapabilities;
 
+    TEST_CASE("Read-only cloud capabilities obey finite transport ceilings before activation", "[platform-services][cloud][capabilities]") {
+        auto snapshot = AvailableCapabilities();
+        auto &cloud = snapshot.services[static_cast<std::size_t>(PlatformServiceKind::Cloud)];
+        REQUIRE_FALSE(cloud.cloudMutation.has_value());
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, {}).HasValue());
+        for (const auto bytes : {std::uint64_t{0}, MaximumCloudObjectPayloadBytes + 1}) {
+            cloud.limits.maxPayloadBytes = bytes;
+            TestSupport::RequireError(ValidatePlatformServiceCapabilitySnapshot(snapshot, {}), BackendErrors::InvalidCapabilitySnapshot);
+        }
+        cloud.limits.maxPayloadBytes = MaximumCloudObjectPayloadBytes;
+        cloud.limits.maxPageEntries = MaximumCloudObjectPageEntries + 1;
+        TestSupport::RequireError(ValidatePlatformServiceCapabilitySnapshot(snapshot, {}), BackendErrors::InvalidCapabilitySnapshot);
+        cloud.limits.maxPageEntries = MaximumCloudObjectPageEntries;
+        CHECK(ValidatePlatformServiceCapabilitySnapshot(snapshot, {}).HasValue());
+    }
+
     namespace {
         template <typename T> Result<PlatformRequestHandle<T>> Unavailable() {
             return Result<PlatformRequestHandle<T>>::Failure(MakeError(BackendErrors::ServiceUnavailable));
@@ -281,7 +297,7 @@ namespace Horo::PlatformServices {
         expectNullFailure(backend.QueryLeaderboardAroundSubject({}));
         expectNullFailure(backend.QueryFriendsLeaderboard({}));
         expectNullFailure(backend.WriteStat({}));
-        expectNullFailure(backend.ReadCloudObject({}));
+        expectNullFailure(backend.ReadCloudObject(CloudReadRequest{}));
         expectNullFailure(backend.WriteCloudObject({}));
         expectNullFailure(backend.DeleteCloudObject({}));
         expectNullFailure(backend.SetPresence({}));
