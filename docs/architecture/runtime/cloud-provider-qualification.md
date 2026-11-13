@@ -27,9 +27,12 @@ explicitly incomplete checks; it does not authorize merge, force-push, issue
 transitions, reduced quality rules or fabricated qualification evidence.
 
 Draft PR [#3554](https://github.com/horocore/horo-engine/pull/3554) publishes the
-initial delivery at `d29beafd55452c77bf69ff97fe54ed1721d8fdfc`. Its three GitHub
-workflows were still queued when the following review fixes were prepared; no
-second push is admitted until those existing runs terminate. Hosted Codacy check
+initial delivery at `d29beafd55452c77bf69ff97fe54ed1721d8fdfc`. The later explicit
+resume verified published target `139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`;
+the topic merge base remains `3df476ff`, and published topic history is preserved.
+Android qualification and Sonar workflows have terminated, while the macOS job
+in CI run `43426488651` remains active. No second push is admitted until that run
+terminates. Hosted Codacy check
 `131889637682` reports two new method-length findings in the cloud conformance
 and Save compatibility tests. The tests now separate provider setup and terminal
 immutability checks while retaining the existing assertions. Full-file review
@@ -39,6 +42,29 @@ delegates opaque payload validation to a focused helper. Hosted reanalysis and
 native execution of these fixes remain outstanding. The final bounded native and
 full-preflight attempts again stopped at the busy physical lock before any
 configure, build, C++ sensor, secrets or local Codacy execution.
+
+The published head's Linux JUnit artifact from CI run `43426488651` confirms
+28 cloud cases, all 201 request cases, one composition entry and 12 Save cloud
+metadata cases passed without skips. The successful Windows job's JUnit artifact
+contains none of those selected contracts: its reduced preset omitted their
+build/test closure. The follow-up adds a cloud-tagged Windows CTest entry backed
+by the request target, plus composition, Save metadata and the staged public
+consumer to the Windows build group. It preserves the reduced preset's existing
+membership and does not label the entire request suite as Windows-qualified.
+The CI grouping regression selection passes all 40 tests; native reconfigure
+and the expanded remote Windows selection remain unexecuted.
+
+SonarCloud check `132138621537` fails on three Major `cpp:S1238` findings in
+`PlatformServicesNullBackend.cpp`, at published lines 99, 104 and 109: list, opaque
+read and quota overrides receive large inputs by value. Those exact signatures
+come from the existing `ICloudService` contract in `PlatformServiceInterfaces.h`.
+Changing only the Null methods to `const&` would stop overriding the interface;
+changing all provider signatures would be a separate public-contract migration.
+These fail-closed overrides retain their existing signatures, with no analyzer
+suppression or issue-status mutation. An authorized Sonar reviewer must assess
+the three inherited-signature findings, or approve a deliberate interface
+migration; the hosted gate remains failed. The same analysis reports 88.5% new
+coverage and 0.0% new duplicated lines; neither metric resolves the issues.
 
 Full-file Codacy review retains two contextual findings at
 `tests/python/test_local_build_cache.py:430`: Bandit B603 (warning) and Semgrep

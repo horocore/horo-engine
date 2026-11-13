@@ -4125,11 +4125,18 @@ add_executable(HoroPlatformRequestTests
 target_compile_features(HoroPlatformRequestTests PRIVATE cxx_std_20)
 target_include_directories(HoroPlatformRequestTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroPlatformRequestTests PRIVATE HoroEngine::PlatformServices Threads::Threads)
+# The reduced Windows preset builds this suite but runs only its opaque cloud contracts.
+add_custom_target(HoroPlatformCloudProviderChecks DEPENDS HoroPlatformRequestTests)
+if(WIN32)
+    add_test(NAME HoroPlatformCloudProviderTests COMMAND HoroPlatformRequestTests "[cloud]")
+    set_tests_properties(HoroPlatformCloudProviderTests PROPERTIES
+            LABELS "unit;platform-services;cloud;headless;ci-windows" RUN_SERIAL TRUE TIMEOUT 90)
+endif()
 add_executable(HoroPlatformServicesCompositionTests unit/platform_services/PlatformServicesCompositionTests.cpp)
 target_compile_features(HoroPlatformServicesCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPlatformServicesCompositionTests PRIVATE HoroEngine::PlatformServices Catch2::Catch2WithMain Threads::Threads)
 add_test(NAME HoroPlatformServicesCompositionTests COMMAND HoroPlatformServicesCompositionTests)
-set_tests_properties(HoroPlatformServicesCompositionTests PROPERTIES LABELS "unit;platform-services;headless")
+set_tests_properties(HoroPlatformServicesCompositionTests PROPERTIES LABELS "unit;platform-services;headless;ci-windows")
 add_executable(HoroGameplayBuildServiceTests
         unit/application/GameplayLibraryBuildTests.cpp
         unit/application/CompilerDiagnosticParserTests.cpp
