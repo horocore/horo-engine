@@ -22,6 +22,82 @@ namespace {
         return InputBinding{.kind = BindingControlKind::Key, .key = key, .scale = scale, .component = component};
     }
 
+    TEST_CASE("Finite binding scales cancel before action saturation", "[unit][runtime][input]") {
+        for (const float sign : {1.0F, -1.0F}) {
+            for (const auto type : {ActionValueType::Axis1D, ActionValueType::Axis2D}) {
+                for (const bool radial : {false, true}) {
+                    if (radial && type != ActionValueType::Axis2D)
+                        continue;
+                    CAPTURE(sign, type, radial);
+                    const float scale = sign * std::numeric_limits<float>::max();
+                    std::vector bindings{KeyBinding(Key::A, scale), KeyBinding(Key::B, scale), KeyBinding(Key::C, -scale),
+                                         KeyBinding(Key::D, -scale), KeyBinding(Key::E, sign * 0.25F)};
+                    for (auto &binding : bindings) {
+                        binding.deadzoneKind = radial ? DeadzoneKind::Radial : DeadzoneKind::None;
+                        binding.deadzone = 0.0F;
+                        binding.component = type == ActionValueType::Axis2D ? 1 : 0;
+                    }
+                    const InputContextId contextId{"gameplay"};
+                    const ActionId actionId{"look"};
+                    InputRouter router;
+                    REQUIRE(router.SetActionMap({ActionDescriptor{actionId, type, contextId, false, std::move(bindings)}}).HasValue());
+                    auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+                    RawInputCollector collector;
+                    collector.BeginFrame(1);
+                    for (const auto key : {Key::A, Key::B, Key::C, Key::D, Key::E})
+                        collector.SetKey(key, true);
+                    router.BeginFrame(collector.Commit());
+                    const auto first = router.ReadActionEvidence(context, actionId);
+                    CHECK(first.status == ActionReadStatus::Resolved);
+                    CHECK(first.value.x == (type == ActionValueType::Axis1D ? sign * 0.25F : 0.0F));
+                    CHECK(first.value.y == (type == ActionValueType::Axis2D ? sign * 0.25F : 0.0F));
+                    CHECK(first.value.pressed);
+                    CHECK(first.value.down);
+                    const auto held = router.ReadAction(context, actionId);
+                    CHECK(held.x == first.value.x);
+                    CHECK(held.y == first.value.y);
+                    CHECK_FALSE(held.pressed);
+                    collector.BeginFrame(2);
+                    collector.Neutralize();
+                    router.BeginFrame(collector.Commit());
+                    const auto released = router.ReadAction(context, actionId);
+                    CHECK(released.x == 0.0F);
+                    CHECK(released.y == 0.0F);
+                    CHECK(released.released);
+                    CHECK_FALSE(released.down);
+                }
+            }
+        }
+    }
+
+    TEST_CASE("Finite wheel products cancel before action saturation", "[unit][runtime][input]") {
+        const float scale = std::numeric_limits<float>::max();
+        const InputContextId contextId{"gameplay"};
+        const ActionId actionId{"look"};
+        InputRouter router;
+        REQUIRE(router
+                    .SetActionMap({ActionDescriptor{actionId,
+                                                    ActionValueType::Axis1D,
+                                                    contextId,
+                                                    false,
+                                                    {{.kind = BindingControlKind::PointerWheelX, .scale = scale},
+                                                     {.kind = BindingControlKind::PointerWheelY, .scale = -scale},
+                                                     KeyBinding(Key::E, -0.5F)}}})
+                    .HasValue());
+        auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        collector.AddPointerWheel(scale, scale);
+        collector.SetKey(Key::E, true);
+        router.BeginFrame(collector.Commit());
+        const auto evidence = router.ReadActionEvidence(context, actionId);
+        CHECK(evidence.status == ActionReadStatus::Resolved);
+        CHECK(evidence.value.x == -0.5F);
+        CHECK(evidence.value.y == 0.0F);
+        CHECK(evidence.value.pressed);
+        CHECK(evidence.value.down);
+    }
+
     TEST_CASE("Snapshot Transitions Are Frame Local", "[unit][runtime][input]") {
         RawInputCollector collector;
         collector.BeginFrame(1);

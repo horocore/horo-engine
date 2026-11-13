@@ -1081,6 +1081,9 @@ namespace Horo::Input {
             bool &radial2D;
             float &radialDeadzone;
             ActionEvidence &evidence;
+            // Keep finite float contributions wide until every source has joined, then saturate once.
+            double x{};
+            double y{};
         };
 
         /** @brief Selects canonical source evidence from admitted edges with a stable simultaneous-modality order. */
@@ -1096,12 +1099,13 @@ namespace Horo::Input {
         }
 
         /** @brief Finalizes post-deadzone evidence; noise cannot drive presentation switching. */
-        void FinalizeAction(ActionEvidence &evidence, const bool radial2D, const float radialDeadzone) noexcept {
-            auto &value = evidence.value;
-            value.x = std::clamp(value.x, -1.0F, 1.0F);
-            value.y = std::clamp(value.y, -1.0F, 1.0F);
-            if (radial2D)
-                ApplyRadialDeadzone(value, radialDeadzone);
+        void FinalizeAction(BindingAccumulationTarget &target) noexcept {
+            auto &evidence = target.evidence;
+            auto &value = target.value;
+            value.x = static_cast<float>(std::clamp(target.x + value.x, -1.0, 1.0));
+            value.y = static_cast<float>(std::clamp(target.y + value.y, -1.0, 1.0));
+            if (target.radial2D)
+                ApplyRadialDeadzone(value, target.radialDeadzone);
             if (value.x == 0.0F && value.y == 0.0F)
                 evidence.meaningful = false;
             evidence.status = ActionReadStatus::Resolved;
@@ -1137,18 +1141,18 @@ namespace Horo::Input {
                 target.value.repeated = target.value.repeated || interpreted.repeated;
             }
             const auto state = evaluated.state;
-            const float axis = evaluated.axis * binding.scale;
+            const double axis = static_cast<double>(evaluated.axis) * binding.scale;
             AccumulateSource(binding, evaluated, target.evidence);
             target.radial2D =
                 target.radial2D || (descriptor.valueType == ActionValueType::Axis2D && binding.deadzoneKind == DeadzoneKind::Radial);
             target.radialDeadzone = std::max(target.radialDeadzone, binding.deadzone);
             if (descriptor.valueType == ActionValueType::Axis2D) {
                 if (binding.component == 0)
-                    target.value.x += axis;
+                    target.x += axis;
                 else
-                    target.value.y += axis;
+                    target.y += axis;
             } else
-                target.value.x += axis;
+                target.x += axis;
             target.value.down = target.value.down || state.down;
             target.value.pressed = target.value.pressed || state.pressed;
             target.value.released = target.value.released || state.released;
@@ -1232,7 +1236,7 @@ namespace Horo::Input {
                 contextEntry->sticky.Consume();
         }
         impl_->collection->Accumulate(actionIndex, player, value);
-        FinalizeAction(evidence, radial2D, radialDeadzone);
+        FinalizeAction(target);
         impl_->lastActionStatus = evidence.status;
         return evidence;
     }
