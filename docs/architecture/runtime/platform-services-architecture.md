@@ -874,6 +874,10 @@ retained after the call.
 
 ### Cloud Save
 
+The [cloud provider qualification record](cloud-provider-qualification.md) maps
+PLS-005 delivery, migration, public-provider regressions and outstanding private
+provider/lifecycle evidence. Local mock results do not establish SDK certification.
+
 Cloud save is authenticated transport of opaque complete objects. It is not a
 replacement for the local save system and owns no local generation, archive parsing,
 lineage, merge, winner, retention or conflict policy.

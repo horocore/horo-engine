@@ -2,6 +2,7 @@
 
 #include "Horo/PlatformServices/PlatformOfflineQueueErrors.h"
 #include "Horo/PlatformServices/PlatformOfflineQueueStorage.h"
+#include "Horo/PlatformServices/PlatformCloudObjects.h"
 #include "Horo/PlatformServices/PlatformRequestErrors.h"
 #include "Horo/PlatformServices/PlatformServicesBackend.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
@@ -161,7 +162,7 @@ namespace Horo::PlatformServices {
             Matches(error, PlatformSessionErrors::AccessRevoked))
             return PlatformServiceErrorKind::AccessDenied;
         if (Matches(error, BackendErrors::ServiceUnavailable) || Matches(error, BackendErrors::UnsupportedOperation) ||
-            Matches(error, BackendErrors::RequiredServiceUnavailable))
+            Matches(error, BackendErrors::RequiredServiceUnavailable) || Matches(error, CloudObjectErrors::UnsupportedCapability))
             return PlatformServiceErrorKind::CapabilityUnavailable;
         if (Matches(error, FrontendErrors::NullProvider))
             return PlatformServiceErrorKind::NullProvider;
