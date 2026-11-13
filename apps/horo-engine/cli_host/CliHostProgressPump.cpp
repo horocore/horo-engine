@@ -38,6 +38,8 @@ namespace Horo::Application::Internal {
                 if (!token.stop_requested())
                     Present(false);
             }
+            if (!failure_ && !raised_)
+                Present(true);
         } catch (...) {
             // Report the host failure after joining, including when allocating an error would fail on this worker.
             raised_ = true;
@@ -50,8 +52,6 @@ namespace Horo::Application::Internal {
         if (worker_.joinable()) {
             worker_.request_stop();
             worker_.join();
-            if (!failure_ && !raised_)
-                Present(true);
         }
         if (failure_)
             return Result<void>::Failure(*failure_);

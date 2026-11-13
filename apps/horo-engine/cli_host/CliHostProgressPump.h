@@ -9,7 +9,8 @@
 
 namespace Horo::Application::Internal {
     /** @brief Owns the sole presenter writer until Finish joins it on the application lane.
-     * @details The mailbox supports concurrent producers. Presenter access and failure state belong to the worker until join,
+     * @details The mailbox supports concurrent producers. The worker owns all progress writes, including the final drain.
+     * Presenter access and failure state belong to the worker until join,
      * then transfer to the caller. All borrowed owners outlive this object. Its worker is destroyed first during unwinding.
      * A slow output consumer retains at most one bounded mailbox event while application work continues independently.
      */
@@ -27,14 +28,14 @@ namespace Horo::Application::Internal {
         CliHostProgressPump(const CliHostProgressPump &) = delete;
         CliHostProgressPump &operator=(const CliHostProgressPump &) = delete;
 
-        /** @brief Joins the writer and presents any remaining event before final output.
+        /** @brief Requests the writer's final drain and joins it before terminal output.
          * @return Success, the original presentation failure, or a host failure after a writer exception.
          */
         [[nodiscard]] Result<void> Finish();
 
     private:
         /** @brief Presents one coalesced event on the sole writer lane.
-         * @param final Bypasses cadence after join to drain the remaining event.
+         * @param final Bypasses cadence when the writer drains before exit.
          */
         void Present(bool final);
         /** @brief Samples bounded events until stop or presentation failure.
