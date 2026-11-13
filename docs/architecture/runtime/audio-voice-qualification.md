@@ -80,7 +80,7 @@ Jira parent identities all resolve to HORO-550.
 | Stream cancellation during pending realization | AudioVoiceRenderStreamTests; unload/reset, already stopped/cancelled voices, cursor hold, silent output, retained retirement pins |
 | Pending schedules, callbacks and reset reconciliation | AudioLifecycleReconcilerTests, AudioCommandStagingTests, ScheduledAudioCommandBatchTests |
 | Actual Null callback dispatch | AudioVoiceRenderNullTests and NullAudioBackendTests; deterministic backend, not physical hardware evidence |
-| Synthetic device loss with pending controls | AudioFrontendTests; production frontend closes admission, cancels unexecuted controls and releases the registry only after Null detachment |
+| Synthetic device loss with pending controls | AudioFrontendTests; resident and real-service stream paths close admission, cancel unexecuted controls, retain render-port pins until Null detachment and release decoder/package ownership exactly once |
 | Persistent resident ambience and schedules | AudioRepeatedPlaybackTests; explicit host opt-in, source/host retirement, host-scoped pending starts, real looping PCM, pause/resume and reset cancellation |
 
 The configured regression ceilings are not a claim of qualification at the identity

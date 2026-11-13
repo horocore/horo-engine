@@ -364,21 +364,46 @@ namespace Horo::Tests::VoiceRenderFixture {
             CHECK(std::any_of(output->left.begin(), output->left.end(), [](const float sample) {
                 return sample > 0.0F;
             }));
-            frontend->Close();
-            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
+            bool deviceLost{};
+            SECTION("explicit close") {
+                frontend->Close();
+            }
+            SECTION("device loss with a pending control") {
+                REQUIRE(frontend->Transport({frontend->Snapshot().voice, AudioVoiceControl::Pause}).Value().status ==
+                        AudioCommandStagingStatus::Ok);
+                REQUIRE(output->null->InjectDeviceLoss(Audio::Backend::DeviceLossCause::Disconnected).HasValue());
+                deviceLost = true;
+            }
+            const auto pumpClosing = [&] {
+                const auto result = frontend->Pump({1, 1'000'000'000});
+                if (deviceLost) {
+                    REQUIRE(result.HasError());
+                    CHECK(result.ErrorValue().code.Value() == AudioErrors::DeviceLost.code.Value());
+                } else {
+                    REQUIRE(result.HasValue());
+                }
+            };
+            pumpClosing();
             REQUIRE(output->null->AdvanceControl().HasValue());
             CHECK(host->service->Retire(stream).HasError());  // Retained voice port forbids early worker/ring retirement.
             REQUIRE(output->null->AdvanceCallback().HasValue());
-            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
+            pumpClosing();
             REQUIRE(output->null->AdvanceControl().HasValue());
-            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
+            pumpClosing();
             REQUIRE(output->null->AdvanceControl().HasValue());
-            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
+            pumpClosing();
             CHECK(frontend->Snapshot().phase == AudioFrontendPhase::Closed);
             CHECK(host->service->Snapshot(stream).HasError());
             CHECK(registry->Snapshot(frontend->Snapshot().voice).HasError());
             CHECK(host->package.opens.load() == 1);
             CHECK(host->package.releases.load() == 1);
+            CHECK(frontend->Snapshot().pendingOperations == 0);
+            std::array<AudioFrontendOperationResult, 2> results;
+            REQUIRE(frontend->DrainTransportResults(results) == (deviceLost ? 2 : 1));
+            CHECK(results[0].disposition == AudioFrontendOperationDisposition::Applied);
+            if (deviceLost)
+                CHECK(results[1].disposition == AudioFrontendOperationDisposition::Cancelled);
+            CHECK(frontend->DrainTransportResults(results) == 0);
             const std::weak_ptr<StreamHost> lease = host;
             host.reset();
             CHECK(lease.expired());
