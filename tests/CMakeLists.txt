@@ -4139,6 +4139,9 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/PlatformPresenceCoordinatorTests.cpp
         unit/platform_services/PlatformOfflineQueueStorageTests.cpp
         unit/platform_services/PlatformProgressionIdempotencyTests.cpp
+        unit/platform_services/PlatformProgressionCoalescerTests.cpp
+        unit/platform_services/PlatformProgressionReplayTests.cpp
+        unit/application/ProgressionUseCasesTests.cpp
         unit/platform_services/PlatformOfflineQueueTests.cpp
         unit/platform_services/PlatformOfflineQueueLifecycleTests.cpp
         unit/platform_services/PlatformProjectConfigurationTests.cpp
@@ -4160,7 +4163,13 @@ add_executable(HoroPlatformRequestTests
 )
 target_compile_features(HoroPlatformRequestTests PRIVATE cxx_std_20)
 target_include_directories(HoroPlatformRequestTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
-target_link_libraries(HoroPlatformRequestTests PRIVATE HoroEngine::PlatformServices Threads::Threads)
+target_link_libraries(HoroPlatformRequestTests PRIVATE HoroEngine::PlatformServices HoroEngine::ProgressionApplication Threads::Threads)
+
+add_executable(HoroProgressionPublicConsumer support/ProgressionPublicHeaderConsumer.cpp)
+target_compile_features(HoroProgressionPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroProgressionPublicConsumer PRIVATE HoroEngine::ProgressionApplication)
+add_test(NAME HoroProgressionPublicConsumer COMMAND HoroProgressionPublicConsumer)
+set_tests_properties(HoroProgressionPublicConsumer PROPERTIES LABELS "unit;platform-services;headless")
 add_executable(HoroPlatformServicesCompositionTests unit/platform_services/PlatformServicesCompositionTests.cpp)
 target_compile_features(HoroPlatformServicesCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPlatformServicesCompositionTests PRIVATE HoroEngine::PlatformServices Catch2::Catch2WithMain Threads::Threads)
