@@ -4096,6 +4096,7 @@ add_executable(HoroPlatformRequestTests
         support/AllocationProbe.cpp
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
         unit/platform_services/PlatformCloudObjectsTests.cpp
+        unit/platform_services/PlatformCloudTransferTests.cpp
         unit/platform_services/PlatformCloudProviderConformanceTests.cpp
         unit/platform_services/PlatformAchievementCoordinatorTests.cpp
         unit/platform_services/PlatformDefinitionRegistriesTests.cpp

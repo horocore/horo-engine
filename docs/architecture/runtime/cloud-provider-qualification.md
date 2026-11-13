@@ -17,12 +17,39 @@ atomically without waiting, verify its actual Windows handle, enforce CPU/RAM
 guards, and release at the batch boundary. No live job is interrupted.
 
 The first cloud batch admission on this restart returned **physical lock busy**;
-no configure/build/test started and no background waiter was created. Python
-analysis/cache checks completed in two complementary selections: 56 passed,
-2 skipped in total. These are not native cloud-test or full-quality results.
+no configure/build/test started and no background waiter was created. The later
+combined Python analysis/cache/runner selection completed with 137 passed and
+4 skipped: three Windows directory-symlink privilege checks and one fixture
+requiring a real compiler and ccache. These are not native cloud-test or
+full-quality results.
 The restart authorizes normal delivery-branch push and a reviewable draft PR with
 explicitly incomplete checks; it does not authorize merge, force-push, issue
 transitions, reduced quality rules or fabricated qualification evidence.
+
+Draft PR [#3554](https://github.com/horocore/horo-engine/pull/3554) publishes the
+initial delivery at `d29beafd55452c77bf69ff97fe54ed1721d8fdfc`. Its three GitHub
+workflows were still queued when the following review fixes were prepared; no
+second push is admitted until those existing runs terminate. Hosted Codacy check
+`131889637682` reports two new method-length findings in the cloud conformance
+and Save compatibility tests. The tests now separate provider setup and terminal
+immutability checks while retaining the existing assertions. Full-file review
+also found the cloud object test file above its line limit and a long mock payload
+validator; staging tests move to `PlatformCloudTransferTests.cpp`, and the mock
+delegates opaque payload validation to a focused helper. Hosted reanalysis and
+native execution of these fixes remain outstanding. The final bounded native and
+full-preflight attempts again stopped at the busy physical lock before any
+configure, build, C++ sensor, secrets or local Codacy execution.
+
+Full-file Codacy review retains two contextual findings at
+`tests/python/test_local_build_cache.py:430`: Bandit B603 (warning) and Semgrep
+`dangerous-subprocess-use-audit` (error). The exact subprocess call is present at
+the published target base and blamed to `32c40bceef`; it executes an argument
+list of PATH-resolved compiler/cache tools and fixture-owned temporary paths,
+with the default `shell=False`. This delivery adds no input to that invocation.
+No rule or issue status is changed. The reported 27% header duplication consists
+of required provider override declarations shared by the base and mock; removing
+those declarations would weaken their explicit interface contracts. Codacy could
+not map `scripts/dev.py` or `tests/CMakeLists.txt`; their metrics remain unknown.
 
 This record tracks PLS-005 as a capability group. Public-engine qualification and
 private-provider certification are separate evidence. Neither scripted results nor
@@ -36,7 +63,7 @@ mutation-ID deduplication guarantee.
 | PLS-005.1, #1890, HORO-1846 | ADR-134 and the normative platform-services architecture | Existing merged architecture; no reimplementation |
 | PLS-005.2, #1908, HORO-1864 | `PlatformCloudObjects`, frontend list/read admission, ordered bounded page and complete-read validators | Existing merged implementation; Jira/GitHub state differs |
 | PLS-005.3, #1905, HORO-1861 | Conditional write/delete, exact intent replay validation, quota and atomic provider model tests | Existing merged implementation; Jira remains In Review |
-| PLS-005.4, #1907, HORO-1863 | Bounded operation-owned staging, explicit partial/absence/revision/cleanup errors, preserved frontend cloud errors, cursor-loop rejection; transfer tests in `PlatformCloudObjectsTests` | Native callback/module leases, staging overhead and atomic SDK evidence remain provider-package obligations |
+| PLS-005.4, #1907, HORO-1863 | Bounded operation-owned staging, explicit partial/absence/revision/cleanup errors, preserved frontend cloud errors, cursor-loop rejection; staging tests in `PlatformCloudTransferTests` | Native callback/module leases, staging overhead and atomic SDK evidence remain provider-package obligations |
 | PLS-005.5, #1911, HORO-1867 | Explicit fail-closed Null cloud entry points; scripted list/read/write/delete/quota; current-session validation, finite transfer slots and redacted typed failures | Test execution and external production providers must be recorded separately |
 | PLS-005.6, #1912, HORO-1868 | `PlatformCloudProviderConformanceTests` exercises both available public providers through `ICloudService`; existing atomic-model tests cover revision races and exact replay | Blocked on #1887/HORO-1843 and #1916/HORO-1872 plus actual private-provider/cross-platform evidence |
 

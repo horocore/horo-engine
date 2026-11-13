@@ -6,6 +6,30 @@
 #include <utility>
 
 namespace Horo::PlatformServices::TestSupport {
+    namespace {
+        /** @brief Checks only the opaque cloud payload family and its advertised finite bounds. */
+        bool ValidCloudResponsePayload(const MockPlatformServicesOperation operation,
+                                       const MockPlatformServicesResponse &response) noexcept {
+            switch (operation) {
+                case MockPlatformServicesOperation::WriteCloudObject:
+                case MockPlatformServicesOperation::DeleteCloudObject:
+                    return std::holds_alternative<CloudMutationResult>(response.payload);
+                case MockPlatformServicesOperation::ListCloudObjects: {
+                    const auto *payload = std::get_if<CloudObjectPage>(&response.payload);
+                    return payload && payload->objects.size() <= MockPlatformServicesBackend::MaximumPageEntries;
+                }
+                case MockPlatformServicesOperation::ReadCloudBlob: {
+                    const auto *payload = std::get_if<CloudBlobReadResult>(&response.payload);
+                    return payload && payload->bytes.Bytes().size() <= MockPlatformServicesBackend::MaximumPayloadBytes;
+                }
+                case MockPlatformServicesOperation::QueryCloudQuota:
+                    return std::holds_alternative<CloudQuotaObservation>(response.payload);
+                default:
+                    return false;
+            }
+        }
+    }  // namespace
+
     namespace detail {
         bool IsKnownOperation(const MockPlatformServicesOperation operation) noexcept {
             return operation < MockPlatformServicesOperation::Count;
@@ -136,17 +160,10 @@ namespace Horo::PlatformServices::TestSupport {
                 return std::holds_alternative<std::monostate>(response.payload);
             case MockPlatformServicesOperation::WriteCloudObject:
             case MockPlatformServicesOperation::DeleteCloudObject:
-                return std::holds_alternative<CloudMutationResult>(response.payload);
-            case MockPlatformServicesOperation::ListCloudObjects: {
-                const auto *payload = std::get_if<CloudObjectPage>(&response.payload);
-                return payload && payload->objects.size() <= MockPlatformServicesBackend::MaximumPageEntries;
-            }
-            case MockPlatformServicesOperation::ReadCloudBlob: {
-                const auto *payload = std::get_if<CloudBlobReadResult>(&response.payload);
-                return payload && payload->bytes.Bytes().size() <= MockPlatformServicesBackend::MaximumPayloadBytes;
-            }
+            case MockPlatformServicesOperation::ListCloudObjects:
+            case MockPlatformServicesOperation::ReadCloudBlob:
             case MockPlatformServicesOperation::QueryCloudQuota:
-                return std::holds_alternative<CloudQuotaObservation>(response.payload);
+                return ValidCloudResponsePayload(operation, response);
             case MockPlatformServicesOperation::ReadCloudObject: {
                 const auto *payload = std::get_if<CloudReadResult>(&response.payload);
                 return payload != nullptr && payload->bytes.size() <= MockPlatformServicesBackend::MaximumPayloadBytes;

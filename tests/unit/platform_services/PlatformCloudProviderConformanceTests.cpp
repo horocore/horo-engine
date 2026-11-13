@@ -26,6 +26,32 @@ namespace Horo::PlatformServices::TestSupport {
             REQUIRE(backend.Activate({}).HasValue());
         }
 
+        /** @brief Installs complete owned evidence for each successful opaque operation in the contract fixture. */
+        void ScriptOpaqueOperationResults(MockPlatformServicesBackend &backend, const CloudBlobWriteRequest &write,
+                                          const CloudMutationResult &commit) {
+            MockPlatformServicesResponse response;
+            response.payload = CloudObjectPage{.subject = write.subject,
+                                               .sessionGeneration = write.subject.SessionGeneration(),
+                                               .objects = {*commit.committedObject}};
+            REQUIRE(backend.SetResponse(Operation::ListCloudObjects, response).HasValue());
+            response.payload = CloudBlobReadResult{.subject = write.subject,
+                                                   .sessionGeneration = write.subject.SessionGeneration(),
+                                                   .head = *commit.committedObject,
+                                                   .bytes = write.bytes};
+            REQUIRE(backend.SetResponse(Operation::ReadCloudBlob, response).HasValue());
+            response.payload = commit;
+            REQUIRE(backend.SetResponse(Operation::WriteCloudObject, response).HasValue());
+            auto deletion = commit;
+            deletion.committedObject.reset();
+            response.payload = deletion;
+            REQUIRE(backend.SetResponse(Operation::DeleteCloudObject, response).HasValue());
+            response.payload = CloudQuotaObservation{.subject = write.subject,
+                                                     .sessionGeneration = write.subject.SessionGeneration(),
+                                                     .usedBytes = 1,
+                                                     .objectCount = 1};
+            REQUIRE(backend.SetResponse(Operation::QueryCloudQuota, response).HasValue());
+        }
+
         /** @brief Confirms one immutable terminal failure without accepting a payload as success. */
         template <typename T>
         void TerminalError(MockPlatformServicesBackend &backend, const PlatformRequestHandle<T> &handle, const ErrorCodeDescriptor &error) {
@@ -67,7 +93,7 @@ namespace Horo::PlatformServices::TestSupport {
         CHECK(legacy.legacyReads == 0);
     }
 
-    TEST_CASE("Cloud providers expose precise Null or complete scripted opaque operations", "[platform-services][cloud][conformance]") {
+    TEST_CASE("Null cloud provider rejects every opaque operation", "[platform-services][cloud][conformance]") {
         const auto write = CloudWrite();
         const auto commit = CloudCommit(write);
         const CloudListRequest list{.subject = write.subject, .pageSize = 1};
@@ -84,36 +110,20 @@ namespace Horo::PlatformServices::TestSupport {
         RequireError(absent.WriteCloudObject(CloudBlobWriteRequest{write}), BackendErrors::NullProvider);
         RequireError(absent.DeleteCloudObject(CloudBlobDeleteRequest{remove}), BackendErrors::NullProvider);
         RequireError(absent.QueryCloudQuota(write.subject), BackendErrors::NullProvider);
+    }
 
+    TEST_CASE("Scripted cloud provider returns complete typed opaque results", "[platform-services][cloud][conformance]") {
+        const auto write = CloudWrite();
+        const auto commit = CloudCommit(write);
         MockPlatformServicesBackend backend;
         Prepare(backend, {Operation::ListCloudObjects, Operation::ReadCloudBlob, Operation::WriteCloudObject, Operation::DeleteCloudObject,
                           Operation::QueryCloudQuota});
-        MockPlatformServicesResponse response;
-        response.payload = CloudObjectPage{.subject = write.subject,
-                                           .sessionGeneration = write.subject.SessionGeneration(),
-                                           .objects = {*commit.committedObject}};
-        REQUIRE(backend.SetResponse(Operation::ListCloudObjects, response).HasValue());
-        response.payload = CloudBlobReadResult{.subject = write.subject,
-                                               .sessionGeneration = write.subject.SessionGeneration(),
-                                               .head = *commit.committedObject,
-                                               .bytes = write.bytes};
-        REQUIRE(backend.SetResponse(Operation::ReadCloudBlob, response).HasValue());
-        response.payload = commit;
-        REQUIRE(backend.SetResponse(Operation::WriteCloudObject, response).HasValue());
-        auto deletion = commit;
-        deletion.committedObject.reset();
-        response.payload = deletion;
-        REQUIRE(backend.SetResponse(Operation::DeleteCloudObject, response).HasValue());
-        response.payload = CloudQuotaObservation{.subject = write.subject,
-                                                 .sessionGeneration = write.subject.SessionGeneration(),
-                                                 .usedBytes = 1,
-                                                 .objectCount = 1};
-        REQUIRE(backend.SetResponse(Operation::QueryCloudQuota, response).HasValue());
+        ScriptOpaqueOperationResults(backend, write, commit);
         ICloudService &cloud = backend;
-        const auto listed = cloud.ListCloudObjects(list);
-        const auto downloaded = cloud.ReadCloudObject(read);
+        const auto listed = cloud.ListCloudObjects({.subject = write.subject, .pageSize = 1});
+        const auto downloaded = cloud.ReadCloudObject(CloudBlobReadRequest{write.subject, write.key, 1});
         const auto uploaded = cloud.WriteCloudObject(CloudBlobWriteRequest{write});
-        const auto deleted = cloud.DeleteCloudObject(CloudBlobDeleteRequest{remove});
+        const auto deleted = cloud.DeleteCloudObject({write.subject, write.key, commit.committedObject->revision, write.mutation});
         const auto quota = cloud.QueryCloudQuota(write.subject);
         REQUIRE(listed.HasValue());
         REQUIRE(downloaded.HasValue());

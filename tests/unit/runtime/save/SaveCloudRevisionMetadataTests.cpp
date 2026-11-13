@@ -15,6 +15,11 @@
 namespace Horo::Runtime {
     namespace {
         using namespace Test;
+        namespace Cloud = Horo::PlatformServices;
+
+        static_assert(!std::is_same_v<SaveCloudMutationId, Cloud::CloudMutationId>);
+        static_assert(!std::is_constructible_v<Cloud::PlatformOfflineOperation, Cloud::CloudBlobWriteRequest>);
+        static_assert(!std::is_constructible_v<Cloud::PlatformOfflineOperation, Cloud::CloudBlobDeleteRequest>);
 
         [[nodiscard]] SaveCloudMetadataScope Scope(const std::uint8_t profile = 4, const std::uint8_t provider = 5,
                                                    const std::uint8_t account = 6) {
@@ -38,9 +43,39 @@ namespace Horo::Runtime {
             return {.key = {std::byte{0x00}, std::byte{0xff}}, .revision = std::vector<std::byte>{std::byte{0x7f}}};
         }
 
+        /** @brief Copies only a trusted caller-owned record's opaque transport fields and original mutation identity. */
+        [[nodiscard]] Cloud::CloudBlobWriteRequest CoordinatorTransportIntent(const SaveCloudGenerationRecord &record,
+                                                                              const SaveCloudMutationId &mutation) {
+            REQUIRE(record.object.has_value());
+            REQUIRE(record.object->revision.has_value());
+            auto intent = Cloud::TestSupport::CloudWrite();
+            const auto key = Cloud::CloudSaveObjectKey::Copy(record.object->key);
+            const auto revision = Cloud::ProviderObjectRevision::Copy(*record.object->revision);
+            REQUIRE(key.HasValue());
+            REQUIRE(revision.HasValue());
+            intent.key = key.Value();
+            intent.precondition = Cloud::CloudMatchProviderRevision{revision.Value()};
+            std::ranges::transform(mutation.Bytes(), intent.mutation.bytes.begin(), [](const std::uint8_t byte) {
+                return static_cast<std::byte>(byte);
+            });
+            return intent;
+        }
+
+        /** @brief Verifies that late commit evidence cannot replace an already published terminal outcome. */
+        void RequireImmutableCloudTerminal(Cloud::PlatformRequestStore &requests,
+                                           const Cloud::PlatformRequestHandle<Cloud::CloudMutationResult> &handle,
+                                           const Cloud::CloudMutationResult &completion, const bool succeeded) {
+            const auto terminal = requests.Query(handle);
+            REQUIRE(terminal.HasValue());
+            REQUIRE(terminal.Value().terminal.has_value());
+            CHECK(terminal.Value().terminal->HasValue() == succeeded);
+            CHECK(requests.CompleteSuccess(handle.Id(), handle.Generation(), completion).Value() ==
+                  Cloud::PlatformRequestMutation::Unchanged);
+            CHECK(requests.Query(handle).Value().state == terminal.Value().state);
+        }
+
         TEST_CASE("Cloud transport outcomes do not publish or rewrite Save coordinator state",
                   "[unit][save][cloud-transport][compatibility]") {
-            namespace Cloud = Horo::PlatformServices;
             const auto index = Index();
             auto metadata = Metadata(index);
             metadata.records.front().state = SaveCloudGenerationState::Uploading;
@@ -48,25 +83,11 @@ namespace Horo::Runtime {
             metadata.records.front().lastConfirmed = Id<SaveCloudMutationId>(8);
             REQUIRE(ValidateSaveCloudRevisionMetadata(index, Scope(), metadata).HasValue());
             const auto before = metadata.records;
-            const auto durableMutation = Id<SaveCloudMutationId>(9);
-
-            auto intent = Cloud::TestSupport::CloudWrite();
-            const auto key = Cloud::CloudSaveObjectKey::Copy(metadata.records.front().object->key);
-            const auto revision = Cloud::ProviderObjectRevision::Copy(*metadata.records.front().object->revision);
-            REQUIRE(key.HasValue());
-            REQUIRE(revision.HasValue());
-            intent.key = key.Value();
-            intent.precondition = Cloud::CloudMatchProviderRevision{revision.Value()};
-            std::ranges::transform(durableMutation.Bytes(), intent.mutation.bytes.begin(), [](const std::uint8_t byte) {
-                return static_cast<std::byte>(byte);
-            });
+            auto intent = CoordinatorTransportIntent(metadata.records.front(), Id<SaveCloudMutationId>(9));
             const auto callerOwnedIntent = intent;
             const auto completion = Cloud::TestSupport::CloudCommit(intent);
             REQUIRE(Cloud::ValidateCloudWriteCompletion(completion, intent, intent.subject, {}).HasValue());
 
-            static_assert(!std::is_same_v<SaveCloudMutationId, Cloud::CloudMutationId>);
-            static_assert(!std::is_constructible_v<Cloud::PlatformOfflineOperation, Cloud::CloudBlobWriteRequest>);
-            static_assert(!std::is_constructible_v<Cloud::PlatformOfflineOperation, Cloud::CloudBlobDeleteRequest>);
             Cloud::PlatformRequestStore requests{{.activeCapacity = 1, .terminalCapacity = 1, .observerCapacity = 1, .generation = {1}}};
             auto admitted = requests.Admit<Cloud::CloudMutationResult>();
             REQUIRE(admitted.HasValue());
@@ -97,13 +118,7 @@ namespace Horo::Runtime {
                                                                          MakeError(Cloud::CloudObjectErrors::QuotaExceeded))
                             .Value() == Cloud::PlatformRequestMutation::Applied);
             }
-            const auto terminal = requests.Query(handle);
-            REQUIRE(terminal.HasValue());
-            REQUIRE(terminal.Value().terminal.has_value());
-            CHECK(terminal.Value().terminal->HasValue() == succeeded);
-            CHECK(requests.CompleteSuccess(handle.Id(), handle.Generation(), completion).Value() ==
-                  Cloud::PlatformRequestMutation::Unchanged);
-            CHECK(requests.Query(handle).Value().state == terminal.Value().state);
+            RequireImmutableCloudTerminal(requests, handle, completion, succeeded);
             CHECK(Cloud::SameCloudWriteIntent(intent, callerOwnedIntent));
             CHECK(metadata.records == before);
             CHECK(ValidateSaveCloudRevisionMetadata(index, Scope(), metadata).HasValue());
@@ -111,7 +126,6 @@ namespace Horo::Runtime {
 
         TEST_CASE("Save cloud evidence is rejected rather than truncated at narrower transport bounds",
                   "[unit][save][cloud-transport][compatibility]") {
-            namespace Cloud = Horo::PlatformServices;
             const auto index = Index();
             auto metadata = Metadata(index);
             metadata.records.front().object = Object();
