@@ -3,16 +3,18 @@
 This is an implementation evidence ledger for DBG-001, not acceptance of an
 unverified product composition. The original source baseline is `f51e0c0f44`;
 the local console checkpoint was rebased unchanged through parents `5d0aff9d63`
-and `d774e3dbd4`, then onto published parent `3df476ff430a` on 2026-11-13.
-The current checkpoint is `2fc7c3c22d1f`; `git range-diff` confirms the checkpoint
-content is unchanged. Before the latest integration, all 99 dirty source paths
+and `d774e3dbd4`, then onto published parents `3df476ff430a` and `139f8a5ed63c`
+on 2026-11-13. The current core checkpoint is `df89fb46e`; the final rebase
+resolved one CI-list conflict by retaining both the parent's Windows test additions
+and the console profile exclusion. `git range-diff` confirms the lock and host
+composition commits are unchanged. Before integration, all 99 dirty source paths
 were backed up. Restoration used the topic's immutable stash identity; the
 original path inventory and unstaged state were preserved. All 96 nonoverlapping
 files retained their contents after line-ending normalization; the three
 overlapping files were merged with the published parent. This does not import
 the main owner's unpublished changes or publish the branch.
 
-Commit `b94a1a3` adds backward-compatible nonblocking heavy-lock admission and
+Commit `02b8535bf` adds backward-compatible nonblocking heavy-lock admission and
 its native-OS lock regression. The default remains blocking for existing callers;
 bounded validation explicitly requests `blocking=False`. The two lock tests pass.
 
@@ -21,7 +23,7 @@ integration and local-build-cache Python modules passed together: 147 tests,
 with two compiler/cache-dependent tests skipped. These are Python/tooling checks;
 native console/GUI/SDK/profile/performance and final analyzer evidence remain
 pending. The actual stacked quality base is `origin/codex/editor-improvements`
-at `3df476ff430a`; the local branch of the same name contains unpublished work
+at `139f8a5ed63c`; the local branch of the same name may contain unpublished work
 and is not this validation base. Final preflight requires fresh worktree-specific
 compile commands and C++ sensor evidence.
 GitHub #1812 / Jira HORO-1768 and all seven children were read on 2026-11-11.
