@@ -535,6 +535,7 @@ namespace Horo::Editor::Ui {
      * @return True only when an enabled selection changes the value; choosing the current value merely closes the popup.
      * @details Keyboard navigation follows Dear ImGui's owner input. Disabled controls/rows cannot activate.
      * Popup labels wrap within the field width while retaining the semantic label font and minimum row height.
+     * The selected preview clips before the arrow without shrinking its typography or changing the stored value.
      * @pre An ImGui frame/window is active; labels and fonts outlive the call.
      */
     [[nodiscard]] bool ComboControl(const char *id, int *value, const char *const *items, int itemCount, const Theme::Fonts &fonts,
@@ -551,6 +552,7 @@ namespace Horo::Editor::Ui {
      * @return True when an enabled entry changed the selection.
      * @details Keyboard activation and pointer clicks share one selection path. Navigation skips disabled rows;
      * choosing the current entry closes without a change. Wrapped rows preserve semantic typography.
+     * Selected previews clip before the arrow; the full label remains available in the popup.
      * @pre An ImGui frame/window is active; callbacks and fonts outlive the call.
      */
     [[nodiscard]] bool ComboControl(const char *id, int *value, int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,

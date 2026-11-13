@@ -1264,8 +1264,11 @@ namespace Horo::Editor::Ui {
         {
             ImFont *font = fonts.sansCompact ? fonts.sansCompact : ImGui::GetFont();
             const char *label = (*value >= 0 && *value < itemCount) ? source.label(*value) : "";
+            const float textLeft = fieldPos.x + metrics.paddingX;
+            const float textRight = std::max(textLeft, fieldPos.x + fieldW - ScaledLayoutValue(32.0F));
+            const ImVec4 clip{textLeft, fieldPos.y, textRight, fieldPos.y + fieldH};
             dl->AddText(font, metrics.fontSize, {fieldPos.x + metrics.paddingX, fieldPos.y + (fieldH - metrics.fontSize) * 0.5F},
-                        Theme::U32(Theme::Text()), label);
+                        Theme::U32(Theme::Text()), label, nullptr, 0, &clip);
         }
 
         // Right-side arrow

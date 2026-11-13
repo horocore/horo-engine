@@ -1303,3 +1303,45 @@ TEST_CASE("Disabled shared combo rejects pointer and keyboard activation", "[uni
     CHECK_FALSE(changed);
     CHECK(GImGui->OpenPopupStack.empty());
 }
+
+TEST_CASE("Shared combo selected text stays inside the label area for long localized values", "[unit][editor][gui][input][accessibility]") {
+    using namespace Horo::Editor;
+    for (const float width : {80.0F, 180.0F, 320.0F}) {
+        for (const bool disabled : {false, true}) {
+            ImGuiTestContext imgui{{800, 500}};
+            const std::array labels{"Uzun yerelleştirilmiş denetleyici hareket kaynağı seçimi / long localized controller motion source"};
+            int selected = 0;
+            for (int frame = 0; frame < 2; ++frame) {
+                RenderImGuiFrame([&] {
+                    ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Always);
+                    ImGui::SetNextWindowSize({780, 480}, ImGuiCond_Always);
+                    ImGui::Begin("Localized combo label bounds");
+                    ImGui::BeginDisabled(disabled);
+                    auto *const draw = ImGui::GetWindowDrawList();
+                    const int firstVertex = draw->VtxBuffer.Size;
+                    const auto textColor = Theme::U32(Theme::Text());
+                    ImGui::SetNextItemWidth(width);
+                    CHECK_FALSE(
+                        Ui::ComboControl("LocalizedChoice", &selected, labels.data(), static_cast<int>(labels.size()), imgui.fonts));
+                    const auto minimum = ImGui::GetItemRectMin(), maximum = ImGui::GetItemRectMax();
+                    const float labelRight = maximum.x - 32 * Theme::GetActiveTokens().sizes.uiScale;
+                    int textVertices = 0;
+                    for (int index = firstVertex; index < draw->VtxBuffer.Size; ++index) {
+                        const auto &vertex = draw->VtxBuffer[index];
+                        if (vertex.col != textColor)
+                            continue;
+                        ++textVertices;
+                        CHECK(vertex.pos.x >= minimum.x);
+                        CHECK(vertex.pos.x <= labelRight);
+                        CHECK(vertex.pos.y >= minimum.y);
+                        CHECK(vertex.pos.y <= maximum.y);
+                    }
+                    CHECK(textVertices > 0);
+                    ImGui::EndDisabled();
+                    ImGui::End();
+                });
+            }
+            CHECK(selected == 0);
+        }
+    }
+}
