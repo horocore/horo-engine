@@ -133,18 +133,22 @@ namespace Horo::Tests::VoiceRenderFixture {
                 const auto ended = runtime->Render(16);
                 REQUIRE(ended.error == nullptr);
                 CHECK(ended.terminal);
-                CHECK_FALSE(runtime->Render(16).terminal);
                 CHECK(runtime->Cursor().frame == cursor.frame);
                 for (const auto *plane : ended.input.samples.planes)
                     CHECK(std::all_of(plane, plane + 16, [](const float sample) {
                         return sample == 0.0F;
                     }));
+                CHECK_FALSE(runtime->Render(16).terminal);
                 runtime->EndBlock();
                 (void)runtime->Reconcile();
                 CHECK(rig.service->Retire(rig.stream).HasError());
                 runtime->Close();
                 CHECK_FALSE(runtime->CompleteShutdown(false));
+                CHECK_FALSE(runtime->TerminalSnapshot().has_value());
                 rig.Finish(*runtime, 0);
+                const auto terminal = runtime->TerminalSnapshot();
+                REQUIRE(terminal.has_value());
+                CHECK(terminal->state == (control == AudioVoiceControl::Stop ? AudioVoiceState::Stopped : AudioVoiceState::Cancelled));
             }
         }
     }

@@ -36,6 +36,11 @@ namespace Horo::Tests::VoiceRenderFixture {
                 const auto frees = AllocationProbe::FreeCount();
                 const auto *error = rig.voice->Apply(record);
                 const auto output = rig.voice->Render(16);
+                bool silent = true;
+                for (const auto *plane : output.input.samples.planes)
+                    silent = std::all_of(plane, plane + 16, [](const float sample) {
+                        return sample == 0.0F;
+                    }) && silent;
                 rig.voice->EndBlock();
                 const auto allocationEnd = AllocationProbe::Count();
                 const auto freeEnd = AllocationProbe::FreeCount();
@@ -45,16 +50,22 @@ namespace Horo::Tests::VoiceRenderFixture {
                 CHECK(allocationEnd == allocations);
                 CHECK(freeEnd == frees);
                 CHECK(rig.registry->State(handle).Value() == (IsTerminalAudioVoiceState(prior) ? prior : AudioVoiceState::Cancelled));
+                CHECK(silent);
                 CHECK_FALSE(rig.voice->Render(16).terminal);
-                for (const auto *plane : output.input.samples.planes)
-                    CHECK(std::all_of(plane, plane + 16, [](const float sample) {
-                        return sample == 0.0F;
-                    }));
                 CHECK(rig.voice->Apply(record) == &AudioErrors::CommandBufferInvalid);
+                CHECK_FALSE(rig.voice->TerminalSnapshot().has_value());
                 rig.voice->Close();
                 CHECK_FALSE(rig.voice->CompleteShutdown(false));
+                CHECK_FALSE(rig.voice->TerminalSnapshot().has_value());
                 REQUIRE(rig.voice->CompleteShutdown(true));
                 CHECK(rig.registry->State(handle).HasError());
+                const auto terminal = rig.voice->TerminalSnapshot();
+                REQUIRE(terminal.has_value());
+                CHECK(terminal->voice == handle);
+                CHECK(terminal->state == (IsTerminalAudioVoiceState(prior) ? prior : AudioVoiceState::Cancelled));
+                CHECK(terminal->terminalReason == AudioVoiceTerminalReasonForState(terminal->state));
+                REQUIRE(rig.voice->CompleteShutdown(true));
+                CHECK(rig.voice->TerminalSnapshot()->state == terminal->state);
             }
         }
     }

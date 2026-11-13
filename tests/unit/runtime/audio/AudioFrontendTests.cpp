@@ -397,6 +397,9 @@ namespace Horo::Tests::VoiceRenderFixture {
             CHECK(registry->Snapshot(frontend->Snapshot().voice).HasError());
             CHECK(host->package.opens.load() == 1);
             CHECK(host->package.releases.load() == 1);
+            REQUIRE(frontend->Snapshot().terminalVoice.has_value());
+            CHECK(IsTerminalAudioVoiceState(frontend->Snapshot().terminalVoice->state));
+            CHECK(frontend->Snapshot().terminalVoice->voice == frontend->Snapshot().voice);
             CHECK(frontend->Snapshot().pendingOperations == 0);
             std::array<AudioFrontendOperationResult, 2> results;
             REQUIRE(frontend->DrainTransportResults(results) == (deviceLost ? 2 : 1));
@@ -465,17 +468,23 @@ namespace Horo::Tests::VoiceRenderFixture {
             REQUIRE(loss.HasError());
             CHECK(loss.ErrorValue().code.Value() == AudioErrors::DeviceLost.code.Value());
             CHECK(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closing);
+            CHECK_FALSE(rig.frontend->Snapshot().terminalVoice.has_value());
             CHECK(rig.registry->Snapshot(handle).HasValue());
             CHECK(rig.frontend->Transport({handle, AudioVoiceControl::Resume}).HasError());
             REQUIRE(rig.output->null->AdvanceControl().HasValue());
             REQUIRE(rig.output->null->AdvanceCallback().HasValue());
             CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasError());
             CHECK(rig.registry->Snapshot(handle).HasValue());  // Silence/quiescence alone cannot release a voice.
+            CHECK_FALSE(rig.frontend->Snapshot().terminalVoice.has_value());
             REQUIRE(rig.output->null->AdvanceControl().HasValue());
             CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasError());
             REQUIRE(rig.output->null->AdvanceControl().HasValue());
             CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasError());
             REQUIRE(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closed);
+            REQUIRE(rig.frontend->Snapshot().terminalVoice.has_value());
+            CHECK(rig.frontend->Snapshot().terminalVoice->voice == handle);
+            CHECK(rig.frontend->Snapshot().terminalVoice->state == AudioVoiceState::Cancelled);
+            CHECK(rig.frontend->Snapshot().terminalVoice->terminalReason == AudioVoiceTerminalReason::Cancelled);
             CHECK(rig.registry->Snapshot(handle).HasError());
             CHECK(rig.frontend->Snapshot().pendingOperations == 0);
             std::array<AudioFrontendOperationResult, 2> results;

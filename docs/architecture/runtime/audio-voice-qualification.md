@@ -19,6 +19,17 @@ stream render ports or worker resources. `EndBlock` acknowledges the mixer's las
 borrow; `CompleteShutdown(false)` still cannot reclaim the ownership island.
 Native detachment proof precedes release and stream retirement on control.
 
+Detached voice retirement retains one immutable `AudioVoiceSnapshot` before the
+registry slot is released. `AudioVoiceRenderRuntime::TerminalSnapshot()` returns
+that value only after successful `CompleteShutdown`; unproved detachment exposes
+no final outcome. The frontend copies the value into
+`AudioFrontendSnapshot::terminalVoice` before destroying its render owner. Closed
+frontend snapshots therefore preserve the exact terminal identity and reason even
+after the registry rejects the old handle. Existing terminal states remain intact;
+otherwise detached shutdown commits Cancelled once. Neither getter reads active
+callback registry state or publishes a terminal result merely because output is
+silent. These are retained values, separate from transport-operation receipts.
+
 The voice-preparation failure sweep also covers the fixed coefficient bank's
 ownership transfers. MSVC Debug's `std::vector` move constructor allocates an
 iterator proxy inside a `noexcept` boundary; an allocation failure there terminates
@@ -114,6 +125,12 @@ the default and typed host-context assignment. Rebuild native consumers for this
 configuration-layout change; serialized scene data is unchanged. No target
 dependency is added.
 
+The render getter is additive; the trailing optional `terminalVoice` frontend
+snapshot field requires recompiling native Frontend consumers. VoiceRender and
+Frontend retain their existing public-header ownership and dependencies. Their
+public consumers cover the optional Horo snapshot type and noexcept render
+getter. No native handle or callback pointer is exposed.
+
 Initial base: `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`, verified against actual
 `origin` branch advertisement on 2026-11-11. The three Audio commits were later
 rebased without content changes onto the unpublished local parent
@@ -147,3 +164,11 @@ Windows lock handle against the canonical shared heavy-build lock, not merely th
 cache identity. Acquire nonblocking; a busy lock defers the batch without leaving
 a waiter. The 2026-11-13 policy removes the former named-grant scheduling gate.
 Use one build worker and `CTEST_PARALLEL_LEVEL=1`.
+
+The first 2026-11-13 bounded native batch configured successfully, including
+public-header inventory and dependency-direction checks, then failed at the new
+persistence test: its lvalue `Result::Value()` is const and cannot call mutable
+`Bind`. The test now moves the owner out of the result. CTest did not run in that
+batch; a fresh incremental build/test is required. Review also strengthened the
+barrier tests to inspect the first borrowed PCM output before a second Render
+overwrites scratch storage.

@@ -482,13 +482,21 @@ namespace Horo::Audio {
             return false;
         if (s.released)
             return true;
+        AudioVoiceState terminal{};
+        if (s.registry->CheckState(s.voice, terminal))
+            return false;
+        if (!IsTerminalAudioVoiceState(terminal)) {
+            if (s.registry->TryCancel(s.voice))
+                return false;
+            terminal = AudioVoiceState::Cancelled;
+        }
+        s.terminalVoice = AudioVoiceSnapshot{s.voice, terminal, AudioVoiceTerminalReasonForState(terminal)};
         s.publications.candidate.store(nullptr);
         s.callback.active = nullptr;
         s.stream.reset();  // Releases the retirement pin on control, before the retained service can be destroyed.
         s.spatial.reset();
         s.resident.reset();
         if (s.streamVoice) {
-            (void)s.registry->TryCancel(s.voice);
             (void)s.registry->Release(s.voice);
             s.streamVoice = false;
         }
@@ -497,5 +505,10 @@ namespace Horo::Audio {
         s.publications.retainedSlot = -1;
         s.released = true;
         return true;
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::TerminalSnapshot */
+    std::optional<AudioVoiceSnapshot> AudioVoiceRenderRuntime::TerminalSnapshot() const noexcept {
+        return state_->terminalVoice;
     }
 }  // namespace Horo::Audio

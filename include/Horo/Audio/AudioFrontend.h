@@ -7,6 +7,7 @@
 #include "Horo/Audio/AudioCommandStaging.h"
 #include "Horo/Audio/AudioDeviceTiming.h"
 #include "Horo/Audio/AudioVoiceControls.h"
+#include "Horo/Audio/AudioVoiceStateMachine.h"
 
 #include <memory>
 #include <optional>
@@ -52,6 +53,8 @@ namespace Horo::Audio {
         std::optional<Error> failure;
         std::size_t pendingOperations{};
         std::size_t retainedOperationResults{};
+        std::optional<AudioVoiceSnapshot>
+            terminalVoice{}; /**< Stable voice outcome after detached retirement; independent of transport results. */
     };
 
     /**
