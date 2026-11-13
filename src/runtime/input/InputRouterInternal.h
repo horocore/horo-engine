@@ -41,6 +41,7 @@ namespace Horo::Input {
             std::uint64_t token;
             InputContextId id;
             InputContextKind kind;
+            InputContextPropagation propagation{InputContextPropagation::Exclusive};
         };
 
         struct Capture {
@@ -49,6 +50,11 @@ namespace Horo::Input {
             PointerButton button;
             IInputCaptureOwner *owner;
         };
+
+        /** @brief Inspection may share eligibility, but mouse delivery remains exclusive to an existing capture owner. */
+        [[nodiscard]] bool MayRoutePointer(const std::uint64_t context) const noexcept {
+            return !capture || capture->context == context;
+        }
 
         // One owner and one delivery window govern all committed text and pre-edit state.
         struct TextFocusState {

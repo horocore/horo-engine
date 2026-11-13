@@ -67,6 +67,8 @@ namespace Horo::Editor {
             Digital(kActionToolRotate, true, {KeyBinding(E)}),
             Digital(kActionToolScale, true, {KeyBinding(R)}),
             Digital(kActionViewportFocusSelected, false, {KeyBinding(F)}),
+            Digital(kActionRuntimeConsoleToggle, false, {KeyBinding(F10, true, true), KeyBinding(F10, false, true, true)}),
+            Digital(kActionRuntimeOverlaysToggle, false, {KeyBinding(F11, true, true), KeyBinding(F11, false, true, true)}),
             Input::ActionDescriptor{Input::ActionId{kGameplayMoveAction},
                                     Input::ActionValueType::Axis2D,
                                     Input::InputContextId{kEditorWorkspaceInputContext},

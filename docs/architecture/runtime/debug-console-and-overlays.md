@@ -97,8 +97,13 @@ an authenticated TLS/token or authenticated host-session endpoint with rate
 limits and audit logging. The complete profile and compile-time inclusion
 contract, including Dedicated Server, is specified in
 [ADR-018 Section 4](../../adr/018-command-registration-permissions-threading-and-packaged-build-policy.md#4-packaged-build-retail-gating-policy).
-These macros describe the required build contract rather than existing CMake
-implementation; enabling Diagnostics requires a separate build.
+`HoroRuntimeConsoleDefaults` selects its compiled metadata using the separate
+`HORO_RUNTIME_CONSOLE_PROFILE` CMake value. Its NonShipping, DevelopmentOnly and
+DiagnosticsOnly contributions use separate translation units. This implements
+the console catalog's inclusion boundary, not a complete packaged game/editor
+composition. Enabling Diagnostics still requires a separate build. Current
+implementation and qualification gaps are recorded in the
+[console qualification ledger](../../guides/runtime-console-qualification.md).
 
 Shipping builds must not contain arbitrary file commands, unrestricted scene
 mutation, unauthenticated remote execution, source-path disclosure, or commands
@@ -181,11 +186,21 @@ struct DebugCommandDescriptor {
     CommandThreadPolicy threadPolicy{CommandThreadPolicy::OwnerThreadNextFrame};
     CommandAvailability availability{CommandAvailability::DevelopmentOnly};
     CommandFlags flags{CommandFlags::None};
-    DebugCommandHandler handler;  ///< Typed function pointer: Result<DebugCommandOutput, Error>(*)(const DebugCommandContext&, const DebugParsedArguments&)
 };
-
-using ConsoleCommandDescriptor = DebugCommandDescriptor;
 ```
+
+The implemented descriptor contains metadata only. After validation, the host
+binds each accepted stable ID to an owned `ICommandHandler` through
+`CommandBinding`. Discovery exposes no callable. This replaces the example's
+earlier embedded function pointer without changing the permission, availability
+or scheduling policy. The additive API has no baseline implementation callers
+to migrate; the [qualification ledger](../../guides/runtime-console-qualification.md)
+records the ownership and SDK boundary.
+
+`EntityId` arguments use a complete `scene:index:generation` transport value.
+The owning scene adapter maps it to its existing typed `EntityRef` and checks
+that exact scene generation at execution. Resolving a bare slot in the current
+scene would allow queued requests to target a replacement world incorrectly.
 
 `CommandPermission` is a bitflag so a caller session can hold a grant mask.
 A descriptor declares exactly one of the four named permissions; zero,

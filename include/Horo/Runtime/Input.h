@@ -380,6 +380,12 @@ namespace Horo::Input {
         NativeDialog,
     };
 
+    /** @brief Explicit host policy for a focused inspection surface; priority and text ownership remain unchanged. */
+    enum class InputContextPropagation : std::uint8_t {
+        Exclusive,
+        GameplayPassThrough /**< A FocusedGuiWidget alone does not exclude Gameplay; every other context/focus barrier still applies. */
+    };
+
     /** @brief Stable identifier shared by action descriptors and live contexts. */
     class InputContextId {
     public:
@@ -705,6 +711,14 @@ namespace Horo::Input {
         void EndFrame() noexcept;
         /** @brief Registers a context until the returned move-only token is destroyed. */
         [[nodiscard]] InputContextToken PushContext(InputContextId id, InputContextKind kind);
+        /** @brief Registers a context with explicit inspection propagation, without granting text focus or consuming input.
+         * @param id Host-owned stable context identity. @param kind Existing routing priority.
+         * @param propagation Exclusive or opt-in GameplayPassThrough, supported only for FocusedGuiWidget.
+         * @return RAII token, or an empty token for invalid propagation/kind combinations without changing router state.
+         * Gameplay pass-through preserves modal/native-dialog/window-focus barriers, ordinary GUI exclusion and transition consumption.
+         * The original two-argument overload remains Exclusive. Use only when the host explicitly permits simultaneous inspection/gameplay.
+         */
+        [[nodiscard]] InputContextToken PushContext(InputContextId id, InputContextKind kind, InputContextPropagation propagation);
         /** @brief Acquires exclusive pointer capture for the currently eligible context. */
         [[nodiscard]] Result<PointerCaptureToken> CapturePointer(const InputContextToken &context, PointerButton button,
                                                                  IInputCaptureOwner &owner);
@@ -714,7 +728,7 @@ namespace Horo::Input {
         [[nodiscard]] bool HasCapture() const noexcept;
         /** @brief Reports whether a registered context has strictly higher priority. */
         [[nodiscard]] bool HasHigherPriorityContext(InputContextKind kind) const noexcept;
-        /** @brief Reports whether this token is the highest-priority, most-recent eligible context. */
+        /** @brief Reports highest-priority eligibility, allowing Gameplay beneath explicitly passing inspection widgets only. */
         [[nodiscard]] bool IsContextActive(const InputContextToken &context) const noexcept;
         /**
          * @brief Grants text focus to one eligible GUI, modal, or native-dialog context.
@@ -753,7 +767,9 @@ namespace Horo::Input {
          * @return Neutral evidence when blocked/missing. CapacityExceeded atomically refuses this action's transitions;
          *         previously admitted consumers are preserved. Meaningful evidence comes only from unconsumed press edges.
          * @details Call this or ReadAction once per action per frame. Exact simultaneous sources prefer keyboard/mouse,
-         *          then gamepad in snapshot order. This does not poll a backend or change assignment.
+         *          then gamepad in snapshot order. Mouse button/wheel bindings remain neutral for a peer of an exclusive
+         *          capture owner even when inspection propagation admits both contexts; keyboard/gamepad bindings are unaffected.
+         *          This does not poll a backend or change assignment.
          */
         [[nodiscard]] ActionEvidence ReadActionEvidence(const InputContextToken &context, const ActionId &action,
                                                         std::optional<PlayerId> player = std::nullopt);
@@ -769,7 +785,7 @@ namespace Horo::Input {
         [[nodiscard]] bool ContextMatches(const InputContextToken &context, const InputContextId &id) const noexcept;
         /** @brief Consumes a key press once at the eligible context. */
         [[nodiscard]] bool ConsumeKey(const InputContextToken &context, Key key);
-        /** @brief Consumes a pointer-button press once at the eligible context. */
+        /** @brief Consumes a pointer-button press once at an eligible context, respecting exclusive mouse capture. */
         [[nodiscard]] bool ConsumePointerButton(const InputContextToken &context, PointerButton button);
         /** @brief Consumes an exact contact press once at the eligible context.
          * @param context Exact live context. @param contact Physical source incarnation from this committed frame.
@@ -778,7 +794,7 @@ namespace Horo::Input {
         [[nodiscard]] bool ConsumeTouchContact(const InputContextToken &context, TouchContactId contact);
         /** @brief Claims one mouse-position/hover delivery for this frame's highest-priority context.
          * @param context Exact live routing token. @return Whether this frame's position was admitted once.
-         * @note Surface-exit positions are admitted so the prior hover target can be neutralized.
+         * @note Surface-exit positions are admitted so the prior hover target can be neutralized. Existing mouse capture excludes peers.
          */
         [[nodiscard]] bool ConsumePointerMotion(const InputContextToken &context);
         /** @brief Assigns a currently connected generation-safe gamepad to one player. */

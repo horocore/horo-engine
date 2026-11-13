@@ -217,6 +217,66 @@ function(horo_register_catch_test target)
     horo_ci_catch_properties(${target})
 endfunction()
 
+add_executable(HoroRuntimeConsoleTests
+    unit/runtime/console/CommandRegistryTests.cpp
+    unit/runtime/console/CommandExecutorTests.cpp
+    unit/runtime/console/ConsoleVariableTests.cpp
+    unit/runtime/console/ConsoleVariableSetTests.cpp
+    unit/runtime/console/ConsoleBuiltinsTests.cpp
+    unit/runtime/console/ConsolePresentationTests.cpp
+    unit/runtime/console/ConsoleHistoryProjectionTests.cpp
+    unit/runtime/console/ConsoleLogProjectionTests.cpp
+    unit/runtime/console/ConsoleOperationProjectionTests.cpp
+    unit/runtime/console/OverlayLayoutTests.cpp
+    unit/runtime/console/ConsolePrivacyTests.cpp
+    unit/runtime/console/ConsoleStartupTests.cpp
+    unit/runtime/console/ConsoleStartupExecutionTests.cpp
+    unit/runtime/console/EditorConsoleLaunchTests.cpp
+    unit/runtime/console/ConsoleSceneOverlayTests.cpp
+    unit/runtime/console/NetworkConsoleInspectionTests.cpp
+    unit/runtime/console/ConsoleConfigurationTests.cpp)
+target_link_libraries(HoroRuntimeConsoleTests PRIVATE HoroEngine::RuntimeConsole HoroEngine::RuntimeConsoleStartup HoroEngine::RuntimeConsoleUi HoroEditorConsoleLaunchInternal HoroEngine::RuntimeScene HoroRuntimeConsoleSceneInternal HoroNetworkConsoleInspectionInternal)
+horo_register_catch_test(HoroRuntimeConsoleTests)
+add_executable(HoroRuntimeConsoleProductTests
+    unit/runtime/console/ConsoleProductTests.cpp
+    unit/runtime/console/ConsoleTelemetryBindingsTests.cpp
+    unit/runtime/console/ConsoleSupportBindingsTests.cpp)
+target_link_libraries(HoroRuntimeConsoleProductTests PRIVATE HoroEngine::RuntimeConsoleDefaults)
+horo_register_catch_test(HoroRuntimeConsoleProductTests)
+add_executable(HoroRuntimeConsoleArtifact support/RuntimeConsoleArtifact.cpp)
+target_compile_features(HoroRuntimeConsoleArtifact PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeConsoleArtifact PRIVATE HoroEngine::RuntimeConsoleDefaults)
+add_dependencies(HoroRuntimeConsoleProductTests HoroRuntimeConsoleArtifact)
+add_test(NAME HoroRuntimeConsoleArtifactContract COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/scripts/qualify_console_artifact.py"
+    --profile "${HORO_RUNTIME_CONSOLE_PROFILE}"
+    --binary "$<TARGET_FILE:HoroRuntimeConsoleArtifact>"
+    --archive "$<TARGET_FILE:HoroRuntimeConsoleDefaults>"
+    --report "${CMAKE_CURRENT_BINARY_DIR}/runtime-console-artifact-${HORO_RUNTIME_CONSOLE_PROFILE}-$<CONFIG>.json")
+set_tests_properties(HoroRuntimeConsoleArtifactContract PROPERTIES
+    LABELS "runtime;console;profile;binary;headless;ci-windows" RUN_SERIAL TRUE TIMEOUT 60)
+if(HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Editor" OR HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Development")
+    add_executable(HoroRuntimeConsoleSceneTests unit/runtime/console/ConsoleSceneBindingsTests.cpp)
+    target_link_libraries(HoroRuntimeConsoleSceneTests PRIVATE HoroEngine::RuntimeConsoleScene HoroEngine::RuntimeConsoleDefaults HoroEngine::RuntimeScene)
+    horo_register_catch_test(HoroRuntimeConsoleSceneTests)
+endif()
+add_test(NAME HoroRuntimeConsoleSdkContract COMMAND ${CMAKE_COMMAND}
+    "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
+    "-DFIXTURE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/runtime_console_sdk"
+    "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/runtime_console_sdk_contract"
+    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+    "-DCMAKE_LINKER=${CMAKE_LINKER}"
+    "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+    "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+    "-DGENERATOR=${CMAKE_GENERATOR}"
+    "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+    "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+    "-DBUILD_CONFIG=$<CONFIG>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeConsoleSdkContract.cmake")
+set_tests_properties(HoroRuntimeConsoleSdkContract PROPERTIES LABELS "runtime;console;sdk;headless;ci-windows" RUN_SERIAL TRUE TIMEOUT 120)
+
 add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp)
 target_compile_features(HoroModelProviderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAdapters Catch2::Catch2WithMain)
@@ -3500,6 +3560,7 @@ target_include_directories(HoroEditorSettingsStoreTests PRIVATE
 target_link_libraries(HoroEditorSettingsStoreTests
         PRIVATE
         HoroEngine::EditorServices
+        HoroEngine::RuntimeConsole
         nlohmann_json::nlohmann_json
 )
 add_executable(HoroWorkspaceLayoutTests
@@ -3850,6 +3911,9 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditorUiComponentsRenderTests
             PRIVATE
             HoroEngine::Gui
+            HoroEditorRuntimeConsoleViewInternal
+            HoroEngine::RuntimeScene
+            HoroEngine::NetworkDebuggerApplication
             HoroThirdParty::ImGui
     )
     add_executable(HoroViewportPanelRenderTests

@@ -307,6 +307,16 @@ def test_heavy_lock_is_exclusive_and_releases_after_exception(repository: tuple[
         pass
 
 
+def test_heavy_lock_nonblocking_api_refuses_busy_then_acquires_after_release(repository: tuple[Path, Path, str]) -> None:
+    repo, root, _ = repository
+    with cache.heavy_build_lock(repo):
+        with pytest.raises(BlockingIOError):
+            with cache.heavy_build_lock(repo, blocking=False):
+                pytest.fail("a second heavy owner must not enter")
+    with cache.heavy_build_lock(repo, blocking=False):
+        with pytest.raises(BlockingIOError):
+            enter_blocked_context(cache._FileLock(root / "heavy-build.lock", blocking=False))
+
 
 def test_reader_lock_releases_when_build_raises(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository

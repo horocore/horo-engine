@@ -1304,6 +1304,24 @@ namespace Horo::Editor::Ui {
 
     // ── InputTextControl ─────────────────────────────────────────────────
 
+    namespace {
+        /** @brief Applies synchronous typed line navigation inside native editing so active text is never overwritten next frame. */
+        int NavigateTextInput(ImGuiInputTextCallbackData *data) {
+            const auto &navigation = *static_cast<const InputTextNavigation *>(data->UserData);
+            InputTextNavigationAction action = InputTextNavigationAction::Complete;
+            if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory)
+                action = data->EventKey == ImGuiKey_UpArrow ? InputTextNavigationAction::Previous : InputTextNavigationAction::Next;
+            const auto replacement = navigation.replace(navigation.context, action, {data->Buf, static_cast<std::size_t>(data->BufTextLen)},
+                                                        static_cast<std::size_t>(data->CursorPos));
+            if (!replacement || data->BufSize <= 0 || replacement->size() >= static_cast<std::size_t>(data->BufSize))
+                return 0;
+            const std::string owned(*replacement);
+            data->DeleteChars(0, data->BufTextLen);
+            data->InsertChars(0, owned.data(), owned.data() + owned.size());
+            return 0;
+        }
+    }  // namespace
+
     /** @copydoc InputTextControl(const char *, char *, size_t, const Theme::Fonts &, const InputTextOptions &) */
     bool InputTextControl(const char *id, char *buffer, const size_t bufferSize, const Theme::Fonts &fonts,
                           const InputTextOptions &options) {
@@ -1326,13 +1344,18 @@ namespace Horo::Editor::Ui {
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
 
         bool changed = false;
+        ImGuiInputTextFlags flags = options.submitOnEnter ? ImGuiInputTextFlags_EnterReturnsTrue : ImGuiInputTextFlags_None;
+        const bool navigate = options.navigation != nullptr && options.navigation->replace != nullptr;
+        if (navigate)
+            flags |= ImGuiInputTextFlags_CallbackCompletion | ImGuiInputTextFlags_CallbackHistory;
+        const ImGuiInputTextCallback callback = navigate ? NavigateTextInput : nullptr;
         ImGui::PushItemWidth(options.width > 0.0F ? ScaledLayoutValue(options.width) : options.width);
         {
             Theme::ScopedTextStyle ts(fonts.sansCompact, metrics.fontSize, Theme::FontPx::SansCompact);
             if (options.hint != nullptr)
-                changed = ImGui::InputTextWithHint(id, options.hint, buffer, bufferSize);
+                changed = ImGui::InputTextWithHint(id, options.hint, buffer, bufferSize, flags, callback, options.navigation);
             else
-                changed = ImGui::InputText(id, buffer, bufferSize);
+                changed = ImGui::InputText(id, buffer, bufferSize, flags, callback, options.navigation);
         }
         ImGui::PopItemWidth();
 
