@@ -150,12 +150,23 @@ namespace Horo::PlatformServices {
         REQUIRE(started.HasValue());
         auto host = std::move(started).Value();
         PlatformOfflineQueue queue;
-        PlatformDiagnostics diagnostics(*host, queue, [] {
-            return Result<std::size_t>::Failure(MakeError(BackendErrors::ServiceUnavailable));
+        const std::string privateDetail = "private-account-and-store-path";
+        auto ownerError = WithCause(MakeError(BackendErrors::ServiceUnavailable, privateDetail),
+                                    MakeError(FrontendErrors::InvalidComposition, privateDetail));
+        ownerError.severity = ErrorSeverity::Critical;
+        ownerError.diagnostics.push_back(
+            {.code = DiagnosticCode{"test.private"}, .severity = DiagnosticSeverity::Note, .message = privateDetail});
+        PlatformDiagnostics diagnostics(*host, queue, [&ownerError] {
+            return Result<std::size_t>::Failure(ownerError);
         });
         const auto failed = diagnostics.SuspendPending({7}, queue.Generation());
         REQUIRE(failed.HasError());
         CHECK(failed.ErrorValue().code.Value() == BackendErrors::ServiceUnavailable.code.Value());
+        CHECK(failed.ErrorValue().domain.Value() == ownerError.domain.Value());
+        CHECK(failed.ErrorValue().severity == ownerError.severity);
+        CHECK(failed.ErrorValue().message.find(privateDetail) == std::string::npos);
+        CHECK(failed.ErrorValue().cause.Get() == nullptr);
+        CHECK(failed.ErrorValue().diagnostics.empty());
         CHECK(queue.ActiveIntentCount() == 0);
         PlatformDiagnostics readonly(*host, queue);
         CHECK_FALSE(readonly.Query().Value().canSuspendPending);

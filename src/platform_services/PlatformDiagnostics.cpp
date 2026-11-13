@@ -45,7 +45,14 @@ namespace Horo::PlatformServices {
         if (provider != snapshot.Value().composition.generation || queue != snapshot.Value().queueGeneration)
             return Result<std::size_t>::Failure(MakeError(OfflineQueueErrors::Stale));
         try {
-            return suspend_();
+            auto result = suspend_();
+            if (result.HasValue())
+                return result;
+            const auto &error = result.ErrorValue();
+            return Result<std::size_t>::Failure({.code = error.code,
+                                                 .domain = error.domain,
+                                                 .severity = error.severity,
+                                                 .message = "The platform diagnostics command failed. Inspect its durable owner."});
         } catch (...) {  // NOSONAR: host command adapters are an extension boundary.
             return Result<std::size_t>::Failure(MakeError(OfflineQueueErrors::QueueUnavailable));
         }

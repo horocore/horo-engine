@@ -168,6 +168,13 @@ composition/queue, wrong lanes and stale provider/queue generations before invok
 that command. It offers no force-replay, retry-delay override, queue deletion, account
 selection or consent override.
 
+Control failures preserve the durable owner's typed code, domain and severity,
+but replace its unrestricted message and omit diagnostics/cause contents. This
+prevents an owner-side storage or identity failure from exporting private detail
+through the diagnostics capability. The command-failure regression injects a
+private marker at all three text surfaces and checks the normalized boundary;
+native execution after this addition is still pending.
+
 The localized Platform dock pane borrows `PanelContext::platformDiagnostics` and
 releases it on detach. The field is appended and defaults to null, preserving existing
 source aggregate callers. The `HoroGui` implementation declares a private dependency

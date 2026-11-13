@@ -27,7 +27,8 @@ namespace Horo::PlatformServices {
         [[nodiscard]] virtual Result<PlatformDiagnosticsSnapshot> Query() const = 0;
         /** @brief Requests suspension against the displayed generations; never forces replay or bypasses access.
          * @param provider Expected activation. @param queue Expected offline lifetime.
-         * @return Count after the host owner has checkpointed suspension, or typed denial/stale/storage failure. */
+         * @return Count after the host owner has checkpointed suspension, or typed denial/stale/storage failure.
+         * @details Owner failures retain code, domain and severity but exclude unrestricted message, diagnostic and cause text. */
         [[nodiscard]] virtual Result<std::size_t> SuspendPending(PlatformProviderGeneration provider,
                                                                  PlatformOfflineQueueGeneration queue) = 0;
     };
