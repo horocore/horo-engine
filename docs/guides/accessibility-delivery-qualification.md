@@ -18,7 +18,7 @@ it must not be attributed to that older remote snapshot.
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Fixed cue/catalog transport, bounded timeline, appearance, safe-area layout and canonical paint/resource lifetimes; 49-case UI batch passed | Host localization/shaping/presentation composition, settings activation and visible native output |
 | ACC-001.3 color | HORO-1807 / #1851 | Foundation-only matrices and authoritative snapshot query; numeric/query/contract cases passed in the 11-case semantic batch | Complete-image GPU execution, cooked shader ABI migration, settings activation and real backend evidence |
-| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, calibrated platform gyro and atomic persistence; **96/96 Input** passed at eac1e8f, including chord-set identity. **98/98 GUI/SDL** and the editor application built at 2b2175c; direct Input consumers passed **62/62** at d460d27 | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; controller motion collection, device evidence and native interaction qualification |
+| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, calibrated platform gyro and atomic persistence; **99/99 Input** passed on the exact patch committed as 80f09f5, including chord-set identity and finite-scale cancellation. **98/98 GUI/SDL** and the editor application built at clean 80f09f5; direct Input consumers passed **62/62** at d460d27 | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; controller motion collection, device evidence and native interaction qualification |
 | ACC-001.5 visual | HORO-1809 / #1853 | Atomic UI scale/contrast projection, readable typography floor and tagged safety projection passed in UI/semantic batches | Both editor theme layers, coherent DPI/font/UI scale, actual Camera/VFX/animation consumers and visual qualification |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Runtime UI semantics, truthful Null Unsupported bridge, retained desired preference and bounded opt-in QA journal passed in the UI batch | Native adapters, default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Inert contribution, seven typed preferences, authoritative snapshot and revision-only hint/retry contracts passed in the semantic batch | Host tick composition, game-owned supported/authorized consumers and shared settings contribution |
@@ -28,20 +28,20 @@ No parent/child issue state or ADR approval state was changed by this delivery.
 
 ## Native verification
 
-Each batch used its exact clean source commit, native MSVC 19.44 Debug with
+Each batch used its exact recorded source snapshot, native MSVC 19.44 Debug with
 embedded debug information, the verified canonical physical OS lock, nonblocking
 admission and CPU/RAM/storage checks. Builds and CTest ran with one worker.
 The lock was released between batches. Discovery required complete Catch
 `Target::case` families and explicit consumers; `--no-tests=error` prevented an
 empty selection from passing. Reports are local ignored artifacts, not source.
 
-| Scope | Clean commit | Built targets | Executed evidence |
+| Scope | Source commit | Built targets | Executed evidence |
 |---|---|---|---|
-| Input | `eac1e8f17caf4a24c442954145fe659c29cdb6ef` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **96/96 passed, zero skipped**, 1.44s; `build/acc-input-chord-eac1e8f-results.xml` and corresponding discovery JSON |
+| Input | `80f09f52b5f94f69b87c0bc9ed921e99540c278b` (exact patch tested before commit) | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **99/99 passed, zero skipped**, 1.52s; `build/acc-input-overflow-results.xml`, corresponding discovery JSON and `build/acc-input-overflow-verified-snapshot.json` |
 | Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
 | Direct Input consumers | `d460d270be3a71c914c001d5302674c2f599672e` | Eleven targets: Character/Input UI/debugger/portable Android tests; staged Character/RuntimeUiInput/Android/XR consumers; direct navigation/pointer/debugger consumers | **62/62 passed, zero skipped**, 1.42s; `build/acc-input-consumers-d460d27-results.xml` and corresponding discovery JSON |
 | Captions / Runtime UI / optional bridge | `0b1f6eb7e223b0ece0d6137bf85a617be066d9d0` | HoroRuntimeUiAccessibilityTests, RuntimeUi staged/accessibility consumers, CaptionTransport staged/direct consumers, PlatformAccessibility staged/direct consumers | **49/49 passed, zero skipped**, 0.72s; `build/acc-caption-completion-0b1f6eb-results.xml` and corresponding discovery JSON |
-| GUI / SDL / editor application | `2b2175ca9847ca97dd50d648563a3cafbc2f82bd` | HoroEditorPresentationTests, HoroGuiPublicHeaderConsumer, HoroInputSdlTests, **HoroEditor** | **98/98 passed, zero skipped**, 54.04s: 88 presentation and 10 SDL cases; `build/acc-gui-identity-2b2175c-results.xml` and corresponding discovery JSON |
+| GUI / SDL / editor application | `80f09f52b5f94f69b87c0bc9ed921e99540c278b` | HoroEditorPresentationTests, HoroGuiPublicHeaderConsumer, HoroInputSdlTests, **HoroEditor** | **98/98 passed, zero skipped**, 53.66s: 88 presentation and 10 SDL cases; `build/acc-gui-overflow-80f09f5-results.xml` and corresponding discovery JSON |
 
 All batches configured successfully, including header ownership and dependency
 direction checks. Affected staged/public consumers compiled. The GUI batch enabled
@@ -62,6 +62,20 @@ The internal chord-set identity correction at `4a7ae9b` rejects reordered or
 repeated-key aliases through both map and profile admission. Its new regression
 executed successfully in the 96-case Input batch at `eac1e8f`, including unchanged
 map/profile revision on rejection and preservation of a genuinely different chord.
+
+The later finite-scale correction at `80f09f5` keeps products and binding totals
+in double precision until physical and bounded collected sources have joined,
+then applies the existing final saturation and radial filtering. Before the fix,
+the new regression observed +/-1 instead of +/-0.25: **96 passed, one failed**;
+`build/acc-overflow-4d4faa5-red-results.xml` retains that failure. The first green
+build attempt found a test-only C2662 ownership error, corrected by moving the
+collection frame out of its Result; no test pass is attributed to that attempt.
+The final three-file frozen patch passed all 99 cases before commit. Its SHA256
+receipt was checked against the committed source; no executable code changed
+between that run and commit. New cases cover sum/product overflow, both axis
+components, radial filtering, allocation-free collection merging and digital
+edges. The subsequent GUI batch ran at the clean commit and relinked the actual
+editor with both this fix and the announcement-completion bridge contract.
 
 The GUI batch executed all ten new Contrast/Input Mapping cases: exact duration
 round trips, malformed drafts, canonical Apply with peer preservation and stale

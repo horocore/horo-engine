@@ -279,6 +279,18 @@ including chord-set identity. These distinct source snapshots and checks are
 recorded in the delivery guide. Scoped capture/persistence integration,
 controller gyro collection and native interaction/hardware qualification remain.
 These checkpoints do not qualify ACC-001.4.
+
+Finite binding scales now accumulate without overflowing the intermediate float
+product or sum. Opposing large weights cancel before physical and collected
+sources are saturated together; radial filtering still follows that final
+saturation. This is an internal arithmetic correction with no API, profile schema
+or accepted-scale-range change. The three regressions cover positive/negative
+weights on both components, ordinary/radial 2D resolution, finite wheel products,
+collection merging, allocation-free reads and press/hold/release preservation.
+The exact source patch committed as `80f09f5` passed **99/99 Input cases**, zero
+skipped, immediately before commit; the recorded source hashes match that commit.
+The clean-commit GUI/SDL refresh also passed **98/98** and rebuilt the editor.
+
 The graphical editor now drains removed-context withdrawals at its actual input
 cutoff, after the router adopts the committed sample and before screen input
 capture. It releases only ended-owner name leases and never delivers them to a
