@@ -116,6 +116,12 @@ namespace Horo::Input {
         static_cast<void>(fixture.Sample(InputSampleTime{0}, false));
         static_cast<void>(fixture.Sample(InputSampleTime{1}, true));
         REQUIRE(fixture.Sample(InputSampleTime{11}, true).value.down);
+        SECTION("The action is still held when host time disappears") {}
+        SECTION("An unread physical release precedes the missing clock") {
+            fixture.Begin(InputSampleTime{12});
+            fixture.input.Collector().SetKey(Key::K, false);
+            static_cast<void>(fixture.input.CommitFrame());
+        }
         fixture.Begin(std::nullopt);
         static_cast<void>(fixture.input.CommitFrame());
         bool removed = false;

@@ -30,7 +30,7 @@ namespace Horo::Input::Detail {
             return;
         const bool released = cell.processor && cell.processor->Cancel().button.released;
         cell.pendingRelease = cell.pendingRelease || released;
-        if (released)
+        if (cell.pendingRelease)
             cell.releaseStatus = cause;
         cell.retired = true;
         cell.chordHeld = false;
