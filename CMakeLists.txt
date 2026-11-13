@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-set(HORO_ENGINE_VERSION "0.3.0")
+set(HORO_ENGINE_VERSION "0.4.0")
 
 project(HoroEngine VERSION ${HORO_ENGINE_VERSION} LANGUAGES CXX C)
 

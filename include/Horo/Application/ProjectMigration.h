@@ -21,6 +21,10 @@
 #include <utility>
 #include <vector>
 
+namespace Horo::Security {
+    class SecureRandomSource;
+}
+
 namespace Horo::Application {
     /** @brief Stable authored identity of one immutable migration definition. */
     struct StableMigrationId {
@@ -116,6 +120,13 @@ namespace Horo::Application {
         std::size_t maxConcurrency{8};
         std::uint64_t maxJournalBytes{128ULL * 1024ULL * 1024ULL};
         std::uint64_t maxHistoryBytes{16ULL * 1024ULL * 1024ULL};
+    };
+
+    /** @brief Explicit operation-owned capabilities available only during candidate preparation. */
+    struct ProjectMigrationExecutionServices final {
+        std::shared_ptr<Security::SecureRandomSource>
+            random; /**< Host-selected entropy; absence never selects a fallback. Concurrent operations
+                     sharing one instance require a provider supporting concurrent Fill calls. */
     };
 
     /** @brief Conservative storage-growth declaration used before transformation admission. */
@@ -308,6 +319,16 @@ namespace Horo::Application {
                                                std::vector<std::byte> document) const;
         [[nodiscard]] Result<void> RemoveDocument(MigrationDocumentHandle document) const;
 
+        /**
+         * @brief Requests bounded fresh entropy from the host-injected operation capability.
+         * @param destination One through 256 writable bytes, cleared on failure.
+         * @return Success or the provider's typed failure; absence fails closed without a fallback.
+         * @details Available to serialized mutable stages, not const validators or parallel document stages.
+         * Entropy is requested only during Execute(), never while constructing or validating descriptors.
+         * The executor retains the injected provider through preparation; stages must not retain this context.
+         */
+        [[nodiscard]] Result<void> FillSecureRandom(std::span<std::byte> destination);
+
     private:
         friend class ProjectMigrationExecutor;
 
@@ -387,12 +408,23 @@ namespace Horo::Application {
     /** @brief Executes planned definitions without owning authoritative publication. */
     class ProjectMigrationExecutor {
     public:
-        /** @brief Builds an unpublished candidate through all definition-local validation barriers. */
+        /**
+         * @brief Builds an unpublished candidate through all definition-local validation barriers.
+         * @param projectRoot Read-only authoritative source root.
+         * @param candidateRoot Disposable unpublished output root.
+         * @param plan Validated immutable migration plan.
+         * @param jobs Operation-owned scheduler.
+         * @param limits Finite inventory and execution bounds.
+         * @param cancellation Parent cancellation intent.
+         * @param services Host-selected capabilities retained through preparation; empty preserves capability-free pipelines.
+         * @return Unpublished candidate or typed inventory, capability, stage or validation failure.
+         */
         [[nodiscard]] static Result<PreparedProjectMigration> Prepare(const std::filesystem::path &projectRoot,
                                                                       const std::filesystem::path &candidateRoot,
                                                                       const ProjectMigrationPlan &plan, JobSystem &jobs,
                                                                       const ProjectMigrationLimits &limits = {},
-                                                                      CancellationToken cancellation = {});
+                                                                      CancellationToken cancellation = {},
+                                                                      const ProjectMigrationExecutionServices &services = {});
 
         /**
          * @brief Applies transaction-owned documents and runs the final target-contract validator.
@@ -413,12 +445,14 @@ namespace Horo::Application {
          * @param jobs Injected scheduler used only through operation-owned TaskGroup scopes.
          * @param limits Bounded inventory and execution limits.
          * @param cancellation Parent operation cancellation.
+         * @param services Same explicit capabilities used by real preparation; no native defaults are selected.
          * @return Verified change summary or a typed inventory/stage/validation failure.
          */
         [[nodiscard]] static Result<ProjectMigrationDryRunResult> VerifiedDryRun(const std::filesystem::path &projectRoot,
                                                                                  const ProjectMigrationPlan &plan, JobSystem &jobs,
                                                                                  const ProjectMigrationLimits &limits = {},
-                                                                                 CancellationToken cancellation = {});
+                                                                                 CancellationToken cancellation = {},
+                                                                                 const ProjectMigrationExecutionServices &services = {});
     };
 
     /** @brief Constructs the build-generated core migration catalog. */

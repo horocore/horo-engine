@@ -1,5 +1,6 @@
 #include "Horo/PlatformServices/PlatformProjectConfiguration.h"
 
+#include "Horo/Foundation/Utf8.h"
 #include "PlatformDefinitionRegistryDetail.h"
 
 #include <algorithm>
@@ -81,9 +82,10 @@ namespace Horo::PlatformServices {
             if (candidate.schemaVersion != PlatformProjectConfigurationSchemaVersion)
                 return Result<void>::Failure(FieldError(PlatformProjectConfigurationErrors::UnsupportedVersion, "schemaVersion",
                                                         "Only Platform Services project configuration schema version 1 is supported."));
-            if (candidate.projectId.empty() || candidate.projectId.size() > limits.maximumProjectIdBytes)
+            if (candidate.projectId.empty() || candidate.projectId.size() > limits.maximumProjectIdBytes ||
+                !IsValidUtf8ScalarSequence(candidate.projectId))
                 return Result<void>::Failure(FieldError(PlatformProjectConfigurationErrors::InvalidConfiguration, "projectId",
-                                                        "Project identity must match the bounded nonempty root project identity."));
+                                                        "Project identity must match the bounded nonempty UTF-8 root project identity."));
             if (!IsKnown(candidate.profile) || !IsKnown(candidate.provider.mode))
                 return Result<void>::Failure(FieldError(PlatformProjectConfigurationErrors::InvalidConfiguration, "profile",
                                                         "Host profile and provider selection mode must be recognized."));
@@ -372,6 +374,19 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformProjectConfiguration::Fingerprint */
     const Sha256Digest &PlatformProjectConfiguration::Fingerprint() const noexcept {
         return fingerprint_;
+    }
+
+    /** @copydoc ValidatePlatformProjectConfigurationCandidate */
+    Result<void> ValidatePlatformProjectConfigurationCandidate(const PlatformProjectConfigurationCandidate &candidate,
+                                                               const PlatformProjectConfigurationLimits &limits) {
+        if (!HasValidLimits(limits))
+            return Result<void>::Failure(FieldError(PlatformProjectConfigurationErrors::CapacityExceeded, "limits",
+                                                    "Configured validation limits must be nonzero and within hard engine bounds."));
+        if (auto shape = ValidateCandidateShape(candidate, limits); shape.HasError())
+            return shape;
+        if (candidate.provider.mode == PlatformProviderSelectionMode::Null)
+            return ValidateRequiredServices(candidate.services, nullptr);
+        return Result<void>::Success();
     }
 
     /** @copydoc BuildPlatformProjectConfiguration */

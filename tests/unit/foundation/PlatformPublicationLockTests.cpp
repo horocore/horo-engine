@@ -30,6 +30,66 @@ namespace {
         }
     };
 
+    TEST_CASE("Native directory publication is tracked and never replaces occupied destinations", "[unit][foundation][publication]") {
+        LockDirectory directory;
+        Horo::NativeDurableFileSystem files;
+        const auto prepared = directory.path / std::filesystem::path{u8"prepared ü 图"};
+        const auto destination = directory.path / std::filesystem::path{u8"published ü 图"};
+        REQUIRE(std::filesystem::create_directory(prepared));
+        const std::string content{"complete payload"};
+        REQUIRE(files.WriteDurable(prepared / "content", std::as_bytes(std::span{content.data(), content.size()})).HasValue());
+        REQUIRE(files.SyncDirectory(prepared).HasValue());
+        bool occupied{};
+        SECTION("Absent destination commits") {}
+        SECTION("Empty existing directory remains") {
+            occupied = true;
+            REQUIRE(std::filesystem::create_directory(destination));
+        }
+        SECTION("Existing nonempty directory remains") {
+            occupied = true;
+            REQUIRE(std::filesystem::create_directory(destination));
+            std::ofstream(destination / "sentinel") << "foreign";
+        }
+        SECTION("Existing regular file remains") {
+            occupied = true;
+            std::ofstream(destination) << "foreign";
+        }
+        Horo::AtomicFileReplacementReceipt receipt;
+        const auto published = files.PublishDirectoryNoReplaceTracked(prepared, destination, receipt);
+        if (occupied) {
+            CHECK(published.HasError());
+            CHECK_FALSE(receipt.WasCommitted());
+            CHECK(std::filesystem::is_regular_file(prepared / "content"));
+            CHECK(std::filesystem::exists(destination));
+        } else {
+            REQUIRE(published.HasValue());
+            CHECK(receipt.WasCommitted());
+            CHECK_FALSE(std::filesystem::exists(prepared));
+            CHECK(std::filesystem::is_regular_file(destination / "content"));
+            REQUIRE(std::filesystem::create_directory(prepared));
+            CHECK(files.PublishDirectoryNoReplaceTracked(prepared, directory.path / "other", receipt).HasError());
+            CHECK(std::filesystem::is_directory(prepared));
+            CHECK_FALSE(std::filesystem::exists(directory.path / "other"));
+        }
+    }
+
+    TEST_CASE("Directory publication rejects malformed and nonsibling paths before mutation", "[unit][foundation][publication]") {
+        LockDirectory directory;
+        Horo::NativeDurableFileSystem files;
+        const auto prepared = directory.path / "prepared";
+        REQUIRE(std::filesystem::create_directory(prepared));
+        auto nul = (directory.path / "target").native();
+        nul.push_back(std::filesystem::path::value_type{});
+        nul.append(std::filesystem::path{"suffix"}.native());
+        for (const auto &destination : {std::filesystem::path{"relative"}, prepared, directory.path / "nested" / "target",
+                                        directory.path / "nested" / ".." / "target", std::filesystem::path{nul}}) {
+            Horo::AtomicFileReplacementReceipt receipt;
+            CHECK(files.PublishDirectoryNoReplaceTracked(prepared, destination, receipt).HasError());
+            CHECK_FALSE(receipt.WasCommitted());
+            CHECK(std::filesystem::is_directory(prepared));
+        }
+    }
+
     TEST_CASE("Native publication locks reject malformed paths before filesystem changes", "[unit][foundation][publication]") {
         LockDirectory directory;
         Horo::NativeDurableFileSystem files;

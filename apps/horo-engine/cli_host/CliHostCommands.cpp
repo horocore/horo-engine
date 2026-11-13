@@ -8,6 +8,7 @@
 #include "McpServe.h"
 #include "NavigationCliHost.h"
 #include "PackageCliHost.h"
+#include "PlatformServicesCliHost.h"
 
 #include <algorithm>
 #include <memory>
@@ -243,6 +244,8 @@ namespace Horo::Application::Internal {
         auto packages = Cli::DescribePackageCommands();
         descriptors.insert(descriptors.end(), std::make_move_iterator(packages.begin()), std::make_move_iterator(packages.end()));
         descriptors.push_back(Cli::DescribeNavigationBakeCommand());
+        descriptors.push_back(DescribePlatformServicesValidationCommand());
+        descriptors.push_back(DescribePlatformServicesCookCommand());
         return descriptors;
     }
 

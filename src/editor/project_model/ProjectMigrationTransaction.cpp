@@ -655,8 +655,10 @@ namespace Horo::Editor {
     /** @copydoc ProjectMigrationTransactionService::ProjectMigrationTransactionService */
     ProjectMigrationTransactionService::ProjectMigrationTransactionService(DurableFileSystem &files, WallClock &wallClock,
                                                                            ProjectMutationCoordinator &mutations, JobSystem &jobs,
-                                                                           const ProjectMigrationStoragePolicy &storagePolicy) noexcept
-        : files_(files), wallClock_(wallClock), mutations_(mutations), jobs_(jobs), storagePolicy_(storagePolicy) {}
+                                                                           const ProjectMigrationStoragePolicy &storagePolicy,
+                                                                           ProjectMigrationExecutionServices executionServices) noexcept
+        : files_(files), wallClock_(wallClock), mutations_(mutations), jobs_(jobs), storagePolicy_(storagePolicy),
+          executionServices_(std::move(executionServices)) {}
 
     /** @copydoc ProjectMigrationTransactionService::InspectStorageAdmission */
     Result<ProjectMigrationStorageAdmission> ProjectMigrationTransactionService::InspectStorageAdmission(
@@ -746,8 +748,8 @@ namespace Horo::Editor {
         if (auto result = WriteJournal(files_, operationRoot, journal); result.HasError())
             return Result<ProjectMigrationTransactionResult>::Failure(result.ErrorValue());
         LOG_DEBUG("editor.project_migration.transaction", "Journal state operation=%s state=Preparing.", operationId.c_str());
-        auto prepared =
-            ProjectMigrationExecutor::Prepare(request.projectRoot, stagingRoot, request.plan, jobs_, request.limits, request.cancellation);
+        auto prepared = ProjectMigrationExecutor::Prepare(request.projectRoot, stagingRoot, request.plan, jobs_, request.limits,
+                                                          request.cancellation, executionServices_);
         if (prepared.HasError()) {
             std::filesystem::remove_all(operationRoot, error);
             return Result<ProjectMigrationTransactionResult>::Failure(prepared.ErrorValue());

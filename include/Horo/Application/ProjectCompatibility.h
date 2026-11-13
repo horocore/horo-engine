@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Application/ProjectVersion.h"
+#include "Horo/Foundation/Sha256.h"
 
 #include <filesystem>
 #include <optional>
@@ -116,6 +117,8 @@ namespace Horo::Application {
         std::optional<ContractBaselineVersion> sourceBaseline;
         bool markerUpdateRequired{false};
         std::optional<Error> diagnostic;
+        std::optional<Sha256Digest>
+            sourceFingerprint; /**< Exact bytes used by this classification; revision evidence, never trust proof. */
     };
 
     /** @brief Read-only bounded project compatibility inspector with injected trust policy. */

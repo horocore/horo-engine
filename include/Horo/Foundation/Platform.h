@@ -246,6 +246,20 @@ namespace Horo {
         [[nodiscard]] virtual Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared,
                                                                 const std::filesystem::path &destination,
                                                                 AtomicFileReplacementReceipt &receipt);
+        /**
+         * @brief Publishes a prepared sibling directory atomically without replacing an existing destination.
+         * @param prepared Existing complete directory whose contents were durably prepared by the caller.
+         * @param destination Absent sibling destination; an existing directory, file or redirect is never replaced.
+         * @param receipt Fresh thread-owned commit witness, recorded immediately after native rename and before later sync/errors.
+         * @return Success after the platform's requested durability operations, failure before commit, or a durability failure after
+         * commit.
+         * @pre Both paths are absolute normalized siblings under the caller's exclusive publication authority; receipt is uncommitted.
+         * @details No cross-volume copy or check-then-replace fallback is permitted. The default rejects unsupported publication
+         * before any write. A committed receipt forbids reporting rollback or deleting the published destination after an error.
+         */
+        [[nodiscard]] virtual Result<void> PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                            const std::filesystem::path &destination,
+                                                                            AtomicFileReplacementReceipt &receipt);
         /** @brief Durably removes a file. @param path File to remove. @return Success after directory durability, or typed I/O failure. */
         [[nodiscard]] virtual Result<void> RemoveDurable(const std::filesystem::path &path) = 0;
         /** @brief Synchronizes directory metadata. @param path Directory to synchronize. @return Success or typed I/O failure. */
@@ -310,6 +324,11 @@ namespace Horo {
         [[nodiscard]] Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                                         AtomicFileReplacementReceipt &receipt) override;
         [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override;
+        /** @copydoc DurableFileSystem::PublishDirectoryNoReplaceTracked */
+        [[nodiscard]] Result<void> PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                    const std::filesystem::path &destination,
+                                                                    AtomicFileReplacementReceipt &receipt) override;
+        /** @copydoc DurableFileSystem::SyncDirectory */
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override;
 
     private:
@@ -325,6 +344,19 @@ namespace Horo {
                                               .defaultSeverity = ErrorSeverity::Error,
                                               .summary = "The filesystem does not support tracked atomic replacement.",
                                               .remediationHint = "Compose a filesystem implementation with native commit tracking.",
+                                              .retryable = false,
+                                              .userActionable = false};
+        return Result<void>::Failure(MakeError(unsupported));
+    }
+
+    /** @copydoc DurableFileSystem::PublishDirectoryNoReplaceTracked */
+    inline Result<void> DurableFileSystem::PublishDirectoryNoReplaceTracked(const std::filesystem::path &, const std::filesystem::path &,
+                                                                            AtomicFileReplacementReceipt &) {
+        const ErrorCodeDescriptor unsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                              .code = ErrorCode{"filesystem.directory_publication_unsupported"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "The filesystem does not support tracked exclusive directory publication.",
+                                              .remediationHint = "Compose an authority with native no-replace directory publication.",
                                               .retryable = false,
                                               .userActionable = false};
         return Result<void>::Failure(MakeError(unsupported));

@@ -126,6 +126,9 @@ namespace Horo::PlatformServices {
         candidate.projectId.clear();
         CheckError(Build(candidate), PlatformProjectConfigurationErrors::InvalidConfiguration);
         candidate = Candidate();
+        candidate.projectId.push_back(static_cast<char>(0xff));
+        CheckError(Build(candidate), PlatformProjectConfigurationErrors::InvalidConfiguration);
+        candidate = Candidate();
         candidate.services.front() = static_cast<PlatformServiceRequirement>(99);
         CheckError(Build(candidate), PlatformProjectConfigurationErrors::InvalidConfiguration);
         candidate = Candidate();
