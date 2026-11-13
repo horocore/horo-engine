@@ -295,7 +295,7 @@ namespace Horo::Prefab {
                                             .registryRevision = registry.Snapshot().Revision(),
                                             .instance = instance});
             REQUIRE(diagnostic.HasValue());
-            CHECK(diagnostic.Value().code == error.code);
+            CHECK(diagnostic.Value().code.Value() == error.code.Value());
             CHECK(diagnostic.Value().revision == ResolverRevision(1));
             CHECK(MakePrefabBuildOutputRecord(diagnostic.Value()).message == error.message);
             REQUIRE(snapshot.Value().Resolve(ResolverAsset(count), instance, ResolverLimits()).HasValue());
