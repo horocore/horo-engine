@@ -431,3 +431,39 @@ again with **66 passed**, recorded in the local ignored JUnit report
 `build/acc-current-python.xml`; they do not exercise the new C++ behavior.
 The local ACC batch helper must use this nonblocking API and the current resource
 and physical-handle guards; it no longer requires a named main-chat grant.
+
+## Current delivery preparation on 2026-11-13
+
+The parent identity was verified in Jira and GitHub as
+`HORO-1769 / #1813 [ACC-001] Accessibility Subsystem`. The initial caption-named
+local branch is retained; the complete topic now uses
+`feat/HORO-1769_accessibility_subsystem` for normal delivery. The published target
+remains `codex/editor-improvements` at `3df476ff`. No merge, force push, history
+rewrite of published ACC commits or issue-state mutation is authorized by this
+record.
+
+The final cache/runner retry completed **107 passed, 4 skipped**, with the same
+three Windows symlink-privilege skips and one real compiler/ccache fixture skip.
+Its local ignored report is `build/acc-cache-python.xml`. This supersedes the
+failed ENOSPC repeat for that exact Python scope; it does not prove C++ behavior.
+The paired-copy/SDK/CI grouping pass remains **66 passed** in
+`build/acc-current-python.xml`.
+
+Two V2 Input batch attempts returned busy at the real OS lock before compiler or
+analyzer startup, without a waiter. The full final-base preflight command was
+also requested through nonblocking physical-lock admission, which returned busy.
+`build/acc-preflight-admission-20261113.json` is explicitly an **admission receipt,
+not an analyzer report**: Sonar IDE, CLI secrets and Codacy are all `not_run`.
+They remain required. No clean security, quality or native result is inferred.
+
+The new doctor run found local tools ready but its independent Codacy cloud
+configuration fetch remained incomplete (exit 2/authentication). The official
+doctor report basename is `1794573359424626900-cddeab7f.json` in the external
+worktree quality cache. This is prerequisite evidence only; it does not prove
+connected-mode authentication or C++ sensor execution.
+
+A reviewable draft may expose this work and run remote CI under the explicit
+restart authorization, with these unresolved checks and all seven implementation
+gaps visible. It must remain incomplete and must not close parent/child issues
+or claim acceptance. Full native, public-consumer, GUI/GPU/AT/hardware and final
+local quality evidence must still be completed for the entire initiative.
