@@ -332,6 +332,7 @@ add_executable(HoroInputTests
         unit/runtime/input/GameplayInputFrameTests.cpp
         unit/runtime/input/InputTests.cpp
         unit/runtime/input/InputRebindingTests.cpp
+        unit/runtime/input/InputPresentationTests.cpp
         unit/runtime/input/InputCollectionTests.cpp
         support/AllocationProbe.cpp
         unit/runtime/input/InputContextTests.cpp

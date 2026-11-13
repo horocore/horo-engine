@@ -46,7 +46,7 @@ already captured `GameplayInputFrame`; no new raw-device access was introduced.
 | Runtime pause/editor capture, focus/modal/device cancellation and allocation-free normal polling | `HoroInputTests`, including `InputRebindingTests.cpp` |
 | Unicode/space paths, project identity containment and escaping directory symlinks | `HoroInputTests`; symlink creation capability is reported by the host |
 | Canonical and raw virtual devices, player assignment, hot-plug generations, focus loss and trigger normalization | `HoroInputTests`, `HoroInputSdlTests` |
-| Unknown-controller Runtime UI navigation, numbered fallback glyphs and optional package presentation | `HoroRuntimeUiInputTests` |
+| Unknown-controller Runtime UI navigation, numbered fallback glyphs and optional package presentation | `HoroInputTests` for vocabulary/provider contracts; `HoroRuntimeUiInputTests` for adapter routing |
 | Optional SDL mapping upgrade, finite rumble requests, unsupported/stale devices and focus cancellation | `HoroInputSdlTests` using SDL virtual-device callbacks |
 | Embedded Settings migration and canonical user-profile corruption | `HoroEditorSettingsStoreTests` |
 | Reachable Input Mapping panel, hidden capture withdrawal, narrow/localized/dark/light/disabled presentation | `HoroGlobalDockPanelRenderTests`, `HoroEditorWorkspaceControllerTests` |
