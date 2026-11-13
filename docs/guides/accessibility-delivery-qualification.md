@@ -220,6 +220,26 @@ groups and their unchanged partners retained. Markdown markup and redundant test
 imports have been corrected; a same-scope rerun is required after those edits.
 No rules, exclusions or cloud configuration were changed to hide incomplete work.
 
+The hosted Codacy review of published `74b798c` is separate from those local
+providers. Its current-head check reported **nine new function-length warnings**.
+The branch-specific API review retained all **35 contextual findings**, complete
+returned issue/clone data and file metrics in
+`build/acc-codacy-server-74b798c.json`. Of 113 changed paths, 101 mapped to files
+analyzed at that exact commit; **12 remain unknown**, including the large editor
+application and shared-control implementation, localization catalogs, analysis
+helpers and CMake paths. Missing mappings and null duplication/coverage metrics
+are not zero findings or a clean qualification. The PR had no review threads.
+
+Subsequent focused refactors separate modal draft editing from explicit footer
+intent, per-binding action rendering, transaction-local mapping admission and
+caption measurement validation. Test scenarios retain allocation, cancellation,
+capacity and malformed-input assertions while separating independent conflict
+and caption-capacity cases. These edits address the nine length findings but
+require the same-scope provider rerun and fresh native evidence. Current expected
+Input discovery is 106 cases and caption/platform discovery is 50; the earlier
+104/49-case reports remain attached to their original snapshots. Paired-copy/CI
+Python checks repeated at `9f5ede5` with **43 passed** in 0.14 seconds.
+
 For published head `55d9991`,
 [SonarCloud run 43427932437](https://github.com/horocore/horo-engine/actions/runs/43427932437)
 failed during instrumented Debug configuration: Lua FetchContent download returned
