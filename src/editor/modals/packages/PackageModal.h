@@ -10,6 +10,9 @@ namespace Horo::Editor {
     /** @brief Transient modal; closing presentation never abandons application-owned work. */
     class PackageModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.packages"};
+
         /** @brief Binds presentation and an explicit project application capability. */
         PackageModal(const EditorGuiContext &context, std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire);
         [[nodiscard]] ModalId Id() const override;

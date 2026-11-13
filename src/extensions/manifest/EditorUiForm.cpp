@@ -532,9 +532,10 @@ namespace Horo::Extensions {
         if (form.nodes.empty() || form.nodes.size() > limits.maximumNodes)
             return CapacityExceeded("Editor UI form node count is empty or exceeds its configured bound.");
 
-        std::vector<std::string> nodeIds;
-        std::vector<std::string> bindingIds;
-        std::vector<std::string> actionIds;
+        // The size constructor keeps MSVC debug iterator-proxy allocation fallible.
+        std::vector<std::string> nodeIds(std::size_t{0});
+        std::vector<std::string> bindingIds(std::size_t{0});
+        std::vector<std::string> actionIds(std::size_t{0});
         nodeIds.reserve(form.nodes.size());
         std::size_t validationCount = 0;
         for (std::size_t index = 0; index < form.nodes.size(); ++index) {

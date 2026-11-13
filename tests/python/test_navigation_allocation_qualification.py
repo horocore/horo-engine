@@ -93,10 +93,11 @@ def test_route_builds_same_release_target_and_verifies_actual_discovery_and_juni
 
 
 def test_whole_job_deadlines_leave_individual_fault_case_budget_unchanged():
-    for name, job in (("ci.yml", "test"), ("sonar.yml", "sonar")):
+    for name, job, expected in (("ci.yml", "test", 360), ("sonar.yml", "sonar", 240)):
         workflow = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
         block = workflow.split(f"\n  {job}:\n", 1)[1]
-        assert "    timeout-minutes: 180" in block
+        timeout = next(line.strip() for line in block.splitlines() if line.startswith("    timeout-minutes:"))
+        assert timeout == f"timeout-minutes: {expected}"
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     block = workflow.split("- name: Test Windows Release Navigation settings allocation qualification", 1)[1]
     block = block.split("\n      - name:", 1)[0]

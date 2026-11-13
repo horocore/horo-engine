@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <format>
 #include <limits>
+#include <map>
 #include <new>
 #include <ranges>
 #include <string>
@@ -69,50 +70,166 @@ namespace Horo::Runtime {
         return deferred;
     }
 
+    namespace {
+        /** @brief Overflow-safe whole-group admission shared by ordinary and private service-selected policies. */
+        bool AdmitsGroupBounds(std::size_t entities, std::size_t resources, const SceneStructuralAdmission &admission,
+                               const SceneRestoreStructuralLimits &limits, std::uint64_t nextDeferred) noexcept {
+            return entities != 0 && entities <= limits.maximumEntities && resources <= limits.maximumResources &&
+                   admission.scene.IsValid() && admission.registry.value != 0 &&
+                   entities <= std::numeric_limits<std::uint64_t>::max() - nextDeferred;
+        }
+
+        /** @brief Exact original per-entity lineage checks, without inheriting ancestry from neighboring restore occurrences. */
+        Result<void> ValidateGroupLineage(std::span<const Assets::AssetId> lineage) {
+            if (lineage.size() > 16)
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            for (std::size_t index = 0; index < lineage.size(); ++index)
+                if (!lineage[index].IsValid() || std::find(lineage.begin(), lineage.begin() + static_cast<std::ptrdiff_t>(index),
+                                                           lineage[index]) != lineage.begin() + static_cast<std::ptrdiff_t>(index))
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            return Result<void>::Success();
+        }
+
+        /** @brief One parent-before-child entry and exact bounded interface/lineage shape. */
+        Result<void> ValidateGroupEntry(std::span<const RuntimeEntityGroupEntry> entries, std::size_t index, bool uniformLineage,
+                                        std::size_t partitionCount) {
+            const auto &entry = entries[index];
+            if (entry.parentInGroup.has_value() && (*entry.parentInGroup >= index || entry.info.parent))
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity, "Group parent must precede its child."));
+            if (entry.members.size() > 64 || (uniformLineage && entry.spawnLineage != entries.front().spawnLineage))
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            const bool partitionValid = uniformLineage ? !entry.restorePartition.has_value()
+                                                       : entry.restorePartition.has_value() && *entry.restorePartition < partitionCount;
+            if (!partitionValid)
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            return ValidateGroupLineage(entry.spawnLineage);
+        }
+
+        /** @brief Shared whole-batch accounting; private restore admission cannot bypass lower service-clamped budgets. */
+        Result<void> ValidateGroupEntries(std::span<const RuntimeEntityGroupEntry> entries, const SceneRestoreStructuralLimits &limits,
+                                          bool uniformLineage, std::size_t partitionCount) {
+            std::size_t physics{};
+            std::size_t references{};
+            std::size_t lineage{};
+            for (std::size_t index = 0; index < entries.size(); ++index) {
+                const auto &entry = entries[index];
+                if (auto valid = ValidateGroupEntry(entries, index, uniformLineage, partitionCount); valid.HasError())
+                    return valid;
+                if (entry.physicsReferences.size() > limits.maximumPhysicsReferences - physics ||
+                    entry.references.size() > limits.maximumReferences - references ||
+                    entry.spawnLineage.size() > limits.maximumLineageEntries - lineage)
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+                physics += entry.physicsReferences.size();
+                references += entry.references.size();
+                lineage += entry.spawnLineage.size();
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates one declared dense member against actual prepared entries, independently of durable record admission. */
+        Result<void> ValidatePartitionSlot(std::span<const RuntimeEntityGroupEntry> entries, const SceneRestorePartitionMember &member,
+                                           std::size_t partition, std::size_t root, std::vector<bool> &seen) {
+            if (member.entity >= entries.size() || seen[member.entity] || entries[member.entity].restorePartition != partition)
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            seen[member.entity] = true;
+            if (member.entity == root)
+                return Result<void>::Success();
+            const auto parent = entries[member.entity].parentInGroup;
+            if (!parent || entries[*parent].restorePartition != partition)
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            return Result<void>::Success();
+        }
+
+        /** @brief A partition's actual root entry must belong to that exact private partition. */
+        bool ValidPartitionRoot(std::span<const RuntimeEntityGroupEntry> entries, const SceneRestoreGroupPartition &partition,
+                                std::size_t index) noexcept {
+            return !partition.members.empty() && partition.root < entries.size() && entries[partition.root].restorePartition == index;
+        }
+
+        /** @brief Requires complete unambiguous partition membership before any Scene-owned pins/entities are reserved. */
+        Result<void> ValidateGroupPartitions(std::span<const RuntimeEntityGroupEntry> entries,
+                                             std::span<const SceneRestoreGroupPartition> partitions, bool uniformLineage) {
+            if (uniformLineage)
+                return partitions.empty() ? Result<void>::Success() : Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            std::vector<bool> seen(entries.size());
+            for (std::size_t index = 0; index < partitions.size(); ++index) {
+                const auto &partition = partitions[index];
+                if (!ValidPartitionRoot(entries, partition, index))
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+                for (const auto &member : partition.members)
+                    if (auto valid = ValidatePartitionSlot(entries, member, index, partition.root, seen); valid.HasError())
+                        return valid;
+                if (!seen[partition.root])
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            }
+            return std::ranges::all_of(seen,
+                                       [](bool value) {
+                return value;
+            })
+                       ? Result<void>::Success()
+                       : Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+        }
+
+        /** @brief Same named-resource validation plus explicit aggregate resident-byte admission for private restore. */
+        Result<void> ValidateGroupResources(std::span<const RuntimeGroupAssetLease> resources, std::size_t maximumBytes) {
+            std::size_t bytes{};
+            for (const auto &pin : resources) {
+                if (pin.artifact.Bytes().empty() || !pin.metadata.id.IsValid() || pin.metadata.expectedType.Value().empty())
+                    return Result<void>::Failure(MakeError(SceneErrors::AssetPayloadEmpty));
+                if (pin.artifact.Bytes().size() > maximumBytes - bytes)
+                    return Result<void>::Failure(
+                        MakeError(SceneErrors::StructuralCommitFailed, "Restore group exceeds actual host resource-byte budget."));
+                bytes += pin.artifact.Bytes().size();
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @copydoc SceneAggregateRestore::ValidateRestorePartitions */
+    Result<void> SceneAggregateRestore::ValidateRestorePartitions(std::span<const SceneRestoreGroupPartition> partitions) const {
+        return partitions.empty() ? Result<void>::Success() : Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+    }
+
     /** @copydoc SceneCommandBuffer::CreateGroup */
     Result<std::vector<DeferredEntity>> SceneCommandBuffer::CreateGroup(std::vector<RuntimeEntityGroupEntry> entries,
                                                                         std::vector<RuntimeGroupAssetLease> resources,
                                                                         const SceneStructuralAdmission &admission) {
-        if (entries.empty() || entries.size() > 256 || resources.size() > 257 || !admission.scene.IsValid() ||
-            admission.registry.value == 0 || entries.size() > std::numeric_limits<std::uint64_t>::max() - nextDeferred_)
+        return CreateGroupInternal(std::move(entries), std::move(resources), admission, {}, {});
+    }
+
+    /** @copydoc SceneCommandBuffer::CreateGroupInternal */
+    Result<std::vector<DeferredEntity>> SceneCommandBuffer::CreateGroupInternal(std::vector<RuntimeEntityGroupEntry> entries,
+                                                                                std::vector<RuntimeGroupAssetLease> resources,
+                                                                                const SceneStructuralAdmission &admission,
+                                                                                const GroupPolicy &policy,
+                                                                                std::vector<SceneRestoreGroupPartition> partitions) {
+        const auto &limits = policy.limits;
+        if (!AdmitsGroupBounds(entries.size(), resources.size(), admission, limits, nextDeferred_))
             return Result<std::vector<DeferredEntity>>::Failure(
                 MakeError(SceneErrors::StructuralCommitFailed, "Invalid structural group bounds."));
-        std::size_t referenceCount{};
-        std::size_t interfaceCount{};
-        for (std::size_t index = 0; index < entries.size(); ++index) {
-            if (entries[index].parentInGroup.has_value() && (*entries[index].parentInGroup >= index || entries[index].info.parent))
-                return Result<std::vector<DeferredEntity>>::Failure(
-                    MakeError(SceneErrors::InvalidEntity, "Group parent must precede its child."));
-            if (entries[index].physicsReferences.size() > 4096 - referenceCount)
-                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
-            referenceCount += entries[index].physicsReferences.size();
-            if (entries[index].members.size() > 64 || entries[index].references.size() > 256 - interfaceCount)
-                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
-            interfaceCount += entries[index].references.size();
-            if (entries[index].spawnLineage.size() > 16)
-                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
-            if (entries[index].spawnLineage != entries.front().spawnLineage)
-                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
-            for (std::size_t lineage = 0; lineage < entries[index].spawnLineage.size(); ++lineage) {
-                const auto &asset = entries[index].spawnLineage[lineage];
-                if (!asset.IsValid() || std::find(entries[index].spawnLineage.begin(),
-                                                  entries[index].spawnLineage.begin() + static_cast<std::ptrdiff_t>(lineage),
-                                                  asset) != entries[index].spawnLineage.begin() + static_cast<std::ptrdiff_t>(lineage))
-                    return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidEntity));
-            }
-        }
-        if (std::ranges::any_of(resources, [](const auto &pin) {
-            return pin.artifact.Bytes().empty() || !pin.metadata.id.IsValid() || pin.metadata.expectedType.Value().empty();
-        }))
-            return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::AssetPayloadEmpty));
+        if (auto valid = ValidateGroupEntries(entries, limits, policy.uniformLineage, partitions.size()); valid.HasError())
+            return Result<std::vector<DeferredEntity>>::Failure(valid.ErrorValue());
+        if (auto valid = ValidateGroupPartitions(entries, partitions, policy.uniformLineage); valid.HasError())
+            return Result<std::vector<DeferredEntity>>::Failure(valid.ErrorValue());
+        if (auto valid = ValidateGroupResources(resources, limits.maximumResourceBytes); valid.HasError())
+            return Result<std::vector<DeferredEntity>>::Failure(valid.ErrorValue());
         std::vector<DeferredEntity> tokens;
         tokens.reserve(entries.size());
         for (std::size_t index = 0; index < entries.size(); ++index)
             tokens.emplace_back(nextDeferred_ + index);
         auto returned = tokens;
-        commands_.emplace_back(CreateGroupCommand{std::move(entries), std::move(resources), std::move(tokens), admission});
+        commands_.emplace_back(CreateGroupCommand{std::move(entries), std::move(resources), std::move(tokens), admission,
+                                                  policy.uniformLineage, std::move(partitions)});
         nextDeferred_ += returned.size();
         return Result<std::vector<DeferredEntity>>::Success(std::move(returned));
+    }
+
+    /** @copydoc SceneCommandBuffer::HasRestoreGroups */
+    bool SceneCommandBuffer::HasRestoreGroups() const noexcept {
+        return std::ranges::any_of(commands_, [](const auto &command) {
+            const auto *group = std::get_if<CreateGroupCommand>(&command);
+            return group && group->restoreSeal;
+        });
     }
 
     /** @copydoc SceneCommandBuffer::ValidateAdmission */
@@ -177,9 +294,11 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeScene::RuntimeScene */
     RuntimeScene::RuntimeScene(const SceneRuntimeId runtimeId, const SceneDefinitionId definitionId, const SceneDefinitionRevision revision,
                                const RuntimeSceneConfig config, const Assets::AssetRegistryRevision assetRevision,
-                               std::vector<ResolvedAsset> assets)
+                               std::vector<ResolvedAsset> &&assets)
         : viewLifetime_(std::make_shared<const std::uint8_t>(0)), runtimeId_(runtimeId), definitionId_(definitionId),
-          definitionRevision_(revision), assetRegistryRevision_(assetRevision), assets_(std::move(assets)), config_(config) {}
+          definitionRevision_(revision), assetRegistryRevision_(assetRevision), assets_(std::size_t{0}), config_(config) {
+        assets_.swap(assets);
+    }
 
     /** @copydoc RuntimeScene::Create */
     Result<std::unique_ptr<RuntimeScene>> RuntimeScene::Create(const RuntimeSceneDefinition &definition, const SceneRuntimeId runtimeId,
@@ -193,7 +312,7 @@ namespace Horo::Runtime {
     Result<std::unique_ptr<RuntimeScene>> RuntimeScene::CreateResolved(const RuntimeSceneDefinition &definition,
                                                                        const SceneRuntimeId runtimeId, const RuntimeSceneConfig config,
                                                                        const Assets::AssetRegistryRevision assetRevision,
-                                                                       std::vector<ResolvedAsset> assets) {
+                                                                       std::vector<ResolvedAsset> &&assets) {
         if (!runtimeId.IsValid() || config.maximumGeneration == 0)
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Runtime identity and maximum generation must be non-zero.");
@@ -211,12 +330,18 @@ namespace Horo::Runtime {
         scene->storage_.slots.reserve(definition.Entities().size());
         scene->storage_.authoredIndex.reserve(definition.Entities().size());
 
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+        std::optional<std::map<std::uint64_t, EntityId>> parentIndex;
+#else
         std::optional<std::unordered_map<std::uint64_t, EntityId>> parentIndex;
+#endif
         if (std::ranges::any_of(definition.Entities(), [](const auto &entity) {
             return entity.parent.has_value();
         })) {
             parentIndex.emplace();
+#if !defined(_MSVC_STL_VERSION) || _ITERATOR_DEBUG_LEVEL == 0
             parentIndex->reserve(definition.Entities().size());
+#endif
         }
         for (const RuntimeEntityDefinition &entity : definition.Entities()) {
             RuntimeEntityCreateInfo info{entity.localTransform, std::nullopt, entity.object, entity.primitiveMesh, entity.components};
@@ -249,8 +374,9 @@ namespace Horo::Runtime {
             return Result<std::unique_ptr<RuntimeScene>>::Failure(MakeError(Vfx::VfxErrors::SceneCloneUnavailable));
         std::unique_ptr<RuntimeScene> clone;
         try {
+            auto assets = active_.scene->assets_;
             clone = std::make_unique<RuntimeScene>(runtimeId, active_.scene->definitionId_, active_.scene->definitionRevision_,
-                                                   active_.scene->config_, active_.scene->assetRegistryRevision_, active_.scene->assets_);
+                                                   active_.scene->config_, active_.scene->assetRegistryRevision_, std::move(assets));
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Unable to allocate cloned Scene lifetime evidence.");
@@ -335,6 +461,7 @@ namespace Horo::Runtime {
         slot.components = {};
         slot.baselineOwner.reset();
         slot.groupResources.reset();
+        slot.groupIdentity.reset();
         slot.groupReferences.reset();
         slot.groupSpawnLineage.reset();
         slot.groupPhysicsReferences.reset();
@@ -372,33 +499,22 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeScene::CommitWithRegistry */
     Result<StructuralCommitResult> RuntimeScene::CommitWithRegistry(
         const SceneCommandBuffer &commands, const Assets::AssetRegistry *registry,
-        std::span<const std::unique_ptr<SceneStructuralParticipant>> participants, std::optional<Error> *notificationError) {
+        std::span<const std::unique_ptr<SceneStructuralParticipant>> participants, std::optional<Error> *notificationError,
+        CommitPurpose purpose) {
         if (commands.Empty())
             return Result<StructuralCommitResult>::Success({});
-        const auto revision = registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
-        if (auto admission = commands.ValidateAdmission(runtimeId_, revision); admission.HasError())
+        if (auto admission = CommandApplier::ValidateResourceAdmission(commands, runtimeId_, registry, purpose); admission.HasError())
             return Result<StructuralCommitResult>::Failure(admission.ErrorValue());
-        if (const auto valid = commands.ValidateBaselineResources(registry); valid.HasError())
+        if (auto valid = CommandApplier::ValidateBaselineParticipants(commands, View(), participants); valid.HasError())
             return Result<StructuralCommitResult>::Failure(valid.ErrorValue());
-        std::vector<SceneBaselinePreparationView> baselines;
-        for (const auto &command : commands.commands_)
-            if (const auto *baseline = std::get_if<SceneCommandBuffer::AttachBaselineCommand>(&command))
-                baselines.emplace_back(baseline->definition, baseline->resources);
-        // Every owner sees the entire exact batch before ANY owner can allocate native additions or retirement state.
-        if (!baselines.empty())
-            for (const auto &participant : participants)
-                if (const auto valid = participant->ValidateBaselines(View(), baselines); valid.HasError())
-                    return Result<StructuralCommitResult>::Failure(valid.ErrorValue());
         RuntimeSceneStorage candidate = storage_;
         StructuralCommitResult result;
         result.created.reserve(commands.commands_.size());
         const CommandApplier applier{*this, candidate, result};
-        for (const SceneCommandBuffer::Command &command : commands.commands_) {
-            if (const auto status = std::visit(applier, command); status.HasError())
-                return Result<StructuralCommitResult>::Failure(status.ErrorValue());
-        }
+        if (const auto status = applier.ApplyCommands(commands); status.HasError())
+            return Result<StructuralCommitResult>::Failure(status.ErrorValue());
         std::vector<std::unique_ptr<SceneStructuralCandidate>> owners;
-        if (const auto ready = applier.PrepareOwners(participants, owners); ready.HasError())
+        if (const auto ready = applier.PrepareOwners(participants, owners, purpose); ready.HasError())
             return Result<StructuralCommitResult>::Failure(ready.ErrorValue());
         // Candidate preparation may allocate. Cancellation is sampled again only after all fallible work,
         // immediately before publication. Registry mutation is restricted to this same owner lane.
@@ -410,10 +526,7 @@ namespace Horo::Runtime {
         RuntimeSceneStorage retired = std::move(storage_);
         storage_ = std::move(candidate);
         ++structuralRevision_;
-        for (const auto &owner : owners) {
-            if (auto notified = owner->AfterPublication(); notified.HasError() && notificationError && !*notificationError)
-                *notificationError = std::move(notified).ErrorValue();
-        }
+        CommandApplier::NotifyOwners(owners, notificationError);
         return Result<StructuralCommitResult>::Success(std::move(result));
     }
 

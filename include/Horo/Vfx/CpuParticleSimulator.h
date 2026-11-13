@@ -7,6 +7,7 @@
 
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Vfx/CpuParticleBuffer.h"
+#include "Horo/Vfx/ParticleSimulationData.h"
 #include "Horo/Vfx/ParticleSystemDescriptor.h"
 
 #include <array>
@@ -21,23 +22,6 @@ namespace Horo::Vfx {
         struct CpuParticleSimulatorState;
     }
 
-    /** @brief Fixed logical order of one committed CPU simulation tick. */
-    enum class CpuParticleStage : std::uint8_t {
-        Spawn,
-        Initialize,
-        Forces,
-        Integrate,
-        Collide,
-        Kill,
-        Extract,
-        Count,
-    };
-
-    inline constexpr std::array<CpuParticleStage, 7> CpuParticleStageOrder{CpuParticleStage::Spawn,   CpuParticleStage::Initialize,
-                                                                           CpuParticleStage::Forces,  CpuParticleStage::Integrate,
-                                                                           CpuParticleStage::Collide, CpuParticleStage::Kill,
-                                                                           CpuParticleStage::Extract};
-
     /**
      * @brief Optional owner-thread sentinel used to qualify stage order and inject a contained failure.
      * @param context Caller-owned sentinel state; the simulator retains no ownership.
@@ -48,41 +32,15 @@ namespace Horo::Vfx {
 
     /** @brief Bounded preparation ceilings for one CPU simulation instance. */
     struct CpuParticleSimulationHardLimits final {
-        static constexpr std::uint32_t ForceModules = 64;          /**< Maximum compiled force modules. */
-        static constexpr std::uint32_t DepthSamples = 1'048'576;   /**< Maximum copied scene-depth pixels. */
-        static constexpr std::uint32_t Planes = 64;                /**< Maximum analytic collision planes. */
+        static constexpr std::uint32_t ForceModules = ParticleSimulationDataLimits::ForceModules; /**< Maximum compiled force modules. */
+        static constexpr std::uint32_t DepthSamples = 1'048'576;                                  /**< Maximum copied scene-depth pixels. */
+        static constexpr std::uint32_t Planes = 64;                                               /**< Maximum analytic collision planes. */
         static constexpr std::uint32_t CurveKeys = 32;             /**< Maximum keys in one over-life curve. */
         static constexpr std::uint32_t PayloadChannels = 32;       /**< Maximum typed custom channels. */
         static constexpr std::uint32_t BurstParticles = 1'000'000; /**< Maximum requested burst per step. */
         static constexpr float DeltaSeconds = 60.0F;               /**< Maximum selected-clock delta per step. */
-        static constexpr std::uint32_t RandomAlgorithmVersion = 1; /**< Versioned counter-hash algorithm. */
-    };
-
-    /** @brief Force kernel selected by a compiled CPU simulation plan. */
-    enum class CpuParticleForceKind : std::uint8_t {
-        Gravity,
-        Wind,
-        Attraction,
-        Noise,
-        Count,
-    };
-
-    /**
-     * @brief Immutable force parameters captured during simulation preparation.
-     *
-     * Gravity and Wind use `vector * strength`. Attraction points at `center`; `falloff` is
-     * the distance attenuation coefficient. Noise uses the versioned per-particle counter stream;
-     * `strength * frequency` scales its acceleration. Noise channels 1-9 are reserved for
-     * initialization, and each noise module in a stack requires a distinct channel.
-     */
-    struct CpuParticleForceModule final {
-        CpuParticleForceKind kind{CpuParticleForceKind::Gravity};
-        Math::Vec3 vector{};
-        Math::Vec3 center{};
-        float strength{1.0F};
-        float falloff{};
-        float frequency{1.0F};
-        std::uint8_t randomChannel{16};
+        static constexpr std::uint32_t RandomAlgorithmVersion =
+            ParticleSimulationDataLimits::RandomAlgorithmVersion; /**< Versioned counter-hash algorithm. */
     };
 
     /** @brief One scalar over-life curve key in normalized age space. Keys must increase strictly. */
@@ -266,6 +224,20 @@ namespace Horo::Vfx {
         constexpr auto operator<=>(const CpuParticleSimulationStepResult &) const noexcept = default;
     };
 
+    /** @brief Prepared execution distinguishes an exact kernel rejection from a legacy diagnostic-provider profile. */
+    enum class CpuParticleAdvanceStatus : std::uint8_t {
+        Complete,
+        Rejected,
+        UnsupportedDiagnostics
+    };
+
+    /** @brief Nonallocating copied result; failure descriptors have process lifetime and retain their original typed code. */
+    struct CpuParticleAdvanceOutcome final {
+        CpuParticleAdvanceStatus status{CpuParticleAdvanceStatus::Rejected};
+        CpuParticleSimulationStepResult step;
+        const ErrorCodeDescriptor *failure{};
+    };
+
     /** @brief Read-only committed CPU particle streams valid until the next owner-thread mutation. */
     struct CpuParticleExtractView final {
         std::uint64_t committedGeneration{};
@@ -279,6 +251,8 @@ namespace Horo::Vfx {
         /** @brief Only declared RenderOnly streams are populated; other indices are empty. */
         std::array<std::span<const float>, CpuParticleBufferHardLimits::CustomFloatStreams> customFloats{};
         std::uint32_t customFloatStreamCount{}; /**< Allocated stream count; protected indices remain empty. */
+        /** @brief Exact logical handles in the same committed dense order; borrows expire with the other streams. */
+        std::span<const CpuParticleHandle> handles{};
     };
 
     /** @brief Allocation-free lifetime diagnostics for one CPU simulator. */
@@ -291,6 +265,16 @@ namespace Horo::Vfx {
         std::uint64_t collisions{};
         std::uint64_t nextSpawnOrdinal{};
         std::uint32_t active{};
+    };
+
+    /** @brief Allocation-free prepared activation transition evidence. */
+    enum class CpuParticleResetStatus : std::uint8_t {
+        Complete,
+        InvalidActivation,
+        ThreadViolation,
+        ActiveStep,
+        ShutDown,
+        GenerationExhausted
     };
 
     /**
@@ -327,6 +311,13 @@ namespace Horo::Vfx {
          * @return Committed result or a typed zero-mutation failure.
          */
         [[nodiscard]] Result<CpuParticleSimulationStepResult> Advance(const CpuParticleSimulationStep &step);
+        /** @brief Executes the same candidate/stages/commit using static typed failure evidence for a prepared no-provider profile.
+         * @param step Same fixed-clock request accepted by Advance.
+         * @return Exact committed result or static rejection descriptor without constructing diagnostic strings.
+         * Observer, Physics-provider and scene-depth diagnostic profiles are explicitly unsupported and never invoked here.
+         * Legacy Advance preserves full provider errors/causes and remains available for those explicitly prepared profiles.
+         */
+        [[nodiscard]] CpuParticleAdvanceOutcome AdvancePrepared(const CpuParticleSimulationStep &step) noexcept;
 
         /**
          * @brief Queues one exact committed particle for the next Kill stage.
@@ -364,6 +355,18 @@ namespace Horo::Vfx {
 
         /** @brief Returns allocation-free committed diagnostics. @return Current lifetime counters. */
         [[nodiscard]] CpuParticleSimulationStatistics Statistics() const noexcept;
+
+        /** @brief Reuses admitted storage for a newer activation without resetting particle, tick or committed-generation identities.
+         * @param activation Same prepared scope/slot and a strictly newer generation issued by its effect owner.
+         * @return Allocation-free transition status; rejection preserves all state.
+         * @pre Owner has retired all borrowed views/readers and prior activation work. Immutable extraction copies remain independent.
+         */
+        [[nodiscard]] CpuParticleResetStatus Reset(EffectSystemId activation) noexcept;
+
+        /** @brief Reports actual prepared storage charges, including both buffers and scratch vector capacities.
+         * @return Bytes retained by this simulator; zero after move. No allocation or mutation occurs.
+         */
+        [[nodiscard]] std::uint64_t PreparedBytes() const noexcept;
 
         /** @brief Idempotently closes the simulator and both generations. @return Success or thread failure. */
         [[nodiscard]] Result<void> Shutdown();

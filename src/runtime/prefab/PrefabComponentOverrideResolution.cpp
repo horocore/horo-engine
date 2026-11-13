@@ -6,26 +6,29 @@
 
 namespace Horo::Prefab::ValueDetail {
     namespace {
-        /** @brief Borrow original authored evidence until this synchronous operation completes. */
+        /** @brief Borrow original authored evidence until this synchronous operation
+         * completes. */
         struct ComponentIntent {
             const PrefabComponentOverrideRecord *record;
             const PrefabSourceRevision *source;
             Sha256Digest schema;
         };
 
-        /** @brief Never resolve an occurrence by type alone or by an unstable vector position. */
+        /** @brief Never resolve an occurrence by type alone or by an unstable vector
+         * position. */
         const RawComponentPayload *FindComponent(const ResolvedPrefabObject &object, const PrefabComponentOverrideTarget &target) {
             const auto found = std::ranges::find(object.object.components, target.instance, &RawComponentPayload::instance);
             return found != object.object.components.end() && found->component.typeId == target.type ? std::to_address(found) : nullptr;
         }
 
-        /** @brief Validate known fields without normalizing or discarding provider-owned opaque bytes. */
+        /** @brief Validate known fields without normalizing or discarding
+         * provider-owned opaque bytes. */
         Result<void> ValidatePayload(const RawComponentPayload &payload, const PrefabComponentOverridePolicy &policy) {
-            Detail::JsonParseGuard guard{PrefabHardLimits::SourceJsonDepth};
             const auto &bytes = payload.component.payload;
-            const auto json = Json::parse(bytes.begin(), bytes.end(), std::ref(guard), false);
-            if (json.is_discarded() || !json.is_object() || guard.HasDuplicate() || guard.IsTooDeep())
-                return Invalid<void>("Component topology payload must be a bounded object with unique keys.");
+            auto owned = DecodeComponentPayload(bytes, "Component topology payload must be a bounded object with unique keys.");
+            if (owned.HasError())
+                return Result<void>::Failure(owned.ErrorValue());
+            const auto &json = owned.Value().Get();
             for (const auto &property : policy.component.properties) {
                 const auto found = json.find(property.id.Value());
                 if (found == json.end()) {
@@ -42,7 +45,8 @@ namespace Horo::Prefab::ValueDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Missing metadata cannot silently grant component or behavior compatibility. */
+        /** @brief Missing metadata cannot silently grant component or behavior
+         * compatibility. */
         std::optional<PrefabComponentOverrideIssue> SchemaIssue(const ResolutionState &state, const ResolvedPrefabObject &object,
                                                                 const ComponentIntent &intent,
                                                                 const PrefabComponentOverrideTarget &target) {
@@ -77,8 +81,15 @@ namespace Horo::Prefab::ValueDetail {
             return std::nullopt;
         }
 
-        /** @brief Admit against the immutable source; staged peers never change a retained precondition. */
-        Result<void> InspectIntent(const ResolutionState &state, const ComponentIntent &intent, PrefabValueOverrideResolution &result) {
+        /** @brief A removed source component cannot become a different occurrence during rebasing. */
+        bool MissingRemovalTarget(const ResolvedPrefabObject &object, const ComponentIntent &intent,
+                                  const PrefabComponentOverrideTarget &target) {
+            return std::holds_alternative<PrefabRemoveComponentOverride>(*intent.record) && !FindComponent(object, target);
+        }
+
+        /** @brief Admit against the immutable source; staged peers never change a
+         * retained precondition. */
+        Result<void> InspectIntent(const ResolutionState &state, const ComponentIntent &intent, PrefabOverrideResolution &result) {
             const auto target = ComponentTarget(*intent.record);
             const auto objects = state.source.Objects();
             const auto object = std::ranges::find_if(objects, [&target](const auto &entry) {
@@ -91,7 +102,7 @@ namespace Horo::Prefab::ValueDetail {
                 orphan(PrefabComponentOverrideIssue::TargetRemoved);
                 return Result<void>::Success();
             }
-            if (std::holds_alternative<PrefabRemoveComponentOverride>(*intent.record) && !FindComponent(*object, target)) {
+            if (MissingRemovalTarget(*object, intent, target)) {
                 orphan(PrefabComponentOverrideIssue::TargetRemoved);
                 return Result<void>::Success();
             }
@@ -106,7 +117,7 @@ namespace Horo::Prefab::ValueDetail {
                     return Invalid<void>("Component contract forbids instance addition.");
                 if (existing != object->object.components.end()) {
                     result.rebased.componentConflicts.emplace_back(*intent.record, *intent.source, intent.schema,
-                                                                   ComponentDigest(*existing), state.source.Revision().rootSource);
+                                                                   ComponentDigest(*existing), state.source.SourceRevision());
                     return Result<void>::Success();
                 }
                 if (auto valid = ValidatePayload(add->payload, *policy); valid.HasError())
@@ -118,7 +129,7 @@ namespace Horo::Prefab::ValueDetail {
                 const auto digest = ComponentDigest(*component);
                 if (digest != std::get<PrefabRemoveComponentOverride>(*intent.record).expectedSourceComponent) {
                     result.rebased.componentConflicts.emplace_back(*intent.record, *intent.source, intent.schema, digest,
-                                                                   state.source.Revision().rootSource);
+                                                                   state.source.SourceRevision());
                     return Result<void>::Success();
                 }
             }
@@ -126,7 +137,8 @@ namespace Horo::Prefab::ValueDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Validate final presence constraints after every removal and addition, including replacement at capacity. */
+        /** @brief Validate final presence constraints after every removal and addition,
+         * including replacement at capacity. */
         Result<void> ValidateObject(const ResolvedPrefabObject &object, const PrefabValueSchemaSnapshot &schemas) {
             const auto &components = object.object.components;
             const auto present = [&components](const auto &type) {
@@ -157,7 +169,8 @@ namespace Horo::Prefab::ValueDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Apply admitted topology only after value payload indices have been finalized. */
+        /** @brief Apply admitted topology only after value payload indices have been
+         * finalized. */
         Result<void> ApplyRecords(ResolutionState &state, const PrefabValueOverrideSet &set) {
             std::set<PrefabObjectAddress> edited;
             for (const auto &record : set.componentRecords) {
@@ -193,26 +206,33 @@ namespace Horo::Prefab::ValueDetail {
                     std::ranges::sort(object.object.components, {}, &RawComponentPayload::instance);
                 }
             }
-            std::erase_if(state.bindings, [&state](const auto &binding) {
+            for (auto &binding : state.bindings) {
                 const auto *property = std::get_if<PrefabPropertyAddress>(&binding.provenance.target);
                 if (!property)
-                    return false;
+                    continue;
                 const auto &components = state.objects[binding.object].object.components;
-                return std::ranges::none_of(components, [property](const auto &component) {
+                if (auto charged = state.budget.Consume(components.size()); charged.HasError())
+                    return charged;
+                if (std::ranges::none_of(components, [property](const auto &component) {
                     return component.instance == property->ComponentInstance() && component.component.typeId == property->ComponentType();
-                });
-            });
+                })) {
+                    binding.provenance.disposition = PrefabValueDisposition::RemovedByInstance;
+                    binding.provenance.origin = PrefabValueOrigin::Instance;
+                }
+            }
             return Result<void>::Success();
         }
     }  // namespace
 
-    /** @brief Re-admit an explicitly edited object even when coalescing removed its last persisted record. */
+    /** @brief Re-admit an explicitly edited object even when coalescing removed its
+     * last persisted record. */
     Result<void> ValidateComponentObject(const ResolvedPrefabObject &object, const PrefabValueSchemaSnapshot &schemas) {
         return ValidateObject(object, schemas);
     }
 
-    /** @brief Preserve all retained topology evidence before publishing one completely validated detached candidate. */
-    Result<void> ResolveComponentIntents(ResolutionState &state, const PrefabValueOverrideSet &set, PrefabValueOverrideResolution &result) {
+    /** @brief Preserve all retained topology evidence before publishing one
+     * completely validated detached candidate. */
+    Result<void> ResolveComponentIntents(ResolutionState &state, const PrefabValueOverrideSet &set, PrefabOverrideResolution &result) {
         std::vector<ComponentIntent> intents;
         for (const auto &record : set.componentRecords)
             intents.emplace_back(&record, &set.authoredAgainst, set.schemaRevision);

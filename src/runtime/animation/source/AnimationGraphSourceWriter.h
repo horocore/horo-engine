@@ -2,6 +2,8 @@
 
 #include "AnimationGraphSourceInternal.h"
 
+#include <ostream>
+#include <streambuf>
 #include <type_traits>
 
 namespace Horo::Animation::GraphSourceDetail {
@@ -20,7 +22,7 @@ namespace Horo::Animation::GraphSourceDetail {
                 Reject(AnimationErrors::GraphLimitExceeded);
             ++values_;
             Separator();
-            Append(Json(std::string(key)).dump());
+            WriteScalar(Json(key));
             Append(":");
             Value(value);
         }
@@ -60,22 +62,56 @@ namespace Horo::Animation::GraphSourceDetail {
                 if constexpr (std::is_same_v<T, std::nullptr_t>)
                     Append("null");
                 else if constexpr (std::is_convertible_v<T, std::string_view>)
-                    Append(Json(std::string(std::string_view(value))).dump());
+                    WriteScalar(Json(std::string_view(value)));
                 else if constexpr (std::is_same_v<T, float>)
-                    Append(Json(value == 0.0F ? 0.0F : value).dump());
+                    WriteScalar(Json(value == 0.0F ? 0.0F : value));
                 else
-                    Append(Json(value).dump());
+                    WriteScalar(Json(value));
             }
         }
 
         /** @brief Seals the sole source representation with its required trailing newline. */
-        std::string Finish() {
+        Result<std::string> Finish() {
             Append("\n");
             CheckAdmission(context_);
-            return std::move(bytes_);
+            // This bounded, cold serialization copy constructs the final owned value
+            // directly. Checked STL string moves can allocate inside noexcept code.
+            return Result<std::string>::SuccessInPlace(bytes_.data(), bytes_.size());
         }
 
     private:
+        /** @brief Sends the existing JSON scalar serializer through the bounded source sink. */
+        class AppendBuffer final : public std::streambuf {
+        public:
+            explicit AppendBuffer(SourceWriter &writer) : writer_(writer) {}
+
+        protected:
+            std::streamsize xsputn(const char *text, std::streamsize count) override {
+                writer_.Append({text, static_cast<std::size_t>(count)});
+                return count;
+            }
+
+            int_type overflow(int_type value) override {
+                if (traits_type::eq_int_type(value, traits_type::eof()))
+                    return traits_type::not_eof(value);
+                const char character = traits_type::to_char_type(value);
+                writer_.Append({&character, 1});
+                return value;
+            }
+
+        private:
+            SourceWriter &writer_;
+        };
+
+        /** @brief Preserves canonical scalar spelling without an intermediate JSON dump string. */
+        void WriteScalar(const Json &value) {
+            AppendBuffer buffer(*this);
+            std::ostream stream(&buffer);
+            // Preserve allocation and admission exceptions thrown by the bounded sink.
+            stream.exceptions(std::ios::badbit | std::ios::failbit);
+            stream << value;
+        }
+
         /** @brief Counts the same primitive/structured events as the source parser before append. */
         void Count(const std::size_t events) {
             CheckAdmission(context_);
@@ -113,7 +149,7 @@ namespace Horo::Animation::GraphSourceDetail {
 
         const AnimationGraphCompileContext &context_;
         const AnimationGraphSourceLimits &limits_;
-        std::string bytes_;
+        std::string bytes_ = std::string(std::size_t{0}, char{});
         std::size_t depth_{};
         std::size_t values_{};
         bool first_{true};

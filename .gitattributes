@@ -1,2 +1,14 @@
+# git apply must read patch context lines with LF endings, including on Windows.
+*.patch text eol=lf
 # The reviewed native patch manifest requires identical bytes on every checkout.
 /cmake/patches/gns/horo-gns-selected-root-v1.patch -text
+# Captured shader evidence is authenticated by its original byte digest.
+/tests/fixtures/shaders/*_locked/** -text
+/tests/fixtures/shaders/register_raster_*/** -text
+# Produced color packages authenticate the original manifest and reference bytes.
+/tests/fixtures/renderer/color/creative-look-produced/** -text
+# Prefab reference revisions and canonical artifacts authenticate exact source bytes.
+/tests/fixtures/prefab-reference-corpus/** -text
+
+# Keep the local analyzer input size stable across platforms.
+/scripts/analyze.py text eol=lf

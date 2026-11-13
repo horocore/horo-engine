@@ -1,13 +1,33 @@
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Platform.h"
+#include "WorkspacePathText.h"
 #include "editor/modals/settings/NavigationSettingsDraft.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
 
 namespace Horo::Editor {
+    /** @copydoc EditorWorkspaceController::UpdateSourceAutosave */
+    void EditorWorkspaceController::UpdateSourceAutosave(const float elapsedSeconds, const int delaySeconds) {
+        NativeDurableFileSystem files;
+        if (auto outcome = m_sourceOpenService.Documents().UpdateAutosave(elapsedSeconds, delaySeconds, files)) {
+            m_sourceSaveOutcome = std::move(*outcome);
+            if (m_sourceSaveOutcome->HasError())
+                LOG_ERROR("editor.source.autosave", "%s", m_sourceSaveOutcome->ErrorValue().message.c_str());
+            RefreshSourceDocumentProjection();
+        }
+    }
+
     /** @copydoc EditorWorkspaceController::HasDirtySourceDocuments */
     bool EditorWorkspaceController::HasDirtySourceDocuments() {
         RefreshSourceDocumentProjection();
+        RefreshTerrainDocuments();
+        for (const auto &[instance, revision] : TerrainDocumentRevisions()) {
+            static_cast<void>(revision);
+            for (const auto &tab : m_viewModel.workspacePanelHost.DocumentTabs())
+                if (tab.identity.instance == instance && tab.dirty)
+                    return true;
+        }
         return std::ranges::any_of(m_viewModel.workspacePanelHost.DocumentTabs(), [](const WorkspaceDocumentTab &tab) {
             return (tab.identity.key.kind == DocumentKind::Source || tab.identity.key.kind == DocumentKind::UiCanvas) && tab.dirty;
         });
@@ -31,14 +51,14 @@ namespace Horo::Editor {
                 continue;
             if (!m_mutations)
                 return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::WriteFailed));
-            const auto saved = canvas.Save(m_viewModel.projectRoot, *m_mutations, files);
+            const auto saved = canvas.Save(ProjectRoot(), *m_mutations, files);
             if (saved.HasError())
                 return Result<void>::Failure(saved.ErrorValue());
             if (saved.Value().status != UiCanvasDocumentSaveStatus::Saved)
                 return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
         }
         RefreshUiCanvasProjection();
-        return Result<void>::Success();
+        return SaveTerrainDocuments();
     }
 
     /** @copydoc EditorWorkspaceController::RefreshSourceDocumentProjection */
@@ -174,7 +194,7 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::SaveSourceDocumentAs:
                 if (command.sourceSave && command.stringPayload)
                     m_sourceSaveOutcome =
-                        m_sourceOpenService.SaveAs(*command.sourceSave, std::filesystem::path{*command.stringPayload}, files);
+                        m_sourceOpenService.SaveAs(*command.sourceSave, WorkspaceNativePath(*command.stringPayload), files);
                 else
                     m_sourceSaveOutcome = Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::Invalid));
                 return true;

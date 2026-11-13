@@ -1,4 +1,5 @@
 #include "EditorViewportRendererVulkan.h"
+#include "EditorViewportShaderParameters.h"
 #include "editor/renderer/EditorRendererErrors.h"
 
 #include <algorithm>
@@ -41,10 +42,13 @@ namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::ProgramResources::WriteLighting(const Render::MaterialBindingLayout &layout,
                                                                                const std::span<std::byte> bytes,
                                                                                const Render::RenderSceneView &scene) {
+        if (scene.lights.size() > Render::MaximumForwardLights)
+            return Result<void>::Failure(MakeError(Render::LightCullingErrors::Capacity));
         std::array<float, Render::MaximumForwardLights * 4> positions{}, directions{}, colors{}, cones{};
         for (std::size_t index = 0; index < scene.lights.size(); ++index) {
             const auto &light = scene.lights[index];
-            const std::array position{light.position.x, light.position.y, light.position.z, static_cast<float>(light.kind)};
+            const auto relative = light.position - scene.camera.position;
+            const std::array position{relative.x, relative.y, relative.z, static_cast<float>(light.kind)};
             const std::array direction{light.direction.x, light.direction.y, light.direction.z, light.range};
             const std::array color{light.color.x, light.color.y, light.color.z, light.intensity};
             const std::array cone{light.innerConeCosine, light.outerConeCosine, 0.0F, 0.0F};
@@ -58,16 +62,15 @@ namespace Horo::Editor {
             if (const auto written = WriteParameter(layout, bytes, {static_cast<std::uint32_t>(index + 6)}, parameters[index]);
                 written.HasError())
                 return written;
-        return Result<void>::Success();
+        const auto baseColor = EditorViewportFixedMaterialBaseColor();
+        return WriteParameter(layout, bytes, {20}, baseColor);
     }
 
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteDraw */
-    Result<void> EditorViewportRendererVulkan::ProgramResources::WriteDraw(const Render::Detail::VulkanEditorGraphicsBridge &bridge,
-                                                                           const ShaderResources &program,
-                                                                           const EditorViewportExtent extent,
-                                                                           const Render::FrameToken frame, const DrawSlot &slot,
-                                                                           const Render::RenderStaticMeshInstance &instance,
-                                                                           const Render::RenderSceneView &scene) {
+    Result<void> EditorViewportRendererVulkan::ProgramResources::WriteDraw(
+        const Render::Detail::VulkanEditorGraphicsBridge &bridge, const ShaderResources &program, const EditorViewportExtent extent,
+        const Render::FrameToken frame, const DrawSlot &slot, const Render::RenderStaticMeshInstance &instance,
+        const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame *shadow) {
         auto mvp = BuildRenderMvp(scene.camera, instance.localToWorld, static_cast<float>(extent.width) / extent.height,
                                   Math::ClipDepthRange::ZeroToOne);
         if (mvp.HasError())
@@ -85,18 +88,56 @@ namespace Horo::Editor {
             clipFromLocal.values[column * 4 + 1] *= -1;
         const auto &presentation = instance.presentation;
         const std::array tint{presentation.tint.x, presentation.tint.y, presentation.tint.z, presentation.tintStrength};
-        const std::array camera{scene.camera.position.x, scene.camera.position.y, scene.camera.position.z,
-                                static_cast<float>(scene.lights.size())};
+        const std::array camera{0.0F, 0.0F, 0.0F, static_cast<float>(scene.lights.size())};
+        auto relativeModel = instance.localToWorld;
+        relativeModel.values[12] -= scene.camera.position.x;
+        relativeModel.values[13] -= scene.camera.position.y;
+        relativeModel.values[14] -= scene.camera.position.z;
         std::array<std::byte, MaximumUniformBytes> storage{};
         const auto bytes = std::span{storage}.first(program.uniformBytes);
-        const std::array<std::span<const float>, 5> parameters{clipFromLocal.values, normal.values, instance.localToWorld.values, tint,
-                                                               camera};
+        const std::array<std::span<const float>, 5> parameters{clipFromLocal.values, normal.values, relativeModel.values, tint, camera};
         for (std::size_t index = 0; index < parameters.size(); ++index)
             if (const auto written = WriteParameter(program.layout, bytes, {static_cast<std::uint32_t>(index + 1)}, parameters[index]);
                 written.HasError())
                 return written;
         if (const auto written = WriteLighting(program.layout, bytes, scene); written.HasError())
             return written;
+        if (auto written = WriteShadowParameters(program, bytes, scene, shadow); written.HasError())
+            return written;
         return bridge.Port()->WriteFrameBuffer(frame, slot.instance, bytes);
     }
+
+    Result<void> EditorViewportRendererVulkan::ProgramResources::WriteShadowParameters(const ShaderResources &program,
+                                                                                       std::span<std::byte> bytes,
+                                                                                       const Render::RenderSceneView &scene,
+                                                                                       const Render::DirectionalShadowFrame *shadow) {
+        std::array<float, 64> matrices{};
+        std::array<float, 16> splits{};
+        std::array<float, 16> rectangles{};
+        std::array<float, 4> settings{};
+        std::array<float, 4> bias{};
+        if (shadow) {
+            for (std::uint32_t index = 0; index < shadow->cascadeCount; ++index) {
+                const auto &cascade = shadow->cascades[index];
+                std::ranges::copy(cascade.cameraRelativeViewProjection.values, matrices.begin() + index * 16);
+                const std::array split{cascade.splitNear, cascade.splitFar, cascade.blendStart, cascade.worldUnitsPerTexel};
+                const std::array rectangle{cascade.atlasScaleBias.x, cascade.atlasScaleBias.y, cascade.atlasScaleBias.z,
+                                           cascade.atlasScaleBias.w};
+                std::ranges::copy(split, splits.begin() + index * 4);
+                std::ranges::copy(rectangle, rectangles.begin() + index * 4);
+            }
+            settings = {static_cast<float>(shadow->cascadeCount), static_cast<float>(shadow->lightIndex),
+                        static_cast<float>(shadow->profile.filterRadius), shadow->profile.normalBias};
+            bias = {shadow->profile.depthBias, shadow->profile.slopeBias, 1.0F / shadow->atlasWidth, 1.0F / shadow->atlasHeight};
+        }
+        const auto forward = Math::Normalize(scene.camera.target - scene.camera.position);
+        const std::array direction{forward.x, forward.y, forward.z, 0.0F};
+        const std::array<std::span<const float>, 6> parameters{matrices, splits, rectangles, settings, bias, direction};
+        for (std::size_t index = 0; index < parameters.size(); ++index)
+            if (auto written = WriteParameter(program.layout, bytes, {static_cast<std::uint32_t>(11 + index)}, parameters[index]);
+                written.HasError())
+                return written;
+        return Result<void>::Success();
+    }
+
 }  // namespace Horo::Editor

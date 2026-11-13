@@ -104,15 +104,59 @@ namespace Horo::Render {
 
                 runtimeInitialized_ = true;
                 capabilities_ = created.Value().implemented;
-                initialized_ = true;
-                shutdownBegun_ = false;
-                drained_ = false;
-                return Result<void>::Success();
+                return FinishInitialization(config);
             }
 
             /** @copydoc IRenderBackend::Capabilities */
             const RenderBackendCapabilities &Capabilities() const noexcept override {
                 return capabilities_;
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs) override {
+                if (!initialized_ || shutdownBegun_ || frameActive_)
+                    return Result<std::shared_ptr<IResidentVfxGpuKernel>>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->RealizeVfxGpuPrograms(programs);
+            }
+
+            Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+                const NativeVfxGpuSimulationPreparation &preparation) override {
+                if (!initialized_ || shutdownBegun_ || frameActive_)
+                    return Result<std::shared_ptr<IResidentVfxGpuSimulation>>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->PrepareNativeVfxGpuSimulation(preparation);
+            }
+
+            Result<std::size_t> CopyCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                               const VfxGpuStepIdentity &step, std::span<std::byte> destination) override {
+                using Outcome = Result<std::size_t>;
+                if (!initialized_ || shutdownBegun_)
+                    return Outcome::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->CopyCompletedVfxGpuObservation(simulation, step, destination);
+            }
+
+            Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                           const VfxGpuStepIdentity &step) override {
+                using Outcome = Result<void>;
+                if (!initialized_ || shutdownBegun_)
+                    return Outcome::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->DiscardCompletedVfxGpuObservation(simulation, step);
+            }
+
+            Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                         std::span<NativeGpuVfxStepReceipt> receipts) override {
+                if (!initialized_ || shutdownBegun_)
+                    return Result<std::size_t>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->PollNativeVfxGpuReceipts(simulation, receipts);
+            }
+
+            Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
+                return runtime_->ObserveGraphSubmission(wait);
+            }
+
+            /** @copydoc IRenderBackend::RealizeExposureGpuKernel */
+            Result<std::shared_ptr<IResidentExposureGpuKernel>> RealizeExposureGpuKernel(const CookedExposureGpuKernel &kernel) override {
+                if (!initialized_ || !capabilities_.support.features.Supports(RenderCapability::ExposureGpu))
+                    return Result<std::shared_ptr<IResidentExposureGpuKernel>>::Failure(MakeError(ExposureGpuErrors::Unsupported));
+                return runtime_->RealizeExposureGpuKernel(kernel);
             }
 
             /** @copydoc IRenderBackend::RealizeLightCullingKernel */
@@ -459,9 +503,10 @@ namespace Horo::Render {
                 if (const auto state = ValidateActiveFrame(request.frame); state.HasError()) {
                     return state;
                 }
-                if (!request.submissions.empty())
-                    return Result<void>::Failure(
-                        MakeError(MetalBackendErrors::UnsupportedGraphExecution, "Metal explicit graph submissions are not implemented."));
+                if (const auto valid = Detail::ValidateMetalRenderGraph(*runtime_, request); valid.HasError()) {
+                    runtime_->RejectUnsubmittedVfxGpuGraph(request);
+                    return valid;
+                }
                 if (!request.resources.empty() && request.lease == nullptr) {
                     return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan,
                                                            "Resident graph execution requires a frontend-owned resource lease."));
@@ -471,8 +516,14 @@ namespace Horo::Render {
                         return retained;
                     }
                 }
+                if (const auto captured = runtime_->CaptureGraphSubmissions(request); captured.HasError()) {
+                    runtime_->RejectUnsubmittedVfxGpuGraph(request);
+                    AbortActiveFrame();
+                    return captured;
+                }
                 const auto executed = Detail::ExecuteMetalRenderGraph(*runtime_, request);
                 if (executed.HasError()) {
+                    runtime_->RejectUnsubmittedVfxGpuGraph(request);
                     AbortActiveFrame();
                 }
                 return executed;
@@ -612,6 +663,28 @@ namespace Horo::Render {
             }
 
         private:
+            Result<void> FinishInitialization(const RenderBackendConfig &config) {
+                using enum Horo::Render::RenderCapability;
+                if (const auto configured =
+                        runtime_->ConfigureGraphSubmissions(config.queueAssignments, capabilities_.support.deviceIncarnation);
+                    configured.HasError()) {
+                    CloseUnsubmittedInitialization();
+                    return configured;
+                }
+                // Compatibility runtimes may accept configuration without implementing a native submission journal.
+                if (runtime_->HasConfiguredGraphSubmissionJournal()) {
+                    capabilities_.supportsExplicitGraphSubmissions = true;
+                    capabilities_.supportsSubmissionObservation = true;
+                    capabilities_.support.features.Enable(VfxGpuSimulation);
+                    capabilities_.support.features.Enable(VfxGpuDraw);
+                    capabilities_.support.features.Enable(VfxGpuReadback);
+                }
+                initialized_ = true;
+                shutdownBegun_ = false;
+                drained_ = false;
+                return Result<void>::Success();
+            }
+
             [[nodiscard]] Result<void> ValidateActiveFrame(const FrameToken frame) const {
                 if (!initialized_) {
                     return Result<void>::Failure(
@@ -765,6 +838,13 @@ namespace Horo::Render {
         return renderEncoder_;
     }
 
+    /** @copydoc MetalEditorGraphicsBridge::RetainEditorTextureView */
+    Result<void> MetalEditorGraphicsBridge::RetainEditorTextureView(const std::uint64_t viewInstance) {
+        if (!retainTexture_ || !waitContext_ || !commandBuffer_)
+            return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+        return retainTexture_(waitContext_, viewInstance, commandBuffer_);
+    }
+
     /** @copydoc MetalEditorGraphicsBridge::WaitUntilIdle */
     void MetalEditorGraphicsBridge::WaitUntilIdle() noexcept {
         if (waitUntilIdle_ != nullptr) {
@@ -783,11 +863,13 @@ namespace Horo::Render {
         void MetalEditorGraphicsAccess::PublishPersistent(
             MetalEditorGraphicsBridge &bridge, void *device, void *commandQueue,  // NOSONAR
             void *waitContext,                                                    // NOSONAR(cpp:S5008)
-            MetalEditorGraphicsBridge::WaitUntilIdleFunction wait) noexcept {     // NOSONAR(cpp:S5205)
+            MetalEditorGraphicsBridge::WaitUntilIdleFunction wait,
+            MetalEditorGraphicsBridge::RetainTextureFunction retainTexture) noexcept {  // NOSONAR(cpp:S5205)
             bridge.device_ = device;
             bridge.commandQueue_ = commandQueue;
             bridge.waitContext_ = waitContext;
             bridge.waitUntilIdle_ = wait;
+            bridge.retainTexture_ = retainTexture;
         }
 
         void MetalEditorGraphicsAccess::PublishFrame(MetalEditorGraphicsBridge &bridge, void *commandBuffer,  // NOSONAR(cpp:S5008)

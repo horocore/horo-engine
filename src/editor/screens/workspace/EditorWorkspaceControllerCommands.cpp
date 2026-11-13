@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorWorkspaceEvents.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "editor/document/EditorViewportPicking.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -116,7 +117,7 @@ namespace Horo::Editor {
         switch (cmd.command) {
             case EditorWorkspaceViewCommand::NavigateContentBrowser:
                 if (cmd.stringPayload.has_value())
-                    NavigateContentBrowser(*cmd.stringPayload, true);
+                    NavigateContentBrowser(WorkspaceNativePath(*cmd.stringPayload), true);
                 break;
             case EditorWorkspaceViewCommand::NavigateContentBrowserBack:
                 NavigateContentBrowserBack();

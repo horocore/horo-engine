@@ -127,7 +127,7 @@ def test_actual_ctest_path_contract_is_registered_and_matches_workflow():
                 f'--output-junit {report}') in cmake
     registration = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert registration.index("add_test(NAME HoroCharacterAllocationJunitPathContract") < registration.index(
-        "horo_finalize_ci_suites()"
+        "cmake_language(DEFER CALL horo_finalize_ci_suites)"
     )
     assert "HoroCharacterAllocationJunitPathContract" in (ROOT / "tests/cmake/HoroCiSuites.cmake").read_text(encoding="utf-8")
 

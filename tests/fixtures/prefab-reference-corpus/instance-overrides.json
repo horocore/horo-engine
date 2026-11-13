@@ -1,0 +1,44 @@
+{
+"authoredAgainst": {
+"contentDigest": "sha256:9e12ed49c7dd0240244eb64d5e98ac468458c2661beb5fb7e3c9b44eac202dee",
+"projectVersion": "0.2.0"
+},
+"conflicts": [],
+"orphans": [],
+"records": [
+{
+"componentSchemaVersion": 0,
+"expectedSourceValue": "sha256:df4273c4a025b812c1ba2076bdf5eff45a06ef41e5a709022f3502e82cdb39c1",
+"operation": 0,
+"target": {
+"kind": "transform",
+"object": 17,
+"scope": []
+},
+"value": {
+"kind": "transform",
+"value": {
+"rotation": [
+0.0,
+0.0,
+0.0,
+1.0
+],
+"scale": [
+1.0,
+1.0,
+1.0
+],
+"translation": [
+9.0,
+0.0,
+0.0
+]
+}
+}
+}
+],
+"schema": 1,
+"schemaRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+"sourcePrefab": "00000000-0000-0000-0000-000000000002"
+}

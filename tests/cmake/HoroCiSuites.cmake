@@ -22,7 +22,38 @@ set(HORO_CI_AUDIO_TARGETS
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroFoundationResultTests
+    HoroDynamicLibraryTests
+    HoroRuntimeSaveIdentityTests
+    HoroRuntimeSaveParticipantRegistryTests
+    HoroRuntimeSaveCaptureSnapshotTests
+    HoroRuntimeSaveOperationTests
+    HoroRuntimeSaveAutosaveSchedulerTests
+    HoroRuntimeSavedSceneBootstrapTests
+    HoroAnimationGraphValueAllocationTests
+    HoroAnimationDocumentTests
+    HoroUiStyleWorkspaceTests
+    HoroFoundationJobSystemTests
+    HoroAssetLoadResultAllocationTests
+    HoroRuntimeSceneAssetDiscoveryTests
+    HoroAssetIdAllocationTests
+    HoroOperationIdentityAllocationTests
+    HoroPrefabMetricsTests
+    HoroPrefabPersistenceTests
+    HoroEditorPlaySavePrefabTests
+    HoroPrefabPersistencePublicConsumer
+    HoroProjectVersionPublicHeaderConsumer
+    HoroPrefabOverridesPublicHeaderConsumer
+    HoroPrefabPersistencePublicHeaderConsumer
+    HoroScriptModuleRuntimeAdapterTests
+    HoroModuleScriptProductHostTests
+    HoroScriptModuleRuntimePublicHeaderConsumer
+    HoroLuaScriptModuleRuntimePublicHeaderConsumer
+    HoroJavaScriptModuleRuntimePublicHeaderConsumer
     HoroFoundationJsonTests
+    HoroSceneSourceTests
+    HoroColorPipelineTests
+    HoroColorCreativeLookPackageTests
     HoroProjectCollisionSettingsTests
     HoroCollisionSettingsPublicConsumer
     HoroPublicationLockFoundationConsumer
@@ -102,6 +133,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroD3D12ResourceTests
     HoroPlayTopologyTests
     HoroPlayTopologyPublicHeaderConsumer
+    HoroReplicationStateCodecTests
     HoroNetworkDebuggerTests
     HoroNetworkDebuggerPublicHeaderConsumer
     HoroTerrainAuthoringTests
@@ -125,6 +157,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPCGDocumentTests
     HoroPCGDocumentPublicHeaderConsumer
     HoroMixerDocumentTests
+    HoroAudioApiTests
     ${HORO_CI_AUDIO_TARGETS}
     HoroCliCommandRegistryTests
     HoroCliOutputPublicHeaderConsumer
@@ -199,6 +232,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroRuntimeUiScreenTransitionPublicHeaderConsumer
     HoroInputPublicHeaderConsumer
     HoroExtensionManagerTests
+    HoroReferenceExtensionQualification
     HoroEditorActivityBoundaryTests
 
     HoroPackageLifecycleTests
@@ -256,7 +290,25 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroGameplayNavigationTests
     HoroGameplayNavigationPublicConsumer
     HoroNavigationBakeServiceTests
+    HoroNavigationBakeApplicationTests
+    HoroNavigationBakeAdapterTests
+    HoroNavigationNativeCliTests
+    HoroNavigationHostErrorTests
+    HoroNavigationProjectBakeInputNativeTests
+    HoroEditorNavigationBakeHostTests
 )
+
+if(WIN32)
+    list(APPEND HORO_CI_WINDOWS_TARGETS
+        HoroProcessImageIdentityTests
+        HoroPhysicsStateCodecTests
+        HoroPhysicsStateHostLifecycleTests)
+    if(HORO_BUILD_PHYSICS_NATIVE)
+        list(APPEND HORO_CI_WINDOWS_TARGETS
+            HoroPhysicsStateWorldTests
+            HoroPhysicsStateNativeTests)
+    endif()
+endif()
 
 set(HORO_CI_NAVIGATION_TARGETS
     HoroNavigationProjectSettingsTests
@@ -291,6 +343,8 @@ set(HORO_CI_NETWORK_TARGETS
 
 # These editor-labelled suites were explicitly run by the coverage workflow.
 set(HORO_SONAR_EDITOR_TARGETS
+    HoroEditorPlaySavePrefabTests
+    HoroModuleScriptProductHostTests
     HoroSourceSyntaxTests
     HoroEditorPlaySessionControllerTests
     HoroSettingsModalLifecycleTests
@@ -325,14 +379,31 @@ endfunction()
 
 function(horo_ci_test_runtime_root target output)
     set(root "${CMAKE_CURRENT_BINARY_DIR}/ci-runtime/${target}")
-    if(CMAKE_HOST_WIN32 AND DEFINED ENV{RUNNER_TEMP} AND NOT "$ENV{RUNNER_TEMP}" STREQUAL "")
+    if(CMAKE_HOST_WIN32)
+        if(DEFINED ENV{RUNNER_TEMP} AND NOT "$ENV{RUNNER_TEMP}" STREQUAL "")
+            set(host_temporary_root "$ENV{RUNNER_TEMP}")
+        elseif(DEFINED ENV{LOCALAPPDATA} AND NOT "$ENV{LOCALAPPDATA}" STREQUAL "")
+            # TEMP/TMP may already point into a parent test's isolated namespace.
+            # LOCALAPPDATA retains the stable host root during nested fixture configuration.
+            set(host_temporary_root "$ENV{LOCALAPPDATA}/Temp")
+        elseif(DEFINED ENV{TEMP} AND NOT "$ENV{TEMP}" STREQUAL "")
+            set(host_temporary_root "$ENV{TEMP}")
+        elseif(DEFINED ENV{TMP} AND NOT "$ENV{TMP}" STREQUAL "")
+            set(host_temporary_root "$ENV{TMP}")
+        else()
+            message(FATAL_ERROR "Windows test isolation requires an absolute host temporary root")
+        endif()
+        file(TO_CMAKE_PATH "${host_temporary_root}" host_temporary_root)
+        if(NOT IS_ABSOLUTE "${host_temporary_root}")
+            message(FATAL_ERROR "Windows test isolation requires an absolute host temporary root")
+        endif()
         # Keep classic Win32 fixture I/O below MAX_PATH without sharing namespaces
         # between build compositions. Reject a shortened-key collision explicitly.
         file(REAL_PATH "${CMAKE_CURRENT_BINARY_DIR}" build_identity)
         set(runtime_identity "${build_identity}\n${target}")
         string(SHA256 build_key "${runtime_identity}")
         string(SUBSTRING "${build_key}" 0 16 build_key)
-        set(namespace "$ENV{RUNNER_TEMP}/hci/${build_key}")
+        set(namespace "${host_temporary_root}/hci/${build_key}")
         file(MAKE_DIRECTORY "${namespace}")
         set(identity_file "${namespace}/identity.txt")
         if(EXISTS "${identity_file}")

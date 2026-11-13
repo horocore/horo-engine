@@ -30,6 +30,7 @@ namespace Horo::Render::VulkanBackendErrors {
     extern const ErrorCodeDescriptor ResourceRequestInvalid;
     extern const ErrorCodeDescriptor ResourceUnsupported;
     extern const ErrorCodeDescriptor ResourceCreationFailed;
+    extern const ErrorCodeDescriptor ResourceCapacityExceeded;
     extern const ErrorCodeDescriptor ResourceIdentityInvalid;
     extern const ErrorCodeDescriptor MemoryTypeUnavailable;
     extern const ErrorCodeDescriptor WrongThread;

@@ -18,8 +18,6 @@ namespace Horo::Editor {
         constexpr float MoveArrowHeadHalfWidth = 7.0F;
         constexpr float MovePlaneOffset = 0.14F;
         constexpr float MovePlaneSize = 0.18F;
-        constexpr float MovePlaneBackGapPixels = 8.0F;
-        constexpr float MoveEndOnOffset = 22.0F;
         constexpr float MoveEndOnHalfSize = 6.0F;
         constexpr float ScaleHandleHalfSize = 9.0F;
         constexpr float ScaleHubHalfSize = 10.0F;
@@ -80,47 +78,24 @@ namespace Horo::Editor {
             const ImU32 face = ShadeAxisColor(color, highlighted ? 1.18F : 1.0F);
             const ImU32 light = ShadeAxisColor(face, 1.1F);
             const ImU32 dark = ShadeAxisColor(face, 0.82F);
-            const float headBase = length - MoveArrowHeadLength;
-            const ImVec2 shaftStart = AlongAxis(center, direction, 2.0F);
+            const float headLength = std::min(MoveArrowHeadLength, length * 0.45F);
+            const float headWidth = std::min(MoveArrowHeadHalfWidth, length * 0.2F);
+            const float headBase = length - headLength;
+            const ImVec2 shaftStart = AlongAxis(center, direction, std::min(2.0F, headBase * 0.5F));
             const ImVec2 shaftEnd = AlongAxis(center, direction, headBase);
             const ImVec2 tip = AlongAxis(center, direction, length);
-            const ImVec2 left = AlongAxis(center, direction, headBase, -MoveArrowHeadHalfWidth);
-            const ImVec2 right = AlongAxis(center, direction, headBase, MoveArrowHeadHalfWidth);
+            const ImVec2 left = AlongAxis(center, direction, headBase, -headWidth);
+            const ImVec2 right = AlongAxis(center, direction, headBase, headWidth);
             const ImVec2 middle = AlongAxis(center, direction, headBase);
 
             drawList.AddLine(shaftStart, shaftEnd, dark, 3.0F);
             drawList.AddLine(shaftStart, shaftEnd, face, 1.5F);
+            // Joined AA fringes on the two acute half-triangles displace the projected tip.
+            const auto flags = drawList.Flags;
+            drawList.Flags &= ~ImDrawListFlags_AntiAliasedFill;
             drawList.AddTriangleFilled(left, tip, middle, light);
             drawList.AddTriangleFilled(middle, tip, right, dark);
-        }
-
-        /** @brief Draws a broad scale shaft and a shaded cube handle at the shared gizmo extent. */
-        void DrawScaleAxisHandle(ImDrawList &drawList, const ImVec2 center, const ImVec2 direction, const float length, const ImU32 color,
-                                 const bool highlighted) {
-            const ImU32 face = ShadeAxisColor(color, highlighted ? 1.25F : 1.0F);
-            const ImU32 light = ShadeAxisColor(face, 1.18F);
-            const ImU32 dark = ShadeAxisColor(face, 0.58F);
-            const ImVec2 handle = AlongAxis(center, direction, length - ScaleHandleHalfSize);
-            const float shaftLength = length - ScaleHandleHalfSize * 2.0F;
-            const ImVec2 shaftEnd = AlongAxis(center, direction, shaftLength);
-            drawList.AddLine(AlongAxis(center, direction, 9.0F), shaftEnd, dark, 8.0F);
-            drawList.AddLine(AlongAxis(center, direction, 9.0F, -1.0F), AlongAxis(center, direction, shaftLength - 1.0F, -1.0F), face,
-                             5.0F);
-            const std::array front{
-                AlongAxis(handle, direction, -ScaleHandleHalfSize, -ScaleHandleHalfSize),
-                AlongAxis(handle, direction, ScaleHandleHalfSize, -ScaleHandleHalfSize),
-                AlongAxis(handle, direction, ScaleHandleHalfSize, ScaleHandleHalfSize),
-                AlongAxis(handle, direction, -ScaleHandleHalfSize, ScaleHandleHalfSize),
-            };
-            constexpr ImVec2 depth{-3.0F, -3.0F};
-            std::array<ImVec2, 4> back{};
-            for (std::size_t corner = 0; corner < front.size(); ++corner)
-                back[corner] = {front[corner].x + depth.x, front[corner].y + depth.y};
-            drawList.AddQuadFilled(back[0], back[1], back[2], back[3], dark);
-            drawList.AddQuadFilled(back[0], back[1], front[1], front[0], light);
-            drawList.AddQuadFilled(back[1], back[2], front[2], front[1], dark);
-            drawList.AddQuadFilled(front[0], front[1], front[2], front[3], face);
-            drawList.AddPolyline(front.data(), static_cast<int>(front.size()), dark, ImDrawFlags_Closed, 1.5F);
+            drawList.Flags = flags;
         }
 
         /** @brief Gives uniform scaling the same solid-handle treatment as the axis tips. */
@@ -138,12 +113,10 @@ namespace Horo::Editor {
             drawList.AddCircle(center, EndOnAxisRadius, ShadeAxisColor(color, highlighted ? 1.3F : 1.0F), 24, 4.0F);
         }
 
-        void DrawMoveEndOnAxisHandle(ImDrawList &drawList, const ImVec2 center, const ImU32 color, const bool highlighted) {
-            const ImVec2 handle{center.x + MoveEndOnOffset, center.y - MoveEndOnOffset};
-            const ImVec2 minimum{handle.x - MoveEndOnHalfSize, handle.y - MoveEndOnHalfSize};
-            const ImVec2 maximum{handle.x + MoveEndOnHalfSize, handle.y + MoveEndOnHalfSize};
-            drawList.AddRectFilled(minimum, maximum, ShadeAxisColor(color, highlighted ? 1.2F : 1.0F));
-            drawList.AddRect(minimum, maximum, ShadeAxisColor(color, 0.7F));
+        /** @brief A depth-gesture marker stays on the actual projected axis endpoint, including exact end-on views. */
+        void DrawMoveEndOnAxisHandle(ImDrawList &drawList, const ImVec2 anchor, const ImU32 color, const bool highlighted) {
+            drawList.AddCircle(anchor, MoveEndOnHalfSize, ShadeAxisColor(color, highlighted ? 1.2F : 1.0F), 20, 2.0F);
+            drawList.AddLine({anchor.x, anchor.y - 3.0F}, {anchor.x, anchor.y + 3.0F}, color, 1.0F);
         }
 
         [[nodiscard]] Result<std::optional<ImVec2>> ProjectToViewport(const EditorViewportCamera &camera, const Math::Vec3 worldPosition,
@@ -332,56 +305,448 @@ namespace Horo::Editor {
             return true;
         }
 
-        /** @brief Draws camera-visible plane translation handles between pairs of move axes. */
-        void DrawMovePlaneHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
-                                  const std::array<ImU32, 3> &axisColors, const float centerPixelsPerWorldUnit) {
-            for (int normal = 0; normal < 3; ++normal) {
-                const int firstAxis = (normal + 1) % 3;
-                const int secondAxis = (normal + 2) % 3;
-                if (!geometry.projectedAxisVisible[firstAxis] || !geometry.projectedAxisVisible[secondAxis])
+        /** @brief One front-facing projected cube face; the same polygon owns drawing and picking. */
+        struct ScaleHandleFace {
+            std::array<ImVec2, 4> corners;
+            float brightness{};
+        };
+
+        /** @brief A cube in the gizmo's equal-length 3D frame, projected with the pivot's shared screen scale. */
+        struct ScaleHandleCube {
+            std::array<ScaleHandleFace, 3> faces{};
+            std::size_t count{};
+        };
+
+        /** @brief Projects equal-edge corners and only camera-facing cube faces without per-axis screen normalization. */
+        [[nodiscard]] ScaleHandleCube ProjectScaleHandle(const TransformGizmoFrameGeometry &geometry, const int axis,
+                                                         const RotationScreenBasis &basis) {
+            std::array<ImVec2, 8> corners{};
+            const auto handleCenter = geometry.worldAxes[axis] * (GizmoExtentPixels - ScaleHandleHalfSize);
+            for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+                auto point = handleCenter;
+                for (int component = 0; component < 3; ++component)
+                    point =
+                        point + geometry.worldAxes[component] * ((corner & (1U << component)) ? ScaleHandleHalfSize : -ScaleHandleHalfSize);
+                corners[corner] = {geometry.center->x + Math::Dot(point, basis.right), geometry.center->y - Math::Dot(point, basis.up)};
+            }
+            constexpr std::array<std::array<int, 4>, 6> indices{{
+                {{0, 4, 6, 2}},
+                {{1, 3, 7, 5}},
+                {{0, 1, 5, 4}},
+                {{2, 6, 7, 3}},
+                {{0, 2, 3, 1}},
+                {{4, 5, 7, 6}},
+            }};
+            ScaleHandleCube cube;
+            for (std::size_t faceIndex = 0; faceIndex < indices.size(); ++faceIndex) {
+                const auto normal = geometry.worldAxes[faceIndex / 2] * (faceIndex % 2 ? 1.0F : -1.0F);
+                const float facing = Math::Dot(normal, basis.towardCamera);
+                if (facing <= 0.0001F)
                     continue;
-                const float firstLength =
-                    MoveExtentPixels * std::min(geometry.pixelsPerWorldUnit[firstAxis] / centerPixelsPerWorldUnit, 1.0F);
-                const float secondLength =
-                    MoveExtentPixels * std::min(geometry.pixelsPerWorldUnit[secondAxis] / centerPixelsPerWorldUnit, 1.0F);
-                const ImVec2 first{geometry.screenDirections[firstAxis].x * firstLength,
-                                   geometry.screenDirections[firstAxis].y * firstLength};
-                const ImVec2 second{geometry.screenDirections[secondAxis].x * secondLength,
-                                    geometry.screenDirections[secondAxis].y * secondLength};
-                if (std::fabs(first.x * second.y - first.y * second.x) * MovePlaneSize * MovePlaneSize < 30.0F)
-                    continue;
-                const ImVec2 base{geometry.center->x + first.x * MovePlaneOffset - second.x * MovePlaneOffset,
-                                  geometry.center->y + first.y * MovePlaneOffset - second.y * MovePlaneOffset};
-                std::array corners{
-                    base,
-                    ImVec2{base.x + first.x * MovePlaneSize, base.y + first.y * MovePlaneSize},
-                    ImVec2{base.x + first.x * MovePlaneSize - second.x * MovePlaneSize,
-                           base.y + first.y * MovePlaneSize - second.y * MovePlaneSize},
-                    ImVec2{base.x - second.x * MovePlaneSize, base.y - second.y * MovePlaneSize},
-                };
-                if (geometry.projectedAxisVisible[normal]) {
-                    const ImVec2 normalDirection = geometry.screenDirections[normal];
-                    float forwardMost = -std::numeric_limits<float>::max();
-                    for (const ImVec2 corner : corners) {
-                        const ImVec2 fromCenter{corner.x - geometry.center->x, corner.y - geometry.center->y};
-                        forwardMost = std::max(forwardMost, fromCenter.x * normalDirection.x + fromCenter.y * normalDirection.y);
-                    }
-                    const float backShift = std::max(0.0F, forwardMost + MovePlaneBackGapPixels);
-                    for (ImVec2 &corner : corners) {
-                        corner.x -= normalDirection.x * backShift;
-                        corner.y -= normalDirection.y * backShift;
-                    }
+                auto &face = cube.faces[cube.count++];
+                for (std::size_t corner = 0; corner < face.corners.size(); ++corner)
+                    face.corners[corner] = corners[indices[faceIndex][corner]];
+                // ImGui's antialiased convex fill requires clockwise screen-space winding.
+                float area{};
+                for (std::size_t corner = 0; corner < face.corners.size(); ++corner) {
+                    const auto &from = face.corners[corner];
+                    const auto &to = face.corners[(corner + 1) % face.corners.size()];
+                    area += from.x * to.y - from.y * to.x;
                 }
-                geometry.movePlaneCorners[normal] = corners;
-                const bool hit = request.hovered && PointInQuad(request.pointer, corners);
+                if (area < 0)
+                    std::reverse(face.corners.begin(), face.corners.end());
+                face.brightness =
+                    std::clamp(0.72F + 0.18F * facing + 0.18F * Math::Dot(normal, basis.up) - 0.10F * Math::Dot(normal, basis.right), 0.5F,
+                               1.15F);
+            }
+            return cube;
+        }
+
+        /** @brief Draws shaded 3D faces rather than a rotated screen square with a fixed depth offset. */
+        void DrawScaleAxisHandle(ImDrawList &drawList, const ImVec2 center, const ImVec2 direction, const float shaftLength,
+                                 const ScaleHandleCube &cube, const ImU32 color, const bool highlighted) {
+            const ImU32 face = ShadeAxisColor(color, highlighted ? 1.25F : 1.0F);
+            const ImU32 dark = ShadeAxisColor(face, 0.58F);
+            drawList.AddLine(AlongAxis(center, direction, 9.0F), AlongAxis(center, direction, shaftLength), dark, 8.0F);
+            drawList.AddLine(AlongAxis(center, direction, 9.0F, -1.0F), AlongAxis(center, direction, shaftLength, -1.0F), face, 5.0F);
+            for (std::size_t index = 0; index < cube.count; ++index) {
+                const auto &quad = cube.faces[index];
+                // Nearly edge-on faces have acute projected corners. ImGui's
+                // joined AA fringe can extend those corners into long spikes.
+                const auto flags = drawList.Flags;
+                drawList.Flags &= ~ImDrawListFlags_AntiAliasedFill;
+                drawList.AddQuadFilled(quad.corners[0], quad.corners[1], quad.corners[2], quad.corners[3],
+                                       ShadeAxisColor(face, quad.brightness));
+                drawList.Flags = flags;
+                for (std::size_t edge = 0; edge < quad.corners.size(); ++edge)
+                    drawList.AddLine(quad.corners[edge], quad.corners[(edge + 1) % quad.corners.size()], dark, 1.0F);
+            }
+        }
+
+        /** @brief Picks visible cube polygons and a bounded edge tolerance, including foreshortened side faces. */
+        [[nodiscard]] bool OverScaleHandle(const ImVec2 pointer, const ScaleHandleCube &cube) noexcept {
+            for (std::size_t face = 0; face < cube.count; ++face) {
+                const auto &corners = cube.faces[face].corners;
+                if (PointInQuad(pointer, corners))
+                    return true;
+                for (std::size_t edge = 0; edge < corners.size(); ++edge)
+                    if (DistanceToSegment(pointer, corners[edge], corners[(edge + 1) % corners.size()]) <= 3.0F)
+                        return true;
+            }
+            return false;
+        }
+
+        /** @brief One camera authority shared by all Move primitives; no local view/projection convention. */
+        struct MoveProjection {
+            const TransformGizmoGeometryRequest &request;
+            Math::Mat4 viewProjection;
+        };
+
+        /** @brief A quad clipped by seven half-spaces has at most eleven corners. */
+        struct MoveClipPolygon {
+            std::array<Math::Vec4, TransformGizmoPlanePolygon::MaximumCorners> points{};
+            std::size_t count{};
+        };
+
+        constexpr std::size_t MoveClipPlanes = 7;
+        using MovePlaneProjection = Result<std::optional<TransformGizmoPlanePolygon>>;
+        using MoveAxisProjection = Result<std::optional<TransformGizmoAxisSegment>>;
+
+        /** @brief Canonical homogeneous clip half-spaces; eye epsilon matches the shared projectability contract. */
+        double MoveClipDistance(const Math::Vec4 point, const std::size_t plane, const Math::ClipDepthRange depth) noexcept {
+            switch (plane) {
+                case 0:
+                    return static_cast<double>(point.w) - 2.0 * Math::DefaultEpsilon;
+                case 1:
+                    return static_cast<double>(point.w) + point.x;
+                case 2:
+                    return static_cast<double>(point.w) - point.x;
+                case 3:
+                    return static_cast<double>(point.w) + point.y;
+                case 4:
+                    return static_cast<double>(point.w) - point.y;
+                case 5:
+                    return depth == Math::ClipDepthRange::NegativeOneToOne ? static_cast<double>(point.z) + point.w : point.z;
+                default:
+                    return static_cast<double>(point.w) - point.z;
+            }
+        }
+
+        /** @brief Interpolates the same projective edge before division, preserving exact endpoints. */
+        Math::Vec4 MoveClipLerp(const Math::Vec4 first, const Math::Vec4 last, const double fraction) noexcept {
+            if (fraction == 0.0)
+                return first;
+            if (fraction == 1.0)
+                return last;
+            return {static_cast<float>(first.x + (static_cast<double>(last.x) - first.x) * fraction),
+                    static_cast<float>(first.y + (static_cast<double>(last.y) - first.y) * fraction),
+                    static_cast<float>(first.z + (static_cast<double>(last.z) - first.z) * fraction),
+                    static_cast<float>(first.w + (static_cast<double>(last.w) - first.w) * fraction)};
+        }
+
+        /** @brief Duplicate clip intersections never create zero-length polygon edges or grow fixed scratch. */
+        bool AppendMoveClip(MoveClipPolygon &output, const Math::Vec4 point) noexcept {
+            if (output.count != 0 && output.points[output.count - 1] == point)
+                return true;
+            if (output.count == output.points.size())
+                return false;
+            output.points[output.count++] = point;
+            return true;
+        }
+
+        /** @brief One bounded convex half-space pass, including exact-on-plane vertices. */
+        bool ClipMovePolygonPlane(const MoveClipPolygon &input, MoveClipPolygon &output, const std::size_t plane,
+                                  const Math::ClipDepthRange depth) noexcept {
+            output.count = 0;
+            auto previous = input.points[input.count - 1];
+            auto before = MoveClipDistance(previous, plane, depth);
+            for (const auto current : std::span{input.points}.first(input.count)) {
+                const auto after = MoveClipDistance(current, plane, depth);
+                if ((before >= 0.0) != (after >= 0.0))
+                    if (!AppendMoveClip(output, MoveClipLerp(previous, current, before / (before - after))))
+                        return false;
+                if (after >= 0.0 && !AppendMoveClip(output, current))
+                    return false;
+                previous = current;
+                before = after;
+            }
+            if (output.count > 1 && output.points[0] == output.points[output.count - 1])
+                --output.count;
+            return true;
+        }
+
+        /** @brief Divides only admitted clipped coordinates, then reuses the canonical viewport-to-pixel adapter. */
+        Result<ImVec2> MoveClipPixels(const MoveProjection &projection, const Math::Vec4 point) noexcept {
+            if (!Math::IsFinite(point) || point.w <= Math::DefaultEpsilon)
+                return Result<ImVec2>::Failure(MakeError(TransformGizmoErrors::InvalidRequest, "Clipped gizmo vertex is not projectable."));
+            const EditorViewportPointProjection normalized{.viewportPosition = {point.x / point.w * 0.5F + 0.5F,
+                                                                                0.5F - point.y / point.w * 0.5F},
+                                                           .ndcDepth = point.z / point.w};
+            const auto &request = projection.request;
+            const auto pixels =
+                MapEditorViewportPointToPixels(normalized, {request.origin.x, request.origin.y}, {request.width, request.height});
+            if (pixels.HasError())
+                return Result<ImVec2>::Failure(pixels.ErrorValue());
+            return Result<ImVec2>::Success({pixels.Value().x, pixels.Value().y});
+        }
+
+        /** @brief Uses translated pixel edges for stable area measurement away from the screen origin. */
+        double MovePolygonArea(const TransformGizmoPlanePolygon &polygon) noexcept {
+            double area = 0.0;
+            const auto origin = polygon.corners[0];
+            for (std::size_t index = 1; index + 1 < polygon.count; ++index) {
+                const auto a = polygon.corners[index];
+                const auto b = polygon.corners[index + 1];
+                area += (static_cast<double>(a.x) - origin.x) * (static_cast<double>(b.y) - origin.y) -
+                        (static_cast<double>(a.y) - origin.y) * (static_cast<double>(b.x) - origin.x);
+            }
+            return area * 0.5;
+        }
+
+        /** @brief Clips first, divides last, and rejects only truly empty or unusably degenerate surviving polygons. */
+        MovePlaneProjection ProjectMovePolygon(const MoveProjection &projection, MoveClipPolygon polygon) {
+            MoveClipPolygon scratch;
+            for (std::size_t plane = 0; plane < MoveClipPlanes; ++plane) {
+                if (!ClipMovePolygonPlane(polygon, scratch, plane, projection.request.depthRange) || scratch.count < 3)
+                    return MovePlaneProjection::Success(std::nullopt);
+                std::swap(polygon, scratch);
+            }
+            TransformGizmoPlanePolygon result;
+            result.count = polygon.count;
+            for (std::size_t index = 0; index < polygon.count; ++index) {
+                const auto point = MoveClipPixels(projection, polygon.points[index]);
+                if (point.HasError())
+                    return MovePlaneProjection::Failure(point.ErrorValue());
+                result.corners[index] = point.Value();
+            }
+            if (std::fabs(MovePolygonArea(result)) < 8.0)
+                return MovePlaneProjection::Success(std::nullopt);
+            return MovePlaneProjection::Success(result);
+        }
+
+        /** @brief Projects the actual authored world-plane corners, retaining all visible clip intersections. */
+        MovePlaneProjection ProjectMovePlane(const MoveProjection &projection, const TransformGizmoFrameGeometry &geometry,
+                                             const int normal, const float worldExtent) {
+            const auto first = geometry.worldAxes[(normal + 1) % 3] * worldExtent;
+            const auto second = geometry.worldAxes[(normal + 2) % 3] * worldExtent;
+            const auto base = first * MovePlaneOffset - second * MovePlaneOffset;
+            const std::array offsets{base, base + first * MovePlaneSize, base + (first - second) * MovePlaneSize,
+                                     base - second * MovePlaneSize};
+            MoveClipPolygon polygon;
+            polygon.count = offsets.size();
+            for (std::size_t index = 0; index < offsets.size(); ++index) {
+                const auto world = geometry.worldPosition + offsets[index];
+                polygon.points[index] = Math::TransformHomogeneous(projection.viewProjection, {world.x, world.y, world.z, 1.0F});
+                if (!Math::IsFinite(polygon.points[index]))
+                    return MovePlaneProjection::Failure(
+                        MakeError(TransformGizmoErrors::InvalidRequest, "Gizmo plane overflows clip coordinates."));
+            }
+            return ProjectMovePolygon(projection, polygon);
+        }
+
+        /** @brief Finds the retained parameter interval of the original homogeneous axis segment. */
+        bool ClipMoveAxis(const MoveProjection &projection, const Math::Vec4 first, const Math::Vec4 last, double &minimum,
+                          double &maximum) noexcept {
+            minimum = 0.0;
+            maximum = 1.0;
+            for (std::size_t plane = 0; plane < MoveClipPlanes; ++plane) {
+                const auto a = MoveClipDistance(first, plane, projection.request.depthRange);
+                const auto b = MoveClipDistance(last, plane, projection.request.depthRange);
+                if (a < 0.0 && b < 0.0)
+                    return false;
+                if ((a < 0.0) == (b < 0.0))
+                    continue;
+                const auto crossing = a / (a - b);
+                if (a < 0.0)
+                    minimum = std::max(minimum, crossing);
+                else
+                    maximum = std::min(maximum, crossing);
+            }
+            return minimum <= maximum;
+        }
+
+        /** @brief A clipped shaft retains its real world-length fraction for interaction sensitivity. */
+        MoveAxisProjection ProjectMoveAxis(const MoveProjection &projection, const TransformGizmoFrameGeometry &geometry, const int axis,
+                                           const float worldExtent) {
+            const auto world = geometry.worldPosition + geometry.worldAxes[axis] * worldExtent;
+            const auto first = Math::TransformHomogeneous(projection.viewProjection, {geometry.worldPosition.x, geometry.worldPosition.y,
+                                                                                      geometry.worldPosition.z, 1.0F});
+            const auto last = Math::TransformHomogeneous(projection.viewProjection, {world.x, world.y, world.z, 1.0F});
+            if (!Math::IsFinite(first) || !Math::IsFinite(last))
+                return MoveAxisProjection::Failure(
+                    MakeError(TransformGizmoErrors::InvalidRequest, "Gizmo axis overflows clip coordinates."));
+            double minimum = 0.0;
+            double maximum = 1.0;
+            if (!ClipMoveAxis(projection, first, last, minimum, maximum) || minimum == maximum)
+                return MoveAxisProjection::Success(std::nullopt);
+            const auto start = MoveClipPixels(projection, MoveClipLerp(first, last, minimum));
+            const auto end = MoveClipPixels(projection, MoveClipLerp(first, last, maximum));
+            if (start.HasError())
+                return MoveAxisProjection::Failure(start.ErrorValue());
+            if (end.HasError())
+                return MoveAxisProjection::Failure(end.ErrorValue());
+            return MoveAxisProjection::Success(TransformGizmoAxisSegment{start.Value(), end.Value(), minimum, maximum, maximum == 1.0});
+        }
+
+        /** @brief Pointer admission shares the visible viewport instead of picking clipped offscreen geometry. */
+        bool MovePointerAvailable(const TransformGizmoGeometryRequest &request) noexcept {
+            return request.hovered && std::isfinite(request.pointer.x) && std::isfinite(request.pointer.y) &&
+                   request.pointer.x >= request.origin.x && request.pointer.x <= request.origin.x + request.width &&
+                   request.pointer.y >= request.origin.y && request.pointer.y <= request.origin.y + request.height;
+        }
+
+        /** @brief Convex polygon picking uses exactly the surviving rendered points, independent of winding. */
+        bool PointInMovePolygon(const ImVec2 point, const TransformGizmoPlanePolygon &polygon) noexcept {
+            double winding = 0.0;
+            for (std::size_t index = 0; index < polygon.count; ++index) {
+                const auto a = polygon.corners[index];
+                const auto b = polygon.corners[(index + 1) % polygon.count];
+                const double cross = (static_cast<double>(b.x) - a.x) * (static_cast<double>(point.y) - a.y) -
+                                     (static_cast<double>(b.y) - a.y) * (static_cast<double>(point.x) - a.x);
+                if (std::fabs(cross) < 0.001F)
+                    continue;
+                if (winding != 0.0F && cross * winding < 0.0F)
+                    return false;
+                winding = cross;
+            }
+            return true;
+        }
+
+        /** @brief Uses exactly the same clipped polygon for drawing and plane selection. */
+        [[nodiscard]] Result<void> DrawMovePlaneHandles(ImDrawList &drawList, const MoveProjection &projection,
+                                                        TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &axisColors,
+                                                        const float centerPixelsPerWorldUnit) {
+            const auto &request = projection.request;
+            for (int normal = 0; normal < 3; ++normal) {
+                const auto projected = ProjectMovePlane(projection, geometry, normal, MoveExtentPixels / centerPixelsPerWorldUnit);
+                if (projected.HasError())
+                    return Result<void>::Failure(projected.ErrorValue());
+                if (!projected.Value())
+                    continue;
+                const auto &polygon = *projected.Value();
+                geometry.movePlaneCorners[normal] = polygon;
+                const bool hit = MovePointerAvailable(request) && PointInMovePolygon(request.pointer, polygon);
                 const bool highlighted = request.activeAxis == normal + 4 || hit;
                 const ImU32 color = ShadeAxisColor(axisColors[normal], highlighted ? 1.25F : 0.95F);
-                drawList.AddQuadFilled(corners[0], corners[1], corners[2], corners[3], color);
-                drawList.AddPolyline(corners.data(), static_cast<int>(corners.size()), ShadeAxisColor(color, 0.72F), ImDrawFlags_Closed,
+                const auto flags = drawList.Flags;
+                drawList.Flags &= ~ImDrawListFlags_AntiAliasedFill;
+                const auto points = polygon.Points();
+                drawList.AddConvexPolyFilled(points.data(), static_cast<int>(points.size()), color);
+                drawList.Flags = flags;
+                drawList.AddPolyline(points.data(), static_cast<int>(points.size()), ShadeAxisColor(color, 0.72F), ImDrawFlags_Closed,
                                      1.0F);
                 if (hit)
                     geometry.hoveredAxis = normal + 4;
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Clipping a shaft does not manufacture an arrow head at the frustum intersection. */
+        void DrawClippedMoveShaft(ImDrawList &drawList, const TransformGizmoAxisSegment &segment, const ImU32 color,
+                                  const bool highlighted) {
+            const auto face = ShadeAxisColor(color, highlighted ? 1.18F : 1.0F);
+            drawList.AddLine(segment.start, segment.end, ShadeAxisColor(face, 0.82F), 3.0F);
+            drawList.AddLine(segment.start, segment.end, face, 1.5F);
+        }
+
+        /** @brief Stores a real end-on axis with an explicit usable depth gesture at its actual projected anchor. */
+        void PrepareMoveDepthAxis(TransformGizmoFrameGeometry &geometry, const int axis, const ImVec2 anchor,
+                                  const float centerPixelsPerWorldUnit) noexcept {
+            geometry.moveEndOnAnchors[axis] = anchor;
+            geometry.moveAxisGestures[axis] = TransformGizmoAxisGesture::ViewDepth;
+            // Vertical pointer travel is the authored depth gesture; worldAxes[axis] remains the real normalized selected axis.
+            geometry.screenDirections[axis] = {0.0F, -1.0F};
+            geometry.pixelsPerWorldUnit[axis] = centerPixelsPerWorldUnit;
+        }
+
+        /** @brief Publishes and draws one admitted clipped segment using that identical segment for pointer selection. */
+        Result<void> DrawVisibleMoveAxis(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                         TransformGizmoFrameGeometry &geometry, const LinearAxisHandleContext &context,
+                                         const TransformGizmoAxisSegment &segment, const float worldExtent, const float length) {
+            const int axis = context.axis;
+            const ImVec2 direction{(segment.end.x - segment.start.x) / length, (segment.end.y - segment.start.y) / length};
+            geometry.screenDirections[axis] = direction;
+            const double sensitivity = length / (worldExtent * (segment.lastParameter - segment.firstParameter));
+            if (!std::isfinite(sensitivity) || sensitivity <= 0.0 || sensitivity > std::numeric_limits<float>::max())
+                return Result<void>::Failure(
+                    MakeError(TransformGizmoErrors::InvalidRequest, "Move axis sensitivity is not representable."));
+            geometry.pixelsPerWorldUnit[axis] = static_cast<float>(sensitivity);
+            geometry.projectedAxisVisible[axis] = true;
+            const auto start = AlongAxis(segment.start, direction, std::min(10.0F, length * 0.25F));
+            const float distance = DistanceToSegment(request.pointer, start, segment.end);
+            const bool hit = MovePointerAvailable(request) && distance <= 8.0F;
+            const bool highlighted = request.activeAxis == axis || hit;
+            if (segment.tipVisible)
+                DrawMoveAxisArrow(drawList, segment.start, direction, length, context.axisColor, highlighted);
+            else
+                DrawClippedMoveShaft(drawList, segment, context.axisColor, highlighted);
+            if (hit && distance < context.hitState.closestDistance) {
+                context.hitState.closestDistance = distance;
+                geometry.hoveredAxis = axis;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Retains only the real clipped shaft; sensitivity uses its actual retained world fraction. */
+        [[nodiscard]] Result<void> DrawMoveAxis(ImDrawList &drawList, const MoveProjection &projection,
+                                                TransformGizmoFrameGeometry &geometry, const LinearAxisHandleContext &context) {
+            const auto &request = projection.request;
+            const int axis = context.axis;
+            const float worldExtent = MoveExtentPixels / context.centerPixelsPerWorldUnit;
+            const auto projected = ProjectMoveAxis(projection, geometry, axis, worldExtent);
+            if (projected.HasError())
+                return Result<void>::Failure(projected.ErrorValue());
+            if (!projected.Value())
+                return Result<void>::Success();
+            const auto &segment = *projected.Value();
+            geometry.moveAxisSegments[axis] = segment;
+            const float length = Distance(segment.start, segment.end);
+            if (const double projectedExtent = length / (segment.lastParameter - segment.firstParameter); projectedExtent < 2.0) {
+                PrepareMoveDepthAxis(geometry, axis, segment.end, context.centerPixelsPerWorldUnit);
+                return Result<void>::Success();
+            }
+            if (length < 0.001F)
+                return Result<void>::Success();
+            return DrawVisibleMoveAxis(drawList, request, geometry, context, segment, worldExtent, length);
+        }
+
+        /** @brief The same anchored depth marker owns both its drawn circle and bounded pointer region. */
+        void DrawMoveEndOnHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
+                                 const int axis, const ImU32 color) {
+            const auto anchor = *geometry.moveEndOnAnchors[axis];
+            const bool hit = MovePointerAvailable(request) && Distance(request.pointer, anchor) <= MoveEndOnHalfSize + 2.0F;
+            DrawMoveEndOnAxisHandle(drawList, anchor, color, request.activeAxis == axis || hit);
+            if (hit)
+                geometry.hoveredAxis = axis;
+        }
+
+        [[nodiscard]] Result<void> DrawMoveHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                                   TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &colors) {
+            const auto scale = GizmoPixelsPerWorldUnitAtPivot(request, geometry.worldPosition);
+            if (scale.HasError())
+                return Result<void>::Failure(scale.ErrorValue());
+            const auto matrix = BuildEditorViewportViewProjection(request.camera, request.width / request.height, request.depthRange);
+            if (matrix.HasError())
+                return Result<void>::Failure(matrix.ErrorValue());
+            const auto basis = ResolveRotationScreenBasis(request.camera);
+            if (basis.HasError())
+                return Result<void>::Failure(basis.ErrorValue());
+            const MoveProjection projection{request, matrix.Value()};
+            LinearHandleHitState hitState;
+            for (int axis = 0; axis < 3; ++axis) {
+                const auto drawn =
+                    DrawMoveAxis(drawList, projection, geometry, {axis, colors[axis], basis.Value(), scale.Value(), hitState});
+                if (drawn.HasError())
+                    return drawn;
+            }
+            if (const auto planes = DrawMovePlaneHandles(drawList, projection, geometry, colors, scale.Value()); planes.HasError())
+                return planes;
+            for (int axis = 0; axis < 3; ++axis)
+                if (geometry.moveEndOnAnchors[axis])
+                    DrawMoveEndOnHandle(drawList, request, geometry, axis, colors[axis]);
+            drawList.AddCircleFilled(*geometry.center, 3.5F, Theme::U32(Theme::Bg0()), 12);
+            drawList.AddCircleFilled(*geometry.center, 2.0F, Theme::U32(Theme::Text()), 12);
+            return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> DrawLinearAxisHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
@@ -413,81 +778,78 @@ namespace Horo::Editor {
             const float axisLength = (move ? MoveExtentPixels : GizmoExtentPixels) * std::min(projectedLength, 1.0F);
             const ImVec2 end = AlongAxis(*geometry.center, geometry.screenDirections[axis], axisLength);
             const ImVec2 hitStart = AlongAxis(*geometry.center, geometry.screenDirections[axis], move ? 10.0F : 12.0F);
-            const ImVec2 scaleHandle = AlongAxis(*geometry.center, geometry.screenDirections[axis], axisLength - ScaleHandleHalfSize);
-            const ImVec2 hitEnd =
-                move ? end : AlongAxis(*geometry.center, geometry.screenDirections[axis], axisLength - ScaleHandleHalfSize * 2.0F);
+            const float scaleShaftLength = (GizmoExtentPixels - ScaleHandleHalfSize * 2.0F) * projectedLength;
+            const ImVec2 hitEnd = move ? end : AlongAxis(*geometry.center, geometry.screenDirections[axis], scaleShaftLength);
             const float distance = DistanceToSegment(request.pointer, hitStart, hitEnd);
-            const ImVec2 handleOffset{request.pointer.x - scaleHandle.x, request.pointer.y - scaleHandle.y};
-            const float alongHandle =
-                handleOffset.x * geometry.screenDirections[axis].x + handleOffset.y * geometry.screenDirections[axis].y;
-            const float acrossHandle =
-                handleOffset.y * geometry.screenDirections[axis].x - handleOffset.x * geometry.screenDirections[axis].y;
-            const bool overScaleHandle =
-                !move && std::fabs(alongHandle) <= ScaleHandleHalfSize + 3.0F && std::fabs(acrossHandle) <= ScaleHandleHalfSize + 3.0F;
+            const ScaleHandleCube cube = move ? ScaleHandleCube{} : ProjectScaleHandle(geometry, axis, screenBasis);
+            const bool overScaleHandle = !move && OverScaleHandle(request.pointer, cube);
             const bool active = request.activeAxis == axis;
             const bool hit = request.hovered && (distance <= (move ? 8.0F : 10.0F) || overScaleHandle);
             if (move)
                 DrawMoveAxisArrow(drawList, *geometry.center, geometry.screenDirections[axis], axisLength, axisColor, active || hit);
             else
-                DrawScaleAxisHandle(drawList, *geometry.center, geometry.screenDirections[axis], axisLength, axisColor, active || hit);
+                DrawScaleAxisHandle(drawList, *geometry.center, geometry.screenDirections[axis], scaleShaftLength, cube, axisColor,
+                                    active || hit);
             // A visible cube handle wins over another axis shaft crossing beneath it.
-            if (const float hitDistance = overScaleHandle ? -1.0F : distance; hit && hitDistance < hitState.closestDistance) {
+            if (const float hitDistance = overScaleHandle ? -1.0F : distance;
+                hit && (hitDistance < hitState.closestDistance || (overScaleHandle && hitDistance == hitState.closestDistance))) {
                 hitState.closestDistance = hitDistance;
                 geometry.hoveredAxis = axis;
             }
             return Result<void>::Success();
         }
 
+        void DrawScaleEndOnHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
+                                  const int axis, const ImU32 color) {
+            const bool hit = request.hovered && std::fabs(Distance(request.pointer, *geometry.center) - EndOnAxisRadius) <= 4.0F;
+            DrawEndOnAxisHandle(drawList, *geometry.center, color, request.activeAxis == axis || hit);
+            if (hit)
+                geometry.hoveredAxis = axis;
+        }
+
+        void DrawScaleCenterHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                   TransformGizmoFrameGeometry &geometry) {
+            const bool hit = request.hovered && std::fabs(request.pointer.x - geometry.center->x) <= ScaleHubHalfSize &&
+                             std::fabs(request.pointer.y - geometry.center->y) <= ScaleHubHalfSize;
+            DrawScaleHub(drawList, *geometry.center, hit || request.activeAxis == 3);
+            if (hit)
+                geometry.hoveredAxis = 3;
+        }
+
         [[nodiscard]] Result<void> DrawLinearHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
                                                      TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &axisColors) {
-            const Result<RotationScreenBasis> screenBasis = ResolveRotationScreenBasis(request.camera);
+            const auto screenBasis = ResolveRotationScreenBasis(request.camera);
             if (screenBasis.HasError())
                 return Result<void>::Failure(screenBasis.ErrorValue());
-            const Result<float> centerPixelsPerWorldUnit = GizmoPixelsPerWorldUnitAtPivot(request, geometry.worldPosition);
-            if (centerPixelsPerWorldUnit.HasError())
-                return Result<void>::Failure(centerPixelsPerWorldUnit.ErrorValue());
+            const auto scale = GizmoPixelsPerWorldUnitAtPivot(request, geometry.worldPosition);
+            if (scale.HasError())
+                return Result<void>::Failure(scale.ErrorValue());
             LinearHandleHitState hitState;
-            for (int axis = 0; axis < 3; ++axis) {
-                const Result<void> drawn = DrawLinearAxisHandle(drawList, request, geometry,
-                                                                LinearAxisHandleContext{
-                                                                    .axis = axis,
-                                                                    .axisColor = axisColors[axis],
-                                                                    .screenBasis = screenBasis.Value(),
-                                                                    .centerPixelsPerWorldUnit = centerPixelsPerWorldUnit.Value(),
-                                                                    .hitState = hitState,
-                                                                });
+            std::array axisOrder{0, 1, 2};
+            std::sort(axisOrder.begin(), axisOrder.end(), [&](const int left, const int right) {
+                const float leftDepth = Math::Dot(geometry.worldAxes[left], screenBasis.Value().towardCamera);
+                const float rightDepth = Math::Dot(geometry.worldAxes[right], screenBasis.Value().towardCamera);
+                return leftDepth < rightDepth || (leftDepth == rightDepth && left < right);
+            });
+            for (const int axis : axisOrder) {
+                const auto drawn = DrawLinearAxisHandle(drawList, request, geometry,
+                                                        {axis, axisColors[axis], screenBasis.Value(), scale.Value(), hitState});
                 if (drawn.HasError())
                     return drawn;
             }
-            if (request.tool == EditorTransformTool::Move)
-                DrawMovePlaneHandles(drawList, request, geometry, axisColors, centerPixelsPerWorldUnit.Value());
-            if (hitState.endOnAxis.has_value()) {
-                const bool move = request.tool == EditorTransformTool::Move;
-                const float ringDistance = Distance(request.pointer, *geometry.center);
-                const bool hit = request.hovered &&
-                                 (move ? std::fabs(request.pointer.x - geometry.center->x - MoveEndOnOffset) <= MoveEndOnHalfSize + 2.0F &&
-                                             std::fabs(request.pointer.y - geometry.center->y + MoveEndOnOffset) <= MoveEndOnHalfSize + 2.0F
-                                       : std::fabs(ringDistance - EndOnAxisRadius) <= 4.0F);
-                if (move)
-                    DrawMoveEndOnAxisHandle(drawList, *geometry.center, axisColors[*hitState.endOnAxis],
-                                            request.activeAxis == hitState.endOnAxis || hit);
-                else
-                    DrawEndOnAxisHandle(drawList, *geometry.center, axisColors[*hitState.endOnAxis],
-                                        request.activeAxis == hitState.endOnAxis || hit);
-                if (hit)
-                    geometry.hoveredAxis = hitState.endOnAxis;
-            }
-            if (request.tool == EditorTransformTool::Scale) {
-                const bool uniformHit = request.hovered && std::fabs(request.pointer.x - geometry.center->x) <= ScaleHubHalfSize &&
-                                        std::fabs(request.pointer.y - geometry.center->y) <= ScaleHubHalfSize;
-                DrawScaleHub(drawList, *geometry.center, uniformHit || request.activeAxis == 3);
-                if (uniformHit)
-                    geometry.hoveredAxis = 3;
-            } else {
-                drawList.AddCircleFilled(*geometry.center, 3.5F, Theme::U32(Theme::Bg0()), 12);
-                drawList.AddCircleFilled(*geometry.center, 2.0F, Theme::U32(Theme::Text()), 12);
-            }
+            if (hitState.endOnAxis.has_value())
+                DrawScaleEndOnHandle(drawList, request, geometry, *hitState.endOnAxis, axisColors[*hitState.endOnAxis]);
+            DrawScaleCenterHandle(drawList, request, geometry);
             return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> DrawHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                               TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &colors) {
+            if (request.tool == EditorTransformTool::Move)
+                return DrawMoveHandles(drawList, request, geometry, colors);
+            if (request.tool == EditorTransformTool::Rotate)
+                return DrawRotationHandles(drawList, request, geometry, RotationAxisColors());
+            return DrawLinearHandles(drawList, request, geometry, colors);
         }
     }  // namespace
 
@@ -519,10 +881,7 @@ namespace Horo::Editor {
             ImGui::GetColorU32(ImVec4{0.42F, 0.83F, 0.29F, 1.0F}),
             ImGui::GetColorU32(ImVec4{0.25F, 0.51F, 0.96F, 1.0F}),
         };
-        if (const Result<void> handles = request.tool == EditorTransformTool::Rotate
-                                             ? DrawRotationHandles(drawList, request, geometry, RotationAxisColors())
-                                             : DrawLinearHandles(drawList, request, geometry, linearAxisColors);
-            handles.HasError()) {
+        if (const Result<void> handles = DrawHandles(drawList, request, geometry, linearAxisColors); handles.HasError()) {
             return Result<TransformGizmoFrameGeometry>::Failure(handles.ErrorValue());
         }
         return Result<TransformGizmoFrameGeometry>::Success(std::move(geometry));

@@ -5,8 +5,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <compare>
 #include <functional>
 #include <limits>
+#include <map>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -16,10 +19,26 @@ namespace Horo::Runtime {
     using PhysicsValidationDetail::BodyReferenceDomain;
 
     namespace {
+        // Checked hash storage allocates iterator bookkeeping inside noexcept.
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+        template <class Key, class Value, class Hash = std::hash<Key>> using ValidationMap = std::map<Key, Value>;
+        template <class Key, class Hash = std::hash<Key>> using ValidationSet = std::set<Key>;
+#else
+        template <class Key, class Value, class Hash = std::hash<Key>> using ValidationMap = std::unordered_map<Key, Value, Hash>;
+        template <class Key, class Hash = std::hash<Key>> using ValidationSet = std::unordered_set<Key, Hash>;
+#endif
+
+        /** @brief Reserves bucket capacity only for the compiled index representation. */
+        template <class Index> void ReserveValidationIndex(Index &index, const std::size_t count) {
+            if constexpr (requires { index.reserve(count); })
+                index.reserve(count);
+        }
+
         struct ObjectLocalKey final {
             std::uint64_t object{};
             std::uint64_t local{};
             [[nodiscard]] constexpr bool operator==(const ObjectLocalKey &) const noexcept = default;
+            [[nodiscard]] constexpr auto operator<=>(const ObjectLocalKey &) const noexcept = default;
         };
 
         struct ObjectLocalKeyHash final {
@@ -122,8 +141,9 @@ namespace Horo::Runtime {
 
         [[nodiscard]] bool HasValidColliderIdentity(const ColliderComponent &component, const BodyReferenceDomain domain) noexcept {
             return component.id.IsValid() && component.collider.IsValid() &&
-                   component.schemaVersion == PhysicsSceneComponentSchemaVersion && component.generation != 0 &&
-                   IsValid(component.body, domain) && component.collisionProfile.IsValid();
+                   (component.schemaVersion == PhysicsColliderComponentSchemaVersion ||
+                    (component.schemaVersion == 1 && component.surfaceBindings.empty())) &&
+                   component.generation != 0 && IsValid(component.body, domain) && component.collisionProfile.IsValid();
         }
 
         [[nodiscard]] bool HasValidColliderTransform(const ColliderComponent &component) noexcept {
@@ -177,8 +197,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> ValidateMaterialBindings(const std::span<const PhysicsColliderMaterialBinding> materials) {
             if (materials.empty() || materials.size() > MaximumPhysicsColliderMaterialBindings)
                 return Failure("Physics colliders require a bounded, non-empty material-slot mapping.");
-            std::unordered_set<std::uint64_t> slots;
-            slots.reserve(materials.size());
+            ValidationSet<std::uint64_t> slots;
+            ReserveValidationIndex(slots, materials.size());
             for (const PhysicsColliderMaterialBinding &binding : materials) {
                 if (!binding.slot.IsValid() || !binding.material.IsValid() || !slots.insert(binding.slot.Value()).second)
                     return Failure("Physics collider material slots must have unique stable identities and valid material assets.");
@@ -186,17 +206,17 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        using BodyMap = std::unordered_map<ObjectLocalKey, const RigidBodyComponent *, ObjectLocalKeyHash>;
+        using BodyMap = ValidationMap<ObjectLocalKey, const RigidBodyComponent *, ObjectLocalKeyHash>;
 
         [[nodiscard]] Result<void> AddComponentIdentity(const SceneObjectId owner, const PhysicsComponentId component,
-                                                        std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> &identities) {
+                                                        ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> &identities) {
             if (!component.IsValid() || !identities.insert(Key(owner, component.value)).second)
                 return Failure("Physics component identities must be non-zero and unique on their owning Scene object.");
             return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> CollectBodies(const std::span<const PhysicsSceneComponentView> components, BodyMap &bodies,
-                                                 std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> &componentIds) {
+                                                 ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> &componentIds) {
             for (const PhysicsSceneComponentView &view : components) {
                 if (!view.owner.IsValid())
                     return Failure("Physics component projections require a valid owning Scene object identity.");
@@ -213,7 +233,7 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateColliderReference(const ColliderComponent &collider, const BodyMap &bodies,
-                                                             std::unordered_map<ObjectLocalKey, std::size_t, ObjectLocalKeyHash> &counts) {
+                                                             ValidationMap<ObjectLocalKey, std::size_t, ObjectLocalKeyHash> &counts) {
             const auto body = bodies.find(Key(collider.body));
             if (body == bodies.end())
                 return Failure("Physics colliders must reference an exact authored body in the same Scene definition.");
@@ -231,9 +251,9 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateColliders(const PhysicsSceneComponentView &view, const BodyMap &bodies,
-                                                     std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> &componentIds,
-                                                     std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> &colliderIds,
-                                                     std::unordered_map<ObjectLocalKey, std::size_t, ObjectLocalKeyHash> &counts) {
+                                                     ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> &componentIds,
+                                                     ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> &colliderIds,
+                                                     ValidationMap<ObjectLocalKey, std::size_t, ObjectLocalKeyHash> &counts) {
             for (const ColliderComponent &collider : view.colliders) {
                 if (Result<void> valid = ValidateColliderComponent(collider); valid.HasError())
                     return valid;
@@ -248,8 +268,8 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateConstraints(const PhysicsSceneComponentView &view, const BodyMap &bodies,
-                                                       std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> &componentIds,
-                                                       std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> &constraintIds) {
+                                                       ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> &componentIds,
+                                                       ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> &constraintIds) {
             for (const PhysicsConstraintComponent &constraint : view.constraints) {
                 if (Result<void> valid = ValidatePhysicsConstraintComponent(constraint); valid.HasError())
                     return valid;
@@ -268,10 +288,10 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateReferences(const std::span<const PhysicsSceneComponentView> components, const BodyMap &bodies,
-                                                      std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> &componentIds) {
-            std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> colliderIds;
-            std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> constraintIds;
-            std::unordered_map<ObjectLocalKey, std::size_t, ObjectLocalKeyHash> colliderCounts;
+                                                      ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> &componentIds) {
+            ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> colliderIds;
+            ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> constraintIds;
+            ValidationMap<ObjectLocalKey, std::size_t, ObjectLocalKeyHash> colliderCounts;
             for (const PhysicsSceneComponentView &view : components) {
                 if (Result<void> colliders = ValidateColliders(view, bodies, componentIds, colliderIds, colliderCounts);
                     colliders.HasError())
@@ -295,6 +315,26 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    namespace {
+        /** @brief Surface slots must be unique physical slots; project membership is checked against the captured world later. */
+        Result<void> ValidateSurfaceBindings(const ColliderComponent &component) {
+            if (component.surfaceBindings.size() > MaximumPhysicsColliderSurfaceBindings)
+                return Failure("Too many collider surface bindings.");
+            std::vector<Physics::PhysicsMaterialSlotId> slots(std::size_t{0});
+            for (const auto &binding : component.surfaceBindings) {
+                if (!binding.slot.IsValid() || !binding.surface.IsValid())
+                    return Failure("Invalid collider surface binding.");
+                const auto physical = std::ranges::find(component.materials, binding.slot, &PhysicsColliderMaterialBinding::slot);
+                if (physical == component.materials.end())
+                    return Failure("Surface binding has no physical material slot.");
+                if (std::ranges::find(slots, binding.slot) != slots.end())
+                    return Failure("Duplicate collider surface slot.");
+                slots.push_back(binding.slot);
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc PhysicsValidationDetail::ValidateCollider */
     Result<void> PhysicsValidationDetail::ValidateCollider(const ColliderComponent &component, const BodyReferenceDomain domain) {
         if (!HasValidColliderIdentity(component, domain) || !HasValidColliderTransform(component))
@@ -302,7 +342,9 @@ namespace Horo::Runtime {
                 "Physics colliders require stable identities, schema, body/profile references, pose, and positive finite scale.");
         if (Result<void> source = ValidateColliderSource(component); source.HasError())
             return source;
-        return ValidateMaterialBindings(component.materials);
+        if (auto physical = ValidateMaterialBindings(component.materials); physical.HasError())
+            return physical;
+        return ValidateSurfaceBindings(component);
     }
 
     /** @copydoc PhysicsValidationDetail::ValidateConstraint */
@@ -328,9 +370,9 @@ namespace Horo::Runtime {
     /** @copydoc ValidatePhysicsSceneComponentViews */
     Result<void> ValidatePhysicsSceneComponentViews(const std::span<const PhysicsSceneComponentView> components) {
         BodyMap bodies;
-        std::unordered_set<ObjectLocalKey, ObjectLocalKeyHash> componentIds;
-        bodies.reserve(components.size());
-        componentIds.reserve(components.size() * 3);
+        ValidationSet<ObjectLocalKey, ObjectLocalKeyHash> componentIds;
+        ReserveValidationIndex(bodies, components.size());
+        ReserveValidationIndex(componentIds, components.size() * 3);
         if (Result<void> valid = CollectBodies(components, bodies, componentIds); valid.HasError())
             return valid;
         return ValidateReferences(components, bodies, componentIds);

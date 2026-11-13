@@ -12,6 +12,12 @@ namespace Horo::Editor {
      */
     class WorldCompositionTab final : public IWorkspacePanel {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace"};
+
+        /** @brief Creates a surface with its required localization scope. */
+        WorldCompositionTab() : IWorkspacePanel(kTextScope) {}
+
         [[nodiscard]] std::string GetId() const override {
             return "horo.world_composition";
         }

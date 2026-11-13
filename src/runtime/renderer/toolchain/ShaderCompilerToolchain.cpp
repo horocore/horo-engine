@@ -5,6 +5,7 @@
 #include "ShaderCompilerRoute.h"
 #include "ShaderCompilerToolchainCatalog.h"
 #include "ShaderCompilerToolchainSupport.h"
+#include "VfxGpuVulkanReflection.h"
 
 #include <algorithm>
 #include <array>
@@ -34,6 +35,11 @@ namespace Horo::Render {
                 return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || (byte >= '0' && byte <= '9') || byte == '.' ||
                        byte == '_' || byte == '-' || byte == '+';
             });
+        }
+
+        bool MatchesVulkanReflectionTarget(const CompiledShaderArtifact &compiled, const ShaderTargetRequirement &target) {
+            return compiled.backend == ShaderTargetBackend::Vulkan && compiled.payloadFormat == ShaderPayloadFormat::SpirV16 &&
+                   target.backend == compiled.backend && target.payloadFormat == compiled.payloadFormat;
         }
 
         class ScratchDirectory final {
@@ -175,8 +181,7 @@ namespace Horo::Render {
                                                                                  const ShaderCompilerToolIdentity &reflectionTool,
                                                                                  const CancellationToken &cancellation) const {
         using Outcome = Result<ReflectedShaderArtifact>;
-        if (!state_ || compiled.backend != ShaderTargetBackend::Vulkan || compiled.payloadFormat != ShaderPayloadFormat::SpirV16 ||
-            target.backend != compiled.backend || target.payloadFormat != compiled.payloadFormat)
+        if (!state_ || !MatchesVulkanReflectionTarget(compiled, target))
             return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid));
         if (cancellation.IsCancellationRequested())
             return Outcome::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
@@ -192,7 +197,9 @@ namespace Horo::Render {
                                                                               reflectionTool, cancellation, scratch.Path());
         if (stages.HasError())
             return Outcome::Failure(stages.ErrorValue());
-        const auto reflection = NormalizeVulkanReflection(manifest, target, stages.Value(), names);
+        const auto reflection = ValidateVfxGpuVulkanReflection(manifest, target, names).HasValue()
+                                    ? NormalizeVfxGpuVulkanReflection(manifest, target, stages.Value(), names, compiled)
+                                    : NormalizeVulkanReflection(manifest, target, stages.Value(), names);
         if (reflection.HasError())
             return Outcome::Failure(reflection.ErrorValue());
         return CookReflectedShaderArtifact(compiled, reflectionTool, reflection.Value());

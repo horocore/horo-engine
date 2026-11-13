@@ -11,6 +11,12 @@
 namespace Horo::Editor {
 
     namespace {
+        /** @brief Keeps native project names and diagnostics in UTF-8 on every host. */
+        [[nodiscard]] std::string IntegrityPathText(const std::filesystem::path &path) {
+            const auto encoded = path.u8string();
+            return {encoded.begin(), encoded.end()};
+        }
+
         [[nodiscard]] bool HasNativeGameplaySources(const std::filesystem::path &projectRoot) {
             for (const std::filesystem::path root : {projectRoot / "source" / "gameplay", projectRoot / "src" / "gameplay"}) {
                 std::error_code error;
@@ -32,7 +38,7 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::string ModuleIdFromProjectName(const std::filesystem::path &projectRoot) {
-            std::string slug = projectRoot.filename().string();
+            std::string slug = IntegrityPathText(projectRoot.filename());
             std::ranges::transform(slug, slug.begin(), [](const unsigned char value) {
                 return std::isalnum(value) ? static_cast<char>(std::tolower(value)) : '_';
             });
@@ -109,7 +115,7 @@ namespace Horo::Editor {
             return Result<void>::Success();
 
         LOG_INFO("editor.project_validator", "Repairing %zu integrity issues for project '%s'...", report.issues.size(),
-                 projectRoot.string().c_str());
+                 IntegrityPathText(projectRoot).c_str());
 
         for (const ProjectIntegrityIssue &issue : report.issues) {
             if (!issue.isAutoFixable)
@@ -133,11 +139,12 @@ namespace Horo::Editor {
                         "endif()\n";
                     if (const Result<void> written = durableFiles_.WriteDurable(issue.targetPath, std::as_bytes(std::span{cmakeContent}));
                         written.HasError()) {
-                        LOG_ERROR("editor.project_validator", "Failed to repair CMakeLists.txt for '%s': %s", projectRoot.string().c_str(),
-                                  written.ErrorValue().message.c_str());
+                        LOG_ERROR("editor.project_validator", "Failed to repair CMakeLists.txt for '%s': %s",
+                                  IntegrityPathText(projectRoot).c_str(), written.ErrorValue().message.c_str());
                         return written;
                     }
-                    LOG_INFO("editor.project_validator", "Repaired missing CMakeLists.txt at '%s'", issue.targetPath.string().c_str());
+                    LOG_INFO("editor.project_validator", "Repaired missing CMakeLists.txt at '%s'",
+                             IntegrityPathText(issue.targetPath).c_str());
                     break;
                 }
                 case ProjectIntegrityIssueKind::MissingGameModuleBootstrap: {
@@ -163,11 +170,12 @@ namespace Horo::Editor {
                         "}\n";
                     if (const Result<void> written = durableFiles_.WriteDurable(issue.targetPath, std::as_bytes(std::span{moduleContent}));
                         written.HasError()) {
-                        LOG_ERROR("editor.project_validator", "Failed to repair GameModule.cpp for '%s': %s", projectRoot.string().c_str(),
-                                  written.ErrorValue().message.c_str());
+                        LOG_ERROR("editor.project_validator", "Failed to repair GameModule.cpp for '%s': %s",
+                                  IntegrityPathText(projectRoot).c_str(), written.ErrorValue().message.c_str());
                         return written;
                     }
-                    LOG_INFO("editor.project_validator", "Repaired missing GameModule.cpp at '%s'", issue.targetPath.string().c_str());
+                    LOG_INFO("editor.project_validator", "Repaired missing GameModule.cpp at '%s'",
+                             IntegrityPathText(issue.targetPath).c_str());
                     break;
                 }
                 case ProjectIntegrityIssueKind::MissingScriptsDirectory:
@@ -175,11 +183,11 @@ namespace Horo::Editor {
                     std::error_code error;
                     std::filesystem::create_directories(issue.targetPath, error);
                     if (error) {
-                        LOG_ERROR("editor.project_validator", "Failed to repair directory '%s': %s", issue.targetPath.string().c_str(),
-                                  error.message().c_str());
+                        LOG_ERROR("editor.project_validator", "Failed to repair directory '%s': %s",
+                                  IntegrityPathText(issue.targetPath).c_str(), error.message().c_str());
                         return Result<void>::Failure(MakeError(ProjectCreationErrors::InvalidRequest, error.message()));
                     }
-                    LOG_INFO("editor.project_validator", "Created missing directory '%s'", issue.targetPath.string().c_str());
+                    LOG_INFO("editor.project_validator", "Created missing directory '%s'", IntegrityPathText(issue.targetPath).c_str());
                     break;
                 }
             }

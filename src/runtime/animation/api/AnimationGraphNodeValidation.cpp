@@ -1,28 +1,38 @@
 #include "AnimationGraphCompilerInternal.h"
 
 #include <cmath>
+#include <initializer_list>
 #include <set>
 
 namespace Horo::Animation::GraphCompileDetail {
     namespace {
         using namespace AnimationErrors;
-        using Shape = Result<std::vector<GraphPin>>;
+        using Shape = Horo::Result<void>;
         using Validation = Horo::Result<void>;
         using enum GraphPinRole;
 
-        /** @brief Captures only the authoring references needed to prove node shape. */
+        /** @brief Borrows authoring inputs and caller-owned storage for the expected pin shape. */
         struct ShapeContext final {
             const GraphDefinition &definition;
             const AnimationGraphData &data;
             GraphSourceLocation location;
+            std::vector<GraphPin> &expected;
         };
 
-        /** @brief Constructs one semantic pin shape without assigning authored identity. */
+        /** @brief Builds fixed pin shapes without transporting an owning vector through Result. */
+        Shape SetPins(const ShapeContext &context, const std::initializer_list<GraphPin> pins) {
+            context.expected.assign(pins);
+            return Shape::Success();
+        }
+
+        /** @brief Constructs one semantic pin shape without assigning authored
+         * identity. */
         GraphPin Pin(const GraphPinRole role, const GraphValueType type, const bool output, const GraphInterfaceId input = {}) {
             return {{}, role, type, output, input};
         }
 
-        /** @brief Validates an absolute or explicitly reference-bound additive clip's exact shape. */
+        /** @brief Validates an absolute or explicitly reference-bound additive clip's
+         * exact shape. */
         Shape NodePins(const GraphClipNode &clip, const ShapeContext &context) {
             using enum GraphValueType;
             if (!clip.clip.IsValid() || clip.clip.Asset() == context.data.id.Asset() || clip.clip.Asset() == context.data.skeleton.Asset())
@@ -34,10 +44,12 @@ namespace Horo::Animation::GraphCompileDetail {
                 pins.push_back(Pin(FirstPose, Pose, false));
                 pins.push_back(Pin(ReferencePose, Pose, false));
             }
-            return Shape::Success(std::move(pins));
+            context.expected.swap(pins);
+            return Shape::Success();
         }
 
-        /** @brief Checks finite sparse mask values and unique canonical stable joint identities. */
+        /** @brief Checks finite sparse mask values and unique canonical stable joint
+         * identities. */
         bool ValidMask(const GraphBoneMask &mask) {
             const auto validWeight = [](const float weight) {
                 return std::isfinite(weight) && weight >= 0.0F && weight <= 1.0F;
@@ -63,7 +75,23 @@ namespace Horo::Animation::GraphCompileDetail {
             std::vector pins{Pin(FirstPose, Pose, false), Pin(SecondPose, Pose, false), Pin(Weight, Float, false), Pin(Result, Pose, true)};
             if (blend.mode != GraphBlendMode::Normalized)
                 pins.push_back(Pin(ReferencePose, Pose, false));
-            return Shape::Success(std::move(pins));
+            context.expected.swap(pins);
+            return Shape::Success();
+        }
+
+        /** @brief Admits a multi-clip tree through the same authoritative node shape
+         * and parameter namespace. */
+        Shape NodePins(const GraphBlendTreeNode &tree, const ShapeContext &context) {
+            if (auto validated = ValidateBlendTree(tree, context.data, context.location); validated.HasError())
+                return Shape::Failure(validated.ErrorValue());
+            return SetPins(context, {Pin(Result, GraphValueType::Pose, true)});
+        }
+
+        /** @brief A named action channel composes the actual connected base pose. */
+        Shape NodePins(const GraphActionSlotNode &slot, const ShapeContext &context) {
+            if (!Find(context.data.actionSlots, slot.slot))
+                return Shape::Failure(Failure(GraphBindingMismatch, context.location));
+            return SetPins(context, {Pin(FirstPose, GraphValueType::Pose, false), Pin(Result, GraphValueType::Pose, true)});
         }
 
         /** @brief Requires an exact declared parameter and its transport type. */
@@ -71,20 +99,21 @@ namespace Horo::Animation::GraphCompileDetail {
             const auto *value = Find(context.data.parameters, parameter.parameter);
             if (!value)
                 return Shape::Failure(Failure(GraphMalformed, context.location));
-            return Shape::Success({Pin(Result, value->type, true)});
+            return SetPins(context, {Pin(Result, value->type, true)});
         }
 
         /** @brief Defines the sole pose input of a final output sink. */
-        Shape NodePins(const GraphOutputNode &, const ShapeContext &) {
-            return Shape::Success({Pin(Value, GraphValueType::Pose, false)});
+        Shape NodePins(const GraphOutputNode &, const ShapeContext &context) {
+            return SetPins(context, {Pin(Value, GraphValueType::Pose, false)});
         }
 
-        /** @brief Requires an exact definition interface and exposes its transport type. */
+        /** @brief Requires an exact definition interface and exposes its transport
+         * type. */
         Shape NodePins(const GraphInputNode &input, const ShapeContext &context) {
             const auto *value = Find(context.definition.inputs, input.input);
             if (!value)
                 return Shape::Failure(Failure(GraphMalformed, context.location));
-            return Shape::Success({Pin(Result, value->type, true)});
+            return SetPins(context, {Pin(Result, value->type, true)});
         }
 
         /** @brief Requires the exact asset-local callee interface shape. */
@@ -92,37 +121,46 @@ namespace Horo::Animation::GraphCompileDetail {
             const auto *target = Find(context.data.definitions, call.definition);
             if (!target)
                 return Shape::Failure(Failure(GraphMalformed, context.location));
-            std::vector<GraphPin> pins;
+            std::vector<GraphPin> pins(std::size_t{0});
             for (const auto &input : target->inputs)
                 pins.push_back(Pin(Interface, input.type, false, input.id));
             pins.push_back(Pin(Result, GraphValueType::Pose, true));
-            return Shape::Success(std::move(pins));
+            context.expected.swap(pins);
+            return Shape::Success();
         }
 
-        /** @brief Admits state control through the same authoritative typed node-shape validation. */
+        /** @brief Admits state control through the same authoritative typed node-shape
+         * validation. */
         Shape NodePins(const GraphStateMachineNode &machine, const ShapeContext &context) {
             if (auto validated = ValidateStateNode(machine, context.data, context.location); validated.HasError())
                 return Shape::Failure(validated.ErrorValue());
-            return Shape::Success({Pin(Result, GraphValueType::Pose, true)});
+            return SetPins(context, {Pin(Result, GraphValueType::Pose, true)});
         }
     }  // namespace
 
+    /** @copydoc ValidGraphBoneMask */
+    bool ValidGraphBoneMask(const GraphBoneMask &mask) {
+        return ValidMask(mask);
+    }
+
     /** @copydoc ValidatePins */
     Validation ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data) {
-        const ShapeContext context{definition, data, {definition.id, node.id, {}}};
-        auto expected = std::visit([&context](const auto &payload) {
+        std::vector<GraphPin> expected(std::size_t{0});
+        const ShapeContext context{definition, data, {definition.id, node.id, {}}, expected};
+        if (auto shape = std::visit(
+                [&context](const auto &payload) {
             return NodePins(payload, context);
         }, node.payload);
-        if (expected.HasError())
-            return Validation::Failure(expected.ErrorValue());
-        if (!UniqueIds(node.pins) || node.pins.size() != expected.Value().size())
+            shape.HasError())
+            return Validation::Failure(shape.ErrorValue());
+        if (!UniqueIds(node.pins) || node.pins.size() != expected.size())
             return Validation::Failure(Failure(GraphMalformed, context.location));
         std::set<std::pair<GraphPinRole, GraphInterfaceId>> seen;
         for (const auto &pin : node.pins) {
-            const auto found = std::ranges::find_if(expected.Value(), [&pin](const auto &value) {
+            const auto found = std::ranges::find_if(expected, [&pin](const auto &value) {
                 return value.role == pin.role && value.interfaceId == pin.interfaceId;
             });
-            if (found == expected.Value().end() || !seen.emplace(pin.role, pin.interfaceId).second || found->output != pin.output)
+            if (found == expected.end() || !seen.emplace(pin.role, pin.interfaceId).second || found->output != pin.output)
                 return Validation::Failure(Failure(GraphMalformed, {definition.id, node.id, pin.id}));
             if (found->type != pin.type)
                 return Validation::Failure(Failure(GraphTypeMismatch, {definition.id, node.id, pin.id}));

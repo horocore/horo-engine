@@ -1,4 +1,7 @@
-#include "BehaviorRuntimeState.h"
+#include "BehaviorRuntimeRestoreInternal.h"
+
+#include <map>
+#include <tuple>
 
 namespace Horo::Gameplay {
     BehaviorRuntime::BehaviorRuntime(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -15,35 +18,13 @@ namespace Horo::Gameplay {
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                      const BehaviorRuntimeLimits limits,
                                                                      BehaviorRuntimeServiceBindings services) {
-        auto &[physics, navigation, character, runtimeUi] = services;
-        if (physics && physics->Binding().scene != scene.View().RuntimeId().value)
-            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Physics::PhysicsErrors::HandleWorldMismatch));
-        if (character && character->Binding().scene != 0 && character->Binding().scene != scene.View().RuntimeId().value)
-            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Character::CharacterErrors::HandleWorldMismatch));
         auto generationLease = registry.AcquireGenerationLease();
         if (generationLease.HasError())
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(generationLease.ErrorValue());
         auto impl = std::make_shared<Impl>(scene, registry, limits, std::move(generationLease).Value());
-        if (navigation && navigation->Binding().scene.scene.IsValid() &&
-            navigation->Binding().scene.scene.Value() != impl->sceneIdentity.value)
-            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Navigation::NavigationErrors::InvalidWorld));
-        impl->navigation = std::move(navigation);
-        if (runtimeUi) {
-            if (runtimeUi->Grant().scene != impl->sceneIdentity.value)
-                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Runtime::Ui::UiErrors::HandleOwnerMismatch));
-            auto child = runtimeUi->Derive();
-            if (child.HasError())
-                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(child.ErrorValue());
-            impl->runtimeUi = std::move(child).Value();
-        }
-        impl->physics = std::move(physics);
-        if (character) {
-            if (auto dependency = character->ValidateDependency(impl->physics.get()); dependency.HasError())
-                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(dependency.ErrorValue());
-            auto child = character->Derive();
-            if (child.HasError())
-                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(child.ErrorValue());
-            impl->character = std::move(child).Value();
+        if (auto bound = BehaviorRuntimeRestoreAccess::ConfigureState(*impl, std::move(services), {}); bound.HasError()) {
+            BehaviorRuntime cleanup{impl};
+            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(bound.ErrorValue());
         }
         return ActivateImpl(std::move(impl));
     }
@@ -53,38 +34,16 @@ namespace Horo::Gameplay {
                                                                      const BehaviorRuntimeLimits limits,
                                                                      BehaviorRuntimeServiceBindings services,
                                                                      std::shared_ptr<const GameplayPrefabContext> prefabs) {
-        auto &[physics, navigation, character, runtimeUi] = services;
-        if (const auto active = scenes.ActiveScene(); !active || (prefabs && prefabs->Binding().scene != active->RuntimeId()) ||
-                                                      (physics && physics->Binding().scene != active->RuntimeId().value))
+        if (!scenes.ActiveScene())
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
-        if (character && character->Binding().scene != 0 && character->Binding().scene != scenes.ActiveScene()->RuntimeId().value)
-            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Character::CharacterErrors::HandleWorldMismatch));
         auto generationLease = registry.AcquireGenerationLease();
         if (generationLease.HasError())
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(generationLease.ErrorValue());
         auto impl = std::make_shared<Impl>(scenes, registry, limits, std::move(generationLease).Value());
-        if (navigation && navigation->Binding().scene.scene.IsValid() &&
-            navigation->Binding().scene.scene.Value() != impl->sceneIdentity.value)
-            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Navigation::NavigationErrors::InvalidWorld));
-        impl->navigation = std::move(navigation);
-        if (runtimeUi) {
-            if (runtimeUi->Grant().scene != impl->sceneIdentity.value)
-                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Runtime::Ui::UiErrors::HandleOwnerMismatch));
-            auto child = runtimeUi->Derive();
-            if (child.HasError())
-                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(child.ErrorValue());
-            impl->runtimeUi = std::move(child).Value();
+        if (auto bound = BehaviorRuntimeRestoreAccess::ConfigureState(*impl, std::move(services), std::move(prefabs)); bound.HasError()) {
+            BehaviorRuntime cleanup{impl};
+            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(bound.ErrorValue());
         }
-        impl->physics = std::move(physics);
-        if (character) {
-            if (auto dependency = character->ValidateDependency(impl->physics.get()); dependency.HasError())
-                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(dependency.ErrorValue());
-            auto child = character->Derive();
-            if (child.HasError())
-                return Result<std::unique_ptr<BehaviorRuntime>>::Failure(child.ErrorValue());
-            impl->character = std::move(child).Value();
-        }
-        impl->prefabs = std::move(prefabs);
         return ActivateImpl(std::move(impl));
     }
 
@@ -101,6 +60,7 @@ namespace Horo::Gameplay {
                 impl->physics->Revoke();
             if (impl->prefabs)
                 impl->prefabs->Revoke();
+            Detail::GameplayVfxHostAccess::RevokeClient(impl->vfx);
             bool rollbackComplete = true;
             for (auto iterator = impl->instances.rbegin(); iterator != impl->instances.rend(); ++iterator) {
                 rollbackComplete = impl->RollbackInstance(*iterator) && rollbackComplete;
@@ -120,38 +80,51 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::FixedUpdate */
     Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta) const {
+        impl_->vfxStructuralReceipt.reset();
         if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
             impl_->ShutdownNow();
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
         }
-        if (impl_->shutdown || impl_->structuralPending)
+        if (impl_->inactive || impl_->shutdown || impl_->structuralPending)
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Behavior runtime is shut down."));
         impl_->events.BeginTick();
         Runtime::SceneCommandBuffer commands;
-        for (Impl::Instance &instance : impl_->instances) {
-            if (!instance.component.enabled)
-                continue;
-            Impl::ContextBackend backend{*impl_, instance, input, commands};
-            BehaviorContext context{backend};
-            if (!instance.started) {
-                instance.implementation->OnStart(context);
-                instance.started = true;
-            }
-            for (const GameplayEvent &event : impl_->events.current) {
-                if (!event.target || BehaviorRuntimeDetail::ToRuntime(*event.target) == instance.entity)
-                    instance.implementation->OnEvent(context, event);
-            }
-            for (const GameplayInputAction &action : input) {
-                if (action.pressed || action.released)
-                    instance.implementation->OnInputAction(context, action);
-            }
-            instance.implementation->OnFixedUpdate(context, delta);
-        }
+        for (std::size_t index = 0; index < impl_->instances.size(); ++index)
+            if (auto updated = RunFixedInstance(index, input, delta, commands); updated.HasError())
+                return updated;
         if (!commands.Empty()) {
             Result<void> committed = impl_->CommitCommands(std::move(commands));
             if (committed.HasError())
                 return Result<void>::Failure(committed.ErrorValue());
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc BehaviorRuntime::VfxStructuralReceipt */
+    std::shared_ptr<const Runtime::SceneStructuralReceipt> BehaviorRuntime::VfxStructuralReceipt() const noexcept {
+        return impl_->vfxStructuralReceipt;
+    }
+
+    Result<void> BehaviorRuntime::RunFixedInstance(std::size_t index, std::span<const GameplayInputAction> input, FixedDeltaTime delta,
+                                                   Runtime::SceneCommandBuffer &commands) const {
+        auto &instance = impl_->instances[index];
+        if (!instance.component.enabled)
+            return Result<void>::Success();
+        Impl::ContextBackend backend{*impl_, instance, input, commands};
+        BehaviorContext context{backend};
+        if (!instance.started) {
+            instance.implementation->OnStart(context);
+            instance.started = true;
+        }
+        for (const GameplayEvent &event : impl_->events.current) {
+            if (!event.target || BehaviorRuntimeDetail::ToRuntime(*event.target) == instance.entity)
+                instance.implementation->OnEvent(context, event);
+        }
+        for (const GameplayInputAction &action : input) {
+            if (action.pressed || action.released)
+                instance.implementation->OnInputAction(context, action);
+        }
+        instance.implementation->OnFixedUpdate(context, delta);
         return Result<void>::Success();
     }
 
@@ -161,7 +134,7 @@ namespace Horo::Gameplay {
             impl_->ShutdownNow();
             return;
         }
-        if (impl_->shutdown || impl_->structuralPending)
+        if (impl_->inactive || impl_->shutdown || impl_->structuralPending)
             return;
         Runtime::SceneCommandBuffer rejectedCommands;
         for (Impl::Instance &instance : impl_->instances) {
@@ -175,7 +148,7 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::SetEnabled */
     Result<void> BehaviorRuntime::SetEnabled(const BehaviorInstanceId instanceId, const bool enabled) const {
-        if (impl_->shutdown || impl_->structuralPending)
+        if (impl_->inactive || impl_->shutdown || impl_->structuralPending)
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
         const auto found = std::ranges::find(impl_->instances, instanceId, [](const Impl::Instance &instance) {
             return instance.component.instanceId;
@@ -227,38 +200,64 @@ namespace Horo::Gameplay {
             if (payload.size() > MaximumBehaviorReloadStateBytes || totalBytes > MaximumBehaviorReloadSnapshotBytes - payload.size())
                 return Result<BehaviorRuntimeReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
             totalBytes += payload.size();
-            snapshot.instances.emplace_back(instance.component.instanceId, instance.component.typeId, std::move(payload), instance.started);
+            snapshot.instances.emplace_back(instance.component.instanceId, instance.component.typeId, std::move(payload), instance.started,
+                                            instance.entity);
         }
         return Result<BehaviorRuntimeReloadSnapshot>::Success(std::move(snapshot));
+    }
+
+    namespace {
+        using ReloadKey = std::tuple<Runtime::EntityRef, std::uint64_t, BehaviorTypeId>;
+        using ReloadIndex = std::map<ReloadKey, const BehaviorInstanceReloadState *>;
+
+        Result<ReloadIndex> IndexReloadStates(const BehaviorRuntimeReloadSnapshot &snapshot) {
+            ReloadIndex states;
+            std::size_t bytes{};
+            for (const auto &state : snapshot.instances) {
+                if (!state.entity.IsValid() || !state.instanceId.IsValid() || !state.typeId.IsValid() ||
+                    state.payload.size() > MaximumBehaviorReloadStateBytes ||
+                    bytes > MaximumBehaviorReloadSnapshotBytes - state.payload.size())
+                    return Result<ReloadIndex>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
+                if (!states.emplace(ReloadKey{state.entity, state.instanceId.value, state.typeId}, &state).second)
+                    return Result<ReloadIndex>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
+                bytes += state.payload.size();
+            }
+            return Result<ReloadIndex>::Success(std::move(states));
+        }
+    }  // namespace
+
+    Result<void> BehaviorRuntime::RestoreReloadInstance(std::size_t index, const BehaviorInstanceReloadState &saved) const {
+        auto &instance = impl_->instances[index];
+        try {
+            if (auto restored = instance.implementation->RestoreReloadState(saved.payload); restored.HasError())
+                return restored;
+        } catch (...) {
+            return Result<void>::Failure(
+                MakeError(GameplayErrors::GameplayReloadRestoreFailed, "Behavior reload restore threw an exception."));
+        }
+        instance.started = saved.started;
+        return Result<void>::Success();
     }
 
     /** @copydoc BehaviorRuntime::RestoreReloadSnapshot */
     Result<void> BehaviorRuntime::RestoreReloadSnapshot(const BehaviorRuntimeReloadSnapshot &snapshot) const {
         if (!impl_ || impl_->shutdown || impl_->structuralPending || snapshot.instances.size() != impl_->instances.size())
             return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
-        std::unordered_map<std::uint64_t, const BehaviorInstanceReloadState *> states;
-        states.reserve(snapshot.instances.size());
-        std::size_t totalBytes = 0;
-        for (const BehaviorInstanceReloadState &state : snapshot.instances) {
-            if (!state.instanceId.IsValid() || !state.typeId.IsValid() || state.payload.size() > MaximumBehaviorReloadStateBytes ||
-                totalBytes > MaximumBehaviorReloadSnapshotBytes - state.payload.size() ||
-                !states.emplace(state.instanceId.value, &state).second)
+        auto indexed = IndexReloadStates(snapshot);
+        if (indexed.HasError())
+            return Result<void>::Failure(indexed.ErrorValue());
+        const auto &states = indexed.Value();
+        std::vector<const BehaviorInstanceReloadState *> matched;
+        matched.reserve(impl_->instances.size());
+        for (const auto &instance : impl_->instances) {
+            const auto found = states.find(ReloadKey{instance.entity, instance.component.instanceId.value, instance.component.typeId});
+            if (found == states.end())
                 return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
-            totalBytes += state.payload.size();
+            matched.push_back(found->second);
         }
-        for (Impl::Instance &instance : impl_->instances) {
-            const auto found = states.find(instance.component.instanceId.value);
-            if (found == states.end() || found->second->typeId != instance.component.typeId)
-                return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
-            try {
-                if (Result<void> restored = instance.implementation->RestoreReloadState(found->second->payload); restored.HasError())
-                    return restored;
-            } catch (...) {  // NOSONAR(cpp:S2738) Native project callbacks may throw arbitrary exception types.
-                return Result<void>::Failure(
-                    MakeError(GameplayErrors::GameplayReloadRestoreFailed, "Behavior reload restore threw an exception."));
-            }
-            instance.started = found->second->started;
-        }
+        for (std::size_t index = 0; index < matched.size(); ++index)
+            if (auto restored = RestoreReloadInstance(index, *matched[index]); restored.HasError())
+                return restored;
         return Result<void>::Success();
     }
 

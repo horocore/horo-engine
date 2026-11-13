@@ -71,11 +71,13 @@ namespace Horo::Audio::Detail {
         if (count * sizeof(float) > maximumBytes) {
             return Result<ResamplerKernel>::Failure(MakeError(AudioErrors::ResamplerBudgetExceeded));
         }
-        std::vector<float> coefficients(static_cast<std::size_t>(count));
+        auto coefficients = std::make_unique<float[]>(static_cast<std::size_t>(count));
         const double cutoff = 0.9 / std::fmax(1.0, plan.InputStep());
         std::ranges::for_each(std::views::iota(std::uint32_t{0}, PhaseIntervals + 1), [&](const std::uint32_t phase) {
             const double fraction = static_cast<double>(phase) / PhaseIntervals;
-            const auto row = std::span{coefficients}.subspan(static_cast<std::size_t>(phase) * plan.Taps(), plan.Taps());
+            const auto row =
+                std::span{coefficients.get(), static_cast<std::size_t>(count)}.subspan(static_cast<std::size_t>(phase) * plan.Taps(),
+                                                                                       plan.Taps());
             if (plan.Descriptor().quality == AudioResamplerQuality::Linear) {
                 row[0] = static_cast<float>(1.0 - fraction);
                 row[1] = static_cast<float>(fraction);
@@ -92,15 +94,15 @@ namespace Horo::Audio::Detail {
         const auto phase = static_cast<std::uint32_t>(position);
         const double blend = position - phase;
         const auto offset = static_cast<std::size_t>(phase) * taps_;
-        return evaluator_(history, oldest, coefficients_.data() + offset, coefficients_.data() + offset + taps_, blend);
+        return evaluator_(history, oldest, coefficients_.get() + offset, coefficients_.get() + offset + taps_, blend);
     }
 
     /** @copydoc ResamplerKernel::StorageBytes */
     std::uint64_t ResamplerKernel::StorageBytes() const noexcept {
-        return coefficients_.size() * sizeof(float);
+        return coefficients_ ? static_cast<std::uint64_t>(PhaseIntervals + 1) * taps_ * sizeof(float) : 0;
     }
 
     /** @copydoc ResamplerKernel::ResamplerKernel */
-    ResamplerKernel::ResamplerKernel(std::vector<float> coefficients, const std::uint32_t taps, ResamplerEvaluator evaluator)
+    ResamplerKernel::ResamplerKernel(std::unique_ptr<float[]> coefficients, const std::uint32_t taps, ResamplerEvaluator evaluator)
         : coefficients_(std::move(coefficients)), taps_(taps), evaluator_(std::move(evaluator)) {}
 }  // namespace Horo::Audio::Detail

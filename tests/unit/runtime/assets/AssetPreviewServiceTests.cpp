@@ -80,11 +80,13 @@ namespace {
 
     class TemporaryAsset final {
     public:
-        explicit TemporaryAsset(const std::vector<std::uint8_t> &bytes) {
+        explicit TemporaryAsset(const std::vector<std::uint8_t> &bytes, const std::filesystem::path &suffix = {}) {
             static std::atomic<std::uint64_t> nextId{};
             path_ = std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443): Unique test-only path; no untrusted input.
                     std::format("horo-preview-{}-{}.horoasset", std::chrono::steady_clock::now().time_since_epoch().count(),
                                 nextId.fetch_add(1));
+            if (!suffix.empty())
+                path_.replace_filename(path_.stem().native() + suffix.native() + path_.extension().native());
             std::ofstream output(path_, std::ios::binary);
             output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         }
@@ -157,6 +159,17 @@ TEST_CASE("Asset preview service reuses a content-addressed provider result", "[
     REQUIRE(secondResult.HasValue());
     REQUIRE(secondResult.Value().cacheHit);
     REQUIRE(provider->calls.load() == 1);
+}
+
+TEST_CASE("Asset preview generation accepts native Unicode source paths", "[unit][assets][preview]") {
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
+    AssetPreviewService service{jobs};
+    TemporaryAsset asset{{1, 2, 3, 4}, u8"\u56fe-\u011e"};
+    const auto provider = std::make_shared<CountingPreviewProvider>();
+    const auto result = RunPreview(service, MakeRequest(asset.Path(), provider));
+    REQUIRE(result.HasValue());
+    CHECK(result.Value().image.IsValid());
+    CHECK(provider->calls.load() == 1);
 }
 
 TEST_CASE("Asset preview cancellation retains the provider through terminal completion", "[unit][assets][preview]") {

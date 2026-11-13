@@ -51,6 +51,12 @@ namespace Horo::XR {
     struct XRCapabilityRevisionTag;
 
     /** @brief Process-local XR runtime incarnation; invalidated on backend replacement or shutdown. */
+    /** @brief Runtime incarnation, never a persisted artifact identity.
+     * The built-in native application host reserves [1, UINT32_MAX] for bounded selection attempts.
+     * The built-in Simulator's shared cold owner issuer reserves [2^32, UINT64_MAX-1], never wraps,
+     * and preserves its incarnation across canonical session replacement. Arbitrary external providers
+     * must coordinate their own identity domain; this contract does not assert their process uniqueness.
+     */
     using XRRuntimeGeneration = XRGeneration<XRRuntimeGenerationTag>;
     /** @brief Monotonic identity of one immutable capability publication. */
     using XRCapabilityRevision = XRGeneration<XRCapabilityRevisionTag>;

@@ -1,0 +1,84 @@
+#pragma once
+/** @file DecisionGraphInstance.h
+ * @brief Host-driven BT/HSM composition with independently allocated call occurrences and no scheduler ownership.
+ */
+#include "Horo/AI/DecisionGraphCompiler.h"
+
+namespace Horo::AI {
+    /** @brief Actual owner-issued range and operation identity; compilation never invents task/provider identities. */
+    struct DecisionGraphInstanceBinding final {
+        BlackboardInstanceBinding blackboard;
+        AiTaskOperationContext operation;
+        std::uint32_t firstTaskSlot{};
+        std::uint64_t availableTaskSlots{};
+        std::uint32_t firstTaskGeneration{1};
+    };
+
+    /** @brief One committed host observation. Every member call sees the same frozen agent blackboard and tick.
+     * Current M3 calls require the same admitted agent schema across the closure; mismatched schemas fail compilation.
+     * There is no implicit key conversion, mutable-document access or hidden blackboard owner.
+     */
+    struct DecisionGraphStepInput final {
+        std::uint64_t tick{};
+        BlackboardInstanceBinding current;
+        const BlackboardSnapshot &blackboard;
+        std::span<const StateMachineEventId> events;
+    };
+
+    /** @brief One complete executable allocation; actual BT/HSM kernels own their existing traversal/task semantics.
+     * @details Create preallocates every possible call occurrence, including mutually exclusive HSM states and
+     * parallel repeated references. Only selected occurrences enter execution. The host calls Step at its existing
+     * AI decision boundary; this object creates no jobs, frame callbacks, Scene authority or task manager.
+     */
+    class DecisionGraphInstance final {
+    public:
+        [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> Create(std::shared_ptr<const CookedDecisionPlan> plan,
+                                                                                   std::shared_ptr<const DecisionNodeGeneration> providers,
+                                                                                   DecisionGraphInstanceBinding binding);
+        /** @brief Logical composition-adapter allocation per occurrence; family kernels report their own extents. */
+        [[nodiscard]] static std::uint64_t CoreStorageBytes(const DecisionCompiledGraph &graph) noexcept;
+        [[nodiscard]] Result<AiTaskState> Step(const DecisionGraphStepInput &input);
+        [[nodiscard]] Result<void> Cancel(AiTaskCancellationReason reason);
+        ~DecisionGraphInstance();
+
+    private:
+        struct OccurrenceState;
+        struct CallAdapter;
+        struct ActionAdapter;
+        [[nodiscard]] static Result<void> Admit(const std::shared_ptr<const CookedDecisionPlan> &plan,
+                                                const std::shared_ptr<const DecisionNodeGeneration> &providers,
+                                                const DecisionGraphInstanceBinding &binding);
+        [[nodiscard]] Result<void> ValidateStep(const DecisionGraphStepInput &input) const;
+        [[nodiscard]] Result<void> BuildOccurrence(std::size_t index);
+        [[nodiscard]] Result<void> ResetOccurrence(std::size_t index);
+        [[nodiscard]] Result<AiTaskState> Advance(std::size_t index);
+        [[nodiscard]] Result<AiTaskState> Call(std::size_t parent, DecisionNodeId node, bool entering);
+        [[nodiscard]] Result<void> BeginCall(std::size_t parent, DecisionNodeId node);
+        void EndCall(std::size_t parent, DecisionNodeId node, AiTaskCancellationReason reason) noexcept;
+        void StopOccurrence(std::size_t index, AiTaskCancellationReason reason) noexcept;
+        [[nodiscard]] std::size_t FindChild(std::size_t parent, DecisionNodeId node) const noexcept;
+        [[nodiscard]] AiTaskOperationContext Operation(std::size_t index, TaskId task, std::uint32_t offset,
+                                                       std::uint32_t generation) const;
+        [[nodiscard]] bool Available() const noexcept;
+        std::shared_ptr<const CookedDecisionPlan> plan_;
+        std::shared_ptr<const DecisionNodeGeneration> providers_;
+        DecisionGraphInstanceBinding binding_;
+        std::vector<std::unique_ptr<OccurrenceState>> occurrences_;
+        std::thread::id owner_;
+        bool evaluating_{};
+        bool shutdown_{};
+        std::uint64_t lastTick_{};
+        const DecisionGraphStepInput *input_{};
+    };
+
+    /** @brief Planned canonical HSM additions, to be placed on the existing source/runner types, not a parallel runner.
+     * StateMachineState owns optional DecisionSubplanCall plus explicit DecisionStateTerminal.
+     * StateMachineTransition owns optional child AiTaskState guard, valid only for a source state with a call.
+     * Entry: ancestor-first entry action, then that state's child starts on its update boundary.
+     * Update: normal action followed by one child step, before transition selection.
+     * Exit: descendant-first child cancellation/cleanup precedes that state's exit action.
+     * Terminal state: complete entry first, publish its explicit outcome without further update/transition work.
+     * Owner cancellation: cancel/cleanup children, invoke no new state entry/update/exit actions after revocation.
+     * Re-entry: reset only that occurrence subtree and advance existing nonwrapping task generations.
+     */
+}  // namespace Horo::AI

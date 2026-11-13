@@ -56,7 +56,20 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
-    "HoroFoundationJsonTests",
+    # Reduced Windows builds own these allocation and native-image regressions.
+    "HoroDynamicLibraryTests",
+    "HoroFoundationResultTests",
+    "HoroRuntimeSaveAutosaveSchedulerTests",
+    "HoroRuntimeSaveCaptureSnapshotTests",
+    "HoroRuntimeSaveOperationTests",
+    "HoroRuntimeSaveParticipantRegistryTests",
+    "HoroRuntimeSavedSceneBootstrapTests",
+    "HoroAnimationGraphValueAllocationTests",
+    "HoroAnimationDocumentTests",
+    "HoroUiStyleWorkspaceTests",
+    "HoroFoundationJobSystemTests", "HoroRuntimeSceneAssetDiscoveryTests", "HoroAssetLoadResultAllocationTests",
+    "HoroFoundationJsonTests", "HoroAssetIdAllocationTests", "HoroOperationIdentityAllocationTests",
+    "HoroSceneSourceTests", "HoroColorPipelineTests", "HoroColorCreativeLookPackageTests", "HoroPrefabMetricsTests",
     "HoroWorkspaceLayoutPersistenceTests", "HoroWorkspaceRecoveryPublicHeaderConsumer",
     "HoroNavigationProjectSettingsTests", "HoroNavigationProjectSettingsPublicConsumer",
     "HoroPrefabSceneCookHostTests",
@@ -90,6 +103,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroD3D12InitializationTests", "HoroD3D12ResourceTests",
     "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
     "HoroMultiviewSceneExtractionPublicHeaderConsumer",
+    "HoroReplicationStateCodecTests", "HoroAudioApiTests",
     "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
     "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
     "HoroTerrainAuthoringTests", "HoroTerrainAuthoringPublicHeaderConsumer",
@@ -125,7 +139,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer",
     "HoroRuntimeUiHitTestingTests", "HoroRuntimeUiEventDispatchTests", "HoroRuntimeUiPointerPublicHeaderConsumer",
     "HoroCharacterInputTests", "HoroCharacterInputPublicHeaderConsumer",
-    "HoroInputPublicHeaderConsumer", "HoroExtensionManagerTests", "HoroMcpSessionTests",
+    "HoroInputPublicHeaderConsumer", "HoroExtensionManagerTests", "HoroReferenceExtensionQualification", "HoroMcpSessionTests",
     "HoroEditorActivityBoundaryTests", "HoroExtensionsPublicHeaderConsumer",
     "HoroProjectCodeQueryTests", "HoroProjectReadFilesTests",
     "HoroMcpProjectCodeQueryTests", "HoroSourceDocumentCodeQueryTests",
@@ -165,6 +179,15 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroGameplayNavigationIntegrationPublicHeaderConsumer", "HoroGameplayApiPublicHeaderConsumer",
     "HoroGameplayRuntimePublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
     "HoroGameplayLuaPublicHeaderConsumer", "HoroNavigationRuntimePublicHeaderConsumer",
+    # Existing module/prefab delivery owners retain exact reduced-build membership.
+    "HoroScriptModuleRuntimeAdapterTests", "HoroModuleScriptProductHostTests",
+    "HoroScriptModuleRuntimePublicHeaderConsumer", "HoroLuaScriptModuleRuntimePublicHeaderConsumer",
+    "HoroJavaScriptModuleRuntimePublicHeaderConsumer",
+    "HoroPrefabPersistenceTests", "HoroEditorPlaySavePrefabTests", "HoroPrefabPersistencePublicConsumer",
+    "HoroPrefabPersistencePublicHeaderConsumer", "HoroPrefabOverridesPublicHeaderConsumer", "HoroProjectVersionPublicHeaderConsumer",
+    # Navigation automation discovery must have the same actual executable build closure.
+    "HoroNavigationBakeApplicationTests", "HoroNavigationBakeAdapterTests", "HoroNavigationNativeCliTests",
+    "HoroNavigationHostErrorTests", "HoroNavigationProjectBakeInputNativeTests", "HoroEditorNavigationBakeHostTests",
 })
 
 
@@ -185,6 +208,39 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
     for workflow in ("prefab-foundation-windows", "extension-abi-windows", "mcp-session-windows", "save-path-windows"):
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
+    assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_windows_checked_stl_regressions_have_headless_build_and_discovery_closure() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    closure = targets("HORO_CI_WINDOWS_TARGETS")
+    for target, dependency in (("HoroAssetIdAllocationTests", "HoroEngine::Assets"),
+                              ("HoroOperationIdentityAllocationTests", "HoroEngine::Foundation"),
+                              ("HoroReplicationStateCodecTests", "HoroEngine::NetworkRuntime"),
+                               ("HoroAudioApiTests", "HoroEngine::AudioApi")):
+        assert target in closure
+        declaration = tests_cmake.index(f"add_executable({target}")
+        assert not any(flag in condition
+                       for condition in cmake_conditions_at(tests_cmake, declaration)
+                       for flag in ("HORO_BUILD_EDITOR_GUI", "HORO_ENABLE_GPU_SMOKE_TESTS",
+                                    "HORO_BUILD_AUDIO_SDL3", "HORO_BUILD_NETWORK_GNS"))
+        links = re.findall(rf"target_link_libraries\(\s*{re.escape(target)}\s+([^)]*)\)", tests_cmake)
+        private_dependencies = set()
+        for arguments in links:
+            visibility = None
+            for argument in arguments.split():
+                if argument in {"PRIVATE", "PUBLIC", "INTERFACE"}:
+                    visibility = argument
+                elif visibility == "PRIVATE":
+                    private_dependencies.add(argument)
+        assert dependency in private_dependencies
+        registration = re.search(rf'horo_register_catch_test\({target} LABELS "([^"]+)"\)', tests_cmake)
+        assert registration is not None
+        assert {"unit", "headless"} <= set(registration.group(1).split(";"))
+    assert "unit/runtime/networking/ReplicationStateCodecProjectionTests.cpp" in tests_cmake
+    assert "unit/runtime/audio/AudioDeviceTimingTests.cpp" in tests_cmake
+    assert 'if(target IN_LIST HORO_CI_WINDOWS_TARGETS)\n        list(APPEND ARG_LABELS ci-windows)' in SUITES
+    assert 'add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})' in SUITES
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
 
 
@@ -433,7 +489,9 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
     assert release["execution"] == {"jobs": 1, "timeout": 90}
     for name in ("ci-linux-debug", "ci-macos-debug"):
         # Keep all native/audio targets and build the actual excluded cook required by the registered contract.
-        assert preset("buildPresets", name)["targets"] == ["all", "HoroEditorUiPaintShaderCook"]
+        assert preset("buildPresets", name)["targets"] == [
+            "all", "HoroEditorUiPaintShaderCook", "HoroEditorClusteredLightingShaderCook",
+        ]
         assert preset("testPresets", name)["filter"]["exclude"]["label"] == "gui|tooling"
 
 
@@ -545,6 +603,19 @@ def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> No
     assert "            build/ci-audio-release/restore-ctest.xml" in WORKFLOW
 
 
+def test_prefab_metrics_debug_selection_retains_mandatory_release_allocation_proof() -> None:
+    assert "HoroPrefabMetricsTests" in targets("HORO_CI_WINDOWS_TARGETS")
+    native = workflow_job("test")
+    build = native.split("id: mcp_release_build", 1)[1].split("\n      - name:", 1)[0]
+    assert "HoroPrefabMetricsTests" in build
+    test = native.split("- name: Test Windows Release Prefab metrics allocation qualification", 1)[1]
+    test = test.split("\n      - name:", 1)[0]
+    for required in ("!cancelled()", "runner.os == 'Windows'", "steps.mcp_release_build.outcome == 'success'",
+                     "--no-tests=error", "'^HoroPrefabMetricsTests::'", "--output-junit prefab-metrics-ctest.xml"):
+        assert required in test
+    assert "continue-on-error" not in test
+
+
 def test_windows_material_binding_has_tests_and_owned_consumer() -> None:
     cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     for target in ("HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer"):
@@ -559,7 +630,7 @@ def test_animation_graph_has_windows_execution_and_sonar_consumer_closure() -> N
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     for target in ("HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer"):
         assert target in targets("HORO_CI_WINDOWS_TARGETS")
-        assert tests_cmake.index(f"add_executable({target}") < tests_cmake.index("horo_finalize_ci_suites()")
+        assert tests_cmake.index(f"add_executable({target}") < tests_cmake.index("cmake_language(DEFER CALL horo_finalize_ci_suites)")
     assert 'LABELS "unit;animation;headless;public_headers;ci-windows"' in tests_cmake
     for source in ("AnimationGraphTests.cpp", "AnimationGraphBindingTests.cpp", "AnimationGraphSourceTests.cpp"):
         assert f"unit/runtime/animation/{source}" in tests_cmake
@@ -698,7 +769,9 @@ def test_vulkan_editor_qualification_uses_locked_cook_and_real_matching_composit
     assert "catalog.tsv" in job
     assert "HoroEditorAssetRoot-Debug.txt" in job
     apps = (ROOT / "apps/CMakeLists.txt").read_text(encoding="utf-8")
-    assert "HoroEditorAssetRoot-$<CONFIG>.txt" in apps
+    assert 'include("${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/cmake/Host.cmake")' in apps
+    editor = (ROOT / "apps/HoroEditor/cmake/Host.cmake").read_text(encoding="utf-8")
+    assert "HoroEditorAssetRoot-$<CONFIG>.txt" in editor
 
 
 def test_debug_cache_checkpoint_precedes_auxiliary_builds_and_has_one_writer() -> None:
@@ -759,7 +832,7 @@ def test_pr_bursts_bound_matrix_width_without_dropping_platforms() -> None:
     assert "max-parallel: 1" in workflow_job("shaders")
     android = (ROOT / ".github/workflows/android-package.yml").read_text(encoding="utf-8")
     assert "max-parallel: 1" in android
-    assert "profile: [qualification-debug, qualification-release]" in android
+    assert "profile: [qualification-debug, qualification-release, qualification-vulkan-development]" in android
     assert preset("buildPresets", "ci-audio-release")["jobs"] == 2
     assert preset("testPresets", "ci-audio-release")["execution"]["jobs"] == 1
 

@@ -28,6 +28,7 @@ namespace Horo::Runtime {
         RigidBody,
         Collider,
         PhysicsConstraint,
+        Animation,
         Count
     };
 

@@ -3,9 +3,11 @@
 #include "EditorWorkspaceInputRouting.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/ScreenRegistry.h"
+#include "Horo/Editor/XRSimulatorModel.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/NavigationErrors.h"
 
 #include <imgui.h>
@@ -13,7 +15,7 @@
 namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::EditorWorkspaceScreen */
     EditorWorkspaceScreen::EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages)
-        : packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
+        : GuiScreen(kTextScope), packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
           modalHost_(services.Get<EditorModalHost>()), context_(services.GetConst<EditorGuiContext>()),
           contributions_{services.Get<WorkspacePanelRegistry>(), services.Get<EditorStatusItemRegistry>()},
           input_(services.Get<Input::InputRouter>()), xr_{services.TryGet<IEditorPlayXrHost>()},
@@ -22,6 +24,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
           viewportSceneState_(services.Get<EditorViewportSceneState>()), runtimeScene_(services.Get<Runtime::RuntimeSceneService>()),
           settings_(services.Get<EditorSettingsService>()), projectOpenService_(services.Get<ProjectOpenService>()),
           panelServices_{
+              .xrSimulator = services.TryGet<XRSimulatorModel>(),
               .guiRenderer = services.TryGet<IEditorGuiRenderer>(),
               .viewportRenderer = services.TryGet<IEditorViewportRenderer>(),
               .logQuery = services.TryGetConst<Log::IStructuredLogQuery>(),
@@ -65,8 +68,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         sourceCommands_.BeginSession();
         workspaceControllerLifetime_ = std::make_shared<int>(0);
         snackbarHost_ = std::make_unique<EditorSnackbarHost>(controller_->DataBus());
-        host_.SetCurrentProjectRoot(controller_->ViewModel().projectRoot);
-        LoadProjectInputProfile(controller_->ViewModel().projectRoot);
+        host_.SetCurrentProjectRoot(controller_->ProjectRoot());
+        LoadProjectInputProfile(controller_->ProjectRoot());
         if (auto attached = AttachXrInput(); attached.HasError()) {
             if (input_.previousProfile) {
                 if (auto restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError())
@@ -100,6 +103,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return controller_ ? controller_->NavigationSettings() : Result<NavigationProjectSettingsSession *>::Success(nullptr);
     }
 
+    /** @copydoc GuiScreen::PrefabSettings */
+    Result<std::shared_ptr<PrefabProjectSettingsSession>> EditorWorkspaceScreen::PrefabSettings() {
+        return controller_ ? controller_->PrefabSettings() : Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
+    }
+
     /** @copydoc EditorWorkspaceScreen::OnUpdate */
     void EditorWorkspaceScreen::OnUpdate(float dt) {
         if (controller_) {
@@ -114,17 +122,20 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 const auto boundary = model.playState == EditorPlayState::Idle || model.playState == EditorPlayState::Failed
                                           ? Packages::PackageActivationBoundary::Quiescent
                                           : Packages::PackageActivationBoundary::Running;
-                static_cast<void>(packages_.pump(std::filesystem::path{model.projectRoot}, boundary));
+                static_cast<void>(packages_.pump(controller_->ProjectRoot(), boundary));
             }
             controller_->UpdateNavigationSettingsProjection();
             controller_->UpdateUiCanvasResources();
-            controller_->UpdateAutosave(dt, settings_.Snapshot().settings.autoSaveIntervalMinutes);
+            const auto preferences = settings_.Snapshot();
+            controller_->UpdateAutosave(dt, preferences.settings.autoSaveIntervalMinutes);
+            controller_->UpdateSourceAutosave(dt, preferences.settings.codeEditor.autoSaveDelaySeconds);
             controller_->UpdateExternalSceneWatch(dt);
             controller_->UpdateGameplaySources(dt);
             if (projectServices_.assetRegistry != nullptr) {
                 controller_->RefreshAssets(projectServices_.assetRegistry->Snapshot());
             }
             controller_->UpdateWorldBake();
+            controller_->UpdateTerrainCook();
             controller_->UpdateContentBrowser();
             controller_->SynchronizeRuntimeScenePreview();
             controller_->UpdateFps(ImGui::GetIO().Framerate);
@@ -159,6 +170,43 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         PublishViewportSceneIfChanged();
     }
 
+    Result<void> EditorWorkspaceScreen::BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &source) {
+        if (!controller_)
+            return Result<void>::Failure(MakeError(NavigationErrors::HostNotStarted));
+        return controller_->BindPlayRuntimeDispatch(source);
+    }
+
+    Result<void> EditorWorkspaceScreen::OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) {
+        if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
+                             controller_->ViewModel().playState != EditorPlayState::Paused))
+            return Result<void>::Success();
+        const auto command = input_.gameplayFrames.Consume(context.simulationTick);
+        const Gameplay::GameplayInputAction action{Gameplay::GameplayActionId{kGameplayMoveAction},
+                                                   command.moveX,
+                                                   command.moveY,
+                                                   command.moveDown,
+                                                   command.movePressed,
+                                                   command.moveReleased};
+        controller_->UpdatePlayFixed({&action, 1}, context);
+        return Result<void>::Success();
+    }
+
+    Result<void> EditorWorkspaceScreen::PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) {
+        if (controller_)
+            controller_->PreparePlayFixedCommit(context);
+        return Result<void>::Success();
+    }
+
+    void EditorWorkspaceScreen::CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        if (controller_)
+            controller_->CommitPlayFixedUpdate(context);
+    }
+
+    void EditorWorkspaceScreen::AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
+        if (controller_)
+            controller_->AbortPlayFixedUpdate(context);
+    }
+
     /** @copydoc EditorWorkspaceScreen::Draw */
     void EditorWorkspaceScreen::Draw(const GuiContentRegion &contentRegion) {
         if (!controller_) {
@@ -168,7 +216,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         using enum EditorWorkspaceViewCommand;
         EditorWorkspaceViewCommandData command;
         controller_->RefreshWorldDocumentProjection();
-        view_.Draw(controller_->ViewModel(), command, contentRegion);
+        GuiLive::Invoke<&EditorWorkspaceView::Draw>(context_.theme.liveReload, view_, controller_->ViewModel(), command, contentRegion);
 
         if (command.command == None && !command.menuInvocation.has_value()) {
             sourceCommands_.RouteInput(input_.router, input_.context, *controller_, command);
@@ -178,42 +226,73 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             host_.DispatchMenuInvocation(*command.menuInvocation);
         }
 
-        if (command.command != None) {
-            if (command.command == OpenCreateWorldLayer && command.worldLayerIntent) {
-                OpenWorldLayerCreation(command.worldLayerIntent->expected);
-            } else if (command.command == OpenPlayTopologyProfiles) {
-                OpenPlayTopologyProfilesModal();
-            } else if (command.command == CompareExternalScene) {
-                OpenSceneComparison();
-            } else if (command.command == CreatePrefabFromSelection && command.objectPayload) {
-                OpenPrefabCreationModal(*command.objectPayload);
-            } else if (command.command == CreateLuaBehavior || command.command == CreateNativeBehavior) {
-                using enum GameplayBehaviorKind;
-                const GameplayBehaviorKind kind = command.command == CreateNativeBehavior ? Native : Lua;
-                const std::string requestedDirectory =
-                    command.stringPayload.value_or(controller_->ViewModel().contentBrowser.absoluteCurrentPath);
-                OpenGameplayBehaviorModal(kind, requestedDirectory);
-            } else if (command.command == CloseWorkspaceDocument &&
-                       sourceCommands_.OpenCloseModal(*controller_, command, modalHost_, context_)) {
-                // The exclusive modal owns only the decision; the controller owns the document transaction.
-            } else {
-                controller_->ProcessCommand(command);
-            }
-            if (command.command == ReturnToWelcome) {
-                static_cast<void>(host_.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
-            }
-        }
+        DispatchWorkspaceCommand(command);
         PublishViewportSceneIfChanged();
-
-        if (snackbarHost_) {
-            const std::optional<SnackbarActionInvokedEvent> action = snackbarHost_->Draw(context_, ImGui::GetIO().DeltaTime);
-            if (action.has_value() && action->actionId == "open_logs") {
-                controller_->ProcessCommand(
-                    EditorWorkspaceViewCommandData{.command = ChangeActivePanel, .stringPayload = "horo.global_dock"});
-            }
-        }
+        DrawWorkspaceSnackbar();
 
         UpdateStatusItems();
+    }
+
+    /** @brief Route captured source creation commands through their exclusive transient workflows. */
+    bool EditorWorkspaceScreen::TryOpenCreationModal(const EditorWorkspaceViewCommandData &command) {
+        using enum EditorWorkspaceViewCommand;
+        if (command.command == CreatePrefabFromSelection && command.objectPayload) {
+            OpenPrefabCreationModal(*command.objectPayload);
+            return true;
+        }
+        if (command.command == CreateTerrainLayerSet || command.command == CreateTerrainFoliageType) {
+            OpenTerrainAssetCreationModal(command);
+            return true;
+        }
+        if (command.command == CreateLuaBehavior || command.command == CreateNativeBehavior) {
+            const auto kind = command.command == CreateNativeBehavior ? GameplayBehaviorKind::Native : GameplayBehaviorKind::Lua;
+            const auto directory = command.stringPayload.value_or(controller_->ViewModel().contentBrowser.absoluteCurrentPath);
+            OpenGameplayBehaviorModal(kind, directory);
+            return true;
+        }
+        return false;
+    }
+
+    /** @brief Resolve document-specific decisions before the controller receives an ordinary source command. */
+    bool EditorWorkspaceScreen::TryOpenDocumentModal(const EditorWorkspaceViewCommandData &command) {
+        using enum EditorWorkspaceViewCommand;
+        if (command.command == OpenCreateWorldLayer && command.worldLayerIntent) {
+            OpenWorldLayerCreation(command.worldLayerIntent->expected);
+            return true;
+        }
+        if (command.command == OpenPlayTopologyProfiles) {
+            OpenPlayTopologyProfilesModal();
+            return true;
+        }
+        if (command.command == CompareExternalScene) {
+            OpenSceneComparison();
+            return true;
+        }
+        if (command.command == CloseWorkspaceDocument)
+            return sourceCommands_.OpenCloseModal(*controller_, command, modalHost_, context_);
+        return false;
+    }
+
+    /** @brief Preserve controller command authority and navigate only after the requested workspace transition. */
+    void EditorWorkspaceScreen::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &command) {
+        using enum EditorWorkspaceViewCommand;
+        if (command.command == None)
+            return;
+        if (!TryOpenDocumentModal(command) && !TryOpenCreationModal(command))
+            controller_->ProcessCommand(command);
+        if (command.command == ReturnToWelcome)
+            static_cast<void>(host_.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
+    }
+
+    /** @brief Consume snackbar actions independently of source command and modal routing. */
+    void EditorWorkspaceScreen::DrawWorkspaceSnackbar() {
+        if (!snackbarHost_)
+            return;
+        const auto action =
+            GuiLive::Invoke<&EditorSnackbarHost::Draw>(context_.theme.liveReload, *snackbarHost_, context_, ImGui::GetIO().DeltaTime);
+        if (action && action->actionId == "open_logs")
+            controller_->ProcessCommand(EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::ChangeActivePanel,
+                                                                       .stringPayload = "horo.global_dock"});
     }
 
     /** @copydoc EditorWorkspaceScreen::CollectActivePanelIds */

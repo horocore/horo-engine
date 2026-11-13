@@ -50,7 +50,7 @@ set_tests_properties(passed failed disabled skipped PROPERTIES LABELS coverage)
         shell=False, check=True, capture_output=True,  # nosec B603
     )
     discovered = subprocess.run(  # nosec B607
-        ["ctest", "--test-dir", str(build), "-L", "^coverage$", "--show-only=json-v1"],
+        ["ctest", "--test-dir", str(build), "-C", "Debug", "--no-tests=error", "-L", "^coverage$", "--show-only=json-v1"],
         executable=str(Path(ctest).resolve(strict=True)),
         shell=False, check=True, capture_output=True,  # nosec B603
     )
@@ -58,7 +58,7 @@ set_tests_properties(passed failed disabled skipped PROPERTIES LABELS coverage)
     discovery.write_bytes(discovered.stdout)
     junit = tmp_path / "ctest.xml"
     result = subprocess.run(  # nosec B607
-        ["ctest", "--test-dir", str(build), "-L", "^coverage$", "--output-junit", str(junit)],
+        ["ctest", "--test-dir", str(build), "-C", "Debug", "--no-tests=error", "-L", "^coverage$", "--output-junit", str(junit)],
         executable=str(Path(ctest).resolve(strict=True)),
         shell=False, capture_output=True,  # nosec B603
     )
@@ -179,6 +179,7 @@ def test_workflow_keeps_test_failures_and_pr_fail_fast() -> None:
     assert "xvfb-run -a ctest --preset sonar" in cpp
     assert "steps.build.outcome == 'success'" in cpp
     assert "(github.ref == 'refs/heads/main' && steps.cpp_tests.outcome == 'failure')" in python
+    assert "coverage run --source=scripts,cmake -m pytest tests/python" in python
     for name in ("Run C++ coverage tests", "Run Python coverage tests",
                  "Collect fastcov line coverage", "Analyze code and wait for Quality Gate"):
         assert "continue-on-error" not in steps[name]
@@ -186,6 +187,8 @@ def test_workflow_keeps_test_failures_and_pr_fail_fast() -> None:
     collector = steps["Collect fastcov line coverage"]
     assert "steps.python_tests.outcome == 'success'" in collector
     assert collector.index("validate_sonar_test_completion.py") < collector.index("collect_sonar_coverage.sh")
-    assert "steps.coverage.outcome == 'success'" in steps["Install cached Sonar scanner"]
+    assert "steps.coverage.outcome == 'success'" in steps["Capture exact native analysis inputs"]
+    assert "steps.analysis_bundle.outcome == 'success'" in steps["Publish source-bound native analysis inputs"]
+    assert "steps.analysis_restore.outcome == 'success'" in steps["Analyze code and wait for Quality Gate"]
     assert "steps.scanner_install.outcome == 'success'" in steps["Analyze code and wait for Quality Gate"]
     assert "-Dsonar.qualitygate.wait=true" in workflow

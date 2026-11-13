@@ -12,6 +12,9 @@
 
 namespace Horo::Log {
     namespace {
+        struct MdcStack;
+        thread_local MdcStack *activeMdcState{};
+
         /**
          * @brief Per-thread MDC frame stack.
          *
@@ -25,12 +28,32 @@ namespace Horo::Log {
                 bool isolated{};
             };
 
-            std::vector<Frame> frames;
+            std::vector<Frame> frames{std::size_t{0}};
+
+            MdcStack() {
+                activeMdcState = this;
+            }
+
+            ~MdcStack() {
+                activeMdcState = nullptr;
+            }
+
+            MdcStack(const MdcStack &) = delete;
+            MdcStack &operator=(const MdcStack &) = delete;
         };
 
         MdcStack &MdcState() {
             thread_local MdcStack state;
             return state;
+        }
+
+        /** @brief Adopts fields without a checked-STL vector move that can allocate inside noexcept. */
+        std::shared_ptr<const std::vector<MdcField>> OwnSnapshotFields(std::vector<MdcField> &fields) {
+            if (fields.empty())
+                return {};
+            auto owned = std::make_shared<std::vector<MdcField>>(std::size_t{0});
+            owned->swap(fields);
+            return owned;
         }
 
         std::size_t PushContextFrame(std::vector<MdcField> fields, const bool isolated = false) {
@@ -47,14 +70,33 @@ namespace Horo::Log {
             HORO_INVARIANT_MSG(index == frames.size() - 1, "Log contexts must be destroyed in last-in, first-out order.");
             frames.pop_back();
         }
+
+        /** @brief Merges into unpublished caller-owned storage; inner fields and privacy boundaries take precedence. */
+        void MergeFrames(const MdcStack &state, std::vector<MdcField> &merged) {
+            merged.reserve(8);
+            for (const auto &frame : state.frames) {
+                if (frame.isolated)
+                    merged.clear();
+                for (const auto &field : frame.fields) {
+                    const auto it = std::ranges::find_if(merged, [&field](const MdcField &entry) {
+                        return entry.first == field.first;
+                    });
+                    if (it == merged.end())
+                        merged.push_back(field);
+                    else
+                        it->second = field.second;
+                }
+            }
+        }
     }  // namespace
 
     /** @copydoc LogContextSnapshot::LogContextSnapshot */
-    LogContextSnapshot::LogContextSnapshot(std::vector<MdcField> fields) : fields_(std::move(fields)) {}
+    LogContextSnapshot::LogContextSnapshot(std::vector<MdcField> fields) : fields_(OwnSnapshotFields(fields)) {}
 
     /** @copydoc LogContextSnapshot::Isolated */
     LogContextSnapshot LogContextSnapshot::Isolated(std::vector<MdcField> fields) {
-        LogContextSnapshot snapshot{std::move(fields)};
+        LogContextSnapshot snapshot;
+        snapshot.fields_ = OwnSnapshotFields(fields);
         snapshot.isolated_ = true;
         return snapshot;
     }
@@ -66,12 +108,13 @@ namespace Horo::Log {
 
     /** @copydoc LogContextSnapshot::Fields */
     std::span<const MdcField> LogContextSnapshot::Fields() const noexcept {
-        return fields_;
+        return fields_ ? std::span<const MdcField>{*fields_} : std::span<const MdcField>{};
     }
 
     /** @copydoc LogContextSnapshot::With */
     LogContextSnapshot LogContextSnapshot::With(std::string key, std::string value) const {
-        std::vector<MdcField> derived = fields_;
+        const auto fields = Fields();
+        std::vector<MdcField> derived(fields.begin(), fields.end());
         if (const auto existing = std::ranges::find(derived, key, &MdcField::first); existing == derived.end())
             derived.emplace_back(std::move(key), std::move(value));
         else
@@ -97,26 +140,9 @@ namespace Horo::Log {
     }
 
     std::vector<MdcField> GetMdcFields() {
-        const auto &frames = MdcState().frames;
-        if (frames.empty())
-            return {};
-
-        // Merge frames outermost-first; innermost value wins on key collision.
-        std::vector<MdcField> merged;
-        merged.reserve(8);  // typical small field count
-        for (const auto &frame : frames) {
-            if (frame.isolated)
-                merged.clear();
-            for (const auto &field : frame.fields) {
-                const auto it = std::ranges::find_if(merged, [&](const MdcField &f) {
-                    return f.first == field.first;
-                });
-                if (it == merged.end())
-                    merged.push_back(field);
-                else
-                    it->second = field.second;  // inner overrides outer
-            }
-        }
+        std::vector<MdcField> merged(std::size_t{0});
+        if (activeMdcState && !activeMdcState->frames.empty())
+            MergeFrames(*activeMdcState, merged);
         return merged;
     }
 
@@ -126,9 +152,16 @@ namespace Horo::Log {
 
     /** @copydoc CaptureLogContext */
     LogContextSnapshot CaptureLogContext() {
-        const bool isolated = std::ranges::any_of(MdcState().frames, [](const auto &frame) {
+        if (!activeMdcState || activeMdcState->frames.empty())
+            return {};
+        auto fields = std::make_shared<std::vector<MdcField>>(std::size_t{0});
+        MergeFrames(*activeMdcState, *fields);
+        LogContextSnapshot snapshot;
+        if (!fields->empty())
+            snapshot.fields_ = std::move(fields);
+        snapshot.isolated_ = std::ranges::any_of(activeMdcState->frames, [](const auto &frame) {
             return frame.isolated;
         });
-        return isolated ? LogContextSnapshot::Isolated(GetMdcFields()) : LogContextSnapshot{GetMdcFields()};
+        return snapshot;
     }
 }  // namespace Horo::Log

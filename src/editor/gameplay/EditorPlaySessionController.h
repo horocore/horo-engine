@@ -5,10 +5,12 @@
  * @brief Isolated editor play-session state machine and runtime-scene ownership.
  */
 
+#include "EditorPlayModulePrograms.h"
+#include "EditorPlaySaveRetirement.h"
 #include "EditorPlaySceneHost.h"
 #include "EditorPlayState.h"
 #include "Horo/Application/NetworkDebugger.h"
-#include "Horo/Gameplay/BehaviorRuntime.h"
+#include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "editor/document/RuntimeSceneConversion.h"
 
@@ -43,9 +45,7 @@ namespace Horo::Editor {
         explicit EditorPlaySessionController(Application::NetworkDebuggerService *debugger = nullptr) noexcept : debugger_(debugger) {}
 
         /** @brief Stops publication before releasing the clone. */
-        ~EditorPlaySessionController() {
-            Stop();
-        }
+        ~EditorPlaySessionController();
 
         /** @brief Admits isolated Play preparation from one committed authoring snapshot.
          * @param authoring Committed immutable document. @param registry Frozen registry outliving pending preparation and active Play.
@@ -80,6 +80,32 @@ namespace Horo::Editor {
                                          const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {},
                                          EditorPlayViewSource viewSource = EditorPlayViewSource::AuthoredCamera,
                                          const IEditorPlayXrHost *selectedXrHost = nullptr);
+        /** @brief Selects explicit application lifetime storage before activation. No queue is discovered implicitly.
+         * @param owner Cold bounded queue outliving the controller and actual scheduler join. */
+        void ConfigureSaveRetirement(std::shared_ptr<EditorPlaySaveRetirement> owner) noexcept;
+        /** @brief Revokes binding and transfers an unsettled exact Play unit into reserved application ownership.
+         * @param registry Native project registry whose borrowed behavior metadata must outlive the moved runtime.
+         * @details Used only at workspace leave after Stop. A settled unit leaves registry untouched. */
+        void RetireOnLeave(std::unique_ptr<ProjectGameplayRegistry> &registry) noexcept;
+        /** @brief Borrows only the selected activation's genuine save owner for synchronous UI intent. */
+        [[nodiscard]] EditorPlaySaveSession *SaveSession() noexcept;
+        /** @brief Retains path-free UI intent storage without exposing a controller pointer or extending callback admission. */
+        [[nodiscard]] std::weak_ptr<EditorPlayRuntimeBinding> SaveBinding() const noexcept;
+        /** @brief Captures exact privately issued installed sources cold before the real Play host is activated. */
+        void ConfigureSaveBindings(std::vector<PlaySaveGameplayBinding> bindings);
+        /** @brief Preserves whole-inventory admission failure; no empty core-only save is substituted for missing required sources. */
+        void ConfigureSaveError(Error error);
+        /** @brief Revokes UI save borrowing and releases old-generation sources only after actual worker/delegate settlement. */
+        [[nodiscard]] bool PrepareSaveRetirement() noexcept;
+        /** Explicit product module-program composition; only configurable before Play. No automatic source execution. */
+        [[nodiscard]] Result<void> ConfigureModuleScripts(std::shared_ptr<Extensions::ScriptModuleHostServices>);
+        /** Cold admission from an actual authenticated source capture, current native evidence and explicit project/context consent. */
+        [[nodiscard]] Result<void> BeginModuleScript(std::shared_ptr<const Extensions::ScriptModuleProgram>,
+                                                     Extensions::ScriptModuleOperationPolicy, const CancellationToken & = {});
+        [[nodiscard]] std::optional<Extensions::ScriptCallResult> TakeModuleScriptResult();
+        [[nodiscard]] Result<void> RequestModuleReferenceUpdate(Extensions::ScriptExportVersion);
+        [[nodiscard]] Result<Extensions::ScriptModuleUpdateReport> RequestNativeModuleUpdate(const Extensions::ScriptModuleProgram &);
+        [[nodiscard]] std::optional<Extensions::ScriptModuleUpdateReport> TakeModuleUpdateReport();
         /** @brief Pauses fixed simulation while leaving presentation active. */
         [[nodiscard]] Result<void> Pause();
         /** @brief Resumes continuous fixed simulation. */
@@ -88,8 +114,16 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Step();
         /** @brief Shuts down behaviors and destroys the isolated runtime clone. */
         void Stop() noexcept;
-        /** @brief Runs one host fixed tick when playing, or consumes one queued paused step. */
+        /** @brief Legacy stepping for unbound private callers; a bound real host must supply its actual fixed context. */
         [[nodiscard]] Result<void> FixedUpdate(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
+        /** @brief Binds one genuine live issuer cold; permits active-frame composition without granting callback admission. */
+        [[nodiscard]] Result<void> BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &source);
+        /** @brief Stages one actual host attempt; paused step remains pending until its real commit. */
+        [[nodiscard]] Result<void> OnRuntimeFixedUpdate(std::span<const Gameplay::GameplayInputAction> input,
+                                                        const Runtime::FixedStepContext &context);
+        [[nodiscard]] Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context);
+        void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
+        void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
         /** @brief Runs presentation callbacks for an active session. */
         void PresentationUpdate(Gameplay::FrameDeltaTime delta);
         /**
@@ -129,16 +163,61 @@ namespace Horo::Editor {
         [[nodiscard]] DocumentRevision AuthoringRevision() const noexcept;
 
     private:
+        [[nodiscard]] bool ShouldTick() const noexcept;
+        [[nodiscard]] Result<void> RunGameplayFixed(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
+        [[nodiscard]] Result<void> RejectFixedAttempt(const Runtime::FixedStepContext &context, Error error);
+        [[nodiscard]] bool MatchesFixedAttempt(const Runtime::FixedStepContext &context) const noexcept;
+        void FlushPendingStop() noexcept;
+
+        struct FixedAttempt final {
+            EditorPlaySceneHost *scene{};
+            Runtime::RuntimeDispatchEvidence evidence;
+            Runtime::RuntimeDispatchFacts facts;
+            bool consumesStep{};
+            bool prepared{};
+        };
+
+        Runtime::RuntimeDispatchSource dispatchSource_;
+        std::optional<FixedAttempt> fixedAttempt_;
+        bool stopPending_{};
         EditorPlayViewSource viewSource_{EditorPlayViewSource::AuthoredCamera};
         const IEditorPlayXrHost *selectedXrHost_{};
+        /** @brief Reserves leave capacity and a callback lookup before any Scene activation is admitted. */
+        [[nodiscard]] Result<void> ReservePlayOwnership();
         /** @brief Acquires one configured owner and admits its asynchronous Scene preparation without waiting. */
         [[nodiscard]] Result<void> BeginPreparation(Runtime::RuntimeSceneDefinition definition, const Gameplay::BehaviorRegistry &registry,
                                                     const EditorPlaySceneFactory &factory);
+        /** @brief Starts the configured Scene and retains the actual pending registry through activation.
+         * @param definition Validated owned Play definition. @param registry Live frozen registry retained by the Play unit.
+         * @return Original Scene startup/preparation failure or genuine queue admission. */
+        [[nodiscard]] Result<void> StartPreparedScene(Runtime::RuntimeSceneDefinition definition,
+                                                      const Gameplay::BehaviorRegistry &registry);
+        /** @brief Registers the canonical Scene-owned runtime before any Scene
+         * preparation is admitted. */
+        [[nodiscard]] Result<void> PrepareBehaviorOwner(const Gameplay::BehaviorRegistry &registry);
+        /** @brief Refreshes only the active borrow after Scene publication; owns no
+         * second runtime or commit gate. */
+        void RefreshBehaviorBinding();
         /** @brief Advances only owned asynchronous Scene preparation and admits behaviors after readiness. */
         [[nodiscard]] Result<void> AdvancePreparation();
         /** @brief Commits the isolated Play host's queued commands after callbacks close and before native stepping. */
         [[nodiscard]] Result<void> CommitSceneChanges();
+        /** @brief Pumps actual cancellation settlement once, retaining owners on pending work or failure. */
+        void PollStopping() noexcept;
+        /** @brief Tears down only after genuine detached/Scene work has settled. */
+        void FinishStop() noexcept;
+        /** @brief Installs available save composition after actual Scene/behavior readiness; unsupported state stays visible to Manager. */
+        void ConfigureReadySave();
+        /** @brief Drains one path-free UI intent at the owner boundary, using the existing Play pause authority for Load. */
+        void DispatchSaveCommand();
+        /** @brief Reports genuine immutable load admission state without touching storage or operation ownership. */
+        [[nodiscard]] bool SaveLoading() noexcept;
         void Fail(Error error) noexcept;
+        void RefreshModuleScriptEpoch();
+        void PollModuleScripts();
+        void CancelModuleScripts() noexcept;
+        std::unique_ptr<EditorPlayModulePrograms> moduleScripts_;
+        std::optional<Error> moduleScriptError_;
 
         Application::NetworkDebuggerService *debugger_{};
         std::uint64_t diagnosticGeneration_{};
@@ -148,7 +227,14 @@ namespace Horo::Editor {
         const Gameplay::BehaviorRegistry *pendingRegistry_{}; /**< Frozen module owner remains alive while Starting. */
         CancellationSource preparationCancellation_;
         std::uint64_t preparationFrame_{1};
-        std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;
+        std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner_;
+        Gameplay::BehaviorRuntime *behaviors_{}; /**< Owner-lane borrow refreshed
+                                                    after the sole Scene commit. */
+        std::shared_ptr<EditorPlayRuntimeBinding> runtimeBinding_;
+        std::vector<PlaySaveGameplayBinding> saveBindings_;
+        std::optional<Error> saveSetupError_;
+        std::shared_ptr<EditorPlaySaveRetirement> saveRetirement_;
+        EditorPlaySaveRetirement::Reservation retirementReservation_;
         std::optional<Error> lastError_;
         DocumentRevision authoringRevision_{};
         bool stepPending_{false};

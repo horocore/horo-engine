@@ -8,9 +8,21 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
 
+namespace Horo::Editor {
+    struct EditorWorkspaceViewModel;
+}
+
 namespace Horo::Editor::PhysicsInspectorWidgets {
     /** @brief Resolve only localized presentation text. */
     const char *Label(const EditorGuiContext &context, const char *key);
+    /** @brief Begins a padded, full-width field group. Pair a true result with EndFields. */
+    [[nodiscard]] bool BeginFields(const char *id = "##physics_fields");
+    /** @brief Ends a successfully begun field group. */
+    void EndFields();
+    /** @brief Draws a wrapped label above its field with shared typography. */
+    void Field(const EditorGuiContext &context, const char *key);
+    /** @brief Selects a typed enum using a full-width control below its label. */
+    bool Choice(const EditorGuiContext &context, const char *key, const char *id, int &value, std::span<const char *const> entries);
     /** @brief Edit a finite typed scalar; semantic validation remains with the owning Physics schema. */
     bool Scalar(const EditorGuiContext &context, const char *key, float &value);
     /** @brief Edit exact Cartesian coordinates through the shared axis control. */
@@ -26,13 +38,15 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
     /** @brief Edit a canonical project collision-profile identity without lookup/default substitution. */
     bool Profile(const EditorGuiContext &context, PhysicsInspectorText &text, Physics::CollisionProfileId &value);
     /** @brief Draw one bounded shared action with localized copy. */
-    bool Action(const EditorGuiContext &context, const char *key, bool enabled = true);
+    bool Action(const EditorGuiContext &context, const char *key, bool enabled = true, bool primary = false);
     /** @brief Show an exact stable identity without a heap allocation or floating-point conversion. */
     void Stable(const EditorGuiContext &context, const char *key, std::uint64_t value);
+    /** @brief Shows immutable component identity in a collapsed details card. */
+    void Details(const EditorGuiContext &context, std::uint64_t component);
     /** @brief Draw all authored body fields without creating a native body. */
     bool Body(const EditorGuiContext &context, Runtime::RigidBodyComponent &body);
     /** @brief Draw exact collider source, binding, local pose, scale and sensor properties. */
-    bool Collider(const EditorGuiContext &context, PhysicsInspectorColliderDraft &draft);
+    bool Collider(const EditorGuiContext &context, PhysicsInspectorColliderDraft &draft, const EditorWorkspaceViewModel &view);
     /** @brief Draw the fixed/distance authored constraint profile with exact typed endpoints. */
     bool Constraint(const EditorGuiContext &context, PhysicsInspectorConstraintDraft &draft);
 }  // namespace Horo::Editor::PhysicsInspectorWidgets

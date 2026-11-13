@@ -27,8 +27,7 @@
         "HORO_BUILD_EDITOR_GUI": "OFF",
         "HORO_BUILD_RENDER_OPENGL": "OFF",
         "HORO_BUILD_RENDER_METAL": "OFF",
-        "HORO_BUILD_AUDIO_SDL3": "OFF",
-        "HORO_ENABLE_OPENTELEMETRY": "OFF"
+        "HORO_BUILD_AUDIO_SDL3": "OFF"
       }
     },
     {
@@ -43,7 +42,6 @@
         "HORO_BUILD_EDITOR_GUI": "ON",
         "HORO_BUILD_RENDER_OPENGL": "ON",
         "HORO_ENABLE_TELEMETRY": "ON",
-        "HORO_ENABLE_OPENTELEMETRY": "ON",
         "HORO_CI_ISOLATE_TEST_EXECUTABLES": "ON"
       }
     },
@@ -234,7 +232,8 @@
       "cacheVariables": {
         "BUILD_TESTING": "OFF",
         "HORO_ANDROID_PACKAGE_QUALIFICATION": "ON",
-        "CMAKE_POSITION_INDEPENDENT_CODE": "ON"
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "HORO_ANDROID_QUALIFICATION_RENDERER": "none"
       }
     },
     {
@@ -242,6 +241,13 @@
       "inherits": "android-package-base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "android-vulkan-development",
+      "inherits": "android-debug",
+      "cacheVariables": {
+        "HORO_ANDROID_QUALIFICATION_RENDERER": "vulkan-android"
       }
     },
     {
@@ -258,7 +264,8 @@
       "configurePreset": "ci-linux-debug",
       "targets": [
         "all",
-        "HoroEditorUiPaintShaderCook"
+        "HoroEditorUiPaintShaderCook",
+        "HoroEditorClusteredLightingShaderCook"
       ]
     },
     {
@@ -266,7 +273,8 @@
       "configurePreset": "ci-macos-debug",
       "targets": [
         "all",
-        "HoroEditorUiPaintShaderCook"
+        "HoroEditorUiPaintShaderCook",
+        "HoroEditorClusteredLightingShaderCook"
       ]
     },
     {

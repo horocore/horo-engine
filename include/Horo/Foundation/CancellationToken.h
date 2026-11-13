@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -41,7 +42,8 @@ namespace Horo {
                 std::size_t users{};
             };
 
-            mutable std::vector<AdmissionWake> admissionWakes;
+            // A size constructor lets checked-library proxy allocation fail through the owning construction boundary.
+            mutable std::vector<AdmissionWake> admissionWakes = std::vector<AdmissionWake>(std::size_t{0});
         };
         friend class CancellationSource;
         friend class JobSystem;
@@ -109,6 +111,15 @@ namespace Horo {
     class CancellationSource {
     public:
         CancellationSource() = default;
+
+        /** @brief Reports the payload size of this owner's existing shared cancellation state.
+         * @return Bytes occupied by State, including its empty wake-registration container and synchronization fields.
+         * @details This is a logical storage charge, not allocator, shared_ptr control-block or process RSS measurement.
+         * It creates no state and does not change cancellation or parent ownership.
+         */
+        [[nodiscard]] static constexpr std::size_t StatePayloadBytes() noexcept {
+            return sizeof(CancellationToken::State);
+        }
 
         explicit CancellationSource(const CancellationToken &parent) {
             m_state->parent = parent.m_state;

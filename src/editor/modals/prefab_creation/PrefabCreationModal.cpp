@@ -11,7 +11,7 @@ namespace Horo::Editor {
     /** @copydoc PrefabCreationModal::PrefabCreationModal */
     PrefabCreationModal::PrefabCreationModal(const EditorGuiContext &context, PrefabCreationIntent intent, std::filesystem::path root,
                                              Submit submit)
-        : context_(context), intent_(std::move(intent)), root_(std::move(root)), submit_(std::move(submit)) {
+        : EditorModal(kTextScope), context_(context), intent_(std::move(intent)), root_(std::move(root)), submit_(std::move(submit)) {
         const auto path = ProjectLayout::AssetRoot(root_).filename() / "Prefab.prefab";
         const auto text = path.generic_u8string();
         relative_.assign(text.begin(), text.end());
@@ -45,9 +45,9 @@ namespace Horo::Editor {
     /** @copydoc PrefabCreationModal::Draw */
     ModalFrameResult PrefabCreationModal::Draw() {
         const auto label = [this](const char *key) {
-            return context_.localization.Get("editor", key);
+            return PrefabCreationModal::kTextScope.Text(context_.localization, key);
         };
-        const auto title = label("workspace.prefab.create.title");
+        const auto title = label("create.title");
         Ui::ScopedModalShell modal({.id = "CreatePrefabFromSelection",
                                     .title = title.c_str(),
                                     .requestedSize = {600, 420},
@@ -60,8 +60,8 @@ namespace Horo::Editor {
                                    context_.theme.fonts);
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::Bg1());
         ImGui::BeginChild("##CreatePrefabBody", {0, modal.BodyHeight()});
-        ImGui::TextWrapped("%s", label("workspace.prefab.create.help").c_str());
-        Ui::FieldLabel(label("workspace.prefab.create.path").c_str(), context_.theme.fonts);
+        ImGui::TextWrapped("%s", label("create.help").c_str());
+        Ui::FieldLabel(label("create.path").c_str(), context_.theme.fonts);
         (void)Ui::InputTextControl("##PrefabDestination", relative_, 4096, context_.theme.fonts,
                                    Ui::InputTextOptions{.error = error_.has_value()});
         if (error_)
@@ -69,12 +69,11 @@ namespace Horo::Editor {
         ImGui::EndChild();
         ImGui::PopStyleColor();
         modal.BeginFooter({20, 12});
-        const bool cancel = Ui::Button({.label = label("workspace.prefab.create.cancel").c_str(),
-                                        .variant = Ui::ButtonVariant::Secondary,
-                                        .font = context_.theme.fonts.sans});
+        const bool cancel = Ui::Button(
+            {.label = label("create.cancel").c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context_.theme.fonts.sans});
         ImGui::SameLine();
-        const bool confirm = Ui::Button(
-            {.label = label("workspace.prefab.create.confirm").c_str(), .enabled = !relative_.empty(), .font = context_.theme.fonts.sans});
+        const bool confirm =
+            Ui::Button({.label = label("create.confirm").c_str(), .enabled = !relative_.empty(), .font = context_.theme.fonts.sans});
         modal.EndFooter();
         if (cancel || modal.CloseRequested())
             return ModalFrameResult::RequestClose(ModalCloseReason::Cancelled);

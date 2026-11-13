@@ -60,6 +60,55 @@ The platform layer includes:
 - deterministic or in-memory test implementations
 - headless implementations where appropriate
 
+### Dynamic library paths
+
+Call `LoadDynamicLibraryAtPath` when the host already has a native filesystem
+path, such as a project gameplay artifact or a shadow copy. The platform
+validates the absolute path and opens the canonical regular file with the native
+loader. Windows uses the wide API and the shared native filesystem spelling so
+project and library names are independent of the active code page and do not
+rely on a process-wide long-path policy setting. Existing text callers can keep using
+`LoadDynamicLibrary`, which converts its input using the platform path encoding.
+
+The wrapper allocation precedes native image acquisition. Once the native loader
+succeeds, the wrapper owns the image before any further fallible C++ work, including
+result construction. Failed admission cannot retain an unowned native reference.
+`GetSymbol` resolves the complete supplied name, including a non-null-terminated
+view; empty names and embedded NULs fail lookup. Its existing no-throw interface
+returns null when the name cannot be prepared because allocation or string extent
+validation fails. Such lookup failure does not consume or unload the library.
+
+### Desktop file-manager integration
+
+`HoroPlatformDesktop` owns `Horo/Platform/FileManager.h` independently of the
+baseline `HoroPlatform` target. The graphical composition links this optional
+desktop adapter through `HoroGui`; headless builds retain the contract with a
+typed `file_manager.unavailable` implementation and no desktop dependencies.
+Call `RevealInFileManager` on the main thread after an explicit user action.
+Directories open themselves. Files are selected in Explorer/Finder; the Linux
+adapter opens the containing directory through the existing SDL desktop URI
+handler. Dispatch acceptance does not prove external-application completion.
+
+Common validation requires an existing absolute native regular file/directory,
+rejects embedded NULs and a symbolic link at the target, and does not reinterpret
+the path through the process locale or resolve it against the current directory.
+Project-root containment remains the caller's responsibility. Windows uses wide
+Shell APIs with scoped COM/PIDL ownership. macOS uses filesystem URLs and
+`NSWorkspace`. Linux percent-encodes path bytes into a local file URI; no platform
+builds shell command strings from a path. Native UI dependencies remain private
+to `HoroPlatformDesktop`. The editor logs typed native failures before presenting
+localized failure copy.
+
+This replaces the editor-menu-owned macOS reveal implementation and non-Apple
+stubs. Existing editor callers retain their private bool bridge; new portable
+callers link `HoroEngine::PlatformDesktop` and consume its typed result. Public
+header consumer coverage and filesystem/URI regression tests cover this boundary.
+Cross-platform native desktop behavior still requires tests on each OS.
+`HoroFileManagerTests` never launches desktop applications. For an explicit native
+check, build the opt-in `HoroFileManagerSmoke` target in a GUI build and invoke it
+with an existing absolute directory/file, including spaces and non-ASCII names.
+This helper is excluded from the default build and unattended CTest runs.
+
 Android application/activity lifecycle, replaceable native surfaces, runtime
 permissions, scoped storage, deployment, and resource-pressure specialization
 follow [Android Platform Host](./android-platform-host.md). Portable callers use
@@ -88,6 +137,19 @@ Rules:
 - case sensitivity follows the storage contract, not the current machine alone
 - symlink traversal is explicit for security-sensitive operations
 - path comparisons are tested on Windows, macOS, and Linux semantics
+
+Native durable I/O and asset source capture convert normalized absolute Windows
+paths to extended-length spelling only at the filesystem I/O boundary. Caller-facing paths and
+directory entry names retain their original namespace; bounded reads still
+reject caller-supplied device/extended prefixes and preserve no-follow parent
+checks. This does not depend on the machine-wide long-path policy being enabled.
+
+`Foundation::Paths::NativeApiPath` owns this pure path conversion in the existing
+Foundation path API. The private Platform helper retains its alias so existing
+adapters use the same policy. Asset source status, size, timestamp and stream
+operations share it after caller-namespace containment validation. Foundation-only
+consumer tests and long Unicode source-capture regression tests cover this additive
+promotion without introducing a concrete Platform dependency into Assets.
 
 Project reads retain native directory identities through descendant traversal and
 content capture. `IProjectReadFiles::Text` and `Files` retain their interactive

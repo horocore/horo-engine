@@ -1,5 +1,7 @@
 #pragma once
 
+#include "EditorViewportForwardLighting.h"
+#include "EditorViewportShaderParameters.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/opengl/OpenGLViewportResourceBridge.h"
@@ -8,7 +10,7 @@
 
 namespace Horo::Editor {
     /** @brief OpenGL editor adapter that renders backend-neutral editor scene instances into an offscreen target. */
-    class EditorViewportRendererOpenGL final : public IEditorViewportRenderer {
+    class EditorViewportRendererOpenGL final : public IEditorViewportRenderer, public Render::IShaderHotReloadTarget {
     public:
         /** @brief Borrows the frontend that owns every generic viewport resource. */
         explicit EditorViewportRendererOpenGL(Render::RenderFrontend &frontend) noexcept;
@@ -22,10 +24,24 @@ namespace Horo::Editor {
 
         /** @brief Releases all OpenGL objects; repeated calls are safe. */
         void Shutdown() noexcept;
+        [[nodiscard]] Result<Render::ShaderHotReloadTargetState> CaptureState() const override;
+        [[nodiscard]] Result<std::unique_ptr<Render::IShaderHotReloadCandidate>> Prepare(
+            std::span<const Render::ShaderHotReloadProgramView> programs, Render::ShaderHotReloadTargetState expected,
+            const CancellationToken &cancellation = {}) override;
+        [[nodiscard]] Result<Render::ShaderHotReloadTargetState> Adopt(std::unique_ptr<Render::IShaderHotReloadCandidate> candidate,
+                                                                       Render::ShaderHotReloadTargetState expected) override;
 
         [[nodiscard]] Result<void> ExecutePreparedFrame(Render::RenderFrameScope &frame,
                                                         std::span<const Render::RenderPassDescriptor> passes) override;
         void RequestExtent(EditorViewportExtent extent) noexcept override;
+        [[nodiscard]] Result<void> RequestLightingProfile(const EditorViewportLightingProfile &profile,
+                                                          const Render::LightPreparationSelection &selection) override;
+        [[nodiscard]] EditorViewportLightingDiagnostics LightingDiagnostics() const noexcept override;
+        /** @copydoc IEditorViewportRenderer::PrepareLightingFrame */
+        [[nodiscard]] Result<void> PrepareLightingFrame(const Render::StaticMeshPassDescriptor &pass, Render::RenderViewId view) override;
+
+        [[nodiscard]] Result<void> RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) override;
+
         void RequestGrid(const EditorViewportGridOptions &options) noexcept override;
         void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &options) noexcept override;
         [[nodiscard]] EditorViewportExtent RequestedExtent() const noexcept override;
@@ -37,15 +53,29 @@ namespace Horo::Editor {
         [[nodiscard]] bool IsReady() const noexcept override;
 
     private:
-        [[nodiscard]] Result<void> CreateProgram();
-        [[nodiscard]] Result<void> CreateShadowProgram();
+        struct ProgramGeneration;
+        [[nodiscard]] Result<void> CreateGridGeometry();
+        [[nodiscard]] Result<void> PrepareDrawLighting(const Render::RenderSceneView &scene,
+                                                       const Render::RenderStaticMeshInstance &instance);
+        [[nodiscard]] Result<void> CreateReloadUniformBuffer(ProgramGeneration &candidate, std::size_t role, std::uint32_t program);
+
+        [[nodiscard]] Result<void> CreateReloadProgram(ProgramGeneration &candidate, std::size_t role,
+                                                       const Render::ShaderHotReloadProgramView &view);
+        [[nodiscard]] Result<void> UploadReload(std::size_t role, std::span<const std::byte> bytes) const;
+        [[nodiscard]] Result<void> UploadReloadGrid(const Math::Mat4 &mvp, Math::Vec3 color) const;
+
+        [[nodiscard]] Result<void> CreateProgram(ProgramGeneration &candidate);
+        [[nodiscard]] Result<void> CreateShadowProgram(ProgramGeneration &candidate);
+        void AdoptProgram(ProgramGeneration &candidate) noexcept;
         [[nodiscard]] Result<void> ValidatePassRequest(const Render::StaticMeshPassDescriptor &descriptor,
                                                        EditorViewportExtent requestedExtent) const;
         [[nodiscard]] Result<void> RenderViewportPass(const Render::StaticMeshPassDescriptor &descriptor,
                                                       const std::optional<EditorViewportDirectionalShadowView> &shadow, float aspect);
+        [[nodiscard]] Result<void> DrawShadowCascade(const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame &frame,
+                                                     std::size_t cascade) const;
         [[nodiscard]] Result<void> DrawDirectionalShadowMap(const Render::RenderSceneView &scene,
-                                                            const EditorViewportDirectionalShadowView &shadow) const;
-        [[nodiscard]] Result<void> DrawSceneMeshes(const Render::RenderSceneView &scene, float aspect) const;
+                                                            const EditorViewportDirectionalShadowView &shadow);
+        [[nodiscard]] Result<void> DrawSceneMeshes(const Render::RenderSceneView &scene, float aspect);
         [[nodiscard]] Result<void> DrawGrid(const Render::RenderCameraView &camera, float aspect, float viewportHeightPixels) const;
         [[nodiscard]] Result<void> DrawLightVisualizer(const Render::RenderCameraView &camera, float aspect);
         void UploadLighting(const Render::RenderSceneView &scene, const std::optional<EditorViewportDirectionalShadowView> &shadow) const;
@@ -64,12 +94,32 @@ namespace Horo::Editor {
             std::int32_t shadowEnabled{-1};
             std::int32_t shadowLightIndex{-1};
             std::int32_t shadowMvp{-1};
+            std::int32_t shadowCascadeCount{-1};
+            std::int32_t cascadeSplits{-1};
+            std::int32_t atlasRects{-1};
+            std::int32_t cameraForward{-1};
+            std::int32_t shadowTexel{-1};
+            std::int32_t shadowBiasFilter{-1};
             std::int32_t selectionColor{-1};
             std::int32_t selectionStrength{-1};
+            std::int32_t baseColor{-1};
         };
 
-        [[nodiscard]] Result<void> LoadUniformLocations();
+        [[nodiscard]] Result<void> LoadUniformLocations(ProgramGeneration &candidate);
 
+        EditorViewportForwardLighting forwardLighting_;
+        std::optional<Render::DirectionalShadowFrame> frameShadow_;
+        Render::DirectionalShadowCacheState shadowCache_;
+        std::uint64_t shadowProgramGeneration_{};
+        std::uint64_t liveGeneration_{};
+        std::uint32_t gridProgram_{};
+        std::array<std::uint32_t, 3> reloadBuffers_{};
+        std::array<std::uint32_t, 3> reloadBufferSlots_{};
+        std::uint32_t reloadTextureUnit_{7};
+        std::array<std::size_t, 3> reloadBufferBytes_{};
+        std::array<Render::MaterialBindingLayout, 3> reloadLayouts_;
+        bool reflectedProgram_{};
+        EditorViewportShaderParameters reloadParameters_;
         std::uint32_t program_{0};
         std::uint32_t shadowProgram_{0};
         std::uint32_t gridVertexArray_{0};

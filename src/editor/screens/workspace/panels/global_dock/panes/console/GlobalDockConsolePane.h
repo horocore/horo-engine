@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 
 #include <array>
@@ -13,8 +14,14 @@
 
 namespace Horo::Editor {
     /** @brief Stateful Console tab view hosted by the global bottom dock. */
-    class GlobalDockConsolePane {
+    class GlobalDockConsolePane : public LocalizedGui {
     public:
+        /** @brief Catalog scope for this embedded dock surface. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.global_dock.console"};
+
+        /** @brief Creates a pane with its required localization scope. */
+        GlobalDockConsolePane() : LocalizedGui(kTextScope) {}
+
         /** @brief Binds the shared structured-log query source. */
         void Attach(const Log::IStructuredLogQuery *logQuery) noexcept;
 

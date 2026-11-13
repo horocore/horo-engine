@@ -65,11 +65,37 @@ namespace Horo::Assets {
         std::unique_ptr<State> state_;
     };
 
-    /** @brief Terminal payload tagged with the registry revision captured at submission. */
+    /** @brief Terminal payload tagged with the registry revision captured at submission.
+     * @details Default and move construction may allocate checked-library destination bookkeeping.
+     * A failed move construction preserves the source payload; successful moves transfer its storage. */
     struct AssetLoadResult {
+        /** @brief Creates an empty envelope. @throws std::bad_alloc If destination bookkeeping cannot be allocated. */
+        AssetLoadResult() = default;
+        /** @brief Copies an envelope and its payload. @param other Envelope to copy.
+         * @throws std::bad_alloc If the payload or destination bookkeeping cannot be allocated. */
+        AssetLoadResult(const AssetLoadResult &other) = default;
+        /** @brief Copies an envelope into existing storage. @param other Envelope to copy. @return This envelope.
+         * @throws std::bad_alloc If the copied payload requires additional storage. */
+        AssetLoadResult &operator=(const AssetLoadResult &other) = default;
+        /** @brief Transfers an envelope after destination bookkeeping is prepared. @param other Envelope to transfer.
+         * @throws std::bad_alloc If destination preparation fails, leaving other unchanged. */
+        AssetLoadResult(AssetLoadResult &&other);
+        /** @brief Transfers a payload into existing destination storage. @param other Envelope to transfer.
+         * @return This envelope. */
+        AssetLoadResult &operator=(AssetLoadResult &&other) noexcept = default;
+        /** @brief Creates a terminal envelope by copying its payload.
+         * @param selected Loaded asset identity. @param revision Registry revision captured at submission.
+         * @param payload Payload to copy. @throws std::bad_alloc If payload storage cannot be allocated. */
+        AssetLoadResult(AssetId selected, AssetRegistryRevision revision, const std::vector<std::uint8_t> &payload);
+        /** @brief Creates a terminal envelope by transferring its payload after destination preparation.
+         * @param selected Loaded asset identity. @param revision Registry revision captured at submission.
+         * @param payload Payload whose storage is transferred. @throws std::bad_alloc If destination preparation fails,
+         * leaving payload unchanged. */
+        AssetLoadResult(AssetId selected, AssetRegistryRevision revision, std::vector<std::uint8_t> &&payload);
+
         AssetId id;
         AssetRegistryRevision sourceRegistryRevision;
-        std::vector<std::uint8_t> bytes;
+        std::vector<std::uint8_t> bytes = std::vector<std::uint8_t>(std::size_t{0});
     };
 
     /** @brief Observable lifecycle state of one accepted asynchronous load. */
@@ -97,7 +123,9 @@ namespace Horo::Assets {
         /** @brief Waits until the scheduled request reaches a terminal state. @return Success for completed or cancelled
          * work, or a typed job-system failure. */
         [[nodiscard]] Result<void> Wait() const;
-        /** @brief Consumes the terminal result exactly once. @return Loaded payload or typed not-ready/cancel/failure. */
+        /** @brief Consumes the terminal result exactly once. @return Loaded payload or typed not-ready/cancel/failure.
+         * @throws std::bad_alloc If preparing the transferred result fails. A terminal consumption attempt remains consumed;
+         * callers must handle allocation failure at their fallible admission boundary. */
         [[nodiscard]] Result<AssetLoadResult> TakeResult();
 
     private:

@@ -147,6 +147,8 @@ namespace {
         const auto extracted = ExtractEditorViewportScene(runtimeScene->View(), document.Revision(), EditorViewportCamera{}, meshCache);
         REQUIRE((extracted.HasValue()));
         REQUIRE((extracted.Value().lights.size() == 1));
+        REQUIRE(extracted.Value().eligibleLights.size() == 1);
+        CHECK_FALSE(extracted.Value().eligibleLights.front().disabledAuthoredLight.has_value());
         REQUIRE((extracted.Value().lightObjects == std::vector{objects.light}));
         const Render::RenderLight &light = extracted.Value().lights.front();
         REQUIRE((light.kind == Render::RenderLightKind::Spot));
@@ -185,11 +187,193 @@ namespace {
         previewComponent.innerConeRadians = 0.4F;
         const SceneObjectLightPreview lightPreview{objects.light, previewComponent};
         REQUIRE((ApplyEditorViewportLightPreview(runtimeScene->View(), &lightPreview, preview).HasValue()));
+        REQUIRE((Math::NearlyEqual(preview.lights.front().position, Math::Vec3{5.0F, 4.0F, 0.0F})));
         REQUIRE((NearlyEqual(preview.lights.front().intensity, 9.0F)));
         REQUIRE((NearlyEqual(preview.lights.front().range, 40.0F)));
         REQUIRE((NearlyEqual(preview.lights.front().innerConeCosine, std::cos(0.4F))));
         REQUIRE((ApplyEditorViewportLightPreview(runtimeScene->View(), nullptr, preview).HasValue()));
         REQUIRE((NearlyEqual(preview.lights.front().intensity, objects.component.intensity)));
+    }
+
+    TEST_CASE("Light preview enable disable and clear preserve exact source identity", "[unit][editor][light-preview]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeLightScene(document);
+        EditorHistory history;
+        SceneDocumentCommandExecutor commands{document, history};
+        auto disabled = objects.component;
+        disabled.enabled = false;
+        REQUIRE(commands.Execute(SetSceneObjectLightCommand{objects.light, disabled}).HasValue());
+        const auto scene = MakeRuntimeScene(document);
+        Runtime::PrimitiveMeshCache meshes;
+        auto runtimeOnly = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, meshes).Value();
+        CHECK(runtimeOnly.eligibleLights.empty());
+        const SceneObjectLightPreview cannotInfer{objects.light, objects.component};
+        CHECK(ApplyEditorViewportLightPreview(scene->View(), &cannotInfer, runtimeOnly).HasError());
+        const auto authored = document.Snapshot();
+        auto snapshot = ExtractEditorViewportScene(scene->View(), authored.revision, {}, meshes, &authored).Value();
+        REQUIRE(snapshot.lights.empty());
+        REQUIRE(snapshot.eligibleLights.size() == 1);
+        REQUIRE(snapshot.eligibleLights.front().disabledAuthoredLight.has_value());
+        CHECK(snapshot.eligibleLights.front().authoredRevision == authored.revision);
+        CHECK(snapshot.eligibleLights.front().definitionRevision == scene->View().DefinitionRevision());
+        const auto entity = snapshot.eligibleLights.front().entity;
+        const auto identity = (std::uint64_t{entity.entity.generation} << 32U) | entity.entity.index;
+        const SceneObjectLightPreview enabled{objects.light, objects.component};
+        for (int iteration = 0; iteration < 4; ++iteration) {
+            auto copied = snapshot;
+            REQUIRE(ApplyEditorViewportLightPreview(scene->View(), &enabled, copied).HasValue());
+            REQUIRE(copied.lights.size() == 1);
+            CHECK(copied.lights.front().stableIdentity == identity);
+            CHECK(copied.lightObjects == std::vector{objects.light});
+            REQUIRE(ApplyEditorViewportLightPreview(scene->View(), nullptr, copied).HasValue());
+            CHECK(copied.lights.empty());
+            snapshot = copied;
+        }
+    }
+
+    TEST_CASE("Disabled light metadata rejects stale authoring revision and runtime definition", "[unit][editor][light-preview]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeLightScene(document);
+        EditorHistory history;
+        SceneDocumentCommandExecutor commands{document, history};
+        auto disabled = objects.component;
+        disabled.enabled = false;
+        REQUIRE(commands.Execute(SetSceneObjectLightCommand{objects.light, disabled}).HasValue());
+        const auto scene = MakeRuntimeScene(document);
+        const auto captured = document.Snapshot();
+        Runtime::PrimitiveMeshCache meshes;
+        auto snapshot = ExtractEditorViewportScene(scene->View(), captured.revision, {}, meshes, &captured).Value();
+        REQUIRE(snapshot.eligibleLights.size() == 1);
+        REQUIRE(commands.Execute(CreateSceneObjectCommand{.name = "New committed state"}).HasValue());
+        const auto latest = document.Snapshot();
+        CHECK(ExtractEditorViewportScene(scene->View(), captured.revision, {}, meshes, &latest).HasError());
+        CHECK(ExtractEditorViewportScene(scene->View(), latest.revision, {}, meshes, &latest).HasError());
+        const SceneObjectLightPreview enabled{objects.light, objects.component};
+        REQUIRE(ApplyEditorViewportLightPreview(scene->View(), &enabled, snapshot).HasValue());
+        REQUIRE(ApplyEditorViewportLightPreview(scene->View(), nullptr, snapshot).HasValue());
+        CHECK(snapshot.lights.empty());
+        CHECK(snapshot.documentRevision == captured.revision);
+    }
+
+    TEST_CASE("Light and transform preview overlays compose and clear independently", "[unit][editor][light-preview]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeLightScene(document);
+        const auto scene = MakeRuntimeScene(document);
+        Runtime::PrimitiveMeshCache meshes;
+        auto snapshot = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, meshes).Value();
+        const auto identity = snapshot.lights.front().stableIdentity;
+        const std::array transforms{SceneObjectTransformPreview{objects.parent, Math::Transform{.translation = {8, 0, 0}}}};
+        auto component = objects.component;
+        component.intensity = 12;
+        const SceneObjectLightPreview light{objects.light, component};
+        REQUIRE(ApplyEditorViewportTransformPreview(scene->View(), transforms, snapshot).HasValue());
+        REQUIRE(ApplyEditorViewportLightPreview(scene->View(), &light, snapshot).HasValue());
+        CHECK(Math::NearlyEqual(snapshot.lights.front().position, Math::Vec3{8, 3, 0}));
+        REQUIRE(ApplyEditorViewportTransformPreview(scene->View(), {}, snapshot).HasValue());
+        CHECK(snapshot.lights.front().intensity == 12);
+        CHECK(Math::NearlyEqual(snapshot.lights.front().position, Math::Vec3{2, 3, 0}));
+        REQUIRE(ApplyEditorViewportTransformPreview(scene->View(), transforms, snapshot).HasValue());
+        REQUIRE(ApplyEditorViewportLightPreview(scene->View(), nullptr, snapshot).HasValue());
+        CHECK(snapshot.lights.front().intensity == objects.component.intensity);
+        CHECK(Math::NearlyEqual(snapshot.lights.front().position, Math::Vec3{8, 3, 0}));
+        component.enabled = false;
+        const SceneObjectLightPreview disabled{objects.light, component};
+        REQUIRE(ApplyEditorViewportLightPreview(scene->View(), &disabled, snapshot).HasValue());
+        CHECK(snapshot.lights.empty());
+        REQUIRE(ApplyEditorViewportTransformPreview(scene->View(), {}, snapshot).HasValue());
+        CHECK(snapshot.lights.empty());
+        REQUIRE(ApplyEditorViewportLightPreview(scene->View(), nullptr, snapshot).HasValue());
+        CHECK(snapshot.lights.front().stableIdentity == identity);
+    }
+
+    TEST_CASE("Empty transform preview preserves canonical scale independent light direction", "[unit][editor][light-preview]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeLightScene(document);
+        EditorHistory history;
+        SceneDocumentCommandExecutor commands{document, history};
+        REQUIRE(commands.Execute(SetSceneObjectTransformCommand{objects.parent, Math::Transform{.scale = {-2, 3, 4}}}).HasValue());
+        const auto scene = MakeRuntimeScene(document);
+        Runtime::PrimitiveMeshCache meshes;
+        auto snapshot = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, meshes).Value();
+        const auto original = snapshot.lights.front();
+        const auto revision = snapshot.View().lightSnapshotRevision;
+        REQUIRE(ApplyEditorViewportTransformPreview(scene->View(), {}, snapshot).HasValue());
+        CHECK(Math::NearlyEqual(snapshot.lights.front().direction, original.direction));
+        CHECK(Math::NearlyEqual(snapshot.lights.front().position, original.position));
+        CHECK(snapshot.View().lightSnapshotRevision == revision);
+    }
+
+    TEST_CASE("Rejected preview publishes neither light nor transform overlay", "[unit][editor][light-preview]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeLightScene(document);
+        const auto scene = MakeRuntimeScene(document);
+        Runtime::PrimitiveMeshCache meshes;
+        auto snapshot = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, meshes).Value();
+        const std::array valid{SceneObjectTransformPreview{objects.parent, Math::Transform{.translation = {8, 0, 0}}}};
+        REQUIRE(ApplyEditorViewportTransformPreview(scene->View(), valid, snapshot).HasValue());
+        const auto revision = snapshot.View().lightSnapshotRevision;
+        const SceneObjectLightPreview absent{{999999}, objects.component};
+        CHECK(ApplyEditorViewportLightPreview(scene->View(), &absent, snapshot).HasError());
+        const std::array invalid{valid.front(), SceneObjectTransformPreview{{999999}, {}}};
+        CHECK(ApplyEditorViewportTransformPreview(scene->View(), invalid, snapshot).HasError());
+        CHECK(snapshot.View().lightSnapshotRevision == revision);
+        CHECK_FALSE(snapshot.lightOverride.has_value());
+        REQUIRE(ApplyEditorViewportLightPreview(scene->View(), nullptr, snapshot).HasValue());
+        CHECK(Math::NearlyEqual(snapshot.lights.front().position, Math::Vec3{8, 3, 0}));
+    }
+
+    TEST_CASE("Stale captured light reference rejects staged update atomically", "[unit][editor][light-preview]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeLightScene(document);
+        EditorHistory history;
+        SceneDocumentCommandExecutor commands{document, history};
+        SceneObjectComponentSet components;
+        components.light = objects.component;
+        REQUIRE(commands.Execute(CreateSceneObjectCommand{.name = "Second light", .components = components}).HasValue());
+        const auto scene = MakeRuntimeScene(document);
+        Runtime::PrimitiveMeshCache meshes;
+        auto snapshot = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, meshes).Value();
+        REQUIRE(snapshot.eligibleLights.size() == 2);
+        const auto revision = snapshot.View().lightSnapshotRevision;
+        // A captured entity generation must never silently bind a replacement occupying its slot.
+        ++snapshot.eligibleLights.back().entity.entity.generation;
+        auto changed = objects.component;
+        changed.intensity = 99;
+        const SceneObjectLightPreview preview{objects.light, changed};
+        CHECK(ApplyEditorViewportLightPreview(scene->View(), &preview, snapshot).HasError());
+        CHECK(snapshot.View().lightSnapshotRevision == revision);
+        CHECK_FALSE(snapshot.lightOverride.has_value());
+        CHECK(snapshot.lights.front().intensity == objects.component.intensity);
+    }
+
+    TEST_CASE("Hidden light sources remain ineligible for component previews", "[unit][editor][light-preview]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        SceneDocument document;
+        const auto objects = MakeLightScene(document);
+        EditorHistory history;
+        SceneDocumentCommandExecutor commands{document, history};
+        REQUIRE(commands.Execute(SetSceneObjectEditorStateCommand{objects.parent, SceneObjectEditorState{.visible = false}}).HasValue());
+        const auto scene = MakeRuntimeScene(document);
+        Runtime::PrimitiveMeshCache meshes;
+        const auto authored = document.Snapshot();
+        auto snapshot = ExtractEditorViewportScene(scene->View(), document.Revision(), {}, meshes, &authored).Value();
+        CHECK(snapshot.eligibleLights.empty());
+        const SceneObjectLightPreview preview{objects.light, objects.component};
+        CHECK(ApplyEditorViewportLightPreview(scene->View(), &preview, snapshot).HasError());
+        CHECK(snapshot.lights.empty());
     }
 
     TEST_CASE("Delete Removes Complete Subtree", "[unit][editor]") {

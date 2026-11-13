@@ -13,6 +13,72 @@
 #include <vector>
 
 namespace Horo::JsonEncoding::Detail {
+    /** @brief Owns bounded codec DOM storage whose retirement never allocates the pinned parser's flattening stack.
+     * @details Owning codecs bound nesting before retaining parsed trees. Only structured containers are traversed;
+     * primitive JSON iteration is deliberately avoided because it can visit the primitive itself. */
+    class OwnedJsonValue final {
+    public:
+        /** @brief Creates an inert owner without allocating a container. */
+        OwnedJsonValue() noexcept : value_(nullptr) {}
+
+        /** @brief Takes a fully constructed DOM without copying its children. */
+        explicit OwnedJsonValue(nlohmann::json &&value) noexcept : value_(std::move(value)) {}
+
+        OwnedJsonValue(const OwnedJsonValue &) = delete;
+        OwnedJsonValue &operator=(const OwnedJsonValue &) = delete;
+
+        /** @brief Transfers sole ownership and leaves the source inert. */
+        OwnedJsonValue(OwnedJsonValue &&other) noexcept : value_(std::move(other.value_)) {}
+
+        /** @brief Retires old ownership before moving the new tree without allocation. */
+        OwnedJsonValue &operator=(OwnedJsonValue &&other) noexcept {
+            if (this != &other) {
+                Clear(value_);
+                value_.swap(other.value_);
+            }
+            return *this;
+        }
+
+        /** @brief Clears children before the empty container destructor can request flattening storage. */
+        ~OwnedJsonValue() noexcept {
+            Clear(value_);
+        }
+
+        /** @brief Borrows owned parsed storage only during the enclosing codec operation. */
+        [[nodiscard]] nlohmann::json &Get() noexcept {
+            return value_;
+        }
+
+        /** @brief Borrows immutable owned parsed storage without extending its lifetime. */
+        [[nodiscard]] const nlohmann::json &Get() const noexcept {
+            return value_;
+        }
+
+        /** @brief Transfers complete storage to an explicitly owning caller and leaves this owner null. */
+        [[nodiscard]] nlohmann::json Take() noexcept {
+            return std::move(value_);
+        }
+
+    private:
+        /** @brief Recursively clears actual bounded structured children in place, then releases only empty containers. */
+        static void Clear(nlohmann::json &value) noexcept {
+            if (value.is_object()) {
+                auto &fields = value.get_ref<nlohmann::json::object_t &>();
+                for (auto &field : fields)
+                    Clear(field.second);
+                fields.clear();
+            } else if (value.is_array()) {
+                auto &children = value.get_ref<nlohmann::json::array_t &>();
+                for (auto &child : children)
+                    Clear(child);
+                children.clear();
+            }
+            value = nullptr;
+        }
+
+        nlohmann::json value_;
+    };
+
     /**
      * @brief Private canonical wire builder whose structural cleanup never allocates.
      * @details The supported Scene and Prefab schemas fix nesting depth. Ordinary vectors own structural
@@ -35,6 +101,27 @@ namespace Horo::JsonEncoding::Detail {
                 Item copied{item};
                 value_.template emplace<Item>(std::move(copied));
             }, other.value_);
+        }
+
+        /** @brief Copies an existing canonical tree under this writer's field-order policy without a JSON DOM intermediary. */
+        template <bool SourceSorted>
+            requires(SourceSorted != SortedFields)
+        explicit(false) CanonicalJsonValue(const CanonicalJsonValue<SourceSorted> &other) {
+            std::visit([this]<typename Item>(const Item &item) {
+                auto copied = CopyPolicyItem<SourceSorted>(item);
+                using Copied = decltype(copied);
+                static_assert(std::is_nothrow_move_constructible_v<Copied>);
+                value_.template emplace<Copied>(std::move(copied));
+            }, other.value_);
+        }
+
+        /** @brief Preserves both trees if copying any cross-policy child fails. */
+        template <bool SourceSorted>
+            requires(SourceSorted != SortedFields)
+        CanonicalJsonValue &operator=(const CanonicalJsonValue<SourceSorted> &other) {
+            CanonicalJsonValue copied{other};
+            *this = std::move(copied);
+            return *this;
         }
 
         /** @brief Transfers complete owned storage without allocation and leaves the source null. */
@@ -110,22 +197,39 @@ namespace Horo::JsonEncoding::Detail {
             return std::get<array_t>(value_).empty();
         }
 
-        /** @brief Bridges existing internal DOM consumers; never used by safe source serialization. */
-        [[nodiscard]] nlohmann::json ToJson() const {
-            return std::visit([]<typename Item>(const Item &item) {
+        /** @brief Converts through one owned implementation; every destination slot exists before a child is transferred into it.
+         * @pre The enclosing codec has admitted its finite tree depth and payload budget, as for dump(). */
+        [[nodiscard]] OwnedJsonValue ToOwnedJson() const {
+            return std::visit([]<typename Item>(const Item &item) -> OwnedJsonValue {
                 if constexpr (std::is_same_v<Item, array_t>) {
-                    auto result = nlohmann::json::array();
-                    for (const auto &child : item)
-                        result.push_back(child.ToJson());
+                    OwnedJsonValue result{nlohmann::json(nlohmann::json::value_t::array)};
+                    auto &children = result.Get().get_ref<nlohmann::json::array_t &>();
+                    children.resize(item.size());
+                    for (std::size_t i = 0; i < item.size(); ++i) {
+                        auto converted = item[i].ToOwnedJson();
+                        children[i].swap(converted.Get());
+                    }
                     return result;
                 } else if constexpr (std::is_same_v<Item, object_t>) {
-                    auto result = nlohmann::json::object();
-                    for (const auto &[name, child] : item)
-                        result[name] = child.ToJson();
+                    OwnedJsonValue result{nlohmann::json(nlohmann::json::value_t::object)};
+                    for (const auto &[name, child] : item) {
+                        auto &target = result.Get()[name];
+                        auto converted = child.ToOwnedJson();
+                        target.swap(converted.Get());
+                    }
+                    return result;
+                } else if constexpr (std::is_same_v<Item, std::string>) {
+                    OwnedJsonValue result{nlohmann::json(nlohmann::json::value_t::string)};
+                    result.Get().get_ref<std::string &>() = item;
                     return result;
                 } else
-                    return nlohmann::json(item);
+                    return OwnedJsonValue{nlohmann::json(item)};
             }, value_);
+        }
+
+        /** @brief Retains the existing raw-DOM bridge signature for legacy callers; fault-critical consumers use ToOwnedJson. */
+        [[nodiscard]] nlohmann::json ToJson() const {
+            return ToOwnedJson().Take();
         }
 
         /** @brief Borrows the typed structural container during synchronous encoding. */
@@ -158,6 +262,39 @@ namespace Horo::JsonEncoding::Detail {
         }
 
     private:
+        template <bool> friend class CanonicalJsonValue;
+
+        /** @brief Completes recursive array storage outside the destination variant before publication. */
+        template <bool SourceSorted> static array_t CopyPolicyArray(const typename CanonicalJsonValue<SourceSorted>::array_t &source) {
+            array_t result;
+            result.reserve(source.size());
+            for (const auto &child : source)
+                result.emplace_back(child);
+            return result;
+        }
+
+        /** @brief Retains source traversal order for ordered targets and sorts only when the target contract requests it. */
+        template <bool SourceSorted> static object_t CopyPolicyObject(const typename CanonicalJsonValue<SourceSorted>::object_t &source) {
+            object_t result;
+            result.reserve(source.size());
+            for (const auto &[name, child] : source)
+                result.emplace_back(name, CanonicalJsonValue{child});
+            if constexpr (SortedFields)
+                std::ranges::sort(result, {}, &object_t::value_type::first);
+            return result;
+        }
+
+        /** @brief Copies the exact scalar alternative or prepares a complete recursively converted container. */
+        template <bool SourceSorted, class Item> static auto CopyPolicyItem(const Item &item) {
+            using Source = CanonicalJsonValue<SourceSorted>;
+            if constexpr (std::is_same_v<Item, typename Source::array_t>)
+                return CopyPolicyArray<SourceSorted>(item);
+            else if constexpr (std::is_same_v<Item, typename Source::object_t>)
+                return CopyPolicyObject<SourceSorted>(item);
+            else
+                return Item{item};
+        }
+
         using Value = std::variant<std::nullptr_t, bool, std::int64_t, std::uint64_t, double, std::string, array_t, object_t>;
         static_assert(std::is_nothrow_move_constructible_v<Value>);
         static_assert(std::is_nothrow_move_assignable_v<Value>);

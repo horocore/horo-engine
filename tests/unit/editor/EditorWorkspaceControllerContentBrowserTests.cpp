@@ -1,6 +1,8 @@
 #include "EditorWorkspaceControllerFilesystemTestSupport.h"
 #include "EditorWorkspaceControllerPolicyTestSupport.h"
 #include "Horo/Assets/MeshEditorPayload.h"
+#include "Horo/Foundation/Paths.h"
+#include "OwnedTestDirectory.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
@@ -8,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -167,6 +170,41 @@ namespace {
         CHECK(controller.ViewModel().objects.back().name == "chair");
     }
 
+    TEST_CASE("Content browser projects Unicode native paths as round-trippable UTF-8", "[unit][editor][assets]") {
+        Tests::OwnedTestDirectory fixture{"content-browser-utf8"};
+        const auto root = fixture.Path() / u8"工程";
+        const auto folder = root / "assets" / u8"图 Ğ";
+        REQUIRE(std::filesystem::create_directories(folder));
+        const auto source = folder / u8"模型.txt";
+        std::ofstream(source, std::ios::binary) << "source";
+        auto metadata = source;
+        metadata += ".horo";
+        std::ofstream(metadata, std::ios::binary) << "{}";
+        auto lock = source;
+        lock += ".horo-source.lock";
+        std::ofstream(lock, std::ios::binary) << "lock";
+
+        const auto nativePath = [](const std::string &text) {
+            return std::filesystem::path{std::u8string{text.begin(), text.end()}};
+        };
+        const auto assets = BuildContentBrowserDirectory(root, root / "assets", {});
+        REQUIRE(assets.readable);
+        REQUIRE(assets.entries.size() == 1);
+        CHECK(assets.entries.front().displayName == "图 Ğ");
+        CHECK(assets.entries.front().containedItemCount == 1);
+        CHECK(std::filesystem::equivalent(nativePath(assets.entries.front().absolutePath), folder));
+
+        const auto contents = BuildContentBrowserDirectory(root, folder, {});
+        REQUIRE(contents.readable);
+        REQUIRE(contents.entries.size() == 1);
+        CHECK(contents.entries.front().displayName == "模型");
+        CHECK(std::filesystem::equivalent(nativePath(contents.entries.front().absolutePath), source));
+        CHECK(std::filesystem::equivalent(nativePath(contents.absoluteCurrentPath), folder));
+        REQUIRE_FALSE(contents.breadcrumbs.empty());
+        CHECK(contents.breadcrumbs.back().label == "图 Ğ");
+        CHECK(std::filesystem::equivalent(nativePath(contents.breadcrumbs.back().absolutePath), folder));
+    }
+
     TEST_CASE("Gameplay behavior creation requests validate Lua and native kinds", "[unit][editor][behavior]") {
         const std::string destination = std::filesystem::absolute("project/assets/scripts").string();
         for (const GameplayBehaviorKind kind : {GameplayBehaviorKind::Lua, GameplayBehaviorKind::Native}) {
@@ -261,6 +299,83 @@ namespace {
 
         std::error_code cleanupError;
         std::filesystem::remove_all(projectRoot, cleanupError);
+    }
+
+    TEST_CASE("Native behavior creation writes source and reveals its real directory with navigation history",
+              "[unit][editor][behavior][native-creation]") {
+        const auto projectRoot = std::filesystem::temp_directory_path() /
+                                 ("horo-create-native-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const auto scripts = projectRoot / "Assets/Scripts";
+        const auto nativeDirectory = projectRoot / "source/gameplay";
+        std::filesystem::create_directories(scripts);
+        NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations{files};
+        Runtime::RuntimeSceneService runtimeScene;
+        CancellationSource cancellation;
+        REQUIRE(runtimeScene.Startup(cancellation.Token()).HasValue());
+        EditorWorkspaceController controller{projectRoot, runtimeScene, {}, {.mutations = &mutations, .durableFiles = &files}};
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::NavigateContentBrowser, .stringPayload = scripts.string()});
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::CreateNativeBehavior;
+        command.gameplayBehaviorRequest = CreateGameplayBehaviorRequest{.destination = nativeDirectory.string(),
+                                                                        .baseName = "PlayerBehavior",
+                                                                        .kind = GameplayBehaviorKind::Native};
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        REQUIRE(std::filesystem::is_regular_file(nativeDirectory / "PlayerBehavior.cpp"));
+        REQUIRE(std::filesystem::is_regular_file(nativeDirectory / "GameModule.cpp"));
+        CHECK_FALSE(std::filesystem::exists(scripts / "PlayerBehavior.cpp"));
+        CHECK_FALSE(std::filesystem::exists(nativeDirectory / "PlayerBehavior.cpp.meta"));
+        REQUIRE(controller.ViewModel().contentBrowser.absoluteCurrentPath == std::filesystem::weakly_canonical(nativeDirectory).string());
+        REQUIRE(std::ranges::any_of(controller.ViewModel().contentBrowser.entries, [&](const auto &entry) {
+            return entry.absolutePath == std::filesystem::weakly_canonical(nativeDirectory / "PlayerBehavior.cpp").string();
+        }));
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::NavigateContentBrowserBack});
+        CHECK(controller.ViewModel().contentBrowser.absoluteCurrentPath == std::filesystem::weakly_canonical(scripts).string());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::NavigateContentBrowserForward});
+        CHECK(controller.ViewModel().contentBrowser.absoluteCurrentPath == std::filesystem::weakly_canonical(nativeDirectory).string());
+        controller.ProcessCommand(command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.content_browser.operation.name_exists");
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::NavigateContentBrowser, .stringPayload = projectRoot.string()});
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.content_browser.operation.invalid_target");
+        std::error_code cleanupError;
+        std::filesystem::remove_all(projectRoot, cleanupError);
+    }
+
+    TEST_CASE("Gameplay requests reject malformed UTF8 before native path construction", "[unit][editor][behavior][unicode]") {
+        const bool malformedDestination = GENERATE(true, false);
+        const std::string malformed{"\xc0\xaf"};
+        const CreateGameplayBehaviorRequest request{.destination = malformedDestination ? "/project/" + malformed : "/project/scripts",
+                                                    .baseName = malformedDestination ? "Behavior" : "Behavior" + malformed,
+                                                    .kind = GameplayBehaviorKind::Lua};
+        CHECK(ValidateCreateGameplayBehaviorRequest(request).HasError());
+    }
+
+    TEST_CASE("Gameplay creation preserves UTF8 destination directories", "[unit][editor][behavior][unicode]") {
+        const auto kind = GENERATE(GameplayBehaviorKind::Lua, GameplayBehaviorKind::Native);
+        Tests::OwnedTestDirectory owned{"behavior-create-\xe5\x9b\xbe"};
+        const auto projectRoot = owned.Path();
+        const auto directory = kind == GameplayBehaviorKind::Lua
+                                   ? ProjectLayout::ScriptsRoot(projectRoot) / std::filesystem::path{u8"\u56fe scripts"}
+                                   : projectRoot / "source/gameplay";
+        std::filesystem::create_directories(directory);
+        NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations{files};
+        Runtime::RuntimeSceneService runtimeScene;
+        CancellationSource cancellation;
+        REQUIRE(runtimeScene.Startup(cancellation.Token()).HasValue());
+        EditorWorkspaceController controller{projectRoot, runtimeScene, {}, {.mutations = &mutations, .durableFiles = &files}};
+        const auto encoded = directory.u8string();
+        const CreateGameplayBehaviorRequest request{.destination = std::string{encoded.begin(), encoded.end()},
+                                                    .baseName = "UnicodeDirectoryBehavior",
+                                                    .kind = kind};
+        controller.ProcessCommand({.command = kind == GameplayBehaviorKind::Lua ? EditorWorkspaceViewCommand::CreateLuaBehavior
+                                                                                : EditorWorkspaceViewCommand::CreateNativeBehavior,
+                                   .gameplayBehaviorRequest = request});
+        INFO(controller.ViewModel().contentBrowserOperationError);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const char *filename = kind == GameplayBehaviorKind::Lua ? "UnicodeDirectoryBehavior.horo_script" : "UnicodeDirectoryBehavior.cpp";
+        CHECK(std::filesystem::is_regular_file(directory / filename));
     }
 
     TEST_CASE("Published Asset Registry Revisions Refresh The Content Browser Projection", "[unit][editor]") {

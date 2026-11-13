@@ -1,5 +1,7 @@
 #include "ExtensionAbiValidation.h"
 
+#include "Horo/Extensions/ExtensionServiceAbi.h"
+
 #include <cstddef>
 
 namespace Horo::Extensions {
@@ -13,7 +15,8 @@ namespace Horo::Extensions {
                    (requirements.requiredFunctions &
                     ~uint32_t{HORO_EXTENSION_REQUIRES_ASSET_IMPORTER | HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER |
                               HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY | HORO_EXTENSION_REQUIRES_EDITOR_PAGE |
-                              HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR | HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT}) == 0;
+                              HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR | HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT |
+                              HORO_EXTENSION_REQUIRES_SERVICES}) == 0;
         }
 
         /** @brief Checks optional interactive transport prefixes without granting absent callbacks through older negotiations. */
@@ -49,6 +52,28 @@ namespace Horo::Extensions {
             }
             return HORO_EXTENSION_SUCCESS;
         }
+
+        HoroExtensionStatus ValidateBackendRequirements(const HoroExtensionRequirements &requirements,
+                                                        const HoroExtensionHostApi &host) noexcept {
+            if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_ASSET_IMPORTER) != 0 && host.registerAssetImporter == nullptr)
+                return HORO_EXTENSION_ERROR_INVALID_ARGS;
+            if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER) != 0 &&
+                (host.structSize <
+                     offsetof(HoroExtensionHostApi, registerPlatformServicesProvider) + sizeof(host.registerPlatformServicesProvider) ||
+                 host.registerPlatformServicesProvider == nullptr))
+                return HORO_EXTENSION_ERROR_INVALID_ARGS;
+            return HORO_EXTENSION_SUCCESS;
+        }
+
+        HoroExtensionStatus ValidateServiceRequirements(const HoroExtensionRequirements &requirements,
+                                                        const HoroExtensionHostApi &host) noexcept {
+            if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_SERVICES) != 0 &&
+                (requirements.minimumHostMinor < 8 ||
+                 requirements.requiredHostApiSize < offsetof(HoroExtensionHostApi, services) + sizeof(host.services) ||
+                 !HoroExtensionHasServiceTransport(&host)))
+                return HORO_EXTENSION_ERROR_VERSION_MISMATCH;
+            return HORO_EXTENSION_SUCCESS;
+        }
     }  // namespace
 
     /** @copydoc NegotiateModuleAbi */
@@ -67,13 +92,10 @@ namespace Horo::Extensions {
         }
         if (!HasSupportedRequirements(requirements, host))
             return HORO_EXTENSION_ERROR_VERSION_MISMATCH;
-        if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_ASSET_IMPORTER) != 0 && host.registerAssetImporter == nullptr)
-            return HORO_EXTENSION_ERROR_INVALID_ARGS;
-        if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER) != 0 &&
-            (host.structSize <
-                 offsetof(HoroExtensionHostApi, registerPlatformServicesProvider) + sizeof(host.registerPlatformServicesProvider) ||
-             host.registerPlatformServicesProvider == nullptr))
-            return HORO_EXTENSION_ERROR_INVALID_ARGS;
+        if (const auto status = ValidateBackendRequirements(requirements, host); status != HORO_EXTENSION_SUCCESS)
+            return status;
+        if (const auto status = ValidateServiceRequirements(requirements, host); status != HORO_EXTENSION_SUCCESS)
+            return status;
         if (const auto status = ValidateInteractiveRequirements(requirements, host); status != HORO_EXTENSION_SUCCESS)
             return status;
         if (negotiated != nullptr)

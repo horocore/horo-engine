@@ -1,5 +1,6 @@
 #include "CliHostCommands.h"
 
+#include "ExtensionScriptCliHost.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Cli/NavigationCommands.h"
 #include "Horo/Cli/PackageCommands.h"
@@ -237,6 +238,8 @@ namespace Horo::Application::Internal {
             }
             descriptors.push_back(std::move(descriptor));
         }
+        descriptors.push_back(DescribeExtensionScriptCommand());
+        descriptors.push_back(DescribeModuleScriptCommand());
         auto packages = Cli::DescribePackageCommands();
         descriptors.insert(descriptors.end(), std::make_move_iterator(packages.begin()), std::make_move_iterator(packages.end()));
         descriptors.push_back(Cli::DescribeNavigationBakeCommand());

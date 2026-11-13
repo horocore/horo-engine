@@ -136,7 +136,8 @@ namespace Horo::Render {
                 throw InvalidEvidence{};
             for (std::size_t index = 0; index < Members.size(); ++index) {
                 const auto &member = members[index];
-                if (member.at("name") != Members[index].name || member.at("type") != Members[index].type ||
+                if (member.at("name").get_ref<const std::string &>() != Members[index].name ||
+                    member.at("type").get_ref<const std::string &>() != Members[index].type ||
                     Unsigned(member.at("offset")) != Members[index].offset || member.contains("array") ||
                     member.contains("matrix_stride") || member.contains("physical_pointer"))
                     throw InvalidEvidence{};

@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        profile: [qualification-debug, qualification-release]
+        profile: [qualification-debug, qualification-release, qualification-vulkan-development]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: actions/setup-java@v4
@@ -56,19 +56,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          keytool -genkeypair -keystore "$RUNNER_TEMP/qualification.p12" -storetype PKCS12 -alias qualification -keyalg RSA -keysize 2048 -validity 2 -dname CN=HoroQualification -storepass qualification -keypass qualification
+          qualification_password="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+          echo "::add-mask::$qualification_password"
+          export HORO_ANDROID_STORE_PASSWORD="$qualification_password"
+          export HORO_ANDROID_KEY_PASSWORD="$qualification_password"
+          printf 'HORO_ANDROID_STORE_PASSWORD=%s\nHORO_ANDROID_KEY_PASSWORD=%s\n' "$qualification_password" "$qualification_password" >> "$GITHUB_ENV"
+          keytool -genkeypair -keystore "$RUNNER_TEMP/qualification.p12" -storetype PKCS12 -alias qualification -keyalg RSA -keysize 2048 -validity 2 -dname CN=HoroQualification -storepass:env HORO_ANDROID_STORE_PASSWORD -keypass:env HORO_ANDROID_KEY_PASSWORD
       - name: Build two isolated signed packages and compare evidence
         shell: bash
         env:
           PACKAGE_PROFILE: ${{ matrix.profile }}
           HORO_ANDROID_KEY_ALIAS: qualification
-          HORO_ANDROID_STORE_PASSWORD: qualification
-          HORO_ANDROID_KEY_PASSWORD: qualification
         run: |
           set -euo pipefail
           export HORO_ANDROID_KEYSTORE="$RUNNER_TEMP/qualification.p12"
           abi_args=(--abi arm64-v8a)
-          if [[ "$PACKAGE_PROFILE" == qualification-debug ]]; then
+          if [[ "$PACKAGE_PROFILE" != qualification-release ]]; then
             abi_args+=(--abi x86_64)
           fi
           for iteration in first second; do

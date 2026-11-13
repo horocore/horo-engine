@@ -1,0 +1,8 @@
+{
+    global:
+        Java_com_google_androidgamesdk_GameActivity_initializeNativeCode;
+        GameActivity_onCreate;
+        android_main;
+    local:
+        *;
+};

@@ -3,6 +3,7 @@
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorModalHost.h"
+#include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
@@ -272,4 +273,22 @@ TEST_CASE("Asset import presentation renders retained history status variants", 
     REQUIRE(modalPtr->ImportHistory().size() == states.size());
 
     DrawFrame(imgui, *modalPtr);
+}
+
+TEST_CASE("Asset import separates relative surface copy from canonical importer labels",
+          "[unit][editor][gui][asset-import][localization]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    Tests::ScopedJobSystem jobs;
+    LocalizationService localization{{"en-US"}};
+    LocalizationCatalog catalog{.locale = {"en-US"}};
+    catalog.messages.emplace(MessageKey{"editor", "asset_import.title"}, "Import assets");
+    catalog.messages.emplace(MessageKey{"editor", "importer.options.optimize"}, "Optimize mesh");
+    REQUIRE(localization.RegisterCatalog(std::move(catalog)));
+    REQUIRE(localization.Prepare({"en-US"}));
+    REQUIRE(localization.ActivatePrepared());
+    AssetImportModal modal{imgui.Fonts(), jobs.Get(), MakeCatalog(), {.localization = &localization}};
+    CHECK(modal.Localized("title", "fallback") == "Import assets");
+    CHECK(modal.LocalizedCatalogMessage("importer.options.optimize", "fallback") == "Optimize mesh");
+    CHECK(modal.Localized("importer.options.optimize", "fallback") == "fallback");
 }

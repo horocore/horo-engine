@@ -31,7 +31,7 @@ namespace Horo::Editor {
         CHECK(document.Snapshot().Value().acceptedSource == before.acceptedSource);
         CHECK(document.Snapshot().Value().dirty);
         CHECK(document.UndoCount() == 1);
-        CHECK_FALSE(std::filesystem::exists(project.path.string() + ".source-publication.tmp"));
+        CHECK_FALSE(std::filesystem::exists(StagingPath(project.path)));
     }
 
     TEST_CASE("PCG precommit write replacement and provider failures preserve document owners", "[unit][editor][pcg][failure]") {
@@ -71,7 +71,7 @@ namespace Horo::Editor {
         CHECK(document.Snapshot().Value().acceptedSource == before.acceptedSource);
         CHECK(document.Snapshot().Value().dirty);
         CHECK(document.UndoCount() == 1);
-        CHECK_FALSE(std::filesystem::exists(project.path.string() + ".source-publication.tmp"));
+        CHECK_FALSE(std::filesystem::exists(StagingPath(project.path)));
     }
 
     TEST_CASE("PCG allocation and untracked publication failures reject concurrent source edits", "[unit][editor][pcg][failure]") {
@@ -114,7 +114,7 @@ namespace Horo::Editor {
         CHECK(document.Snapshot().Value().acceptedSource == before.acceptedSource);
         CHECK(document.Snapshot().Value().dirty);
         CHECK(document.UndoCount() == 1);
-        CHECK_FALSE(std::filesystem::exists(project.path.string() + ".source-publication.tmp"));
+        CHECK_FALSE(std::filesystem::exists(StagingPath(project.path)));
     }
 
     TEST_CASE("PCG visible replacement failures retain truthful reconciliation and dirty owners", "[unit][editor][pcg][failure]") {
@@ -160,7 +160,7 @@ namespace Horo::Editor {
         CHECK(document.Snapshot().Value().acceptedSource == before.acceptedSource);
         CHECK(document.Snapshot().Value().dirty);
         CHECK(document.UndoCount() == 1);
-        CHECK_FALSE(std::filesystem::exists(project.path.string() + ".source-publication.tmp"));
+        CHECK_FALSE(std::filesystem::exists(StagingPath(project.path)));
     }
 
     TEST_CASE("PCG rollback cleanup exceptions preserve the primary precommit failure", "[unit][editor][pcg][failure]") {
@@ -176,7 +176,7 @@ namespace Horo::Editor {
         ErrorIs(document.Save(save.Value(), project.root, project.path, project.mutations, project.files), Injected);
         CHECK(document.Snapshot().Value().dirty);
         CHECK(Assets::CaptureAssetSource(project.root, project.path, 1024 * 1024).Value().bytes == Capture().bytes);
-        CHECK(std::filesystem::exists(project.path.string() + ".source-publication.tmp"));
+        CHECK(std::filesystem::exists(StagingPath(project.path)));
     }
 
     TEST_CASE("Shared source capture distinguishes empty missing bounded and cancelled inputs", "[unit][editor][pcg][assets]") {
@@ -232,7 +232,7 @@ namespace Horo::Editor {
         Project project;
         const auto accepted = Capture();
         SECTION("existing staging file is preserved") {
-            const auto stage = project.path.string() + ".source-publication.tmp";
+            const auto stage = StagingPath(project.path);
             {
                 std::ofstream file(stage, std::ios::binary);
                 file << "previous recovery evidence";
@@ -246,7 +246,7 @@ namespace Horo::Editor {
             CHECK(project.files.writes == 0);
         }
         SECTION("staging appears immediately before exclusive creation") {
-            const auto stage = project.path.string() + ".source-publication.tmp";
+            const auto stage = StagingPath(project.path);
             project.files.duringWrite = [&] {
                 std::ofstream file(stage, std::ios::binary);
                 file << "foreign stage";
@@ -275,7 +275,7 @@ namespace Horo::Editor {
             REQUIRE(save.HasValue());
             ErrorIs(document.Save(save.Value(), project.root, project.path, project.mutations, project.files, cancellation.Token()),
                     Assets::AssetSourceErrors::Cancelled);
-            CHECK_FALSE(std::filesystem::exists(project.path.string() + ".source-publication.tmp"));
+            CHECK_FALSE(std::filesystem::exists(StagingPath(project.path)));
             CHECK(project.files.replacements == 0);
             CHECK(Assets::CaptureAssetSource(project.root, project.path, 1024 * 1024).Value().bytes == accepted.bytes);
         }

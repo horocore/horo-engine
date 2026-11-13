@@ -2389,6 +2389,15 @@ worker completions return to that owner and call `CompleteSuccess` or
 token before publishing. Native, script, and graph adapters do not define their
 own status vocabularies or terminal-result stores.
 
+Module-originated task diagnostics are captured through the immutable original
+scene-owner copier. It copies both the operation identity and the diagnostic
+fields into host-owned storage while the module is still loaded, preserving
+empty snapshots and their isolation boundary. Copying only the outer operation
+context is insufficient: nested shared field storage must not retain a
+module-emitted destructor or control block after native image unload. Retained
+diagnostics and their final weak owner can then be released after retirement
+without pinning the retired module.
+
 1. **Cooperative Asynchronous Task Execution**:
    - While a task is `Running`, `PrepareResume` admits recurring fixed-tick or event resumes until completion or cancellation.
    - Long-running async requests (e.g. `MoveTo` navigation or animation playback) use the captured `CancellationToken`. Cancellation requested before admission, during execution, or after a worker completion is resolved at the serialized owner boundary. Whichever terminal transition publishes first remains immutable.

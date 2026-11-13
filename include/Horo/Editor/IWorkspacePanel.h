@@ -2,9 +2,11 @@
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorSurfaceEventContext.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Editor/WorkspaceDockArea.h"
 #include "Horo/Runtime/Input.h"
 
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -38,6 +40,8 @@ namespace Horo::Extensions {
 namespace Horo::Editor {
     struct NavigationViewportAccess;
     class EditorDataBus;
+    class XRSimulatorModel;
+    class IXRSimulatorArtifacts;
     class IEditorGuiRenderer;
     class IEditorViewportRenderer;
     struct EditorWorkspaceViewCommandData;
@@ -63,10 +67,16 @@ namespace Horo::Editor {
         const NavigationViewportAccess *navigationOverlays{};   /**< Explicit owner-lane saved/cooked geometry query. */
         Extensions::EditorViewportHost *extensionViewport{};    /**< Explicit owner of viewport publication and picking. */
         const Extensions::EditorThemeFrame *extensionTheme{};   /**< Current host theme capture; no panel-owned authority. */
+        std::weak_ptr<IXRSimulatorArtifacts>
+            xrSimulatorArtifacts{};      /**< Same admitted project source/publication port, revoked before retirement. */
+        XRSimulatorModel *xrSimulator{}; /**< Explicit application model; invalidated when panel detaches. */
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */
-    class IWorkspacePanel {
+    class IWorkspacePanel : public LocalizedGui {
+    protected:
+        using LocalizedGui::LocalizedGui;
+
     public:
         virtual ~IWorkspacePanel() = default;
 

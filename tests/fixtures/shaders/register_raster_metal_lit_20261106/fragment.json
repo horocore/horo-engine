@@ -1,0 +1,305 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "PSMain",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_13" : {
+            "name" : "type.ViewportParameters",
+            "members" : [
+                {
+                    "name" : "Mvp",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "ModelToWorld",
+                    "type" : "mat4",
+                    "offset" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "ShadowViewProjection",
+                    "type" : "mat4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 128,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "CameraAndLightCount",
+                    "type" : "vec4",
+                    "offset" : 384
+                },
+                {
+                    "name" : "SelectionColorAndStrength",
+                    "type" : "vec4",
+                    "offset" : 400
+                },
+                {
+                    "name" : "ShadowSettings",
+                    "type" : "vec4",
+                    "offset" : 416
+                },
+                {
+                    "name" : "ShadowCoordinates",
+                    "type" : "vec4",
+                    "offset" : 432
+                },
+                {
+                    "name" : "CascadeSplits",
+                    "type" : "vec4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 448,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "AtlasRects",
+                    "type" : "vec4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 512,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "CameraForward",
+                    "type" : "vec4",
+                    "offset" : 576
+                },
+                {
+                    "name" : "ShadowBiasFilter",
+                    "type" : "vec4",
+                    "offset" : 592
+                },
+                {
+                    "name" : "ClusterDimensions",
+                    "type" : "vec4",
+                    "offset" : 608
+                },
+                {
+                    "name" : "ClusterDepth",
+                    "type" : "vec4",
+                    "offset" : 624
+                },
+                {
+                    "name" : "ViewportDimensions",
+                    "type" : "vec4",
+                    "offset" : 640
+                },
+                {
+                    "name" : "ShadowIdentity",
+                    "type" : "vec4",
+                    "offset" : 656
+                },
+                {
+                    "name" : "BaseColor",
+                    "type" : "vec4",
+                    "offset" : 672
+                }
+            ]
+        },
+        "_17" : {
+            "name" : "PackedLight",
+            "members" : [
+                {
+                    "name" : "positionRange",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "direction",
+                    "type" : "vec3",
+                    "offset" : 16
+                },
+                {
+                    "name" : "kind",
+                    "type" : "uint",
+                    "offset" : 28
+                },
+                {
+                    "name" : "colorIntensity",
+                    "type" : "vec4",
+                    "offset" : 32
+                },
+                {
+                    "name" : "cones",
+                    "type" : "vec2",
+                    "offset" : 48
+                },
+                {
+                    "name" : "identityLow",
+                    "type" : "uint",
+                    "offset" : 56
+                },
+                {
+                    "name" : "identityHigh",
+                    "type" : "uint",
+                    "offset" : 60
+                }
+            ]
+        },
+        "_16" : {
+            "name" : "type.StructuredBuffer.PackedLight",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "_17",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 64
+                }
+            ]
+        },
+        "_19" : {
+            "name" : "LightMembership",
+            "members" : [
+                {
+                    "name" : "offset",
+                    "type" : "uint",
+                    "offset" : 0
+                },
+                {
+                    "name" : "count",
+                    "type" : "uint",
+                    "offset" : 4
+                },
+                {
+                    "name" : "omitted",
+                    "type" : "uint",
+                    "offset" : 8
+                },
+                {
+                    "name" : "reserved",
+                    "type" : "uint",
+                    "offset" : 12
+                }
+            ]
+        },
+        "_18" : {
+            "name" : "type.StructuredBuffer.LightMembership",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "_19",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 16
+                }
+            ]
+        },
+        "_20" : {
+            "name" : "type.StructuredBuffer.uint",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uint",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 4
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "in.var.TEXCOORD0",
+            "location" : 0
+        },
+        {
+            "type" : "vec3",
+            "name" : "in.var.TEXCOORD1",
+            "location" : 1
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target0",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "ShadowMap",
+            "set" : 0,
+            "binding" : 1
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "ShadowSampler",
+            "set" : 0,
+            "binding" : 2
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_16",
+            "name" : "ClusterLights",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 3
+        },
+        {
+            "type" : "_18",
+            "name" : "ClusterMembership",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 4
+        },
+        {
+            "type" : "_20",
+            "name" : "ClusterReferences",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 5
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_13",
+            "name" : "type.ViewportParameters",
+            "block_size" : 688,
+            "set" : 0,
+            "binding" : 0
+        }
+    ]
+}

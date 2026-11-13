@@ -96,6 +96,7 @@ namespace Horo::Render::Detail {
         RenderPipelineDeviceIdentity identity;
         VulkanShaderOwnerIdentity ownerIdentity;
         bool vertexLayerEnabled{false};
+        bool shaderDemoteEnabled{false};
         IssueIdentity issue;
         ResolveResource resolve;
         std::thread::id owner;
@@ -257,6 +258,51 @@ namespace Horo::Render::Detail {
         }
 
         /** @brief Validates a complete cooked layout within guaranteed Vulkan 1.3 baseline bounds. */
+        /** @brief Rejects active uniform blocks whose canonical reflected extent cannot fit any selected-device binding. */
+        Result<void> ValidateUniformExtents(const NormalizedShaderReflection &reflection) const {
+            const auto layout = PrepareMaterialBindingLayout(reflection);
+            if (layout.HasError())
+                return Result<void>::Failure(layout.ErrorValue());
+            for (const auto &binding : reflection.bindings) {
+                if (!binding.active || binding.kind != ShaderResourceKind::UniformBuffer)
+                    continue;
+                const auto bytes = ComputeMaterialParameterBufferByteSize(layout.Value(), binding.id);
+                if (bytes.HasError())
+                    return Result<void>::Failure(bytes.ErrorValue());
+                if (bytes.Value() > properties.limits.maxUniformBufferRange)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
+                                                           "Canonical reflected uniform extent exceeds the selected device range."));
+            }
+            return Result<void>::Success();
+        }
+
+        Result<void> ValidateMaterialInterface(const NormalizedShaderReflection &reflection) const {
+            if (std::ranges::any_of(reflection.bindings, [](const auto &binding) {
+                return binding.active && !BindingSupported(binding);
+            }))
+                return Result<void>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceUnsupported,
+                              "Vulkan graphics materials require read-only uniform buffers, sampled images and samplers."));
+            if (std::ranges::any_of(reflection.targetBindings, [](const auto &map) {
+                return map.active && !MappingSupported(map);
+            }))
+                return Result<void>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceUnsupported,
+                              "Vulkan material ABI requires direct bindings in descriptor sets zero through three."));
+            if (std::ranges::any_of(reflection.stageInterface, [](const auto &input) {
+                return input.stage == ShaderStage::Vertex && input.direction == ShaderInterfaceDirection::Input &&
+                       !VertexInputSupported(input);
+            }))
+                return Result<void>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceUnsupported,
+                              "Vulkan graphics requires the established MeshVertex location and component contract."));
+            if (!NativeBindingsUnique(reflection.targetBindings))
+                return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
+                                                       "Vulkan material realization requires separate image/sampler "
+                                                       "coordinates; recook a direct target binding map."));
+            return Result<void>::Success();
+        }
+
         Result<void> ValidateLayout(const RenderGraphicsPipelineDescriptor &descriptor) const {
             if (descriptor.state.viewRouting == RenderViewRouting::VertexLayer && !vertexLayerEnabled)
                 return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
@@ -264,29 +310,10 @@ namespace Horo::Render::Detail {
             if (!descriptor.manifest.inlineConstants.empty())
                 return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
                                                        "Inline constants require an explicit material value submission contract."));
-            if (std::ranges::any_of(descriptor.reflection.bindings, [](const auto &binding) {
-                return binding.active && !BindingSupported(binding);
-            }))
-                return Result<void>::Failure(
-                    MakeError(VulkanBackendErrors::ResourceUnsupported,
-                              "Vulkan graphics materials require read-only uniform buffers, sampled images and samplers."));
-            if (std::ranges::any_of(descriptor.reflection.targetBindings, [](const auto &map) {
-                return map.active && !MappingSupported(map);
-            }))
-                return Result<void>::Failure(
-                    MakeError(VulkanBackendErrors::ResourceUnsupported,
-                              "Vulkan material ABI requires direct bindings in descriptor sets zero through three."));
-            if (std::ranges::any_of(descriptor.reflection.stageInterface, [](const auto &input) {
-                return input.stage == ShaderStage::Vertex && input.direction == ShaderInterfaceDirection::Input &&
-                       !VertexInputSupported(input);
-            }))
-                return Result<void>::Failure(
-                    MakeError(VulkanBackendErrors::ResourceUnsupported,
-                              "Vulkan graphics requires the established MeshVertex location and component contract."));
-            if (!NativeBindingsUnique(descriptor.reflection.targetBindings))
-                return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
-                                                       "Vulkan material realization requires separate image/sampler "
-                                                       "coordinates; recook a direct target binding map."));
+            if (const auto material = ValidateMaterialInterface(descriptor.reflection); material.HasError())
+                return material;
+            if (const auto extents = ValidateUniformExtents(descriptor.reflection); extents.HasError())
+                return extents;
             return ValidateDescriptorLimits(descriptor.reflection);
         }
 

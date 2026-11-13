@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
@@ -13,6 +14,7 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserCards.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserToolbar.h"
 
@@ -100,31 +102,27 @@ namespace Horo::Editor {
             ImGui::TextUnformatted(entry.displayName.c_str());
             const bool copy = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
             ImGui::TextColored(Theme::Dim(), "%s",
-                               localization
-                                   .Get("editor",
-                                        copy ? "workspace.content_browser.action.copy" : "workspace.content_browser.action.move_here")
-                                   .c_str());
+                               AssetBrowserPane::kTextScope.Text(localization, copy ? "action.copy" : "action.move_here").c_str());
             ImGui::EndDragDropSource();
         }
 
-        void DrawAssetLocationRail(const ImVec2 minimum, const float height, const EditorGuiContext &context) {
+        void DrawAssetLocationRail(const ImVec2 minimum, const float height, const ContentBrowserDirectory &directory,
+                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
             using enum Ui::UiIcon;
             ImDrawList *drawList = ImGui::GetWindowDrawList();
             const float width = AssetBrowserLayout::LocationRailWidth;
             drawList->AddRectFilled(minimum, {minimum.x + width, minimum.y + height}, Theme::U32(Theme::Bg1()));
             drawList->AddLine({minimum.x + width - 1.0F, minimum.y}, {minimum.x + width - 1.0F, minimum.y + height},
                               Theme::U32(Theme::Border()));
-            const std::array icons{Favorite, History, Storage, Package, AccountTree, Tag};
-            const std::array keys{"workspace.content_browser.location.favorites",    "workspace.content_browser.location.recent",
-                                  "workspace.content_browser.location.sources",      "workspace.content_browser.location.packages",
-                                  "workspace.content_browser.location.dependencies", "workspace.content_browser.location.tags"};
-            for (std::size_t index = 0; index < icons.size(); ++index) {
+            for (std::size_t index = 0; index < directory.roots.size(); ++index) {
+                const auto &root = directory.roots[index];
                 const ImVec2 position{minimum.x, minimum.y + 6.0F + static_cast<float>(index) * 32.0F};
                 ImGui::SetCursorScreenPos(position);
-                ImGui::PushID(static_cast<int>(index));
-                static_cast<void>(ImGui::InvisibleButton("##location", {width - 1.0F, 30.0F}));
+                ImGui::PushID(static_cast<int>(root.kind));
+                if (ImGui::InvisibleButton("##location", {width - 1.0F, 30.0F}))
+                    command = AssetBrowserInteractionSession::Navigate(root.absolutePath);
                 const bool hovered = ImGui::IsItemHovered();
-                const bool active = index == 0;
+                const bool active = root.absolutePath == directory.absoluteRootPath;
                 if (active || hovered) {
                     ImVec4 fill = active ? Theme::Accent() : Theme::Text();
                     fill.w = active ? 0.055F : 0.025F;
@@ -136,35 +134,39 @@ namespace Horo::Editor {
                 constexpr float iconSize = 20.0F;
                 const ImVec2 iconPosition{position.x + (width - iconSize) * 0.5F, position.y + (30.0F - iconSize) * 0.5F};
                 const ImU32 iconColor = Theme::U32(active || hovered ? Theme::Text() : Theme::Dim());
-                Ui::DrawEditorIcon(drawList, icons[index], iconPosition, {iconSize, iconSize}, iconColor, context.theme.fonts.icon);
+                Ui::DrawEditorIcon(drawList, root.kind == ContentBrowserRootKind::Assets ? Folder : Storage, iconPosition,
+                                   {iconSize, iconSize}, iconColor, context.theme.fonts.icon);
                 if (hovered) {
-                    const std::string &tooltip = context.localization.Get("editor", keys[index]);
+                    const std::string &tooltip =
+                        AssetBrowserPane::kTextScope.Text(context.localization, AssetBrowserPane::RootLabelKey(root.kind));
                     Ui::ShowTooltip(tooltip.c_str(), &context.theme.fonts);
                 }
                 ImGui::PopID();
             }
         }
 
-        [[nodiscard]] std::string EntrySecondaryText(const ContentBrowserEntry &entry, const ILocalizationService &localization) {
+        [[nodiscard]] std::string EntrySecondaryText(const ContentBrowserEntry &entry, const ILocalizationService &localization,
+                                                     const ContentBrowserRootKind rootKind = ContentBrowserRootKind::Assets) {
             if (entry.kind == ContentBrowserEntryKind::Directory) {
                 const std::string &unit =
-                    localization.Get("editor", entry.containedItemCount == 1 ? "workspace.content_browser.count.item"
-                                                                             : "workspace.content_browser.count.items");
+                    AssetBrowserPane::kTextScope.Text(localization, entry.containedItemCount == 1 ? "count.item" : "count.items");
                 return std::format("{} {}", entry.containedItemCount, unit);
             }
+            if (rootKind == ContentBrowserRootKind::NativeSources)
+                return AssetBrowserPane::kTextScope.Text(localization, "asset.native_source");
             if (entry.previewError) {
-                const auto &migration = Prefab::PrefabErrors::MigrationRequired;
+                const auto &migration = GuiLive::HostSymbol<&Prefab::PrefabErrors::MigrationRequired>();
                 const bool needsMigration = entry.previewError->domain.Value() == migration.domain.Value() &&
                                             entry.previewError->code.Value() == migration.code.Value();
-                return localization.Get("editor", needsMigration ? "workspace.content_browser.prefab.migration_required"
-                                                                 : "workspace.content_browser.preview.unavailable");
+                return AssetBrowserPane::kTextScope.Text(localization,
+                                                         needsMigration ? "prefab.migration_required" : "preview.unavailable");
             }
             if (entry.previewState == ContentBrowserPreviewState::Queued)
-                return localization.Get("editor", "workspace.content_browser.preview.queued");
+                return AssetBrowserPane::kTextScope.Text(localization, "preview.queued");
             if (!entry.registered)
-                return localization.Get("editor", "workspace.content_browser.asset.unregistered");
+                return AssetBrowserPane::kTextScope.Text(localization, "asset.unregistered");
             if (entry.IsPrefab())
-                return localization.Get("editor", "workspace.content_browser.prefab.type");
+                return AssetBrowserPane::kTextScope.Text(localization, "prefab.type");
             return entry.assetType;
         }
 
@@ -179,10 +181,10 @@ namespace Horo::Editor {
 
         [[nodiscard]] const char *EmptyGridMessageKey(const ContentBrowserDirectory &directory) noexcept {
             if (directory.loadState == ContentBrowserLoadState::Loading)
-                return "workspace.content_browser.loading";
+                return "loading";
             if (directory.loadState == ContentBrowserLoadState::Error)
-                return "workspace.content_browser.unavailable";
-            return directory.entries.empty() ? "workspace.content_browser.empty" : "workspace.content_browser.no_results";
+                return "unavailable";
+            return directory.entries.empty() ? "empty" : "no_results";
         }
 
         void DrawEmptyAssetGrid(const ImVec2 gridOrigin, const float gridWidth, const float gridY, const ContentBrowserDirectory &directory,
@@ -261,7 +263,7 @@ namespace Horo::Editor {
                                        .cardHeight = metrics.cardHeight,
                                        .previewWidth = metrics.previewWidth,
                                        .previewHeight = metrics.previewHeight,
-                                       .secondaryText = EntrySecondaryText(entry, context.gui.localization),
+                                       .secondaryText = EntrySecondaryText(entry, context.gui.localization, context.directory.rootKind),
                                        .listView = listView,
                                        .hovered = hovered,
                                        .selected = context.interactionSession.State().selectedAbsolutePath == entry.absolutePath,
@@ -368,7 +370,7 @@ namespace Horo::Editor {
             }
             viewport.cardRenderer.RetainVisible(directory, visibleEntries);
 
-            DrawAssetLocationRail(viewport.bodyOrigin, viewport.bodyHeight, viewport.context);
+            DrawAssetLocationRail(viewport.bodyOrigin, viewport.bodyHeight, directory, viewport.command, viewport.context);
             const ImVec2 gridViewportOrigin{viewport.bodyOrigin.x + AssetBrowserLayout::LocationRailWidth, viewport.bodyOrigin.y};
             const float gridViewportWidth = std::max(1.0F, viewport.contentWidth - AssetBrowserLayout::LocationRailWidth);
             DrawAssetBrowserGridContent(viewport, directory, visibleEntries, gridViewportOrigin, gridViewportWidth);

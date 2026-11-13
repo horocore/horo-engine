@@ -31,8 +31,31 @@ namespace Horo::Physics::Detail {
         return Result<void>::Success();
     }
 
+    namespace {
+        template <class Contributor>
+        Result<void> ValidateSurface(const PhysicsSurfaceWorldBinding &binding, const Contributor &contributor) {
+            if (!contributor.surface)
+                return Result<void>::Success();
+            if (!contributor.material || !MatchesPhysicsSurfaceEvidence(binding, *contributor.surface))
+                return Result<void>::Failure(MakeError(SurfaceErrors::Stale));
+            return Result<void>::Success();
+        }
+
+        Result<void> ValidateFixtureSurfaces(const PhysicsSurfaceWorldBinding &binding, const PhysicsQueryFixtureDescriptor &fixture) {
+            if (auto valid = ValidateSurface(binding, fixture); valid.HasError())
+                return valid;
+            if (const auto *compound = std::get_if<PhysicsCompoundShapeDescriptor>(&fixture.shape))
+                for (const auto &child : compound->children)
+                    if (auto valid = ValidateSurface(binding, child); valid.HasError())
+                        return valid;
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc ValidateCanonicalFixtureAuthority */
     Result<void> ValidateCanonicalFixtureAuthority(const CanonicalQueryAccess &access, const PhysicsQueryFixtureDescriptor &fixture) {
+        if (auto surface = ValidateFixtureSurfaces(access.simulation.binding.surfaces, fixture); surface.HasError())
+            return surface;
         if (!access.simulation.binding.schema)
             return Result<void>::Success();
         const auto valid = [&access](const auto &contributor) {

@@ -108,7 +108,7 @@ leaking into the next lease. Generated state is never committed.
 Without `--compile-commands`, the helper first checks the canonical
 `build/skeleton/compile_commands.json` for this worktree and selected sources.
 If that verified build is unavailable, it configures an external Debug/Ninja build
-with tests and the optional Vulkan, ImGui UI tests, OpenTelemetry and GNS targets
+with tests and the optional Vulkan, ImGui UI tests and GNS targets
 enabled to cover the Linux CI composition. This first configure can download
 dependencies and take materially longer than subsequent checks.
 
@@ -116,11 +116,23 @@ An existing database must be accompanied by its CMake cache naming the exact
 worktree source root. CMake refreshes configuration, then only the selected
 translation units' object targets are built with Ninja. Make builds use their
 owning targets so CMake dependencies and generated headers are prepared.
+Dependency translation units excluded from the first-party inventory may own
+objects in a separate CMake cache; they do not block selected project contexts.
+Active project objects still require an output inside the selected build.
+Header searches try the nearest consumers first and retain all candidates as
+fallbacks for transitive includes.
 Staged public-header copies are mapped back only when their contents match the
 source header.
 Header-only selections require a literal include chain to a compiled translation
 unit. Macro-generated include chains without provable context are incomplete.
 Platform-guarded files absent from this build are incomplete, not clean.
+
+Include lookup probes each candidate before canonicalizing it. Only missing files
+and non-directory search components advance to the next search directory; other
+filesystem errors remain incomplete. Existing symlinks still undergo canonical
+resolution, and staged headers still require the original content identity.
+This avoids repeatedly walking nonexistent Windows path parents without changing
+include search order or the subsequent native-build and C++ sensor requirements.
 
 Requests require fresh Sonar logs naming all submitted files, active C/C++ rules,
 a positive count of analyzed compilation units and completed analysis. Sensor
@@ -205,6 +217,16 @@ Do not run general `sonar analyze` or Vortex entitlement probes in this workflow
 Secret scanner text is not stored because
 it can contain credential values; a finding directs you to inspect it locally.
 Never put tokens in repository files, report output or command arguments.
+
+On Windows, selected paths are submitted in sequential batches that fit the
+native executable or batch launcher's UTF-16 command-line limit, with dispatch
+headroom for CLI child tools and npm-style batch launchers. The same
+provider timeout covers all batches. Every Codacy batch retains its submitted
+paths and independently checked tool execution evidence; any incomplete batch
+keeps the whole provider incomplete. Secrets findings are retained across
+batches without retaining scanner text, and every batch must confirm completion.
+Analyzer runtime identity must remain consistent across batches before it is
+reused for raw complexity measurements, which use the same bounded path handling.
 
 ## Validation and troubleshooting
 

@@ -255,20 +255,15 @@ logger, metric, profiler, or sink internals directly.
 
 ## External Export And Telemetry Boundary
 
-Automatic telemetry upload remains out of scope for this architecture. Local
-observability does not require network access. Horo's optional OpenTelemetry
-adapter is compiled and activated only by a process composition root, and
-runtime export additionally requires explicit approval and an endpoint.
+Observability is local: hosts persist logs, metrics, operation history, profiler
+captures and explicitly created support bundles without a network exporter.
+There is no external telemetry adapter, collector configuration or runtime
+export approval switch in the engine or developer runner. Local support-bundle
+creation remains an explicit host operation, with the existing privacy review.
 
-Any external exporter, including the OpenTelemetry adapter, must satisfy:
-
-- user or product approval;
-- redaction before export;
-- bounded batching and retry;
-- offline behavior;
-- authentication and endpoint policy;
-- schema mapping from Horo records to the external format;
-- audit records for enablement and export failures.
+Any future external exporter requires a new architecture decision covering
+approval, redaction, bounded batching/retry, offline behavior, endpoint policy,
+schema mapping and audit records; it must not add network work to producers.
 
 No module may send logs, metrics, traces, captures, or diagnostic bundles to a
 network endpoint directly.
@@ -278,10 +273,9 @@ network endpoint directly.
 The following observability concerns are intentionally not covered by the core
 architecture:
 
-- **Cross-machine trace correlation** (e.g. OpenTelemetry trace IDs across
-  dedicated server farms or CI build agents). The optional exporter preserves
-  Horo correlation identifiers, but defining a distributed tracing topology is
-  owned by the deploying product.
+- **Cross-machine trace correlation** across dedicated server farms or CI build
+  agents. Horo preserves local correlation identifiers; distributed tracing
+  topology belongs to the deploying product.
 - **Dedicated multiplayer/networking health metrics** such as packet loss, RTT,
   or desync detection. These belong to the networking subsystem; they may emit
   logs or register metrics through the same descriptors but are not defined

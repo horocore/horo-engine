@@ -17,6 +17,13 @@ namespace Horo::Editor {
         constexpr std::size_t MaximumDiscoveredScripts = 1024;
         constexpr std::uintmax_t MaximumGameplayManifestBytes = 64U * 1024U;
 
+        /** @brief Derives a native Lua sidecar without locale-dependent text conversion. */
+        std::filesystem::path LuaMetadataPath(const std::filesystem::path &source) {
+            auto metadata = source;
+            metadata += ".meta";
+            return metadata;
+        }
+
         struct NativeArtifactManifest {
             std::string moduleId;
             std::string buildFingerprint;
@@ -43,9 +50,10 @@ namespace Horo::Editor {
                 !document["artifactPath"].is_string())
                 return Result<NativeArtifactManifest>::Failure(ManifestError("required typed fields are missing."));
 
+            const auto &artifactText = document["artifactPath"].get_ref<const std::string &>();
             NativeArtifactManifest manifest{document["moduleId"].get<std::string>(), document["buildFingerprint"].get<std::string>(),
                                             document["descriptorRevision"].get<std::uint64_t>(),
-                                            std::filesystem::path{document["artifactPath"].get<std::string>()}};
+                                            std::filesystem::path{std::u8string{artifactText.begin(), artifactText.end()}}};
             if (manifest.moduleId.empty() || manifest.buildFingerprint.empty() || manifest.descriptorRevision == 0 ||
                 !manifest.artifactPath.is_absolute() || !std::filesystem::is_regular_file(manifest.artifactPath, error) || error)
                 return Result<NativeArtifactManifest>::Failure(ManifestError("metadata or artifact path is invalid."));
@@ -122,7 +130,7 @@ namespace Horo::Editor {
 
     ProjectGameplayRegistry::LuaSourceStat ProjectGameplayRegistry::ReadLuaSourceStat(const std::filesystem::path &source,
                                                                                       std::error_code &error) {
-        const std::filesystem::path metadata{source.string() + ".meta"};
+        const std::filesystem::path metadata = LuaMetadataPath(source);
         ProjectGameplayRegistry::LuaSourceStat stat;
         stat.sourceWriteTime = std::filesystem::last_write_time(source, error);
         if (error)
@@ -287,7 +295,7 @@ namespace Horo::Editor {
 
         std::ranges::sort(sources);
         for (const std::filesystem::path &source : sources) {
-            auto loaded = Gameplay::LuaBehaviorProgram::LoadFiles(source, source.string() + ".meta");
+            auto loaded = Gameplay::LuaBehaviorProgram::LoadFiles(source, LuaMetadataPath(source));
             if (loaded.HasError()) {
                 diagnostics_.emplace_back(source, loaded.ErrorValue());
                 continue;
@@ -368,7 +376,7 @@ namespace Horo::Editor {
             if (sourceStat == luaSourceStats_[index])
                 continue;
             luaSourceStats_[index] = sourceStat;
-            auto candidate = Gameplay::LuaBehaviorProgram::LoadFiles(luaSources_[index], luaSources_[index].string() + ".meta");
+            auto candidate = Gameplay::LuaBehaviorProgram::LoadFiles(luaSources_[index], LuaMetadataPath(luaSources_[index]));
             if (candidate.HasError()) {
                 diagnostics.emplace_back(luaSources_[index], candidate.ErrorValue());
                 continue;
@@ -407,8 +415,9 @@ namespace Horo::Editor {
         std::filesystem::create_directories(destination, error);
         if (error)
             return Result<NativeGameplayRollbackArtifact>::Failure(ManifestError(error.message()));
-        const std::filesystem::path preserved =
-            destination / std::format("rollback-{}-{}", nativeDescriptorRevision_, nativeModule_->LoadedArtifactPath().filename().string());
+        auto filename = std::filesystem::path{std::format("rollback-{}-", nativeDescriptorRevision_)};
+        filename += nativeModule_->LoadedArtifactPath().filename();
+        const std::filesystem::path preserved = destination / filename;
         std::filesystem::copy_file(nativeModule_->LoadedArtifactPath(), preserved, std::filesystem::copy_options::overwrite_existing,
                                    error);
         if (error)

@@ -98,7 +98,10 @@ namespace Horo::Physics::Detail {
                 PhysicsSceneCollisionBinding collision{.profile = body.colliders.front().profile};
                 collision.colliders.reserve(body.colliders.size());
                 for (const PlannedCollider &collider : body.colliders)
-                    collision.colliders.push_back({.localPose = collider.localPose});
+                    collision.colliders.push_back({.localPose = collider.localPose,
+                                                   .materials = collider.materials,
+                                                   .surface = collider.surface,
+                                                   .collider = collider.collider.value});
                 const Result<BodyHandle> nativeBody = physics.CreateSceneBody(
                     {.body = descriptor, .sensor = body.sensor, .sceneEntity = body.object.value, .collision = std::move(collision)});
                 if (nativeBody.HasError())
@@ -219,7 +222,7 @@ namespace Horo::Physics::Detail {
                 return Result<StagedPhysicsScene>::Failure(physics.ErrorValue());
             auto character = Character::CharacterWorld::Prepare({scene.RuntimeId().value, identity, evidence.collisionFilterGeneration,
                                                                  evidence.originGeneration},
-                                                                settings.character);
+                                                                settings.character, settings.simulation.surfaces);
             if (character.HasError())
                 return Result<StagedPhysicsScene>::Failure(character.ErrorValue());
             return StagePhysicsScene(std::move(physics).Value(), std::move(character).Value(), identity, plan);
@@ -261,6 +264,8 @@ namespace Horo::Physics::Detail {
             structural->authoredBodies = std::move(resources.bodyBindings);
             structural->authoredShapes = std::move(resources.shapeBindings);
             structural->authoredConstraints = std::move(resources.constraintBindings);
+            if (const auto groups = MaterializePendingPhysicsGroups(structural, scene); groups.HasError())
+                return Result<std::shared_ptr<PhysicsStructuralState>>::Failure(groups.ErrorValue());
             return Result<std::shared_ptr<PhysicsStructuralState>>::Success(std::move(structural));
         }
     }  // namespace
@@ -332,7 +337,7 @@ namespace Horo::Physics {
                 return Result<Detail::PhysicsScenePlan>::Failure(capabilities.ErrorValue());
             if (const auto evidence = ValidateTriggerVolumeEvidence(definition, scene, settings); evidence.HasError())
                 return Result<Detail::PhysicsScenePlan>::Failure(evidence.ErrorValue());
-            Result<Detail::PhysicsScenePlan> builtPlan = Detail::BuildPhysicsScenePlan(definition, scene);
+            Result<Detail::PhysicsScenePlan> builtPlan = Detail::BuildPhysicsScenePlan(definition, scene, settings.simulation.surfaces);
             if (builtPlan.HasError())
                 return Result<Detail::PhysicsScenePlan>::Failure(builtPlan.ErrorValue());
             Detail::PhysicsScenePlan plan = std::move(builtPlan).Value();

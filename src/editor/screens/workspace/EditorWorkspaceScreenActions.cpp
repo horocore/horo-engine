@@ -4,10 +4,12 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Paths.h"
+#include "WorkspacePathText.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
 #include "editor/modals/packages/PackageModal.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
 #include "editor/modals/prefab_creation/PrefabCreationModal.h"
+#include "editor/modals/save_load/SaveLoadManagerModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
 #include "editor/modals/source_document/SourceDocumentCloseModal.h"
 #include "editor/modals/world_layer/CreateWorldLayerModal.h"
@@ -22,13 +24,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
         /** @brief Formats bounded creation diagnostics after the workspace lifetime fence passes. */
         std::string PrefabCreationFailureMessage(const PrefabCreationOutcome *outcome, const ILocalizationService &localization) {
-            std::string message = localization.Get("editor", "workspace.prefab.create.failed");
+            std::string message = EditorWorkspaceScreen::kTextScope.Text(localization, "prefab.create.failed");
             if (!outcome)
                 return message;
             if (outcome->error)
                 message += std::format("\n{}", outcome->error->message);
             constexpr std::size_t maximumVisibleBoundaries{32};
-            const auto count = std::min(outcome->boundaries.size(), maximumVisibleBoundaries);
+            const auto count = (std::min)(outcome->boundaries.size(), maximumVisibleBoundaries);
             for (const auto &boundary : std::span{outcome->boundaries}.first(count)) {
                 message += std::format("\n{}: {}", boundary.source.value, boundary.property);
                 if (boundary.target)
@@ -36,7 +38,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             }
             if (count < outcome->boundaries.size())
                 message += std::format("\n{} {}", outcome->boundaries.size() - count,
-                                       localization.Get("editor", "workspace.prefab.create.more_diagnostics"));
+                                       EditorWorkspaceScreen::kTextScope.Text(localization, "prefab.create.more_diagnostics"));
             for (const auto &receipt : outcome->files)
                 if (receipt.recoveryError)
                     message += std::format("\n{}: {}", receipt.path.generic_string(), receipt.recoveryError->message);
@@ -67,7 +69,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             const std::filesystem::path normalizedProjectRoot = NormalizeAbsolutePath(projectRoot);
             const std::filesystem::path assetsRoot = ProjectLayout::AssetRoot(normalizedProjectRoot);
             const std::filesystem::path scriptsRoot = ProjectLayout::ScriptsRoot(normalizedProjectRoot);
-            const std::filesystem::path requested = NormalizeAbsolutePath(requestedDirectory);
+            const std::filesystem::path requested = NormalizeAbsolutePath(WorkspaceNativePath(requestedDirectory));
             std::filesystem::path destination;
             if (kind == Native) {
                 destination = normalizedProjectRoot / "source" / "gameplay";
@@ -130,50 +132,81 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::HandleMenuInvocation */
     bool EditorWorkspaceScreen::HandleMenuInvocation(const EditorMenuInvocation &invocation) {
         EditorMenuAction action = invocation.action;
+        if (OpenWorkspaceManager(action))
+            return true;
+        if (sourceCommands_.HandleMenuAction(controller_.get(), action))
+            return true;
+        action = NormalizeSceneSaveAction(action);
+        if (HandlePrimitiveMenu(invocation))
+            return true;
+        if (const auto persisted = HandleScenePersistenceMenu(action); persisted.has_value())
+            return *persisted;
+        return HandleDocumentHistoryMenu(action);
+    }
+
+    /** @brief Promotes an untitled document's Save to the existing Save As route without creating any source write authority. */
+    EditorMenuAction EditorWorkspaceScreen::NormalizeSceneSaveAction(EditorMenuAction action) const {
+        if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
+            !controller_->CurrentScenePath())
+            return EditorMenuAction::SaveSceneAs;
+        return action;
+    }
+
+    /** @brief Preserves exact primitive payload and document selection through the ordinary controller command. */
+    bool EditorWorkspaceScreen::HandlePrimitiveMenu(const EditorMenuInvocation &invocation) {
+        if (!controller_ || invocation.action != EditorMenuAction::CreatePrimitive || !invocation.primitive)
+            return false;
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::CreatePrimitive;
+        command.primitivePayload = invocation.primitive;
+        command.objectPayload = controller_->ViewModel().primarySelection;
+        controller_->ProcessCommand(command);
+        PublishViewportSceneIfChanged();
+        return true;
+    }
+
+    /** @brief Distinguishes an unrelated action from the real Save As dialog's accepted/cancelled result. */
+    std::optional<bool> EditorWorkspaceScreen::HandleScenePersistenceMenu(EditorMenuAction action) {
+        if (!controller_ || (action != EditorMenuAction::SaveSceneAs && action != EditorMenuAction::SaveSceneCopyAs))
+            return {};
+        return SaveSceneAs(action == EditorMenuAction::SaveSceneCopyAs);
+    }
+
+    /** @brief Routes ordinary Save/Undo/Redo through existing canonical document history. */
+    bool EditorWorkspaceScreen::HandleDocumentHistoryMenu(EditorMenuAction action) {
+        using enum EditorMenuAction;
+        if (!controller_ || (action != SaveScene && action != Undo && action != Redo))
+            return false;
+        EditorWorkspaceViewCommandData command;
+        if (action == SaveScene)
+            command.command = EditorWorkspaceViewCommand::SaveScene;
+        else if (action == Undo)
+            command.command = EditorWorkspaceViewCommand::UndoScene;
+        else
+            command.command = EditorWorkspaceViewCommand::RedoScene;
+        controller_->ProcessCommand(command);
+        PublishViewportSceneIfChanged();
+        return true;
+    }
+
+    /** @brief Opens the actual workspace manager surface while keeping each feature's authority private to its existing owner. */
+    bool EditorWorkspaceScreen::OpenWorkspaceManager(EditorMenuAction action) {
         if (action == EditorMenuAction::ManagePackages) {
             OpenPackagesModal();
             return true;
         }
-        if (sourceCommands_.HandleMenuAction(controller_.get(), action))
-            return true;
-        if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
-            !controller_->CurrentScenePath().has_value())
-            action = EditorMenuAction::SaveSceneAs;
-        if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
-            EditorWorkspaceViewCommandData command;
-            command.command = EditorWorkspaceViewCommand::CreatePrimitive;
-            command.primitivePayload = invocation.primitive;
-            command.objectPayload = controller_->ViewModel().primarySelection;
-            controller_->ProcessCommand(command);
-            PublishViewportSceneIfChanged();
-            return true;
-        }
-        if (controller_ && (action == EditorMenuAction::SaveSceneAs || action == EditorMenuAction::SaveSceneCopyAs)) {
-            return SaveSceneAs(action == EditorMenuAction::SaveSceneCopyAs);
-        }
-        if (!controller_ ||
-            (action != EditorMenuAction::SaveScene && action != EditorMenuAction::Undo && action != EditorMenuAction::Redo)) {
+        if (action != EditorMenuAction::OpenSaveLoadManager)
             return false;
-        }
-
-        using enum EditorMenuAction;
-        EditorWorkspaceViewCommandData command;
-        if (action == SaveScene) {
-            command.command = EditorWorkspaceViewCommand::SaveScene;
-        } else if (action == Undo) {
-            command.command = EditorWorkspaceViewCommand::UndoScene;
-        } else {
-            command.command = EditorWorkspaceViewCommand::RedoScene;
-        }
-        controller_->ProcessCommand(command);
-        PublishViewportSceneIfChanged();
+        const auto binding = controller_ ? controller_->PlaySaveBinding() : std::weak_ptr<EditorPlayRuntimeBinding>{};
+        if (const auto opened = modalHost_.OpenRoot(std::make_unique<SaveLoadManagerModal>(context_, binding)); opened.HasError())
+            LOG_WARN("editor.play.save", "Manager admission failed: %s", opened.ErrorValue().message.c_str());
         return true;
     }
 
     /** @copydoc EditorWorkspaceScreen::SaveSceneAs */
     bool EditorWorkspaceScreen::SaveSceneAs(const bool copyOnly) {
         const auto &currentPath = controller_->CurrentScenePath();
-        const std::filesystem::path projectRoot{controller_->ViewModel().projectRoot};
+        const std::filesystem::path projectRoot{controller_->ProjectRoot()};
         const std::filesystem::path suggestedPath = currentPath.value_or(ProjectLayout::ScenesRoot(projectRoot) / "main.horo");
 
         auto nativeDialogContext =
@@ -182,39 +215,40 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         // portable-file-dialogs forwards this value to AppleScript's
         // `default name`, where a full path is interpreted as a literal
         // filename and its separators become colons.
-        const std::string dialogDefault = suggestedPath.filename().string();
+        const std::string dialogDefault = WorkspacePathText(suggestedPath.filename());
 #else
-        const std::string dialogDefault = suggestedPath.string();
+        const std::string dialogDefault = WorkspacePathText(suggestedPath);
 #endif
         pfd::save_file dialog(std::string{context_.localization.Get("editor", copyOnly ? "workspace.scene_save_copy_as.title"
                                                                                        : "workspace.scene_save_as.title")},
                               dialogDefault,
-                              {std::string{context_.localization.Get("editor", "workspace.scene_save.file_type")}, "*.horo"});
+                              {std::string{EditorWorkspaceScreen::kTextScope.Text(context_.localization, "scene_save.file_type")},
+                               "*.horo"});
         const std::string selected = dialog.result();
         if (selected.empty()) {
             return true;
         }
 
-        std::filesystem::path destination{selected};
+        std::filesystem::path destination = WorkspaceNativePath(selected);
         if (destination.extension().empty()) {
             destination += ".horo";
         }
         if (!destination.is_absolute()) {
             LOG_ERROR("editor.scene_document", "Native scene destination dialog returned a non-absolute path '%s'.",
-                      destination.string().c_str());
+                      WorkspacePathText(destination).c_str());
             return true;
         }
         std::error_code canonicalError;
         const std::filesystem::path normalized = std::filesystem::weakly_canonical(destination, canonicalError);
         if (canonicalError) {
-            LOG_ERROR("editor.scene_document", "Scene destination '%s' could not be normalized: %s", destination.string().c_str(),
+            LOG_ERROR("editor.scene_document", "Scene destination '%s' could not be normalized: %s", WorkspacePathText(destination).c_str(),
                       canonicalError.message().c_str());
             return true;
         }
 
         EditorWorkspaceViewCommandData command;
         command.command = copyOnly ? EditorWorkspaceViewCommand::SaveSceneCopyAs : EditorWorkspaceViewCommand::SaveSceneAs;
-        command.stringPayload = normalized.string();
+        command.stringPayload = WorkspacePathText(normalized);
         controller_->ProcessCommand(command);
         PublishViewportSceneIfChanged();
         return true;
@@ -241,7 +275,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (!controller_ || !packages_.acquire)
             return;
         const auto acquire = packages_.acquire;
-        const std::filesystem::path root{controller_->ViewModel().projectRoot};
+        const std::filesystem::path root{controller_->ProjectRoot()};
         const auto opened = modalHost_.OpenRoot(std::make_unique<PackageModal>(context_, [acquire, root] {
             return acquire(root);
         }));
@@ -253,10 +287,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     void EditorWorkspaceScreen::OpenPlayTopologyProfilesModal() {
         if (!controller_ || !projectServices_.durableFiles)
             return;
-        const auto &model = controller_->ViewModel();
-        if (model.playState != EditorPlayState::Idle && model.playState != EditorPlayState::Failed)
+        if (const auto &model = controller_->ViewModel();
+            model.playState != EditorPlayState::Idle && model.playState != EditorPlayState::Failed)
             return;
-        const std::filesystem::path root{model.projectRoot};
+        const std::filesystem::path root{controller_->ProjectRoot()};
         auto store =
             std::make_unique<Application::PlayTopologyStore>(*projectServices_.durableFiles, root / "config" / "play_topologies.json",
                                                              root / ".horo" / "local" / "play_topology_overrides.json");
@@ -289,7 +323,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }));
         if (opened.HasError() && controller_)
             controller_->Notifications().Publish("world_layers", NotificationSeverity::Error,
-                                                 context_.localization.Get("editor", "workspace.world_layers.rejected"));
+                                                 EditorWorkspaceScreen::kTextScope.Text(context_.localization, "world_layers.rejected"));
     }
 
     /** @copydoc EditorWorkspaceScreen::OpenPrefabCreationModal */
@@ -298,10 +332,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (captured.HasError())
             return;
         auto opened = modalHost_.OpenRoot(
-            std::make_unique<PrefabCreationModal>(context_, captured.Value(), controller_->ViewModel().projectRoot,
+            std::make_unique<PrefabCreationModal>(context_, captured.Value(), controller_->ProjectRoot(),
                                                   [controller = controller_.get(), localization = &context_.localization,
                                                    lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_},
-                                                   expired = context_.localization.Get("editor", "workspace.prefab.create.expired")](
+                                                   expired = EditorWorkspaceScreen::kTextScope.Text(context_.localization,
+                                                                                                    "prefab.create.expired")](
                                                       PrefabCreationIntent intent) -> std::optional<std::string> {
             if (lifetime.expired())
                 return expired;
@@ -328,7 +363,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return;
         }
         const std::optional<std::filesystem::path> destination =
-            ResolveGameplayBehaviorDestination(controller_->ViewModel().projectRoot, kind, requestedDirectory);
+            ResolveGameplayBehaviorDestination(controller_->ProjectRoot(), kind, requestedDirectory);
         if (!destination.has_value()) {
             EditorWorkspaceViewCommandData fallback;
             fallback.command = kind == GameplayBehaviorKind::Native ? EditorWorkspaceViewCommand::CreateNativeBehavior
@@ -339,8 +374,16 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
 
         const std::string baseName = SuggestGameplayBehaviorBaseName(*destination, kind);
+        const auto browse = [this](const std::string_view title,
+                                   const std::filesystem::path &initialDirectory) -> std::optional<std::filesystem::path> {
+            auto dialogContext = input_.router.PushContext(Input::InputContextId{"editor.native_dialog.behavior_destination"},
+                                                           Input::InputContextKind::NativeDialog);
+            const std::string selected = pfd::select_folder(std::string{title}, WorkspacePathText(initialDirectory)).result();
+            return selected.empty() ? std::nullopt : std::optional{WorkspaceNativePath(selected)};
+        };
         Result<void> opened =
-            modalHost_.OpenRoot(std::make_unique<GameplayBehaviorFilenameModal>(context_, kind, destination->string(), baseName,
+            modalHost_.OpenRoot(std::make_unique<GameplayBehaviorFilenameModal>(context_, kind, WorkspacePathText(*destination), baseName,
+                                                                                controller_->ProjectRoot(), browse,
                                                                                 [this](CreateGameplayBehaviorRequest request) {
             if (!controller_) {
                 return;

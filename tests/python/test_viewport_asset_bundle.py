@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
 import pytest
 
@@ -12,10 +13,15 @@ pytest_plugins = ("pytester",)
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def sonar_coverage_job():
+    workflow = (ROOT / '.github/workflows/sonar.yml').read_text()
+    return workflow.split('  sonar:', 1)[1].split('\n  sonar-main:', 1)[0]
+
+
 def test_sonar_cooks_and_verifies_locally_after_build_before_coverage():
     workflow = (ROOT / '.github/workflows/sonar.yml').read_text()
     assert '  viewport-assets:' not in workflow
-    consumer = workflow.split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     assert re.search(r'^    runs-on: (?:&sonar_runner )?ubuntu-26\.04$', consumer, re.MULTILINE)
     assert 'needs:' not in consumer
     assert 'actions: read' not in consumer
@@ -59,7 +65,7 @@ def require_provisioning_failure_policy(consumer):
 
 
 def test_provisioning_failure_policy_accepts_optional_compiler_checkpoints():
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
 
 
@@ -70,7 +76,7 @@ def test_provisioning_failure_policy_accepts_optional_compiler_checkpoints():
     'Verify and select viewport data for coverage', 'Run C++ coverage tests',
 ])
 def test_provisioning_failure_policy_rejects_ignored_required_step(name):
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
     marker = f'      - name: {name}\n'
     mutated = consumer.replace(marker, marker + '        continue-on-error: true\n', 1)
@@ -80,17 +86,17 @@ def test_provisioning_failure_policy_rejects_ignored_required_step(name):
 
 
 def test_provisioning_failure_policy_rejects_ignored_job():
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
-    mutated = consumer.replace('    name: SonarCloud\n',
-                               '    name: SonarCloud\n    continue-on-error: true\n', 1)
+    mutated = consumer.replace('    name: Sonar coverage\n',
+                               '    name: Sonar coverage\n    continue-on-error: true\n', 1)
     assert mutated != consumer
     with pytest.raises(AssertionError):
         require_provisioning_failure_policy(mutated)
 
 
 def test_provisioning_failure_policy_rejects_unrelated_optional_step():
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
     marker = '      - name: Build instrumented targets\n'
     extra = ('      - name: Unrelated optional setup\n'
@@ -107,7 +113,7 @@ def test_provisioning_failure_policy_rejects_unrelated_optional_step():
     ('uses: ./.github/actions/publish-compiler-checkpoint', 'uses: different/action'),
 ])
 def test_provisioning_failure_policy_rejects_repurposed_optional_step(original, replacement):
-    consumer = (ROOT / '.github/workflows/sonar.yml').read_text().split('  sonar:', 1)[1]
+    consumer = sonar_coverage_job()
     require_provisioning_failure_policy(consumer)
     mutated = consumer.replace(original, replacement, 1)
     assert mutated != consumer
@@ -147,6 +153,8 @@ def bundle(tmp_path):
     # Deliberately synthetic protocol fixtures, not claimed as native cooked assets.
     (root / module.PAYLOAD).write_bytes(b'protocol fixture payload')
     (root / module.REFLECTION).write_text('{}')
+    (root / module.SHADOW_PAYLOAD).write_bytes(b'protocol fixture shadow payload')
+    (root / module.SHADOW_REFLECTION).write_text('{}')
     (root / 'catalog.tsv').write_text(module.canonical_catalog(ROOT))
     expected = {'sha': 'a' * 40, 'tree': 'b' * 40, 'run_id': '123', 'run_attempt': '1', 'repository': 'fixture/repo'}
     module.create(root, ROOT, expected)
@@ -167,7 +175,9 @@ def test_bundle_rejects_stale_source_or_other_run(bundle, field):
 
 
 @pytest.mark.parametrize('name', ['shaders/editor/viewport-vulkan.horoshdr',
-                                  'shaders/editor/viewport-vulkan.reflection.json', 'catalog.tsv'])
+                                  'shaders/editor/viewport-vulkan.reflection.json',
+                                  'shaders/editor/viewport-shadow-vulkan.horoshdr',
+                                  'shaders/editor/viewport-shadow-vulkan.reflection.json', 'catalog.tsv'])
 def test_bundle_rejects_missing_required_data(bundle, name):
     module, root, expected = bundle
     (root / name).unlink()
@@ -180,6 +190,28 @@ def test_bundle_rejects_changed_payload_hash(bundle):
     (root / module.PAYLOAD).write_bytes(b'tampered fixture')
     with pytest.raises(ValueError, match='digest mismatch'):
         module.verify(root, ROOT, expected)
+
+
+def test_bundle_rejects_changed_shadow_payload_hash(bundle):
+    module, root, expected = bundle
+    (root / module.SHADOW_PAYLOAD).write_bytes(b'tampered shadow fixture')
+    with pytest.raises(ValueError, match='digest mismatch'):
+        module.verify(root, ROOT, expected)
+
+
+def test_bundle_rejects_malformed_shadow_metadata(bundle):
+    module, root, expected = bundle
+    (root / module.SHADOW_REFLECTION).write_text('{')
+    with pytest.raises(json.JSONDecodeError):
+        module.verify(root, ROOT, expected)
+
+
+def test_offline_action_cooks_the_canonical_shadow_pair_before_provenance():
+    action = (ROOT / '.github/actions/cook-vulkan-viewport/action.yml').read_text()
+    shadow = action.index('assets/shaders/editor/viewport_shadow.hlsl')
+    assert '"$asset_root/shaders/editor/viewport-shadow-vulkan"' in action[shadow:]
+    mode = action.index('--shadow', shadow)
+    assert mode < action.index('viewport_asset_bundle.py create')
 
 
 def test_bundle_rejects_catalog_substitution_even_with_rehashed_provenance(bundle):
@@ -236,3 +268,18 @@ printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$3" >> "$GITHUB_ENV"
     else:
         assert result.ret == 0, result.stderr.str()
         assert environment.read_text() == f'previous=value\nHORO_EDITOR_VULKAN_ASSET_ROOT={root}\n'
+
+
+def test_sonar_build_covers_the_excluded_clustered_cook_contract():
+    tests_cmake = (ROOT / 'tests/CMakeLists.txt').read_text(encoding='utf-8')
+    registration = tests_cmake.split('add_test(NAME HoroEditorClusteredLightingShaderCookContract', 1)[1]
+    registration = registration.split('set_tests_properties(', 1)[0]
+    dependency = re.search(r'"-DCOOK=\$<TARGET_FILE:([^>]+)>"', registration)
+    assert dependency is not None
+    target = dependency.group(1)
+    declarations = (ROOT / 'apps/HoroEditor/cmake/ShaderTools.cmake').read_text(encoding='utf-8')
+    assert re.search(r'add_executable\(\s*' + re.escape(target) + r'\s+EXCLUDE_FROM_ALL\b', declarations)
+    build = next(line.strip() for line in sonar_coverage_job().splitlines()
+                 if line.strip().startswith('cmake --build --preset sonar'))
+    arguments = shlex.split(build)
+    assert target in arguments[arguments.index('--target') + 1:]

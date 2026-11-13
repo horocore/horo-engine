@@ -115,6 +115,16 @@ namespace Horo::Assets {
                 return Result<void>::Failure(cookResult.ErrorValue());
 
             auto sink = std::move(cookResult).Value();
+            if (request.keyProjection) {
+                const auto *selection = request.keyProjection->Find(slot.record.id);
+                if (!selection || sink.dependencies.size() > request.limits.maximumAssets ||
+                    std::ranges::any_of(sink.dependencies, [&](const AssetId dependency) {
+                    return !std::ranges::binary_search(selection->inputs, dependency);
+                }))
+                    return Result<void>::Failure(
+                        MakeError(CookErrors::MalformedArtifact, "Cooker output exceeded its declared input closure."));
+            }
+
             const AssetCookArtifact artifact{
                 .id = sourceView.id,
                 .type = sourceView.type,

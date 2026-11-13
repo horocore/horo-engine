@@ -198,4 +198,8 @@ namespace Horo::Render::VulkanBackendErrors {
                                          "Stop admission and recreate the device through explicit host recovery.",
                                          false,
                                          true};
+    const ErrorCodeDescriptor ResourceCapacityExceeded{Domain, ErrorCode{"render.vulkan.resource_capacity_exceeded"}, ErrorSeverity::Error,
+                                                       "A bounded Vulkan preparation exceeds its admitted memory or object capacity.",
+                                                       "Increase the explicit preparation budget or reduce the declared workload; no "
+                                                       "partial native preparation is published."};
 }  // namespace Horo::Render::VulkanBackendErrors

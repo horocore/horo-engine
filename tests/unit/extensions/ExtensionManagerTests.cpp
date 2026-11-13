@@ -8,6 +8,7 @@
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Security/SecurityErrors.h"
+#include "OwnedTestDirectory.h"
 #include "SecurityTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -95,16 +96,11 @@ namespace Horo::Extensions::Tests {
     }
 
     struct ExtensionManagerTestFixture {
-        fs::path tempDir;
+        Horo::Tests::OwnedTestDirectory ownedDirectory{"extension"};
+        fs::path tempDir{ownedDirectory.Path() / "plugins"};
 
         ExtensionManagerTestFixture() {
-            tempDir = fs::temp_directory_path() / "horo_extension_tests" / "plugins";
             fs::create_directories(tempDir);
-        }
-
-        ~ExtensionManagerTestFixture() {
-            std::error_code ec;
-            fs::remove_all(tempDir, ec);
         }
 
 #ifdef HORO_ABI_FIXTURE_0
@@ -299,7 +295,10 @@ namespace Horo::Extensions::Tests {
         REQUIRE(builtIn.packageId == "horo.builtin.assets");
         REQUIRE(builtIn.origin == ExtensionOrigin::BuiltIn);
         REQUIRE(builtIn.enabled);
-        REQUIRE(builtIn.modules.size() == 2);
+        REQUIRE(builtIn.modules.size() == 3);
+        CHECK(builtIn.modules[0].id == "horo.builtin.assets.importer.obj");
+        CHECK(builtIn.modules[1].id == "horo.builtin.assets.importer.fbx");
+        CHECK(builtIn.modules[2].id == "horo.builtin.assets.importer.terrain");
 
         REQUIRE(inventory.MarkRuntimeActive(builtIn.packageId).HasValue());
         REQUIRE_FALSE(inventory.Entries().front().RestartRequired());

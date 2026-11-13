@@ -1,7 +1,9 @@
 #include "Horo/Editor/ProjectCreationService.h"
 
+#include "../physics/CollisionIdentityGeneration.h"
 #include "../physics/ProjectCollisionTemplate.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -324,28 +326,54 @@ namespace Horo::Editor {
             return source.HasValue() && WriteDurableFile(staging / ".horo/collision.json", source.Value());
         }
 
-        [[nodiscard]] std::optional<StagingPreparationFailure> WriteScaffolding(const std::filesystem::path &staging,
-                                                                                const ProjectCreationRequest &request,
-                                                                                const std::string &projectId) {
+        /** @brief Authors one real template surface UUID only in the unpublished new-project directory. */
+        [[nodiscard]] bool WriteSurfaceScaffolding(const std::filesystem::path &staging, const std::string &projectId) {
+            auto bytes = AllocateCollisionIdentityBytes(nullptr);
+            if (bytes.HasError())
+                return false;
+            const auto id = Physics::SurfaceMaterialId::FromBytes(bytes.Value());
+            Application::ProjectSurfaceSettingsInput input;
+            input.projectId = projectId;
+            input.defaultSurfaceId = id;
+            input.surfaces.push_back({id, "Default"});
+            auto settings = Application::ProjectSurfaceSettings::Create(std::move(input));
+            if (settings.HasError())
+                return false;
+            auto source = Application::EncodeProjectSurfaceSettings(settings.Value());
+            return source.HasValue() && WriteDurableFile(staging / ".horo/surfaces.json", source.Value());
+        }
+
+        /** @brief Writes portable root metadata before adding semantic settings to the staged project. */
+        [[nodiscard]] bool WritePortableScaffolding(const std::filesystem::path &staging, const ProjectCreationRequest &request,
+                                                    const std::string &projectId) {
             std::error_code error;
             std::filesystem::create_directories(staging / ".horo", error);
             if (error || !WriteDurableFile(staging / ".horo/project.json", ProjectJson(request, projectId)) ||
                 !WriteDurableFile(staging / ".horo/plugins.json", "{\n  \"schemaVersion\": 1,\n  \"requestedPlugins\": []\n}\n") ||
                 !WriteDurableFile(staging / ".horo/input.json",
                                   "{\n  \"schemaVersion\": 1,\n  \"profileId\": \"project-default\",\n  \"overrides\": []\n}\n")) {
-                return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed,
-                                                 "Unable to write project metadata into the staging directory."};
+                return false;
             }
 
-            if (!WriteCollisionScaffolding(staging, projectId))
-                return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed, "Unable to write project collision settings."};
+            return true;
+        }
 
+        /** @brief Creates the ordinary asset directories without choosing any surface semantics. */
+        [[nodiscard]] bool WriteAssetScaffolding(const std::filesystem::path &staging) {
+            std::error_code error;
             for (const char *directory : {"Assets/Models", "Assets/Textures", "Assets/Materials", "Assets/Shaders", "Assets/Scenes"}) {
                 std::filesystem::create_directories(staging / directory, error);
                 if (error)
-                    return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed, "Unable to create project asset scaffolding."};
+                    return false;
             }
 
+            return true;
+        }
+
+        /** @brief Writes only explicitly requested starter/build/VCS authoring into unpublished staging. */
+        [[nodiscard]] std::optional<StagingPreparationFailure> WriteOptionalScaffolding(const std::filesystem::path &staging,
+                                                                                        const ProjectCreationRequest &request) {
+            std::error_code error;
             if (request.includeStarterContent) {
                 const std::filesystem::path starterScene = staging / request.defaultScene;
                 std::filesystem::create_directories(starterScene.parent_path(), error);
@@ -379,6 +407,22 @@ namespace Horo::Editor {
             }
 
             return std::nullopt;
+        }
+
+        /** @brief Publishes no project until all complete staging phases succeed. */
+        [[nodiscard]] std::optional<StagingPreparationFailure> WriteScaffolding(const std::filesystem::path &staging,
+                                                                                const ProjectCreationRequest &request,
+                                                                                const std::string &projectId) {
+            using enum Horo::Editor::ProjectCreationErrorCode;
+            if (!WritePortableScaffolding(staging, request, projectId))
+                return StagingPreparationFailure{WriteFailed, "Unable to write project metadata into the staging directory."};
+            if (!WriteCollisionScaffolding(staging, projectId))
+                return StagingPreparationFailure{WriteFailed, "Unable to write project collision settings."};
+            if (!WriteSurfaceScaffolding(staging, projectId))
+                return StagingPreparationFailure{WriteFailed, "Unable to write project surface settings."};
+            if (!WriteAssetScaffolding(staging))
+                return StagingPreparationFailure{WriteFailed, "Unable to create project asset scaffolding."};
+            return WriteOptionalScaffolding(staging, request);
         }
 
         void RunCreate(const std::shared_ptr<ProjectCreationServiceState> &state,

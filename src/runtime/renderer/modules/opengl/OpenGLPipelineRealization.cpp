@@ -389,6 +389,30 @@ namespace Horo::Render::Detail {
         }
     }  // namespace
 
+    /** @copydoc ValidateOpenGLProgramInterface */
+    Result<void> ValidateOpenGLProgramInterface(const std::uint32_t program, const ShaderManifest &manifest,
+                                                const ShaderTargetRequirement &target, const NormalizedShaderReflection &reflection) {
+        if (!IsAvailable())
+            return Result<void>::Failure(MakeError(OpenGLBackendErrors::MissingRequiredEntryPoints));
+        if (const auto validated = ValidateShaderManifest(manifest); validated.HasError())
+            return validated;
+        RenderGraphicsPipelineDescriptor descriptor;
+        descriptor.manifest = manifest;
+        descriptor.target = target;
+        descriptor.reflection = reflection;
+        if (glGetError() != GL_NO_ERROR)
+            return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
+        if (const auto attributes = ValidateAttributes(program, descriptor); attributes.HasError())
+            return attributes;
+        if (const auto outputs = ValidateOutputs(program, reflection); outputs.HasError())
+            return outputs;
+        if (const auto bindings = ValidateBindings(program, descriptor); bindings.HasError())
+            return bindings;
+        if (glGetError() != GL_NO_ERROR)
+            return Result<void>::Failure(MakeError(OpenGLBackendErrors::CommandFailed));
+        return Result<void>::Success();
+    }
+
     /** @copydoc ValidateOpenGLVertexAttributes */
     Result<void> ValidateOpenGLVertexAttributes(const std::span<const OpenGLVertexAttribute> attributes,
                                                 const RenderGraphicsPipelineDescriptor &descriptor) {
@@ -407,8 +431,8 @@ namespace Horo::Render::Detail {
             if (attribute.name == "gl_InstanceID") {
                 const auto canonical = MakeVfxShaderManifest(descriptor.target);
                 const auto schema = ComputeShaderInterfaceCompatibilityId(canonical);
-                const auto authored = ComputeShaderInterfaceCompatibilityId(descriptor.manifest);
-                if (instanceId || attribute.type != GL_INT || attribute.arrayCount != 1 ||
+                if (const auto authored = ComputeShaderInterfaceCompatibilityId(descriptor.manifest);
+                    instanceId || attribute.type != GL_INT || attribute.arrayCount != 1 ||
                     descriptor.target.backend != ShaderTargetBackend::OpenGL ||
                     descriptor.target.payloadFormat != ShaderPayloadFormat::Glsl410 || reflection.backend != ShaderTargetBackend::OpenGL ||
                     reflection.interfaceSchemaVersion != descriptor.target.interfaceSchemaVersion ||
@@ -429,8 +453,8 @@ namespace Horo::Render::Detail {
                 return variable.stage == ShaderStage::Vertex && variable.direction == ShaderInterfaceDirection::Input &&
                        variable.location == location;
             });
-            const GLenum meshType = location == 2 ? GL_FLOAT_VEC2 : GL_FLOAT_VEC3;
-            if ((locations & bit) != 0 || match == reflection.stageInterface.end() || attribute.arrayCount != 1 || match->arrayCount != 1 ||
+            if (const GLenum meshType = location == 2 ? GL_FLOAT_VEC2 : GL_FLOAT_VEC3;
+                (locations & bit) != 0 || match == reflection.stageInterface.end() || attribute.arrayCount != 1 || match->arrayCount != 1 ||
                 attribute.type != meshType || attribute.type != ValueType(match->type, match->rows, match->columns) ||
                 (!match->nativeName.empty() && match->nativeName != attribute.name))
                 return Mismatch("Linked user attribute name/type/location differs from cooked reflection and MeshVertex.");

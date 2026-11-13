@@ -76,6 +76,25 @@ namespace Horo::Prefab {
                                                      ResolverLimits());
         }
 
+        /** @brief Captures an actual two-edge nested chain so a one-edge policy tests the first rejected edge, not the root. */
+        Result<PrefabSourceResolverSnapshot> BuildTwoEdgeResolverSnapshot(Assets::AssetRegistry &registry) {
+            const auto outer = ResolverAsset(1), middle = ResolverAsset(2), leaf = ResolverAsset(3);
+            PublishResolverRegistry(registry, {ResolverRecord(outer, "assets/prefabs/outer.prefab"),
+                                               ResolverRecord(middle, "assets/prefabs/middle.prefab"),
+                                               ResolverRecord(leaf, "assets/prefabs/leaf.prefab")});
+            const PrefabComposition first{.nestedPlacements = {{.placementLocalId = {1},
+                                                                .sourcePrefab = PrefabAssetReference::Create(middle).Value(),
+                                                                .authoredAgainst = ResolverRevision(2)}}};
+            const PrefabComposition second{.nestedPlacements = {{.placementLocalId = {7},
+                                                                 .sourcePrefab = PrefabAssetReference::Create(leaf).Value(),
+                                                                 .authoredAgainst = ResolverRevision(3)}}};
+            return BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
+                                                     {{ResolverDocument(outer, {ResolverObject(0)}, first, {middle}), ResolverRevision(1)},
+                                                      {ResolverDocument(middle, {ResolverObject(0)}, second, {leaf}), ResolverRevision(2)},
+                                                      {ResolverDocument(leaf, {ResolverObject(0)}), ResolverRevision(3)}},
+                                                     ResolverLimits());
+        }
+
         TEST_CASE("Prefab source resolver pins one registry and document context across nested expansion", "[unit][prefab][resolver]") {
             const auto outer = ResolverAsset(1);
             const auto nested = ResolverAsset(2);
@@ -110,8 +129,18 @@ namespace Horo::Prefab {
             policy.maximumObjectCount = 2;
             policy.maximumNestedPrefabDepth = 1;
             result = snapshot.Resolve(outer, PrefabInstanceId::Create(1).Value(), ResolverLimits(policy));
+            REQUIRE(result.HasValue());
+            REQUIRE(result.Value().Objects().size() == 2);
+            const auto accepted = result.Value();
+            auto twoEdges = BuildTwoEdgeResolverSnapshot(registry);
+            REQUIRE(twoEdges.HasValue());
+            policy.maximumObjectCount = 3;
+            result = twoEdges.Value().Resolve(outer, PrefabInstanceId::Create(1).Value(), ResolverLimits(policy));
+            INFO((result.HasError() ? result.ErrorValue().message
+                                    : "Two-edge nested chain unexpectedly admitted under an edge limit of one."));
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().code.Value() == PrefabErrors::HierarchyDepthExceeded.code.Value());
+            CHECK(accepted.Objects().size() == 2);
         }
 
         TEST_CASE("Prefab source resolver inherits a variant parent hierarchy", "[unit][prefab][resolver][variant]") {

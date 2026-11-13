@@ -109,6 +109,11 @@ fifteen-minute timeout, and cancellation escalates from a two-second graceful
 window to forced tree termination while stdout and stderr remain continuously
 drained.
 
+Windows gameplay configuration selects CMake's `Embedded` MSVC debug-information
+format (`/Z7`). Debug symbols remain available without a background `mspdbsrv`
+process surviving configure or build. Windows Job descendant cleanup remains
+mandatory and is not treated as a successful build outcome.
+
 The service exposes a project-scoped, owned snapshot of the active build for
 presentation clients. A workspace may detach and reopen its Build Output panel
 without owning or cancelling the session. The snapshot includes its monotonic

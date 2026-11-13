@@ -146,7 +146,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PhysicsInspectorSession::AddCollider */
-    void PhysicsInspectorSession::AddCollider() {
+    void PhysicsInspectorSession::AddCollider(const bool trigger) {
         if (draft_.colliders.size() >= Runtime::MaximumPhysicsCollidersPerBody || NextComponentId() == 0)
             return;
         std::uint64_t slot = 0;
@@ -154,7 +154,16 @@ namespace Horo::Editor {
             slot = std::max(slot, draft.value.collider.value);
         if (slot == std::numeric_limits<std::uint64_t>::max())
             return;
+        if (!draft_.body) {
+            if (NextComponentId() == std::numeric_limits<std::uint64_t>::max())
+                return;
+            Runtime::RigidBodyComponent body;
+            body.id.value = NextComponentId();
+            body.body.value = 1;
+            draft_.body = body;
+        }
         Runtime::ColliderComponent value;
+        value.sensor = trigger;
         value.id.value = NextComponentId();
         value.collider.value = slot + 1;
         value.body = {Runtime::SceneObjectId{object_.value}, draft_.body ? draft_.body->body : Runtime::PhysicsBodySlotId{}};

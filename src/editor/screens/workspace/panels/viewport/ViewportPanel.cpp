@@ -7,6 +7,7 @@
 #include "ViewportOverlay.h"
 #include "ViewportStreamingPreview.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
+#include "editor/screens/workspace/terrain/TerrainViewportTool.h"
 #include "visualizers/light/LightMarkerLayer.h"
 
 #include <algorithm>
@@ -105,6 +106,7 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnDetach */
     void ViewportPanel::OnDetach() {
         worldSourceTool_.Cancel();
+        terrainTool_->Cancel();
         interaction_.Detach();
         contributions_ = nullptr;
         activeContribution_ = {};
@@ -120,6 +122,7 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnPresentationHidden */
     void ViewportPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &command) {
         worldSourceTool_.Cancel();
+        terrainTool_->Cancel();
         if (!activeContribution_)
             return;
         interaction_.CancelContribution();
@@ -160,6 +163,11 @@ namespace Horo::Editor {
             .ground = ground,
         };
 
+        if (DrawTerrainSource(drawList, surfaceLayout, viewModel, command, context)) {
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            return;
+        }
         RequestViewportExtent(width, height);
         ConfigureRenderer(viewModel, context);
         const EditorViewportTextureView textureView =
@@ -261,7 +269,7 @@ namespace Horo::Editor {
 
     void ViewportPanel::DrawAssetPlacementHint(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const ImVec2 pointer,
                                                const EditorGuiContext &context) {
-        const std::string &hint = context.localization.Get("editor", "workspace.viewport.asset_drop_hint");
+        const std::string &hint = ViewportPanel::kTextScope.Text(context.localization, "asset_drop_hint");
         const ImVec2 hintSize = ImGui::CalcTextSize(hint.c_str());
         const ImVec2 hintMin{std::clamp(pointer.x + 14.0F, layout.origin.x + 8.0F, layout.origin.x + layout.width - hintSize.x - 20.0F),
                              std::clamp(pointer.y + 18.0F, layout.origin.y + 8.0F, layout.origin.y + layout.height - hintSize.y - 16.0F)};
@@ -390,8 +398,13 @@ namespace Horo::Editor {
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
         const ImVec2 pointer = ImGui::GetMousePos();
+        const auto statusRow =
+            ResolveViewportStatusRow(layout.origin, {layout.width, layout.height}, viewModel.objects.size(), context.localization);
+        const bool pointerOverStatus =
+            pointer.y >= statusRow.objectsPosition.y && pointer.y <= statusRow.objectsPosition.y + statusRow.height;
         const bool pointerOverControls =
-            navigationLayer_.CapturesPointer() || (pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F);
+            navigationLayer_.CapturesPointer() || pointerOverStatus ||
+            (pointer.y >= layout.origin.y && pointer.y <= ResolveViewportToolbar(layout.origin, {layout.width, layout.height}).bottom);
         const bool inputEligible = ViewportInputEligible();
         const bool surfaceInteractive = !pointerOverControls || interaction_.IsActive();
         const bool surfaceHovered = PrepareViewportInput(layout, inputEligible, surfaceInteractive);
@@ -499,7 +512,7 @@ namespace Horo::Editor {
 
     void ViewportPanel::DrawMissingRendererMessage(const float centerX, const float originY, const float height,
                                                    const EditorGuiContext &context) {
-        const std::string &message = context.localization.Get("editor", "workspace.viewport.renderer_missing");
+        const std::string &message = ViewportPanel::kTextScope.Text(context.localization, "renderer_missing");
         const float messageWidth = ImGui::CalcTextSize(message.c_str()).x;
         ImGui::SetCursorScreenPos(ImVec2(centerX - messageWidth * 0.5F, originY + height * 0.52F));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.28F, 0.32F, 0.40F, 1.0F));

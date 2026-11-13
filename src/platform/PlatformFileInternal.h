@@ -5,6 +5,7 @@
 #pragma once
 
 #include "Horo/Foundation/Platform.h"
+#include "NativeFileApiPath.h"
 
 #if !defined(_WIN32)
 #include <fcntl.h>
@@ -30,7 +31,12 @@ namespace Horo::PlatformFileInternal {
 
     /** @brief Preserves the failing native path in a typed filesystem error. */
     [[nodiscard]] inline Error FsError(const ErrorCodeDescriptor &code, const std::filesystem::path &path) {
-        return MakeError(code, std::string(code.summary) + " Path: " + path.generic_string());
+        try {
+            const auto encoded = path.generic_u8string();
+            return MakeError(code, std::string(code.summary) + " Path: " + std::string{encoded.begin(), encoded.end()});
+        } catch (const std::system_error &) {
+            return MakeError(code, std::string(code.summary) + " Path text cannot be represented as UTF-8.");
+        }
     }
 
 #if !defined(_WIN32)

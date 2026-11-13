@@ -22,7 +22,8 @@ namespace Horo::Editor {
             auto preview = BuildScenePrefabProjection(snapshot, sources, Limits(), &schemas);
             REQUIRE(preview.HasValue());
             REQUIRE(preview.Value().instances[0].expanded);
-            CHECK(preview.Value().instances[0].valueProvenance.back().origin == Prefab::PrefabValueOrigin::Instance);
+            REQUIRE(preview.Value().instances[0].valueSnapshot);
+            CHECK(preview.Value().instances[0].valueSnapshot->Values().back().origin == Prefab::PrefabValueOrigin::Instance);
             REQUIRE(ConvertScenePrefabProjectionToRuntime(snapshot, {20}, preview.Value(), sources, Limits(), &schemas).HasValue());
             auto runtime = ConvertSceneDocumentToRuntime(snapshot, {20}, sources, Limits(), &schemas);
             REQUIRE(runtime.HasValue());

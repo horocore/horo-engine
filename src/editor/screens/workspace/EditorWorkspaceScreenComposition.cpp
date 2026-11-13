@@ -4,6 +4,7 @@
 #include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspaceReadSources.h"
+#include "Horo/Editor/XRSimulatorModel.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/EditorInspectorHost.h"
 #include "Horo/Extensions/EditorViewportHost.h"
@@ -11,7 +12,9 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Prefab/PrefabErrors.h"
+#include "Horo/Prefab/PrefabValueOverrides.h"
 #include "PCGPreviewWorkspace.h"
+#include "ScriptModuleHostServices.h"
 
 #include <array>
 #include <span>
@@ -20,9 +23,13 @@
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
         /** @brief Composes the explicit project loader and retains its cooperative lease through cache publication. */
-        PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations) {
-            return [root, mutations](const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
-                                     const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation) {
+        PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations,
+                                                   Prefab::PrefabMetricHandles metrics,
+                                                   std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas) {
+            return
+                [root, mutations, metrics = std::move(metrics),
+                 schemas = std::move(schemas)](const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
+                                               const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation) {
                 if (mutations == nullptr)
                     return Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
                 auto lease = mutations->TryAcquire({root, ProjectMutationOwner::Asset, "prefab.hierarchy.capture"});
@@ -31,12 +38,18 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 auto project = Application::LoadProjectSourceDocument(root);
                 if (project.HasError())
                     return Result<PreparedPrefabHierarchySources>::Failure(project.ErrorValue());
-                auto sources =
-                    CapturePrefabHierarchySources(root, registry, roots, limits, project.Value().metadata.horoVersion.value, cancellation);
+                auto sources = CapturePrefabHierarchySources(root, registry, roots, limits, project.Value().metadata.horoVersion.value,
+                                                             cancellation, metrics, schemas);
                 if (sources.HasError())
                     return Result<PreparedPrefabHierarchySources>::Failure(sources.ErrorValue());
                 return Result<PreparedPrefabHierarchySources>::Success({std::move(sources).Value(), std::move(lease).Value()});
             };
+        }
+
+        /** @brief Copies only explicitly registered override policy into the asynchronous source capture lease. */
+        std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> OverrideSchemas(const EditorServiceRegistry &services) {
+            const auto *schemas = services.TryGetConst<Prefab::PrefabValueSchemaSnapshot>();
+            return schemas ? std::make_shared<const Prefab::PrefabValueSchemaSnapshot>(*schemas) : nullptr;
         }
 
         /** @brief Owns the capability catalog and disposable preview inputs admitted together by the workspace host. */
@@ -73,9 +86,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         EditorWorkspaceGameplayServices BindGameplayServices(const EditorServiceRegistry &services, const GuiScreenHost &host,
                                                              EditorPlaySceneFactory sceneFactory) {
             const auto *environment = services.TryGet<Application::GameplayBuildEnvironment>();
+            auto *saveRetirement = services.TryGet<EditorPlaySaveRetirement>();
+            auto *moduleScripts = services.TryGet<Extensions::ScriptModuleHostServices>();
             return {.builds = services.TryGet<Application::GameplayBuildService>(),
                     .environment = environment ? *environment : Application::GameplayBuildEnvironment{},
                     .retirements = host.GameplayRetirements(),
+                    .saveRetirement = saveRetirement ? saveRetirement->shared_from_this() : nullptr,
+                    .moduleScripts = moduleScripts ? moduleScripts->shared_from_this() : nullptr,
                     .sceneFactory = std::move(sceneFactory)};
         }
 
@@ -104,6 +121,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .navigationOverlays = services_.TryGetConst<NavigationViewportAccess>(),
             .extensionViewport = services_.TryGet<Extensions::EditorViewportHost>(),
             .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
+            .xrSimulatorArtifacts = simulatorArtifacts_,
+            .xrSimulator = panelServices_.xrSimulator,
         };
         contributions_.panels.AttachAll(panelContext);
     }
@@ -133,6 +152,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         };
     }
 
+    /** @copydoc EditorWorkspaceScreen::RevokeSimulatorArtifacts */
+    void EditorWorkspaceScreen::RevokeSimulatorArtifacts() noexcept {
+        if (simulatorArtifacts_)
+            simulatorArtifacts_->Revoke();
+        simulatorArtifacts_.reset();
+    }
+
     /** @copydoc EditorWorkspaceScreen::InitializeController */
     Result<void> EditorWorkspaceScreen::InitializeController(const std::filesystem::path &projectRoot) {
         const Assets::AssetRegistrySnapshot assetSnapshot =
@@ -141,6 +167,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (capturedSources.HasError())
             return Result<void>::Failure(capturedSources.ErrorValue());
         auto sources = std::move(capturedSources).Value();
+        auto simulatorArtifacts = sources.simulatorArtifacts;
         auto resources = PrepareUiInspectorResources(services_, projectRoot, sources.owner);
         if (resources.HasError())
             return Result<void>::Failure(resources.ErrorValue());
@@ -159,6 +186,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             controller_.reset();
             return Result<void>::Failure(error);
         }
+        RevokeSimulatorArtifacts();
+        simulatorArtifacts_ = std::move(simulatorArtifacts);
         uiInspectorResources_ = std::move(uiInspectorResources);
         return Result<void>::Success();
     }
@@ -194,9 +223,15 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
                                            .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                            .audioPreview = services_.TryGet<IAudioComponentPreview>(),
-                                           .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                           .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations,
+                                                                               services_.TryGetConst<Prefab::PrefabMetricHandles>()
+                                                                                   ? *services_.TryGetConst<Prefab::PrefabMetricHandles>()
+                                                                                   : Prefab::PrefabMetricHandles{},
+                                                                               OverrideSchemas(services_)),
                                                       .stageFactory = BindPrefabStageFactory(projectRoot)},
-                                           .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)}};
+                                           .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)},
+                                           .terrainCook = services_.TryGetConst<Application::TerrainAuthoringCookFactory>(),
+                                           .terrainAssets = services_.TryGetConst<Application::TerrainAuthoringAssetFactory>()};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */

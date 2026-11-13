@@ -1,5 +1,6 @@
 #include "../../../support/renderer/MultiviewTestSupport.h"
 #include "VulkanGraphTestSupport.h"
+#include "runtime/renderer/modules/vulkan/VulkanGraphRuntimeInternal.h"
 
 namespace {
     using namespace Horo::Render;
@@ -146,3 +147,48 @@ namespace {
     }
 
 }  // namespace
+
+TEST_CASE("Vulkan compute barrier scope requires actual queue evidence", "[unit][runtime][renderer][vulkan][vfx]") {
+    using namespace Horo::Render;
+    using namespace Horo::Render::Detail;
+    const VulkanGraphResource buffer{.kind = RenderGraphResourceKind::Buffer};
+    const RenderGraphLogicalState before{};
+    const RenderGraphLogicalState after{RenderGraphSynchronizationAccess::ReadWrite,
+                                        RenderGraphSynchronizationOperation::Storage,
+                                        RenderGraphPipelineScope::Compute,
+                                        RenderGraphTextureLayout::NotApplicable,
+                                        {1}};
+    CHECK(TranslateVulkanGraphBarrier(buffer, before, after).HasError());
+    const auto admitted = TranslateVulkanGraphBarrier(buffer, before, after, {.computeAvailable = true});
+    REQUIRE(admitted.HasValue());
+    CHECK(admitted.Value().buffer.dstStageMask == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
+    CHECK(admitted.Value().buffer.dstAccessMask == (VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT));
+}
+
+TEST_CASE("Vulkan private particle handoff never opens generic external image or write access", "[unit][runtime][renderer][vulkan][vfx]") {
+    using namespace Horo::Render;
+    using namespace Horo::Render::Detail;
+    VulkanGraphResource resource{.kind = RenderGraphResourceKind::Buffer};
+    const RenderGraphLogicalState before{RenderGraphSynchronizationAccess::Write,
+                                         RenderGraphSynchronizationOperation::Storage,
+                                         RenderGraphPipelineScope::Compute,
+                                         RenderGraphTextureLayout::NotApplicable,
+                                         {1}};
+    RenderGraphLogicalState after{RenderGraphSynchronizationAccess::Read,
+                                  RenderGraphSynchronizationOperation::Storage,
+                                  RenderGraphPipelineScope::External,
+                                  RenderGraphTextureLayout::NotApplicable,
+                                  {1}};
+    CHECK(TranslateVulkanGraphBarrier(resource, before, after, {.computeAvailable = true}).HasError());
+    const VulkanGraphBarrierOptions exact{.computeAvailable = true, .particleHandoff = true};
+    const auto admitted = TranslateVulkanGraphBarrier(resource, before, after, exact);
+    REQUIRE(admitted.HasValue());
+    CHECK(admitted.Value().buffer.srcAccessMask == VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    CHECK(admitted.Value().buffer.dstStageMask == VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    CHECK(admitted.Value().buffer.dstAccessMask == VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    after.access = RenderGraphSynchronizationAccess::Write;
+    CHECK(TranslateVulkanGraphBarrier(resource, before, after, exact).HasError());
+    after.access = RenderGraphSynchronizationAccess::Read;
+    resource.kind = RenderGraphResourceKind::Texture;
+    CHECK(TranslateVulkanGraphBarrier(resource, before, after, exact).HasError());
+}

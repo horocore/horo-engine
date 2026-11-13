@@ -30,7 +30,7 @@ namespace {
     /** @brief Uses the real owner's teardown ordering at the real GuiScreenHost leave/re-enter boundary. */
     class SessionScreen final : public GuiScreen {
     public:
-        SessionScreen(SessionState &state, const bool reject) : state_(state), reject_(reject) {}
+        SessionScreen(SessionState &state, const bool reject) : GuiScreen("test.SessionScreen"), state_(state), reject_(reject) {}
 
         ScreenId Id() const override {
             return reject_ ? 2 : 1;

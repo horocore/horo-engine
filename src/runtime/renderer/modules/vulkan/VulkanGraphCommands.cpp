@@ -49,35 +49,67 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::ValidateTextureUpload */
+    Result<void> VulkanGraphRuntime::Impl::ValidateTextureUpload(const RenderGraphTextureUpload &upload) {
+        const auto &source = bindings[upload.source.value - 1];
+        const auto &destination = bindings[upload.destination.value - 1];
+        if (!native.copyImage)
+            return Result<void>::Failure(Unsupported("Texture upload requires the actual Vulkan buffer-to-image copy entry point."));
+        if (source.kind != RenderGraphResourceKind::Buffer || destination.kind != RenderGraphResourceKind::Texture ||
+            source.buffer == VK_NULL_HANDLE || destination.image == VK_NULL_HANDLE)
+            return Result<void>::Failure(Invalid("Texture upload differs from its retained native buffer/image kinds."));
+        if (const auto valid = ValidateTextureUploadDescriptors(upload, source.bufferDescriptor, destination.textureDescriptor);
+            valid.HasError())
+            return valid;
+        if (!states[upload.source.value - 1].contentsDefined)
+            return Result<void>::Failure(Invalid("Texture upload source contents are undefined."));
+        states[upload.destination.value - 1].contentsDefined = true;
+        return Result<void>::Success();
+    }
+
+    Result<void> VulkanGraphRuntime::Impl::ValidateColor(const RenderGraphColorAttachment &operation, RenderQueueId queue) {
+        const auto *color = &operation;
+
+        const auto &binding = bindings[color->texture.value - 1];
+        if (const auto *nativeQueue = Queue(queue); nativeQueue == nullptr || !nativeQueue->supportsGraphics ||
+                                                    binding.colorView == VK_NULL_HANDLE ||
+                                                    binding.kind != RenderGraphResourceKind::Texture || !color->operations.IsValid() ||
+                                                    color->operations.storeOperation != AttachmentStoreOperation::Store ||
+                                                    color->operations.loadOperation == AttachmentLoadOperation::DontCare)
+            return Result<void>::Failure(Unsupported(
+                "Color work requires an admitted graphics queue and whole single-sample color attachment with preserved store."));
+        auto &state = states[color->texture.value - 1];
+        if (color->operations.loadOperation == AttachmentLoadOperation::Load && !state.contentsDefined)
+            return Result<void>::Failure(Invalid("Color attachment Load requires defined native contents."));
+        state.contentsDefined = true;
+        return Result<void>::Success();
+    }
+
+    namespace {
+        bool SeparatelyPrepared(const RenderGraphWorkload &workload) {
+            return std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphVfxGpuCompute>(workload) ||
+                   std::holds_alternative<RenderGraphVfxGpuDraw>(workload);
+        }
+    }  // namespace
+
     /** @brief Validates native descriptor roles and contents before recording; unsupported adjacent capabilities remain explicit. */
     Result<void> VulkanGraphRuntime::Impl::ValidateWorkload(const RenderGraphWorkload &workload, const RenderQueueId queue) {
         if (const auto *multiviewWork = std::get_if<RenderGraphMultiview>(&workload)) {
             PrepareMultiviewContents(*multiviewWork, bindings, states);
             return Result<void>::Success();
         }
-        if (std::holds_alternative<RenderGraphVfx>(workload))
-            return Result<void>::Success();  // Complete native scene admission is performed with the full request in PreparePass.
+        if (SeparatelyPrepared(workload))
+            return Result<void>::Success();
         if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload))
             return ValidateDepthAttachment(*depth, queue);
         if (std::holds_alternative<std::monostate>(workload))
             return Result<void>::Success();
         if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload))
             return ValidateBufferCopy(*copy);
-        if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
-            const auto &binding = bindings[color->texture.value - 1];
-            if (const auto *nativeQueue = Queue(queue); nativeQueue == nullptr || !nativeQueue->supportsGraphics ||
-                                                        binding.colorView == VK_NULL_HANDLE ||
-                                                        binding.kind != RenderGraphResourceKind::Texture || !color->operations.IsValid() ||
-                                                        color->operations.storeOperation != AttachmentStoreOperation::Store ||
-                                                        color->operations.loadOperation == AttachmentLoadOperation::DontCare)
-                return Result<void>::Failure(Unsupported(
-                    "Color work requires an admitted graphics queue and whole single-sample color attachment with preserved store."));
-            auto &state = states[color->texture.value - 1];
-            if (color->operations.loadOperation == AttachmentLoadOperation::Load && !state.contentsDefined)
-                return Result<void>::Failure(Invalid("Color attachment Load requires defined native contents."));
-            state.contentsDefined = true;
-            return Result<void>::Success();
-        }
+        if (const auto *upload = std::get_if<RenderGraphTextureUpload>(&workload))
+            return ValidateTextureUpload(*upload);
+        if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload))
+            return ValidateColor(*color, queue);
         if (std::holds_alternative<PrimaryOutputAttachment>(workload))
             return Result<void>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported,
                                                    "Primary output acquisition/presentation belongs to the Vulkan WSI capability."));
@@ -110,6 +142,21 @@ namespace Horo::Render::Detail {
                                             .regionCount = 1,
                                             .pRegions = &region};
         copy(command, &commandInfo);
+    }
+
+    /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeTextureUpload */
+    void VulkanGraphRuntime::Impl::Dispatch::EncodeTextureUpload(const VkCommandBuffer command, const RenderGraphTextureUpload &upload,
+                                                                 const std::span<const VulkanGraphResource> resident) const noexcept {
+        const VkBufferImageCopy2 region{.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+                                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                        .imageExtent = {upload.extent.width, upload.extent.height, 1}};
+        const VkCopyBufferToImageInfo2 copy{.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
+                                            .srcBuffer = resident[upload.source.value - 1].buffer,
+                                            .dstImage = resident[upload.destination.value - 1].image,
+                                            .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                            .regionCount = 1,
+                                            .pRegions = &region};
+        copyImage(command, &copy);
     }
 
     /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeColor */
@@ -145,12 +192,29 @@ namespace Horo::Render::Detail {
                 native.EncodeDepthAttachment(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphBufferCopy>) {
                 native.EncodeCopy(command, operation, bindings);
+            } else if constexpr (std::is_same_v<Operation, RenderGraphTextureUpload>) {
+                native.EncodeTextureUpload(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphColorAttachment>) {
                 native.EncodeColor(command, operation, bindings);
             } else if constexpr (!std::is_same_v<Operation, std::monostate>) {
                 HORO_INVARIANT_MSG(false, "Unsupported native workload passed validation.");
             }
         }, workload);
+    }
+
+    Result<void> VulkanGraphRuntime::Impl::RecordPass(VkCommandBuffer command, VulkanCommandTicket ticket,
+                                                      const RenderQueueSubmission &submission, const RenderGraphExecutionRequest &request,
+                                                      std::size_t pass) {
+        Barriers(command, passes[pass].before);
+        if (const auto &workload = request.workloads[pass].workload; std::holds_alternative<RenderGraphVfx>(workload))
+            EncodeVfx(command, pass);
+        else if (std::holds_alternative<RenderGraphVfxGpuCompute>(workload) || std::holds_alternative<RenderGraphVfxGpuDraw>(workload)) {
+            if (const auto encoded = vfxGpu.Encode(command, ticket, submission, request, pass, bindings); encoded.HasError())
+                return encoded;
+        } else
+            Encode(command, workload);
+        Barriers(command, passes[pass].after);
+        return Result<void>::Success();
     }
 
     /** @brief Copies submission ownership into preallocated tickets; no graph/request views survive admission. */
@@ -171,12 +235,8 @@ namespace Horo::Render::Detail {
             if (buffer.HasError())
                 return Result<void>::Failure(std::move(buffer).ErrorValue());
             for (std::size_t pass = submission.passes.offset; pass < submission.passes.offset + submission.passes.count; ++pass) {
-                Barriers(buffer.Value(), passes[pass].before);
-                if (std::holds_alternative<RenderGraphVfx>(request.workloads[pass].workload))
-                    EncodeVfx(buffer.Value(), pass);
-                else
-                    Encode(buffer.Value(), request.workloads[pass].workload);
-                Barriers(buffer.Value(), passes[pass].after);
+                if (const auto encoded = RecordPass(buffer.Value(), submission.ticket, submission.value, request, pass); encoded.HasError())
+                    return encoded;
             }
             if (auto finished = commands.Finish(submission.ticket); finished.HasError())
                 return finished;

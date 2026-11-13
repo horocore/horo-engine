@@ -24,12 +24,12 @@ namespace Horo::Editor {
         /** @brief Parses a captured canonical source pair and discovers only typed nesting/inheritance edges. */
         Result<Prefab::PrefabDependencySource> ParseSource(const Assets::AssetCookPinnedSource &source,
                                                            const Prefab::PrefabLimitProfile &limits,
-                                                           const Application::HoroVersion &version,
-                                                           std::vector<Assets::AssetId> &selection) {
+                                                           const Application::HoroVersion &version, std::vector<Assets::AssetId> &selection,
+                                                           const Prefab::PrefabMetricHandles &metrics) {
             if (source.record.type.Value() != "core.prefab")
                 return Result<Prefab::PrefabDependencySource>::Failure(MakeError(Prefab::PrefabErrors::DependencyTypeMismatch));
             const std::string_view bytes{reinterpret_cast<const char *>(source.bytes.data()), source.bytes.size()};
-            auto document = Prefab::PrefabDocument::Parse(bytes, limits, {.expectedProjectVersion = version});
+            auto document = Prefab::PrefabDocument::Parse(bytes, limits, {.expectedProjectVersion = version, .metrics = &metrics});
             if (document.HasError())
                 return Result<Prefab::PrefabDependencySource>::Failure(document.ErrorValue());
             if (document.Value().Data().assetId != source.record.id)
@@ -51,18 +51,28 @@ namespace Horo::Editor {
             const auto sourceVersion = document.Value().Data().projectVersion;
             return Result<Prefab::PrefabDependencySource>::Success({std::move(document).Value(), {sourceVersion, digest}});
         }
+
+        /** @brief Admits the explicit selected root list before entering iterative bounded dependency capture. */
+        Result<std::vector<Assets::AssetId>> InitialSelection(std::span<const Assets::AssetId> roots) {
+            std::vector<Assets::AssetId> selection;
+            for (const auto asset : roots)
+                if (auto added = Include(selection, asset); added.HasError())
+                    return Result<std::vector<Assets::AssetId>>::Failure(added.ErrorValue());
+            return Result<std::vector<Assets::AssetId>>::Success(std::move(selection));
+        }
+
     }  // namespace
 
     /** @copydoc CapturePrefabHierarchySources */
     Result<PrefabHierarchySources> CapturePrefabHierarchySources(
         const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
-        const Prefab::PrefabLimitProfile &limits, const Application::HoroVersion &version, const CancellationToken &cancellation) {
+        const Prefab::PrefabLimitProfile &limits, const Application::HoroVersion &version, const CancellationToken &cancellation,
+        const Prefab::PrefabMetricHandles &metrics, std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas) {
         try {
-            std::vector<Assets::AssetId> selection;
-            for (const auto asset : roots) {
-                if (auto added = Include(selection, asset); added.HasError())
-                    return Result<PrefabHierarchySources>::Failure(added.ErrorValue());
-            }
+            auto selected = InitialSelection(roots);
+            if (selected.HasError())
+                return Result<PrefabHierarchySources>::Failure(selected.ErrorValue());
+            auto selection = std::move(selected).Value();
             const Assets::AssetCookLimits captureLimits{.maximumSourceBytes = Prefab::PrefabHardLimits::SourceDocumentBytes,
                                                         .maximumAssets = MaximumSources};
             for (;;) {
@@ -74,14 +84,14 @@ namespace Horo::Editor {
                 sources.reserve(selection.size());
                 const auto capturedCount = selection.size();
                 for (const auto &source : inputs.Value().Sources()) {
-                    auto parsed = ParseSource(source, limits, version, selection);
+                    auto parsed = ParseSource(source, limits, version, selection, metrics);
                     if (parsed.HasError())
                         return Result<PrefabHierarchySources>::Failure(parsed.ErrorValue());
                     sources.push_back(std::move(parsed).Value());
                 }
                 if (selection.size() != capturedCount)
                     continue;
-                auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits);
+                auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits, metrics, schemas);
                 if (resolver.HasError())
                     return Result<PrefabHierarchySources>::Failure(resolver.ErrorValue());
                 if (auto current = inputs.Value().VerifyUnchanged(cancellation); current.HasError())

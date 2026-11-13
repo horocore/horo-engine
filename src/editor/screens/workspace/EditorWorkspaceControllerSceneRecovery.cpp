@@ -1,4 +1,5 @@
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -6,6 +7,13 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Missing external source is a replacement failure, never permission to clear the document. */
+        const ErrorCodeDescriptor ExternalSceneUnavailable{.domain = ErrorDomainId{"editor.scene_document"},
+                                                           .code = ErrorCode{"external_scene_unavailable"},
+                                                           .defaultSeverity = ErrorSeverity::Error,
+                                                           .summary = "The canonical external Scene is unavailable.",
+                                                           .remediationHint = "Restore the Scene file or choose another document."};
+
         /** @brief Discards superseded recovery state before any canonical Scene owner replacement. */
         bool DiscardSupersededRecovery(const std::filesystem::path &root, const ProjectMutationCoordinator &mutations,
                                        DurableFileSystem &files) {
@@ -20,40 +28,21 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ReloadExternalScene */
     void EditorWorkspaceController::ReloadExternalScene() {
+        if (DeferPlaySceneReplacement(PlaySceneReplacementKind::External))
+            return;
         if (!PrepareNavigationSceneReplacement("Scene replacement"))
             return;
 
         if (!m_defaultScenePath.has_value() || m_mutations == nullptr || m_durableFiles == nullptr)
             return;
 
-        if (const Result<LoadedProjectScene> loaded = LoadProjectScene(std::filesystem::path{m_viewModel.projectRoot}, *m_defaultScenePath);
-            loaded.HasError() || !loaded.Value().existed) {
-            LOG_ERROR("editor.scene_document", "External scene reload failed because the canonical document is unavailable.");
+        auto loaded = ReadExternalSceneForReplacement();
+        if (loaded.HasError()) {
+            LOG_ERROR("editor.scene_document", "%s", loaded.ErrorValue().message.c_str());
             return;
-        } else {
-            LoadedProjectScene external = loaded.Value();
-            SceneDocument validatedExternal;
-            if (const Result<void> validated = validatedExternal.LoadSaved(external.objects, external.prefabInstances);
-                validated.HasError()) {
-                LOG_ERROR("editor.scene_document", "External scene validation failed: %s", validated.ErrorValue().message.c_str());
-                return;
-            }
-            if (HasDirtyCollisionSettings()) {
-                LOG_ERROR("editor.collision", "Save or discard collision settings before reloading the Scene owner.");
-                return;
-            }
-            if (!DiscardSupersededRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_mutations, *m_durableFiles))
-                return;
-            if (auto closed = ShutdownCollisionSettings(); closed.HasError())
-                return;
-            if (const Result<void> installed = m_document.LoadSaved(std::move(external.objects), std::move(external.prefabInstances));
-                installed.HasError()) {
-                LOG_ERROR("editor.scene_document", "External scene validation failed: %s", installed.ErrorValue().message.c_str());
-                return;
-            }
-
-            m_sceneFingerprint = std::move(external.fingerprint);
         }
+        if (!InstallExternalScene(std::move(loaded).Value()))
+            return;
         if (m_sceneFileWatch != nullptr)
             m_sceneFileWatch->Reset();
         m_history.Clear();
@@ -70,18 +59,50 @@ namespace Horo::Editor {
         m_autosaveRetryDelaySeconds = 0.0F;
         m_autosaveSuppressedForDiscard = false;
         RefreshSceneProjections();
-        LOG_INFO("editor.scene_document", "Reloaded externally changed scene '%s'.", m_defaultScenePath->string().c_str());
+        LOG_INFO("editor.scene_document", "Reloaded externally changed scene '%s'.", WorkspacePathText(*m_defaultScenePath).c_str());
+    }
+
+    /** @copydoc EditorWorkspaceController::ReadExternalSceneForReplacement */
+    Result<LoadedProjectScene> EditorWorkspaceController::ReadExternalSceneForReplacement() const {
+        auto loaded = LoadProjectScene(ProjectRoot(), *m_defaultScenePath);
+        if (loaded.HasError())
+            return loaded;
+        if (!loaded.Value().existed)
+            return Result<LoadedProjectScene>::Failure(MakeError(ExternalSceneUnavailable));
+        SceneDocument validated;
+        if (const auto result = validated.LoadSaved(loaded.Value().objects, loaded.Value().prefabInstances); result.HasError())
+            return Result<LoadedProjectScene>::Failure(result.ErrorValue());
+        return loaded;
+    }
+
+    /** @copydoc EditorWorkspaceController::InstallExternalScene */
+    bool EditorWorkspaceController::InstallExternalScene(LoadedProjectScene scene) {
+        if (HasDirtyCollisionSettings()) {
+            LOG_ERROR("editor.collision", "Save or discard collision settings before reloading the Scene owner.");
+            return false;
+        }
+        if (!DiscardSupersededRecovery(ProjectRoot(), *m_mutations, *m_durableFiles))
+            return false;
+        if (auto closed = ShutdownCollisionSettings(); closed.HasError())
+            return false;
+        if (const auto installed = m_document.LoadSaved(std::move(scene.objects), std::move(scene.prefabInstances)); installed.HasError()) {
+            LOG_ERROR("editor.scene_document", "External scene validation failed: %s", installed.ErrorValue().message.c_str());
+            return false;
+        }
+        m_sceneFingerprint = std::move(scene.fingerprint);
+        return true;
     }
 
     /** @copydoc EditorWorkspaceController::RestoreSceneRecovery */
     void EditorWorkspaceController::RestoreSceneRecovery() {
+        if (DeferPlaySceneReplacement(PlaySceneReplacementKind::Recovery))
+            return;
         if (!PrepareNavigationSceneReplacement("Scene replacement"))
             return;
 
         if (!m_defaultScenePath.has_value())
             return;
-        Result<std::optional<ProjectSceneRecoveryRecord>> recovery =
-            InspectProjectSceneRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_defaultScenePath);
+        Result<std::optional<ProjectSceneRecoveryRecord>> recovery = InspectProjectSceneRecovery(ProjectRoot(), *m_defaultScenePath);
         if (recovery.HasError() || !recovery.Value().has_value()) {
             LOG_ERROR("editor.scene_recovery", "Recovery restore failed because no valid record is available.");
             return;
@@ -114,8 +135,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::DiscardSceneRecovery() {
         if (m_mutations == nullptr || m_durableFiles == nullptr)
             return;
-        if (const Result<void> discarded =
-                DiscardProjectSceneRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_mutations, *m_durableFiles);
+        if (const Result<void> discarded = DiscardProjectSceneRecovery(ProjectRoot(), *m_mutations, *m_durableFiles);
             discarded.HasError()) {
             LOG_ERROR("editor.scene_recovery", "Recovery discard failed: %s", discarded.ErrorValue().message.c_str());
             return;
@@ -124,6 +144,41 @@ namespace Horo::Editor {
         m_lastAutosavedState = {};
         m_autosaveSuppressedForDiscard = true;
         LOG_INFO("editor.scene_recovery", "Recovery state discarded explicitly.");
+    }
+
+    /** @copydoc EditorWorkspaceController::DeferPlaySceneReplacement */
+    bool EditorWorkspaceController::DeferPlaySceneReplacement(PlaySceneReplacementKind kind) {
+        if (m_playSession.State() == EditorPlaySessionState::Idle)
+            return false;
+        m_playSceneReplacement = PlaySceneReplacementIntent{kind, m_document.Revision(), m_document.ReplacementEpoch(), m_defaultScenePath};
+        StopPlaySession();
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::PlaySceneReplacementMatches */
+    bool EditorWorkspaceController::PlaySceneReplacementMatches() const noexcept {
+        return m_playSceneReplacement && m_playSceneReplacement->revision == m_document.Revision() &&
+               m_playSceneReplacement->replacementEpoch == m_document.ReplacementEpoch() &&
+               m_playSceneReplacement->scenePath == m_defaultScenePath;
+    }
+
+    /** @copydoc EditorWorkspaceController::ResumePlaySceneReplacement */
+    void EditorWorkspaceController::ResumePlaySceneReplacement() {
+        if (!m_playSceneReplacement)
+            return;
+        if (!PlaySceneReplacementMatches()) {
+            m_playSceneReplacement.reset();
+            LOG_WARN("editor.play.save", "Scene replacement consent expired while Play was stopping; request replacement again.");
+            return;
+        }
+        if (m_playSession.State() != EditorPlaySessionState::Idle)
+            return;
+        const auto kind = m_playSceneReplacement->kind;
+        m_playSceneReplacement.reset();
+        if (kind == PlaySceneReplacementKind::External)
+            ReloadExternalScene();
+        else
+            RestoreSceneRecovery();
     }
 
 }  // namespace Horo::Editor

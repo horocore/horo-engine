@@ -232,3 +232,25 @@ TEST_CASE("Actual dispatch identity primitive never wraps or mutates the exhaust
     REQUIRE_FALSE(Internal::AdvanceDispatchOrdinal(ordinal));
     REQUIRE(ordinal == std::numeric_limits<std::uint64_t>::max());
 }
+
+TEST_CASE("Opaque dispatch equality survives expiry without restoring admission", "[runtime][dispatch]") {
+    DispatchFixture fixture;
+    DispatchFixture foreign;
+    REQUIRE(fixture.scheduler->RunFrame(fixture.lifecycle, fixture.token, false).HasValue());
+    REQUIRE(foreign.scheduler->RunFrame(foreign.lifecycle, foreign.token, false).HasValue());
+    const auto first = fixture.reader->variableEvidence;
+    const auto copy = first;
+    REQUIRE(first.RefersToSameDispatch(copy));
+    REQUIRE(copy.RefersToSameDispatch(first));
+    REQUIRE_FALSE(first.RefersToSameDispatch(RuntimeDispatchEvidence{}));
+    REQUIRE_FALSE(RuntimeDispatchEvidence{}.RefersToSameDispatch(RuntimeDispatchEvidence{}));
+    REQUIRE_FALSE(first.RefersToSameDispatch(foreign.reader->variableEvidence));
+    REQUIRE(fixture.scheduler->RunFrame(fixture.lifecycle, fixture.token, false).HasValue());
+    REQUIRE_FALSE(first.RefersToSameDispatch(fixture.reader->variableEvidence));
+    RuntimeDispatchFacts untouched{.frame = 91};
+    REQUIRE(copy.Read(fixture.reader->expected, RuntimePhase::VariableUpdate, untouched) == RuntimeDispatchStatus::Stale);
+    fixture.scheduler->RetireDispatch();
+    REQUIRE(first.RefersToSameDispatch(copy));
+    REQUIRE(copy.Read(fixture.reader->expected, RuntimePhase::VariableUpdate, untouched) == RuntimeDispatchStatus::Retired);
+    REQUIRE(untouched.frame == 91);
+}

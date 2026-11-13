@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/ExposureGpuKernel.h"
 #include "Horo/Runtime/Render/FramePacing.h"
 #include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/LightFrameUpload.h"
@@ -20,6 +21,7 @@
 #include "Horo/Runtime/Render/RenderSubmission.h"
 #include "Horo/Runtime/Render/Texture.h"
 #include "Horo/Runtime/Render/UiPaintKernel.h"
+#include "Horo/Runtime/Render/VfxGpuKernel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -169,6 +171,10 @@ namespace Horo::Render {
         bool supportsRenderTargetResources{false};
         /** @brief Consumes exact frontend-authored graph partitions, GPU waits and timeline signals. */
         bool supportsExplicitGraphSubmissions{false};
+        bool supportsMaterialRasterGraph{
+            false}; /**< Implements native graph material consumers including readonly fragment storage bindings. */
+        bool supportsMaterialPassBatches{
+            false}; /**< Implements bounded flat depth/color batches, raster regions and depth-only pipeline admission together. */
         bool supportsExplicitMaterialSubmissions{false}; /**< Implements material passes through canonical queue/timeline records. */
         bool supportsSubmissionObservation{false};
         /**
@@ -595,8 +601,63 @@ namespace Horo::Render {
          * @return Native preparation lease or typed unsupported/original admission failure.
          * @details No source compilation, discovery or policy fallback. The host drains leases before teardown.
          */
+        /** @brief Realizes only the fixed offline-cooked exposure family; default is typed unsupported.
+         * @param kernel Exact clear/build/adapt artifacts and reflection. @return Native family lease or typed failure.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentExposureGpuKernel>> RealizeExposureGpuKernel(
+            const CookedExposureGpuKernel &kernel);
+
         [[nodiscard]] virtual Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
+
+        /** @brief Realizes the complete cooked GPU particle compute/direct-draw family at a cold owner boundary.
+         * @param programs Exact canonical artifacts and final-target reflection, never runtime source.
+         * @return Native family lease or typed unsupported/original validation failure.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs);
+
+        /** @brief Queries optional native parameter storage after cold program realization, before frontend allocation.
+         * @param descriptor Exact admitted simulation descriptor; this query performs no resource allocation.
+         * @return Immutable storage plan or original typed failure. The default empty plan requires no additional buffer.
+         * @details The frontend validates and accounts this plan through its ordinary registry, cost and inventory lease.
+         */
+        [[nodiscard]] virtual Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
+            const VfxGpuSimulationDescriptor &descriptor) const;
+
+        /** @brief Registers one exact initialized particle inventory in the existing native resource authority.
+         * @param preparation Synchronous cold borrows, registry-issued identities and retained inventory pins.
+         * @return Private native simulation/ring lease or typed unsupported/original preparation failure.
+         * @details No borrowed source spans survive return; the native lease retains buffers and journals through actual completion.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+            const NativeVfxGpuSimulationPreparation &preparation);
+
+        /** @brief Drains already-observed native submission/completion facts on the render owner without waiting.
+         * @param simulation Exact preparation lease, retained by the caller throughout the synchronous call.
+         * @param destination Bounded caller storage; excess pending facts remain owned and are never dropped.
+         * @return Written count, or typed unsupported/thread/device failure. Normal empty and nonempty success allocate nothing.
+         * @details Graph encoding and frontend admission are not acceptance. Accepted follows actual native submission;
+         * Completed follows proven native completion. Neither cancellation nor observation releases pending physical use early.
+         */
+        [[nodiscard]] virtual Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                           std::span<NativeGpuVfxStepReceipt> destination);
+
+        /** @brief Copies one explicitly requested normalized observation after actual native completion.
+         * @param simulation Exact native preparation lease. @param step Exact completed observation-producing step.
+         * @param destination Caller-owned prepared result bytes; no typed alignment or native pointer is required.
+         * @return Copied bytes or typed pending/unsupported/original failure. Failure preserves the native observation hold.
+         * @details Owner-thread only and nonblocking. A successful exact copy consumes the native hold; disabled observations
+         * never map or copy data. Native host visibility/coherency must be established before reporting completion.
+         */
+        [[nodiscard]] virtual Result<std::size_t> CopyCompletedVfxGpuObservation(
+            const std::shared_ptr<IResidentVfxGpuSimulation> &simulation, const VfxGpuStepIdentity &step, std::span<std::byte> destination);
+
+        /** @brief Retires a cancelled or expired observation after actual completion, without mapping or copying it.
+         * @param simulation Exact native preparation lease. @param step Exact observation-producing step.
+         * @return Success or typed pending/unsupported/original failure; queued GPU use remains charged until terminal.
+         */
+        [[nodiscard]] virtual Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                             const VfxGpuStepIdentity &step);
 
         /** @brief Realizes the exact UI paint vertex ABI, premultiplied blend and bounded stencil pipeline family.
          * @param kernel Cooked artifact, exact native reflection and explicit attachment formats.

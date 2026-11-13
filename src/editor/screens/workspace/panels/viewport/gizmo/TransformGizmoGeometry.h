@@ -4,19 +4,63 @@
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
 #include <array>
+#include <cstdint>
 #include <imgui.h>
 #include <optional>
+#include <span>
 
 namespace Horo::Editor {
+    /** @brief One clipped convex plane; bounded storage owns both rendered and picked points. */
+    struct TransformGizmoPlanePolygon {
+        static constexpr std::size_t MaximumCorners = 12;
+        std::array<ImVec2, MaximumCorners> corners{};
+        std::size_t count{};
+
+        [[nodiscard]] std::span<const ImVec2> Points() const noexcept {
+            return std::span{corners}.first(count);
+        }
+
+        [[nodiscard]] const ImVec2 &operator[](const std::size_t index) const noexcept {
+            return corners[index];
+        }
+
+        [[nodiscard]] const ImVec2 *begin() const noexcept {
+            return corners.data();
+        }
+
+        [[nodiscard]] const ImVec2 *end() const noexcept {
+            return corners.data() + count;
+        }
+    };
+
+    /** @brief Exact visible axis segment; clipping never turns a cut boundary into an arrow tip. */
+    struct TransformGizmoAxisSegment {
+        ImVec2 start{};
+        ImVec2 end{};
+        double firstParameter{};
+        double lastParameter{1.0};
+        bool tipVisible{true};
+    };
+
+    /** @brief Move input representation; ViewDepth means vertical pointer travel along the same real selected world axis. */
+    enum class TransformGizmoAxisGesture : std::uint8_t {
+        ProjectedAxis,
+        ViewDepth
+    };
+
     /** @brief Screen-space geometry produced for one transform-gizmo presentation frame. */
     struct TransformGizmoFrameGeometry {
         Math::Vec3 worldPosition;
         std::array<Math::Vec3, 3> worldAxes{};
         std::optional<ImVec2> center;
-        std::array<ImVec2, 3> screenDirections{};
+        std::array<ImVec2, 3>
+            screenDirections{}; /**< Projected direction, or explicit vertical ViewDepth gesture; never a replacement world axis. */
         std::array<float, 3> pixelsPerWorldUnit{};
         std::array<bool, 3> projectedAxisVisible{};
-        std::array<std::optional<std::array<ImVec2, 4>>, 3> movePlaneCorners{};
+        std::array<std::optional<TransformGizmoPlanePolygon>, 3> movePlaneCorners{};
+        std::array<std::optional<TransformGizmoAxisSegment>, 3> moveAxisSegments{};
+        std::array<std::optional<ImVec2>, 3> moveEndOnAnchors{};
+        std::array<TransformGizmoAxisGesture, 3> moveAxisGestures{};
         std::optional<int> hoveredAxis;
     };
 

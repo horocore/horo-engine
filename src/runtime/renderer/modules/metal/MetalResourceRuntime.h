@@ -30,8 +30,56 @@ namespace Horo::Render::Detail {
         /** @brief Mutates only a complete reusable native frame slot; pending native references reject before writes. */
         [[nodiscard]] Result<void> UpdateLightFrame(const NativeLightFrameUpdate &update);
         /** @brief Loads an exact cooked Metal library and validates the fixed culling compute ABI before native publication. */
+        /** @brief Realizes the actual fixed Metal exposure family. @param kernel Cooked artifacts. @return Native lease or failure. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentExposureGpuKernel>> RealizeExposureGpuKernel(const CookedExposureGpuKernel &kernel);
+        /** @brief Validates exact native resources and kernel provenance. @param work Closed operation. @param resources Graph instances.
+         * @param currentCommands Trusted actual active native command, or null for context-free pre-admission.
+         * @return Admission. Same-command resource ordering grants no exposure predecessor acceptance. */
+        [[nodiscard]] Result<void> ValidateExposureGpu(const RenderGraphExposureGpu &work,
+                                                       std::span<const RenderGraphResourceInstance> resources,
+                                                       void *currentCommands = nullptr) const;
+        /** @brief Executes the fixed native family. @param commands Actual command. @param work Closed operation. @param resources Graph
+         * instances. @return Encoding result. */
+        [[nodiscard]] Result<void> ExecuteExposureGpu(void *commands, const RenderGraphExposureGpu &work,
+                                                      std::span<const RenderGraphResourceInstance> resources);
+        /** @brief Resolves native acceptance/abandonment. @param commands Actual command. @param committed Accepted submission. */
+        void FinishExposureGpuCommands(void *commands, bool committed) noexcept;
+
         [[nodiscard]] Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
+        /** @brief Admits the complete authentic GPU simulation/direct-draw family against actual Metal reflection. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs);
+        /** @brief Copies and validates exact frontend-issued simulation inventory at the cold preparation boundary. */
+        [[nodiscard]] Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+            const NativeVfxGpuSimulationPreparation &preparation);
+        /** @brief Owner-only bounded native receipt drain; never waits or allocates. */
+        [[nodiscard]] Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                   std::span<NativeGpuVfxStepReceipt> destination);
+        [[nodiscard]] Result<void> ValidateVfxGpuCompute(const RenderGraphVfxGpuCompute &workload,
+                                                         const RenderGraphExecutionRequest &request) const;
+        [[nodiscard]] Result<void> ExecuteVfxGpuCompute(void *commands, const RenderGraphVfxGpuCompute &workload,
+                                                        const RenderGraphExecutionRequest &request);
+        [[nodiscard]] Result<void> ValidateVfxGpuDraw(const RenderGraphVfxGpuDraw &workload,
+                                                      const RenderGraphExecutionRequest &request) const;
+        [[nodiscard]] Result<void> ExecuteVfxGpuDraw(void *commands, const RenderGraphVfxGpuDraw &workload,
+                                                     const RenderGraphExecutionRequest &request);
+        /** @brief Copies an exact completed normalized observation into a cold caller byte arena; consumes only on success. */
+        [[nodiscard]] Result<std::size_t> CopyCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                         const VfxGpuStepIdentity &step, std::span<std::byte> destination);
+        /** @brief Releases a completed observation without mapping/copying, preserving pending native holds. */
+        [[nodiscard]] Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                     const VfxGpuStepIdentity &step);
+        /** @brief Emits only exact same-runtime current-step rejection facts at a proven pre-encoding failure boundary. */
+        void RejectUnsubmittedVfxGpuGraph(const RenderGraphExecutionRequest &request) noexcept;
+        /** @brief Holds native resources after a commit whose acceptance could not be established. */
+        void PreserveUncertainVfxGpuCommands(void *commands) noexcept;
+        void PreserveUncertainGraphCommands(void *commands) noexcept;
+        /** @brief Resolves unsent or actually accepted command journals; acceptance follows native commit return. */
+        void FinishVfxGpuCommands(void *commands, bool committed) noexcept;
+        /** @brief Observes all native simulations without releasing pending inventory; false means actual use is outstanding. */
+        [[nodiscard]] bool VfxGpuSimulationsDrained() noexcept;
+        /** @brief Owner-only bounded retirement of externally released, native-terminal simulations. */
+        void DrainVfxGpuRetirements(std::size_t budget) noexcept;
         /** @brief Realizes exact cooked raster/stencil states at a preparation safe point; no runtime source compilation. */
         [[nodiscard]] Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &kernel);
         /** @brief Atomically updates an admitted mapped UI slot after complete native-use validation. */
@@ -85,6 +133,12 @@ namespace Horo::Render::Detail {
         void DestroyTexture(std::uint64_t backendInstance) noexcept;
         void DestroyTextureView(std::uint64_t backendInstance) noexcept;
         void DestroyRenderTarget(std::uint64_t backendInstance) noexcept;
+        /** @brief Validates actual prepared material, mesh, graph inputs and native attachment parents. */
+        [[nodiscard]] Result<void> ValidateMaterialRaster(const RenderGraphMaterialRaster &workload,
+                                                          const RenderGraphExecutionRequest &request) const;
+        /** @brief Encodes only prevalidated material work in the current compute/raster command transaction. */
+        [[nodiscard]] Result<void> ExecuteMaterialRaster(void *commands, const RenderGraphMaterialRaster &workload,
+                                                         const RenderGraphExecutionRequest &request);
         /** @brief Validates exact UI slot publication, kernel epoch, texture policy and primary target before encoding. */
         [[nodiscard]] Result<void> ValidateUiPaint(const RenderGraphUiPaint &paint, std::span<const RenderGraphResourceInstance> resources,
                                                    void *primary) const;
@@ -105,6 +159,10 @@ namespace Horo::Render::Detail {
                                                                            std::span<const RenderGraphResourceInstance> resources,
                                                                            id<MTLCommandBuffer> commands, id<MTLTexture> primary);
 #endif
+        /** @brief Records one selected editor atlas view in the same native command transaction as graph residents.
+         * @param commandBuffer Exact active runtime commands. @param view Actual same-runtime native view identity.
+         * @return Typed stale/foreign failure or owner-lane tracked use; FinishGraphCommands commits or rolls back it. */
+        [[nodiscard]] Result<void> TrackEditorTextureViewUse(void *commandBuffer, std::uint64_t view);
         /** @brief Marks all resolved graph residents against the final owner buffer preceding lease retirement. */
         void TrackParallelGraphUse(void *finalCommands, std::span<const RenderGraphResourceInstance> resources) noexcept;
         /** @brief Non-blockingly drains at most 64 native-complete retired instances. */

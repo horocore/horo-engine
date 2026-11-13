@@ -6,7 +6,8 @@
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
-#include <cstring>
+#include <bit>
+#include <catch2/generators/catch_generators.hpp>
 #include <memory>
 
 namespace Horo::Gameplay {
@@ -18,18 +19,18 @@ namespace Horo::Gameplay {
 
         /** @brief Calls the real native frontend and releases its extra loader reference before returning. */
         std::shared_ptr<const Telemetry::OperationContext> CaptureModuleDiagnostics(const std::shared_ptr<const GameplayAiContext> &context,
-                                                                                    AI::AgentHandle agent, AI::TaskHandle &task) {
+                                                                                    AI::AgentHandle agent, bool isolated,
+                                                                                    bool includeFields, AI::TaskHandle &task) {
             auto image = Platform::LoadDynamicLibrary(HORO_TEST_AI_MODULE_PATH);
             REQUIRE(image.HasValue());
             void *symbol = image.Value()->GetSymbol("HoroTestStartAiTaskWithDiagnostics");
             REQUIRE(symbol != nullptr);
-            using Capture = bool (*)(const std::shared_ptr<const GameplayAiContext> &, AI::AgentHandle, AI::TaskHandle &,
+            using Capture = bool (*)(const std::shared_ptr<const GameplayAiContext> &, AI::AgentHandle, bool, bool, AI::TaskHandle &,
                                      std::shared_ptr<const Telemetry::OperationContext> &);
-            Capture capture{};
-            static_assert(sizeof(capture) == sizeof(symbol));
-            std::memcpy(&capture, &symbol, sizeof(capture));
+            static_assert(sizeof(Capture) == sizeof(symbol));
+            const auto capture = std::bit_cast<Capture>(symbol);
             std::shared_ptr<const Telemetry::OperationContext> diagnostics;
-            REQUIRE(capture(context, agent, task, diagnostics));
+            REQUIRE(capture(context, agent, isolated, includeFields, task, diagnostics));
             REQUIRE(diagnostics);
             return diagnostics;
         }
@@ -68,6 +69,9 @@ namespace Horo::Gameplay {
     }
 
     TEST_CASE("Native AI diagnostics and their last weak owner survive module retirement and image unload", "[gameplay][ai][host]") {
+        const bool isolated = GENERATE(false, true);
+        const bool includeFields = GENERATE(false, true);
+        CAPTURE(isolated, includeFields);
         AiTestSupport::Fixture fixture;
         auto anchor = GameplayAiContext::Create({"game.ai.tests", true, true}, fixture.runtime.CapabilityAtSafePoint());
         REQUIRE(anchor.HasValue());
@@ -80,7 +84,7 @@ namespace Horo::Gameplay {
         REQUIRE(context);
         std::weak_ptr<const GameplayAiContext> weakContext = context;
         AI::TaskHandle task;
-        auto diagnostics = CaptureModuleDiagnostics(context, fixture.agent, task);
+        auto diagnostics = CaptureModuleDiagnostics(context, fixture.agent, isolated, includeFields, task);
         std::weak_ptr<const Telemetry::OperationContext> weakDiagnostics = diagnostics;
         REQUIRE(task.IsValid());
         CHECK(fixture.runtime.Find(fixture.agent).Value().hasRunningTask);
@@ -93,10 +97,13 @@ namespace Horo::Gameplay {
         weakContext.reset();
         CHECK(diagnostics->operationId == 741);
         CHECK(diagnostics->parentOperationId == 740);
+        CHECK(diagnostics->diagnosticContext.IsIsolationBoundary() == isolated);
         const auto fields = diagnostics->diagnosticContext.Fields();
-        REQUIRE(fields.size() == 1);
-        CHECK(fields[0].first == "module.source");
-        CHECK(fields[0].second == "native-ai-image");
+        REQUIRE(fields.size() == (includeFields ? 1 : 0));
+        if (includeFields) {
+            CHECK(fields[0].first == "module.source");
+            CHECK(fields[0].second == "native-ai-image");
+        }
         diagnostics.reset();  // The captured object's host-emitted destructor runs after the module image has unloaded.
         CHECK(weakDiagnostics.expired());
         weakDiagnostics.reset();  // The final host-emitted control-block deallocator runs after unload as well.

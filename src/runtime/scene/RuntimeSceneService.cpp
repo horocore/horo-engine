@@ -7,6 +7,7 @@
 #include <format>
 #include <limits>
 #include <new>
+#include <set>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -28,6 +29,32 @@ namespace Horo::Runtime {
     }
 
     namespace {
+        /** @brief New animation-bearing Scenes require one actual composed activation authority before any publication. */
+        Result<void> ValidateActivationOwners(const RuntimeSceneDefinition &definition,
+                                              std::span<const std::unique_ptr<SceneActivationParticipant>> participants) {
+            const bool required = std::ranges::any_of(definition.Entities(), [](const auto &entity) {
+                return entity.components.animation.has_value();
+            });
+            if (!required)
+                return Result<void>::Success();
+            const auto owners = std::ranges::count_if(participants, [](const auto &participant) {
+                return participant->RequiredOwner() == SceneActivationOwner::Animation;
+            });
+            if (owners != 1)
+                return Result<void>::Failure(
+                    MakeError(SceneErrors::AssetServicesUnavailable, "Animation requires exactly one canonical Scene activation owner."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Preserves the existing finite preparation-phase vocabulary. */
+        Result<void> ValidateActivationPhases(std::span<const std::unique_ptr<SceneActivationParticipant>> participants) {
+            for (const auto &participant : participants)
+                if (participant->PreparationPhase() != SceneActivationPhase::InitialPlacement &&
+                    participant->PreparationPhase() != SceneActivationPhase::DerivedResources)
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Unknown Scene activation preparation phase."));
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] bool IsTerminal(const Horo::Assets::AssetLoadState state) noexcept {
             using enum Horo::Assets::AssetLoadState;
             return state == Succeeded || state == Failed || state == Cancelled;
@@ -38,6 +65,11 @@ namespace Horo::Runtime {
                                            std::format("Scene {} requires asset {}.", scene.value, asset.ToString()),
                                            SourceLocation{asset.ToString(), 0, 0});
             return error;
+        }
+
+        /** @brief Reads the same actual registry revision for ordinary structural admission without adding another validator. */
+        Assets::AssetRegistryRevision StructuralRegistryRevision(const Assets::AssetRegistry *registry) {
+            return registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
         }
 
         [[nodiscard]] Result<void> ValidateRuntimeIdentity(const std::uint64_t nextRuntimeId) {
@@ -52,6 +84,8 @@ namespace Horo::Runtime {
                 return identity;
             if (config.maximumGeneration == 0 || limits.maximumDependencies == 0 || limits.maximumConcurrentLoads == 0 ||
                 limits.maximumResidentBytes == 0)
+                return Result<void>::Failure(MakeError(SceneErrors::AssetLimitsInvalid));
+            if (limits.maximumDependencyReferences == 0 || limits.maximumDependencyReferences > 1048576)
                 return Result<void>::Failure(MakeError(SceneErrors::AssetLimitsInvalid));
             if (definition.AssetDependencies().size() > limits.maximumDependencies)
                 return Result<void>::Failure(
@@ -76,20 +110,28 @@ namespace Horo::Runtime {
 
     struct RuntimeSceneService::Preparation {
         struct Entry {
+            Entry() = default;
+
+            explicit Entry(const SceneAssetDependency &source) : dependency(source) {}
+
             SceneAssetDependency dependency;
             std::shared_ptr<const std::vector<std::uint8_t>> payload;
             std::optional<Assets::AssetLoadHandle> load;
+            std::size_t inspectedParticipants{};
         };
 
-        Preparation(RuntimeSceneDefinition source, const RuntimeSceneConfig sceneConfig, Assets::AssetRegistrySnapshot registrySnapshot)
-            : definition(std::move(source)), config(sceneConfig), snapshot(std::move(registrySnapshot)) {}
+        Preparation(const RuntimeSceneDefinition &source, const RuntimeSceneConfig sceneConfig,
+                    Assets::AssetRegistrySnapshot registrySnapshot)
+            : definition(source), config(sceneConfig), snapshot(std::move(registrySnapshot)) {}
 
         RuntimeSceneDefinition definition;
         RuntimeSceneConfig config;
         Assets::AssetRegistrySnapshot snapshot;
-        std::vector<Entry> entries;
+        // Count construction keeps checked-library empty-vector bookkeeping inside the fallible preparation boundary.
+        std::vector<Entry> entries = std::vector<Entry>(std::size_t{0});
         std::size_t activeLoads{};
         std::size_t residentBytes{};
+        std::size_t discoveredReferences{};
     };
 
     /** @brief Keeps observer-triggered shutdown outside preparation, rollback, publication and retirement stacks. */
@@ -111,6 +153,15 @@ namespace Horo::Runtime {
         RuntimeSceneService &service;
         bool outer{};
     };
+
+    /** @copydoc RuntimeSceneService::RetirePublishedRestorePreparation */
+    Result<bool> RuntimeSceneService::RetirePublishedRestorePreparation() {
+        if (std::this_thread::get_id() != restoreRetirementOwner_ || mutatingLifecycle_)
+            return Result<bool>::Failure(MakeError(SceneErrors::OperationInProgress));
+        const LifecycleMutation mutation{*this};
+        auto result = RetirePublishedRestorePreparationInternal();
+        return result;
+    }
 
     RuntimeSceneService::RuntimeSceneService() = default;
 
@@ -143,14 +194,15 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc RuntimeSceneService::QueuePreparation */
-    Result<void> RuntimeSceneService::QueuePreparation(RuntimeSceneDefinition definition, const RuntimeSceneConfig config) {
-        auto queued = QueuePreparationWithPublicationCheck(std::move(definition), {}, config);
+    Result<void> RuntimeSceneService::QueuePreparation(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config) {
+        auto queued = QueuePreparationWithPublicationCheck(definition, {}, config);
         return queued.HasError() ? Result<void>::Failure(queued.ErrorValue()) : Result<void>::Success();
     }
 
     /** @copydoc RuntimeSceneService::QueuePreparationWithPublicationCheck */
     Result<ScenePublicationReceipt> RuntimeSceneService::QueuePreparationWithPublicationCheck(
-        RuntimeSceneDefinition definition, std::unique_ptr<ScenePublicationCheck> publicationCheck, const RuntimeSceneConfig config) {
+        const RuntimeSceneDefinition &definition, std::unique_ptr<ScenePublicationCheck> publicationCheck,
+        const RuntimeSceneConfig config) {
         if (shutdown_)
             return Result<ScenePublicationReceipt>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
@@ -166,7 +218,7 @@ namespace Horo::Runtime {
             // Receipt storage is admitted before world preparation. Publication fills only bounded values, with no callbacks.
             auto receipt = publicationCheck ? std::make_shared<ScenePublicationDetail::State>() : nullptr;
             operationError_.reset();
-            if (const auto admitted = BeginPreparation(std::move(definition), config); admitted.HasError())
+            if (const auto admitted = BeginPreparation(definition, config); admitted.HasError())
                 return Result<ScenePublicationReceipt>::Failure(admitted.ErrorValue());
             if (pending_.scene && publicationCheck) {
                 const auto composition = publicationCheck->ValidatePreparedComposition(pending_.datasets);
@@ -185,7 +237,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc RuntimeSceneService::QueuePreparationWithRestore */
-    Result<void> RuntimeSceneService::QueuePreparationWithRestore(RuntimeSceneDefinition definition,
+    Result<void> RuntimeSceneService::QueuePreparationWithRestore(const RuntimeSceneDefinition &definition,
                                                                   std::unique_ptr<SceneAggregateRestore> restore,
                                                                   const RuntimeSceneConfig config) {
         if (!restore)
@@ -199,7 +251,7 @@ namespace Horo::Runtime {
         const LifecycleMutation mutation{*this};
         operationError_.reset();
         aggregateRestore_ = std::move(restore);
-        const auto admitted = BeginPreparation(std::move(definition), config);
+        const auto admitted = BeginPreparation(definition, config);
         if (admitted.HasError()) {
             aggregateRestore_->Rollback();
             aggregateRestore_.reset();
@@ -207,59 +259,68 @@ namespace Horo::Runtime {
         return admitted;
     }
 
-    Result<void> RuntimeSceneService::PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const {
-        prep.entries.reserve(definition.AssetDependencies().size());
-        for (const SceneAssetDependency &dependency : definition.AssetDependencies()) {
-            Preparation::Entry entry{dependency};
-            if (active_.scene && active_.scene->assetRegistryRevision_ == prep.snapshot.Revision()) {
-                const auto reusable =
-                    std::ranges::find(active_.scene->assets_, dependency.id, [](const RuntimeScene::ResolvedAsset &asset) {
-                    return asset.dependency.id;
-                });
-                if (reusable != active_.scene->assets_.end() && reusable->dependency.expectedType == dependency.expectedType)
-                    entry.payload = reusable->payload;
-            }
-            if (entry.payload) {
-                if (entry.payload->size() > assetPreparationServices_.limits.maximumResidentBytes - prep.residentBytes) {
-                    return Result<void>::Failure(
-                        WithAssetContext(MakeError(SceneErrors::AssetBudgetExceeded), definition.Id(), dependency.id));
-                }
-                prep.residentBytes += entry.payload->size();
-            }
-            prep.entries.push_back(std::move(entry));
+    Result<void> RuntimeSceneService::ReusePreparationPayload(Preparation &prep, std::size_t index) const {
+        auto &entry = prep.entries[index];
+        if (active_.scene && active_.scene->assetRegistryRevision_ == prep.snapshot.Revision()) {
+            const auto reusable = std::ranges::find(active_.scene->assets_, entry.dependency.id, [](const auto &asset) {
+                return asset.dependency.id;
+            });
+            if (reusable != active_.scene->assets_.end() && reusable->dependency.expectedType == entry.dependency.expectedType)
+                entry.payload = reusable->payload;
+        }
+        if (entry.payload) {
+            if (entry.payload->size() > assetPreparationServices_.limits.maximumResidentBytes - prep.residentBytes)
+                return Result<void>::Failure(
+                    WithAssetContext(MakeError(SceneErrors::AssetBudgetExceeded), prep.definition.Id(), entry.dependency.id));
+            prep.residentBytes += entry.payload->size();
         }
         return Result<void>::Success();
     }
 
-    Result<void> RuntimeSceneService::BeginPreparation(RuntimeSceneDefinition definition, const RuntimeSceneConfig config) {
-        if (const auto validation = ValidatePreparation(definition, config, assetPreparationServices_.limits, nextRuntimeId_);
-            validation.HasError())
-            return validation;
-
-        if (definition.AssetDependencies().empty()) {
-            if (const auto staged = StageCandidate(definition, config, {}, {}); staged.HasError())
-                return staged;
-            transition_ = TransitionKind::Activate;
-            return Result<void>::Success();
-        }
-        if (!assetPreparationServices_.registry || !assetPreparationServices_.loads)
-            return Result<void>::Failure(MakeError(SceneErrors::AssetServicesUnavailable));
-
-        Assets::AssetRegistrySnapshot snapshot = assetPreparationServices_.registry->Snapshot();
-        if (const auto checked = CheckDependenciesExist(definition, snapshot); checked.HasError())
-            return checked;
-
-        auto prep = std::make_unique<Preparation>(std::move(definition), config, std::move(snapshot));
-        if (const auto populated = PopulatePreparationEntries(*prep, prep->definition); populated.HasError())
-            return populated;
-
-        preparation_ = std::move(prep);
-        if (const Result<void> submitted = SubmitPreparationLoads(); submitted.HasError()) {
-            const Error error = submitted.ErrorValue();
-            CancelPreparation(false);
-            return Result<void>::Failure(error);
+    Result<void> RuntimeSceneService::PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const {
+        prep.entries.reserve(definition.AssetDependencies().size());
+        for (const auto &dependency : definition.AssetDependencies()) {
+            prep.entries.emplace_back(dependency);
+            if (auto reused = ReusePreparationPayload(prep, prep.entries.size() - 1); reused.HasError())
+                return reused;
         }
         return Result<void>::Success();
+    }
+
+    Result<void> RuntimeSceneService::BeginPreparation(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config) {
+        try {
+            if (const auto validation = ValidatePreparation(definition, config, assetPreparationServices_.limits, nextRuntimeId_);
+                validation.HasError())
+                return validation;
+
+            if (definition.AssetDependencies().empty()) {
+                if (const auto staged = StageCandidate(definition, config, {}, {}); staged.HasError())
+                    return staged;
+                transition_ = TransitionKind::Activate;
+                return Result<void>::Success();
+            }
+            if (!assetPreparationServices_.registry || !assetPreparationServices_.loads)
+                return Result<void>::Failure(MakeError(SceneErrors::AssetServicesUnavailable));
+
+            Assets::AssetRegistrySnapshot snapshot = assetPreparationServices_.registry->Snapshot();
+            if (const auto checked = CheckDependenciesExist(definition, snapshot); checked.HasError())
+                return checked;
+
+            auto prep = std::make_unique<Preparation>(definition, config, std::move(snapshot));
+            if (const auto populated = PopulatePreparationEntries(*prep, prep->definition); populated.HasError())
+                return populated;
+
+            preparation_ = std::move(prep);
+            if (const Result<void> submitted = SubmitPreparationLoads(); submitted.HasError()) {
+                const Error error = submitted.ErrorValue();
+                CancelPreparation(false);
+                return Result<void>::Failure(error);
+            }
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            CancelPreparation(false);
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene preparation allocation failed."));
+        }
     }
 
     /** @copydoc RuntimeSceneService::QueueUnload */
@@ -298,8 +359,9 @@ namespace Horo::Runtime {
         if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
         const LifecycleMutation mutation{*this};
-        const auto revision = assetPreparationServices_.registry ? assetPreparationServices_.registry->Snapshot().Revision()
-                                                                 : Assets::AssetRegistryRevision{};
+        const auto revision = StructuralRegistryRevision(assetPreparationServices_.registry);
+        if (commands.HasRestoreGroups())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Private restore groups cannot enter ordinary commit."));
         if (auto admission = commands.ValidateAdmission(active_.scene->View().RuntimeId(), revision); admission.HasError())
             return admission;
         if (!commands.Empty())
@@ -401,7 +463,7 @@ namespace Horo::Runtime {
                     return Result<void>::Success();
                 }
             }
-            AdvancePreparation();
+            AdvancePreparation(context.cancellation);
             return CommitDeferredChanges(context.cancellation);
         }
         return Result<void>::Success();
@@ -460,7 +522,7 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    Result<void> RuntimeSceneService::ProcessCompletedPreparationLoads() {
+    Result<void> RuntimeSceneService::ProcessCompletedPreparationLoads(const CancellationToken &cancellation) {
         for (Preparation::Entry &entry : preparation_->entries) {
             if (!entry.load || !IsTerminal(entry.load->State()))
                 continue;
@@ -481,9 +543,116 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(
                     WithAssetContext(MakeError(SceneErrors::AssetBudgetExceeded), preparation_->definition.Id(), entry.dependency.id));
             preparation_->residentBytes += result.bytes.size();
-            entry.payload = std::make_shared<const std::vector<std::uint8_t>>(std::move(result.bytes));
+            auto payload = std::make_shared<std::vector<std::uint8_t>>(std::size_t{0});
+            payload->swap(result.bytes);
+            entry.payload = std::move(payload);
         }
+        if (auto discovered = DiscoverPreparationDependencies(cancellation); discovered.HasError())
+            return discovered;
         return SubmitPreparationLoads();
+    }
+
+    Result<void> RuntimeSceneService::AppendPreparationDependency(const SceneAssetDependency &dependency) {
+        auto &prep = *preparation_;
+        const auto existing = std::ranges::find(prep.entries, dependency.id, [](const auto &entry) {
+            return entry.dependency.id;
+        });
+        if (existing != prep.entries.end()) {
+            if (existing->dependency.expectedType != dependency.expectedType)
+                return Result<void>::Failure(
+                    WithAssetContext(MakeError(SceneErrors::AssetTypeMismatch), prep.definition.Id(), dependency.id));
+            return Result<void>::Success();
+        }
+        if (const auto maximum = std::min<std::size_t>(assetPreparationServices_.limits.maximumDependencies, 16384);
+            prep.entries.size() >= maximum)
+            return Result<void>::Failure(
+                WithAssetContext(MakeError(SceneErrors::AssetBudgetExceeded), prep.definition.Id(), dependency.id));
+        const auto *record = prep.snapshot.Find(dependency.id);
+        if (!record)
+            return Result<void>::Failure(WithAssetContext(MakeError(SceneErrors::AssetMissing), prep.definition.Id(), dependency.id));
+        if (record->type != dependency.expectedType)
+            return Result<void>::Failure(WithAssetContext(MakeError(SceneErrors::AssetTypeMismatch), prep.definition.Id(), dependency.id));
+        prep.entries.emplace_back(dependency);
+        return ReusePreparationPayload(prep, prep.entries.size() - 1);
+    }
+
+    Result<void> RuntimeSceneService::MergePreparationDependencies(std::span<const SceneAssetDependency> dependencies) {
+        for (const auto &dependency : dependencies)
+            if (auto appended = AppendPreparationDependency(dependency); appended.HasError())
+                return appended;
+        return Result<void>::Success();
+    }
+
+    Result<std::vector<SceneAssetDependency>> RuntimeSceneService::InvokePreparationDiscovery(std::size_t entryIndex,
+                                                                                              std::size_t participantIndex,
+                                                                                              const CancellationToken &cancellation) {
+        using Return = Result<std::vector<SceneAssetDependency>>;
+        try {
+            const auto &entry = preparation_->entries[entryIndex];
+            const RuntimeSceneAssetView view{entry.dependency.id, &entry.dependency.expectedType, *entry.payload};
+            const auto remaining = assetPreparationServices_.limits.maximumDependencyReferences - preparation_->discoveredReferences;
+            return participants_[participantIndex]->DiscoverDependencies(view, cancellation, remaining);
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
+        } catch (...) {
+            return Return::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene dependency discovery callback failed."));
+        }
+    }
+
+    Result<void> RuntimeSceneService::DiscoverPreparationEntry(std::size_t entryIndex, const CancellationToken &cancellation) {
+        while (preparation_->entries[entryIndex].inspectedParticipants < participants_.size()) {
+            if (cancellation.IsCancellationRequested())
+                return JobCancelled();
+            const auto participant = preparation_->entries[entryIndex].inspectedParticipants;
+            auto dependencies = InvokePreparationDiscovery(entryIndex, participant, cancellation);
+            if (dependencies.HasError())
+                return Result<void>::Failure(dependencies.ErrorValue());
+            if (shutdownDeferred_ || shutdown_ || !started_)
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene dependency discovery owner retired."));
+            if (cancellation.IsCancellationRequested())
+                return JobCancelled();
+            if (const auto remaining = assetPreparationServices_.limits.maximumDependencyReferences - preparation_->discoveredReferences;
+                dependencies.Value().size() > remaining)
+                return Result<void>::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
+            preparation_->discoveredReferences += dependencies.Value().size();
+            if (auto merged = MergePreparationDependencies(dependencies.Value()); merged.HasError())
+                return merged;
+            ++preparation_->entries[entryIndex].inspectedParticipants;
+        }
+        return Result<void>::Success();
+    }
+
+    Result<void> RuntimeSceneService::DiscoverPreparationDependencies(const CancellationToken &cancellation) {
+        for (std::size_t index = 0; index < preparation_->entries.size(); ++index) {
+            if (!preparation_->entries[index].payload)
+                continue;
+            if (auto inspected = DiscoverPreparationEntry(index, cancellation); inspected.HasError())
+                return inspected;
+        }
+        return Result<void>::Success();
+    }
+
+    Result<void> RuntimeSceneService::CompletePreparationDefinition() {
+        auto &prep = *preparation_;
+        std::ranges::sort(prep.entries, {}, [](const auto &entry) {
+            return entry.dependency.id;
+        });
+        if (prep.entries.size() == prep.definition.AssetDependencies().size())
+            return Result<void>::Success();
+        SceneDefinitionBuilder builder{prep.definition.Id(), prep.definition.Revision()};
+        for (const auto &entity : prep.definition.Entities())
+            builder.Add(entity);
+        for (const auto &entry : prep.entries)
+            if (auto required = builder.RequireAsset(entry.dependency); required.HasError())
+                return required;
+        for (const auto &evidence : prep.definition.TriggerVolumeEvidence())
+            if (auto required = builder.RequireTriggerVolume(evidence); required.HasError())
+                return required;
+        auto complete = std::move(builder).Build();
+        if (complete.HasError())
+            return Result<void>::Failure(complete.ErrorValue());
+        prep.definition = std::move(complete).Value();
+        return Result<void>::Success();
     }
 
     Result<void> RuntimeSceneService::FinalizePreparation() {
@@ -495,7 +664,10 @@ namespace Horo::Runtime {
             return Result<void>::Failure(std::move(error));
         }
 
-        std::vector<RuntimeScene::ResolvedAsset> assets;
+        if (auto complete = CompletePreparationDefinition(); complete.HasError())
+            return complete;
+
+        std::vector<RuntimeScene::ResolvedAsset> assets(std::size_t{0});
         assets.reserve(preparation_->entries.size());
         for (Preparation::Entry &entry : preparation_->entries)
             assets.emplace_back(std::move(entry.dependency), std::move(entry.payload));
@@ -508,50 +680,169 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @brief Synchronous private-candidate borrow; never stored in a restore owner. */
+    struct RuntimeSceneService::RestoreCandidateCommands final : SceneRestoreCandidateCommands {
+        RestoreCandidateCommands(RuntimeSceneService &owner, RuntimeScene &candidate) noexcept
+            : owner(owner), candidate(candidate), runtime(candidate.View().RuntimeId()) {}
+
+        ~RestoreCandidateCommands() override {
+            if (seal)
+                seal->valid = false;
+        }
+
+        /** @brief Requires the exact issued payload control, which public assignment cannot forge or carry across attempts. */
+        bool IssuedBatch(const SceneCommandBuffer &commands) const noexcept {
+            if (!seal || !seal->valid || builtCommands != &commands || commands.commands_.size() != 1)
+                return false;
+            const auto *group = std::get_if<SceneCommandBuffer::CreateGroupCommand>(&commands.commands_.front());
+            return group && group->restoreSeal && !seal.owner_before(group->restoreSeal) && !group->restoreSeal.owner_before(seal);
+        }
+
+        /** @brief Service-issued proof of this exact still-unpublished candidate on its owning lane. */
+        bool Admits() const noexcept {
+            return std::this_thread::get_id() == owner.restoreRetirementOwner_ && owner.pending_.scene.get() == &candidate &&
+                   owner.active_.scene.get() != &candidate && candidate.View().RuntimeId() == runtime && runtime.value != 0 &&
+                   owner.aggregateRestore_;
+        }
+
+        Result<StructuralCommitResult> Commit(const SceneCommandBuffer &commands) override {
+            if (!Admits() || !IssuedBatch(commands))
+                return Result<StructuralCommitResult>::Failure(MakeError(SceneErrors::InvalidCandidate));
+            seal->valid = false;
+            builtCommands = nullptr;
+            return candidate.CommitWithRegistry(commands, owner.assetPreparationServices_.registry, owner.structuralParticipants_, nullptr,
+                                                RuntimeScene::CommitPurpose::RestoreMaterialization);
+        }
+
+        /** @brief Charges the actual private candidate's existing assets plus the new exact resource closure against live host policy. */
+        Result<void> ValidateResidentBudget(std::span<const RuntimeGroupAssetLease> resources) const {
+            const auto &limits = owner.assetPreparationServices_.limits;
+            std::set<Assets::AssetId> dependencies;
+            std::size_t bytes{};
+            for (const auto &asset : candidate.assets_) {
+                dependencies.insert(asset.dependency.id);
+                if (asset.payload && asset.payload->size() > limits.maximumResidentBytes - bytes)
+                    return Result<void>::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
+                if (asset.payload)
+                    bytes += asset.payload->size();
+            }
+            for (const auto &resource : resources) {
+                dependencies.insert(resource.metadata.id);
+                if (resource.artifact.Bytes().size() > limits.maximumResidentBytes - bytes)
+                    return Result<void>::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
+                bytes += resource.artifact.Bytes().size();
+            }
+            return dependencies.size() <= limits.maximumDependencies ? Result<void>::Success()
+                                                                     : Result<void>::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
+        }
+
+        Result<std::vector<DeferredEntity>> CreateGroup(SceneCommandBuffer &commands, std::vector<RuntimeEntityGroupEntry> entries,
+                                                        std::vector<RuntimeGroupAssetLease> resources,
+                                                        const CancellationToken &cancellation,
+                                                        std::vector<SceneRestoreGroupPartition> partitions) override {
+            if (!Admits())
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidCandidate));
+            if (builtGroup || !commands.Empty())
+                return Result<std::vector<DeferredEntity>>::Failure(MakeError(SceneErrors::InvalidCandidate));
+            if (auto valid = ValidateResidentBudget(resources); valid.HasError())
+                return Result<std::vector<DeferredEntity>>::Failure(valid.ErrorValue());
+            if (auto valid = owner.aggregateRestore_->ValidateRestorePartitions(partitions); valid.HasError())
+                return Result<std::vector<DeferredEntity>>::Failure(valid.ErrorValue());
+            auto limits = owner.aggregateRestore_->StructuralLimits();
+            limits.maximumEntities = std::min(limits.maximumEntities, std::size_t{16'384});
+            limits.maximumResources =
+                std::min({limits.maximumResources, owner.assetPreparationServices_.limits.maximumDependencies, std::size_t{16'384}});
+            limits.maximumReferences = std::min(limits.maximumReferences, std::size_t{65'536});
+            limits.maximumPhysicsReferences = std::min(limits.maximumPhysicsReferences, std::size_t{65'536});
+            limits.maximumLineageEntries = std::min(limits.maximumLineageEntries, limits.maximumEntities * 16);
+            limits.maximumResourceBytes =
+                std::min(limits.maximumResourceBytes, owner.assetPreparationServices_.limits.maximumResidentBytes);
+            const auto revision = owner.assetPreparationServices_.registry ? owner.assetPreparationServices_.registry->Snapshot().Revision()
+                                                                           : Assets::AssetRegistryRevision{};
+            auto issuedSeal = std::make_shared<SceneCommandBuffer::RestoreGroupSeal>();
+            auto created = commands.CreateGroupInternal(std::move(entries), std::move(resources), {runtime, revision, cancellation},
+                                                        {limits, false}, std::move(partitions));
+            builtGroup = created.HasValue();
+            if (builtGroup) {
+                seal = std::move(issuedSeal);
+                std::get<SceneCommandBuffer::CreateGroupCommand>(commands.commands_.front()).restoreSeal = seal;
+                builtCommands = &commands;
+            }
+            return created;
+        }
+
+        RuntimeSceneService &owner;
+        RuntimeScene &candidate;
+        SceneRuntimeId runtime;
+        bool builtGroup{};
+        const SceneCommandBuffer *builtCommands{}; /**< Exact synchronous single-group batch; cleared before its only commit attempt. */
+        std::shared_ptr<SceneCommandBuffer::RestoreGroupSeal> seal;
+    };
+
+    /** @copydoc RuntimeSceneService::IsRestoreCandidate */
+    bool RuntimeSceneService::IsRestoreCandidate(const RuntimeScene &candidate) const noexcept {
+        return std::this_thread::get_id() == restoreRetirementOwner_ && aggregateRestore_ && pending_.scene.get() == &candidate &&
+               active_.scene.get() != &candidate;
+    }
+
     /** @copydoc RuntimeSceneService::StageCandidate */
     Result<void> RuntimeSceneService::StageCandidate(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config,
                                                      const Assets::AssetRegistryRevision revision,
-                                                     std::vector<RuntimeScene::ResolvedAsset> assets) {
-        auto candidate = RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, revision, std::move(assets));
-        if (candidate.HasError())
-            return Result<void>::Failure(candidate.ErrorValue());
-        pending_.scene = std::move(candidate).Value();
-        if (aggregateRestore_) {
-            if (const auto prepared = aggregateRestore_->PrepareScene(*pending_.scene); prepared.HasError()) {
-                aggregateRestore_->Rollback();
-                pending_.scene.reset();
-                return prepared;
+                                                     std::vector<RuntimeScene::ResolvedAsset> &&assets) {
+        try {
+            auto candidate = RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, revision, std::move(assets));
+            if (candidate.HasError())
+                return Result<void>::Failure(candidate.ErrorValue());
+            pending_.scene = std::move(candidate).Value();
+            if (aggregateRestore_) {
+                RestoreCandidateCommands commands{*this, *pending_.scene};
+                if (const auto prepared = aggregateRestore_->PrepareScene(*pending_.scene, commands); prepared.HasError()) {
+                    aggregateRestore_->Rollback();
+                    pending_.scene.reset();
+                    return prepared;
+                }
             }
-        }
-        if (const auto prepared = PrepareParticipants(definition); prepared.HasError()) {
+            if (const auto prepared = PrepareParticipants(definition); prepared.HasError()) {
+                if (aggregateRestore_)
+                    aggregateRestore_->Rollback();
+                pending_.scene.reset();
+                return Result<void>::Failure(prepared.ErrorValue());
+            }
+            // Only a complete private aggregate consumes its identity. Failed preparation may retry
+            // the same unpublished ID; unsigned wrap after a successful maximum ID closes admission.
+            ++nextRuntimeId_;
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
             if (aggregateRestore_)
                 aggregateRestore_->Rollback();
+            ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
             pending_.scene.reset();
-            return Result<void>::Failure(prepared.ErrorValue());
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene candidate allocation failed."));
         }
-        // Only a complete private aggregate consumes its identity. Failed preparation may retry
-        // the same unpublished ID; unsigned wrap after a successful maximum ID closes admission.
-        ++nextRuntimeId_;
-        return Result<void>::Success();
     }
 
-    void RuntimeSceneService::AdvancePreparation() {
+    void RuntimeSceneService::AdvancePreparation(const CancellationToken &cancellation) {
         if (!preparation_)
             return;
-        if (const Result<void> processed = ProcessCompletedPreparationLoads(); processed.HasError()) {
-            const Error error = processed.ErrorValue();
+        try {
+            if (const Result<void> processed = ProcessCompletedPreparationLoads(cancellation); processed.HasError()) {
+                const Error error = processed.ErrorValue();
+                CancelPreparation(false);
+                RejectPendingPublication(error);
+                return;
+            }
+            if (preparation_->activeLoads != 0 || std::ranges::any_of(preparation_->entries, [this](const Preparation::Entry &entry) {
+                return !entry.payload || entry.inspectedParticipants != participants_.size();
+            }))
+                return;
+            if (const Result<void> finalized = FinalizePreparation(); finalized.HasError()) {
+                const Error error = finalized.ErrorValue();
+                CancelPreparation(false);
+                RejectPendingPublication(error);
+            }
+        } catch (const std::bad_alloc &) {
             CancelPreparation(false);
-            RejectPendingPublication(error);
-            return;
-        }
-        if (preparation_->activeLoads != 0 || std::ranges::any_of(preparation_->entries, [](const Preparation::Entry &entry) {
-            return !entry.payload;
-        }))
-            return;
-        if (const Result<void> finalized = FinalizePreparation(); finalized.HasError()) {
-            const Error error = finalized.ErrorValue();
-            CancelPreparation(false);
-            RejectPendingPublication(error);
+            RejectPendingPublication(MakeError(SceneErrors::AssetBudgetExceeded, "Scene dependency preparation allocation failed."));
         }
     }
 
@@ -605,13 +896,13 @@ namespace Horo::Runtime {
         };
         try {
             pending_.candidates.reserve(participants_.size());
-            for (const auto &participant : participants_)
-                if (participant->PreparationPhase() != SceneActivationPhase::InitialPlacement &&
-                    participant->PreparationPhase() != SceneActivationPhase::DerivedResources)
-                    return reject(MakeError(SceneErrors::InvalidCandidate, "Unknown Scene activation preparation phase."));
+            if (auto owners = ValidateActivationOwners(definition, participants_); owners.HasError())
+                return reject(owners.ErrorValue());
+            if (auto phases = ValidateActivationPhases(participants_); phases.HasError())
+                return reject(phases.ErrorValue());
             if (auto prepared = PrepareParticipantPhase(definition, SceneActivationPhase::InitialPlacement); prepared.HasError())
                 return reject(prepared.ErrorValue());
-            std::vector<SceneInitialPlacement> placements;
+            std::vector<SceneInitialPlacement> placements(std::size_t{0});
             for (const auto &candidate : pending_.candidates) {
                 const auto projected = candidate->InitialPlacements();
                 if (projected.size() > pending_.scene->View().SlotCount() - placements.size())

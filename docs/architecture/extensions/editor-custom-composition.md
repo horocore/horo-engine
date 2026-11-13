@@ -143,3 +143,10 @@ public-header consumers. Hosted and local validation evidence belongs in the PR;
 this contract does not assert that tests, native-device checks, screen readers or
 manual visual states were run. GPU/device validation requires an available editor
 composition and separate evidence.
+
+Explicit command contributions are separate from custom control composition.
+A schema2 activity descriptor may publish manifest-claimed `editor.command`
+metadata only when its module requires the host's `editor.commands` capability.
+The command registry and host input router own shortcut admission, user overrides
+and dispatch; a custom control/action node alone still grants no global shortcut.
+See [Editor customization contributions](plugin-system.md#editor-customization-contributions).

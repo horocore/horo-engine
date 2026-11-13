@@ -25,29 +25,8 @@ namespace Horo::AI {
         BlackboardCheck,
         TimeLimit,
         Task,
+        Subplan, /**< Compiler-admitted call; no synthetic task definition or provider descriptor. */
         Count,
-    };
-    /** @brief Parallel completion policy; branches are stepped in declared order on the owner thread. */
-    enum class BehaviorTreeParallelPolicy : std::uint8_t {
-        RequireOneSuccess,
-        RequireAllSuccess,
-        RequireAllComplete,
-        StopOthersOnFailure,
-        Count,
-    };
-    /** @brief Reactive condition policy; lower-priority observers must be direct Selector children. */
-    enum class BehaviorTreeAbortMode : std::uint8_t {
-        None,
-        Self,
-        LowerPriority,
-        Both,
-        Count
-    };
-    /** @brief Service wake policy while its owning subtree is active. */
-    enum class BehaviorTreeServiceMode : std::uint8_t {
-        Periodic,
-        Reactive,
-        Count
     };
 
     /** @brief Typed execution semantics bound to an already validated stable decision node. */
@@ -114,6 +93,14 @@ namespace Horo::AI {
             std::shared_ptr<const DecisionAssetPlan> bindings, DecisionNodeId root, std::span<const BehaviorTreeExecutionNode> nodes,
             std::span<const BehaviorTreeExecutionService> services = {}, const BehaviorTreeExecutionLimits &limits = {});
 
+        /** @brief Compiler-only composed admission; standalone Compile still rejects unresolved dependencies. */
+        [[nodiscard]] static Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> CompileClosure(
+            DecisionClosureAdmission admission, std::shared_ptr<const DecisionAssetPlan> bindings, DecisionNodeId root,
+            std::span<const BehaviorTreeExecutionNode> nodes, std::span<const BehaviorTreeExecutionService> services = {},
+            const BehaviorTreeExecutionLimits &limits = {});
+        [[nodiscard]] DecisionKernelStorage Storage() const noexcept;
+        [[nodiscard]] std::size_t TaskSlots() const noexcept;
+
         /** @brief Returns preorder records. @return Immutable contiguous nodes. */
         [[nodiscard]] std::span<const BehaviorTreePlanNode> Nodes() const noexcept {
             return nodes_;
@@ -148,6 +135,9 @@ namespace Horo::AI {
         BehaviorTreeExecutionPlan &operator=(const BehaviorTreeExecutionPlan &) = delete;
 
     private:
+        [[nodiscard]] static Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> CompileAdmitted(
+            std::shared_ptr<const DecisionAssetPlan> bindings, DecisionNodeId root, std::span<const BehaviorTreeExecutionNode> nodes,
+            std::span<const BehaviorTreeExecutionService> services, const BehaviorTreeExecutionLimits &limits, bool composed);
         /** @brief Builds preorder records after typed identity admission. @param root Stable root.
          * @param nodes Validated typed controls. @param limits Structural limits. @return Topology/depth result.
          */
@@ -189,6 +179,17 @@ namespace Horo::AI {
             // Synchronous adapters have no detached service outcomes to pump.
         }
 
+        /** @brief Only a complete closure runner implements calls; default adapters cannot admit them. */
+        [[nodiscard]] virtual bool SupportsSubplans() const noexcept {
+            return false;
+        }
+
+        [[nodiscard]] virtual Result<AiTaskState> EvaluateSubplan(const BehaviorTreeEvaluationContext &, bool) noexcept {
+            return Result<AiTaskState>::Failure(MakeError(AIErrors::DecisionAssetSubtreeIncompatible));
+        }
+
+        virtual void CancelSubplan(DecisionNodeId, AiTaskCancellationReason) noexcept {}
+
         /** @brief Starts one admitted task. @param context Borrowed frozen inputs. @param operation Exact execution fence.
          * @return Running/Succeeded/Failed/Cancelled, or a typed failure retained by the lifecycle.
          */
@@ -217,9 +218,11 @@ namespace Horo::AI {
     struct BehaviorTreeInstanceBinding final {
         AgentHandle agent;
         CancellationToken cancellation;
-        std::uint32_t firstTaskSlot{};        /**< Owner reserves HardNodes consecutive slots exclusively for this instance's lifetime. */
+        std::uint32_t firstTaskSlot{}; /**< Owner reserves plan.TaskSlots() consecutive slots exclusively for this instance's lifetime. */
         std::uint32_t firstTaskGeneration{1}; /**< Owner-issued seed; generations never wrap, including across reload/restart. */
         BlackboardInstanceBinding blackboard; /**< Exact admitted schema publication and blackboard instance generation. */
+        CancellationToken capabilityCancellation;
+        std::shared_ptr<const Telemetry::OperationContext> diagnostics;
     };
 
     /** @brief Single-owner allocation-bounded tree instance; scene decision scheduling remains with AIDecisionSystem. */
@@ -283,6 +286,14 @@ namespace Horo::AI {
         BehaviorTreeInstance &operator=(BehaviorTreeInstance &&) = delete;
 
     private:
+        friend class BehaviorTreeExecutionPlan;
+        [[nodiscard]] bool ValidEvaluation(std::uint64_t tick, AiTaskResumeReason reason) const noexcept;
+        [[nodiscard]] bool EvaluationCancelled(AgentHandle activeAgent) const noexcept;
+        [[nodiscard]] Result<AiTaskState> CancelEvaluation(AgentHandle activeAgent);
+        [[nodiscard]] Result<AiTaskState> EvaluateBody(const BlackboardSnapshot &blackboard);
+        void ApplyTemporalControl(std::size_t node, bool entering) noexcept;
+        [[nodiscard]] Result<void> ApplyConditionControl(std::size_t node, const BlackboardSnapshot &blackboard, bool entering);
+        [[nodiscard]] Result<void> RunSubplan(std::size_t node, const BlackboardSnapshot &blackboard, bool entering);
         struct NodeState;
         struct ServiceState;
         struct Frame;

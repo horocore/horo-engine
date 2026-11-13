@@ -6,12 +6,14 @@
 
 namespace Horo::Prefab::ValueDetail {
     namespace {
-        /** @brief Charge owned provenance before copying possibly large strings into the immutable result. */
+        /** @brief Charge owned provenance before copying possibly large strings into
+         * the immutable result. */
         Result<void> AddBinding(ResolutionState &state, PrefabValueOverrideTarget target, PrefabOverrideValue value,
                                 const std::size_t object, const std::optional<std::size_t> component,
                                 const PrefabValuePropertySchema *schema, const PrefabValueOrigin origin) {
             const auto size = EncodeTarget(target).dump(0).size() + 2 * EncodeValue(value).dump(0).size() +
-                              (schema ? EncodeValue(schema->defaultValue).dump(0).size() : 0) + sizeof(ValueBinding);
+                              (schema ? EncodeValue(schema->defaultValue).dump(0).size() : 0) + sizeof(ValueBinding) +
+                              state.objects[object].originChain.size() * sizeof(PrefabCompositionOriginStep);
             if (state.bindings.size() >= PrefabHardLimits::OverrideRecords ||
                 state.provenanceBytes > state.limits.Policy().maximumOverrideSetBytes ||
                 size > state.limits.Policy().maximumOverrideSetBytes - state.provenanceBytes)
@@ -22,25 +24,27 @@ namespace Horo::Prefab::ValueDetail {
                                              schema ? std::optional{schema->defaultValue} : std::nullopt,
                                              value,
                                              std::move(value),
-                                             state.objects[object].sourcePrefab};
+                                             state.objects[object].sourcePrefab,
+                                             state.objects[object].originChain};
             state.bindings.emplace_back(std::move(provenance), object, component, schema);
             return Result<void>::Success();
         }
 
-        /** @brief Decode the actual source component once; duplicate keys and excessive nesting never enter resolution. */
+        /** @brief Decode the actual source component once; duplicate keys and excessive
+         * nesting never enter resolution. */
         Result<Json *> CapturePayload(ResolutionState &state, const std::size_t object, const std::size_t component) {
             const auto &source = state.objects[object].object.components[component].component.payload;
-            Detail::JsonParseGuard guard{PrefabHardLimits::SourceJsonDepth};
             if (source.empty())
                 return Invalid<Json *>("Registered component source payload is empty.");
-            auto json = Json::parse(source.begin(), source.end(), std::ref(guard), false);
-            if (json.is_discarded() || !json.is_object() || guard.HasDuplicate() || guard.IsTooDeep())
-                return Invalid<Json *>("Registered component source payload is malformed.");
-            const auto [found, inserted] = state.payloads.try_emplace(std::pair{object, component}, std::move(json));
-            return Result<Json *>::Success(&found->second);
+            auto owned = DecodeComponentPayload(source, "Registered component source payload is malformed.");
+            if (owned.HasError())
+                return Result<Json *>::Failure(owned.ErrorValue());
+            const auto [found, inserted] = state.payloads.try_emplace(std::pair{object, component}, std::move(owned).Value());
+            return Result<Json *>::Success(&found->second.Get());
         }
 
-        /** @brief Capture one exact registered property after the component payload has been decoded once. */
+        /** @brief Capture one exact registered property after the component payload has
+         * been decoded once. */
         Result<void> CaptureProperty(ResolutionState &state, const std::size_t object, const std::size_t component,
                                      const PrefabValuePropertySchema &schema, const Json &json) {
             const auto &source = state.objects[object];
@@ -48,7 +52,8 @@ namespace Horo::Prefab::ValueDetail {
             const bool present = json.contains(schema.payloadProperty.Value());
             if (!present && schema.required)
                 return Invalid<void>("Required source component property is absent.");
-            // Registry defaults are inspection metadata; they never synthesize absent authored source values.
+            // Registry defaults are inspection metadata; they never synthesize absent
+            // authored source values.
             if (!present)
                 return Result<void>::Success();
             auto value = ReadPayloadValue(json[schema.payloadProperty.Value()], schema.kind);
@@ -59,11 +64,14 @@ namespace Horo::Prefab::ValueDetail {
             auto target = PrefabPropertyAddress::Create(source.key.object, schema.componentType, payload.instance, schema.property);
             if (target.HasError())
                 return Result<void>::Failure(target.ErrorValue());
-            const auto origin = source.sourcePrefab == state.source.RootAsset() ? PrefabValueOrigin::Source : PrefabValueOrigin::Inherited;
+            const auto origin = source.originChain.empty()                                           ? PrefabValueOrigin::Source
+                                : source.originChain.back().kind == PrefabCompositionOrigin::Variant ? PrefabValueOrigin::Variant
+                                                                                                     : PrefabValueOrigin::Nested;
             return AddBinding(state, std::move(target).Value(), std::move(value).Value(), object, component, &schema, origin);
         }
 
-        /** @brief Capture exact registered values or declared defaults; names and vector positions never retarget a property. */
+        /** @brief Capture exact registered values or declared defaults; names and
+         * vector positions never retarget a property. */
         Result<void> CaptureComponent(ResolutionState &state, const std::size_t object, const std::size_t component) {
             const auto &source = state.objects[object];
             const auto &payload = source.object.components[component];
@@ -91,7 +99,8 @@ namespace Horo::Prefab::ValueDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Capture a component inventory only when an explicit schema publication exists. */
+        /** @brief Capture a component inventory only when an explicit schema
+         * publication exists. */
         Result<void> CaptureObjectComponents(ResolutionState &state, const std::size_t object) {
             if (!state.schemas)
                 return Result<void>::Success();
@@ -101,8 +110,9 @@ namespace Horo::Prefab::ValueDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Re-admit source allocation bounds under this operation's exact captured policy before copying it. */
-        Result<void> AdmitSource(const EffectivePrefabCandidate &source, const PrefabLimitProfile &limits) {
+        /** @brief Re-admit source allocation bounds under this operation's exact
+         * captured policy before copying it. */
+        Result<void> AdmitSource(const PrefabOverrideBaseline &source, const PrefabLimitProfile &limits) {
             if (source.Objects().size() > limits.Policy().maximumObjectCount)
                 return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
             std::size_t bytes{};
@@ -119,7 +129,8 @@ namespace Horo::Prefab::ValueDetail {
         }
     }  // namespace
 
-    /** @brief Capture immutable source/default/inheritance evidence before any override mutates a detached payload. */
+    /** @brief Capture immutable source/default/inheritance evidence before any
+     * override mutates a detached payload. */
     Result<void> CaptureBindings(ResolutionState &state) {
         if (auto valid = AdmitSource(state.source, state.limits); valid.HasError())
             return valid;
@@ -130,7 +141,9 @@ namespace Horo::Prefab::ValueDetail {
             if (auto charged = state.budget.Consume(1); charged.HasError())
                 return charged;
             const auto &object = state.objects[i];
-            const auto origin = object.sourcePrefab == state.source.RootAsset() ? PrefabValueOrigin::Source : PrefabValueOrigin::Inherited;
+            const auto origin = object.originChain.empty()                                           ? PrefabValueOrigin::Source
+                                : object.originChain.back().kind == PrefabCompositionOrigin::Variant ? PrefabValueOrigin::Variant
+                                                                                                     : PrefabValueOrigin::Nested;
             if (auto added = AddBinding(state, object.key.object, object.object.localTransform, i, std::nullopt, nullptr, origin);
                 added.HasError())
                 return added;
@@ -143,27 +156,36 @@ namespace Horo::Prefab::ValueDetail {
         return Result<void>::Success();
     }
 
-    /** @brief Find one exact stable target with logarithmic lookup in captured canonical metadata. */
+    /** @brief Find one exact stable target with logarithmic lookup in captured
+     * canonical metadata. */
     ValueBinding *FindBinding(ResolutionState &state, const PrefabValueOverrideTarget &target) {
         auto found = std::ranges::lower_bound(state.bindings, target, TargetLess, [](const ValueBinding &binding) -> const auto & {
             return binding.provenance.target;
         });
-        return found != state.bindings.end() && found->provenance.target == target ? std::to_address(found) : nullptr;
+        return found != state.bindings.end() && found->provenance.target == target &&
+                       found->provenance.disposition == PrefabValueDisposition::Present
+                   ? std::to_address(found)
+                   : nullptr;
     }
 
-    /** @brief Apply one validated value solely to operation-owned objects, preserving a nested root's original mount transform. */
+    /** @brief Apply one validated value solely to operation-owned objects,
+     * preserving a nested root's original mount transform. */
     Result<void> WriteBinding(ResolutionState &state, ValueBinding &binding, const PrefabOverrideValue &value) {
+        if (binding.provenance.disposition != PrefabValueDisposition::Present)
+            return Result<void>::Failure(MakeError(PrefabErrors::OverrideOrphan));
         if (!binding.component.has_value()) {
             auto &object = state.objects[binding.object];
             const auto &transform = std::get<Math::Transform>(value);
-            auto effective = Math::TryDecomposeAffineTRS(Math::Multiply(object.placementTransform.ToMatrix(), transform.ToMatrix()));
+            auto effective = ComposePrefabPlacement(object.placementTransform, transform);
             if (effective.HasError())
                 return Result<void>::Failure(effective.ErrorValue());
             object.object.localTransform = transform;
             object.effectiveLocalTransform = effective.Value();
         } else {
             state.modifiedPayloads.emplace(binding.object, *binding.component);
-            state.payloads.at({binding.object, *binding.component})[binding.schema->payloadProperty.Value()] = PayloadValue(value);
+            auto replacement = PayloadValue(value);
+            auto &target = state.payloads.at({binding.object, *binding.component}).Get()[binding.schema->payloadProperty.Value()];
+            target.swap(replacement.Get());
         }
         binding.provenance.effectiveValue = value;
         binding.provenance.origin = PrefabValueOrigin::Instance;
@@ -171,14 +193,15 @@ namespace Horo::Prefab::ValueDetail {
     }
 
     namespace {
-        /** @brief Finish one detached object's actual component payloads while charging the same aggregate byte budget. */
+        /** @brief Finish one detached object's actual component payloads while charging
+         * the same aggregate byte budget. */
         Result<void> FinishObjectPayloads(ResolutionState &state, const std::size_t objectIndex, std::size_t &bytes) {
             auto &object = state.objects[objectIndex];
             for (std::size_t componentIndex = 0; componentIndex < object.object.components.size(); ++componentIndex) {
                 auto &component = object.object.components[componentIndex];
                 if (const auto payload = state.payloads.find({objectIndex, componentIndex});
                     payload != state.payloads.end() && state.modifiedPayloads.contains({objectIndex, componentIndex})) {
-                    const auto encoded = payload->second.dump();
+                    const auto encoded = payload->second.Get().dump();
                     if (encoded.size() > Gameplay::MaximumSerializedComponentBytes ||
                         encoded.size() > state.limits.Policy().maximumExpandedPayloadBytes - bytes)
                         return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
@@ -193,7 +216,8 @@ namespace Horo::Prefab::ValueDetail {
         }
     }  // namespace
 
-    /** @brief Validate aggregate derived payload size before replacing any owned component envelope. */
+    /** @brief Validate aggregate derived payload size before replacing any owned
+     * component envelope. */
     Result<void> FinishPayloads(ResolutionState &state) {
         std::size_t bytes{};
         for (std::size_t object = 0; object < state.objects.size(); ++object)

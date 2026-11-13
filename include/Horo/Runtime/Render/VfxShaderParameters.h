@@ -40,8 +40,9 @@ namespace Horo::Render {
      * @param destination Owner-retained frame storage, disjoint from all borrowed inputs.
      * @return Written prefix extent or typed failure; failure preserves every destination byte.
      * @details Converts canonical column-major matrices to MaterialParameterValue's logical row-major input.
-     * The existing material writer alone applies native matrix order, offsets, strides and padding. Unused
-     * instance lanes are zero. The owner must retain the resulting bytes through actual native upload/record.
+     * Validated reflection determines native matrix order, offsets, strides and padding. Regular nonoverlapping
+     * field regions serialize directly; other layouts use the canonical material writer. Unused instance lanes
+     * are zero. The owner must retain the resulting bytes through actual native upload/record.
      */
     [[nodiscard]] Result<std::size_t> PackVfxShaderParameters(const MaterialBindingLayout &layout,
                                                               std::span<const VfxPackedDrawInstance> instances,

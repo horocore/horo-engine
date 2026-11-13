@@ -1,3 +1,4 @@
+#include "PhysicsStateConstructionPlans.h"
 #include "PhysicsWorldInternal.h"
 
 #include <new>
@@ -121,7 +122,10 @@ namespace Horo::Physics {
         if (const auto capacity = impl_->CheckPublicationRevisionCapacity(); capacity.HasError())
             return Preparation::Failure(capacity.ErrorValue());
         try {
-            auto prepared = Detail::PrepareCanonicalSceneBodies(impl_->native, impl_->identity, {}, shapes, bodies);
+            auto recipes = Detail::PrepareGroupConstructionRecipes(impl_->runtime->stateRecipes, shapes);
+            if (recipes.HasError())
+                return Preparation::Failure(recipes.ErrorValue());
+            auto prepared = Detail::PrepareCanonicalSceneBodies(impl_->native, impl_->identity, {}, shapes, bodies, recipes.Value());
             if (prepared.HasError())
                 return Preparation::Failure(prepared.ErrorValue());
             auto state = std::make_unique<PhysicsSceneBodyPreparation::Impl>(*impl_, std::move(prepared).Value());
@@ -142,8 +146,25 @@ namespace Horo::Physics {
             return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (const Result<void> valid = ValidatePhysicsShapeDescriptor(descriptor); valid.HasError())
             return Result<ShapeHandle>::Failure(valid.ErrorValue());
-        return Detail::CreateCanonicalSceneShape(impl_->native, impl_->identity, descriptor);
+        auto recipe = Detail::PrepareAnalyticConstructionRecipe(impl_->runtime->stateRecipes, descriptor);
+        if (recipe.HasError())
+            return Result<ShapeHandle>::Failure(recipe.ErrorValue());
+        return Detail::CreateCanonicalSceneShape(impl_->native, impl_->identity, descriptor, &recipe.Value());
     }
+
+    namespace {
+        Result<void> ValidateCompoundInputs(PhysicsWorldId expectedWorld, std::span<const PhysicsSceneShapeInstance> instances) {
+            if (instances.empty())
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "A scene compound shape requires a child shape."));
+            for (const PhysicsSceneShapeInstance &instance : instances) {
+                if (const Result<void> owner = ValidatePhysicsHandleOwner(instance.shape, expectedWorld); owner.HasError())
+                    return Result<void>::Failure(owner.ErrorValue());
+                if (const Result<void> pose = ValidatePhysicsPose(instance.localPose); pose.HasError())
+                    return Result<void>::Failure(pose.ErrorValue());
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
 
     /** @copydoc PhysicsWorld::CreateSceneCompoundShape */
     Result<ShapeHandle> PhysicsWorld::CreateSceneCompoundShape(const std::span<const PhysicsSceneShapeInstance> instances) const {
@@ -153,16 +174,12 @@ namespace Horo::Physics {
             return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
         if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping || Detail::HasPendingCanonicalSceneBodies(impl_->native))
             return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
-        if (instances.empty())
-            return Result<ShapeHandle>::Failure(
-                MakeError(PhysicsErrors::DescriptorInvalid, "A scene compound shape requires a child shape."));
-        for (const PhysicsSceneShapeInstance &instance : instances) {
-            if (const Result<void> owner = ValidatePhysicsHandleOwner(instance.shape, impl_->identity); owner.HasError())
-                return Result<ShapeHandle>::Failure(owner.ErrorValue());
-            if (const Result<void> pose = ValidatePhysicsPose(instance.localPose); pose.HasError())
-                return Result<ShapeHandle>::Failure(pose.ErrorValue());
-        }
-        return Detail::CreateCanonicalSceneCompoundShape(impl_->native, impl_->identity, instances);
+        if (auto inputs = ValidateCompoundInputs(impl_->identity, instances); inputs.HasError())
+            return Result<ShapeHandle>::Failure(inputs.ErrorValue());
+        auto recipe = Detail::PrepareCompoundConstructionRecipe(impl_->runtime->stateRecipes, impl_->native, instances);
+        if (recipe.HasError())
+            return Result<ShapeHandle>::Failure(recipe.ErrorValue());
+        return Detail::CreateCanonicalSceneCompoundShape(impl_->native, impl_->identity, instances, &recipe.Value());
     }
 
     /** @copydoc PhysicsWorld::CreateSceneBody */

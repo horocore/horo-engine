@@ -1,6 +1,7 @@
 #include "WorldSourceShapeControls.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 
 #include <algorithm>
@@ -60,7 +61,7 @@ namespace Horo::Editor {
         /** @brief Adds or removes bounded owned vertices; an overflow failure never changes pointCount or existing points. */
         Result<void> DrawGeometry(WS::StreamingSourcePathVolume &path, const EditorGuiContext &context) {
             if (path.pointCount < 2 || path.pointCount > path.points.size())
-                return Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
+                return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&WorldDocumentErrors::Invalid>()));
             DrawLength("workspace.world_sources.half_extent", "##path_extent", path.halfExtentMillimeters, context);
             if (Ui::Button({.label = context.localization.Get("editor", "workspace.world_sources.add_point").c_str(),
                             .variant = Ui::ButtonVariant::Secondary,

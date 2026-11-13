@@ -10,6 +10,10 @@ namespace Horo::Platform::Android {
     public:
         explicit AndroidLifecycleAdapter(AndroidLifecycleController &controller) noexcept;
 
+        /** @brief Verifies the exact existing lifecycle authority without exposing mutable state. @param controller Expected authority.
+         * @return True only when this adapter issues observations for that controller. */
+        [[nodiscard]] bool IsBoundTo(const AndroidLifecycleController &controller) const noexcept;
+
         [[nodiscard]] Result<void> OnProcessCreated();
         [[nodiscard]] Result<AndroidActivityGeneration> OnActivityCreated();
         [[nodiscard]] Result<void> OnActivityStarted(AndroidActivityGeneration activity);

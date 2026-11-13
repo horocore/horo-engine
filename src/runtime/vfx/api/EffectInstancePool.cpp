@@ -53,6 +53,7 @@ namespace Horo::Vfx {
             EffectPoolPlan plan{};
             EffectPoolPolicy policy{};
             VfxIdentityScope scene{};
+            std::uint32_t firstInstanceSlot{};
             std::thread::id ownerThread{};
             std::vector<EffectPoolSlot> slots;
             std::vector<std::uint32_t> freeSlots;
@@ -85,9 +86,10 @@ namespace Horo::Vfx {
         template <typename State, typename Slot>
         [[nodiscard]] EffectPoolStatus ValidateHandle(State &state, const EffectSystemId instance, Slot *&slot) noexcept {
             using enum EffectPoolStatus;
-            if (!instance.IsValid() || instance.scope != state.scene || instance.slot >= state.plan.capacity)
+            if (!instance.IsValid() || instance.scope != state.scene || instance.slot < state.firstInstanceSlot ||
+                static_cast<std::uint64_t>(instance.slot) - state.firstInstanceSlot >= state.plan.capacity)
                 return InvalidHandle;
-            slot = &state.slots[instance.slot];
+            slot = &state.slots[instance.slot - state.firstInstanceSlot];
             if (instance.generation != slot->generation)
                 return StaleHandle;
             if (slot->state == EffectSlotState::Free || slot->state == EffectSlotState::PermanentlyRetired)
@@ -96,7 +98,7 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] EffectSystemId Identity(const EffectInstancePoolState &state, const std::uint32_t index) noexcept {
-            return {state.scene, index, state.slots[index].generation};
+            return {state.scene, state.firstInstanceSlot + index, state.slots[index].generation};
         }
 
         [[nodiscard]] std::uint32_t AvailableSlot(const EffectInstancePoolState &state, const VfxRequirementClass requirement) noexcept {
@@ -157,10 +159,16 @@ namespace Horo::Vfx {
             --state.delayedCount;
         }
 
+        /** @brief Validates finite descriptor demand and the host-reserved identity interval. */
+        [[nodiscard]] bool ValidDescriptor(const EffectPoolDescriptor &descriptor) noexcept {
+            return descriptor.scene.IsValid() && descriptor.maximumInstances != 0 && descriptor.emittersPerInstance != 0 &&
+                   descriptor.bytesPerInstance != 0 &&
+                   static_cast<std::uint64_t>(descriptor.firstInstanceSlot) + descriptor.maximumInstances <= EffectSystemId::InvalidSlot;
+        }
+
         [[nodiscard]] bool ValidPlanInputs(const EffectPoolDescriptor &descriptor, const EffectPoolBudget &budget,
                                            const EffectPoolPolicy &policy) noexcept {
-            if (!descriptor.scene.IsValid() || descriptor.maximumInstances == 0 || descriptor.emittersPerInstance == 0 ||
-                descriptor.bytesPerInstance == 0 || budget.maximumInstances == 0 || budget.maximumEmitterSlots == 0 ||
+            if (!ValidDescriptor(descriptor) || budget.maximumInstances == 0 || budget.maximumEmitterSlots == 0 ||
                 budget.maximumBytes == 0 || policy.overBudget >= EffectPoolOverBudgetPolicy::Count)
                 return false;
             if (policy.overBudget == EffectPoolOverBudgetPolicy::RejectNewest)
@@ -213,6 +221,38 @@ namespace Horo::Vfx {
             state = std::move(prepared);
             return Ready;
         }
+
+        /** @brief Checked finite materialization plan, before allocating any pool storage. */
+        struct PoolStoragePlan final {
+            std::uint32_t capacity{};
+            std::uint32_t delayedCapacity{};
+            std::uint64_t plannedBytes{};
+        };
+
+        [[nodiscard]] Result<PoolStoragePlan> PlanStorage(const EffectPoolDescriptor &descriptor, const EffectPoolBudget &budget,
+                                                          const EffectPoolPolicy &policy) {
+            const std::uint32_t delayedCapacity = policy.overBudget == EffectPoolOverBudgetPolicy::DelayBounded ? budget.maximumDelayed : 0;
+            constexpr std::uint64_t slotControlBytes = sizeof(EffectPoolSlot) + sizeof(std::uint32_t);
+            if (delayedCapacity > std::numeric_limits<std::size_t>::max() / sizeof(Detail::DelayedEffectRequest) ||
+                descriptor.bytesPerInstance > std::numeric_limits<std::uint64_t>::max() - slotControlBytes)
+                return Result<PoolStoragePlan>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
+            const std::uint64_t fixedBytes =
+                sizeof(EffectInstancePoolState) + static_cast<std::uint64_t>(delayedCapacity) * sizeof(Detail::DelayedEffectRequest);
+            const std::uint64_t bytesPerSlot = descriptor.bytesPerInstance + slotControlBytes;
+            if (fixedBytes >= budget.maximumBytes)
+                return Result<PoolStoragePlan>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
+            const auto capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                {descriptor.maximumInstances, budget.maximumInstances, budget.maximumEmitterSlots / descriptor.emittersPerInstance,
+                 (budget.maximumBytes - fixedBytes) / bytesPerSlot}));
+            if (capacity == 0 || budget.requiredReserve > capacity ||
+                capacity > std::numeric_limits<std::size_t>::max() / sizeof(EffectPoolSlot) ||
+                capacity > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t))
+                return Result<PoolStoragePlan>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
+
+            return Result<PoolStoragePlan>::Success(
+                {capacity, delayedCapacity, fixedBytes + static_cast<std::uint64_t>(capacity) * bytesPerSlot});
+        }
+
     }  // namespace
 
     EffectInstancePool::EffectInstancePool(std::unique_ptr<EffectInstancePoolState> state) noexcept : state_(std::move(state)) {}
@@ -227,27 +267,13 @@ namespace Horo::Vfx {
         using enum StoragePreparationStatus;
         if (!ValidPlanInputs(descriptor, budget, policy))
             return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
-        const std::uint32_t delayedCapacity = policy.overBudget == EffectPoolOverBudgetPolicy::DelayBounded ? budget.maximumDelayed : 0;
-        constexpr std::uint64_t slotControlBytes = sizeof(EffectPoolSlot) + sizeof(std::uint32_t);
-        if (delayedCapacity > std::numeric_limits<std::size_t>::max() / sizeof(Detail::DelayedEffectRequest) ||
-            descriptor.bytesPerInstance > std::numeric_limits<std::uint64_t>::max() - slotControlBytes)
-            return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
-        const std::uint64_t fixedBytes =
-            sizeof(EffectInstancePoolState) + static_cast<std::uint64_t>(delayedCapacity) * sizeof(Detail::DelayedEffectRequest);
-        const std::uint64_t bytesPerSlot = descriptor.bytesPerInstance + slotControlBytes;
-        if (fixedBytes >= budget.maximumBytes)
-            return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
-        const auto capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(
-            {descriptor.maximumInstances, budget.maximumInstances, budget.maximumEmitterSlots / descriptor.emittersPerInstance,
-             (budget.maximumBytes - fixedBytes) / bytesPerSlot}));
-        if (capacity == 0 || budget.requiredReserve > capacity ||
-            capacity > std::numeric_limits<std::size_t>::max() / sizeof(EffectPoolSlot) ||
-            capacity > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t))
-            return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
+        const auto plan = PlanStorage(descriptor, budget, policy);
+        if (plan.HasError())
+            return Result<EffectInstancePool>::Failure(plan.ErrorValue());
+        const auto [capacity, delayedCapacity, plannedBytes] = plan.Value();
 
         std::unique_ptr<EffectInstancePoolState> state;
         std::uint64_t reservedBytes{};
-        const std::uint64_t plannedBytes = fixedBytes + static_cast<std::uint64_t>(capacity) * bytesPerSlot;
         const auto storageStatus = PrepareStorage(capacity, delayedCapacity, budget.maximumBytes, plannedBytes, state, reservedBytes);
         if (storageStatus == AllocationFailed)
             return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolAllocationFailed));
@@ -258,6 +284,7 @@ namespace Horo::Vfx {
             state->freeSlots[index] = index;
         std::make_heap(state->freeSlots.data(), state->freeSlots.data() + capacity, std::greater<>{});
         state->scene = descriptor.scene;
+        state->firstInstanceSlot = descriptor.firstInstanceSlot;
         state->ownerThread = std::this_thread::get_id();
         state->policy = policy;
         state->plan = {.capacity = capacity,
@@ -362,7 +389,7 @@ namespace Horo::Vfx {
         state_->currentTick = tick;
         ++slot->generation;
         slot->admittedTick = tick;
-        return {.status = Admitted, .instance = Identity(*state_, instance.slot)};
+        return {.status = Admitted, .instance = Identity(*state_, instance.slot - state_->firstInstanceSlot)};
     }
 
     /** @copydoc EffectInstancePool::Stop */
@@ -435,7 +462,7 @@ namespace Horo::Vfx {
         } else {
             ++slot->generation;
             slot->state = EffectSlotState::Free;
-            state_->freeSlots[state_->freeCount++] = instance.slot;
+            state_->freeSlots[state_->freeCount++] = instance.slot - state_->firstInstanceSlot;
             std::push_heap(state_->freeSlots.data(), state_->freeSlots.data() + state_->freeCount, std::greater<>{});
         }
         return Admitted;

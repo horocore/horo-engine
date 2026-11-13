@@ -8,6 +8,7 @@
 #include "Horo/Assets/AssetPayloadCache.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Runtime/RuntimeLifecycle.h"
+#include "Horo/Runtime/Save/SaveReference.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
 #include "Horo/Vfx/VfxWorld.h"
@@ -27,7 +28,36 @@ namespace Horo::Assets {
 namespace Horo::Runtime {
     class RuntimeScene;
     class RuntimeSceneView;
+    class SceneRestoreCandidateCommands;
+    class SceneCommandBuffer;
     class IStagedRestoreAggregatePublication;
+
+    /** @brief Exact durable member inventory for one private structural partition; entity is a dense command index. */
+    struct SceneRestorePartitionMember final {
+        std::size_t entity{};
+        PersistentEntityId identity;
+        std::uint64_t generation{};
+    };
+
+    /** @brief Save-owned qualified occurrence and complete live member inventory, never a runtime ownership grant. */
+    struct SceneRestoreGroupPartition final {
+        SaveWorldId world;
+        SavePrefabInstanceId occurrence;
+        std::size_t root{};
+        std::vector<SceneRestorePartitionMember> members;
+    };
+
+    /** @brief Inert requested restore group budget; the actual Scene service clamps it to its host policy and hard caps.
+     * Ordinary CreateGroup retains these existing default ceilings and uniform lineage.
+     */
+    struct SceneRestoreStructuralLimits final {
+        std::size_t maximumEntities{256};
+        std::size_t maximumResources{257};
+        std::size_t maximumReferences{256};
+        std::size_t maximumPhysicsReferences{4096};
+        std::size_t maximumLineageEntries{4096};
+        std::size_t maximumResourceBytes{std::numeric_limits<std::size_t>::max()};
+    };
 
     /**
      * @brief Owned composite restore retained behind normal Scene preparation admission.
@@ -38,10 +68,34 @@ namespace Horo::Runtime {
     class SceneAggregateRestore {
     public:
         virtual ~SceneAggregateRestore() = default;
+
+        /** @brief Declares admitted Bundle/graph limits as inert metadata; the service applies lower host/hard ceilings.
+         * @return Finite structural budget. Existing aggregates retain ordinary group limits.
+         */
+        [[nodiscard]] virtual SceneRestoreStructuralLimits StructuralLimits() const noexcept {
+            return {};
+        }
+
+        /** @brief Validates declared partitions against the aggregate's sole admitted durable inventory.
+         * @param partitions Complete live occurrence/member declarations; caller tokens confer no authority.
+         * @return Typed mismatch/duplicate/absence failure or exact coverage. Default rejects nonempty declarations.
+         */
+        [[nodiscard]] virtual Result<void> ValidateRestorePartitions(std::span<const SceneRestoreGroupPartition> partitions) const;
         /** @brief Allocates exact identities and stages core values on the unpublished Scene.
          * @param scene Actual candidate owned by the Scene service, borrowed until retirement.
          * @return Success or a typed preparation failure with no active-state mutation. */
         [[nodiscard]] virtual Result<void> PrepareScene(RuntimeScene &scene) = 0;
+
+        /** @brief Prepares the exact private candidate with an ephemeral service-owned command capability.
+         * @param scene Actual unpublished candidate. @param commands Synchronous non-retainable command capability.
+         * @return Original typed failure or successful preparation; publication remains with the aggregate gate.
+         * @details Default forwards to the original overload so existing aggregates keep one preparation path.
+         */
+        [[nodiscard]] virtual Result<void> PrepareScene(RuntimeScene &scene, SceneRestoreCandidateCommands &commands) {
+            (void)commands;
+            return PrepareScene(scene);
+        }
+
         /** @brief Advances bounded detached restore preparation at the owner lifecycle boundary.
          * @return Ready, still pending, or a typed failure requiring aggregate rollback. */
         [[nodiscard]] virtual Result<bool> PrepareOwners() = 0;
@@ -59,6 +113,15 @@ namespace Horo::Runtime {
         virtual void Rollback() noexcept = 0;
     };
 
+    /** @brief Optional aggregate cleanup after actual old owner/Scene retirement, outside the publication gate.
+     * @details Active aggregate ownership remains intact. Failed/pending transient retirement is retryable cleanup, never rollback.
+     */
+    class ISceneRestoreTransientRetirement {
+    public:
+        virtual ~ISceneRestoreTransientRetirement() = default;
+        [[nodiscard]] virtual Result<bool> RetirePublishedTransient() = 0;
+    };
+
     /** @brief Prepared-owner declaration of persistent dataset participation; runtime/backend world handles are not dataset IDs. */
     enum class SceneCanonicalDatasetProjection : std::uint8_t {
         Unqualified,
@@ -74,7 +137,7 @@ namespace Horo::Runtime {
         DerivedResources
     };
     /** @brief Host-only activation virtual contract revision; all host participants must rebuild together. */
-    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 4;
+    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 5;
     struct SceneInitialPlacement;
 
     /** @brief Detached subsystem state prepared for one aggregate runtime-scene candidate. */
@@ -153,10 +216,41 @@ namespace Horo::Runtime {
         }
     };
 
+    struct RuntimeSceneAssetView;
+
+    /** @brief Closed typed owner requirements for newly supported Scene activation capabilities. */
+    enum class SceneActivationOwner : std::uint8_t {
+        Animation
+    };
+
     /** @brief Host-injected subsystem participating in aggregate runtime-scene publication. */
     class SceneActivationParticipant {
     public:
         virtual ~SceneActivationParticipant() = default;
+
+        /** @brief Discovers bounded portable dependency roles from one exact already-loaded asset.
+         * @param asset Invocation-scoped loaded HCAF bytes and actual pinned registry identity/type; never retain the view.
+         * @param cancellation Exact current owner callback cancellation; never retain a context reference.
+         * @param maximumReturnedDependencies Remaining whole-preparation charged-reference budget, including duplicates.
+         * @return Complete bounded declarations or typed failure; default legacy participants declare none.
+         * @details Cold owner lane only. No I/O, loads, actor activation, cache/publication or retained Scene borrow.
+         * The Scene service validates/merges into its existing snapshot/load group and inspects each asset once per participant.
+         */
+        [[nodiscard]] virtual Result<std::vector<SceneAssetDependency>> DiscoverDependencies(const RuntimeSceneAssetView &asset,
+                                                                                             const CancellationToken &cancellation,
+                                                                                             std::size_t maximumReturnedDependencies) {
+            (void)asset;
+            (void)cancellation;
+            (void)maximumReturnedDependencies;
+            return Result<std::vector<SceneAssetDependency>>::Success({});
+        }
+
+        /** @brief Declares one actual composed owner; legacy participants do not claim new capabilities.
+         * @return Animation only for the canonical Animation-owned activation adapter, otherwise absent.
+         */
+        [[nodiscard]] virtual std::optional<SceneActivationOwner> RequiredOwner() const noexcept {
+            return std::nullopt;
+        }
 
         /** @brief Declares preparation dependency without backend discovery or incidental registration ordering.
          * @return InitialPlacement only for owners projecting recovered initial poses; all other owners derive resources afterward.
@@ -279,6 +373,8 @@ namespace Horo::Runtime {
         std::size_t maximumDependencies{1024};                         /**< Maximum required assets in one definition. */
         std::size_t maximumConcurrentLoads{8};                         /**< Maximum in-flight provider requests. */
         std::size_t maximumResidentBytes{1024ULL * 1024ULL * 1024ULL}; /**< Per-candidate logical byte budget. */
+        std::size_t maximumDependencyReferences{
+            65536}; /**< Whole discovered-edge work budget, including duplicates; hard ceiling 1048576. */
     };
 
     /** @brief Allocation-free borrowed cooked payload resolved for an active scene. */
@@ -337,11 +433,21 @@ namespace Horo::Runtime {
         std::optional<Gameplay::ComponentTypeId> component;
     };
 
+    /** @brief External binding to an entity in the same complete private group reservation.
+     * @details Command input only. Resolves to RuntimeGroupExternalReference after all slots are reserved,
+     * preserving the published external category for forward/cyclic bindings. No live EntityRef is fabricated.
+     */
+    struct RuntimeGroupExternalEntitySlot final {
+        RuntimeGroupEntitySlot entity;
+        std::optional<Gameplay::ComponentTypeId> component;
+    };
+
     /** @brief One cook-owned typed reference interface; an absent optional binding is explicit Unbound. */
     struct RuntimeGroupReference final {
         std::size_t ownerMember{};
         std::uint64_t property{};
-        std::variant<std::monostate, RuntimeGroupEntitySlot, RuntimeGroupMemberSlot, Assets::AssetDependency, RuntimeGroupExternalReference>
+        std::variant<std::monostate, RuntimeGroupEntitySlot, RuntimeGroupMemberSlot, Assets::AssetDependency, RuntimeGroupExternalReference,
+                     RuntimeGroupExternalEntitySlot>
             target;
     };
 
@@ -385,6 +491,7 @@ namespace Horo::Runtime {
         std::vector<RuntimeGroupMemberIdentity> members;          /**< Complete cook-projected occurrence metadata. */
         std::vector<RuntimeGroupReference> references; /**< Declared reference interfaces, separate from initialization values. */
         std::vector<Assets::AssetId> spawnLineage;     /**< Bounded immutable inherited creation evidence, at most 16 unique assets. */
+        std::optional<std::size_t> restorePartition;   /**< Private restore command partition; ordinary CreateGroup rejects it. */
     };
 
     /** @brief Generation, catalog and cancellation evidence rechecked by Scene at structural publication. */
@@ -420,6 +527,35 @@ namespace Horo::Runtime {
         std::size_t transformsUpdated{};
         std::size_t baselinesAttached{}; /**< Complete attached or replaced ownership records. */
         std::size_t baselinesDetached{}; /**< Complete explicitly retired ownership records. */
+    };
+
+    /** @brief Service-issued ephemeral mutation capability for one exact unpublished restore candidate.
+     * @details Borrowed only during PrepareScene. Never retain a reference/pointer or invoke after that call.
+     * Cannot be copied, moved, constructed or selected by domain callers. Uses the issuing service's actual
+     * registry and the normal Scene structural admission checks; it publishes no active state.
+     */
+    class SceneRestoreCandidateCommands {
+        friend class RuntimeSceneService;
+        SceneRestoreCandidateCommands() = default;
+
+    public:
+        virtual ~SceneRestoreCandidateCommands() = default;
+        SceneRestoreCandidateCommands(const SceneRestoreCandidateCommands &) = delete;
+        SceneRestoreCandidateCommands &operator=(const SceneRestoreCandidateCommands &) = delete;
+        /** @brief Commits one complete command batch to the exact private candidate on its owner lane.
+         * @param commands Complete bounded batch. @return Actual structural receipt data or original typed error.
+         */
+        [[nodiscard]] virtual Result<StructuralCommitResult> Commit(const SceneCommandBuffer &commands) = 0;
+        /** @brief Builds one complete restore group with actual candidate admission and service-clamped Bundle/host bounds.
+         * @param commands Receiving unsubmitted buffer. @param entries Complete exact prepared projection.
+         * @param resources Actual immutable named leases. @param cancellation Original restore ancestry.
+         * @return Dense deferred tokens or original typed budget/admission failure; no Scene mutation.
+         */
+        [[nodiscard]] virtual Result<std::vector<DeferredEntity>> CreateGroup(SceneCommandBuffer &commands,
+                                                                              std::vector<RuntimeEntityGroupEntry> entries,
+                                                                              std::vector<RuntimeGroupAssetLease> resources,
+                                                                              const CancellationToken &cancellation,
+                                                                              std::vector<SceneRestoreGroupPartition> partitions) = 0;
     };
 
     /** @brief Explicit aggregate ceilings for independent baselines attached to one canonical scene. */
@@ -530,6 +666,22 @@ namespace Horo::Runtime {
         friend class RuntimeScene;
         friend class RuntimeSceneService;
 
+        /** @brief Private policy selectable only by the normal wrapper or actual service-issued restore capability. */
+        struct GroupPolicy final {
+            SceneRestoreStructuralLimits limits;
+            bool uniformLineage{true};
+        };
+
+        /** @brief Same canonical group validator/builder for ordinary and explicitly bounded private restore admission. */
+        [[nodiscard]] Result<std::vector<DeferredEntity>> CreateGroupInternal(std::vector<RuntimeEntityGroupEntry> entries,
+                                                                              std::vector<RuntimeGroupAssetLease> resources,
+                                                                              const SceneStructuralAdmission &admission,
+                                                                              const GroupPolicy &policy,
+                                                                              std::vector<SceneRestoreGroupPartition> partitions);
+
+        /** @brief Identifies service-sealed restore commands, including revoked copies, for ordinary-path rejection. */
+        [[nodiscard]] bool HasRestoreGroups() const noexcept;
+
         struct CreateCommand {
             DeferredEntity deferred;
             RuntimeEntityCreateInfo info;
@@ -545,11 +697,19 @@ namespace Horo::Runtime {
             std::optional<SceneStructuralAdmission> admission;
         };
 
+        /** @brief Private retained control minted only for one synchronous service capability; command copies cannot renew it. */
+        struct RestoreGroupSeal final {
+            bool valid{true};
+        };
+
         struct CreateGroupCommand {
             std::vector<RuntimeEntityGroupEntry> entries;
             std::vector<RuntimeGroupAssetLease> resources;
             std::vector<DeferredEntity> deferred;
             SceneStructuralAdmission admission;
+            bool uniformLineage{true};
+            std::vector<SceneRestoreGroupPartition> partitions;
+            std::shared_ptr<const RestoreGroupSeal> restoreSeal{};
         };
 
         struct DestroyGroupCommand {
@@ -601,7 +761,8 @@ namespace Horo::Runtime {
     enum class SceneStructuralOwner {
         Physics,
         Gameplay,
-        AI
+        AI,
+        Animation
     };
 
     /** @brief Explicit structural preparation order, independent of host registration order. */
@@ -773,12 +934,13 @@ namespace Horo::Runtime {
         /** @brief Constructs one cold Scene owner and its non-owning view lifetime observation.
          * @param runtimeId Exact runtime incarnation. @param definitionId Logical definition.
          * @param revision Authored revision. @param config Generation policy.
-         * @param assetRevision Registry revision used for preparation. @param assets Owned resolved payloads.
+         * @param assetRevision Registry revision used for preparation. @param assets Resolved payload buffer consumed by swap.
+         * Callers retaining a buffer must explicitly copy it before passing the detached copy as an rvalue.
          * @throws std::bad_alloc When the cold lifetime observation cannot be allocated.
          * @pre Construction, storage queries, mutation and destruction occur on the same owner thread.
          */
         RuntimeScene(SceneRuntimeId runtimeId, SceneDefinitionId definitionId, SceneDefinitionRevision revision, RuntimeSceneConfig config,
-                     Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> assets);
+                     Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> &&assets);
         RuntimeScene(const RuntimeScene &) = delete;
         RuntimeScene &operator=(const RuntimeScene &) = delete;
         RuntimeScene(RuntimeScene &&) = delete;
@@ -796,15 +958,20 @@ namespace Horo::Runtime {
         /** @brief Atomically applies validated initial poses to this private candidate, preserving topology generations. */
         [[nodiscard]] Result<void> ApplyInitialPlacements(std::span<const SceneInitialPlacement> placements);
 
+        /** @brief Only the Scene service friend selects private materialization; ordinary public commits cannot defer native owners. */
+        enum class CommitPurpose : std::uint8_t {
+            Ordinary,
+            RestoreMaterialization
+        };
         [[nodiscard]] Result<StructuralCommitResult> CommitWithRegistry(
             const SceneCommandBuffer &commands, const Assets::AssetRegistry *registry,
             std::span<const std::unique_ptr<SceneStructuralParticipant>> participants = {},
-            std::optional<Error> *notificationError = nullptr);
+            std::optional<Error> *notificationError = nullptr, CommitPurpose purpose = CommitPurpose::Ordinary);
 
         [[nodiscard]] static Result<std::unique_ptr<RuntimeScene>> CreateResolved(const RuntimeSceneDefinition &definition,
                                                                                   SceneRuntimeId runtimeId, RuntimeSceneConfig config,
                                                                                   Assets::AssetRegistryRevision assetRevision,
-                                                                                  std::vector<ResolvedAsset> assets);
+                                                                                  std::vector<ResolvedAsset> &&assets);
 
         struct Slot {
             std::uint32_t generation{1};
@@ -817,6 +984,8 @@ namespace Horo::Runtime {
             RuntimeComponentSet components;
             std::optional<SceneDefinitionId> baselineOwner;
             std::shared_ptr<const std::vector<RuntimeGroupAssetLease>> groupResources;
+            std::shared_ptr<const void>
+                groupIdentity; /**< Actual Scene-issued whole-occurrence ownership, separate from resource sharing. */
             std::shared_ptr<const std::vector<RuntimeResolvedGroupReference>> groupReferences;
             std::shared_ptr<const std::vector<Assets::AssetId>> groupSpawnLineage;
             std::shared_ptr<const std::vector<ResolvedGroupPhysicsBodyReference>> groupPhysicsReferences;
@@ -832,10 +1001,10 @@ namespace Horo::Runtime {
 
         /** @brief Copyable transactional state without a runtime-domain identity. */
         struct RuntimeSceneStorage {
-            std::vector<BaselineAttachment> baselines;
-            std::vector<Slot> slots;
-            std::vector<std::uint32_t> freeList;
-            std::vector<std::pair<SceneObjectId, EntityId>> authoredIndex;
+            std::vector<BaselineAttachment> baselines = std::vector<BaselineAttachment>(std::size_t{0});
+            std::vector<Slot> slots = std::vector<Slot>(std::size_t{0});
+            std::vector<std::uint32_t> freeList = std::vector<std::uint32_t>(std::size_t{0});
+            std::vector<std::pair<SceneObjectId, EntityId>> authoredIndex = std::vector<std::pair<SceneObjectId, EntityId>>(std::size_t{0});
         };
 
         struct CommandApplier;
@@ -901,12 +1070,12 @@ namespace Horo::Runtime {
          * @return Success or a typed invalid-input/lifecycle error. */
         [[nodiscard]] Result<void> AddActivationParticipant(std::unique_ptr<SceneActivationParticipant> participant);
         /** @brief Queues validated preparation and later safe-point activation. Asset-bearing definitions pin the current
-         * registry snapshot and load through the injected service. @param definition Immutable scene definition consumed by
-         * the operation; lvalue callers retain source compatibility through a boundary copy. @param config Generation retirement policy.
+         * registry snapshot and load through the injected service. @param definition Borrowed immutable scene definition;
+         * the operation retains an independent copy inside its allocation boundary. @param config Generation retirement policy.
          * @return Success when accepted, or a typed immediate validation/admission error. */
-        [[nodiscard]] Result<void> QueuePreparation(RuntimeSceneDefinition definition, RuntimeSceneConfig config = {});
+        [[nodiscard]] Result<void> QueuePreparation(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config = {});
         /** @brief Queues detached preparation with an additional owned pure publication check.
-         * @param definition Immutable complete runtime definition consumed by this operation.
+         * @param definition Borrowed immutable complete runtime definition copied into the operation inside its allocation boundary.
          * @param publicationCheck Optional predicate retained through preparation and revalidated before aggregate publication.
          * @param config Generation retirement policy.
          * @return Owned receipt for a nonnull check; deferred failures preserve the active scene and reach TakeOperationError().
@@ -914,15 +1083,16 @@ namespace Horo::Runtime {
          * @details Existing cancellation, replacement and shutdown paths retire the predicate with the pending operation.
          */
         [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationWithPublicationCheck(
-            RuntimeSceneDefinition definition, std::unique_ptr<ScenePublicationCheck> publicationCheck, RuntimeSceneConfig config = {});
+            const RuntimeSceneDefinition &definition, std::unique_ptr<ScenePublicationCheck> publicationCheck,
+            RuntimeSceneConfig config = {});
         /** @brief Queues a composite save restore through the existing exclusive Scene admission path.
-         * @param definition Validated compatible immutable authored defaults.
+         * @param definition Borrowed validated compatible immutable authored defaults; pending preparation retains an independent copy.
          * @param restore Non-null owned restore composition, retained through pending preparation/rollback.
          * @param config Generation retirement policy.
          * @return Typed admission result; failed/pending owner preparation never publishes a partial Scene.
          * @details Normal QueuePreparation callers retain their existing block preparation behavior.
          */
-        [[nodiscard]] Result<void> QueuePreparationWithRestore(RuntimeSceneDefinition definition,
+        [[nodiscard]] Result<void> QueuePreparationWithRestore(const RuntimeSceneDefinition &definition,
                                                                std::unique_ptr<SceneAggregateRestore> restore,
                                                                RuntimeSceneConfig config = {});
         /** @brief Queues transactional active-scene unload; repeated unload with no pending transition is harmless.
@@ -951,6 +1121,19 @@ namespace Horo::Runtime {
          * @return Success or null/duplicate/late registration failure without replacing another owner.
          */
         [[nodiscard]] Result<void> AddStructuralParticipant(std::unique_ptr<SceneStructuralParticipant> participant);
+        /** @brief Observes the actual next unconsumed Scene runtime identity without reserving or consuming it.
+         * @pre Called on the service construction/owner lane; violation fails the ownership invariant.
+         * @return Exact current cursor; zero means identity space was exhausted and must stay zero when carried to a new service.
+         * @details Allocation-free observation. Hosts carry this value after actual Save/Scene settlement and before service teardown
+         * to avoid reusing identities consumed by complete private aggregates, including later rejected publications.
+         * Early failed preparation does not consume an identity. This is not a new identity issuer or a global reservation.
+         */
+        [[nodiscard]] SceneRuntimeId NextRuntimeId() const noexcept;
+        /** @brief Checks exact owner-lane identity of this service's actual unpublished restore candidate.
+         * @param candidate Borrowed candidate object. @return False for foreign/active/equal-ID substitute Scenes.
+         * @details Pure composition evidence; grants no mutation, retention or publication authority.
+         */
+        [[nodiscard]] bool IsRestoreCandidate(const RuntimeScene &candidate) const noexcept;
         /** @brief Returns the current immutable active scene view. */
         [[nodiscard]] std::optional<RuntimeSceneView> ActiveScene() const noexcept;
         /**
@@ -964,6 +1147,11 @@ namespace Horo::Runtime {
         [[nodiscard]] std::optional<StructuralCommitResult> TakeStructuralCommitResult();
         /** @brief Returns and clears the newest recoverable operation error. */
         [[nodiscard]] std::optional<Error> TakeOperationError();
+        /** @brief Retries only explicit published transient cleanup outside the publication gate.
+         * @return True after all opted-in transient preparation is retired, false while pending, or original cleanup error.
+         * @details Active Scene/core/reference/physics ownership is preserved. Failure is not a rolled-back Load.
+         * @pre Call on the Scene lifecycle owner outside another lifecycle mutation. */
+        [[nodiscard]] Result<bool> RetirePublishedRestorePreparation();
 
         [[nodiscard]] Result<void> Startup(const CancellationToken &cancellation) override;
 
@@ -988,6 +1176,7 @@ namespace Horo::Runtime {
 
         struct Preparation;
         struct AggregateTransfer;
+        struct RestoreCandidateCommands;
         struct LifecycleMutation;
 
         /** @brief Borrowed asset preparation authorities and their owned admission limits.
@@ -1012,14 +1201,23 @@ namespace Horo::Runtime {
             std::unique_ptr<SceneAggregateRestore> restore; /**< Pins committed identity/fixup/module roots until Scene retirement. */
         };
 
-        [[nodiscard]] Result<void> BeginPreparation(RuntimeSceneDefinition definition, RuntimeSceneConfig config);
+        [[nodiscard]] Result<void> BeginPreparation(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config);
         /** @brief Stages the validated runtime scene and its detached participant candidates without publication. */
         [[nodiscard]] Result<void> StageCandidate(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config,
-                                                  Assets::AssetRegistryRevision revision, std::vector<RuntimeScene::ResolvedAsset> assets);
+                                                  Assets::AssetRegistryRevision revision,
+                                                  std::vector<RuntimeScene::ResolvedAsset> &&assets);
         [[nodiscard]] Result<void> PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const;
-        [[nodiscard]] Result<void> ProcessCompletedPreparationLoads();
+        [[nodiscard]] Result<void> ReusePreparationPayload(Preparation &preparation, std::size_t entry) const;
+        [[nodiscard]] Result<void> AppendPreparationDependency(const SceneAssetDependency &dependency);
+        [[nodiscard]] Result<void> DiscoverPreparationDependencies(const CancellationToken &cancellation);
+        [[nodiscard]] Result<void> DiscoverPreparationEntry(std::size_t entry, const CancellationToken &cancellation);
+        [[nodiscard]] Result<std::vector<SceneAssetDependency>> InvokePreparationDiscovery(std::size_t entry, std::size_t participant,
+                                                                                           const CancellationToken &cancellation);
+        [[nodiscard]] Result<void> MergePreparationDependencies(std::span<const SceneAssetDependency> dependencies);
+        [[nodiscard]] Result<void> ProcessCompletedPreparationLoads(const CancellationToken &cancellation);
+        [[nodiscard]] Result<void> CompletePreparationDefinition();
         [[nodiscard]] Result<void> FinalizePreparation();
-        void AdvancePreparation();
+        void AdvancePreparation(const CancellationToken &cancellation);
         void CancelPreparation(bool waitForCompletion) noexcept;
         [[nodiscard]] Result<void> SubmitPreparationLoads();
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
@@ -1038,6 +1236,10 @@ namespace Horo::Runtime {
         /** @brief Retires only an unpublished queue receipt; already published identities remain immutable. */
         void RetirePublicationReceipt(ScenePublicationStatus status) noexcept;
 
+        [[nodiscard]] Result<bool> RetirePublishedRestorePreparationInternal();
+        static std::optional<Error> MakeRestoreRetirementFallback();
+        std::optional<Error> restoreRetirementFallback_{MakeRestoreRetirementFallback()};
+        std::thread::id restoreRetirementOwner_{std::this_thread::get_id()};
         SceneAggregate active_;
         Vfx::VfxExtractionOutcome vfxFrame_;
         SceneAggregate pending_;

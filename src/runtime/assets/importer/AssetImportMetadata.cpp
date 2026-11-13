@@ -159,6 +159,21 @@ namespace Horo::Assets {
         if (input.gcount() != static_cast<std::streamsize>(contents.size()))
             return Result<AssetImportMetadata>::Failure(MetadataError("Asset import metadata could not be read completely."));
 
+        return DecodeAssetImportMetadata(contents);
+    }
+
+    namespace {
+        bool MetadataSchemaSupported(const nlohmann::json &json) {
+            const auto schema = json.find("schemaVersion");
+            return schema != json.end() && schema->is_number_unsigned() &&
+                   schema->get<std::uint32_t>() == AssetImportMetadata::kSchemaVersion;
+        }
+    }  // namespace
+
+    /** @copydoc DecodeAssetImportMetadata */
+    Result<AssetImportMetadata> DecodeAssetImportMetadata(std::string_view contents) {
+        if (contents.empty() || contents.size() > kMaximumMetadataBytes)
+            return Result<AssetImportMetadata>::Failure(MetadataError("Asset import metadata is missing, empty, or too large."));
         const nlohmann::json json = nlohmann::json::parse(contents, nullptr, false, true);
         if (!json.is_object())
             return Result<AssetImportMetadata>::Failure(MetadataError("Asset import metadata schema is missing or unsupported."));
@@ -167,8 +182,7 @@ namespace Horo::Assets {
             const auto found = json.find(key);
             return found != json.end() && found->is_string() ? found->get_ref<const std::string &>() : std::string{};
         };
-        if (const auto schema = json.find("schemaVersion");
-            schema == json.end() || !schema->is_number_unsigned() || schema->get<std::uint32_t>() != AssetImportMetadata::kSchemaVersion) {
+        if (!MetadataSchemaSupported(json)) {
             return Result<AssetImportMetadata>::Failure(MetadataError("Asset import metadata schema is missing or unsupported."));
         }
 

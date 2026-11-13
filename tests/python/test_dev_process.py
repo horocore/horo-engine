@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -129,25 +130,124 @@ def test_cancellation_during_cleanup_preserves_exception_and_unconfirmed_cause(
 def test_windows_cleanup_cancellation_preserves_exception_and_unconfirmed_cause(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cancellation: BaseException,
 ) -> None:
+    class Handle:
+        def Close(self):
+            pass
+
     class Child:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            return False
-
+        _handle = Handle()
         def wait(self):
             raise KeyboardInterrupt
 
-        def terminate(self):
+    class Job:
+        def attach_and_resume(self, _):
+            pass
+
+        def stop(self):
             raise cancellation
 
+        def close(self):
+            pass
+
+    monkeypatch.setattr(process, '_WindowsJob', Job)
     monkeypatch.setattr(process.subprocess, 'CREATE_NEW_PROCESS_GROUP', 0, raising=False)
     monkeypatch.setattr(process.subprocess, 'Popen', lambda *_, **__: Child())
     with pytest.raises(type(cancellation)) as caught:
         process._windows_run(["fixture"], tmp_path, None)
     assert caught.value is cancellation
     assert isinstance(caught.value.__cause__, process.CleanupError)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows job containment")
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_windows_job_drains_nested_children_without_touching_unrelated_processes(tmp_path, monkeypatch, interrupted):
+    c = process.ctypes
+    kernel = c.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes, kernel.OpenProcess.restype = [c.c_uint32, c.c_int, c.c_uint32], c.c_void_p
+    kernel.WaitForSingleObject.argtypes, kernel.WaitForSingleObject.restype = [c.c_void_p, c.c_uint32], c.c_uint32
+    kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [c.c_void_p], c.c_int
+    ready = tmp_path / "owned-pids.json"
+    child_ready = tmp_path / "child-pids.json"
+    program = tmp_path / "parent with spaces türkçe.py"
+    child_code = (
+        "import json,os,pathlib,subprocess,sys,time; "
+        "leaf=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+        "target=pathlib.Path(sys.argv[1]); "
+        "temp=target.with_suffix('.tmp'); "
+        "temp.write_text(json.dumps([os.getpid(),leaf.pid])); temp.replace(target); time.sleep(60)"
+    )
+    program.write_text(
+        "import json,os,pathlib,subprocess,sys,time\n"
+        f"child=subprocess.Popen([sys.executable,'-c',{child_code!r},{str(child_ready)!r}], "
+        "creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)\n"
+        f"source=pathlib.Path({str(child_ready)!r})\n"
+        "while not source.exists(): time.sleep(.01)\n"
+        f"target=pathlib.Path({str(ready)!r})\n"
+        "temp=target.with_suffix('.tmp')\n"
+        "temp.write_text(json.dumps([os.getpid(),*json.loads(source.read_text())]))\n"
+        "temp.replace(target)\n"
+        + ("time.sleep(60)\n" if interrupted else "sys.exit(7)\n"), encoding="utf-8",
+    )
+    wait = process.subprocess.Popen.wait
+    observed = []
+
+    def controlled_wait(child, *args, **kwargs):
+        if child.args[1] != str(program) or kwargs.get("timeout") is not None:
+            return wait(child, *args, **kwargs)
+        deadline = time.monotonic() + 10
+        while not ready.exists():
+            assert child.poll() is None, "Fixture parent exited before publishing descendants"
+            assert time.monotonic() < deadline, "Fixture did not create its descendants"
+            time.sleep(.01)
+        for pid in [child.pid, *json.loads(ready.read_text())]:
+            handle = kernel.OpenProcess(0x100000, False, pid)  # Pin fixture process identity with SYNCHRONIZE.
+            if handle:
+                observed.append((pid, handle))
+            elif c.get_last_error() != 87:  # The normal-exit fixture parent may already be gone.
+                raise c.WinError(c.get_last_error())
+        if interrupted:
+            raise KeyboardInterrupt
+        return wait(child, *args, **kwargs)
+
+    unrelated = process.subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        monkeypatch.setattr(process.subprocess.Popen, 'wait', controlled_wait)
+        assert process.run([sys.executable, str(program)], tmp_path) == (130 if interrupted else 7)
+        assert unrelated.poll() is None
+        assert len(observed) >= 2
+        for pid, handle in observed:
+            assert kernel.WaitForSingleObject(handle, 5000) == 0, f"Owned process {pid} survived"
+    finally:
+        for _, handle in observed:
+            kernel.CloseHandle(handle)
+        unrelated.terminate()  # Fixture-owned process handle, outside the runner's job.
+        wait(unrelated, timeout=5)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows suspended launch")
+def test_windows_job_attach_failure_prevents_user_code_and_reaps_suspended_root(tmp_path, monkeypatch):
+    output = tmp_path / "must-not-run.txt"
+
+    def denied(*_):
+        raise PermissionError("fixture assignment denied")
+
+    monkeypatch.setattr(process._WindowsJob, 'attach_and_resume', denied)
+    with pytest.raises(PermissionError, match="assignment denied"):
+        process.run([sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()", str(output)], tmp_path)
+    assert not output.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows cleanup failure")
+def test_windows_job_verification_failure_still_blocks_further_builds(tmp_path, monkeypatch):
+    recorded = []
+
+    def denied(_):
+        raise PermissionError("fixture job cleanup denied")
+
+    monkeypatch.setattr(process._WindowsJob, 'stop', denied)
+    monkeypatch.setattr(process, 'record_cleanup_failure', recorded.append)
+    assert process.execute_subprocess([sys.executable, "-c", "pass"], cwd=tmp_path) == 126
+    assert recorded == [process.REPOSITORY_ROOT]
 
 
 def test_discovery_excludes_unrelated_and_reused_parent_descendants() -> None:

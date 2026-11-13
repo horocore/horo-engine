@@ -155,6 +155,19 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    Result<bool> VulkanCommandRuntime::ObserveAcceptedNative(const RenderCpuWait &wait, bool refresh) {
+        if (const auto access = impl_->Access(); access.HasError())
+            return Result<bool>::Failure(access.ErrorValue());
+        const auto *queue = impl_->FindQueue(wait.completion.queue);
+        if (!wait.IsValid() || wait.expectedDeviceIncarnation != impl_->deviceIncarnation || !queue ||
+            wait.purpose != RenderCpuWaitPurpose::Poll || wait.completion.value > queue->signaled)
+            return Result<bool>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid));
+        if (refresh)
+            if (const auto polled = Poll(); polled.HasError())
+                return Result<bool>::Failure(polled.ErrorValue());
+        return Result<bool>::Success(queue->observed >= wait.completion.value);
+    }
+
     /** @copydoc VulkanCommandRuntime::Observe */
     Result<bool> VulkanCommandRuntime::Observe(const RenderCpuWait &wait) {
         if (const auto access = impl_->Access(); access.HasError())

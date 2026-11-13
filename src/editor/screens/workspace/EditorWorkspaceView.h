@@ -143,6 +143,8 @@ namespace Horo::Editor {
         bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Draws source-only controls and the isolated stage using shared themed components. */
         bool DrawPrefabDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draw the active real terrain asset through the existing viewport panel. */
+        bool DrawTerrainDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Refreshes transient widget drafts only when their immutable source publication changes. */
         void RefreshPrefabNameDrafts(const PrefabDocumentSnapshot &source) const;
         /** @brief Emits source-local edits from persistent bounded widget buffers. */

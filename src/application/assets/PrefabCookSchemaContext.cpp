@@ -115,6 +115,31 @@ namespace Horo::Application {
         return digest_;
     }
 
+    /** @copydoc PrefabCookSchemaContext::DigestForTypes */
+    Result<Sha256Digest> PrefabCookSchemaContext::DigestForTypes(const std::span<const Gameplay::ComponentTypeId> components,
+                                                                 const std::span<const Gameplay::BehaviorTypeId> behaviors) const {
+        if (components.size() > 1024 || behaviors.size() > 1024)
+            return Result<Sha256Digest>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+        Json identity{{"contract", "horo.prefab.cook.used-schemas.v1"}, {"components", Json::object()}, {"behaviors", Json::object()}};
+        for (const auto &type : components) {
+            const auto found = std::ranges::find(components_.Descriptors(), type, &Gameplay::ComponentDescriptor::typeId);
+            if (found == components_.Descriptors().end())
+                return Result<Sha256Digest>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            identity["components"][type.Value()] = ComponentIdentity(*found);
+        }
+        for (const auto &type : behaviors) {
+            const auto found = std::ranges::find(behaviors_, type, &Gameplay::BehaviorDescriptor::typeId);
+            if (found == behaviors_.end())
+                return Result<Sha256Digest>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            auto metadata = BehaviorIdentity(*found);
+            if (metadata.HasError())
+                return Result<Sha256Digest>::Failure(metadata.ErrorValue());
+            identity["behaviors"][type.Value()] = std::move(metadata).Value();
+        }
+        const auto bytes = identity.dump();
+        return Result<Sha256Digest>::Success(ComputeSha256(std::as_bytes(std::span{bytes})));
+    }
+
     /** @copydoc PrefabCookSchemaContext::Validate */
     Result<void> PrefabCookSchemaContext::Validate(const std::span<const Gameplay::SerializedComponent> components,
                                                    const std::span<const Gameplay::BehaviorComponent> behaviors) const {

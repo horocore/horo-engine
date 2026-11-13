@@ -49,9 +49,13 @@ def test_new_dependency_helper_and_capability_defaults_invalidate(source_root: P
 
 
 def test_dependency_fingerprint_normalizes_windows_line_endings(source_root: Path) -> None:
-    initial = cache.dependency_fingerprint(source_root)
     path = source_root / "cmake/Dependencies.cmake"
-    path.write_bytes(path.read_bytes().replace(b"\n", bytes((13, 10))))
+    content = path.read_bytes().replace(b"\r\n", b"\n")
+    path.write_bytes(content)
+    initial = cache.dependency_fingerprint(source_root)
+    path.write_bytes(content.replace(b"\n", b"\r\n"))
+    assert path.read_bytes() == content.replace(b"\n", b"\r\n")
+    assert b"\r\r\n" not in path.read_bytes()
     assert cache.dependency_fingerprint(source_root) == initial
 
 

@@ -18,15 +18,27 @@ namespace Horo::XR {
     }  // namespace
 
     /** @copydoc XRFakeRuntime::Resources::Prepare */
-    Result<void> XRFakeRuntime::Resources::Prepare(const XRSessionPreparation stage, const XRSessionId &, const XRFeaturePlan &) {
+    Result<void> XRFakeRuntime::Resources::Prepare(const XRSessionPreparation stage, const XRSessionId &candidate,
+                                                   const XRFeaturePlan &plan) {
         if (failStage == stage)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
-        return Result<void>::Success();
+        if (!composition)
+            return Result<void>::Success();
+        try {
+            auto result = composition->Prepare(stage, candidate, plan);
+            if (result.HasError())
+                composition->Release(stage, candidate);
+            return result;
+        } catch (...) {
+            composition->Release(stage, candidate);
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        }
     }
 
     /** @copydoc XRFakeRuntime::Resources::Release */
-    void XRFakeRuntime::Resources::Release(XRSessionPreparation, const XRSessionId &) noexcept {
-        // Preparation owns no native, GPU or external resources, so fake retirement has no work to perform.
+    void XRFakeRuntime::Resources::Release(const XRSessionPreparation stage, const XRSessionId &session) noexcept {
+        if (composition)
+            composition->Release(stage, session);
     }
 
     /** @copydoc XRFakeRuntime::XRFakeRuntime */
@@ -44,11 +56,23 @@ namespace Horo::XR {
             return Result<XRSessionId>::Failure(MakeError(XRErrors::OperationUnavailable));
         if (failStage && *failStage >= XRSessionPreparation::Count)
             return Result<XRSessionId>::Failure(MakeError(XRErrors::OperationInvalid));
-        if (limits.maximumViews > capabilities.Limits().maximumViews || limits.maximumViews > plan.Limits().maximumViews ||
-            limits.maximumViews > XRFrameHardLimits::MaximumViews || limits.maximumImages > XRFrameHardLimits::MaximumImages ||
-            limits.maximumLayers > XRFrameHardLimits::MaximumLayers)
+        if (!ValidActivationLimits(capabilities, plan, limits))
             return Result<XRSessionId>::Failure(MakeError(XRErrors::CapacityExceeded));
         resources_.failStage = failStage;
+
+        struct ResetStage final {
+            Resources &resources;
+
+            explicit ResetStage(Resources &value) noexcept : resources(value) {}
+
+            ResetStage(const ResetStage &) = delete;
+            ResetStage &operator=(const ResetStage &) = delete;
+
+            ~ResetStage() {
+                resources.failStage.reset();
+            }
+        } reset{resources_};
+
         auto activated = sessions_.Activate(capabilities, capabilities.System(), capabilities.Revision(), plan);
         resources_.failStage.reset();
         if (!activated.HasValue())
@@ -61,7 +85,15 @@ namespace Horo::XR {
         plan_ = plan;
         script_.clear();
         cursor_ = 0;
+        previousPrediction_ = {};
         return activated;
+    }
+
+    bool XRFakeRuntime::ValidActivationLimits(const XRCapabilitySnapshot &capabilities, const XRFeaturePlan &plan,
+                                              const XRFrameLimits limits) noexcept {
+        return limits.maximumViews <= capabilities.Limits().maximumViews && limits.maximumViews <= plan.Limits().maximumViews &&
+               limits.maximumViews <= XRFrameHardLimits::MaximumViews && limits.maximumImages <= XRFrameHardLimits::MaximumImages &&
+               limits.maximumLayers <= XRFrameHardLimits::MaximumLayers;
     }
 
     /** @copydoc XRFakeRuntime::ValidateStep */
@@ -135,7 +167,7 @@ namespace Horo::XR {
             return XRFrameStatus::StaleSession;
         if (steps.size() > XRFakeLimits::MaximumSteps)
             return XRFrameStatus::CapacityExceeded;
-        XRRenderPredictionTime previous;
+        XRRenderPredictionTime previous = previousPrediction_;
         for (const auto &step : steps) {
             if (const auto status = ValidateStep(step, session); status != XRFrameStatus::Ok)
                 return status;
@@ -212,32 +244,61 @@ namespace Horo::XR {
         return status;
     }
 
-    /** @copydoc XRFakeRuntime::Step */
-    XRFakeOutcome XRFakeRuntime::Step(const XRSessionId &session) {
+    XRFakeOutcome XRFakeRuntime::BeginStep(const XRSessionId &session) const {
         XRFakeOutcome outcome;
         outcome.nextStep = cursor_;
         outcome.session = sessions_.Snapshot();
-        if (shutdown_) {
+        if (shutdown_)
             outcome.status = XRFrameStatus::Shutdown;
+        else if (!session.IsValid())
+            outcome.status = XRFrameStatus::InvalidInput;
+        else if (session != outcome.session.session)
+            outcome.status = XRFrameStatus::StaleSession;
+        else
+            outcome.status = XRFrameStatus::Ok;
+        return outcome;
+    }
+
+    /** @copydoc XRFakeRuntime::Step */
+    XRFakeOutcome XRFakeRuntime::Step(const XRSessionId &session) {
+        auto outcome = BeginStep(session);
+        if (outcome.status != XRFrameStatus::Ok)
+            return outcome;
+        if (cursor_ >= script_.size()) {
+            outcome.status = XRFrameStatus::Unavailable;
             return outcome;
         }
-        if (!session.IsValid()) {
+        return ConsumeStep(session, script_[cursor_], std::move(outcome));
+    }
+
+    /** @copydoc XRFakeRuntime::Step(const XRSessionId &, const XRFakeStep &) */
+    XRFakeOutcome XRFakeRuntime::Step(const XRSessionId &session, const XRFakeStep &step) {
+        auto outcome = BeginStep(session);
+        if (outcome.status != XRFrameStatus::Ok)
+            return outcome;
+        if (!script_.empty()) {
+            outcome.status = XRFrameStatus::OutOfOrder;
+            return outcome;
+        }
+        outcome.status = ValidateStep(step, session);
+        if (outcome.status != XRFrameStatus::Ok)
+            return outcome;
+        return ConsumeStep(session, step, std::move(outcome));
+    }
+
+    XRFakeOutcome XRFakeRuntime::ConsumeStep(const XRSessionId &session, const XRFakeStep &step, XRFakeOutcome outcome) {
+        if (step.executeFrame && previousPrediction_.IsValid() && step.prediction <= previousPrediction_) {
             outcome.status = XRFrameStatus::InvalidInput;
             return outcome;
         }
-        if (session != outcome.session.session) {
-            outcome.status = XRFrameStatus::StaleSession;
-            return outcome;
-        }
-        if (cursor_ == script_.size())
-            return outcome;
-        const auto &step = script_[cursor_];
         if (step.event && !sessions_.ApplyEvent(session, *step.event).HasValue()) {
             outcome.status = XRFrameStatus::OutOfOrder;
             return outcome;
         }
         outcome.consumed = true;
         outcome.nextStep = ++cursor_;
+        if (step.executeFrame)
+            previousPrediction_ = step.prediction;
         outcome.session = sessions_.Snapshot();
         outcome.status = step.executeFrame ? RunFrame(step, session, outcome) : XRFrameStatus::Ok;
         if (outcome.status == XRFrameStatus::Ok && step.executeFrame)

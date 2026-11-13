@@ -18,7 +18,8 @@ namespace Horo::Physics {
 
     /** @copydoc ValidatePhysicsCapabilities */
     bool ValidatePhysicsCapabilities(const PhysicsCapabilities &capabilities) noexcept {
-        if (capabilities.contractVersion != 1 || capabilities.revision == 0 || capabilities.availability > PhysicsAvailability::Available)
+        if (capabilities.contractVersion != PhysicsCapabilityContractVersion || capabilities.revision == 0 ||
+            capabilities.availability > PhysicsAvailability::Available)
             return false;
         return std::ranges::all_of(capabilities.features, [&capabilities](const auto support) {
             return CoherentSupport(support, capabilities.availability);

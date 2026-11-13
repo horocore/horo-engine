@@ -1,0 +1,15 @@
+{
+  "projectVersion": "0.2.0",
+  "assetId": "00000000-0000-0000-0000-000000000009",
+  "objects": [],
+  "composition": {
+    "variantParent": "00000000-0000-0000-0000-000000000002",
+    "variantAuthoredAgainst": {
+      "projectVersion": "0.2.0",
+      "contentDigest": "sha256:4d2430f05b0ab2e3c255c89f2da8162ff8ef54d62c8b88fe8c35fcad74e57d02"
+    }
+  },
+  "referencedAssets": [
+    "00000000-0000-0000-0000-000000000002"
+  ]
+}

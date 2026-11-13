@@ -10,6 +10,21 @@ namespace Horo::Character {
                    fastPath.eventOverflowCount + fastPath.impulseOverflowCount + fastPath.scratchOverflowCount;
         }
 
+        /** @brief Validate the owner/input frame before taking the non-reentrant tick guard or touching queues. */
+        [[nodiscard]] Result<void> ValidateTickAdmission(const auto &impl, const CharacterFixedTickInput &input) {
+            if (const auto owner = Detail::RequireOwnerThread(impl.ownerThread); owner.HasError())
+                return owner;
+            if (input.metrics != nullptr)
+                input.metrics->snapshot = {};
+            if (impl.state.load() != CharacterWorldState::Active || impl.ticking.load())
+                return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
+            if (input.tick == 0 || input.sceneGeneration != impl.descriptor.sceneGeneration || input.fixedDelta <= Duration{} ||
+                input.tick != impl.closedTick.load() + 1)
+                return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+
+            return Result<void>::Success();
+        }
+
         /** @brief Finalizes one optional attempt even when command resolution exits early. */
         template <typename Impl> class MetricAttempt final {
         public:
@@ -105,15 +120,8 @@ namespace Horo::Character {
 
     /** @copydoc CharacterWorld::AdvanceFixedTick */
     Result<void> CharacterWorld::AdvanceFixedTick(const CharacterFixedTickInput &input) {
-        if (const auto owner = Detail::RequireOwnerThread(impl_->ownerThread); owner.HasError())
-            return owner;
-        if (input.metrics != nullptr)
-            input.metrics->snapshot = {};
-        if (impl_->state.load() != CharacterWorldState::Active || impl_->ticking.load())
-            return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
-        if (input.tick == 0 || input.sceneGeneration != impl_->descriptor.sceneGeneration || input.fixedDelta <= Duration{} ||
-            input.tick != impl_->closedTick.load() + 1)
-            return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+        if (const auto admission = ValidateTickAdmission(*impl_, input); admission.HasError())
+            return admission;
 
         Detail::TickGuard ticking{*impl_};
         MetricAttempt metrics{*impl_, input.metrics, input.tick};
@@ -131,6 +139,8 @@ namespace Horo::Character {
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
         Detail::ObservePhase(input, CharacterTickPhase::ResolveMovement);
         metrics.FinishPhase(CharacterMetricPhase::ResolveMovement);
+        if (impl_->state.load() != CharacterWorldState::Active)
+            return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
 
         impl_->fastPath.Canonicalize();
         Detail::PublishTick(*impl_, input, applied.Value());

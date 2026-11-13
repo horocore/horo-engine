@@ -8,7 +8,7 @@ using Capture = SnapshotResult (Horo::Render::RenderFrameScope::*)(const Horo::R
                                                                    const Horo::Render::RenderGraphSchedule &,
                                                                    const Horo::Render::RenderGraphLifetimePlan &,
                                                                    const Horo::Render::CompiledRenderGraphExecution &,
-                                                                   Horo::Render::RenderGraphInspectionLimits, std::stop_token);
+                                                                   Horo::Render::RenderGraphInspectionLimits, Horo::CancellationToken);
 using Read = SnapshotResult (Horo::Render::RenderFrontend::*)() const;
 static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrameScope::CaptureInspection), Capture>);
 static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrontend::GraphInspectionSnapshot), Read>);

@@ -28,7 +28,7 @@
 
 enum {  // NOSONAR(cpp:S3642) C ABI constant group
     HORO_EXTENSION_ABI_VERSION = 1,
-    HORO_EXTENSION_ABI_MINOR_VERSION = 7,
+    HORO_EXTENSION_ABI_MINOR_VERSION = 8,
     HORO_ASSET_IMPORTER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION_2 = 2,
@@ -426,6 +426,8 @@ using HoroRegisterEditorViewportFunc = HoroExtensionStatus (*)(void *, const str
 typedef HoroExtensionStatus (*HoroRegisterEditorViewportFunc)(void *, const struct HoroEditorViewportDescriptor *);
 #endif
 
+struct HoroExtensionServiceHostApi;
+
 struct HoroExtensionHostApi {
     /** @brief Size of this struct for append-only ABI negotiation. */
     uint32_t structSize;
@@ -447,6 +449,8 @@ struct HoroExtensionHostApi {
     HoroRegisterEditorInspectorFunc registerEditorInspector;
     /** @brief Appended in1.7; test the complete prefix before accessing. */
     HoroRegisterEditorViewportFunc registerEditorViewport;
+    /** @brief ABI1.8; available only after exact service transport negotiation. */
+    const struct HoroExtensionServiceHostApi *services;
 };
 typedef struct HoroExtensionHostApi HoroExtensionHostApi;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
@@ -484,6 +488,7 @@ enum {  // NOSONAR(cpp:S3642) C ABI function requirement bits.
     HORO_EXTENSION_REQUIRES_EDITOR_PAGE = 8,
     HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR = 16,
     HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT = 32,
+    HORO_EXTENSION_REQUIRES_SERVICES = 64,
 };
 
 /**

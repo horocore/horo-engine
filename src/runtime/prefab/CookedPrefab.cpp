@@ -39,12 +39,22 @@ namespace Horo::Prefab {
             });
         }
 
+        /** @brief Admits only actual canonical optional source evidence; absent means
+         * procedural, not inferred provenance. */
+        bool ValidSourceRevision(const std::optional<PrefabSourceRevision> &revision) {
+            if (!revision)
+                return true;
+            const auto parsed = Application::ParseHoroVersion(Application::FormatHoroVersion(revision->projectVersion));
+            return parsed.HasValue() && parsed.Value() == revision->projectVersion && HasDigest(revision->contentDigest);
+        }
+
         /** @brief Resolves a member occurrence without returning mutable storage. */
         [[nodiscard]] bool HasMember(const CookedPrefabData &data, const CookedPrefabMemberSlot slot) noexcept {
             return slot.entity.value < data.entities.size() && slot.member < data.entities[slot.entity.value].members.size();
         }
 
-        /** @brief Validates every cook-owned target and its immutable default before publishing the artifact. */
+        /** @brief Validates every cook-owned target and its immutable default before
+         * publishing the artifact. */
         [[nodiscard]] Result<void> ValidateInitialization(const CookedPrefabData &data) {
             if (data.initialization.size() > MaximumPrefabInitializationValues)
                 return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected));
@@ -69,7 +79,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Rejects nonfinite behavioral values even when provider descriptors are unavailable. */
+        /** @brief Rejects nonfinite behavioral values even when provider descriptors
+         * are unavailable. */
         [[nodiscard]] bool IsFiniteField(const Gameplay::BehaviorField &field) noexcept {
             return std::visit([]<typename Value>(const Value &value) {
                 if constexpr (std::is_same_v<Value, double>)
@@ -82,7 +93,8 @@ namespace Horo::Prefab {
             }, field.value);
         }
 
-        /** @brief Validates portable member envelopes and per-kind stable occurrence uniqueness. */
+        /** @brief Validates portable member envelopes and per-kind stable occurrence
+         * uniqueness. */
         [[nodiscard]] Result<void> ValidateMembers(const CookedPrefabEntity &entity) {
             std::vector<std::pair<std::size_t, std::uint64_t>> identities;
             for (const auto &member : entity.members) {
@@ -114,7 +126,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Checks finite entity state and unique path-free source evidence independently from hierarchy traversal. */
+        /** @brief Checks finite entity state and unique path-free source evidence
+         * independently from hierarchy traversal. */
         [[nodiscard]] Result<void> ValidateEntityProvenance(const CookedPrefabData &data, const std::size_t index,
                                                             const PrefabProjectPolicy &policy) {
             const auto &entity = data.entities[index];
@@ -131,7 +144,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Checks flattened hierarchy, bounded source evidence and member envelopes before encoding. */
+        /** @brief Checks flattened hierarchy, bounded source evidence and member
+         * envelopes before encoding. */
         [[nodiscard]] Result<void> ValidateEntities(const CookedPrefabData &data, const PrefabProjectPolicy &policy) {
             if (data.entities.empty() || data.entities.size() > policy.maximumObjectCount)
                 return Result<void>::Failure(MakeError(PrefabErrors::ObjectCountExceeded));
@@ -155,7 +169,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Validates canonical complete dependencies and explicit external binding declarations. */
+        /** @brief Validates canonical complete dependencies and explicit external
+         * binding declarations. */
         [[nodiscard]] Result<void> ValidateInterfaces(const CookedPrefabData &data, const PrefabProjectPolicy &policy) {
             if (data.dependencies.size() > policy.maximumReferencedAssets)
                 return Result<void>::Failure(MakeError(PrefabErrors::ReferenceCountExceeded));
@@ -177,7 +192,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        /** @brief Checks that every fixup has one owner/property and a valid closed target. */
+        /** @brief Checks that every fixup has one owner/property and a valid closed
+         * target. */
         [[nodiscard]] Result<void> ValidateReferences(const CookedPrefabData &data) {
             for (std::size_t index = 0; index < data.references.size(); ++index) {
                 const auto &reference = data.references[index];
@@ -210,7 +226,8 @@ namespace Horo::Prefab {
                 bytes.push_back(static_cast<std::byte>((value >> shift) & 0xffU));
         }
 
-        /** @brief Reads one envelope word after the fixed header size has been admitted. */
+        /** @brief Reads one envelope word after the fixed header size has been
+         * admitted. */
         [[nodiscard]] std::uint32_t ReadWord(const std::span<const std::byte> bytes, const std::size_t offset) noexcept {
             std::uint32_t value = 0;
             for (std::size_t index = offset; index < offset + 4; ++index)
@@ -221,7 +238,7 @@ namespace Horo::Prefab {
 
     /** @copydoc CookedPrefab::Create */
     Result<CookedPrefab> CookedPrefab::Create(CookedPrefabData candidate, const PrefabLimitProfile &limits) {
-        if (!candidate.assetId.IsValid())
+        if (!candidate.assetId.IsValid() || !ValidSourceRevision(candidate.rootSourceRevision))
             return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::IdentityInvalid));
         auto valid = ValidateInterfaces(candidate, limits.Policy());
         if (valid.HasError())

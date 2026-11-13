@@ -255,18 +255,46 @@ namespace Horo::Physics::Detail {
             return static_cast<std::size_t>(std::distance(bodies.begin(), found));
         }
 
+        struct PreparedColliderBindings final {
+            std::vector<PhysicsQueryMaterial> physical;
+            std::optional<PhysicsSurfaceEvidence> semantic;
+        };
+
+        /** @brief Resolve the entire physical and semantic material closure before shape or native preparation. */
+        Result<PreparedColliderBindings> PrepareColliderBindings(const Runtime::RuntimeSceneDefinition &definition,
+                                                                 Runtime::RuntimeSceneView scene, const ColliderReference &reference,
+                                                                 const PhysicsSurfaceWorldBinding &surfaces) {
+            const auto &collider = *reference.component;
+            std::vector<PhysicsQueryMaterial> materials;
+            for (const auto &material : collider.materials) {
+                auto resolved = ResolveAsset(definition, scene, material.material, PhysicsErrors::MaterialDescriptorInvalid, "material",
+                                             reference.object, collider.id.value);
+                if (resolved.HasError())
+                    return Result<PreparedColliderBindings>::Failure(std::move(resolved).ErrorValue());
+                auto physical = DecodeScenePhysicalMaterial(material, *resolved.Value().type, resolved.Value().bytes);
+                if (physical.HasError())
+                    return Result<PreparedColliderBindings>::Failure(AddActivationContext(std::move(physical).ErrorValue(), "material",
+                                                                                          reference.object, collider.id.value,
+                                                                                          material.material));
+                materials.push_back(physical.Value());
+            }
+            auto semantic = BindColliderSurface(collider, surfaces);
+            if (semantic.HasError())
+                return Result<PreparedColliderBindings>::Failure(
+                    AddActivationContext(std::move(semantic).ErrorValue(), "surface", reference.object, collider.id.value, std::nullopt));
+
+            return Result<PreparedColliderBindings>::Success({std::move(materials), std::move(semantic).Value()});
+        }
+
         [[nodiscard]] Result<PlannedCollider> BuildPlannedCollider(const Runtime::RuntimeSceneDefinition &definition,
                                                                    const Runtime::RuntimeSceneView scene,
-                                                                   const ColliderReference &reference) {
+                                                                   const ColliderReference &reference,
+                                                                   const PhysicsSurfaceWorldBinding &surfaces) {
             const Runtime::ColliderComponent &collider = *reference.component;
-            for (const Runtime::PhysicsColliderMaterialBinding &material : collider.materials) {
-                if (const Result<Runtime::RuntimeSceneAssetView> resolved =
-                        ResolveAsset(definition, scene, material.material, PhysicsErrors::MaterialDescriptorInvalid, "material",
-                                     reference.object, collider.id.value);
-                    resolved.HasError())
-                    return Result<PlannedCollider>::Failure(resolved.ErrorValue());
-            }
-
+            auto bindings = PrepareColliderBindings(definition, scene, reference, surfaces);
+            if (bindings.HasError())
+                return Result<PlannedCollider>::Failure(std::move(bindings).ErrorValue());
+            auto ownedBindings = std::move(bindings).Value();
             PhysicsShapeDescriptor geometry;
             if (const auto *analytic = std::get_if<Runtime::PhysicsAnalyticCollider>(&collider.source)) {
                 geometry = ToPhysicsShape(*analytic);
@@ -298,7 +326,9 @@ namespace Horo::Physics::Detail {
                                                                     .geometry = std::move(resolvedShape.geometry),
                                                                     .localPose = resolvedShape.localPose,
                                                                     .profile = collider.collisionProfile,
-                                                                    .sensor = collider.sensor});
+                                                                    .sensor = collider.sensor,
+                                                                    .materials = std::move(ownedBindings.physical),
+                                                                    .surface = std::move(ownedBindings.semantic)});
         }
 
         [[nodiscard]] std::vector<ColliderReference> CollectEnabledColliders(const std::vector<Runtime::PhysicsSceneComponentView> &views) {
@@ -316,13 +346,13 @@ namespace Horo::Physics::Detail {
 
         [[nodiscard]] Result<void> AppendPlannedCollider(const Runtime::RuntimeSceneDefinition &definition,
                                                          const Runtime::RuntimeSceneView scene, const ColliderReference &reference,
-                                                         std::vector<PlannedBody> &bodies) {
+                                                         std::vector<PlannedBody> &bodies, const PhysicsSurfaceWorldBinding &surfaces) {
             const Runtime::ColliderComponent &collider = *reference.component;
             PlannedBody *body = FindPlannedBody(bodies, collider.body);
             if (body == nullptr)
                 return ContextFailure<void>(PhysicsErrors::DescriptorInvalid, "collider", reference.object, collider.id.value, std::nullopt,
                                             "The enabled collider references a disabled or absent authored body.");
-            Result<PlannedCollider> planned = BuildPlannedCollider(definition, scene, reference);
+            Result<PlannedCollider> planned = BuildPlannedCollider(definition, scene, reference, surfaces);
             if (planned.HasError())
                 return Result<void>::Failure(planned.ErrorValue());
             if (!body->colliders.empty() && body->sensor != planned.Value().sensor)
@@ -340,10 +370,11 @@ namespace Horo::Physics::Detail {
         [[nodiscard]] Result<void> AppendPlannedColliders(const Runtime::RuntimeSceneDefinition &definition,
                                                           const Runtime::RuntimeSceneView scene,
                                                           const std::vector<Runtime::PhysicsSceneComponentView> &views,
-                                                          std::vector<PlannedBody> &bodies) {
+                                                          std::vector<PlannedBody> &bodies, const PhysicsSurfaceWorldBinding &surfaces) {
             const std::vector<ColliderReference> colliders = CollectEnabledColliders(views);
             for (const ColliderReference &reference : colliders) {
-                if (const Result<void> appended = AppendPlannedCollider(definition, scene, reference, bodies); appended.HasError())
+                if (const Result<void> appended = AppendPlannedCollider(definition, scene, reference, bodies, surfaces);
+                    appended.HasError())
                     return appended;
             }
             for (const PlannedBody &body : bodies)
@@ -401,8 +432,10 @@ namespace Horo::Physics::Detail {
     }
 
     /** @copydoc BuildPhysicsScenePlan */
-    Result<PhysicsScenePlan> BuildPhysicsScenePlan(const Runtime::RuntimeSceneDefinition &definition,
-                                                   const Runtime::RuntimeSceneView scene) {
+    Result<PhysicsScenePlan> BuildPhysicsScenePlan(const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene,
+                                                   const PhysicsSurfaceWorldBinding &surfaces) {
+        if (auto valid = ValidatePhysicsSurfaceWorldBinding(surfaces); valid.HasError())
+            return Result<PhysicsScenePlan>::Failure(std::move(valid).ErrorValue());
         const Result<std::vector<Runtime::PhysicsSceneComponentView>> views = BuildPhysicsComponentViews(definition);
         if (views.HasError())
             return Result<PhysicsScenePlan>::Failure(views.ErrorValue());
@@ -415,7 +448,8 @@ namespace Horo::Physics::Detail {
         PhysicsScenePlan plan;
         plan.characters = std::move(characters).Value();
         plan.bodies = std::move(bodies).Value();
-        if (const Result<void> colliders = AppendPlannedColliders(definition, scene, views.Value(), plan.bodies); colliders.HasError())
+        if (const Result<void> colliders = AppendPlannedColliders(definition, scene, views.Value(), plan.bodies, surfaces);
+            colliders.HasError())
             return Result<PhysicsScenePlan>::Failure(colliders.ErrorValue());
         if (const Result<void> constraints = AppendPlannedConstraints(views.Value(), plan.bodies, plan.constraints); constraints.HasError())
             return Result<PhysicsScenePlan>::Failure(constraints.ErrorValue());

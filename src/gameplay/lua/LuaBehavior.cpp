@@ -1,5 +1,6 @@
 #include "Horo/Gameplay/LuaBehavior.h"
 
+#include "GameplayVfxHostAccess.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Physics/CharacterErrors.h"
@@ -11,6 +12,7 @@
 #include "LuaReplicationDeclaration.h"
 #include "LuaRuntimeUiBinding.h"
 #include "LuaRuntimeUiProtected.h"
+#include "LuaVfxBinding.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -258,8 +260,11 @@ namespace Horo::Gameplay {
         }
 
         void PushContext(lua_State *state, BehaviorContext &context, const std::shared_ptr<const GameplayPhysicsContext> &physics,
-                         const std::shared_ptr<const GameplayNavigationContext> &navigation) const {
+                         const std::shared_ptr<const GameplayNavigationContext> &navigation,
+                         const std::shared_ptr<const GameplayVfxContext> &vfx) const {
             lua_newtable(state);
+            Detail::PushLuaVfxContext(state, vfx);
+            lua_setfield(state, -2, "vfx");
             Detail::PushLuaNavigationContext(state, navigation, vm_.navigationToken);
             lua_setfield(state, -2, "navigation");
             Detail::PushLuaPhysicsContext(state, physics);
@@ -380,6 +385,24 @@ namespace Horo::Gameplay {
             lua_setfield(state, -2, "fields");
         }
 
+        /** @brief Marshals only borrowed callback arguments inside the protected Lua boundary. */
+        static int PushCallbackArguments(lua_State *state, const std::optional<double> &delta, const GameplayInputAction *action,
+                                         const GameplayEvent *event) {
+            if (delta.has_value()) {
+                lua_pushnumber(state, *delta);
+                return 2;
+            }
+            if (action != nullptr) {
+                PushAction(state, *action);
+                return 2;
+            }
+            if (event != nullptr) {
+                PushEvent(state, *event);
+                return 2;
+            }
+            return 1;
+        }
+
         void Call(const char *name, BehaviorContext &context, const std::optional<double> delta = std::nullopt,
                   const GameplayInputAction *action = nullptr, const GameplayEvent *event = nullptr) {
             if (!EnsureLoaded())
@@ -397,33 +420,27 @@ namespace Horo::Gameplay {
             // Every shared owner lives outside the protected inner context constructor and callback.
             const auto physics = context.PhysicsContext();
             const auto navigation = context.NavigationContext();
+            const auto vfx = context.VfxContext();
             try {
                 BindCharacter(context);
-                Detail::UiScript::Protected(state, [this, &context, &physics, &navigation, name, delta, action, event](lua_State *inner) {
+                Detail::UiScript::Protected(state,
+                                            [this, &context, &physics, &navigation, &vfx, name, delta, action, event](lua_State *inner) {
                     lua_rawgeti(inner, LUA_REGISTRYINDEX, vm_.behaviorRef);
                     lua_getfield(inner, -1, name);
                     if (lua_isnil(inner, -1))
                         return 0;
-                    PushContext(inner, context, physics, navigation);
-                    int argumentCount = 1;
-                    if (delta.has_value()) {
-                        lua_pushnumber(inner, *delta);
-                        ++argumentCount;
-                    } else if (action != nullptr) {
-                        PushAction(inner, *action);
-                        ++argumentCount;
-                    } else if (event != nullptr) {
-                        PushEvent(inner, *event);
-                        ++argumentCount;
-                    }
+                    PushContext(inner, context, physics, navigation, vfx);
+                    const int argumentCount = PushCallbackArguments(inner, delta, action, event);
                     lua_call(inner, argumentCount, 0);
                     return 0;
                 });
             } catch (const Detail::UiScript::LuaTransportFailure &) {
+                Detail::GameplayVfxHostAccess::AbortCallback(vfx);
                 const std::string message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : "Lua callback failed.";
                 lua_pop(state, 1);
                 Fail(message);
             } catch (const std::bad_alloc &) {
+                Detail::GameplayVfxHostAccess::AbortCallback(vfx);
                 Fail("Lua callback context exceeded its memory capacity.");
             }
         }

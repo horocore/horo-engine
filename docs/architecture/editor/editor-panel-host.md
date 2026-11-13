@@ -578,6 +578,16 @@ sections:
   - Opens files through: typed editor/application commands
   - Subscribes to: `ProjectOpenedEvent`
 
+The embedded content browser exposes the existing `Assets` and `source` roots
+as **Assets** and **Sources**. The controller's directory projection publishes
+only existing roots that satisfy project containment and symlink policy. Root
+selection and breadcrumbs use the same canonical navigation/history commands;
+paint code does not enumerate the filesystem. Native files retain their actual
+extensions and open through the source document service. They do not acquire
+asset identities, sidecars or import authority merely by appearing in this view.
+Source-write lease files (`*.horo-source.lock`) stay on disk but are omitted from
+cards and visible-child counts.
+
 ## Embedded Source Editor
 
 The editor workspace includes source-editing surfaces for project scripts,
@@ -651,6 +661,11 @@ Required source editor constraints:
 - large files use bounded memory and may open in read-only or external-editor
   mode until a streaming editor contract exists;
 - editor shortcuts participate in the workspace shortcut conflict policy.
+
+A source surface releases its active text-input ID on a primary press outside
+the surface before later-drawn dock controls process that press. An in-progress
+selection drag retains pointer ownership until release. Keyboard capture must
+not make another panel require a second click.
 
 ### Source syntax and theme projection
 
@@ -1319,7 +1334,10 @@ single/batch/close outcomes remain queryable on the controller; presentation dec
 how to ask the user and display each error without writing files itself. Save As
 retargets the workspace registry through `SourceFileOpenService`, preserving instance
 identity. No widget teardown, presentation detach or implicit watcher event authorizes
-save, overwrite, or dirty discard.
+save, overwrite, or dirty discard. Save As without overwrite consent requires an
+absent destination at both disk checks around private staging. A destination that
+appears during staging is a conflict even if its bytes match the original source
+base; explicit consent must name the observed destination bytes before retrying.
 
 ### Source editing history and view restoration (HORO-223)
 
@@ -1364,3 +1382,38 @@ metadata. Existing value/temporary call sites need no source migration, but
 consumers must rebuild for the changed C++ signatures; function-pointer adapters
 must use const-reference parameters. The staged public-header consumer exercises
 all five planners alongside the existing source service consumers.
+
+## Add Component contribution catalog
+
+The Inspector's private `AddComponentRegistry` owns only menu presentation
+metadata. Static definitions are composed explicitly from per-component files
+under `panels/inspector/add_component/definitions/`; there is no ambient registrar
+or registration during descriptor validation. Dynamic project behavior entries
+are projections of `ProjectGameplayRegistry`, fenced by project scope and owner
+publication revision and revoked on panel detach. They do not own schemas or
+implementation callbacks. Existing `Gameplay::ComponentRegistry` remains the
+serialization/inspection authority for project gameplay components.
+
+The generic menu resolves labels in the current locale and evaluates availability
+against the current selection/draft. Selection returns typed commands/intents;
+canonical controllers or detached Physics sessions retain mutation and admission
+ownership. Registry refreshes perform no filesystem discovery, and unchanged
+publication revisions do not rebuild metadata. Duplicate/invalid contributions
+fail before drawing, preserving the previous owned catalog for diagnostics.
+
+See [component menu registry](../../guides/editor-component-menu-registry.md) for
+static composition and project-script publication details.
+
+### Built-in Inspector field presentation
+
+Built-in standard component fields use target-private `InspectorFields::Schema<Model>`
+metadata under `panels/inspector/component_fields/definitions/`. This catalog binds
+static localization/control metadata to typed draft members, including current-model
+visibility/validation and display-unit conversion. Canonical component constructors
+remain the single source of default authored values. Metadata construction is inert;
+no field discovery invokes a registrar, service locator, backend or document mutation.
+The generic drawer returns change/commit events to the existing Inspector sessions;
+preview/cancellation, validation, history and Physics Apply/Discard authority remain
+unchanged. Composite source/identity/variant editors retain explicit typed adapters.
+Dynamic behavior fields and extension inspector declarations retain their existing
+schema/publication owners; this catalog is not a parallel serialization schema.

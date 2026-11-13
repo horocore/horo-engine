@@ -7,6 +7,11 @@
 #include <limits>
 
 namespace Horo::Render::Detail {
+    /** @copydoc RenderSubmissionAllocator::WasAdmittedPoint */
+    bool RenderSubmissionAllocator::WasAdmittedPoint(const RenderTimelinePoint point) const noexcept {
+        return WasAdmitted(point);
+    }
+
     namespace {
         /** @brief Keeps malformed, exhausted and colliding records outside native admission. */
         Error InvalidSubmission() {

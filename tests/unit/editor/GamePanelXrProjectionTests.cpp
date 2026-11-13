@@ -122,4 +122,24 @@ namespace Horo::Editor::Tests {
         CHECK(DrawImages(gui, panel, model, old) == 0);
         panel.OnDetach();
     }
+
+    TEST_CASE("Simulator Game panel hides stale texture when consumed view evidence disappears", "[unit][editor][gui][xr][simulator]") {
+        EditorGuiContextFixture gui;
+        LogicalViewport viewport;
+        GamePanel panel;
+        PanelContext context{gui.editorEvents, nullptr, &viewport};
+        panel.OnAttach(context);
+        EditorWorkspaceViewModel model;
+        model.playState = EditorPlayState::Playing;
+        model.playViewSource = EditorPlayViewSource::Simulator;
+        model.simulatorPreviewAvailable = true;
+        CHECK(DrawImages(gui, panel, model, viewport.identity) == 0);
+        viewport.ready = true;
+        CHECK(DrawImages(gui, panel, model, viewport.identity) != 0);
+        model.simulatorPreviewAvailable = false;
+        CHECK(DrawImages(gui, panel, model, viewport.identity) == 0);
+        model.simulatorPreviewAvailable = true;
+        CHECK(DrawImages(gui, panel, model, viewport.identity) != 0);
+        panel.OnDetach();
+    }
 }  // namespace Horo::Editor::Tests

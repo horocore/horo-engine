@@ -1,10 +1,13 @@
 #pragma once
 
 /** @file PrefabSpawnService.h
- * @brief Bounded tick-addressed cooked prefab operations and revocable Gameplay capability.
+ * @brief Bounded tick-addressed cooked prefab operations and revocable Gameplay
+ * capability.
  */
 
 #include "Horo/Gameplay/ComponentRegistry.h"
+#include "Horo/Prefab/PrefabOverrideOperations.h"
+#include "Horo/Prefab/PrefabPersistenceOwner.h"
 #include "Horo/Prefab/PrefabTemplateProvider.h"
 
 #include <algorithm>
@@ -16,19 +19,24 @@ namespace Horo::Prefab {
     class PrefabSpawnService;
 
     /** @brief Explicit host-owned inert codec for built-in cooked members.
-     * @details Borrowed only synchronously on the Scene owner lane during bounded preparation.
-     * The host outlives the spawn service; neither a queued transaction nor a template lease retains
-     * this interface. Implementations decode typed values, never resolve source files or select backends.
+     * @details Borrowed only synchronously on the Scene owner lane during bounded
+     * preparation. The host outlives the spawn service; neither a queued
+     * transaction nor a template lease retains this interface. Implementations
+     * decode typed values, never resolve source files or select backends.
      */
     class PrefabComponentProjector {
     public:
         virtual ~PrefabComponentProjector() = default;
         /** @brief Projects one complete member through the canonical component codec.
          * @param source Immutable cooked occurrence and its portable payload.
-         * @param destination Candidate entity components; unchanged on unsupported type or failure.
-         * @param primitiveMesh Candidate primitive geometry; unchanged on unsupported type or failure.
-         * @return True for one projected built-in, false for an unrecognized custom type, or typed malformed/unsupported failure.
-         * @throws std::bad_alloc When bounded candidate storage cannot be allocated; no Scene state is published.
+         * @param destination Candidate entity components; unchanged on unsupported
+         * type or failure.
+         * @param primitiveMesh Candidate primitive geometry; unchanged on unsupported
+         * type or failure.
+         * @return True for one projected built-in, false for an unrecognized custom
+         * type, or typed malformed/unsupported failure.
+         * @throws std::bad_alloc When bounded candidate storage cannot be allocated;
+         * no Scene state is published.
          */
         [[nodiscard]] virtual Result<bool> Project(const RawComponentPayload &source, Runtime::RuntimeComponentSet &destination,
                                                    std::optional<Runtime::PrimitiveMeshDescriptor> &primitiveMesh) const = 0;
@@ -40,12 +48,18 @@ namespace Horo::Prefab {
         struct PrefabInstanceState;
     }  // namespace Detail
 
-    /** @brief Read-only identity of one complete spawned group; never mutable Scene storage. */
+    /** @brief Read-only identity of one complete spawned group; never mutable Scene
+     * storage. */
     class PrefabInstance final {
     public:
         PrefabInstance() = default;
-        /** @brief Returns the generation-qualified root. @return Invalid for an empty instance. */
+        /** @brief Returns the generation-qualified root. @return Invalid for an empty
+         * instance. */
         [[nodiscard]] Runtime::EntityRef Root() const noexcept;
+        /** @brief Returns the actual durable occurrence for semantic persistence, even after this runtime cookie becomes stale.
+         * @return Exact issued Save identity, or absence for an empty/ephemeral instance. Identity alone grants no mutation.
+         */
+        [[nodiscard]] std::optional<Runtime::SavePrefabInstanceId> PersistentId() const noexcept;
 
     private:
         friend class PrefabSpawnService;
@@ -54,15 +68,18 @@ namespace Horo::Prefab {
         std::shared_ptr<const Detail::PrefabInstanceState> state_;
     };
 
-    /** @brief Explicit copied binding to one declared external interface; separate from initialization. */
+    /** @brief Explicit copied binding to one declared external interface; separate
+     * from initialization. */
     struct PrefabRuntimeBinding final {
         PrefabPropertyId id;
         Runtime::EntityRef target;
     };
 
-    /** @brief Copied, bounded creation input. Placement is the root's local transform relative to the optional parent.
-     * notBeforeTick addresses the first eligible safe point, not asynchronous load completion. The operation expires
-     * after 64 ticks beyond that point. Initialization IDs are runtime declarations, never authoring paths/overrides.
+    /** @brief Copied, bounded creation input. Placement is the root's local
+     * transform relative to the optional parent. notBeforeTick addresses the first
+     * eligible safe point, not asynchronous load completion. The operation expires
+     * after 64 ticks beyond that point. Initialization IDs are runtime
+     * declarations, never authoring paths/overrides.
      */
     struct PrefabSpawnRequest final {
         PrefabTemplateLoadRequest source;
@@ -71,9 +88,11 @@ namespace Horo::Prefab {
         std::uint64_t notBeforeTick{1};
         std::vector<PrefabInitializationValue> initialization;
         std::vector<PrefabRuntimeBinding> bindings;
+        std::optional<PrefabValueOverrideSet> overrides; /**< Complete canonical cooked-baseline deltas, separate from initialization. */
     };
 
-    /** @brief Owner-lane observable operation states; only Cancel may run on another thread. */
+    /** @brief Owner-lane observable operation states; only Cancel may run on
+     * another thread. */
     enum class PrefabSpawnState {
         Pending,
         Committed,
@@ -81,17 +100,22 @@ namespace Horo::Prefab {
         Cancelled
     };
 
-    /** @brief Retainable operation observation with no service/Scene/provider lifetime requirement. */
+    /** @brief Retainable operation observation with no service/Scene/provider
+     * lifetime requirement. */
     class PrefabOperation final {
     public:
         PrefabOperation() = default;
-        /** @brief Observes the last owner-lane completion. @return Failed for an empty handle. */
+        /** @brief Observes the last owner-lane completion. @return Failed for an
+         * empty handle. */
         [[nodiscard]] PrefabSpawnState State() const noexcept;
-        /** @brief Obtains the committed group for a spawn operation. @return Group or original typed failure/not-ready. */
+        /** @brief Obtains the committed group for a spawn operation. @return Group or
+         * original typed failure/not-ready. */
         [[nodiscard]] Result<PrefabInstance> Spawned() const;
-        /** @brief Borrows the original typed operation error. @return Null for pending/committed work. */
+        /** @brief Borrows the original typed operation error. @return Null for
+         * pending/committed work. */
         [[nodiscard]] const Error *Failure() const noexcept;
-        /** @brief Requests cancellation before publication; never blocks or joins work. */
+        /** @brief Requests cancellation before publication; never blocks or joins
+         * work. */
         void Cancel() const noexcept;
 
     private:
@@ -99,7 +123,8 @@ namespace Horo::Prefab {
         std::shared_ptr<Detail::PrefabSpawnOperation> operation_;
     };
 
-    /** @brief Explicit trusted module policy and unique Scene incarnation selected by application composition. */
+    /** @brief Explicit trusted module policy and unique Scene incarnation selected
+     * by application composition. */
     struct GameplayPrefabBinding final {
         std::string moduleId;
         Runtime::SceneRuntimeId scene;
@@ -107,11 +132,14 @@ namespace Horo::Prefab {
         bool permissionGranted{};
         std::optional<std::vector<Gameplay::BehaviorTypeId>> behaviorAllowlist{};
 
-        /**< Explicit registry-owned principals. Absent uses the module prefix; present empty authorizes no behavior. */
+        /**< Explicit registry-owned principals. Absent uses the module prefix;
+         * present empty authorizes no behavior. */
 
-        /** @brief Checks exact host-supplied registry principals, or the default module namespace.
+        /** @brief Checks exact host-supplied registry principals, or the default
+         * module namespace.
          * @param type Frozen registered behavior identity.
-         * @return Whether this binding authorizes that behavior to receive a derived capability.
+         * @return Whether this binding authorizes that behavior to receive a derived
+         * capability.
          */
         [[nodiscard]] bool AdmitsBehavior(const Gameplay::BehaviorTypeId &type) const noexcept {
             if (behaviorAllowlist)
@@ -123,12 +151,15 @@ namespace Horo::Prefab {
 }  // namespace Horo::Prefab
 
 namespace Horo::Gameplay {
-    /** @brief Copiable, explicitly granted cooked-prefab capability. It retains no mutable Scene or provider.
-     * Requests run only on the service owner lane. Revoke is an atomic fence safe on any thread; copied clients and
-     * pending Scene transactions observe it. Destruction revokes the module scope before owner teardown.
+    /** @brief Copiable, explicitly granted cooked-prefab capability. It retains no
+     * mutable Scene or provider. Requests run only on the service owner lane.
+     * Revoke is an atomic fence safe on any thread; copied clients and pending
+     * Scene transactions observe it. Destruction revokes the module scope before
+     * owner teardown.
      */
     class GameplayPrefabContext final {
-        /** @brief Construction authority retained only by the admitted service and derived-client factory. */
+        /** @brief Construction authority retained only by the admitted service and
+         * derived-client factory. */
         class ConstructionKey final {
             friend class GameplayPrefabContext;
             friend class Prefab::PrefabSpawnService;
@@ -136,8 +167,10 @@ namespace Horo::Gameplay {
         };
 
     public:
-        /** @brief Constructs an authorized client through shared allocation without exposing construction authority.
-         * @param key Private authority created only by the service or derived-client factory.
+        /** @brief Constructs an authorized client through shared allocation without
+         * exposing construction authority.
+         * @param key Private authority created only by the service or derived-client
+         * factory.
          * @param state Retained service identity and revocable owner-lane state.
          * @param binding Trusted host policy, already admitted against this state.
          * @param scope Unique module scope identity.
@@ -153,33 +186,48 @@ namespace Horo::Gameplay {
         /** @brief Queues bounded cooked-template preparation and creation.
          * @param request Complete owned typed input.
          * @param cancellation External operation ancestry.
-         * @return Observation handle or typed admission failure without accepted work.
+         * @return Observation handle or typed admission failure without accepted
+         * work.
          */
         [[nodiscard]] Result<Prefab::PrefabOperation> Spawn(const Prefab::PrefabSpawnRequest &request,
                                                             const CancellationToken &cancellation = {}) const;
-        /** @brief Queues retirement of a group created by this exact service and module scope.
-         * @param instance Committed group identity; arbitrary entities are not accepted.
+        /** @brief Queues retirement of a group created by this exact service and
+         * module scope.
+         * @param instance Committed group identity; arbitrary entities are not
+         * accepted.
          * @param notBeforeTick First eligible safe point, bounded to 64 ticks ahead.
          * @param cancellation External operation ancestry.
          * @return Observation handle or typed rejection without mutation.
          */
         [[nodiscard]] Result<Prefab::PrefabOperation> Despawn(const Prefab::PrefabInstance &instance, std::uint64_t notBeforeTick,
                                                               const CancellationToken &cancellation = {}) const;
-        /** @brief Reads the admitted Scene owner's current fixed tick without mutating or discovering services.
-         * @return Exact owner tick (zero before simulation), or typed revoked/wrong-lane/unavailable-Scene failure.
-         * @details Owner-lane only. Callers schedule against this clock rather than a module-local callback counter;
-         * use tick one for requests submitted before the first simulation tick. The query performs no allocation on success.
+        /** @brief Acquires a fresh ordinary current-scope capability for a durable live occurrence owned by this module.
+         * @param instance Durable occurrence identity. @return New generation-correct handle or typed revoked/foreign/tombstone failure.
+         * @details Uses the same bounded Save inventory and actual current members; retained pre-Load handles remain stale.
+         */
+        [[nodiscard]] Result<Prefab::PrefabInstance> FindPersistent(Runtime::SavePrefabInstanceId instance) const;
+        /** @brief Reads the admitted Scene owner's current fixed tick without
+         * mutating or discovering services.
+         * @return Exact owner tick (zero before simulation), or typed
+         * revoked/wrong-lane/unavailable-Scene failure.
+         * @details Owner-lane only. Callers schedule against this clock rather than a
+         * module-local callback counter; use tick one for requests submitted before
+         * the first simulation tick. The query performs no allocation on success.
          */
         [[nodiscard]] Result<std::uint64_t> CurrentTick() const;
-        /** @brief Permanently closes this module grant before unload, failure or play stop. */
+        /** @brief Permanently closes this module grant before unload, failure or play
+         * stop. */
         void Revoke() const noexcept;
         /** @brief Borrows immutable explicit routing. @return Exact host grant. */
         [[nodiscard]] const Prefab::GameplayPrefabBinding &Binding() const noexcept;
-        /** @brief Resolves one declared reference interface from an existing committed member.
+        /** @brief Resolves one declared reference interface from an existing
+         * committed member.
          * @param owner Generation-qualified owning entity, never a mutable borrow.
          * @param member Exact existing member schema/occurrence.
-         * @param property Cook-declared reference identity, separate from initialization IDs.
-         * @return Copied typed reference or typed revoked/undeclared/unavailable-target failure. Optional absence is Unbound.
+         * @param property Cook-declared reference identity, separate from
+         * initialization IDs.
+         * @return Copied typed reference or typed
+         * revoked/undeclared/unavailable-target failure. Optional absence is Unbound.
          */
         [[nodiscard]] Result<Runtime::RuntimeResolvedGroupReference> Reference(Runtime::EntityRef owner,
                                                                                const Runtime::RuntimeGroupMemberIdentity &member,
@@ -188,9 +236,11 @@ namespace Horo::Gameplay {
     private:
         friend class Prefab::PrefabSpawnService;
         friend class BehaviorRuntime;
-        /** @brief Derives an instance client once at creation, preserving immutable Scene-owned spawn lineage.
+        /** @brief Derives an instance client once at creation, preserving immutable
+         * Scene-owned spawn lineage.
          * @param entity Exact committed attachment owner.
-         * @return Child client or typed stale/lineage failure; neither module code nor callbacks may reset lineage.
+         * @return Child client or typed stale/lineage failure; neither module code
+         * nor callbacks may reset lineage.
          */
         [[nodiscard]] Result<std::shared_ptr<const GameplayPrefabContext>> ForEntity(Runtime::EntityRef entity) const;
         std::shared_ptr<Prefab::Detail::PrefabSpawnState> state_;
@@ -202,34 +252,71 @@ namespace Horo::Gameplay {
 }  // namespace Horo::Gameplay
 
 namespace Horo::Prefab {
-    /** @brief Scene-owner-lane runtime operations over explicitly composed cooked provider and Scene service.
-     * Borrowed authorities outlive this service. Hosts advance it before Scene's lifecycle safe point, after updating
-     * the fixed tick. One complete transaction is queued at a time. At most 32 pending and 128 retained operations
-     * and 32 module scopes are admitted; no waiting, source parsing, global discovery or behavior hooks occur here.
+    /** @brief Scene-owner-lane runtime operations over explicitly composed cooked
+     * provider and Scene service. Borrowed authorities outlive this service. Hosts
+     * advance it before Scene's lifecycle safe point, after updating the fixed
+     * tick. One complete transaction is queued at a time. At most 32 pending and
+     * 128 retained operations and 32 module scopes are admitted; no waiting, source
+     * parsing, global discovery or behavior hooks occur here.
      */
     class PrefabSpawnService final : public Runtime::RuntimeLifecycleParticipant {
     public:
-        /** @brief Captures one active Scene incarnation and frozen optional custom component registry.
-         * @param provider Verified runtime template authority, outliving this service.
+        /** @brief Captures one active Scene incarnation and frozen optional custom
+         * component registry.
+         * @param provider Verified runtime template authority, outliving this
+         * service.
          * @param scenes Scene transaction authority, outliving this service.
-         * @param components Frozen metadata authority for opaque custom components; null rejects those members.
-         * @param projector Explicit borrowed built-in codec, outliving this service; null admits no built-in projection.
+         * @param components Frozen metadata authority for opaque custom components;
+         * null rejects those members.
+         * @param persistence Optional actual host Save identity owner; absence
+         * retains ephemeral spawn behavior.
+         * @param projector Explicit borrowed built-in codec, outliving this service;
+         * null admits no built-in projection.
          */
         PrefabSpawnService(PrefabTemplateProvider &provider, Runtime::RuntimeSceneService &scenes,
-                           const Gameplay::ComponentRegistry *components = nullptr, const PrefabComponentProjector *projector = nullptr);
+                           const Gameplay::ComponentRegistry *components = nullptr, const PrefabComponentProjector *projector = nullptr,
+                           std::shared_ptr<IPrefabPersistenceOwner> persistence = {},
+                           std::shared_ptr<const PrefabValueSchemaSnapshot> schemas = {});
+        /** @brief Prepares a Scene-owned service for one actual unpublished candidate, without starting or publishing it.
+         * @param provider Existing host-owned verified template provider. @param scenes Existing canonical Scene service.
+         * @param candidate Actual private candidate supplied by Scene preparation; it outlives this service through shutdown.
+         * @param components Actual frozen component registry when used. @param projector Actual host built-in codec.
+         * @param persistence Actual existing Save identity owner. @param schemas Explicit actual delta schemas.
+         * @param initialTick Actual current host fixed-step cursor, not a saved/generated counter; commands retain existing bounded tick
+         * policy.
+         * @return Cold service; attachment binding may read this candidate, while ALL commands reject until actual publication.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<PrefabSpawnService>> PrepareForScene(
+            PrefabTemplateProvider &provider, Runtime::RuntimeSceneService &scenes, Runtime::RuntimeScene &candidate,
+            const Gameplay::ComponentRegistry *components = nullptr, const PrefabComponentProjector *projector = nullptr,
+            std::shared_ptr<IPrefabPersistenceOwner> persistence = {}, std::shared_ptr<const PrefabValueSchemaSnapshot> schemas = {},
+            std::uint64_t initialTick = 0);
         ~PrefabSpawnService() override;
         PrefabSpawnService(const PrefabSpawnService &) = delete;
         PrefabSpawnService &operator=(const PrefabSpawnService &) = delete;
+        /** @brief Installs the actual host Save identity owner once, before any accepted structural prefab queue.
+         * @param persistence Existing activation's complete durable metadata owner; non-null and Scene-qualified by its preparation.
+         * @return Success (including the identical already-installed owner), or typed late/foreign/closed rejection without mutation.
+         * @details Pending unsubmitted loads are allowed so OnCreate requests are covered before their first safe-point commit.
+         * Existing ephemeral groups are never assigned reconstructed IDs after publication.
+         */
+        [[nodiscard]] Result<void> InstallPersistenceOwner(std::shared_ptr<IPrefabPersistenceOwner> persistence);
         /** @brief Admits an explicitly permitted module to this exact active Scene.
-         * @param binding Trusted host policy and routing; never inferred from a service locator.
+         * @param binding Trusted host policy and routing; never inferred from a
+         * service locator.
          * @return Revocable module capability or typed admission failure.
-         * @details Const preserves service routing identity; admission mutates shared owner-lane state and is not thread-safe.
+         * @details Const preserves service routing identity; admission mutates shared
+         * owner-lane state and is not thread-safe.
          */
         [[nodiscard]] Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> Acquire(GameplayPrefabBinding binding) const;
-        /** @brief Advances bounded load/completion work and at most one eligible Scene transaction.
-         * @param tick Monotonic committed fixed tick; zero is allowed only before the first simulation tick.
-         * @return Owner-lane/tick failure; individual operations preserve their own typed failure.
-         * @details Const preserves service routing identity; the shared runtime state and Scene queue may change.
+        /** @brief Advances bounded load/completion work and at most one eligible
+         * Scene transaction.
+         * @param tick Monotonic committed fixed tick; zero is allowed only before the
+         * first simulation tick.
+         * @return Owner-lane/tick failure; individual operations preserve their own
+         * typed failure.
+         * @details Const preserves service routing identity; the shared runtime state
+         * and Scene queue may change.
          */
         [[nodiscard]] Result<void> Advance(std::uint64_t tick) const;
         /** @copydoc Runtime::RuntimeLifecycleParticipant::Startup */
@@ -238,7 +325,8 @@ namespace Horo::Prefab {
         [[nodiscard]] Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override;
         /** @copydoc Runtime::RuntimeLifecycleParticipant::OnFixedUpdate */
         [[nodiscard]] Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override;
-        /** @brief Revokes pending publication and detaches borrowed authorities; retained handles stay safe. */
+        /** @brief Revokes pending publication and detaches borrowed authorities;
+         * retained handles stay safe. */
         void Shutdown() noexcept override;
 
     private:

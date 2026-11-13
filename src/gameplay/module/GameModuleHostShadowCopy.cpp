@@ -1,4 +1,5 @@
 #include "GameModuleHostDetail.h"
+#include "Horo/Foundation/PathUtils.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 
@@ -6,10 +7,13 @@
 #include <atomic>
 #include <chrono>
 #include <format>
+#include <string>
 #include <system_error>
 
 namespace Horo::Gameplay {
     namespace {
+        using Foundation::Paths::NativeApiPath;
+
         [[nodiscard]] bool IsSafeAbsolutePath(const std::filesystem::path &path) noexcept {
             return !path.empty() && path.is_absolute() && std::ranges::none_of(path, [](const std::filesystem::path &part) {
                 return part == "..";
@@ -22,7 +26,7 @@ namespace Horo::Gameplay {
 
         [[nodiscard]] Result<std::filesystem::path> PrepareShadowRoot(const std::filesystem::path &shadowRoot) {
             std::error_code error;
-            std::filesystem::create_directories(shadowRoot, error);  // NOSONAR
+            std::filesystem::create_directories(NativeApiPath(shadowRoot), error);  // NOSONAR
             if (error)
                 return Result<std::filesystem::path>::Failure(ShadowCopyError(error.message()));
             const std::filesystem::path canonicalRoot = std::filesystem::weakly_canonical(shadowRoot, error);
@@ -35,9 +39,22 @@ namespace Horo::Gameplay {
                                                                    const std::filesystem::path &canonicalRoot) {
             static std::atomic<std::uint64_t> sequence{1};
             const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-            const std::filesystem::path shadowPath =
-                canonicalRoot / std::format("{}.horo_reload_{}_{}{}", libraryPath.stem().string(), timestamp, sequence.fetch_add(1),
-                                            libraryPath.extension().string());
+            auto stem = libraryPath.stem().u8string();
+            if (const auto marker = stem.find(u8".horo_reload_"); marker != std::u8string::npos)
+                stem.resize(marker);
+            constexpr std::size_t maximumStemBytes = 64;
+            if (stem.size() > maximumStemBytes) {
+                auto length = maximumStemBytes;
+                while ((static_cast<unsigned char>(stem[length]) & 0xc0U) == 0x80U)
+                    --length;
+                stem.resize(length);
+            }
+            if (stem.empty())
+                stem = u8"gameplay";
+            auto filename = std::filesystem::path{stem};
+            filename += std::format(".horo_reload_{}_{}", timestamp, sequence.fetch_add(1));
+            filename += libraryPath.extension();
+            const std::filesystem::path shadowPath = canonicalRoot / filename;
             std::error_code error;
             const std::filesystem::path canonicalShadow = std::filesystem::weakly_canonical(shadowPath, error);
             if (const std::filesystem::path relativeShadow = canonicalShadow.lexically_relative(canonicalRoot);
@@ -48,7 +65,8 @@ namespace Horo::Gameplay {
 
         [[nodiscard]] Result<void> CopyShadowArtifact(const std::filesystem::path &source, const std::filesystem::path &destination) {
             std::error_code error;
-            if (std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error))  // NOSONAR
+            if (std::filesystem::copy_file(NativeApiPath(source), NativeApiPath(destination), std::filesystem::copy_options::none,
+                                           error))  // NOSONAR
                 return Result<void>::Success();
             return Result<void>::Failure(ShadowCopyError(error ? error.message() : "candidate could not be copied."));
         }

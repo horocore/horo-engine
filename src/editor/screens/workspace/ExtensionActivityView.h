@@ -1,5 +1,6 @@
 #pragma once
 #include "Horo/Extensions/EditorActivityHost.h"
+#include "Horo/Runtime/Input.h"
 #include "editor/modals/extension_pages/EditorPageThemeCapture.h"
 
 #include <array>
@@ -24,7 +25,7 @@ namespace Horo::Editor {
         ExtensionActivityView &operator=(ExtensionActivityView &&) = delete;
         void Update();
         /** @brief Applies the workspace/modal input router decision before drawing or pumping pending actions. */
-        void SetInputAdmitted(bool admitted) noexcept;
+        void SetInputAdmitted(bool admitted);
         /** @brief Queues a generation-bound placement command; publication occurs at the next owner Update. */
         [[nodiscard]] bool QueueMove(const Extensions::EditorSurfaceProviderIdentity &provider, std::string_view id,
                                      Extensions::EditorActivityPlacement placement) noexcept;
@@ -62,6 +63,18 @@ namespace Horo::Editor {
             IEditorGuiRenderer *renderer_{};
             std::uintptr_t id_{};
         };
+
+        struct CommandBinding {
+            std::string id;
+            std::vector<Input::InputBinding> bindings;
+        };
+
+        std::vector<CommandBinding> commands_;
+        std::uint64_t commandSurfaceRevision_{};
+        std::uint64_t commandSettingsRevision_{~std::uint64_t{0}};
+        bool commandBindingsValid_{};
+        /** @brief Rebuilds command shortcuts only after module publication or committed settings change. */
+        void PrepareCommands();
 
         struct Entry {
             Extensions::EditorActivityProjection projection;

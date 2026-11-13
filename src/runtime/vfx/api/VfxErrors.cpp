@@ -5,6 +5,33 @@ namespace Horo::Vfx::VfxErrors {
         const ErrorDomainId VfxDomain{"horo.vfx"};
     }
 
+    const ErrorCodeDescriptor
+        SpawnPreparationInvalid{.domain = VfxDomain,
+                                .code = ErrorCode{"vfx.spawn.preparation_invalid"},
+                                .defaultSeverity = ErrorSeverity::Error,
+                                .summary = "The prepared spawn recipe or reservation is invalid.",
+                                .remediationHint = "Prepare validated recipes and disjoint finite Scene reservations before playback."};
+    const ErrorCodeDescriptor
+        SpawnPreparationUnsupported{.domain = VfxDomain,
+                                    .code = ErrorCode{"vfx.spawn.preparation_unsupported"},
+                                    .defaultSeverity = ErrorSeverity::Error,
+                                    .summary = "The spawn recipe requires an unavailable prepared execution path.",
+                                    .remediationHint =
+                                        "Admit an explicitly supported CPU recipe; do not silently change simulation domains."};
+    const ErrorCodeDescriptor
+        SpawnPreparationBudgetExceeded{.domain = VfxDomain,
+                                       .code = ErrorCode{"vfx.spawn.preparation_budget_exceeded"},
+                                       .defaultSeverity = ErrorSeverity::Error,
+                                       .summary = "Spawn preparation exceeds its single Scene-wide reservation.",
+                                       .remediationHint = "Reduce prepared concurrency or obtain an explicit larger host reservation."};
+    const ErrorCodeDescriptor
+        SpawnPreparationAllocationFailed{.domain = VfxDomain,
+                                         .code = ErrorCode{"vfx.spawn.preparation_allocation_failed"},
+                                         .defaultSeverity = ErrorSeverity::Error,
+                                         .summary = "Fixed spawn storage could not be allocated during preparation.",
+                                         .remediationHint =
+                                             "Preserve the prior Scene and retry only at an explicit cold preparation boundary."};
+
     const ErrorCodeDescriptor IdentityInvalid{.domain = VfxDomain,
                                               .code = ErrorCode{"vfx.identity.invalid"},
                                               .defaultSeverity = ErrorSeverity::Error,
@@ -297,6 +324,35 @@ namespace Horo::Vfx::VfxErrors {
                                             .defaultSeverity = ErrorSeverity::Error,
                                             .summary = "The prepared CPU particle simulation descriptor is invalid.",
                                             .remediationHint = "Use finite bounded forces, curves, payloads, and collision adapters."};
+    const ErrorCodeDescriptor GpuSimulationUnsupported{.domain = VfxDomain,
+                                                       .code = ErrorCode{"vfx.gpu_simulation.unsupported_unit"},
+                                                       .defaultSeverity = ErrorSeverity::Error,
+                                                       .summary =
+                                                           "The authored GPU unit requires an unimplemented stage or observation schema.",
+                                                       .remediationHint = "Select a genuinely supported compiled unit or its explicitly "
+                                                                          "admitted CPU/substitute policy; never erase required stages."};
+    const ErrorCodeDescriptor
+        GpuSimulationInvalid{.domain = VfxDomain,
+                             .code = ErrorCode{"vfx.gpu_simulation.invalid"},
+                             .defaultSeverity = ErrorSeverity::Error,
+                             .summary = "GPU particle preparation violates its exact identity, source or finite budget contract.",
+                             .remediationHint = "Prepare matching stable identities, valid seed streams and a complete host-reserved GPU "
+                                                "work/memory envelope."};
+    const ErrorCodeDescriptor
+        GpuSimulationAllocationFailed{.domain = VfxDomain,
+                                      .code = ErrorCode{"vfx.gpu_simulation.allocation_failed"},
+                                      .defaultSeverity = ErrorSeverity::Error,
+                                      .summary = "Cold GPU logical preparation could not allocate its admitted source and acknowledgement "
+                                                 "storage.",
+                                      .remediationHint =
+                                          "Reduce the admitted unit reservation or release prior generations before preparing again."};
+    const ErrorCodeDescriptor
+        GpuSimulationReceiptInvalid{.domain = VfxDomain,
+                                    .code = ErrorCode{"vfx.gpu_simulation.receipt_invalid"},
+                                    .defaultSeverity = ErrorSeverity::Error,
+                                    .summary = "The frontend preparation receipt is revoked or does not match this exact GPU unit.",
+                                    .remediationHint = "Prepare the same immutable source on the current renderer/device and activate only "
+                                                       "its actual issued receipt."};
     const ErrorCodeDescriptor EffectPoolInvalid{.domain = VfxDomain,
                                                 .code = ErrorCode{"vfx.effect_pool.invalid"},
                                                 .defaultSeverity = ErrorSeverity::Error,

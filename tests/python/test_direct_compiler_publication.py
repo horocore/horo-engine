@@ -193,6 +193,7 @@ def test_foreign_fork_sonar_policy_is_preserved() -> None:
                "github.event.pull_request.head.repo.full_name": "fork/horo-engine"}
     assert condition(job(source, "sonar"), context) is False
     assert condition(job(source, "sonar-main"), context) is False
+    assert condition(job(source, "sonar-analysis"), context) is False
 
 
 @pytest.mark.parametrize("workflow,readonly,writer,fields", [
@@ -209,7 +210,7 @@ def test_both_jobs_share_the_complete_pipeline_with_distinct_permissions(
     assert "      packages: read\n" in reader
     assert "packages: write" not in reader
     assert "      packages: write\n" in main
-    timeout = 90 if readonly == "shaders" else 180
+    timeout = {"shaders": 90, "test": 360, "sonar": 240}[readonly]
     assert f"    timeout-minutes: {timeout}\n" in reader
     assert f"    timeout-minutes: {timeout}\n" in main
     for field in fields:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
+#include "Horo/Runtime/Render/VfxGpuKernel.h"
 #include "VulkanCommandRuntime.h"
 #include "VulkanExternalImages.h"
 #include "VulkanShaderRuntime.h"
@@ -78,6 +79,14 @@ namespace Horo::Render::Detail {
         bool published{};
     };
 
+    /** @brief Exact existing registry generation retained by a cold native particle inventory; never a second registry. */
+    struct VulkanVfxGpuBufferCapture {
+        NativeVfxGpuBuffer issued;
+        VulkanGraphResource resource;
+        std::shared_ptr<const void> backing;
+        void *mapped{};
+    };
+
     class VulkanMaterialCapture;
 
     /** @brief Device-owned Vulkan resource allocator and identity registry. */
@@ -99,7 +108,7 @@ namespace Horo::Render::Detail {
         /** @brief Attaches the shader owner to this registry after native device creation. */
         [[nodiscard]] Result<void> InitializeShaders(const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
                                                      const VulkanShaderRuntime::Resolver &resolver, std::uint64_t deviceIncarnation = 0,
-                                                     bool vertexLayerEnabled = false);
+                                                     bool vertexLayerEnabled = false, bool shaderDemoteEnabled = false);
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const override;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &,
                                                                                std::size_t) const override;
@@ -155,6 +164,10 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> CaptureGraphResources(const RenderGraphExecutionRequest &request,
                                                          std::span<VulkanGraphResource> destination,
                                                          VulkanCommandRetention &retention) const;
+        /** @brief Captures actual storage/uniform backing and optionally maps its allocator-proven host-coherent memory once. */
+        [[nodiscard]] Result<VulkanVfxGpuBufferCapture> CaptureVfxGpuBuffer(const NativeVfxGpuBuffer &, RenderResourceOwnerId,
+                                                                            std::size_t minimumBytes, RenderBufferUsage requiredUsage,
+                                                                            bool hostVisible);
         /** @brief Borrows the canonical buffer completion proof before an explicitly retired-slot host write. */
         [[nodiscard]] Result<RenderTimelinePoint> BufferCompletion(std::uint64_t instance) const;
         /** @brief Replaces exact host-visible uniform or vertex bytes after the selected frame owner proves prior retirement.

@@ -6,7 +6,7 @@
 using Participant = Horo::Runtime::SceneActivationParticipant;
 using RetirementSignature =
     Horo::Result<std::unique_ptr<Horo::Runtime::SceneActivationCandidate>> (Participant::*)(const Horo::Runtime::RuntimeSceneView &);
-static_assert(Horo::Runtime::SceneActivationParticipantContractVersion == 4);
+static_assert(Horo::Runtime::SceneActivationParticipantContractVersion == 5);
 static_assert(std::is_same_v<decltype(&Participant::PrepareRetirement), RetirementSignature>);
 
 using PreparationSignature = Horo::Result<std::unique_ptr<Horo::Runtime::SceneActivationCandidate>> (Participant::*)(

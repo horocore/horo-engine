@@ -494,13 +494,18 @@ namespace Horo::Render {
         }
     }  // namespace
 
+    /** @copydoc ValidateShaderCompilationRequest */
+    Result<void> ValidateShaderCompilationRequest(const ShaderCompilationRequest &request, const ShaderCompilerLimits &limits) {
+        if (!IsValidLimits(limits))
+            return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidLimits));
+        return ValidateRequest(request, limits);
+    }
+
     /** @copydoc CompileShaderTargets */
     Result<ShaderCompilationBatch> CompileShaderTargets(const ShaderCompilationRequest &request, const IShaderCompilerAdapter &adapter,
                                                         const CancellationToken &cancellation, const ShaderCompilerLimits &limits,
                                                         IShaderCompilerDiagnosticSink *diagnostics) {
-        if (!IsValidLimits(limits))
-            return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidLimits));
-        if (const auto validation = ValidateRequest(request, limits); validation.HasError())
+        if (const auto validation = ValidateShaderCompilationRequest(request, limits); validation.HasError())
             return Result<ShaderCompilationBatch>::Failure(validation.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));

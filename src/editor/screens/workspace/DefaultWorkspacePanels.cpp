@@ -1,6 +1,7 @@
 #include "Horo/Editor/DefaultWorkspacePanels.h"
 
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Editor/XRSimulatorPanel.h"
 #include "editor/navigation/NavigationTab.h"
 #include "editor/screens/workspace/PCGWorkspace.h"
 #include "editor/screens/workspace/panels/game/GamePanel.h"
@@ -9,6 +10,7 @@
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
 #include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
+#include "editor/screens/workspace/terrain/FoliagePaletteTab.h"
 
 namespace Horo::Editor {
     /** @copydoc RegisterNavigationWorkspacePanel */
@@ -26,6 +28,7 @@ namespace Horo::Editor {
                                         const std::span<const GlobalDockPaneFactory> globalDockPaneFactories) {
         registry.RegisterPanel(std::make_shared<HierarchyPanel>());
         registry.RegisterPanel(std::make_shared<InspectorPanel>());
+        registry.RegisterPanel(std::make_shared<FoliagePaletteTab>());
         auto globalDock = std::make_shared<GlobalDockPanel>();
         for (const GlobalDockPaneFactory &factory : globalDockPaneFactories) {
             if (factory)
@@ -34,6 +37,7 @@ namespace Horo::Editor {
         registry.RegisterPanel(std::move(globalDock));
         registry.RegisterPanel(std::make_shared<ViewportPanel>());
         registry.RegisterPanel(std::make_shared<GamePanel>());
+        registry.RegisterPanel(std::make_shared<XRSimulatorPanel>());
         registry.RegisterPanel(std::make_shared<WorldCompositionTab>());
         registry.RegisterPanel(CreatePCGGraphWorkspacePanel());
     }

@@ -141,3 +141,26 @@ def test_runtime_qualification_omitted_profiles_are_built_and_executed_in_ci() -
         assert f"run: ctest --preset {name}" in steps["Test"].group(1)
         assert steps["Configure"].start() < steps["Build"].start() < steps["Test"].start()
     assert "build/ci*/ctest.xml" in WORKFLOW
+
+
+def test_navigation_automation_has_windows_build_and_execution_closure() -> None:
+    """The reduced build must produce every labelled automation acceptance suite."""
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    acceptance_targets = {
+        "HoroNavigationBakeApplicationTests",
+        "HoroNavigationBakeAdapterTests",
+        "HoroNavigationNativeCliTests",
+        "HoroNavigationHostErrorTests",
+        "HoroNavigationProjectBakeInputNativeTests",
+        "HoroEditorNavigationBakeHostTests",
+    }
+    assert acceptance_targets <= targets("HORO_CI_WINDOWS_TARGETS")
+    assert "HoroCiWindowsChecks" in preset("buildPresets", "ci-windows-debug")["targets"]
+    assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+    for target in acceptance_targets:
+        assert f"add_executable({target}" in tests_cmake
+        registration = re.search(rf"horo_register_catch_test\({target} LABELS \"([^\"]+)\"\)", tests_cmake)
+        assert registration is not None
+        assert "ci-windows" in registration.group(1).split(";")
+    assert "add_dependencies(HoroNavigationNativeCliTests horo-engine)" in tests_cmake
+    assert "HORO_TEST_NAVIGATION_MCP_SCRIPT" in tests_cmake

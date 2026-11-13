@@ -172,7 +172,7 @@ jobs:
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}
           -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
-          -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
+          -DHORO_BUILD_AUDIO_SDL3=OFF
           -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF
       - name: Build native Vulkan contracts
         run: >-
@@ -337,7 +337,7 @@ jobs:
       - name: Build D3D12 tests
         run: >-
           cmake --build build/ci-d3d12-resources --parallel 2
-          --target HoroD3D12InitializationTests HoroD3D12ResourceTests
+          --target HoroD3D12InitializationTests HoroD3D12ResourceTests HoroD3D12CommandTests
       - name: Test D3D12 initialization
         run: >-
           ctest --test-dir build/ci-d3d12-resources --output-on-failure --parallel 1 --no-tests=error
@@ -346,6 +346,11 @@ jobs:
         run: >-
           build/ci-d3d12-resources/tests/HoroD3D12ResourceTests.exe '[warp]'
           --reporter junit --out build/ci-d3d12-resources/warp.xml
+      - name: Test D3D12 commands on WARP
+        run: >-
+          ctest --test-dir build/ci-d3d12-resources --output-on-failure --parallel 1 --no-tests=error
+          --timeout 90 -R '^HoroD3D12CommandTests::'
+          --output-junit "$GITHUB_WORKSPACE/build/ci-d3d12-resources/commands.xml"
       - name: Upload D3D12 test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -364,7 +369,8 @@ jobs:
       contents: read
       packages: read
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    # Cold Debug plus provider/network/XR variants exceed three hours before tests start.
+    timeout-minutes: 360
     defaults: &native_defaults
       run:
         shell: bash
@@ -569,7 +575,7 @@ jobs:
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
+        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests HoroFoundationJsonTests HoroGameplayRuntimeTests HoroPrefabPersistenceTests HoroPrefabMetricsTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -783,6 +789,13 @@ jobs:
           --no-tests=error --timeout 120 -R '^HoroMcpSessionTests::'
           --output-junit build/ci-audio-release/mcp-ctest.xml
 
+      - name: Test Windows Release Prefab metrics allocation qualification
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        run: >-
+          ctest --test-dir build/ci-audio-release --parallel 1 --output-on-failure
+          --no-tests=error --timeout 90 -R '^HoroPrefabMetricsTests::'
+          --output-junit prefab-metrics-ctest.xml
+
       - name: Test Windows Release restore allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
         run: >-
@@ -972,6 +985,7 @@ jobs:
             build/ci-metal/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
+            build/ci-audio-release/prefab-metrics-ctest.xml
             build/ci-audio-release/collision-allocation-ctest.xml
             build/ci-audio-release/collision-allocation-discovery.json
             build/ci-audio-release/collision-allocation-regex.txt
@@ -997,7 +1011,9 @@ jobs:
       contents: read
       packages: read
     runs-on: macos-latest
-    timeout-minutes: 180
+    # This producer runs the complete Debug and auxiliary native qualification builds.
+    # A cold hosted Debug build alone exceeded the former three-hour budget.
+    timeout-minutes: 360
     defaults: *native_defaults
     env: *native_environment
     strategy: &macos_build_strategy
@@ -1028,12 +1044,95 @@ jobs:
       contents: read
       packages: write
     runs-on: macos-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     defaults: *native_defaults
     env: *native_environment
     strategy: *macos_build_strategy
     outputs: *macos_bundle_outputs
     steps: *native_steps
+
+  reference-sdk-macos-x64:
+    name: Reference SDK · macOS x64
+    needs: [tooling]
+    if: ${{ !cancelled() && needs.tooling.result == 'success' }}
+    runs-on: macos-15-intel
+    # The cold Intel host build alone exceeds one hour; retain time for native SDK tests.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      # macos-15-intel defaults to Xcode 16.4, whose libc++ hides C++20 stop/join APIs.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      CC: clang
+      CXX: clang++
+      HORO_COMPILER_LAUNCHER: ccache
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      CTEST_PARALLEL_LEVEL: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+      - name: Setup build tools
+        uses: ./.github/actions/setup-build-tools
+      - name: Verify stable C++20 stop and join support
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          probe="$RUNNER_TEMP/horo-cxx20-stop-probe"
+          cat > "$probe.cpp" <<'CPP'
+          #include <condition_variable>
+          #include <mutex>
+          #include <stop_token>
+          #include <thread>
+          int main() {
+              std::mutex mutex;
+              std::condition_variable_any wake;
+              std::jthread worker([&mutex, &wake](std::stop_token stop) {
+                  std::unique_lock lock(mutex);
+                  wake.wait(lock, stop, [] { return false; });
+              });
+              worker.request_stop();
+          }
+          CPP
+          xcrun --sdk macosx clang++ -std=c++20 -mmacosx-version-min=14.0 \
+            -Werror=unguarded-availability-new "$probe.cpp" -o "$probe"
+          "$probe"
+      - name: Restore compatible main caches
+        uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-tests-v1
+          compiler-storage: registry
+          mode: Debug
+          max-size: 2G
+      - name: Configure reference SDK host
+        run: >-
+          cmake --preset ci-macos-debug
+          -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk"
+          -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON
+      - name: Build actual SDK consumers and native host
+        run: >-
+          cmake --build --preset ci-macos-debug --parallel 2 --target
+          HoroReferenceExtensionQualification HoroExtensionAbiCConsumer
+          HoroExtensionsPublicHeaderConsumer HoroExtensionLuaBindingsPublicHeaderConsumer
+      - name: Validate reference packages and native lifecycle
+        run: >-
+          ctest --test-dir build/ci -C Debug --parallel 1 --output-on-failure --no-tests=error
+          -R '^(HoroReferenceExtensionExamplesTest|HoroNativeExtensionServiceTests|HoroNativeExtensionServiceOffLaneRetentionTests|HoroExtensionAbiCConsumer|HoroExtensionSdkExternalConsumerTest|HoroExtensionSdkReconfigureTest)$'
+          --output-junit reference-sdk-ctest.xml
+      - name: Preserve SDK qualification results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reference-sdk-macos-x64-${{ github.sha }}
+          path: build/ci/reference-sdk-ctest.xml
+          if-no-files-found: warn
+          retention-days: 7
 
   macos-metal:
     name: Test · macOS / Clang${{ github.ref == 'refs/heads/main' && ' (main)' || '' }}
@@ -1108,7 +1207,7 @@ jobs:
       contents: read
       packages: write
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    timeout-minutes: 360
     defaults: *native_defaults
     env: *native_environment
     strategy: *native_strategy

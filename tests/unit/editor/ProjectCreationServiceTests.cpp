@@ -1,5 +1,6 @@
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -120,6 +121,12 @@ namespace {
         CHECK(collision.Value().settings->Input().revision == 1);
         CHECK(collision.Value().settings->Schema()->Profiles().size() == 1);
         CHECK(collision.Value().settings->Capture(1).HasValue());
+        const auto surfaces = Horo::Application::LoadProjectSurfaceSettings(root, compatibility.metadata->projectId);
+        REQUIRE(surfaces.HasValue());
+        REQUIRE(surfaces.Value().settings->Input().defaultSurfaceId.has_value());
+        REQUIRE(surfaces.Value().settings->Catalog()->Entries().size() == 1);
+        CHECK(surfaces.Value().settings->Catalog()->Contains(*surfaces.Value().settings->Input().defaultSurfaceId));
+        CHECK(surfaces.Value().settings->Capture(1).HasValue());
         REQUIRE((compatibility.metadata->horoVersion == current));
         const auto *decision = Horo::Application::BuiltInReleaseCompatibilityRegistry().Find(current);
         REQUIRE(decision != nullptr);

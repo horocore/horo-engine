@@ -53,7 +53,8 @@ namespace Horo::Render {
             for (std::size_t at = 0; at + 1 < tokens.size(); ++at) {
                 if (tokens[at] != name || tokens[at + 1] != "(")
                     continue;
-                std::size_t depth = 1, end = at + 2;
+                std::size_t depth = 1;
+                std::size_t end = at + 2;
                 for (; end < tokens.size() && depth != 0; ++end) {
                     if (tokens[end] == "(")
                         ++depth;
@@ -203,11 +204,12 @@ namespace Horo::Render {
                              NativeStageEvidence &result) {
             if (at + 9 >= tokens.size() || tokens[at + 1] != "(" || tokens[at + 3] != "=" || tokens[at + 5] != ")" || tokens[at + 9] != ";")
                 throw InvalidVfxEvidence{};
-            const auto direction = tokens[at + 6], type = tokens[at + 7];
+            const auto direction = tokens[at + 6];
+            const auto type = tokens[at + 7];
             std::uint32_t location{};
             const auto number = tokens[at + 4];
-            const auto parsed = std::from_chars(number.data(), number.data() + number.size(), location);
-            if (parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size() || location > 2 ||
+            if (const auto parsed = std::from_chars(number.data(), number.data() + number.size(), location);
+                parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size() || location > 2 ||
                 (direction != "in" && direction != "out") || type.size() != 4 || !type.starts_with("vec") || type[3] < '2' ||
                 type[3] > '4' || !Identifier(tokens[at + 8]))
                 throw InvalidVfxEvidence{};
@@ -269,14 +271,15 @@ namespace Horo::Render {
             const auto role = instances ? index : index + 2;
             const bool matrix = role == 0;
             const std::uint32_t offset = role == 1 ? 8192U : role == 3 ? 16U : 0U;
-            if (member.at("name") != names[role] ||
+            if (member.at("name").get_ref<const std::string &>() != names[role] ||
                 member.at("type") != (matrix      ? "mat4"
                                       : role == 3 ? "float"
                                                   : "vec4") ||
                 Unsigned(member.at("offset")) != offset || member.contains("physical_pointer"))
                 throw InvalidVfxEvidence{};
             if (instances) {
-                const auto &array = member.at("array"), &literal = member.at("array_size_is_literal");
+                const auto &array = member.at("array");
+                const auto &literal = member.at("array_size_is_literal");
                 if (!array.is_array() || array.size() != 1 || Unsigned(array[0]) != MaximumVfxDrawInstances || !literal.is_array() ||
                     literal.size() != 1 || literal[0] != true || Unsigned(member.at("array_stride")) != (matrix ? 64U : 16U))
                     throw InvalidVfxEvidence{};
@@ -364,8 +367,7 @@ namespace Horo::Render {
                         Unsigned(block.at("set")) != 0 || Unsigned(block.at("binding")) != role || block.contains("array"))
                         throw InvalidVfxEvidence{};
                     seen[role] = true;
-                    const auto bytes = Unsigned(block.at("block_size"));
-                    if (role == 0 ? bytes != 10240 : bytes != 20 && bytes != 32)
+                    if (const auto bytes = Unsigned(block.at("block_size")); role == 0 ? bytes != 10240 : bytes != 20 && bytes != 32)
                         throw InvalidVfxEvidence{};
                     const auto &members = json.at("types").at(block.at("type").get<std::string>()).at("members");
                     if (!members.is_array() || members.size() != 2)
@@ -403,9 +405,9 @@ namespace Horo::Render {
                 const auto &entries = json.at(key);
                 if (!entries.is_array() || entries.size() != 1 || native.bindings[role] == 0xffffffffU)
                     throw InvalidVfxEvidence{};
-                const auto &entry = entries[0];
-                if (entry.at("name") != name || entry.at("type") != type || Unsigned(entry.at("set")) != 0 ||
-                    Unsigned(entry.at("binding")) != role || entry.contains("array"))
+                if (const auto &entry = entries[0]; entry.at("name") != name || entry.at("type") != type ||
+                                                    Unsigned(entry.at("set")) != 0 || Unsigned(entry.at("binding")) != role ||
+                                                    entry.contains("array"))
                     throw InvalidVfxEvidence{};
                 Activate(candidate, role, native.bindings[role], native.names[role], ShaderStageVisibility::Fragment);
             }
@@ -422,9 +424,9 @@ namespace Horo::Render {
             const auto json = guard.Parse(stage.json.begin(), stage.json.end());
             if (guard.HasDuplicate() || guard.IsTooDeep() || json.is_discarded() || !json.is_object())
                 throw InvalidVfxEvidence{};
-            const auto &entries = json.at("entryPoints");
-            if (!entries.is_array() || entries.size() != 1 || entries[0].at("name") != stage.entryPoint ||
-                entries[0].at("mode") != (vertex ? "vert" : "frag"))
+            if (const auto &entries = json.at("entryPoints"); !entries.is_array() || entries.size() != 1 ||
+                                                              entries[0].at("name") != stage.entryPoint ||
+                                                              entries[0].at("mode") != (vertex ? "vert" : "frag"))
                 throw InvalidVfxEvidence{};
             for (const auto key : {"textures", "images", "ssbos", "push_constants", "subpass_inputs", "counters", "acceleration_structures",
                                    "tensors", "specialization_constants"})
@@ -445,8 +447,8 @@ namespace Horo::Render {
         try {
             const auto canonical = MakeVfxShaderManifest(target);
             const auto expected = ComputeShaderInterfaceCompatibilityId(canonical);
-            const auto actual = ComputeShaderInterfaceCompatibilityId(manifest);
-            if ((target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL) || stages.size() != 2 ||
+            if (const auto actual = ComputeShaderInterfaceCompatibilityId(manifest);
+                (target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL) || stages.size() != 2 ||
                 native.size() != 2 || manifest.sourceRevision != canonical.sourceRevision || expected.HasError() || actual.HasError() ||
                 expected.Value() != actual.Value())
                 throw InvalidVfxEvidence{};

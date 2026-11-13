@@ -18,7 +18,7 @@ namespace Horo::Application {
     /** @brief Decodes bounded project source without I/O, migration, service discovery or policy defaults.
      * @param contents Complete UTF-8 `.horo/project.json` bytes owned by the caller.
      * @return Metadata and optional Network source, or an existing typed metadata diagnostic.
-     * @post Legacy metadata limits remain unchanged; the registered 0.2 profile is bounded to 1 MiB and depth 32.
+     * @post Legacy metadata limits remain unchanged; registered 0.2/0.3 profiles are bounded to 1 MiB and depth 32.
      */
     [[nodiscard]] Result<ProjectSourceDocument> DecodeProjectSourceDocument(std::string_view contents);
 

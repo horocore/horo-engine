@@ -35,6 +35,10 @@ namespace Horo::SceneSource::Detail {
 
         /** @brief Selects the minimum envelope required by typed authored features for both writer and reader. */
         std::uint32_t RequiredSceneSchema(const std::span<const SceneObjectSnapshot> objects) {
+            if (std::ranges::any_of(objects, [](const auto &object) {
+                return object.components.animation.has_value();
+            }))
+                return kAnimationSceneSchemaVersion;
             bool character{};
             for (const auto &object : objects) {
                 if (!object.components.navigationSources.empty())
@@ -213,15 +217,28 @@ namespace Horo::SceneSource::Detail {
     }
 
     namespace {
-        /** @brief Admits only complete bounded legacy or Character-capable document roots. */
-        bool InvalidSceneRoot(const Json &document) {
-            return !document.is_object() || !document.contains("schemaVersion") ||
-                   (document["schemaVersion"] != kSceneSchemaVersion && document["schemaVersion"] != kCharacterSceneSchemaVersion &&
-                    document["schemaVersion"] != kNavigationSourceSceneSchemaVersion) ||
-                   !document.contains("objects") || !document["objects"].is_array() || document["objects"].size() > kMaximumSceneObjects ||
-                   (document.contains("prefabInstances") &&
-                    (!document["prefabInstances"].is_array() || document["prefabInstances"].size() > kMaximumSceneObjects));
+        /** @brief Admits only explicit source schema generations; unknown newer documents are never downgraded. */
+        bool KnownSceneSchema(const Json &document) {
+            if (!document.is_object() || !document.contains("schemaVersion"))
+                return false;
+            const auto &schema = document["schemaVersion"];
+            return schema == kSceneSchemaVersion || schema == kCharacterSceneSchemaVersion ||
+                   schema == kNavigationSourceSceneSchemaVersion || (schema.is_number_unsigned() && schema == kAnimationSceneSchemaVersion);
         }
+
+        /** @brief Checks bounded object/prefab inventory independently from feature-version admission. */
+        bool InvalidSceneInventory(const Json &document) {
+            if (!document.contains("objects") || !document["objects"].is_array() || document["objects"].size() > kMaximumSceneObjects)
+                return true;
+            return document.contains("prefabInstances") &&
+                   (!document["prefabInstances"].is_array() || document["prefabInstances"].size() > kMaximumSceneObjects);
+        }
+
+        /** @brief Keeps source schema admission and bounded inventory checks in the original short-circuit order. */
+        bool InvalidSceneRoot(const Json &document) {
+            return !KnownSceneSchema(document) || InvalidSceneInventory(document);
+        }
+
     }  // namespace
 
     [[nodiscard]] Result<ParsedScene> ParseScene(const std::string_view contents) {

@@ -1,6 +1,7 @@
 #include "../../../support/renderer/MultiviewTestSupport.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "RenderMemoryTestSupport.h"
+#include "VulkanResourceTestSupport.h"
 #include "VulkanShaderDispatchFixture.h"
 #include "runtime/renderer/modules/vulkan/VulkanBackendInternal.h"
 #include "runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.h"
@@ -35,6 +36,7 @@ namespace {
         bool matrixParameters{false};
         std::size_t resolvedBufferBytes{16};
         std::uint64_t deviceIncarnation{};
+        bool shaderDemoteEnabled{false};
         ShaderTargetRequirement target{.backend = ShaderTargetBackend::Vulkan,
                                        .payloadFormat = ShaderPayloadFormat::SpirV16,
                                        .descriptorVersion = 1,
@@ -91,7 +93,7 @@ namespace {
                 if (r.instance != 99 || kind != ShaderResourceKind::UniformBuffer || r.kind != MaterialResidentResourceKind::Buffer)
                     return Result<VulkanMaterialResource>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
                 return Result<VulkanMaterialResource>::Success({.buffer = Handle<VkBuffer>(99), .bytes = resolvedBufferBytes});
-            }, VulkanShaderRuntime::DeviceFeatures{deviceIncarnation, false});
+            }, VulkanShaderRuntime::DeviceFeatures{deviceIncarnation, false, shaderDemoteEnabled});
         }
 
         void UseSampledMaterial() {
@@ -202,7 +204,8 @@ namespace {
 
         Result<std::uint64_t> Pipeline() {
             auto cost = runtime.QueryGraphicsPipelineMemoryCost(descriptor, vertex, fragment);
-            REQUIRE(cost.HasValue());
+            if (cost.HasError())
+                return Result<std::uint64_t>::Failure(cost.ErrorValue());
             return runtime.CreateGraphicsPipeline(descriptor, vertex, fragment, TestSupport::PlacementFor(cost.Value(), next));
         }
 
@@ -506,6 +509,37 @@ TEST_CASE("Vulkan layer routing rejects mismatched cooked output and disabled de
     }
 }
 
+TEST_CASE("Vulkan demotion modules require the enabled optional logical device feature", "[vulkan][shader][demote][protocol-fake]") {
+    Fixture f;
+    SECTION("unsupported demotion never reaches the driver") {}
+    SECTION("enabled demotion reaches the existing native module owner") {
+        f.shaderDemoteEnabled = true;
+    }
+    REQUIRE(f.Initialize().HasValue());
+    f.Reflect();
+    auto bytes = f.Code(ShaderStage::Fragment);
+    const std::array<std::uint32_t, 2> capability{(2U << 16) | 17U, 5379U};
+    const auto capabilityBytes = std::as_bytes(std::span{capability});
+    std::array<std::uint8_t, sizeof(capability)> encoded{};
+    std::ranges::transform(capabilityBytes, encoded.begin(), [](std::byte value) {
+        return std::to_integer<std::uint8_t>(value);
+    });
+    bytes.insert(bytes.begin() + 20, encoded.begin(), encoded.end());
+    const RenderShaderModuleDescriptor descriptor{f.target, ShaderStage::Fragment, "main", f.artifact, f.reflection.interfaceCompatibility};
+    const auto cost = f.runtime.QueryShaderModuleMemoryCost(descriptor, bytes.size());
+    REQUIRE(cost.HasValue());
+    const auto result = f.runtime.CreateShaderModule(descriptor, bytes, TestSupport::PlacementFor(cost.Value(), 99));
+    if (f.shaderDemoteEnabled) {
+        REQUIRE(result.HasValue());
+        CHECK(f.state.shaders == 1);
+        f.runtime.DestroyShaderModule(result.Value());
+    } else {
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == VulkanBackendErrors::ResourceUnsupported.code.Value());
+        CHECK(f.state.shaders == 0);
+    }
+}
+
 TEST_CASE("Vulkan shader lifecycle rejects incomplete dispatch and foreign-thread admission", "[vulkan][shader][lifecycle]") {
     Fixture f;
     CHECK(f.runtime.QuerySamplerMemoryCost({}).HasError());
@@ -528,3 +562,161 @@ TEST_CASE("Vulkan shader lifecycle rejects incomplete dispatch and foreign-threa
 }
 
 #include "VulkanShaderNativeSmoke.inl"
+
+TEST_CASE("Vulkan depth-only pipeline realizes zero color attachments with distinct immutable identity", "[vulkan][shader][shadow]") {
+    Fixture fixture;
+    fixture.Prepare();
+    const auto colorIdentity = ComputeRenderGraphicsPipelineStateDigest(fixture.descriptor.state);
+    REQUIRE(colorIdentity.HasValue());
+    fixture.descriptor.state.depthOnly = true;
+    fixture.descriptor.state.depthFormat = RenderTextureFormat::Depth32Float;
+    fixture.descriptor.compatibility.pipelineDescriptorDigest = ComputeRenderGraphicsPipelineStateDigest(fixture.descriptor.state).Value();
+    CHECK(fixture.descriptor.compatibility.pipelineDescriptorDigest != colorIdentity.Value());
+    REQUIRE(fixture.Pipeline().HasValue());
+    CHECK(fixture.state.colorAttachments == 0);
+    CHECK(fixture.state.blendAttachments == 0);
+    CHECK(fixture.state.depthWriteEnabled);
+    fixture.descriptor.state.depthFormat.reset();
+    CHECK(ComputeRenderGraphicsPipelineStateDigest(fixture.descriptor.state).HasError());
+}
+
+namespace {
+    struct RegistryMaterialFixture {
+        Fixture contract;
+        Horo::Render::VulkanResourceTest::NativeResourceScope native;
+        VulkanResourceRuntime registry;
+        std::uint64_t pipeline{}, buffer{}, sampler{}, texture{}, view{}, target{};
+
+        RegistryMaterialFixture() {
+            native.state.imageRequirements.size = 512;
+            contract.UseSampledMaterial();
+            contract.Prepare();
+            Horo::Render::VulkanResourceTest::InitializeNativeResourceRuntime(registry);
+            VkPhysicalDeviceProperties properties{};
+            properties.limits.minUniformBufferOffsetAlignment = 16;
+            properties.limits.maxUniformBufferRange = 65536;
+            properties.limits.maxDescriptorSetUniformBuffers = 128;
+            properties.limits.maxDescriptorSetSampledImages = 128;
+            properties.limits.maxDescriptorSetSamplers = 128;
+            properties.limits.maxPerStageDescriptorUniformBuffers = 128;
+            properties.limits.maxPerStageDescriptorSampledImages = 128;
+            properties.limits.maxPerStageDescriptorSamplers = 128;
+            properties.limits.maxPerStageResources = 128;
+            properties.limits.maxBoundDescriptorSets = 4;
+            properties.limits.maxSamplerAllocationCount = 4096;
+            REQUIRE(registry.InitializeShaders(properties, RenderAdapterId{"vulkan:test"}, Resolve, 11).HasValue());
+            const auto vertex = Stage(ShaderStage::Vertex);
+            const auto fragment = Stage(ShaderStage::Fragment);
+            const auto identity = registry.QueryPipelineDeviceIdentity();
+            REQUIRE(identity.HasValue());
+            auto descriptor = contract.descriptor;
+            descriptor.compatibility.deviceCompatibilityDigest = identity.Value().deviceCompatibilityDigest;
+            const auto plan = registry.QueryGraphicsPipelineMemoryCost(descriptor, vertex, fragment);
+            REQUIRE(plan.HasValue());
+            auto created = registry.CreateGraphicsPipeline(descriptor, vertex, fragment, TestSupport::PlacementFor(plan.Value(), 1));
+            REQUIRE(created.HasValue());
+            pipeline = created.Value();
+            CreateBindings();
+        }
+
+        std::uint64_t Stage(ShaderStage stage) {
+            const auto code = contract.Code(stage);
+            const RenderShaderModuleDescriptor descriptor{contract.target, stage, "main", contract.artifact,
+                                                          contract.reflection.interfaceCompatibility};
+            const auto plan = registry.QueryShaderModuleMemoryCost(descriptor, code.size());
+            REQUIRE(plan.HasValue());
+            auto created = registry.CreateShaderModule(descriptor, code, TestSupport::PlacementFor(plan.Value(), 1));
+            REQUIRE(created.HasValue());
+            return created.Value();
+        }
+
+        void CreateBindings() {
+            const RenderBufferDescriptor descriptor{16, RenderBufferUsage::Uniform, RenderBufferAccess::HostVisible};
+            const auto plan = registry.QueryBufferMemoryCost(descriptor);
+            REQUIRE(plan.HasValue());
+            std::array<std::byte, 16> bytes{};
+            auto created = registry.CreateBuffer(descriptor, bytes, TestSupport::PlacementFor(plan.Value(), 1));
+            REQUIRE(created.HasValue());
+            buffer = created.Value();
+            const auto samplerPlan = registry.QuerySamplerMemoryCost({});
+            REQUIRE(samplerPlan.HasValue());
+            auto createdSampler = registry.CreateSampler({}, TestSupport::PlacementFor(samplerPlan.Value(), 1));
+            REQUIRE(createdSampler.HasValue());
+            sampler = createdSampler.Value();
+        }
+
+        void CreateDepth(RenderTextureFormat format, RenderTextureAspect aspect) {
+            const RenderTextureDescriptor descriptor{.extent = {8, 8},
+                                                     .format = format,
+                                                     .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
+            const auto plan = registry.QueryTextureMemoryCost(descriptor);
+            REQUIRE(plan.HasValue());
+            auto created = registry.CreateTexture(descriptor, {}, TestSupport::PlacementFor(plan.Value(), 1));
+            REQUIRE(created.HasValue());
+            texture = created.Value();
+            auto createdView = registry.CreateTextureView({.texture = {{1}, 1, 1}, .format = format, .aspect = aspect}, texture);
+            REQUIRE(createdView.HasValue());
+            view = createdView.Value();
+            auto createdTarget = registry.CreateRenderTarget({.depthAttachment = {{1}, 2, 1}, .extent = {8, 8}}, 0, view);
+            REQUIRE(createdTarget.HasValue());
+            target = createdTarget.Value();
+        }
+
+        Result<std::unique_ptr<IResidentMaterialBinding>> Material() {
+            auto descriptor = contract.Material();
+            descriptor.resources.push_back({{2}, 0, RenderTextureViewHandle{{1}, 4, 1}});
+            descriptor.resources.push_back({{3}, 0, RenderSamplerHandle{{1}, 5, 1}});
+            const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, buffer, 0, 16},
+                                       MaterialResidentResource{MaterialResidentResourceKind::TextureView, view},
+                                       MaterialResidentResource{MaterialResidentResourceKind::Sampler, sampler}};
+            return registry.RealizeResolved(descriptor, pipeline, resources);
+        }
+    };
+}  // namespace
+
+TEST_CASE("Vulkan resource delegate publishes sampled Depth32 material with its exact attachment image journal",
+          "[vulkan][material][shadow][registry]") {
+    RegistryMaterialFixture fixture;
+    fixture.CreateDepth(RenderTextureFormat::Depth32Float, RenderTextureAspect::Depth);
+    auto material = fixture.Material();
+    INFO((material.HasError() ? material.ErrorValue().message : "depth descriptor admitted by real registry resolver"));
+    REQUIRE(material.HasValue());
+    const auto *native = dynamic_cast<const VulkanPreparedMaterialBinding *>(material.Value().get());
+    REQUIRE(native);
+    const auto sampled = std::ranges::find_if(native->resources, [](const auto &resource) {
+        return resource.image != VK_NULL_HANDLE;
+    });
+    REQUIRE(sampled != native->resources.end());
+    VulkanCommandRetention pins;
+    pins.resources.reserve(1);
+    const auto attachment = fixture.registry.MaterialCapture().CaptureMaterialTarget(fixture.target, pins);
+    REQUIRE(attachment.HasValue());
+    CHECK(sampled->image == attachment.Value().depth.image);
+    CHECK(sampled->view == attachment.Value().depthView);
+    CHECK(sampled->state == attachment.Value().depth.state);
+    CHECK(sampled->backing != nullptr);
+    CHECK(fixture.contract.state.sampledImageLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    CHECK(fixture.contract.state.samplerMinFilter == VK_FILTER_NEAREST);
+    CHECK_FALSE(fixture.contract.state.samplerCompareEnabled);
+    const auto wrongAspect = fixture.registry.CreateTextureView({.texture = {{1}, 1, 1},
+                                                                 .format = RenderTextureFormat::Depth32Float,
+                                                                 .aspect = RenderTextureAspect::Color},
+                                                                fixture.texture);
+    REQUIRE(wrongAspect.HasError());
+    CHECK(wrongAspect.ErrorValue().code.Value() == VulkanBackendErrors::ResourceIdentityInvalid.code.Value());
+    CHECK(wrongAspect.ErrorValue().domain.Value() == VulkanBackendErrors::ResourceIdentityInvalid.domain.Value());
+}
+
+TEST_CASE("Vulkan resource delegate keeps unsupported depth and stencil sample aspects closed", "[vulkan][material][shadow][registry]") {
+    RegistryMaterialFixture fixture;
+    SECTION("Depth16 is outside the ordinary depth material contract") {
+        fixture.CreateDepth(RenderTextureFormat::Depth16Unorm, RenderTextureAspect::Depth);
+    }
+    SECTION("Combined stencil is outside the ordinary depth material contract") {
+        fixture.CreateDepth(RenderTextureFormat::Depth32FloatStencil8, RenderTextureAspect::DepthStencil);
+    }
+    const auto material = fixture.Material();
+    REQUIRE(material.HasError());
+    CHECK(material.ErrorValue().code.Value() == VulkanBackendErrors::ResourceIdentityInvalid.code.Value());
+    CHECK(material.ErrorValue().domain.Value() == VulkanBackendErrors::ResourceIdentityInvalid.domain.Value());
+}

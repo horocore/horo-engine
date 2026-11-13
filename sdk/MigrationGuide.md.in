@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 22 / `gameplay-sdk22`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 29 / `gameplay-sdk29`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -32,6 +32,95 @@ or that this snapshot has passed every platform. The extension SDK has no engine
 library link dependency; native libraries still require matching OS/architecture
 and their own private dependency/toolchain compatibility. No Android, mobile,
 cross-architecture, or generic C++ binary compatibility is promised here.
+
+## Gameplay SDK28 → SDK29 (Scoped VFX spawn pipeline)
+
+Rebuild the host, native gameplay modules and generated descriptor bundles together
+with the exact `gameplay-sdk29` engine/toolchain/platform/configuration fingerprint.
+The Scene-owned VFX spawn pipeline extends native gameplay context and binding
+contracts. Require boundary 29 before invoking a module factory; do not relabel
+SDK28 objects or retain an SDK28 fingerprint around SDK29 headers.
+
+Keep VFX identity, request admission and lifetime authority in the Scene-owned
+runtime. This native migration does not renumber particle asset, package or
+snapshot schemas. For rollback, restore the SDK28 host, modules and original
+manifests together; mixed native generations remain unsupported.
+
+## Gameplay SDK27 → SDK28 (Physics state and restore publication)
+
+Rebuild native modules and their host together with the exact `gameplay-sdk28`
+engine, compiler, platform and configuration fingerprint. Physics capability
+metadata, World/runtime state APIs, Runtime Save session ownership and the final
+restore-publication callback extend native layouts. An SDK27 module must reject
+before invoking its factory; do not relabel an old binary or bypass its manifest.
+
+Use the optional Physics SDK target for the typed state headers. Construction,
+solver and snapshot wire schemas have their own versions; SDK28 does not renumber
+them. Keep private Scene restore targets, generated build facts and loaded-image
+leases in their existing owners. Live Animation state remains unsupported by
+Play Save capture, as documented for SDK27.
+
+For rollback of this SDK migration, restore both the host and all modules built
+for SDK27 together, including their original manifests. Do not mix SDK27 module
+objects with an SDK28 host. Snapshot compatibility still checks actual receiving
+build, solver, platform and content independently of this native boundary.
+
+## Gameplay SDK26 → SDK27 (Animation components and Scene activation)
+
+Rebuild native gameplay modules and generated descriptor bundles against boundary
+27 and the exact `gameplay-sdk27` engine/toolchain/platform/configuration
+fingerprint. Scene component values now contain the optional typed Animation
+component, and the closed builtin component vocabulary includes Animation.
+Scene activation participant contract 5 adds bounded loaded-asset dependency
+discovery and explicit required-owner admission. Runtime lifecycle participants
+also expose fixed prepare/commit/abort callbacks for the actual scheduler fence.
+These layouts and virtual interfaces must not be mixed with SDK26 objects.
+
+Keep Animation authoring data inert: persist stable component/Skeleton/Clip/Graph
+identities and policies, not live runtime owners, clocks or pose handles. Recook
+animated Scenes with the current producer (source schema4 and cooked Scene v4).
+Scenes without Animation retain their established source/cooked formats. Prefab
+cook's optional projected dependency span is invocation-scoped metadata owned by
+the same cook transaction; it is not durable or runtime authority.
+
+The host supplies the real dispatch issuer and one shared nonwrapping Animation
+identity source. Register one Animation Scene owner and forward the same actual
+fixed attempt through evaluation, prepare, commit or abort; native modules must
+not issue their own scheduler proof or add a second evaluator. Runtime binary
+loading stays source/JSON-free. Standalone additive clips without a real base,
+native retarget and root-motion integration remain explicitly unsupported.
+
+Old boundary numbers and old fingerprints are rejected before factory entry.
+Retain a coherent prior engine/SDK/module/cooked-artifact set for rollback;
+never relabel an SDK26 binary as SDK27. The external extension C ABI is unchanged.
+
+## Gameplay SDK25 → SDK26 (Prefab persistence and Scene group contracts)
+
+Rebuild every native gameplay module and descriptor bundle, including optional
+Physics, RuntimeUi and AI consumers, with boundary 26 and the exact
+`gameplay-sdk26` engine/toolchain/platform/configuration fingerprint. Typed
+`PrefabSpawnRequest` override inputs and Scene group command/reference layouts
+have changed. Old boundaries/fingerprints are rejected before factory entry;
+never mix SDK25 static objects with these new C++ value layouts.
+
+Use the same canonical prefab provider/spawn boundary for ordinary creation and
+Save reconstruction. Restore groups use Scene-issued qualified ownership and
+command-only dense external references; they do not expose a second public spawn
+or persistent-ID issuer. Persistent lookup returns a fresh current Scene/service
+binding; old handles remain stale and explicit tombstones remain unavailable.
+
+Recook authored prefab assets using the actual producer. `HPFB3` is the sole
+current cooked format and records genuine root source revision/provenance;
+`HPFB2` is rejected, not interpreted through an unqualified fallback. Ordinary
+procedural templates may lack source provenance, but durable capture then fails
+with typed compatibility diagnostics. Physical checkpoint state still requires
+its actual owning canonical Physics Save adapter; this change does not fabricate
+that coverage. External C ABI 1.8 is unchanged.
+
+Rollback: stop the host and restore the previous exact engine, SDK, modules,
+cooked artifacts and project/Save backup as one coherent set. Rebuild against
+that retained generation; do not relabel SDK26 modules as SDK25 or reinterpret
+new cooked bytes as an old schema.
 
 ## External C ABI 1.0 → 1.1
 
@@ -214,6 +303,31 @@ and complete consumer/lifecycle revalidation, not the maximum prior number.
 Rollback: restore a coherent previous engine, SDK and rebuilt module set, then
 restart play. Never edit fingerprints or force-load a mismatched binary.
 
+## Gameplay SDK24 → SDK25 (Character surface and event contracts)
+
+Rebuild the engine host, native gameplay modules, generated descriptor bundles and
+SDK consumers with boundary25 / `gameplay-sdk25`. Character movement and committed
+event values now carry explicit slide and semantic surface evidence. Physics
+world bindings retain their captured project surface catalog and mapping identity.
+These C++ value layouts are incompatible with SDK24, even for modules that do not
+consume the new event stream. Never edit a descriptor fingerprint to bypass this
+boundary.
+
+Rollback requires the previous coherent engine, SDK, modules and project backup;
+the 0.3.0 project authoring contract cannot be opened by a 0.2.0 host.
+
+## Gameplay SDK22 → SDK24 (Decision node and graph contracts)
+
+Rebuild the engine host, native gameplay modules, descriptor bundles and SDK
+consumers with boundary24 / `gameplay-sdk24`. Decision-node registration and
+compiled graph execution now use the typed provider, task and schema contracts
+documented in the decision-node registration and graph compilation guides.
+SDK22 and intermediate SDK23 binaries must not be mixed with the SDK24 host;
+use `CurrentGameplayBuildFingerprint()` rather than editing descriptors.
+
+Rollback requires restoring the previous engine, SDK, rebuilt modules and
+compatibility matrix as one coherent set before restarting the host.
+
 ## Gameplay SDK21 → SDK22 (Scene borrowed-view lifetime)
 
 Rebuild the engine host, every native gameplay module, generated descriptor bundle
@@ -384,3 +498,32 @@ Viewport providers use `EditorViewportAbi.h`, negotiate the complete appended
 and require interactive `editor.viewport` support. Existing field offsets remain
 unchanged. See the repository guide `docs/guides/extension-viewport-migration.md`
 for permissions, copied geometry budgets, canonical transform binding and teardown.
+
+## External C ABI 1.7 → 1.8 reference services
+
+`ExtensionServiceAbi.h` adds the negotiated `services` host-table tail. Old
+1.0–1.7 offsets and explicit prefixes remain unchanged. New service modules must
+request minor8, `HORO_EXTENSION_REQUIRES_SERVICES`, the complete new prefix and
+`extension.services`; load must repeat the table/size/schema/null checks.
+The SDK package version remains the engine version; 1.8 is the host ABI minor.
+
+The closed schema accepts synchronous signed64 scalar methods with at most8
+arguments and32 methods. It copies registration identities and method shapes.
+Actual host permission `extension.services.invoke` and transport capability
+`horo.extension.services` are explicit composition policy. A manifest dependency,
+static import or script API claim alone never grants invocation authority.
+Services use the existing BackendServiceRegistry; script bindings use the existing
+ScriptCapabilityContext/ScriptInvocationRegistry. The one supported Lua adapter
+is bounded and does not implement the full two-adapter or hot-rebind feature.
+
+Callbacks are synchronous and may run on workers; providers must be thread-safe.
+Shutdown also may run on a worker after admitted calls drain. Clients and request
+views are borrowed until their importing module unloads and for the call,
+respectively. Providers own allocations and destruction; no STL/exception/allocator
+crosses this C boundary. Cancellation is cooperative and never proof of drain.
+
+The engine's ExtensionManager, HeadlessExtensionHost and GuiScreenHost C++
+composition contracts grow. Rebuild their consumers from the same snapshot.
+This change does not alter Gameplay SDK25 layouts. To roll back, restore matching
+old SDK/binaries and remove minor8 requirements/service-dependent contributions;
+never disguise new modules as a prior prefix.

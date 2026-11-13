@@ -5,6 +5,7 @@
  */
 
 #include "Horo/AI/AITaskLifecycle.h"
+#include "Horo/AI/BehaviorTree.h"
 #include "Horo/AI/BlackboardInstance.h"
 #include "Horo/AI/DecisionAssetValidation.h"
 
@@ -23,6 +24,7 @@ namespace Horo::AI {
         extern const ErrorCodeDescriptor HierarchyInvalid;
         /** @brief A step is repeated, malformed, oversized, reentrant or no longer admitted by the task lifecycle. */
         extern const ErrorCodeDescriptor StepInvalid;
+        extern const ErrorCodeDescriptor AuthoredFailure;
     }  // namespace StateMachineErrors
     struct StateMachineEventIdentityTag;
     /** @brief Stable gameplay event identity; event payload facts enter the shared blackboard at BlackboardSync. */
@@ -55,6 +57,12 @@ namespace Horo::AI {
         BlackboardScalarValue operand{false}; /**< Ignored by Present; otherwise must match the admitted scalar kind. */
     };
 
+    /** @brief Provider use owned by an actual action phase, not a second project node registry. */
+    struct StateMachineProviderAction final {
+        DecisionAssetNode binding;
+        std::vector<BehaviorTreeProperty> properties;
+    };
+
     /** @brief One semantic state; hierarchy and actions use stable identities, never display labels. */
     struct StateMachineState final {
         DecisionNodeId id;
@@ -63,6 +71,12 @@ namespace Horo::AI {
         std::optional<TaskId> entry;
         std::optional<TaskId> update;
         std::optional<TaskId> exit;
+        std::optional<StateMachineProviderAction> entryProvider;
+        std::optional<StateMachineProviderAction> updateProvider;
+        std::optional<StateMachineProviderAction> exitProvider;
+        std::optional<DecisionSubplanCall> call;
+        DecisionStateTerminal terminal{DecisionStateTerminal::None};
+        SourceLocation source;
     };
 
     /** @brief One external transition; self transitions exit and re-enter the source state. */
@@ -73,6 +87,9 @@ namespace Horo::AI {
         std::int32_t priority{}; /**< Higher wins within one source depth; ties use ascending stable transition identity. */
         std::optional<StateMachineEventId> event; /**< Absent means condition-triggered; present requires this step's event. */
         std::vector<StateMachineGuard> guards;    /**< All guards must hold; an empty conjunction is true. */
+        std::optional<AiTaskState> childOutcome;  /**< Requires a call on the source state; compared after its one child step. */
+        std::vector<DecisionBlackboardRequirement> requirements;
+        SourceLocation location;
     };
 
     /** @brief Borrowed-by-value .horo_sm semantic source with no editor layout or runtime pointers. */
@@ -115,6 +132,11 @@ namespace Horo::AI {
         [[nodiscard]] static Result<std::shared_ptr<const CookedStateMachinePlan>> Compile(
             std::shared_ptr<const DecisionAssetPlan> decision, StateMachineAssetDescriptor source);
 
+        /** @brief Compiler-only composed admission retains real dependencies and validates every explicit call. */
+        [[nodiscard]] static Result<std::shared_ptr<const CookedStateMachinePlan>> CompileClosure(
+            DecisionClosureAdmission admission, std::shared_ptr<const DecisionAssetPlan> decision, StateMachineAssetDescriptor source);
+        [[nodiscard]] DecisionKernelStorage Storage() const noexcept;
+
         /** @brief Returns the unchanged shared decision contract. @return Retained immutable plan. */
         [[nodiscard]] const DecisionAssetPlan &Decision() const noexcept {
             return *decision_;
@@ -133,6 +155,8 @@ namespace Horo::AI {
     private:
         friend class StateMachineInstance;
 
+        [[nodiscard]] static Result<std::shared_ptr<const CookedStateMachinePlan>> CompileAdmitted(
+            std::shared_ptr<const DecisionAssetPlan> decision, StateMachineAssetDescriptor source, bool composed);
         [[nodiscard]] std::size_t Index(DecisionNodeId id) const noexcept;
         std::shared_ptr<const DecisionAssetPlan> decision_;
         StateMachineAssetDescriptor source_;
@@ -150,6 +174,13 @@ namespace Horo::AI {
         DecisionNodeId state;
         TaskId action;
         StateMachineActionPhase phase;
+        const AiTaskOperationContext &operation;
+        const BlackboardSnapshot &blackboard;
+        std::uint64_t tick;
+    };
+
+    struct StateMachineStateInvocation final {
+        DecisionNodeId state;
         const AiTaskOperationContext &operation;
         const BlackboardSnapshot &blackboard;
         std::uint64_t tick;
@@ -173,6 +204,25 @@ namespace Horo::AI {
          * @return Success or an owned typed cause; never retains invocation storage.
          */
         [[nodiscard]] virtual Result<void> Invoke(const StateMachineActionInvocation &invocation) noexcept = 0;
+
+        /** @brief Composition hooks run only for states with admitted calls; defaults reject incomplete adapters. */
+        [[nodiscard]] virtual bool SupportsSubplans() const noexcept {
+            return false;
+        }
+
+        [[nodiscard]] virtual Result<void> EnterState(const StateMachineStateInvocation &) noexcept {
+            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetSubtreeIncompatible));
+        }
+
+        [[nodiscard]] virtual Result<AiTaskState> UpdateState(const StateMachineStateInvocation &) noexcept {
+            return Result<AiTaskState>::Failure(MakeError(AIErrors::DecisionAssetSubtreeIncompatible));
+        }
+
+        [[nodiscard]] virtual Result<void> ExitState(const StateMachineStateInvocation &) noexcept {
+            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetSubtreeIncompatible));
+        }
+
+        virtual void CancelState(DecisionNodeId, AiTaskCancellationReason) noexcept {}
     };
 
     /** @brief Bounded evaluation disposition, not a competing task terminal-status vocabulary. */
@@ -245,7 +295,9 @@ namespace Horo::AI {
                                                           std::span<const StateMachineEventId> events = {},
                                                           StateMachineActions *actions = nullptr);
         /** @brief Cancels without invoking further actions. @param reason Shared cancellation cause. @return Shared disposition. */
-        [[nodiscard]] Result<AiTaskTransitionDisposition> Cancel(AiTaskCancellationReason reason);
+        [[nodiscard]] Result<AiTaskTransitionDisposition> Cancel(AiTaskCancellationReason reason, StateMachineActions *actions = nullptr);
+        /** @brief Reuses bounded storage after cancellation, with an owner-issued fresh task handle. */
+        [[nodiscard]] Result<void> Restart(AiTaskOperationContext operation);
 
         /** @brief Returns the shared immutable terminal outcome. @return Null before cancellation/failure. */
         [[nodiscard]] const AiTaskTerminalResult *TerminalResult() const noexcept {
@@ -258,6 +310,7 @@ namespace Horo::AI {
         StateMachineInstance &operator=(const StateMachineInstance &) = delete;
 
     private:
+        friend class CookedStateMachinePlan;
         using Path = std::array<std::size_t, StateMachineLimits::Depth>;
         [[nodiscard]] std::size_t MakePath(DecisionNodeId target, Path &path) const noexcept;
         [[nodiscard]] Result<void> CheckBoundary(const BlackboardSnapshot &blackboard);
@@ -269,6 +322,18 @@ namespace Horo::AI {
                                                                         StateMachineActions *actions);
         [[nodiscard]] Result<void> RunActions(const Path &path, std::size_t begin, std::size_t end, StateMachineActionPhase phase,
                                               const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions);
+        void StopCalls(const Path &path, std::size_t begin, std::size_t end, StateMachineActions *actions,
+                       AiTaskCancellationReason reason) noexcept;
+        [[nodiscard]] Result<void> InvokePhase(const StateMachineState &state, StateMachineActionPhase phase,
+                                               const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions);
+        [[nodiscard]] Result<bool> PreparePath(const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions);
+        [[nodiscard]] Result<bool> CommitTransition(const StateMachineTransition &transition, const BlackboardSnapshot &blackboard,
+                                                    std::uint64_t tick, StateMachineActions *actions);
+        [[nodiscard]] Result<void> RunState(const StateMachineState &state, std::size_t index, StateMachineActionPhase phase,
+                                            const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions);
+        [[nodiscard]] Result<void> RunCall(const StateMachineState &state, std::size_t index, StateMachineActionPhase phase,
+                                           const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions);
+        [[nodiscard]] Result<bool> FinishTerminal(StateMachineActions *actions);
         [[nodiscard]] Result<bool> GuardsHold(const StateMachineTransition &transition, const BlackboardSnapshot &blackboard) const;
         [[nodiscard]] Result<const StateMachineTransition *> Select(const BlackboardSnapshot &blackboard,
                                                                     std::span<const StateMachineEventId> events) const;
@@ -281,6 +346,8 @@ namespace Horo::AI {
         Path path_{};
         std::size_t depth_{};
         std::optional<std::uint64_t> lastTick_;
+        std::array<AiTaskState, StateMachineLimits::States> childOutcomes_{};
+        StateMachineActions *actions_{}; /**< Borrowed only while Step holds its scope guard. */
         bool evaluating_{};
     };
 }  // namespace Horo::AI

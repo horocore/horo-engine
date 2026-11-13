@@ -166,3 +166,29 @@ TEST_CASE("Physics Inspector slot exhaustion preserves every captured contributo
     CHECK(session.Draft().constraints.front().value == object.components.physicsConstraints.front());
     CHECK_FALSE(session.Draft().dirty);
 }
+
+TEST_CASE("Adding a collider or trigger supplies its local static body without inventing project references",
+          "[editor][physics][inspector]") {
+    for (const bool trigger : {false, true}) {
+        PhysicsInspectorSession session;
+        const SceneObject object{.id = {7}, .name = "Box"};
+        REQUIRE(session.Begin(object, Context(), 1));
+        session.AddCollider(trigger);
+        REQUIRE(session.Draft().body.has_value());
+        REQUIRE(session.Draft().colliders.size() == 1);
+        const auto &body = *session.Draft().body;
+        const auto &collider = session.Draft().colliders.front();
+        CHECK(body.motion == Runtime::AuthoredPhysicsMotionType::Static);
+        CHECK(collider.value.sensor == trigger);
+        CHECK(collider.value.body.object.value == object.id.value);
+        CHECK(collider.value.body.body == body.body);
+        CHECK(collider.value.id != body.id);
+        CHECK(collider.bodyObject.valid);
+        CHECK(collider.bodySlot.valid);
+        CHECK_FALSE(collider.profile.valid);
+        CHECK(session.Request().HasError());
+        session.Cancel();
+        CHECK_FALSE(session.Draft().body.has_value());
+        CHECK(session.Draft().colliders.empty());
+    }
+}

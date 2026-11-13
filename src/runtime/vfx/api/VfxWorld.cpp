@@ -1,5 +1,8 @@
 #include "Horo/Vfx/VfxWorld.h"
 
+#include "VfxWorldCoordinates.h"
+#include "VfxWorldSpawnInternal.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -9,9 +12,7 @@ namespace Horo::Vfx {
     namespace {
         /** @brief Computes canonical cell differences before conversion, preserving nearby positions at large global coordinates. */
         float RelativeAxis(Math::WorldCoordinateAxis64 simulation, Math::WorldCoordinateAxis64 render, float local) noexcept {
-            const auto cells = simulation.cellIndex - render.cellIndex;
-            const auto offset = static_cast<double>(simulation.offsetMillimeters) - render.offsetMillimeters;
-            return static_cast<float>(static_cast<double>(cells) * 1024.0 + offset / 1000.0 + local);
+            return Detail::VfxRelativeAxis(simulation, render, local);
         }
 
         /** @brief Rejects incompatible cooked material, topology and scene identities before activation. */
@@ -54,18 +55,28 @@ namespace Horo::Vfx {
         }
     }  // namespace
 
+    namespace {
+        bool ValidExtractionBounds(VfxExtractionBudget budget, std::uint32_t gpuBatchCapacity) noexcept {
+            constexpr std::uint32_t MaxBatches = 4'096;
+            if (constexpr std::uint32_t MaxFrameSlots = 16; gpuBatchCapacity > budget.maximumBatches || budget.maximumBatches == 0 ||
+                                                            budget.maximumBatches > MaxBatches || budget.maximumInstances == 0 ||
+                                                            budget.maximumInstances > CpuParticleBufferHardLimits::Particles ||
+                                                            budget.maximumDrawCalls == 0 || budget.maximumDrawCalls > MaxBatches * 3U ||
+                                                            budget.frameSlots == 0 || budget.frameSlots > MaxFrameSlots)
+                return false;
+            return true;
+        }
+    }  // namespace
+
     /** @copydoc VfxRenderExtractor::Prepare */
-    Result<VfxRenderExtractor> VfxRenderExtractor::Prepare(const VfxExtractionBudget budget) {
-        constexpr std::uint32_t MaxBatches = 4'096;
-        if (constexpr std::uint32_t MaxFrameSlots = 16;
-            budget.maximumBatches == 0 || budget.maximumBatches > MaxBatches || budget.maximumInstances == 0 ||
-            budget.maximumInstances > CpuParticleBufferHardLimits::Particles || budget.maximumDrawCalls == 0 ||
-            budget.maximumDrawCalls > MaxBatches * 3U || budget.frameSlots == 0 || budget.frameSlots > MaxFrameSlots)
+    Result<VfxRenderExtractor> VfxRenderExtractor::Prepare(const VfxExtractionBudget budget, std::uint32_t gpuBatchCapacity) {
+        if (!ValidExtractionBounds(budget, gpuBatchCapacity))
             return Result<VfxRenderExtractor>::Failure(MakeError(VfxErrors::LimitExceeded));
-        if (const auto bytes = static_cast<std::uint64_t>(budget.frameSlots) *
-                               (static_cast<std::uint64_t>(budget.maximumBatches) * sizeof(Render::VfxRenderBatch) +
-                                static_cast<std::uint64_t>(budget.maximumInstances) * sizeof(Render::VfxRenderInstance) +
-                                sizeof(Render::RenderWorldFrameData));
+        if (const auto bytes =
+                static_cast<std::uint64_t>(budget.frameSlots) *
+                (static_cast<std::uint64_t>(budget.maximumBatches) * sizeof(Render::VfxRenderBatch) +
+                 static_cast<std::uint64_t>(budget.maximumInstances) * sizeof(Render::VfxRenderInstance) +
+                 static_cast<std::uint64_t>(gpuBatchCapacity) * sizeof(Render::GpuVfxRenderBatch) + sizeof(Render::RenderWorldFrameData));
             bytes > budget.maximumBytes || budget.maximumBytes > CpuParticleBufferHardLimits::Bytes)
             return Result<VfxRenderExtractor>::Failure(MakeError(VfxErrors::LimitExceeded));
         try {
@@ -77,6 +88,14 @@ namespace Horo::Vfx {
                 auto frame = std::make_shared<Render::RenderWorldFrameData>();
                 frame->batches_.reserve(budget.maximumBatches);
                 frame->instances_.reserve(budget.maximumInstances);
+                frame->gpuBatches_.reserve(gpuBatchCapacity);
+                const auto actualBytes =
+                    static_cast<std::uint64_t>(budget.frameSlots) *
+                    (frame->batches_.capacity() * sizeof(Render::VfxRenderBatch) +
+                     frame->instances_.capacity() * sizeof(Render::VfxRenderInstance) +
+                     frame->gpuBatches_.capacity() * sizeof(Render::GpuVfxRenderBatch) + sizeof(Render::RenderWorldFrameData));
+                if (actualBytes > budget.maximumBytes)
+                    return Result<VfxRenderExtractor>::Failure(MakeError(VfxErrors::LimitExceeded));
                 extractor.slots_.push_back(std::move(frame));
             }
             return Result<VfxRenderExtractor>::Success(std::move(extractor));
@@ -89,43 +108,36 @@ namespace Horo::Vfx {
     VfxWorld::VfxWorld(VfxIdentityScope scene, VfxRenderExtractor extractor)
         : scene_(scene), extractor_(std::move(extractor)), owner_(std::this_thread::get_id()) {}
 
-    /** @copydoc VfxWorld::Prepare */
-    Result<std::unique_ptr<VfxWorld>> VfxWorld::Prepare(VfxIdentityScope scene, std::span<const VfxEmitterPreparation> bindings,
-                                                        VfxExtractionBudget budget) {
-        if (!scene.IsValid() || bindings.empty() || bindings.size() > 4'096)
-            return Result<std::unique_ptr<VfxWorld>>::Failure(MakeError(VfxErrors::IdentityInvalid));
-        std::uint64_t particles{};
-        for (const auto &binding : bindings)
-            particles += binding.particles.capacity;
-        if (particles > CpuParticleBufferHardLimits::Particles)
-            return Result<std::unique_ptr<VfxWorld>>::Failure(MakeError(VfxErrors::LimitExceeded));
+    Result<void> VfxWorld::ValidateCpuBindings(VfxIdentityScope scene, std::span<const VfxEmitterPreparation> bindings) {
         for (std::size_t index = 0; index < bindings.size(); ++index) {
             if (!ValidBinding(bindings[index], scene))
-                return Result<std::unique_ptr<VfxWorld>>::Failure(MakeError(VfxErrors::ParticleModeIncompatible));
+                return Result<void>::Failure(MakeError(VfxErrors::ParticleModeIncompatible));
             for (std::size_t previous = 0; previous < index; ++previous) {
                 const auto &left = bindings[previous];
                 const auto &right = bindings[index];
                 if (left.emitter.slot == right.emitter.slot || left.particles.buffer.slot == right.particles.buffer.slot ||
                     (left.effect.slot == right.effect.slot && left.effect != right.effect))
-                    return Result<std::unique_ptr<VfxWorld>>::Failure(MakeError(VfxErrors::IdentityInvalid));
+                    return Result<void>::Failure(MakeError(VfxErrors::IdentityInvalid));
             }
         }
-        auto extractor = VfxRenderExtractor::Prepare(budget);
-        if (extractor.HasError())
-            return Result<std::unique_ptr<VfxWorld>>::Failure(extractor.ErrorValue());
-        try {
-            auto world = std::make_unique<VfxWorld>(VfxWorld{scene, std::move(extractor).Value()});
-            world->emitters_.reserve(bindings.size());
-            for (const auto &binding : bindings) {
-                auto particleBuffer = CpuParticleBuffer::Create(binding.particles);
-                if (particleBuffer.HasError())
-                    return Result<std::unique_ptr<VfxWorld>>::Failure(particleBuffer.ErrorValue());
-                world->emitters_.emplace_back(binding, std::move(particleBuffer).Value(), false);
-            }
-            return Result<std::unique_ptr<VfxWorld>>::Success(std::move(world));
-        } catch (const std::bad_alloc &) {
-            return Result<std::unique_ptr<VfxWorld>>::Failure(MakeError(VfxErrors::ParticleBufferAllocationFailed));
+        return Result<void>::Success();
+    }
+
+    Result<void> VfxWorld::PrepareCpuEmitters(std::span<const VfxEmitterPreparation> bindings) {
+        emitters_.reserve(bindings.size());
+        for (const auto &binding : bindings) {
+            auto buffer = CpuParticleBuffer::Create(binding.particles);
+            if (buffer.HasError())
+                return Result<void>::Failure(buffer.ErrorValue());
+            emitters_.emplace_back(binding, std::move(buffer).Value(), false);
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc VfxWorld::Prepare */
+    Result<std::unique_ptr<VfxWorld>> VfxWorld::Prepare(VfxIdentityScope scene, std::span<const VfxEmitterPreparation> cpu,
+                                                        VfxExtractionBudget budget) {
+        return Prepare(scene, cpu, {}, budget);
     }
 
     /** @copydoc VfxWorld::Play */
@@ -135,20 +147,16 @@ namespace Horo::Vfx {
         if (shutDown_)
             return Result<void>::Failure(MakeError(VfxErrors::ParticleBufferShutDown));
         bool found = false;
-        for (const auto &emitter : emitters_) {
-            if (emitter.binding.effect == effect) {
-                if (emitter.retired)
-                    return Result<void>::Failure(MakeError(VfxErrors::GenerationExhausted));
-                if (emitter.live)
-                    return Result<void>::Failure(MakeError(VfxErrors::IdentityInvalid));
-                found = true;
-            }
-        }
+        if (!CanPlayGpu(effect, found))
+            return Result<void>::Failure(MakeError(VfxErrors::IdentityInvalid));
+        if (auto ready = CheckCpuPlay(effect, found); ready.HasError())
+            return ready;
         if (!found)
             return Result<void>::Failure(MakeError(VfxErrors::IdentityInvalid));
         for (auto &emitter : emitters_)
             if (emitter.binding.effect == effect)
                 emitter.live = true;
+        SetGpuLive(effect);
         return Result<void>::Success();
     }
 
@@ -158,11 +166,7 @@ namespace Horo::Vfx {
             return Result<EffectSystemId>::Failure(MakeError(VfxErrors::ParticleBufferThreadViolation));
         if (shutDown_)
             return Result<EffectSystemId>::Failure(MakeError(VfxErrors::IdentityInvalid));
-        if (const bool found = std::ranges::any_of(emitters_,
-                                                   [effect](const Emitter &emitter) {
-            return emitter.live && emitter.binding.effect == effect;
-        });
-            !found)
+        if (!HasLiveEffect(effect))
             return Result<EffectSystemId>::Failure(MakeError(VfxErrors::IdentityInvalid));
         auto next = effect;
         const bool exhausted = effect.generation == std::numeric_limits<std::uint32_t>::max();
@@ -177,6 +181,7 @@ namespace Horo::Vfx {
                 emitter.binding.effect = next;
             }
         }
+        StopGpu(effect, next, exhausted);
         if (exhausted)
             return Result<EffectSystemId>::Failure(MakeError(VfxErrors::GenerationExhausted));
         return Result<EffectSystemId>::Success(next);
@@ -206,6 +211,8 @@ namespace Horo::Vfx {
                 return closed;
             emitter.live = false;
         }
+        ShutdownGpu();
+        ShutdownSpawns();
         shutDown_ = true;
         return Result<void>::Success();
     }
@@ -266,6 +273,14 @@ namespace Horo::Vfx {
         return true;
     }
 
+    bool VfxWorld::AppendCpuEmitters(Render::RenderWorldFrameData &data, const Math::WorldCoordinate64 &origin,
+                                     VfxExtractionReport &report) const noexcept {
+        for (const auto &emitter : emitters_)
+            if (emitter.live && !extractor_.AppendEmitter(emitter.binding, emitter.particles, data, origin, report))
+                return false;
+        return AppendSpawnEmitters(data, origin, report);
+    }
+
     /** @copydoc VfxRenderExtractor::Extract */
     VfxExtractionOutcome VfxRenderExtractor::Extract(const VfxWorld &world, std::uint64_t frame, const Math::WorldCoordinate64 &origin,
                                                      std::uint64_t revision) noexcept {
@@ -293,15 +308,12 @@ namespace Horo::Vfx {
         auto &data = **available;
         data.batches_.clear();
         data.instances_.clear();
+        data.gpuBatches_.clear();
         data.scene_ = world.scene_.Value();
         data.frame_ = frame;
         data.originRevision_ = revision;
-        for (const auto &emitter : world.emitters_) {
-            if (!emitter.live)
-                continue;
-            if (!AppendEmitter(emitter.binding, emitter.particles, data, origin, report))
-                return outcome;
-        }
+        if (!world.AppendCpuEmitters(data, origin, report) || !AppendGpuEmitters(world, data, origin, report))
+            return outcome;
         lastFrame_ = frame;
         outcome.snapshot.data_ = *available;
         return outcome;

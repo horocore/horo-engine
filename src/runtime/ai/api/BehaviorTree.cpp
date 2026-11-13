@@ -86,20 +86,53 @@ namespace Horo::AI {
             return found == nodes.end() || found->id != id ? nodes.size() : static_cast<std::size_t>(std::distance(nodes.begin(), found));
         }
 
+        [[nodiscard]] bool ValidExecutableDefinition(const BehaviorTreeNode &node) noexcept {
+            using enum Horo::AI::DecisionControlKind;
+            const auto kind = node.control.kind;
+            if (kind >= Count)
+                return false;
+            if (kind == Unspecified)
+                return node.type.IsValid();
+            const bool provider = kind == Task || kind == Condition || kind == Service;
+            return provider == node.type.IsValid();
+        }
+
+        [[nodiscard]] bool ValidNodeReferences(const BehaviorTreeNode &node, BehaviorTreeGraphId graph) noexcept {
+            if (node.nestedSubtree && (!node.nestedSubtree->graph.IsValid() || !ValidVersion(node.nestedSubtree->requiredSchemaVersion) ||
+                                       node.nestedSubtree->graph == graph))
+                return false;
+            if (!node.call)
+                return true;
+            return node.call->asset.IsValid() && node.call->kind < DecisionPlanKind::Utility && node.call->schema.IsValid();
+        }
+
+        [[nodiscard]] bool ValidControlBounds(const BehaviorTreeNode &node) noexcept {
+            return node.control.parallelPolicy < BehaviorTreeParallelPolicy::Count &&
+                   node.control.abortMode < BehaviorTreeAbortMode::Count && node.control.serviceMode < BehaviorTreeServiceMode::Count &&
+                   node.control.iterations > 0 && node.requirements.size() <= DecisionAssetValidationHardLimits::RequirementsPerNode &&
+                   node.source.source.size() <= 4096;
+        }
+
+        [[nodiscard]] bool ValidNodeCardinality(const BehaviorTreeNode &node) noexcept {
+            using enum BehaviorTreeNodeKind;
+            if (node.kind == Root || node.kind == Decorator)
+                return node.minimumChildren == 1 && node.maximumChildren == 1;
+            if (node.kind == Task || node.kind == Service)
+                return node.minimumChildren == 0 && node.maximumChildren == 0;
+            return true;
+        }
+
+        [[nodiscard]] bool ValidNodeHeader(const BehaviorTreeNode &node, const BehaviorTreeAssetLimits &limits) {
+            return node.id.IsValid() && node.typeVersion.major != 0 && IsKnown(node.kind) && ValidName(node.displayName, limits) &&
+                   node.minimumChildren <= node.maximumChildren && node.maximumChildren <= limits.maximumChildrenPerNode;
+        }
+
         [[nodiscard]] Result<void> ValidateNodeShape(const BehaviorTreeNode &node, const BehaviorTreeGraphId graph,
                                                      const BehaviorTreeAssetLimits &limits) {
-            using enum BehaviorTreeNodeKind;
-            if (!node.id.IsValid() || !node.type.IsValid() || node.typeVersion.major == 0 || !IsKnown(node.kind) ||
-                !ValidName(node.displayName, limits) || node.minimumChildren > node.maximumChildren ||
-                node.maximumChildren > limits.maximumChildrenPerNode ||
-                (node.nestedSubtree.has_value() &&
-                 (!node.nestedSubtree->graph.IsValid() || !ValidVersion(node.nestedSubtree->requiredSchemaVersion) ||
-                  node.nestedSubtree->graph == graph)))
+            if (!ValidNodeHeader(node, limits) || !ValidExecutableDefinition(node) || !ValidNodeReferences(node, graph) ||
+                !ValidControlBounds(node))
                 return Failure<void>(AIErrors::BehaviorTreeSchemaInvalid);
-            if (node.kind == Root || node.kind == Decorator) {
-                if (node.minimumChildren != 1 || node.maximumChildren != 1)
-                    return Failure<void>(AIErrors::BehaviorTreeTopologyInvalid);
-            } else if ((node.kind == Task || node.kind == Service) && (node.minimumChildren != 0 || node.maximumChildren != 0))
+            if (!ValidNodeCardinality(node))
                 return Failure<void>(AIErrors::BehaviorTreeTopologyInvalid);
             return Result<void>::Success();
         }

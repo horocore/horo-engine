@@ -1,5 +1,8 @@
 #include "CanonicalPhysicsRuntimeDiagnostics.h"
 
+#include "CanonicalPhysicsStateAllocator.h"
+#include "CanonicalPhysicsStateColdCost.h"
+
 #include <Jolt/Core/Memory.h>
 #include <algorithm>
 #include <charconv>
@@ -11,41 +14,78 @@
 
 namespace Horo::Physics::Detail {
     namespace {
-        /** @brief Native allocation callbacks retained while the explicit canonical owner is alive. */
+        /** @brief Native allocation callbacks retained while the explicit canonical
+         * owner is alive. */
         struct AllocatorFunctions final {
             JPH::AllocateFunction allocate{};
             JPH::ReallocateFunction reallocate{};
             JPH::AlignedAllocateFunction alignedAllocate{};
+            JPH::FreeFunction free{};
+            JPH::AlignedFreeFunction alignedFree{};
         };
 
         using NativeAllocationBlock = std::invoke_result_t<JPH::AllocateFunction, std::size_t>;
 
-        /** @brief Returns the process-owned native allocator callbacks saved around checked installation. */
+        /** @brief Returns the process-owned native allocator callbacks saved around
+         * checked installation. */
         AllocatorFunctions &InstalledAllocatorFunctions() noexcept {
             static AllocatorFunctions functions;
             return functions;
         }
 
-        /** @brief Native allocation cannot unwind through no-exception Jolt frames; fail closed on exhaustion. */
+        /** @brief Native allocation cannot unwind through no-exception Jolt frames;
+         * fail closed on exhaustion. */
         NativeAllocationBlock RequireNativeAllocation(NativeAllocationBlock memory) noexcept {
             if (memory == nullptr)
                 std::abort();
             return memory;
         }
 
-        /** @brief Delegates one native allocation while preserving the process-owned checked callback contract. */
+        /** @brief Delegates one native allocation while preserving the process-owned
+         * checked callback contract. */
         NativeAllocationBlock CheckedAllocate(const std::size_t size) {
+            if (auto *arena = ActiveCanonicalPhysicsStateArena())
+                return arena->Allocate(std::max(size, std::size_t{1}), 16);
+            RecordCanonicalPhysicsStateColdAllocation(std::max(size, std::size_t{1}));
             return RequireNativeAllocation(InstalledAllocatorFunctions().allocate(std::max(size, std::size_t{1})));
         }
 
-        /** @brief Delegates one native reallocation while preserving the process-owned checked callback contract. */
+        /** @brief Delegates one native reallocation while preserving the process-owned
+         * checked callback contract. */
         NativeAllocationBlock CheckedReallocate(NativeAllocationBlock memory, const std::size_t oldSize, const std::size_t newSize) {
+            if (auto *arena = ActiveCanonicalPhysicsStateArena(); arena && (!memory || arena->Contains(memory)))
+                return arena->Reallocate(memory, oldSize, std::max(newSize, std::size_t{1}));
+            if (auto *arena = ActiveCanonicalPhysicsStateArena())
+                arena->RecordForeignReallocation();
+            RecordCanonicalPhysicsStateColdAllocation(std::max(newSize, std::size_t{1}));
             return RequireNativeAllocation(InstalledAllocatorFunctions().reallocate(memory, oldSize, std::max(newSize, std::size_t{1})));
         }
 
-        /** @brief Delegates one aligned native allocation while preserving the process-owned checked callback contract. */
+        /** @brief Delegates one aligned native allocation while preserving the
+         * process-owned checked callback contract. */
         NativeAllocationBlock CheckedAlignedAllocate(const std::size_t size, const std::size_t alignment) {
+            if (auto *arena = ActiveCanonicalPhysicsStateArena())
+                return arena->Allocate(std::max(size, std::size_t{1}), alignment);
+            RecordCanonicalPhysicsStateColdAllocation(std::max(size, std::size_t{1}));
             return RequireNativeAllocation(InstalledAllocatorFunctions().alignedAllocate(std::max(size, std::size_t{1}), alignment));
+        }
+
+        /** @brief Frees only actual arena-owned temporary pointers through scratch
+         * provenance. */
+        void CheckedFree(void *memory) {
+            if (auto *arena = ActiveCanonicalPhysicsStateArena(); arena && arena->Contains(memory))
+                arena->Free(memory);
+            else
+                InstalledAllocatorFunctions().free(memory);
+        }
+
+        /** @brief Foreign/aligned native ownership retains its original allocator
+         * authority. */
+        void CheckedAlignedFree(void *memory) {
+            if (auto *arena = ActiveCanonicalPhysicsStateArena(); arena && arena->Contains(memory))
+                arena->Free(memory);
+            else
+                InstalledAllocatorFunctions().alignedFree(memory);
         }
     }  // namespace
 
@@ -81,7 +121,8 @@ namespace Horo::Physics::Detail {
         const auto desired = static_cast<std::uint8_t>(static_cast<std::uint8_t>(kind) + std::uint8_t{1});
         std::uint8_t current = emergencyKind.load();
         while (current < desired && !emergencyKind.compare_exchange_weak(current, desired)) {
-            // A producer changed the priority; retry only while this condition is more severe.
+            // A producer changed the priority; retry only while this condition is more
+            // severe.
         }
     }
 
@@ -94,8 +135,9 @@ namespace Horo::Physics::Detail {
         }
         if (!occupied || kind > retainedKind) {
             retainedKind = kind;
-            const std::string_view evidence =
-                message.empty() ? std::string_view{"Native solver emitted an empty diagnostic message."} : message;
+            const std::string_view evidence = message.empty() ? std::string_view{"Native solver emitted an empty "
+                                                                                 "diagnostic message."}
+                                                              : message;
             const std::size_t count = std::min(evidence.size(), text.size() - 1);
             std::copy_n(evidence.data(), count, text.data());
             text[count] = '\0';
@@ -107,16 +149,17 @@ namespace Horo::Physics::Detail {
 
     std::optional<Error> DiagnosticInbox::Drain() {
         if (lock.test_and_set())
-            return MakeError(PhysicsErrors::SolverFatalCondition,
-                             "A native solver callback did not quiesce before the owner-thread drain boundary.");
+            return MakeError(PhysicsErrors::SolverFatalCondition, "A native solver callback did not quiesce before the "
+                                                                  "owner-thread drain boundary.");
         const std::uint8_t emergency = emergencyKind.exchange(0);
         if (!occupied && emergency == 0) {
             lock.clear();
             return std::nullopt;
         }
         CanonicalDiagnosticKind kind = occupied ? retainedKind : static_cast<CanonicalDiagnosticKind>(emergency - 1);
-        std::string message =
-            occupied ? std::string{text.data(), size} : std::string{"Native solver fatal evidence was bounded by callback contention."};
+        std::string message = occupied ? std::string{text.data(), size}
+                                       : std::string{"Native solver fatal evidence was "
+                                                     "bounded by callback contention."};
         if (occupied && emergency > static_cast<std::uint8_t>(kind) + 1) {
             kind = static_cast<CanonicalDiagnosticKind>(emergency - 1);
             message = "Native solver fatal evidence was bounded by callback contention.";
@@ -133,7 +176,9 @@ namespace Horo::Physics::Detail {
         return inbox;
     }
 
-    void CaptureNativeTrace(const char *format, ...) noexcept {  // NOSONAR -- JPH::TraceFunction requires this C varargs ABI.
+    void CaptureNativeTrace(const char *format,
+                            ...) noexcept {  // NOSONAR -- JPH::TraceFunction
+                                             // requires this C varargs ABI.
         DiagnosticInbox *inbox = ActiveDiagnosticInbox().load();
         if (inbox == nullptr || format == nullptr)
             return;
@@ -141,7 +186,8 @@ namespace Horo::Physics::Detail {
         message.fill('\0');
         std::va_list arguments;
         va_start(arguments, format);
-        const int formatted = std::vsnprintf(message.data(), message.size(), format, arguments);  // NOSONAR -- native format ABI.
+        const int formatted = std::vsnprintf(message.data(), message.size(), format,
+                                             arguments);  // NOSONAR -- native format ABI.
         va_end(arguments);
         if (formatted < 0)
             inbox->Submit(CanonicalDiagnosticKind::Validation, "Native solver validation message could not be formatted.");
@@ -166,10 +212,12 @@ namespace Horo::Physics::Detail {
 
     void InstallAllocators() {
         JPH::RegisterDefaultAllocator();
-        InstalledAllocatorFunctions() = {JPH::Allocate, JPH::Reallocate, JPH::AlignedAllocate};
+        InstalledAllocatorFunctions() = {JPH::Allocate, JPH::Reallocate, JPH::AlignedAllocate, JPH::Free, JPH::AlignedFree};
         JPH::Allocate = CheckedAllocate;
         JPH::Reallocate = CheckedReallocate;
         JPH::AlignedAllocate = CheckedAlignedAllocate;
+        JPH::Free = CheckedFree;
+        JPH::AlignedFree = CheckedAlignedFree;
     }
 
     void ResetAllocators() noexcept {

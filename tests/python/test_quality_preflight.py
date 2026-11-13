@@ -10,6 +10,7 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -214,6 +215,90 @@ def test_header_context_follows_transitive_literal_includes(tmp_path: Path):
         sonar.header_context([entry], [missing], tmp_path)
 
 
+def test_header_context_prefers_nearby_consumer_without_reading_unrelated_graph(tmp_path: Path):
+    nearby = tmp_path / "panel"
+    nearby.mkdir()
+    header = nearby / "panel.h"
+    source = nearby / "panel.cpp"
+    unrelated = tmp_path / "unrelated.cpp"
+    header.write_text("int value;\n")
+    source.write_text('#include "panel.h"\n')
+    unrelated.write_text("int unrelated;\n")
+    entries = [{"source": path, "includes": [tmp_path], "target": path.stem + ".o"}
+               for path in (unrelated, source)]
+    with patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads:
+        assert sonar.header_context(entries, [header], tmp_path) == {header: entries[1]}
+        assert all(call.args[0] != unrelated for call in reads.call_args_list)
+
+
+def test_header_context_prefers_ancestor_directory_consumers(tmp_path: Path):
+    directory = tmp_path / "editor" / "panels"
+    fields = directory / "fields"
+    fields.mkdir(parents=True)
+    header = fields / "schema.h"
+    header.write_text("int field;\n", encoding="utf-8")
+    source = directory / "panel.cpp"
+    source.write_text('#include "fields/schema.h"\n', encoding="utf-8")
+    unrelated = tmp_path / "unrelated.cpp"
+    unrelated.write_text("int unrelated;\n", encoding="utf-8")
+    entries = [{"source": path, "includes": [tmp_path], "target": path.stem + ".o"}
+               for path in (unrelated, source)]
+
+    with patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads:
+        assert sonar.header_context(entries, [header], tmp_path) == {header: entries[1]}
+        assert all(call.args[0] != unrelated for call in reads.call_args_list)
+
+
+def test_header_context_empty_selection_does_not_read_unrelated_sources(tmp_path: Path):
+    source = tmp_path / "unrelated.cpp"
+    source.write_text("int unrelated;\n", encoding="utf-8")
+    entry = {"source": source, "includes": [tmp_path], "target": "unrelated.o"}
+    with patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads:
+        assert sonar.header_context([entry], [], tmp_path) == {}
+        reads.assert_not_called()
+
+
+def test_header_context_prefers_public_header_counterparts(tmp_path: Path):
+    public = tmp_path / "include"
+    public.mkdir()
+    first, second = public / "first.h", public / "second.h"
+    first.write_text('#include "unrelated.h"\n')
+    second.write_text("int second;\n")
+    unrelated = tmp_path / "unrelated.cpp"
+    unrelated.write_text("int unrelated;\n")
+    sources = [tmp_path / "first.cpp", tmp_path / "second.cpp"]
+    for source in sources:
+        source.write_text(f'#include "{source.stem}.h"\n')
+    entries = [{"source": path, "includes": [public], "target": path.stem + ".o"}
+               for path in [unrelated, *sources]]
+    with patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads:
+        assert sonar.header_context(entries, [first, second], tmp_path) == {first: entries[1], second: entries[2]}
+        assert all(call.args[0] != unrelated for call in reads.call_args_list)
+
+
+def test_header_context_counterpart_fallback_still_follows_selected_headers(tmp_path: Path):
+    source = tmp_path / "owner.cpp"
+    owner, detail = tmp_path / "owner.h", tmp_path / "detail.h"
+    source.write_text('#include "owner.h"\n')
+    owner.write_text('#include "detail.h"\n')
+    detail.write_text("int detail;\n")
+    entry = {"source": source, "includes": [tmp_path], "target": "owner.o"}
+    assert sonar.header_context([entry], [owner, detail], tmp_path) == {owner: entry, detail: entry}
+
+
+def test_header_context_keeps_distant_consumers_as_fallback(tmp_path: Path):
+    public = tmp_path / "include"
+    public.mkdir()
+    header = public / "public.h"
+    header.write_text("int value;\n")
+    nearby, distant = public / "unrelated.cpp", tmp_path / "consumer.cpp"
+    nearby.write_text("int unrelated;\n")
+    distant.write_text('#include "public.h"\n')
+    entries = [{"source": path, "includes": [public], "target": path.stem + ".o"}
+               for path in (distant, nearby)]
+    assert sonar.header_context(entries, [header], tmp_path) == {header: entries[0]}
+
+
 def test_wrong_worktree_compilation_database_is_rejected(tmp_path: Path):
     build = tmp_path / "build"
     build.mkdir()
@@ -229,6 +314,31 @@ def test_compiler_entries_require_in_build_object_target(tmp_path: Path):
     database.write_text(json.dumps([{"directory": str(tmp_path), "file": "source.cpp", "command": "c++ -c source.cpp"}]))
     with pytest.raises(AnalysisError, match="object target"):
         sonar.compiler_entries(database, tmp_path)
+
+
+@pytest.mark.parametrize("cache_directory", [".cmake/fetchcontent", "vendor", "deprecated"])
+def test_compiler_entries_omit_excluded_dependency_objects_outside_build(tmp_path: Path, cache_directory: str):
+    build = tmp_path / "build"
+    build.mkdir()
+    source = tmp_path / "source.cpp"
+    source.write_text("int value;\n", encoding="utf-8")
+    cache = tmp_path / cache_directory
+    cache.mkdir(parents=True)
+    dependency = cache / "dependency.cpp"
+    dependency.write_text("int dependency;\n", encoding="utf-8")
+    database = build / "compile_commands.json"
+    database.write_text(json.dumps([
+        {"directory": str(build), "file": str(dependency),
+         "arguments": ["c++", "-c", str(dependency)], "output": str(cache / "dependency.o")},
+        {"directory": str(build), "file": str(source),
+         "arguments": ["c++", "-I", str(cache), "-c", str(source)], "output": "source.o"},
+    ]), encoding="utf-8")
+
+    entries = sonar.compiler_entries(database, tmp_path)
+
+    assert [entry["source"] for entry in entries] == [source]
+    assert entries[0]["target"] == "source.o"
+    assert cache in entries[0]["includes"]
 
 
 def test_duplication_retains_unchanged_clone_partner(tmp_path: Path):

@@ -123,11 +123,13 @@ namespace Horo::Extensions {
 
     /** @brief Derives the restricted context allowlists only from the copied initial declarative form. */
     static HoroExtensionStatus CopyFormPermissions(const std::shared_ptr<EditorActivitySession> &session,
-                                                   const HoroEditorActivityDescriptor *descriptor) {
+                                                   AssetImporterRegistrationSession &load, const HoroEditorActivityDescriptor *descriptor) {
         auto copied = Detail::CopyActivityForm(descriptor->initialSnapshot, session->drawer.surface.id,
                                                session->activity.surface.labelLocalizationKey);
-        if (copied.HasError())
+        if (copied.HasError()) {
+            load.error = copied.ErrorValue();
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
+        }
         session->drawer.localization.emplace_back(session->activity.surface.labelLocalizationKey);
         for (const auto &node : copied.Value().nodes) {
             const auto &base = EditorUiNodeBaseOf(node);
@@ -177,8 +179,7 @@ namespace Horo::Extensions {
 
     /** @brief Seals the explicit custom feature grant before publication; basic UI support confers no advanced authority. */
     static HoroExtensionStatus AdmitComposition(const std::shared_ptr<EditorActivitySession> &session,
-                                                const AssetImporterRegistrationSession &load,
-                                                const HoroEditorActivityDescriptor &descriptor) {
+                                                AssetImporterRegistrationSession &load, const HoroEditorActivityDescriptor &descriptor) {
         const bool custom = std::ranges::find(load.extensionModule->requiredCapabilities, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY) !=
                             load.extensionModule->requiredCapabilities.end();
         if ((descriptor.initialSnapshot.schemaVersion == HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION ||
@@ -192,8 +193,10 @@ namespace Horo::Extensions {
             session->activity.surface.requiredCapabilities.push_back(EditorCustomCompositionCapability);
         }
         auto admission = ExtensionCapabilityAdmission::Evaluate(request, load.editorHost->AdmissionPolicy());
-        if (admission.HasError())
+        if (admission.HasError()) {
+            load.error = admission.ErrorValue();
             return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+        }
         session->admission.emplace(std::move(admission).Value());
         if (custom) {
             auto grant = session->admission->Grant(EditorCustomCompositionCapability);
@@ -204,45 +207,139 @@ namespace Horo::Extensions {
         return HORO_EXTENSION_SUCCESS;
     }
 
+    /** @brief Copies only explicitly declared command metadata, without executing module code. */
+    static bool CopyCommands(EditorActivitySession &session, const AssetImporterRegistrationSession &load,
+                             const HoroEditorActivityDescriptor &descriptor) {
+        if (descriptor.schemaVersion == 1)
+            return true;
+        if (descriptor.structSize < sizeof(HoroEditorActivityDescriptorV2) ||
+            std::ranges::find(load.extensionModule->requiredCapabilities, HORO_EDITOR_COMMAND_HOST_CAPABILITY) ==
+                load.extensionModule->requiredCapabilities.end())
+            return false;
+        const auto &extended = reinterpret_cast<const HoroEditorActivityDescriptorV2 &>(descriptor);
+        if (extended.commandCount > 64 || (extended.commandCount && !extended.commands))
+            return false;
+        for (std::uint32_t index = 0; index < extended.commandCount; ++index) {
+            const auto &input = extended.commands[index];
+            EditorActivitySession::Command command;
+            if (!Detail::CopyActivityText(input.id, command.descriptor.id.value) || !Detail::CopyActivityText(input.nodeId, command.node) ||
+                !Detail::CopyActivityText(input.actionId, command.action) ||
+                !Detail::CopyActivityText(input.labelKey, command.descriptor.labelLocalizationKey, 128) ||
+                !Detail::CopyActivityText(input.shortcut, command.descriptor.shortcut, 64) ||
+                !Declared(load, "editor.command", command.descriptor.id.value) || command.descriptor.id.value.starts_with("editor.") ||
+                std::ranges::none_of(session.messages, [&](const auto &message) {
+                return message.locale == "en-US" && message.key == command.descriptor.labelLocalizationKey;
+            }))
+                return false;
+            if (const bool action = std::ranges::any_of(session.form.nodes,
+                                                        [&](const auto &node) {
+                return std::visit([&](const auto &typed) {
+                    if constexpr (requires { typed.action; })
+                        return typed.base.id.value == command.node && typed.action.value == command.action;
+                    else
+                        return false;
+                }, node.payload);
+            });
+                !action)
+                return false;
+            session.commands.push_back(std::move(command));
+        }
+        return true;
+    }
+
+    /** @brief Preserves an earlier typed failure, otherwise names the exact rejecting stage without changing ABI status. */
+    static HoroExtensionStatus RejectActivityStage(AssetImporterRegistrationSession &load, const HoroExtensionStatus status,
+                                                   const std::string_view stage) noexcept {
+        if (!load.error.code.Value().empty())
+            return status;
+        try {
+            load.error = MakeError(ExtensionErrors::ContributionRejected, "Editor activity rejected at " + std::string{stage} + ".");
+        } catch (...) {
+            // Sticky ABI failure remains authoritative when diagnostic allocation cannot succeed.
+        }
+        return status;
+    }
+
+    static bool RegistrationOwners(const AssetImporterRegistrationSession &load) noexcept {
+        return load.editorHost && load.manifest && load.extensionModule && load.lifetime && load.retirement &&
+               load.lifetime->ownerThread == std::this_thread::get_id();
+    }
+
+    static bool RegistrationDescriptor(const HoroEditorActivityDescriptor &descriptor) noexcept {
+        return descriptor.structSize >= sizeof(HoroEditorActivityDescriptor) &&
+               (descriptor.schemaVersion == 1 || descriptor.schemaVersion == 2) && descriptor.side <= HORO_EDITOR_ACTIVITY_BOTTOM &&
+               descriptor.group <= 2 && descriptor.openByDefault <= 1 && descriptor.messageCount <= 128 &&
+               (descriptor.messageCount == 0 || descriptor.messages);
+    }
+
+    static bool RegistrationInput(const AssetImporterRegistrationSession &load, const HoroEditorActivityDescriptor *descriptor,
+                                  const HoroEditorActivitySessionApi *api) noexcept {
+        if (!descriptor || !api || api->structSize < sizeof(HoroEditorActivitySessionApi))
+            return false;
+        return RegistrationOwners(load) && RegistrationDescriptor(*descriptor);
+    }
+
+    static HoroExtensionStatus PrepareActivitySession(const std::shared_ptr<EditorActivitySession> &session,
+                                                      AssetImporterRegistrationSession &load,
+                                                      const HoroEditorActivityDescriptor &descriptor, std::string &resource) {
+        auto status = CopyDescriptors(session, load, &descriptor, resource);
+        if (status != HORO_EXTENSION_SUCCESS)
+            return RejectActivityStage(load, status, "descriptor ownership");
+        status = CopyFormPermissions(session, load, &descriptor);
+        if (status != HORO_EXTENSION_SUCCESS)
+            return RejectActivityStage(load, status, "initial form");
+        status = CopyMessages(session, &descriptor);
+        if (status != HORO_EXTENSION_SUCCESS)
+            return RejectActivityStage(load, status, "messages/action provider");
+        if (!CopyCommands(*session, load, descriptor))
+            return RejectActivityStage(load, HORO_EXTENSION_ERROR_INVALID_ARGS, "commands");
+        status = AdmitComposition(session, load, descriptor);
+        if (status != HORO_EXTENSION_SUCCESS)
+            return RejectActivityStage(load, status, "custom composition admission");
+        return HORO_EXTENSION_SUCCESS;
+    }
+
+    static HoroExtensionStatus StageActivitySession(const std::shared_ptr<EditorActivitySession> &session,
+                                                    AssetImporterRegistrationSession &load, const HoroEditorActivitySnapshot &initial) {
+        if (const auto status = session->Publish(initial); status != HORO_EXTENSION_SUCCESS)
+            return RejectActivityStage(load, status, "initial publication");
+        if (!EditorActivityHostAccess::Stage(*load.editorHost, session))
+            return RejectActivityStage(load, HORO_EXTENSION_ERROR_OUTPUT_REJECTED, "host staging");
+        if (!load.retirement->RegisterContribution(load.extensionModule->id, session))
+            return RejectActivityStage(load, HORO_EXTENSION_ERROR_OUTPUT_REJECTED, "retirement ownership");
+        return HORO_EXTENSION_SUCCESS;
+    }
+
     /** @brief Validates and copies one complete ABI contribution before admission. */
     static HoroExtensionStatus RegisterEditorActivityImpl(AssetImporterRegistrationSession &load,
                                                           const HoroEditorActivityDescriptor *descriptor,
                                                           HoroEditorActivitySessionApi *api) noexcept {
-        if (descriptor == nullptr || api == nullptr || api->structSize < sizeof(HoroEditorActivitySessionApi))
-            return HORO_EXTENSION_ERROR_INVALID_ARGS;
+        if (!RegistrationInput(load, descriptor, api))
+            return RejectActivityStage(load, HORO_EXTENSION_ERROR_INVALID_ARGS, "ABI prefix/owner validation");
         try {
-            if (!load.editorHost || !load.manifest || !load.extensionModule || !load.lifetime || !load.retirement ||
-                load.lifetime->ownerThread != std::this_thread::get_id() || descriptor->structSize < sizeof(HoroEditorActivityDescriptor) ||
-                descriptor->schemaVersion != HORO_EDITOR_ACTIVITY_SCHEMA_VERSION || descriptor->side > HORO_EDITOR_ACTIVITY_BOTTOM ||
-                descriptor->group > 2 || descriptor->openByDefault > 1 || descriptor->messageCount > 128 ||
-                (descriptor->messageCount != 0 && descriptor->messages == nullptr))
-                return HORO_EXTENSION_ERROR_INVALID_ARGS;
             auto session = std::make_shared<EditorActivitySession>();
             session->host = load.editorHost;
             session->actions.provider = EditorActivityProviderAction{*descriptor};
             session->retirement = load.retirement;
             std::string resource;
-            if (const auto status = CopyDescriptors(session, load, descriptor, resource); status != HORO_EXTENSION_SUCCESS)
+            auto status = PrepareActivitySession(session, load, *descriptor, resource);
+            if (status != HORO_EXTENSION_SUCCESS)
                 return status;
-            if (CopyFormPermissions(session, descriptor) != HORO_EXTENSION_SUCCESS ||
-                CopyMessages(session, descriptor) != HORO_EXTENSION_SUCCESS)
-                return HORO_EXTENSION_ERROR_INVALID_ARGS;
-            if (AdmitComposition(session, load, *descriptor) != HORO_EXTENSION_SUCCESS)
-                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             auto raster = ReadIcon(*load.manifest, resource);
-            if (raster.HasError())
+            if (raster.HasError()) {
+                load.error = raster.ErrorValue();
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
+            }
             session->icon = std::make_shared<EditorSvgIcon>(std::move(raster).Value());
-            if (session->Publish(descriptor->initialSnapshot) != HORO_EXTENSION_SUCCESS ||
-                !EditorActivityHostAccess::Stage(*load.editorHost, session) ||
-                !load.retirement->RegisterContribution(load.extensionModule->id, session))
-                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            status = StageActivitySession(session, load, descriptor->initialSnapshot);
+            if (status != HORO_EXTENSION_SUCCESS)
+                return status;
             load.lifetime->editorActivities.push_back(session);
             *api = {sizeof(HoroEditorActivitySessionApi), HORO_EDITOR_ACTIVITY_SESSION_VERSION, session->customGrant ? 255U : 31U,
                     session.get(), HoroPublishActivitySession};
             return HORO_EXTENSION_SUCCESS;
         } catch (...) {
-            return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            return RejectActivityStage(load, HORO_EXTENSION_ERROR_OUTPUT_REJECTED, "registration exception boundary");
         }
     }
 
@@ -258,8 +355,9 @@ extern "C" HoroExtensionStatus RegisterExternalEditorActivity(void *context, con
     if (status != HORO_EXTENSION_SUCCESS) {
         load.failed = true;
         try {
-            load.error =
-                Horo::MakeError(Horo::Extensions::ExtensionErrors::ContributionRejected, "Editor activity ABI publication was rejected.");
+            if (load.error.code.Value().empty())
+                load.error = Horo::MakeError(Horo::Extensions::ExtensionErrors::ContributionRejected,
+                                             "Editor activity ABI publication was rejected.");
         } catch (...) {
             // The typed ABI failure and sticky rejection remain authoritative when diagnostics cannot allocate.
             return status;
@@ -352,6 +450,28 @@ namespace Horo::Extensions {
         return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected));
     }
 
+    /** @copydoc EditorActivityHost::PreparedCommands */
+    std::span<const EditorActivityCommandProjection> EditorActivityHost::PreparedCommands() const noexcept {
+        return state_->preparedCommands;
+    }
+
+    /** @copydoc EditorActivityHost::QueueCommand */
+    Result<void> EditorActivityHost::QueueCommand(const std::string_view id) const {
+        const auto invocation = state_->commands.Invoke(id, {});
+        if (invocation.HasError())
+            return Result<void>::Failure(invocation.ErrorValue());
+        for (const auto &weak : state_->sessions) {
+            const auto session = weak.lock();
+            if (!session || session->activity.surface.provider != invocation.Value().provider)
+                continue;
+            for (const auto &command : session->commands)
+                if (command.descriptor.id.value == id)
+                    return QueueAction(session->activity.surface.provider, session->activity.surface.id, command.node, command.action,
+                                       session->revision);
+        }
+        return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected));
+    }
+
     /** @brief Finds the committed owner of a captured activity projection without invoking provider code. */
     static std::shared_ptr<EditorActivitySession> ProjectionOwner(const std::vector<std::weak_ptr<EditorActivitySession>> &sessions,
                                                                   const EditorSurfaceSnapshot &surface) {
@@ -401,6 +521,9 @@ namespace Horo::Extensions {
             return std::tie(a.activity->side, a.activity->group, a.placement.order, a.id) <
                    std::tie(b.activity->side, b.activity->group, b.placement.order, b.id);
         });
+        state_->preparedCommands.clear();
+        for (const auto &command : state_->commands.Snapshot())
+            state_->preparedCommands.push_back({command.command, command.provider});
         state_->preparedRevision = revision;
     }
 
@@ -427,6 +550,8 @@ namespace Horo::Extensions {
         for (const auto &weak : state_->sessions)
             if (const auto session = weak.lock())
                 session->Revoke();
+        state_->commands.BeginShutdown();
+        state_->preparedCommands.clear();
         state_->registry.BeginShutdown();
         state_->prepared.clear();
     }

@@ -13,6 +13,24 @@
 #include <utility>
 
 namespace Horo::Foundation::Paths {
+    /** @copydoc NativeApiPath */
+    std::filesystem::path NativeApiPath(const std::filesystem::path &path) {
+#if defined(_WIN32)
+        if (!path.is_absolute() || path != path.lexically_normal())
+            return path;
+        auto preferred = path;
+        preferred.make_preferred();
+        const auto &text = preferred.native();
+        if (text.starts_with(L"\\\\?\\") || text.starts_with(L"\\\\.\\"))
+            return preferred;
+        if (text.starts_with(L"\\\\"))
+            return std::filesystem::path{std::wstring{L"\\\\?\\UNC\\"} + text.substr(2)};
+        return std::filesystem::path{std::wstring{L"\\\\?\\"} + text};
+#else
+        return path;
+#endif
+    }
+
     namespace {
         /** @brief Keeps ordinary filesystem failures as non-equivalence while allowing allocation failure to unwind.
          * @details The error-code equivalent overload is noexcept. This throwable boundary keeps path allocation
@@ -39,7 +57,8 @@ namespace Horo::Foundation::Paths {
 
     std::filesystem::path Resolve(const std::filesystem::path &projectRoot, const ProjectPath &relative) {
         std::filesystem::path result = projectRoot;
-        result /= relative.String();
+        const auto &text = relative.String();
+        result /= std::filesystem::path{std::u8string{text.begin(), text.end()}};
         return result;
     }
 

@@ -71,14 +71,16 @@ namespace Horo::Extensions::Tests {
             CapabilityFixture fixture;
             auto descriptor = fixture.Descriptor();
             descriptor.*trust = false;
-            RequireErrorCode(ScriptCapabilityContext::Create(fixture.registry, std::move(descriptor)), "script_invocation_unavailable");
+            RequireErrorCode(ScriptCapabilityContext::Create(fixture.registry, std::move(descriptor)),
+                             "extensions.script_invocation_unavailable");
         }
         for (const auto permissions : {&Descriptor::packageCapabilities, &Descriptor::scriptCapabilities, &Descriptor::projectCapabilities,
                                        &Descriptor::contextCapabilities}) {
             CapabilityFixture fixture;
             auto descriptor = fixture.Descriptor();
             (descriptor.*permissions).clear();
-            RequireErrorCode(ScriptCapabilityContext::Create(fixture.registry, std::move(descriptor)), "script_invocation_unavailable");
+            RequireErrorCode(ScriptCapabilityContext::Create(fixture.registry, std::move(descriptor)),
+                             "extensions.script_invocation_unavailable");
         }
         CapabilityFixture fixture;
         auto descriptor = fixture.Descriptor();
@@ -110,7 +112,8 @@ namespace Horo::Extensions::Tests {
         SECTION("missing policy revision") {
             descriptor.policyRevision = 0;
         }
-        RequireErrorCode(ScriptCapabilityContext::Create(fixture.registry, std::move(descriptor)), "script_invocation_unavailable");
+        RequireErrorCode(ScriptCapabilityContext::Create(fixture.registry, std::move(descriptor)),
+                         "extensions.script_invocation_unavailable");
     }
 
     TEST_CASE("Script binding limits profiles and requires gameplay lifetime evidence", "[Extensions][ScriptCapability]") {
@@ -130,7 +133,7 @@ namespace Horo::Extensions::Tests {
         CapabilityFixture fixture;
         auto context = ScriptCapabilityContext::Create(fixture.registry, fixture.Descriptor());
         REQUIRE(context.HasValue());
-        RequireErrorCode(context.Value().Bind("com.example.undeclared"), "script_invocation_unavailable");
+        RequireErrorCode(context.Value().Bind("com.example.undeclared"), "extensions.script_invocation_unavailable");
         auto binding = context.Value().Bind("com.example.api");
         REQUIRE(binding.HasValue());
         auto deniedFunction = Request(DescriptorSnapshot());
@@ -202,7 +205,7 @@ namespace Horo::Extensions::Tests {
         REQUIRE(binding.HasValue());
         auto request = Request(exports.Value());
         request.functionId = "other";
-        RequireErrorCode(binding.Value().Begin(fixture.provider, request), "script_invocation_unavailable");
+        RequireErrorCode(binding.Value().Begin(fixture.provider, request), "extensions.script_invocation_unavailable");
         descriptor.imports.front().functions.clear();
         auto emptyOperations = ScriptCapabilityContext::Create(fixture.registry, descriptor);
         REQUIRE(emptyOperations.HasValue());

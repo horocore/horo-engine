@@ -11,6 +11,12 @@ namespace Horo::Editor {
     /** @brief Persistent document panel presenting the active authored camera or explicitly selected XR left-eye mirror. */
     class GamePanel final : public IWorkspacePanel {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.game"};
+
+        /** @brief Creates a surface with its required localization scope. */
+        GamePanel() : IWorkspacePanel(kTextScope) {}
+
         [[nodiscard]] std::string GetId() const override {
             return "horo.game";
         }
@@ -34,6 +40,10 @@ namespace Horo::Editor {
                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) override;
 
     private:
+        void RequestViewport(float width, float height);
+        [[nodiscard]] bool CanDraw(const EditorWorkspaceViewModel &viewModel, const EditorViewportTextureView &texture) const;
+        void DrawUnavailable(const ImVec2 &origin, float width, float height, const EditorWorkspaceViewModel &viewModel,
+                             const EditorGuiContext &context);
         IEditorViewportRenderer *viewportRenderer_{};
     };
 }  // namespace Horo::Editor

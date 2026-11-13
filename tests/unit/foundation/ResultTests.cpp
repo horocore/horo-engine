@@ -6,7 +6,9 @@
 #include "Horo/Foundation/Result.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -37,6 +39,124 @@ namespace {
         REQUIRE((result.HasValue()));
         REQUIRE((!result.HasError()));
         REQUIRE((result.Value() == 42));
+    }
+
+    TEST_CASE("Result constructs immovable successful values in final storage", "[unit][foundation]") {
+        struct Immovable {
+            explicit Immovable(int &input) : value(input) {}
+
+            Immovable(const Immovable &) = delete;
+            Immovable(Immovable &&) = delete;
+            int &value;
+        };
+
+        int input = 42;
+        const auto result = Horo::Result<Immovable>::SuccessInPlace(input);
+        REQUIRE(result.HasValue());
+        REQUIRE(&result.Value().value == &input);
+        input = 43;
+        REQUIRE(result.Value().value == 43);
+    }
+
+    TEST_CASE("Result in-place construction propagates value constructor exceptions", "[unit][foundation]") {
+        struct Rejected {
+            explicit Rejected(int &attempts) {
+                ++attempts;
+                throw std::runtime_error("value construction failed");
+            }
+        };
+
+        int attempts{};
+        REQUIRE_THROWS_AS(Horo::Result<Rejected>::SuccessInPlace(attempts), std::runtime_error);
+        REQUIRE(attempts == 1);
+    }
+
+    TEST_CASE("Result completion runs once in its caller's final return storage", "[unit][foundation]") {
+        const auto fallback = Descriptor("horo.foundation.test", "completion.failed", "Prepared completion failure");
+        SECTION("value result") {
+            Horo::Result<int> *observed{};
+            unsigned calls{};
+            bool startedFailed{};
+            const auto result = Horo::Result<int>::CompleteInPlace(Horo::MakeError(fallback), [&](Horo::Result<int> &outcome) noexcept {
+                observed = &outcome;
+                ++calls;
+                startedFailed = outcome.HasError();
+                outcome = Horo::Result<int>::Success(42);
+            });
+            CHECK(observed == &result);
+            CHECK(calls == 1);
+            CHECK(startedFailed);
+            REQUIRE(result.HasValue());
+            CHECK(result.Value() == 42);
+        }
+        SECTION("void result") {
+            Horo::Result<void> *observed{};
+            unsigned calls{};
+            bool startedFailed{};
+            const auto result = Horo::Result<void>::CompleteInPlace(Horo::MakeError(fallback), [&](Horo::Result<void> &outcome) noexcept {
+                observed = &outcome;
+                ++calls;
+                startedFailed = outcome.HasError();
+                outcome = Horo::Result<void>::Success();
+            });
+            CHECK(observed == &result);
+            CHECK(calls == 1);
+            CHECK(startedFailed);
+            CHECK(result.HasValue());
+        }
+    }
+
+    TEST_CASE("Result completion retains the prepared typed error and immutable cause", "[unit][foundation]") {
+        auto fallback =
+            Horo::WithCause(Horo::MakeError(Descriptor("horo.foundation.test", "completion.failed", "Prepared completion failure")),
+                            Horo::MakeError(Descriptor("horo.foundation.test", "completion.cause", "Original callback failure")));
+        const auto *cause = fallback.cause.Get();
+        const Horo::Error *observed{};
+        unsigned calls{};
+        const auto result = Horo::Result<int>::CompleteInPlace(std::move(fallback), [&](Horo::Result<int> &outcome) noexcept {
+            observed = &outcome.ErrorValue();
+            ++calls;
+        });
+        REQUIRE(result.HasError());
+        CHECK(calls == 1);
+        CHECK(observed == &result.ErrorValue());
+        CHECK(result.ErrorValue().code.Value() == "completion.failed");
+        CHECK(result.ErrorValue().domain.Value() == "horo.foundation.test");
+        CHECK(result.ErrorValue().message == "Prepared completion failure");
+        CHECK(result.ErrorValue().cause.Get() == cause);
+        REQUIRE(cause != nullptr);
+        CHECK(cause->code.Value() == "completion.cause");
+    }
+
+    TEST_CASE("Result completion propagates exceptions and releases partial final state", "[unit][foundation]") {
+        const auto fallback = Descriptor("horo.foundation.test", "completion.failed", "Prepared completion failure");
+        unsigned calls{};
+        SECTION("value result releases its completed payload") {
+            auto owner = std::make_shared<int>(42);
+            const std::weak_ptr<int> observed = owner;
+            using Return = Horo::Result<std::shared_ptr<int>>;
+            CHECK_THROWS_AS(Return::CompleteInPlace(Horo::MakeError(fallback),
+                                                    [&](Return &completed) {
+                ++calls;
+                completed = Return::Success(std::move(owner));
+                throw std::runtime_error("completion escaped");
+            }),
+                            std::runtime_error);
+            CHECK(calls == 1);
+            CHECK_FALSE(owner);
+            CHECK(observed.expired());
+        }
+        SECTION("void result propagates after completion") {
+            using Return = Horo::Result<void>;
+            CHECK_THROWS_AS(Return::CompleteInPlace(Horo::MakeError(fallback),
+                                                    [&](Return &completed) {
+                ++calls;
+                completed = Return::Success();
+                throw std::runtime_error("completion escaped");
+            }),
+                            std::runtime_error);
+            CHECK(calls == 1);
+        }
     }
 
     TEST_CASE("Assertion helpers follow the build policy", "[unit][foundation]") {

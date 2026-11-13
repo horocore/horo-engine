@@ -56,6 +56,29 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] virtual Result<void> OnFixedUpdate(const FixedStepContext &context) = 0;
 
+        /**
+         * @brief Validates and arms staged state after every participant's fixed update succeeded.
+         * @details All fallible preparation belongs here or in OnFixedUpdate. A failure or cancellation
+         *          aborts the attempted tick; successful preparation is not commitment evidence.
+         */
+        [[nodiscard]] virtual Result<void> PrepareFixedCommit(const FixedStepContext &) {
+            return Result<void>::Success();
+        }
+
+        /**
+         * @brief Publishes already-armed state after the scheduler commits the exact attempted tick.
+         * @details This boundary must not fail, allocate, perform I/O, dispatch foreign callbacks,
+         *          change lifecycle state, or check cancellation again. The active opaque dispatch
+         *          evidence now carries this tick's actual commitment. Legacy participants default to no-op.
+         */
+        virtual void CommitFixedUpdate(const FixedStepContext &) noexcept {}
+
+        /**
+         * @brief Discards any staged state after an unsuccessful attempted tick, in reverse owner order.
+         * @details Must tolerate an attempt that never reached this participant; no allocation or I/O.
+         */
+        virtual void AbortFixedUpdate(const FixedStepContext &) noexcept {}
+
         /** @brief Releases resources; called once for each successfully started participant in reverse order. */
         virtual void Shutdown() noexcept = 0;
     };
@@ -110,6 +133,15 @@ namespace Horo::Runtime {
         [[nodiscard]] RuntimeLifecycleState State() const noexcept;
 
     private:
+        friend class FrameScheduler;
+
+        /** @brief Contains final preparation failures without granting public tick publication authority. */
+        [[nodiscard]] Result<void> PrepareFixedCommit(const FixedStepContext &context);
+        /** @brief Publishes each staged owner only after the scheduler's no-fail commitment fence. */
+        void CommitFixedUpdate(const FixedStepContext &context) noexcept;
+        /** @brief Discards staged owners in reverse registration order while dispatch proof is still active. */
+        void AbortFixedUpdate(const FixedStepContext &context) noexcept;
+
         std::vector<std::unique_ptr<RuntimeLifecycleParticipant>> participants_;
         std::size_t startedParticipantCount_{};
         RuntimeLifecycleState state_{RuntimeLifecycleState::Created};

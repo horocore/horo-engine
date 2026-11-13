@@ -4,7 +4,6 @@
 #include <array>
 #include <limits>
 #include <nlohmann/json.hpp>
-#include <stop_token>
 #include <thread>
 
 namespace Horo::Render {
@@ -12,7 +11,7 @@ namespace Horo::Render {
         using namespace Test;
 
         auto Capture(const Sources &sources, const RenderGraphInspectionContext context = {{41}, {9}, 1},
-                     const RenderGraphInspectionLimits limits = {}, const std::stop_token token = {}) {
+                     const RenderGraphInspectionLimits limits = {}, const CancellationToken token = {}) {
             return CaptureRenderGraphInspection(sources.graph, sources.schedule, sources.lifetime, sources.execution, context, limits,
                                                 token);
         }
@@ -183,10 +182,16 @@ namespace Horo::Render {
         RequireError(Capture(sources, {{41}, {9}, 2}, {.maxRecords = 0}), "render.graph.inspection.invalid_limits");
         RequireError(Capture(sources, {{41}, {9}, 2}, {.maxRecords = RenderGraphInspectionLimits::HardMaxRecords + 1}),
                      "render.graph.inspection.invalid_limits");
-        std::stop_source stopped;
-        stopped.request_stop();
-        RequireError(Capture(sources, {{41}, {9}, 2}, {}, stopped.get_token()), "render.graph.inspection.cancelled");
-        RequireError(ExportRenderGraphInspection(*initial.Value(), 4096, stopped.get_token()), "render.graph.inspection.cancelled");
+        CancellationSource stopped;
+        stopped.RequestCancellation();
+        RequireError(Capture(sources, {{41}, {9}, 2}, {}, stopped.Token()), "render.graph.inspection.cancelled");
+        RequireError(ExportRenderGraphInspection(*initial.Value(), 4096, stopped.Token()), "render.graph.inspection.cancelled");
+        CancellationSource parent;
+        CancellationSource child(parent.Token());
+        const auto inherited = child.Token();
+        parent.RequestCancellation();
+        RequireError(Capture(sources, {{41}, {9}, 2}, {}, inherited), "render.graph.inspection.cancelled");
+        RequireError(ExportRenderGraphInspection(*initial.Value(), 4096, inherited), "render.graph.inspection.cancelled");
         REQUIRE(feed.Read().HasValue());
         CHECK(feed.Read().Value() == initial.Value());
     }

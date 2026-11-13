@@ -222,6 +222,95 @@ namespace Horo::Runtime {
                  Descriptor("horo.test.provider", 1)});
         }
 
+        enum class FinalClaimMode {
+            Allow,
+            Reject,
+            Cancel,
+            Throw,
+            Reenter
+        };
+
+        /** @brief Protocol fixture for the actual transaction gate, not native Physics proof. */
+        class FinalClaim final : public IStagedRestoreAggregatePublication {
+        public:
+            Result<void> ValidateAndArm() override {
+                ++checks;
+                checkedBeforePublication = log->published.empty() && !published;
+                if (mode == FinalClaimMode::Throw)
+                    throw std::runtime_error{"final owner validation failed"};
+                if (mode == FinalClaimMode::Reject)
+                    return Result<void>::Failure(MakeError(SaveErrors::CompositionInjectedFailure));
+                if (mode == FinalClaimMode::Cancel)
+                    static_cast<void>(handle.RequestCancellation());
+                if (mode == FinalClaimMode::Reenter)
+                    reentryRejected = transaction->Activate(evidence, *this).HasError();
+                return Result<void>::Success();
+            }
+
+            void PublishPrepared() noexcept override {
+                published = true;
+            }
+
+            FinalClaimMode mode{FinalClaimMode::Allow};
+            SaveOperationHandle handle;
+            ParticipantLog *log{};
+            StagedRestoreTransaction *transaction{};
+            StagedRestoreActivationEvidence evidence;
+            std::uint32_t checks{};
+            bool checkedBeforePublication{}, published{}, reentryRejected{};
+        };
+
+        void CheckFinalClaim(FinalClaimMode mode, const ErrorCodeDescriptor *failure) {
+            const auto registry = Registry({Descriptor("h.p", 1)});
+            auto operation = Operation();
+            const auto handle = operation.Handle();
+            ParticipantLog log;
+            std::vector<std::unique_ptr<IStagedRestoreParticipant>> staged;
+            staged.push_back(Candidate("h.p", log));
+            auto transaction =
+                StagedRestoreTransaction::Create(Context(registry), std::move(operation), registry, std::move(staged)).Value();
+            REQUIRE(transaction.Prepare().HasValue());
+            FinalClaim final;
+            final.mode = mode;
+            final.handle = handle;
+            final.log = &log;
+            final.transaction = &transaction;
+            final.evidence = Activation(registry);
+            auto activated = transaction.Activate(final.evidence, final);
+            CHECK(final.checks == 1);
+            CHECK(final.checkedBeforePublication);
+            if (failure) {
+                RequireError(activated, *failure);
+                CHECK_FALSE(final.published);
+                CHECK(log.published.empty());
+                CHECK(log.rolledBack == std::vector<std::string>{"h.p"});
+                CHECK(Snapshot(handle).commit == SaveOperationCommitOutcome::NotCommitted);
+            } else {
+                REQUIRE(activated.HasValue());
+                CHECK(final.published);
+                CHECK(log.published == std::vector<std::string>{"h.p"});
+                CHECK(Snapshot(handle).commit == SaveOperationCommitOutcome::Committed);
+            }
+            if (mode == FinalClaimMode::Reenter)
+                CHECK(final.reentryRejected);
+        }
+
+        TEST_CASE("Final owner claim rejects before any existing restore publication", "[unit][save][restore][final-gate]") {
+            CheckFinalClaim(FinalClaimMode::Reject, &SaveErrors::CompositionInjectedFailure);
+        }
+
+        TEST_CASE("Cancellation at final owner claim wins the same operation gate", "[unit][save][restore][final-gate]") {
+            CheckFinalClaim(FinalClaimMode::Cancel, &SaveErrors::OperationCancelled);
+        }
+
+        TEST_CASE("Foreign final owner exception rolls back exact staging", "[unit][save][restore][final-gate]") {
+            CheckFinalClaim(FinalClaimMode::Throw, &SaveErrors::LifecycleCallbackFailed);
+        }
+
+        TEST_CASE("Final owner claim cannot recursively publish the transaction", "[unit][save][restore][final-gate]") {
+            CheckFinalClaim(FinalClaimMode::Reenter, nullptr);
+        }
+
         TEST_CASE("Foreign resolver faults roll back every applied owner with their original typed fault category",
                   "[unit][save][restore][activation]") {
             struct ForeignResolverFault final {};

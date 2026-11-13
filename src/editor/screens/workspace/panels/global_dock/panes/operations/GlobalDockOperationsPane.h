@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
@@ -16,8 +17,14 @@
 
 namespace Horo::Editor {
     /** @brief Stateful Operations tab hosted by the global bottom dock. */
-    class GlobalDockOperationsPane {
+    class GlobalDockOperationsPane : public LocalizedGui {
     public:
+        /** @brief Catalog scope for this embedded dock surface. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.global_dock.operations"};
+
+        /** @brief Creates a pane with its required localization scope. */
+        GlobalDockOperationsPane() : LocalizedGui(kTextScope) {}
+
         /** @brief Binds typed operation query and cancellation capabilities. */
         void Attach(const IOperationQuery *operationQuery, IOperationControl *operationControl) noexcept;
 

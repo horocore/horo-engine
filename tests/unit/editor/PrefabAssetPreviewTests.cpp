@@ -33,9 +33,99 @@ namespace Horo::Editor {
                     .providerVersion = "1",
                     .absoluteAssetPath = project.source,
                     .assetType = Assets::AssetTypeId::Parse("core.prefab").Value(),
-                    .provider = std::move(provider)};
+                    .provider = std::move(provider),
+                    .requiresRevision = true};
         }
     }  // namespace
+
+    TEST_CASE("Real prefab preview cache partitions source schema and typed scene delta captures independently",
+              "[prefab][value-snapshot][preview][native]") {
+        Project project;
+        auto document = ScenePrefabDocument(project.asset, {{.localId = {}, .name = "Box", .components = {BoxPayload()}}});
+        auto wire = document.SerializeCanonical().Value();
+        std::ofstream(project.source, std::ios::binary | std::ios::trunc) << wire;
+        PrefabAssetPreviewValues values;
+        auto provider = CreatePrefabAssetPreviewProvider(project.registry.Snapshot(), project.asset, project.Loader(), nullptr,
+                                                         [&](const CancellationToken &) {
+            return Result<PrefabAssetPreviewValues>::Success(values);
+        });
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
+        Assets::AssetPreviewService service{jobs};
+        const auto execute = [&]() {
+            auto request = service.Submit(Request(project, provider));
+            REQUIRE(request.HasValue());
+            REQUIRE(request.Value().Wait().HasValue());
+            return request.Value().TakeResult();
+        };
+        auto first = execute();
+        REQUIRE(first.HasValue());
+        CHECK_FALSE(first.Value().cacheHit);
+        auto cached = execute();
+        REQUIRE(cached.HasValue());
+        CHECK(cached.Value().cacheHit);
+        values.schemas = Prefab::PrefabValueSchemaSnapshot::Create({}, ScenePrefabLimits()).Value();
+        auto schemaChanged = execute();
+        REQUIRE(schemaChanged.HasValue());
+        CHECK_FALSE(schemaChanged.Value().cacheHit);
+        CHECK(schemaChanged.Value().image.pixels == first.Value().image.pixels);
+        const auto candidate = ScenePrefabResolver(project.asset, document.Data().objects)
+                                   .Resolve(project.asset, Prefab::PrefabInstanceId::Create(1).Value(), ScenePrefabLimits())
+                                   .Value();
+        Math::Transform stretched;
+        stretched.scale = {3, 1, 1};
+        values.delta = Prefab::PreparePrefabValueEdit(candidate, {},
+                                                      {Prefab::PrefabValueEditKind::Assign,
+                                                       Prefab::PrefabObjectAddress::Create({}, {}).Value(), stretched},
+                                                      &*values.schemas, ScenePrefabLimits())
+                           .Value()
+                           .rebased;
+        auto deltaChanged = execute();
+        REQUIRE(deltaChanged.HasValue());
+        CHECK_FALSE(deltaChanged.Value().cacheHit);
+        CHECK(deltaChanged.Value().image.pixels != first.Value().image.pixels);
+        values.delta.reset();
+        auto data = document.Data();
+        data.objects[0].localTransform.scale = {1, 3, 1};
+        wire = Prefab::PrefabDocument::Create(std::move(data), ScenePrefabLimits()).Value().SerializeCanonical().Value();
+        std::ofstream(project.source, std::ios::binary | std::ios::trunc) << wire;
+        auto sourceChanged = execute();
+        REQUIRE(sourceChanged.HasValue());
+        CHECK_FALSE(sourceChanged.Value().cacheHit);
+        CHECK(sourceChanged.Value().image.pixels != first.Value().image.pixels);
+        service.Shutdown();
+    }
+
+    TEST_CASE("Real prefab preview rejects schema or delta publication drift on cached-hit delivery",
+              "[prefab][value-snapshot][preview][lifecycle]") {
+        Project project;
+        const auto document = ScenePrefabDocument(project.asset, {{.localId = {}, .name = "Box", .components = {BoxPayload()}}});
+        const auto wire = document.SerializeCanonical().Value();
+        std::ofstream(project.source, std::ios::binary | std::ios::trunc) << wire;
+        PrefabAssetPreviewValues values;
+        std::size_t captures{};
+        bool drift{};
+        auto provider = CreatePrefabAssetPreviewProvider(project.registry.Snapshot(), project.asset, project.Loader(), nullptr,
+                                                         [&](const CancellationToken &) {
+            ++captures;
+            if (drift && captures == 2) {
+                values.schemas = Prefab::PrefabValueSchemaSnapshot::Create({}, ScenePrefabLimits()).Value();
+                ++values.publication;
+            }
+            return Result<PrefabAssetPreviewValues>::Success(values);
+        });
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
+        Assets::AssetPreviewService service{jobs};
+        auto first = service.Submit(Request(project, provider)).Value();
+        REQUIRE(first.Wait().HasValue());
+        REQUIRE(first.TakeResult().HasValue());
+        captures = 0;
+        drift = true;
+        auto stale = service.Submit(Request(project, provider)).Value();
+        REQUIRE(stale.Wait().HasValue());
+        CHECK(stale.TakeResult().HasError());
+        CHECK(captures == 2);
+        service.Shutdown();
+    }
 
     TEST_CASE("Prefab cards classify exact typed registered identities independently from filenames", "[editor][prefab][preview]") {
         ContentBrowserEntry entry{.displayName = "not-a-template.txt",

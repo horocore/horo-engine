@@ -213,10 +213,7 @@ namespace Horo::Gameplay {
         return InvokeRestoreReload(*gameplayModule, snapshot, runtimeContext);
     }
 
-    void LoadedGameModule::Impl::Shutdown() noexcept {
-        if (shutdown)
-            return;
-        shutdown = true;
+    void LoadedGameModule::Impl::RevokeRuntimeServices() noexcept {
         if (ai) {
             ai->Revoke();
             ai->RetireOwnedTasksAtSafePoint();
@@ -231,6 +228,13 @@ namespace Horo::Gameplay {
             physics->Revoke();
         if (projectServices)
             projectServices->RequestCancellation();
+    }
+
+    void LoadedGameModule::Impl::Shutdown() noexcept {
+        if (shutdown)
+            return;
+        shutdown = true;
+        RevokeRuntimeServices();
         if (gameplayModule != nullptr && startAttempted)
             gameplayModule->Stop(runtimeContext);  // NOSONAR: exact-generation module boundary; path analysis is unrelated.
         // Mutable public context copies may contain module-emitted shared owners; release them while code and module still exist.
@@ -246,6 +250,10 @@ namespace Horo::Gameplay {
         registries.assetTypes.reset();
         registries.replication.reset();
         registries.events.reset();
+        for (const auto &slot : persistenceSourceSlots)
+            if (slot)
+                slot->CloseNativeSources();
+        persistenceSourceSlots.clear();
         registries.persistence.reset();
         if (gameplayModule != nullptr) {
             destroy(gameplayModule);

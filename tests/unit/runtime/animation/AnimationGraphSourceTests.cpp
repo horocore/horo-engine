@@ -9,15 +9,15 @@ using namespace Horo::Animation;
 using namespace Horo::Animation::Test;
 using namespace Horo::Animation::Test::Graph;
 
-TEST_CASE("Graph canonical source preserves the existing byte format", "[animation][graph][codec]") {
+TEST_CASE("Graph canonical source versions action catalogs and preserves existing node payloads", "[animation][graph][codec]") {
     auto data = Simple();
     data.parameters.push_back({Id<GraphParameterId>(1), "weight", GraphValueType::Float, 0.5F});
-    // Captured from the prior canonical writer before its allocation-safety correction.
+    // Schema 6 adds empty action catalogs and changes the explicit envelope for this pre-tree payload.
     constexpr std::string_view expected =
-        R"gold({"schemaVersion":4,"assetType":"core.animation.graph","contractVersion":{"major":1,"minor":2,"patch":0},")gold"
+        R"gold({"schemaVersion":6,"assetType":"core.animation.graph","contractVersion":{"major":1,"minor":4,"patch":0},")gold"
         R"gold(dependencies":[{"assetType":"core.animation.clip","assetId":"00000000-0000-0000-0000-000000000003"},{"ass)gold"
         R"gold(etType":"core.animation.skeleton","assetId":"00000000-0000-0000-0000-000000000002"}],"payload":{"skeleton)gold"
-        R"gold(":"00000000-0000-0000-0000-000000000002","entry":1,"parameters":[{"id":1,"name":"weight","type":"float",")gold"
+        R"gold(":"00000000-0000-0000-0000-000000000002","entry":1,"actionSlots":[],"actions":[],"parameters":[{"id":1,"name":"weight","type":"float",")gold"
         R"gold(default":0.5}],"definitions":[{"id":1,"inputs":[],"nodes":[{"id":2,"kind":"output","reference":null,"pins)gold"
         R"gold(":[{"id":1,"role":"value","type":"pose","output":false,"interface":null}],"settings":{}},{"id":4,"kind":")gold"
         R"gold(clip","reference":"00000000-0000-0000-0000-000000000003","pins":[{"id":1,"role":"result","type":"pose","o)gold"
@@ -254,6 +254,9 @@ TEST_CASE("Graph source version migration is explicit canonical and transactiona
     REQUIRE(current.HasValue());
     auto legacy = nlohmann::ordered_json::parse(current.Value());
     legacy["schemaVersion"] = 1;
+    // Legacy schemas have no action catalog fields.
+    legacy["payload"].erase("actionSlots");
+    legacy["payload"].erase("actions");
     legacy["contractVersion"] = {{"major", 1}, {"minor", 0}, {"patch", 0}};
     for (auto &node : legacy["payload"]["definitions"][0]["nodes"])
         node.erase("settings");
@@ -334,4 +337,43 @@ TEST_CASE("Graph source and compiler reject a skeleton identity reused as a clip
         if (dependency["assetType"] == "core.animation.skeleton")
             dependency["assetId"] = data.skeleton.Asset().ToString();
     RejectAssetRoleCollision(data, source.dump());
+}
+
+TEST_CASE("Graph source validates versioned payload shape before accessing required fields", "[animation][graph][codec]") {
+    const auto data = Blended();
+    const auto encoded = SerializeAnimationGraphSource(data);
+    REQUIRE(encoded.HasValue());
+    const auto canonical = nlohmann::ordered_json::parse(encoded.Value());
+    for (const std::string_view key : {"skeleton", "entry", "actionSlots", "actions", "parameters", "definitions"}) {
+        auto broken = canonical;
+        broken["payload"].erase(std::string{key});
+        const auto rejected = DeserializeAnimationGraphSource(broken.dump(), data.id);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == AnimationErrors::GraphMalformed.code.Value());
+    }
+    auto nonObject = canonical;
+    nonObject["payload"] = nullptr;
+    const auto rejected = DeserializeAnimationGraphSource(nonObject.dump(), data.id);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == AnimationErrors::GraphMalformed.code.Value());
+}
+
+TEST_CASE("Graph pre-action JSON schemas explicitly migrate without accepting new catalog fields", "[animation][graph][codec]") {
+    const auto data = Blended();
+    const auto encoded = SerializeAnimationGraphSource(data);
+    REQUIRE(encoded.HasValue());
+    const auto canonical = nlohmann::ordered_json::parse(encoded.Value());
+    for (const std::uint32_t schema : {4U, 5U}) {
+        auto old = canonical;
+        old["schemaVersion"] = schema;
+        old["contractVersion"] = {{"major", 1}, {"minor", schema == 4 ? 2 : 3}, {"patch", 0}};
+        CHECK(DeserializeAnimationGraphSource(old.dump(), data.id, {}, {}, AnimationGraphSourceMigration::MigrateSupported).HasError());
+        old["payload"].erase("actionSlots");
+        old["payload"].erase("actions");
+        const auto migrated = DeserializeAnimationGraphSource(old.dump(), data.id, {}, {}, AnimationGraphSourceMigration::MigrateSupported);
+        REQUIRE(migrated.HasValue());
+        const auto rewritten = SerializeAnimationGraphSource(migrated.Value());
+        REQUIRE(rewritten.HasValue());
+        CHECK(rewritten.Value() == encoded.Value());
+    }
 }

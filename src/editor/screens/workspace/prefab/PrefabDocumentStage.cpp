@@ -1,5 +1,6 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSceneExpansion.h"
+#include "Horo/Prefab/PrefabValueOverrides.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 
@@ -64,7 +65,11 @@ namespace Horo::Editor {
             if (dependency.document.Data().assetId != source_->Data().assetId)
                 sources.push_back(dependency);
         sources.push_back({*source_, {source_->Data().projectVersion, state_}});
-        auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits_);
+        auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits_, {},
+                                                                  dependencies.ValueSchemas()
+                                                                      ? std::make_shared<const Prefab::PrefabValueSchemaSnapshot>(
+                                                                            *dependencies.ValueSchemas())
+                                                                      : nullptr);
         if (resolver.HasError())
             return Result<void>::Failure(resolver.ErrorValue());
         auto candidate = resolver.Value().Resolve(source_->Data().assetId,

@@ -4,6 +4,7 @@
  * @brief Bounded source-free runtime template transformation over the shared prefab resolver.
  */
 #include "Horo/Assets/AssetCook.h"
+#include "Horo/Assets/AssetDependency.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Prefab/CookedPrefab.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
@@ -19,6 +20,9 @@ namespace Horo::Prefab {
     struct PrefabTemplateCookOptions final {
         CancellationToken cancellation;         /**< Cooperative cancellation ancestry retained for the invocation. */
         Assets::AssetCookLimits resourceLimits; /**< Resource-envelope ceilings, independent of prefab payload limits. */
+        std::span<const Assets::AssetDependency> projectedResourceDependencies; /**< Invocation-scoped inert typed roles from the
+            actual host-composed resource owner over the SAME verified envelopes. Empty preserves ordinary resource leaves.
+            The canonical closure builder validates/merges these; they grant no runtime admission/publication authority. */
     };
 
     /**

@@ -201,8 +201,32 @@ different absence policies; overlapping phase coverage for one provider is rejec
 Cycle diagnostics name one actual deterministic cycle rather than downstream blocked
 participants. Allocation failure returns a typed registry error, and fallible insertion
 completes before generation publication so membership and generation remain atomic.
+Accepted bindings share immutable descriptor storage between the live registry and
+issued snapshots. The final binding releases that storage; adapter leases retain
+their existing independent ownership. Graph and phase-plan scratch is filled in its
+original owner rather than transferred through checked-STL container moves.
+Registration constructs its final return value before publishing the new generation;
+failure constructing that value rolls back its inserted binding. This changes private
+C++ binding storage, so binary consumers rebuild with the matching SDK. Persistent
+archive identities and schemas retain their existing representation.
 The identity-sorted binding view remains the canonical manifest/query
 projection and is not used as an execution plan.
+
+`SaveOperationController` reserves its terminal Error slot and bounded callback
+buffer during admission. Terminal transitions copy inert snapshot metadata,
+move-assign the winning Error into that existing slot, and transfer the callback
+buffer's owner without moving a checked-STL vector. The dispatcher retains the
+same immutable snapshot and releases callback captures outside the operation lock,
+after all accepted observers have run. Cancellation/commit arbitration and late
+observer behavior retain their existing ordering.
+
+`Fail(const Error&, ...)` makes its fallible owned copy before attempting the
+transition; `Fail(Error&&, ...)` consumes directly into reserved terminal storage.
+Callers using the changed C++ overload symbols rebuild against the matching SDK.
+The private Play failure-publication adapter borrows its caller-owned result for
+the synchronous call, so a checked-STL parameter move cannot fail before original
+failure publication begins. If copying fails, it publishes the owned original
+before rethrowing, while a cancellation that already won remains authoritative.
 
 `Horo/Runtime/Save/SaveParticipation.h` is the installed gameplay/module-facing
 contract. A host-owned `SaveParticipationHost` issues weak clients for one exact
@@ -239,8 +263,47 @@ name a path, namespace, storage provider or native handle. Native C++ participan
 planned scripting adapters map to the same inert descriptor, bounded capture sink,
 staged restore and path-free request semantics rather than parallel persistence models.
 
-The complete application service shape below remains schematic; it is not an
-installed `RuntimeSaveService` header:
+The complete slot-aware application service shape below remains schematic; it is not an
+installed `RuntimeSaveService` header. The implemented foundation orchestrator is
+`RuntimeSaveSession` (`HoroEngine::Runtime`); it composes the existing registry,
+capture barrier, safe-point coordinator, operation lifecycle, JobSystem and staged
+restore transaction without selecting archive/storage policy:
+
+- The host supplies a pinned real registry snapshot, exact runtime/Scene/registry
+  generation and its actual mutation/epoch capture barrier. Every required domain
+  and capture owner must already be registered; the session never synthesizes
+  readiness or content-install/world proof. Host generation replacement retires
+  this session and explicitly composes its successor.
+- Save admission retains one bounded operation. At the host's exclusive
+  `CommitDeferredLifecycleChanges`, the existing barrier captures immutable
+  participant data. An operation-owned writer prepares detached data on the
+  explicitly selected JobSystem CPU/I/O lane. Only the existing atomic operation
+  commit gate admits its transactional publication. A preparation failure is
+  `NotCommitted`; a publication failure is conservatively `Unknown`.
+- Load input is staged by an owned worker adapter. Receipt decoding, validation,
+  instantiation, application, reference fixup and aggregate activation use the
+  existing deterministic `StagedRestoreTransaction` at the owner safe point.
+  An inactive candidate never replaces live state on preparation failure.
+- Submission, pumping, retirement and acknowledgement belong to the owner thread;
+  returned request polling, completion observation and cancellation are thread-safe.
+  One terminal record remains until explicit acknowledgement after worker settlement.
+  Retirement is nonblocking; detached closures own their inputs and registry/module
+  leases, never a session pointer. Hosts retain external owners until `IsSettled`.
+  Destroy the session on its construction thread. Writer/source/staged-receipt leases
+  may outlive it; their last-reference destruction must be safe on worker or owner
+  threads and cannot assume owner-thread runtime retirement. The same owner mutation
+  fence covers admission, capture/restore pumping, retirement and acknowledgement,
+  including host clock and completion callbacks; nested transitions fail explicitly.
+
+This additive public API is owned only by HoroRuntime and has standalone staged
+header consumer and real registered-participant integration coverage. Existing
+primitive consumers migrate by replacing their hand-written capture/worker/restore
+wiring; they retain their real barrier and storage/restore adapters. The lower
+level contracts remain canonical. Editor SceneDocument persistence is not a save
+participant and acquires no dependency on the session. This integration does not
+install PIE controls or a packaged slot policy.
+
+The planned complete slot-aware application surface is:
 
 ```cpp
 struct ProductStorageId { Uuid value; };

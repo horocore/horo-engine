@@ -1,0 +1,33 @@
+{
+  "descriptor": {
+    "configurationRelease": 40000,
+    "configurationSHA256": "9e3ec773a7fbc0bb6666e428dedd8ccec4f59b8b6d40506c825cc7a8c02ff2ff",
+    "dimension": 2,
+    "domainMaximum": [
+      3.0,
+      3.0,
+      3.0
+    ],
+    "domainMinimum": [
+      -1.0,
+      -1.0,
+      -1.0
+    ],
+    "domainPolicy": "RejectOutsideV1",
+    "interpolation": "Tetrahedral",
+    "role": "CreativeLook",
+    "schemaVersion": 2
+  },
+  "kind": "horo-creative-look-package",
+  "payload": {
+    "bytes": 96,
+    "file": "look.rgb.f32le",
+    "sha256": "d642b55516c65ea4710606ab9ce68150a1200acfc4bd84a463faf2afef84d46e"
+  },
+  "reference": {
+    "bytes": 5620,
+    "file": "reference.json",
+    "sha256": "9b28c13b64d456698e3c8553c0483db79d8f0a4966c1f13c62617b26b16f02a9"
+  },
+  "schemaVersion": 1
+}

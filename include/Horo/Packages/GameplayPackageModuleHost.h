@@ -3,12 +3,22 @@
  * @brief Explicit package-to-gameplay SDK composition with exact permission and generation ownership.
  */
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/LuaDecisionNode.h"
 #include "Horo/Packages/PackageModuleHost.h"
 #include "Horo/Security/ArtifactSignature.h"
 
 #include <functional>
 
 namespace Horo::Packages {
+    /** @brief Exact locked package attribution accompanying its real acquired node generation. */
+    struct PackageDecisionNodeGeneration final {
+        HoroPackageId package;
+        PackageVersion version;
+        Sha256Digest artifact;
+        std::uint64_t activationGeneration{};
+        std::shared_ptr<const AI::DecisionNodeGeneration> nodes;
+    };
+
     /** @brief Exact application-selected gameplay SDK identity and per-generation world authority. */
     struct GameplayPackageModuleBinding final {
         HoroPackageId package;
@@ -45,12 +55,28 @@ namespace Horo::Packages {
             const VerifiedPackageModule &module, std::span<const std::shared_ptr<IPackageModuleActivation>> dependencies,
             const CancellationToken &cancellation) override;
         /** @brief Acquires an exact live SDK module; the lease pins verified bytes and prevents finalization while borrowed.
-         * @param package Owning package. @param module Exact module identity. @param generation Exact activation generation.
+         * @param package Owning package. @param selectedModule Exact module identity. @param generation Exact activation generation.
          * @return Read-only SDK owner, or null after withdrawal/mismatch. Release on any thread; owner-lane drain performs teardown.
          * @pre Application exposes this only after the matching PackageLifecycleService snapshot publishes.
          */
-        [[nodiscard]] std::shared_ptr<const Gameplay::LoadedGameModule> Acquire(const HoroPackageId &package, std::string_view module,
+        [[nodiscard]] std::shared_ptr<const Gameplay::LoadedGameModule> Acquire(const HoroPackageId &package,
+                                                                                std::string_view selectedModule,
                                                                                 std::uint64_t generation) const;
+        /** @brief Acquires generated contributions from the exact trusted, locked and live package activation.
+         * Package versions remain selected by the existing resolver/lock; no highest-version or load-order fallback occurs.
+         */
+        [[nodiscard]] Result<PackageDecisionNodeGeneration> AcquireDecisionNodes(const HoroPackageId &package, std::string_view moduleId,
+                                                                                 std::uint64_t generation) const;
+        /** @brief Compiles actual declared package script bytes under that same native activation's revocation/lifetime.
+         * @param source Exact declared .horo_script inventory identity, never an arbitrary physical file.
+         * @param type Canonical sidecar/selection identity. @param provider Stable provider identity.
+         * @param descriptorVersion Node contract version, distinct from the actual locked package version.
+         * @details No script invocation provider or manifest flag is treated as an executable node implementation.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Gameplay::LuaDecisionNodeProgram>> CompileDecisionNode(
+            const HoroPackageId &package, std::string_view moduleId, std::uint64_t generation, const PackagePath &source,
+            AI::DecisionNodeTypeId type, AI::DecisionProviderId provider, std::uint32_t descriptorVersion,
+            Gameplay::LuaBehaviorLimits limits = {}) const;
 
     private:
         struct Impl;

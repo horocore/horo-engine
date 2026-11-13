@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -30,8 +31,8 @@ namespace Horo::Editor::SettingsModalInternal {
     }
 
     void DrawPluginSectionTabs(SettingsState &st, const EditorGuiContext &ctx) {
-        const std::array<std::string, 2> sectionTabsStr = {ctx.localization.Get("editor", "settings.plugins.installed"),
-                                                           ctx.localization.Get("editor", "settings.extensions.marketplace")};
+        const std::array<std::string, 2> sectionTabsStr = {SettingsModal::kTextScope.Text(ctx.localization, "plugins.installed"),
+                                                           SettingsModal::kTextScope.Text(ctx.localization, "extensions.marketplace")};
         const std::array<const char *, 2> kSectionTabs = {sectionTabsStr[0].c_str(), sectionTabsStr[1].c_str()};
         constexpr float pad = 4.0F;
         constexpr float tabH = 31.0F;

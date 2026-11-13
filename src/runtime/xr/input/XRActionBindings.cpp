@@ -302,6 +302,11 @@ namespace Horo::XR {
         return revision_;
     }
 
+    /** @copydoc XRActionBindingCoordinator::Session */
+    const XRSessionId &XRActionBindingCoordinator::Session() const noexcept {
+        return session_;
+    }
+
     /** @brief Commits neutral Input state before dropping the previous publication. */
     void XRActionBindingCoordinator::Retire() noexcept {
         if (current_) {

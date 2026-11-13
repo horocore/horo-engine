@@ -110,7 +110,35 @@ session/envelope replay and Gameplay dispatch tests, and for the runtime schedul
 integration that applies replication to an actual Scene only at its declared safe
 point. This does not replace production backend qualification.
 
-### Outstanding external dependency
+`HoroNetworkChaosHarnessTests` adds one reusable copied application fixture under
+`tests/support/network`. Its two canonical `NetworkAdmissionController` instances
+exchange actual offer/challenge/HMAC proof/acknowledgement envelopes through the
+same scenario authority. A drained restart terminalizes the previous lifecycle;
+the following tick publishes connectivity using the scenario owner's successful-Open
+replacement witness and a new secure-channel generation. Only fresh authenticated activation binds RPC and replica consumers.
+No prepared session grants gameplay, and a generation increment never supplies
+authentication. Traffic passes canonical envelope admission, RPC Gameplay dispatch
+and `ReplicationInboundApply` into a real Scene at the declared safe points.
+
+Version-one tick ordering is fixed: publish previously drained restart connectivity,
+advance exact-tick actions and delivery, poll admission/dispatcher on both endpoints,
+schedule synthetic traffic, commit Gameplay then Scene, compare application
+checkpoints. The copied fixture caps traffic and application checkpoints at 64 each;
+the core retains its 16 topology, 128 action and 128 events-per-tick ceilings.
+A numeric fixed-size artifact retains seed/revision/duration, topology and timeline,
+synthetic traffic, expected/observed session/RPC/Scene checkpoints and the first
+mismatch tick. It never retains captured payloads, endpoints, principals, credentials
+or provider errors. Optional evidence disabled still enforces every checkpoint.
+Failure shuts admission, replica/RPC consumers, dispatcher and scenario in owner
+order. The headless Catch executable supplies local/CI reproduction; use
+`cmake --build <test-build> --target HoroNetworkChaosHarnessTests` and
+`ctest --test-dir <test-build> -R HoroNetworkChaosHarnessTests --output-on-failure`.
+The tests cover deterministic full replay, loss, duplication, jitter, reordering,
+stalls, saturation, restarts with fresh proof, genuinely retained pre-restart replica
+envelopes on old and replacement occurrences, cancellation after receipt but before
+Scene publication, malformed envelopes, mismatch cleanup and disabled evidence.
+
+### Separate editor dependency
 
 Native blocker #1177 [NET-008.6] remains open. Its built-in/project/user preset
 storage, authorized live/timeline editor commands, immutable editor projection,
@@ -123,8 +151,21 @@ prerequisite and the actual validation available at the PR revision.
 
 ## Public contract migration
 
-The added scenario header belongs only to `HoroNetworkTransportNull`; no
-`NetworkApi` or production transport dependency exposes fault injection. Existing
+The scenario header now belongs to `HoroNetworkChaosHarness`, and its implementation
+is split from `HoroNetworkTransportNull`. Both concrete targets exist only with
+`BUILD_TESTING=ON`; the raw deterministic implementation is excluded too. Explicit
+harness consumers must link `HoroEngine::NetworkChaosHarness`; existing raw
+transport tests retain `HoroEngine::NetworkTransportNull`. There is no installed
+fault-injection target/header surface. The `HEADLESS_NULL` qualification profile
+rejects non-testing configurations with an actionable diagnostic. Both actual
+shipping hosts (`horo-engine` and `HoroEditor`) validate their complete link graph,
+including conditional and alias dependencies, against either injection target.
+The actual non-testing configure also rejects either target/alias or either
+fault-injection header in the configured public ownership inventory.
+This is product/build authority independent of build type: Release-mode tests may
+run the harness. `NetworkChaosProfile` only expresses intent inside that isolated
+target; it cannot authorize a release product. No `NetworkApi` or production
+transport dependency exposes fault injection. Existing
 static-scenario callers keep their semantics. `ReplaceScenario` is additive and
 rejects fragment-storage or seed changes, stale revisions and terminal owners.
 No project settings, credentials or serialized replication identities migrate.

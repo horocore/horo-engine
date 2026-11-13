@@ -49,6 +49,10 @@ namespace Horo::AI {
 
     namespace Detail {
         /** @copydoc AiTaskMailbox::AiTaskMailbox */
+        std::uint64_t AiTaskMailbox::StorageBytes(std::size_t capacity) noexcept {
+            return sizeof(AiTaskMailbox) + capacity * sizeof(Slot);
+        }
+
         AiTaskMailbox::AiTaskMailbox(const std::size_t capacity) : slots_(capacity) {}
 
         /** @copydoc AiTaskMailbox::Bind */

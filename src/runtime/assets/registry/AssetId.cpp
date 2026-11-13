@@ -3,6 +3,7 @@
 #include "../AssetErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <string>
 
 namespace Horo::Assets {
@@ -49,15 +50,16 @@ namespace Horo::Assets {
     /** @copydoc AssetId::ToString */
     std::string AssetId::ToString() const {
         constexpr char kHex[] = "0123456789abcdef";
-        std::string result;
-        result.reserve(36);
+        std::array<char, 36> result{};
+        std::size_t position{};
         for (std::size_t index = 0; index < bytes_.size(); ++index) {
             if (index == 4 || index == 6 || index == 8 || index == 10)
-                result.push_back('-');
-            result.push_back(kHex[static_cast<std::size_t>(bytes_[index]) >> 4U]);
-            result.push_back(kHex[static_cast<std::size_t>(bytes_[index]) & 0x0fU]);
+                result[position++] = '-';
+            result[position++] = kHex[static_cast<std::size_t>(bytes_[index]) >> 4U];
+            result[position++] = kHex[static_cast<std::size_t>(bytes_[index]) & 0x0fU];
         }
-        return result;
+        // Direct construction keeps checked-library allocation outside noexcept string moves.
+        return std::string(result.data(), result.size());
     }
 
     /** @copydoc AssetId::Bytes */
@@ -73,6 +75,11 @@ namespace Horo::Assets {
             hash *= sizeof(std::size_t) == 8 ? 1099511628211ULL : 16777619U;
         }
         return hash;
+    }
+
+    /** @copydoc AssetTypeId::AssetTypeId */
+    AssetTypeId::AssetTypeId(AssetTypeId &&other) : AssetTypeId() {
+        value_.swap(other.value_);
     }
 
     /** @copydoc AssetTypeId::Parse */
@@ -97,7 +104,7 @@ namespace Horo::Assets {
 
         if (segmentStart || !hasDot)
             return Result<AssetTypeId>::Failure(MakeError(AssetErrors::TypeInvalid));
-        return Result<AssetTypeId>::Success(AssetTypeId{std::string{value}});
+        return Result<AssetTypeId>::Success(AssetTypeId{value});
     }
 
     /** @copydoc AssetTypeId::Value */

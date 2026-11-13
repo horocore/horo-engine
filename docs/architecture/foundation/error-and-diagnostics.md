@@ -88,6 +88,42 @@ Use `Result` for:
 Do not use `Result` for ordinary query absence when `std::optional<T>` fully
 describes the outcome.
 
+`Result<T>::SuccessInPlace(args...)` constructs `T` directly in the result's
+value storage. Constructor exceptions propagate to the caller before a result
+is published. It supports immovable values and avoids intermediate value moves;
+it does not change the existing `Success(T)`, result copy/move, or error contracts.
+Callers must still respect the exception contract of their chosen constructor.
+
+The animation source writer uses this additive factory to construct its final
+bounded string from the completed private buffer. This is a cold serialization
+copy: checked Windows STL string moves may allocate inside a `noexcept` move
+constructor and terminate during allocation failure. Direct construction keeps
+that final allocation fallible. Existing callers need no migration; the writer
+and serializer return the result as a prvalue, preserving C++17 copy elision.
+Foundation regressions cover immovable values and constructor exceptions;
+animation allocation regressions cover the actual string publication boundary.
+
+`Result<T>::CompleteInPlace(fallback, completion)` first copies the supplied
+failure in final return storage, then synchronously calls completion
+with a borrowed reference to that result. Return the factory as a prvalue to retain
+C++17 copy elision. The completion must not retain its reference; it owns exception
+containment and the allocation contracts of any state transitions. Preparing the
+fallback may allocate before the completion starts. A throwing completion propagates
+its exception after destroying the partial result, including any installed payload;
+the factory does not impose a `noexcept` boundary. This additive construction API
+leaves existing result construction and copy/move contracts in place.
+The cold fallback copy is deliberate: its allocation failures remain catchable on
+MSVC checked STL, where an Error move can allocate inside a `noexcept` constructor.
+
+Gameplay persistence uses this factory to prepare callback failure storage before
+calling project code. Its exception paths retain that failure or move-assign an
+already prepared allocation failure into the existing error alternative. They do
+not move a completed result after the callback throws: MSVC checked strings and
+vectors can allocate iterator proxies even in moves declared `noexcept`. Native
+save regressions measure allocations after real standard, allocation and foreign
+project exceptions; Foundation tests verify final-storage identity and preservation
+of typed failure causes.
+
 ## Error Model
 
 ```cpp

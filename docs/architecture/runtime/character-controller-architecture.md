@@ -734,13 +734,24 @@ must fence old world generations. Missing/deleted downstream bindings, failed
 optional consumers, consumer reload and shutdown suppress presentation without
 feeding back into Character movement or rewriting historical facts.
 
-The proposed semantic `SurfaceMaterialId`, catalog admission and collider semantic
-projection described in ADR-181 do **not** ship in this contract. Physical evidence
-must not be cast, renamed or inferred into a semantic ID. Once Physics provides the
-versioned typed semantic projection, Character will copy it and its mapping
-provenance and admit the catalog-valid default separately. Until that producer is
-implemented, semantic-dependent consumers remain explicitly unavailable; there
-is no coupled `SurfaceMaterial` containing coefficients or Audio/VFX assets.
+The immutable Physics `SurfaceCatalogSnapshot` and `PhysicsSurfaceWorldBinding`
+now provide the separate semantic identity, catalogue revision/fingerprint and
+mapping generation. Character retains that exact world capture. Query evidence
+must match it before any candidate is committed. Physical-only hits may use the
+explicit catalog-valid controller `defaultSurface`; an absent component value
+inherits only the captured Project default. These two semantic origins are
+`Query` and `DescriptorDefault`, independent of physical material provenance.
+A present invalid or unregistered default is rejected, never silently inherited.
+Legacy empty catalogue/no default keeps physical movement available and reports
+`CharacterSurfaceAvailability::Unavailable`. No physical ID, coefficient or name
+is converted into a semantic surface.
+
+The source field `characterController.collision.defaultSurface` is an optional
+strict canonical UUID string in Character component schema 1 under the 0.3
+persistent contract. Absence remains absent through source round trips; `null`,
+wrong types and invalid IDs fail parsing. Runtime catalogue/mapping generations
+are not authored. Replacing the catalogue creates a new captured world rather
+than mutating the meaning of old snapshots.
 
 ## Locomotion Facts And Footstep Correlation
 
@@ -760,7 +771,7 @@ Events:
 
 Events carry:
 
-- Physics physical asset/generation/slot, body/shape and optional authored child references; future semantic identity remains separate
+- Physics physical asset/generation/slot, body/shape and optional authored child references; independently admitted semantic identity and mapping evidence
 - explicit query or descriptor-fallback provenance
 - contact point and normal
 - impact velocity
@@ -769,6 +780,52 @@ Events carry:
 Facts carry stable scene/controller/tick/result identity plus bounded material,
 contact and achieved/impact velocity evidence where applicable. Repeated raw
 contacts do not create another state-transition fact.
+
+`CharacterMovementResult::sliding` is produced by the admitted steep gravity-slide
+branch after its final support reduction. Events compare the previous committed
+record with the final preflighted candidate, once per controller/tick. Wall and
+ceiling events describe collision-state entry; sustained raw contacts do not
+repeat them. `SurfaceChanged` requires grounded support on both sides, two
+semantic IDs and comparable catalogue/mapping evidence. A physical-only revision
+change or a transition to unknown meaning does not manufacture this event.
+
+`CharacterWorld::CaptureEvents` and its scoped capability wrapper copy immutable
+`CharacterMovementEvent` and `CharacterEventTerminalState` values into caller
+spans on the owner thread after commit. Events carry controller, tick, command
+sequence, state revision, transform publication revision, kind/ordinal and a
+separate world stream watermark. Consumers deduplicate that tuple and advance
+their own watermark; reads never consume facts or invoke consumers. No callback,
+native pointer or world ownership escapes. Already copied values survive
+consumer retirement, world replacement and shutdown. Revoked or stale
+capabilities cannot read new publications.
+
+`maximumQueuedEvents` bounds the retained journal. Newer ticks take retention
+priority; within a tick Landed/LeftGround/SlideEnd precede ordinary contact hints,
+then canonical controller/kind/ordinal order decides ties. Evictions and rejected
+facts increment explicit per-publication `droppedEvents` and saturating
+`cumulativeDroppedEvents`. These measure journal retention pressure and can
+include facts a consumer already read; without a stored consumer cursor/history
+they do not claim exact per-consumer historical loss. `readDroppedEvents` separately
+counts unseen retained facts omitted by this capture's output quota.
+Every resident controller also has a complete terminal-state copy in storage
+reserved from `maximumControllers`, independent of event loss. It preserves
+actual ground/slide/collision/semantic state and its original source tick and
+revisions. An undersized terminal span rejects before modifying either output;
+an undersized event span returns a deterministic prefix and explicit read loss.
+A no-command tick advances only the stream watermark, emits zero new facts and
+does not relabel old support as a newly queried contact. Failed ticks never swap
+the published event/terminal buffers.
+
+Preparation reserves two event buffers and two terminal buffers (at most
+`2 * maximumQueuedEvents * sizeof(CharacterMovementEvent)` plus
+`2 * maximumControllers * sizeof(CharacterEventTerminalState)`), in addition to
+existing movement storage. Projection uses a seven-entry stack array; append,
+canonicalization, publication swaps and capture use no hot-path allocation.
+Overflow reduction is bounded by the prepared event capacity per emitted fact;
+no consumer backpressure can roll back movement or enlarge storage. Shutdown
+closes admission and clears retained storage without synthesizing transitions.
+Inbound sweep velocity is optional contact evidence; support-only probes do not
+invent impact velocity. Achieved velocity remains separately identified.
 
 [ADR-091](../../adr/091-footstep-and-locomotion-event-ownership.md) makes committed
 Animation marker occurrences the authoritative timing source for animation-driven

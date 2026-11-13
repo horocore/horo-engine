@@ -43,8 +43,8 @@ def junit(tmp_path, names=None):
     return path
 
 
-def test_exact_ten_release_cases_are_accepted(tmp_path):
-    assert len(QUALIFICATION.SCENE_CASES) == 10
+def test_exact_eleven_release_cases_are_accepted(tmp_path):
+    assert len(QUALIFICATION.SCENE_CASES) == 22
     QUALIFICATION.scene_verify_discovery(discovery())
     QUALIFICATION.scene_verify_junit(junit(tmp_path))
 
@@ -129,7 +129,7 @@ def test_actual_ctest_path_contract_is_registered_and_matches_workflow():
                 f'--output-junit {report}') in cmake
     registration = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert registration.index("add_test(NAME HoroSceneAllocationJunitPathContract") < registration.index(
-        "horo_finalize_ci_suites()"
+        "cmake_language(DEFER CALL horo_finalize_ci_suites)"
     )
     assert "HoroSceneAllocationJunitPathContract" in (ROOT / "tests/cmake/HoroCiSuites.cmake").read_text(encoding="utf-8")
 

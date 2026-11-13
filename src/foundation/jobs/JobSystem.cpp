@@ -12,6 +12,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -105,7 +106,13 @@ namespace Horo {
         explicit JobStoreState(const std::size_t capacity) : terminalCapacity(capacity) {}
 
         const std::size_t terminalCapacity;
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+        // Checked MSVC hash storage allocates a proxy inside a noexcept constructor.
+        // Ordered storage keeps checked construction failures recoverable.
+        std::map<JobId, std::shared_ptr<JobRecord>> records;
+#else
         std::unordered_map<JobId, std::shared_ptr<JobRecord>> records;
+#endif
         std::deque<JobId> terminalOrder;
         std::uint64_t revision{};
         std::uint64_t droppedTerminalCount{};
@@ -114,7 +121,8 @@ namespace Horo {
     /** @copydoc JobSystem::State::State */
     JobSystem::State::State(const JobSystemConfig &value)
         : config(value), schedulerIdentity(NextSchedulerIdentity()), execution(std::make_shared<JobExecutionState>(value)),
-          store(std::make_shared<JobStoreState>(value.maxRetainedTerminalJobs)) {}
+          store(std::make_shared<JobStoreState>(value.maxRetainedTerminalJobs)),
+          preCancelledError(MakeJobError(JobErrors::Cancelled, "Job was cancelled before execution.")), workers(std::size_t{0}) {}
 
     /** @copydoc JobSystem::State::PruneQueues */
     void JobSystem::State::PruneQueues() {
@@ -481,7 +489,22 @@ namespace Horo {
                     });
             }
         } catch (...) {
-            Shutdown(ShutdownPolicy::Cancel);
+            // Construction has not published the scheduler, so no jobs or external helpers can exist.
+            // Stop and join the workers directly; general Shutdown prepares allocating cancellation snapshots.
+            {
+                std::lock_guard lock(m_state->execution->mutex);
+                m_state->execution->helpersAllowed = false;
+            }
+            {
+                std::lock_guard lock(m_state->mutex);
+                m_state->accepting = false;
+                m_state->stopping = true;
+            }
+            m_state->workAvailable.notify_all();
+            m_state->spaceAvailable->notify_all();
+            for (auto &worker : m_state->workers)
+                if (worker.joinable())
+                    worker.join();
             throw;
         }
     }
@@ -544,10 +567,9 @@ namespace Horo {
         const bool cancelled = record->cancellation.Token().IsCancellationRequested();
         if (cancelled) {
             // Prepare fallible terminal metadata before publishing or transferring callback ownership.
-            record->terminalResult = JobTerminalResult{
-                .state = JobState::Cancelled,
-                .error = MakeJobError(JobErrors::Cancelled, "Job was cancelled before execution."),
-            };
+            auto &terminal = record->terminalResult.emplace();
+            terminal.state = JobState::Cancelled;
+            terminal.error.emplace(preCancelledError);
             record->state = JobState::Cancelled;
             record->timing.finishedAt = std::chrono::steady_clock::now();
         }

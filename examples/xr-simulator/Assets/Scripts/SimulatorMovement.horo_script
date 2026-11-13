@@ -1,0 +1,12 @@
+return horo.behavior {
+    type_id = "game.xr_simulator.movement",
+    display_name = "Simulator Semantic Movement",
+    category = "Simulator",
+    schema_version = 1,
+    fields = {},
+    on_fixed_update = function(ctx, dt)
+        local x, y, z = ctx.transform.position()
+        local move_x, move_y, down = ctx.input.action("gameplay.move")
+        if down then ctx.transform.set_position(x + move_x, y, z + move_y) end
+    end
+}

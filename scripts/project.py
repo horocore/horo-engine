@@ -108,9 +108,34 @@ def validate_asset_names(profile: dict) -> None:
         raise AndroidError("Source assets cannot overwrite owned provenance or generated package metadata.")
 
 
+def exact_graphics_profile(actual: object, expected: dict) -> bool:
+    """Require the closed profile's exact field types as well as values."""
+    if not isinstance(actual, dict) or actual.keys() != expected.keys():
+        return False
+    return all(type(actual[key]) is type(value) and actual[key] == value for key, value in expected.items())
+
+
+def validate_renderer_profile(profile: dict) -> None:
+    """Admit only explicit assembly-only or bounded Android Vulkan development composition."""
+    if profile["distributionQualified"]:
+        raise AndroidError("Qualification packages cannot claim distribution/device qualification.")
+    if profile["renderer"] == "none":
+        if "graphicsProfile" in profile:
+            raise AndroidError("Assembly-only profiles cannot declare native graphics support.")
+        return
+    expected = {"schema": 2, "api": "Vulkan1.1", "presentMode": "Fifo",
+                "swapchainMaintenance1Required": True, "singleGraphicsPresentQueue": True,
+                "compositeAlphaPolicy": "prefer-opaque-else-inherit-alpha-one"}
+    if profile["renderer"] != "vulkan-android" or not exact_graphics_profile(profile.get("graphicsProfile"), expected):
+        raise AndroidError("Unsupported Android development graphics profile; select the declared effective Vulkan tuple.")
+    if profile["preset"] != "android-vulkan-development" or profile["configuration"] != "Debug":
+        raise AndroidError("Android Vulkan qualification requires its explicit development preset.")
+    if profile["assets"] != {"qualification.json": "android/qualification-vulkan.json"}:
+        raise AndroidError("Android Vulkan development requires its presentation-intent asset without device qualification claims.")
+
+
 def validate_profile_identity(profile: dict) -> None:
-    if profile["renderer"] != "none" or profile["distributionQualified"]:
-        raise AndroidError("This qualification composition has no presentation/device support; provide a qualified product host.")
+    validate_renderer_profile(profile)
     if profile["permissions"] != [profile["applicationId"] + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
                                    "android.permission.ACTIVITY_RECOGNITION"] or profile["features"]:
         raise AndroidError("Qualification profiles admit only AndroidX receiver and optional Activity Recognition permissions; no required hardware features.")
@@ -496,6 +521,26 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
         raise AndroidError("GameActivity changed during staging; retry with the admitted AAR.")
 
 
+def ndk_host_tag() -> str:
+    """Select the NDK host package for this build machine without searching foreign installations."""
+    tags = {"Linux": "linux-x86_64", "Darwin": "darwin-x86_64", "Windows": "windows-x86_64"}
+    tag = tags.get(host_platform.system())
+    if tag is None:
+        raise AndroidError("Unsupported NDK build host; select a declared Linux, macOS or Windows toolchain.")
+    return tag
+
+
+def ndk_shared_runtime(ndk: Path, abi: str) -> Path:
+    """Resolve the exact declared ABI runtime within the selected host's NDK sysroot."""
+    triples = {"arm64-v8a": "aarch64-linux-android", "x86_64": "x86_64-linux-android"}
+    triple = triples.get(abi)
+    if triple is None:
+        raise AndroidError("Unsupported Android runtime ABI.")
+    runtime = ndk / f"toolchains/llvm/prebuilt/{ndk_host_tag()}/sysroot/usr/lib/{triple}/libc++_shared.so"
+    bounded_bytes(runtime)
+    return runtime
+
+
 def build_native(arguments: argparse.Namespace, profile: dict, activity_root: Path, workspace: Path) -> Path:
     if arguments.native_root:
         if arguments.native_root.is_symlink():
@@ -513,8 +558,7 @@ def build_native(arguments: argparse.Namespace, profile: dict, activity_root: Pa
         destination = native_root / abi
         destination.mkdir(parents=True)
         shutil.copyfile(binary / f"lib{profile['nativeLibrary']}.so", destination / f"lib{profile['nativeLibrary']}.so")
-        triple = "aarch64-linux-android" if abi == "arm64-v8a" else "x86_64-linux-android"
-        runtime = arguments.ndk / f"toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/{triple}/libc++_shared.so"
+        runtime = ndk_shared_runtime(arguments.ndk, abi)
         shutil.copyfile(runtime, destination / "libc++_shared.so")
     return native_root
 
@@ -545,7 +589,7 @@ def canonical_apk(source: Path, destination: Path, provenance_bytes: bytes | Non
         names = original.namelist()
         for name in sorted(names):
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_STORED if name.endswith(".so") else zipfile.ZIP_DEFLATED
+            info.compress_type = zipfile.ZIP_STORED if name.endswith(".so") or name == "resources.arsc" else zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
             payload = provenance_bytes if name == PROVENANCE_ASSET and provenance_bytes is not None else original.read(name)
             result.writestr(info, payload)
@@ -566,6 +610,8 @@ def inspect_package(package: Path, expected: dict) -> dict:
         names = archive.namelist()
         if len(names) != len(set(names)) or "classes.dex" not in names or "AndroidManifest.xml" not in names:
             raise AndroidError("APK is ambiguous or missing its Android application payload.")
+        if "resources.arsc" in names and archive.getinfo("resources.arsc").compress_type != zipfile.ZIP_STORED:
+            raise AndroidError("Android resource tables must be uncompressed before four-byte zip alignment.")
         provenance_bytes = archive.read(PROVENANCE_ASSET)
         if provenance_bytes != canonical_json(expected):
             raise AndroidError("APK provenance differs from its admitted inputs.")
@@ -688,7 +734,7 @@ def verify_manifest(badging: str, profile: dict) -> None:
 
 def apk_main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("qualification-debug", "qualification-release"), required=True)
+    parser.add_argument("--profile", choices=("qualification-debug", "qualification-release", "qualification-vulkan-development"), required=True)
     parser.add_argument("--abi", action="append", required=True)
     for name in ("sdk", "ndk", "gradle", "game-activity", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
@@ -787,7 +833,7 @@ def safe_member_path(member: zipfile.ZipInfo, seen: set[str]) -> PurePosixPath:
     path = PurePosixPath(member.filename)
     mode = member.external_attr >> 16
     components = member.filename.rstrip("/").split("/")
-    if (not member.filename or "\\" in member.filename or path.is_absolute() or
+    if (not member.filename or member.orig_filename != member.filename or "\\" in member.filename or path.is_absolute() or
             any(part in ("", ".", "..") for part in components) or
             ":" in components[0] or path.as_posix() != member.filename.rstrip("/") or
             (mode & 0o170000) not in (0, 0o100000, 0o040000) or member.filename.casefold() in seen):
@@ -1474,19 +1520,19 @@ def significant_tokens(text: str) -> list[tuple[str, str]]:
     return [(match.lastgroup or "other", match.group()) for match in TOKEN.finditer(text) if match.lastgroup not in ignored]
 
 
-def annotations_in(text: str, source: pathlib.Path) -> list[tuple[str, str]]:
+def annotations_in(text: str, source: pathlib.Path, marker: str = "HORO_BEHAVIOR") -> list[tuple[str, str]]:
     tokens = significant_tokens(text)
     annotations: list[tuple[str, str]] = []
     expected = ("identifier", "punctuation", "identifier", "punctuation", "string", "punctuation")
     for index, token in enumerate(tokens):
-        if token != ("identifier", "HORO_BEHAVIOR"):
+        if token != ("identifier", marker):
             continue
         candidate = tokens[index : index + len(expected)]
         if len(candidate) != len(expected) or tuple(kind for kind, _ in candidate) != expected:
-            raise ValueError(f"malformed HORO_BEHAVIOR annotation in {source}")
+            raise ValueError(f"malformed {marker} annotation in {source}")
         _, opening, symbol, comma, encoded_type_id, closing = candidate
         if opening[1] != "(" or comma[1] != "," or closing[1] != ")":
-            raise ValueError(f"malformed HORO_BEHAVIOR annotation in {source}")
+            raise ValueError(f"malformed {marker} annotation in {source}")
         type_id = json.loads(encoded_type_id[1])
         annotations.append((symbol[1], type_id))
     return annotations
@@ -1590,9 +1636,10 @@ const auto &Factories() {{
 '''
 
 
-def generated_exports(module_id: str, fingerprint: str, revision: int, count: int) -> str:
+def generated_exports(module_id: str, fingerprint: str, revision: int, count: int, node_count: int = 0) -> str:
     behavior_pointer = "Descriptors().data()" if count else "nullptr"
     factory_pointer = "Factories().data()" if count else "nullptr"
+    node_pointer = "DecisionNodes().data()" if node_count else "nullptr"
     return f'''
 
 extern "C" HORO_GAME_EXPORT const Horo::Gameplay::GameModuleDescriptor *GetGameModuleDescriptor() noexcept {{
@@ -1621,6 +1668,8 @@ extern "C" HORO_GAME_EXPORT const Horo::Gameplay::GeneratedGameplayDescriptorBun
         .diagnostics = nullptr,
         .diagnosticCount = 0,
         .lifecycle = {{.create = &CreateGameModule, .destroy = &DestroyGameModule}},
+        .decisionNodes = {node_pointer},
+        .decisionNodeCount = {node_count},
     }};
     return &bundle;
 }}
@@ -1632,8 +1681,47 @@ def generated_source(
     fingerprint: str,
     revision: int,
     annotations: list[tuple[str, str, pathlib.Path]],
+    nodes: list[tuple[str, str, pathlib.Path]] | None = None,
 ) -> str:
-    return generated_storage(annotations) + generated_exports(module_id, fingerprint, revision, len(annotations))
+    nodes = nodes or []
+    return (generated_storage(annotations) + generated_node_storage(nodes)
+            + generated_exports(module_id, fingerprint, revision, len(annotations), len(nodes)))
+
+
+def generated_node_storage(nodes: list[tuple[str, str, pathlib.Path]]) -> str:
+    declarations = "\n".join(
+        f"Horo::AI::DecisionNodeRegistration HoroGeneratedDecisionNode_{symbol}();"
+        for symbol, _, _ in nodes
+    )
+    records = ",\n        ".join(f"HoroGeneratedDecisionNode_{symbol}()" for symbol, _, _ in nodes)
+    return f'''
+{declarations}
+namespace {{
+const auto &DecisionNodes() {{
+    static const std::array<Horo::AI::DecisionNodeRegistration, {len(nodes)}> nodes{{{{
+        {records}
+    }}}};
+    return nodes;
+}}
+}}
+'''
+
+
+def decision_node_annotations(sources: list[tuple[pathlib.Path, str, str]]) -> list[tuple[str, str, pathlib.Path]]:
+    nodes = [(symbol, identity, source) for source, text, _ in sources
+             for symbol, identity in annotations_in(text, source, "HORO_AI_NODE")]
+    if len(nodes) > 128:
+        raise ValueError("decision node annotation count exceeds the supported limit")
+    seen_ids: set[int] = set()
+    seen_symbols: set[str] = set()
+    for symbol, identity, source in nodes:
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", identity) or int(identity) > 2**64 - 1:
+            raise ValueError(f"invalid decision node identity in {source}")
+        if int(identity) in seen_ids or symbol in seen_symbols:
+            raise ValueError(f"duplicate decision node annotation in {source}")
+        seen_ids.add(int(identity))
+        seen_symbols.add(symbol)
+    return sorted(nodes, key=lambda node: (int(node[1]), node[0]))
 
 
 def validate_identity(module_id: str, fingerprint: str) -> None:
@@ -1667,8 +1755,9 @@ def generate_bundle(
     ]
     annotations.sort(key=lambda annotation: (annotation[1], annotation[0]))
     validate_annotations(annotations)
+    nodes = decision_node_annotations(sources)
     revision = descriptor_revision(module_id, annotations, [record[2] for record in sources])
-    write_atomic(generated_output, generated_source(module_id, fingerprint, revision, annotations))
+    write_atomic(generated_output, generated_source(module_id, fingerprint, revision, annotations, nodes))
     write_atomic(generated_revision, f"{revision}\n")
 
 

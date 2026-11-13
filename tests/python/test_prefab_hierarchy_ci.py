@@ -74,9 +74,11 @@ class PrefabHierarchyCiTests(unittest.TestCase):
                 self.assertTrue(catalog["messages"][f"workspace.hierarchy.prefab.{key}"]["text"])
 
     def test_job_budgets_preserve_case_timeout(self):
-        for name in ("ci.yml", "sonar.yml"):
+        for name, job, expected in (("ci.yml", "test", 360), ("sonar.yml", "sonar", 240)):
             source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
-            self.assertIn("timeout-minutes: 180", source)
+            block = source.split(f"\n  {job}:\n", 1)[1]
+            timeout = next(line.strip() for line in block.splitlines() if line.startswith("    timeout-minutes:"))
+            self.assertEqual(timeout, f"timeout-minutes: {expected}")
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("--no-tests=error --timeout 90", workflow)
 

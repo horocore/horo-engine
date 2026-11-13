@@ -61,7 +61,18 @@ def test_planner_accounts_for_every_input_once_with_bounded_nul_batches(tmp_path
     assert (stage / "batches.manifest").read_bytes() == before
 
 
-def test_newlines_quotes_spaces_unicode_are_data_not_commands(tmp_path: Path) -> None:
+def test_quotes_spaces_unicode_are_data_not_commands(tmp_path: Path) -> None:
+    root, build, stage, _, _ = fixture(tmp_path, 0)
+    names = ["quoted ' $() ; örnek.gcno"]
+    files = [build / name for name in names]
+    for file in files:
+        file.touch()
+    collector.plan(root, build, stage)
+    assert read_manifest(read_manifest(stage / "batches.manifest")[0]) == sorted(files)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain newline characters")
+def test_newlines_are_data_not_commands(tmp_path: Path) -> None:
     root, build, stage, _, _ = fixture(tmp_path, 0)
     names = ["line\nbreak.gcno", "quoted ' $() ; örnek.gcno"]
     files = [build / name for name in names]
@@ -128,7 +139,12 @@ def test_invalid_ownership_area_is_rejected(tmp_path: Path, kind: str) -> None:
         stage = build
     else:
         link = build / "coverage-batches.link"
-        link.symlink_to(stage, target_is_directory=True)
+        try:
+            link.symlink_to(stage, target_is_directory=True)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                pytest.skip("Creating symlinks requires Windows symlink privilege")
+            raise
         stage = link
     with pytest.raises(ValueError):
         collector.plan(root, build, stage)
@@ -295,7 +311,9 @@ def test_xr_bootstrap_coverage_is_selected_without_widening_the_editor_host_root
     selection = host.split("includes=(", 1)[1].split("\n)", 1)[0]
     includes = shlex.split(selection)
     assert "$workspace/apps/HoroEditor/app/EditorOpenXRBootstrap.cpp" in includes
-    assert "$workspace/apps/common/" in includes
+    assert "$workspace/apps/shared/" in includes
+    assert "$workspace/apps/HoroEditor/composition/" in includes
+    assert "$workspace/apps/HoroEditor/tools/shader_cook/" in includes
     assert "$workspace/apps/HoroEditor/app/" not in includes
     assert "$workspace/apps/HoroEditor/" not in includes
     assert "$workspace/apps/" not in includes

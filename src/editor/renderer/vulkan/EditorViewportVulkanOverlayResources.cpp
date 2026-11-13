@@ -6,14 +6,14 @@
 
 namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::CreateOverlaySlots */
-    Result<void> EditorViewportRendererVulkan::CreateOverlaySlots() {
+    Result<void> EditorViewportRendererVulkan::CreateOverlaySlots(ShaderResources &program, std::span<FrameSlot> slots) {
         for (std::uint32_t index = 0; index < device_.frames; ++index) {
-            auto &slot = slots_[index].overlay;
+            auto &slot = slots[index].overlay;
             if (const auto mesh = CreateOverlayMesh(slot); mesh.HasError())
                 return mesh;
-            if (const auto uniform = ProgramResources::CreateUniformSlot(frontend_, shader_, slot.uniforms,
+            if (const auto uniform = ProgramResources::CreateUniformSlot(frontend_, program, slot.uniforms,
                                                                          (index + 1) * (Render::RenderMaterialPass::MaximumDraws + 1),
-                                                                         shader_.overlayPipeline);
+                                                                         program.overlayPipeline, resources_.ShadowTextureView());
                 uniform.HasError())
                 return uniform;
         }

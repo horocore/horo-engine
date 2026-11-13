@@ -9,6 +9,7 @@ namespace Horo::Editor::NavigationErrors {
     extern const ErrorCodeDescriptor ScreenCreationFailed;
     extern const ErrorCodeDescriptor InvalidRouteParameters;
     extern const ErrorCodeDescriptor Busy;
+    extern const ErrorCodeDescriptor FixedDispatchInvalid;
     extern const ErrorCodeDescriptor LeaveDenied;
     extern const ErrorCodeDescriptor InvalidLeaveRequirement;
     extern const ErrorCodeDescriptor LeaveResolutionLimitExceeded;

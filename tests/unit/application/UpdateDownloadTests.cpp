@@ -1,3 +1,4 @@
+#include "../../support/OwnedTestDirectory.h"
 #include "Horo/Release/UpdateDownloadSession.h"
 #include "Horo/Release/UpdateHttpDownload.h"
 #include "Horo/Release/UpdateStageReady.h"
@@ -5,8 +6,8 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
-#include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -23,19 +24,10 @@ using namespace Horo::Release;
 
 namespace {
     class TemporaryStage final {
+        Horo::Tests::OwnedTestDirectory directory_{"update-download"};
+
     public:
-        TemporaryStage()
-            : path(std::filesystem::temp_directory_path() /
-                   ("horo-update-download-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
-            std::filesystem::create_directories(path);
-        }
-
-        ~TemporaryStage() {
-            std::error_code error;
-            std::filesystem::remove_all(path, error);
-        }
-
-        std::filesystem::path path;
+        const std::filesystem::path path{directory_.Path()};
     };
 
     class AcceptingProvider final : public Horo::Security::SignatureProvider {
@@ -64,7 +56,7 @@ namespace {
 
     [[nodiscard]] Horo::Security::ArtifactVerifier Verifier() {
         auto roots = std::make_shared<Horo::Security::TrustedRootStore>();
-        std::vector<std::byte> key(65U, std::byte{1});
+        std::vector key(65U, std::byte{1});
         key.front() = std::byte{0x04};
         REQUIRE(roots->Add({.publisherId = "com.horo.updates", .keyId = "key-1", .publicKey = std::move(key)}).HasValue());
         return {std::make_shared<AcceptingProvider>(), std::move(roots)};
@@ -110,12 +102,12 @@ namespace {
                     character = static_cast<char>(character - 'a' + 'A');
             }
         }
-        std::string inventory = std::string{UpdateFileInventoryHeader} + std::string{name} + '\t' + std::to_string(content.size()) + '\t' +
-                                digestText + "\t0755\tentrypoint\n";
+        std::string inventory =
+            std::format("{}{}\t{}\t{}\t0755\tentrypoint\n", UpdateFileInventoryHeader, name, content.size(), digestText);
         if (extraFile && declareExtra) {
             const auto extraDigest = Horo::ComputeSha256(std::as_bytes(std::span{extraFile->second}));
-            inventory += std::string{extraFile->first} + '\t' + std::to_string(extraFile->second.size()) + '\t' +
-                         Horo::FormatSha256(extraDigest) + "\t0644\tcontent\n";
+            inventory +=
+                std::format("{}\t{}\t{}\t0644\tcontent\n", extraFile->first, extraFile->second.size(), Horo::FormatSha256(extraDigest));
         }
         if (includeInventory)
             REQUIRE(
@@ -248,7 +240,9 @@ TEST_CASE("HTTPS adapter authenticates a complete durable checkpoint without ano
     REQUIRE(session.Append(std::as_bytes(std::span{payload})).HasValue());
     REQUIRE(session.Finish(Verifier()).HasValue());
 
-    const auto recovered = DownloadUpdatePackageHttps({package, Paths(stage), Limits}, files, Verifier(), {});
+    // Named brace-initialized requests retain borrowed temporaries and avoid MSVC 19.44's call-cleanup ICE.
+    const UpdateHttpsDownloadRequest downloadRequest{package, Paths(stage), Limits};
+    const auto recovered = DownloadUpdatePackageHttps(downloadRequest, files, Verifier(), {});
     REQUIRE(recovered.HasValue());
     CHECK(recovered.Value().durableBytes == package.size);
 }
@@ -259,14 +253,18 @@ TEST_CASE("HTTPS adapter rejects invalid policy and cancellation before opening 
     auto package = Package(payload);
     Horo::NativeDurableFileSystem files;
     package.url = "http://updates.example.test/editor.zip";
-    CHECK(DownloadUpdatePackageHttps({package, Paths(stage), Limits}, files, Verifier(), {}).HasError());
+    const UpdateHttpsDownloadRequest insecureRequest{package, Paths(stage), Limits};
+    CHECK(DownloadUpdatePackageHttps(insecureRequest, files, Verifier(), {}).HasError());
     package.url = "https://updates.example.test/editor.zip";
-    CHECK(DownloadUpdatePackageHttps({package, Paths(stage), Limits, {.connectTimeoutSeconds = 15U, .requestTimeoutSeconds = 14U}}, files,
-                                     Verifier(), {})
-              .HasError());
+    const UpdateHttpsDownloadRequest invalidTimeoutRequest{package,
+                                                           Paths(stage),
+                                                           Limits,
+                                                           {.connectTimeoutSeconds = 15U, .requestTimeoutSeconds = 14U}};
+    CHECK(DownloadUpdatePackageHttps(invalidTimeoutRequest, files, Verifier(), {}).HasError());
     Horo::CancellationSource cancellation;
     cancellation.RequestCancellation();
-    CHECK(DownloadUpdatePackageHttps({package, Paths(stage), Limits}, files, Verifier(), cancellation.Token()).HasError());
+    const UpdateHttpsDownloadRequest cancelledRequest{package, Paths(stage), Limits};
+    CHECK(DownloadUpdatePackageHttps(cancelledRequest, files, Verifier(), cancellation.Token()).HasError());
     CHECK_FALSE(std::filesystem::exists(Paths(stage).partialFile));
 }
 
@@ -295,8 +293,9 @@ TEST_CASE("Verified stage publishes a durable marker only for the exact private 
     const std::array inventory{UpdateStagedFile{"bin/editor", executable.size(), Horo::ComputeSha256(std::as_bytes(std::span{executable})),
                                                 UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
     constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
-    auto published = PublishVerifiedUpdateStage({package, checkpoint.Value(), Paths(stage).partialFile, root, inventory, archiveLimits},
-                                                files, Verifier(), {});
+    const VerifiedUpdateStageRequest publicationRequest{package, checkpoint.Value(), Paths(stage).partialFile,
+                                                        root,    inventory,          archiveLimits};
+    auto published = PublishVerifiedUpdateStage(publicationRequest, files, Verifier(), {});
     REQUIRE(published.HasValue());
     CHECK(std::filesystem::is_regular_file(published.Value()));
 
@@ -304,9 +303,9 @@ TEST_CASE("Verified stage publishes a durable marker only for the exact private 
         std::ofstream output(root / "bin/editor", std::ios::binary | std::ios::trunc);
         output << "changed";
     }
-    CHECK(PublishVerifiedUpdateStage({package, checkpoint.Value(), Paths(stage).partialFile, root, inventory, archiveLimits}, files,
-                                     Verifier(), {})
-              .HasError());
+    const VerifiedUpdateStageRequest changedPublicationRequest{package, checkpoint.Value(), Paths(stage).partialFile,
+                                                               root,    inventory,          archiveLimits};
+    CHECK(PublishVerifiedUpdateStage(changedPublicationRequest, files, Verifier(), {}).HasError());
     CHECK_FALSE(std::filesystem::exists(published.Value()));
 }
 
@@ -322,19 +321,18 @@ TEST_CASE("Cancelled or invalid stage never publishes ready", "[release][update]
     constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     Horo::CancellationSource cancellation;
     cancellation.RequestCancellation();
-    CHECK(PublishVerifiedUpdateStage({package, {}, Paths(stage).partialFile, root, inventory, archiveLimits}, files, Verifier(),
-                                     cancellation.Token())
-              .HasError());
+    const VerifiedUpdateStageRequest cancelledRequest{package, {}, Paths(stage).partialFile, root, inventory, archiveLimits};
+    CHECK(PublishVerifiedUpdateStage(cancelledRequest, files, Verifier(), cancellation.Token()).HasError());
     CHECK_FALSE(std::filesystem::exists(root.string() + ".ready"));
-    CHECK(PublishVerifiedUpdateStage({package, {}, Paths(stage).partialFile, "relative/candidate", inventory, archiveLimits}, files,
-                                     Verifier(), {})
-              .HasError());
+    const VerifiedUpdateStageRequest relativeRequest{package, {}, Paths(stage).partialFile, "relative/candidate", inventory, archiveLimits};
+    CHECK(PublishVerifiedUpdateStage(relativeRequest, files, Verifier(), {}).HasError());
     const auto marker = std::filesystem::path{root.string() + ".ready"};
     {
         std::ofstream output(marker, std::ios::binary);
         output << "preserve unrelated package path";
     }
-    CHECK(PublishVerifiedUpdateStage({package, {}, marker, root, inventory, archiveLimits}, files, Verifier(), {}).HasError());
+    const VerifiedUpdateStageRequest aliasRequest{package, {}, marker, root, inventory, archiveLimits};
+    CHECK(PublishVerifiedUpdateStage(aliasRequest, files, Verifier(), {}).HasError());
     CHECK(std::filesystem::is_regular_file(marker));
 }
 
@@ -350,8 +348,8 @@ TEST_CASE("Verified ZIP staging extracts bounded content and publishes ready", "
     Horo::NativeDurableFileSystem files;
     constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     const auto root = stage.path / "candidate";
-    auto published =
-        StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits}, files, Verifier(), {});
+    const VerifiedZipUpdateRequest stagingRequest{package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits};
+    auto published = StageVerifiedZipUpdate(stagingRequest, files, Verifier(), {});
     REQUIRE(published.HasValue());
     CHECK(std::filesystem::is_regular_file(published.Value()));
     std::ifstream input(root / "bin/editor", std::ios::binary);
@@ -382,25 +380,24 @@ TEST_CASE("A verified delta ZIP stays private without an activation ready marker
     Horo::NativeDurableFileSystem files;
     constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     const auto root = stage.path / "delta";
-    auto extracted =
-        StageVerifiedDeltaZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, limits}, files, Verifier(), {});
+    const VerifiedZipUpdateRequest deltaRequest{package, CompleteCheckpoint(package), paths.partialFile, root, limits};
+    auto extracted = StageVerifiedDeltaZipUpdate(deltaRequest, files, Verifier(), {});
     REQUIRE(extracted.HasValue());
     REQUIRE(extracted.Value().size() == 1U);
     CHECK(extracted.Value().front().path == "bin/editor");
     CHECK(std::filesystem::is_regular_file(root / "bin/editor"));
     CHECK_FALSE(std::filesystem::exists(stage.path / "delta.ready"));
     CHECK_FALSE(std::filesystem::exists(stage.path / "delta.ready.prepared"));
-    CHECK(StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, stage.path / "rejected", limits}, files,
-                                 Verifier(), {})
-              .HasError());
+    const VerifiedZipUpdateRequest rejectedRequest{package, CompleteCheckpoint(package), paths.partialFile, stage.path / "rejected",
+                                                   limits};
+    CHECK(StageVerifiedZipUpdate(rejectedRequest, files, Verifier(), {}).HasError());
     CHECK_FALSE(std::filesystem::exists(stage.path / "rejected"));
     {
         std::ofstream marker(stage.path / "blocked.ready", std::ios::binary);
         marker << "foreign marker";
     }
-    CHECK(StageVerifiedDeltaZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, stage.path / "blocked", limits}, files,
-                                      Verifier(), {})
-              .HasError());
+    const VerifiedZipUpdateRequest blockedRequest{package, CompleteCheckpoint(package), paths.partialFile, stage.path / "blocked", limits};
+    CHECK(StageVerifiedDeltaZipUpdate(blockedRequest, files, Verifier(), {}).HasError());
     CHECK_FALSE(std::filesystem::exists(stage.path / "blocked"));
     CHECK(std::filesystem::is_regular_file(stage.path / "blocked.ready"));
 }
@@ -418,7 +415,8 @@ TEST_CASE("Activation admission rejects a changed ready marker", "[release][upda
     Horo::NativeDurableFileSystem files;
     constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     const auto root = stage.path / "candidate";
-    auto published = StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, limits}, files, Verifier(), {});
+    const VerifiedZipUpdateRequest stagingRequest{package, CompleteCheckpoint(package), paths.partialFile, root, limits};
+    auto published = StageVerifiedZipUpdate(stagingRequest, files, Verifier(), {});
     REQUIRE(published.HasValue());
     const std::array inventory{UpdateStagedFile{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content})),
                                                 UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
@@ -444,8 +442,8 @@ TEST_CASE("ZIP staging reserves disk space before creating the private tree", "[
                                          .maximumExpandedBytes = 1024U,
                                          .reserveBytes = std::numeric_limits<std::uint64_t>::max()};
     const auto root = stage.path / "candidate";
-    CHECK(
-        StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, limits}, files, Verifier(), {}).HasError());
+    const VerifiedZipUpdateRequest stagingRequest{package, CompleteCheckpoint(package), paths.partialFile, root, limits};
+    CHECK(StageVerifiedZipUpdate(stagingRequest, files, Verifier(), {}).HasError());
     CHECK_FALSE(std::filesystem::exists(root));
     CHECK_FALSE(std::filesystem::exists(root.string() + ".ready"));
 }
@@ -464,8 +462,8 @@ TEST_CASE("ZIP staging rejects escaped and oversized entries before creating a t
             std::ofstream output(paths.partialFile, std::ios::binary | std::ios::trunc);
             output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
         }
-        CHECK(StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits}, files, Verifier(), {})
-                  .HasError());
+        const VerifiedZipUpdateRequest stagingRequest{package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits};
+        CHECK(StageVerifiedZipUpdate(stagingRequest, files, Verifier(), {}).HasError());
         CHECK_FALSE(std::filesystem::exists(root));
         CHECK_FALSE(std::filesystem::exists(root.string() + ".ready"));
     }
@@ -491,13 +489,12 @@ TEST_CASE("ZIP staging persists empty files and cancellation clears stale ready 
     }
     Horo::CancellationSource cancellation;
     cancellation.RequestCancellation();
-    CHECK(StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits}, files, Verifier(),
-                                 cancellation.Token())
-              .HasError());
+    const VerifiedZipUpdateRequest cancelledRequest{package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits};
+    CHECK(StageVerifiedZipUpdate(cancelledRequest, files, Verifier(), cancellation.Token()).HasError());
     CHECK_FALSE(std::filesystem::exists(marker));
     CHECK_FALSE(std::filesystem::exists(root));
-    auto published =
-        StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits}, files, Verifier(), {});
+    const VerifiedZipUpdateRequest stagingRequest{package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits};
+    auto published = StageVerifiedZipUpdate(stagingRequest, files, Verifier(), {});
     REQUIRE(published.HasValue());
     CHECK(std::filesystem::is_regular_file(root / "empty.txt"));
     CHECK(std::filesystem::file_size(root / "empty.txt") == 0U);
@@ -515,8 +512,8 @@ TEST_CASE("ZIP staging never removes a package whose path aliases its ready mark
     }
     Horo::NativeDurableFileSystem files;
     constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
-    CHECK(
-        StageVerifiedZipUpdate({package, CompleteCheckpoint(package), packageFile, root, archiveLimits}, files, Verifier(), {}).HasError());
+    const VerifiedZipUpdateRequest stagingRequest{package, CompleteCheckpoint(package), packageFile, root, archiveLimits};
+    CHECK(StageVerifiedZipUpdate(stagingRequest, files, Verifier(), {}).HasError());
     CHECK(std::filesystem::file_size(packageFile) == archive.size());
 }
 
@@ -537,8 +534,8 @@ TEST_CASE("ZIP staging rejects undeclared files and declared digest mismatches",
             std::ofstream output(paths.partialFile, std::ios::binary | std::ios::trunc);
             output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
         }
-        CHECK(StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits}, files, Verifier(), {})
-                  .HasError());
+        const VerifiedZipUpdateRequest stagingRequest{package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits};
+        CHECK(StageVerifiedZipUpdate(stagingRequest, files, Verifier(), {}).HasError());
         CHECK_FALSE(std::filesystem::exists(root));
         CHECK_FALSE(std::filesystem::exists(root.string() + ".ready"));
     }

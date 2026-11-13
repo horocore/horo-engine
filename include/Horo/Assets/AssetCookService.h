@@ -25,6 +25,7 @@
 #include <vector>
 
 namespace Horo::Assets {
+    class AssetCookKeyProjection;
 
     /** @brief Validated unpublished resource envelope, borrowed only until the dependent-catalog callback returns. */
     struct AssetCookCandidateArtifactView final {
@@ -57,10 +58,12 @@ namespace Horo::Assets {
         OperationStore *operationStore{nullptr};                /**< Optional user-facing operation authority. */
         std::function<void()> requestCancel;                    /**< Cooperative cancellation request paired with the supplied token. */
         std::shared_ptr<DurableFileSystem> publicationFiles; /**< Required host-owned durable writer and common native lock capability. */
-        std::function<Result<AssetId>()> newPublicationOperationId;    /**< Required host entropy source for unique publication staging. */
-        std::shared_ptr<const AssetCookInputSnapshot> pinnedInputs;    /**< Optional real-file capture: selected registry records
-                                                                      must match it; complete captured closure participates in V2 keys.
-                                                                      Host retains project read authority through publication. */
+        std::function<Result<AssetId>()> newPublicationOperationId; /**< Required host entropy source for unique publication staging. */
+        std::shared_ptr<const AssetCookInputSnapshot> pinnedInputs; /**< Optional real-file capture: selected registry records
+                                                                   must match it; complete captured closure participates in V2 keys.
+                                                                   Host retains project read authority through publication. */
+        std::shared_ptr<const AssetCookKeyProjection>
+            keyProjection; /**< Optional complete producer-local key selections; requires the exact pinnedInputs. */
         std::function<Result<void>()> validateHostInputs;              /**< Optional synchronous host compatibility/package/reload fence,
                                                                        called before work and immediately before pointer replacement.
                                                                        Captures must outlive this joined Cook invocation. */

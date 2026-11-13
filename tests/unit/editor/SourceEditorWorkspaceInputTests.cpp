@@ -151,3 +151,57 @@ TEST_CASE("Graph shortcuts retain source capture and route through the graph-own
     CHECK(command.command == (command.sourceTextInputOwned && key != Input::Key::S ? Command::None : expected));
     CHECK_FALSE(command.objectPayload);
 }
+
+TEST_CASE("Source history shortcuts preserve ownership when the widget pauses keyboard input for a command",
+          "[editor][source][widget][input]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    const bool mac = GENERATE(true, false);
+    Editor::Tests::EditorGuiContextFixture gui;
+    ImGui::GetIO().ConfigMacOSXBehaviors = mac;
+    Horo::Tests::OwnedTestDirectory directory{"source-history-input"};
+    std::ofstream(directory.Path() / "code.cpp") << "saved";
+    HoroEditorWorkspaceControllerPolicyTests::FocusedWorkspaceController controller{directory.Path(), {}, [](const SourceOpenResult &) {
+        return true;
+    }};
+    EditorWorkspaceViewCommandData open;
+    open.command = EditorWorkspaceViewCommand::OpenSourceFile;
+    open.sourceOpenRequest = SourceOpenRequest{.path = "code.cpp", .mode = SourceOpenMode::EmbeddedOnly};
+    controller.ProcessCommand(open);
+    REQUIRE(controller.ViewModel().sourceDocuments.size() == 1);
+    const auto original = controller.ViewModel().sourceDocuments.front();
+    auto plan = PlanSourceReplacement(original, {0, 0, 0, {1}}, "changed");
+    REQUIRE(plan.HasValue());
+    EditorWorkspaceViewCommandData edit;
+    edit.command = EditorWorkspaceViewCommand::SourceDocumentInteraction;
+    edit.sourceInteraction = SourceEditSubmission{original.Identity().instance, std::move(plan).Value()};
+    controller.ProcessCommand(edit);
+    REQUIRE(controller.ViewModel().sourceHistory.front().undoEntries == 1);
+    WorkspacePanelRegistry panels;
+    REQUIRE(gui.input.SetActionMap(BuildEditorInputActions()).HasValue());
+    auto context = gui.input.PushContext(Input::InputContextId{kEditorWorkspaceInputContext}, Input::InputContextKind::EditorWorkspace);
+    EditorWorkspaceView view{gui.context, panels, 0, gui.input, context};
+    const auto frame = [&] {
+        gui.imgui.BeginFrame();
+        EditorWorkspaceViewCommandData command;
+        view.Draw(controller.ViewModel(), command, {.width = 1280, .height = 800});
+        gui.imgui.EndFrame();
+        return command;
+    };
+    frame();
+    frame();
+    Input::RawInputCollector collector;
+    collector.BeginFrame(1);
+    collector.SetModifiers({.control = !mac, .command = mac});
+    collector.SetKey(Input::Key::Z, true);
+    gui.input.BeginFrame(collector.Commit());
+    ImGui::GetIO().AddKeyEvent(mac ? ImGuiMod_Super : ImGuiMod_Ctrl, true);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Z, true);
+    auto command = frame();
+    REQUIRE(command.sourceTextInputOwned);
+    REQUIRE(command.command == EditorWorkspaceViewCommand::SourceDocumentInteraction);
+    RouteWorkspaceInputAction(gui.input, context, controller.ViewModel(), command, false, {});
+    REQUIRE(command.command == EditorWorkspaceViewCommand::SourceDocumentInteraction);
+    controller.ProcessCommand(command);
+    REQUIRE(controller.ViewModel().sourceDocuments.front().Text() == original.Text());
+}
