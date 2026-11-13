@@ -61,7 +61,7 @@ namespace Horo::Editor {
         };
 
         /** @brief Contains allocation failure while the original runtime and all live gameplay scopes remain intact. */
-        Result<Gameplay::BehaviorRuntimeReloadSnapshot> CaptureReloadSafely(Gameplay::BehaviorRuntime &runtime) {
+        Result<Gameplay::BehaviorRuntimeReloadSnapshot> CaptureReloadSafely(const Gameplay::BehaviorRuntime &runtime) {
             try {
                 return runtime.CaptureReloadSnapshot();
             } catch (const std::bad_alloc &) {
@@ -624,8 +624,7 @@ namespace Horo::Editor {
         if (captured.HasError())
             return Result<EditorPlayReloadSnapshot>::Failure(captured.ErrorValue());
         EditorPlayReloadSnapshot snapshot{std::move(captured).Value(), state_};
-        const auto quiesced = behaviorOwner_->QuiesceForReload();
-        if (quiesced.HasError())
+        if (const auto quiesced = behaviorOwner_->QuiesceForReload(); quiesced.HasError())
             return Result<EditorPlayReloadSnapshot>::Failure(quiesced.ErrorValue());
         CancelModuleScripts();
         // The owner completed fallible preparation and revoked its real child scopes before destroying callbacks.
@@ -653,9 +652,9 @@ namespace Horo::Editor {
             lastError_ = prefabs.ErrorValue();
             return Result<void>::Failure(prefabs.ErrorValue());
         }
-        const auto restored =
-            behaviorOwner_->ResumeAfterReload(registry, snapshot.behaviors, std::move(services).Value(), std::move(prefabs).Value());
-        if (restored.HasError()) {
+        if (const auto restored =
+                behaviorOwner_->ResumeAfterReload(registry, snapshot.behaviors, std::move(services).Value(), std::move(prefabs).Value());
+            restored.HasError()) {
             lastError_ = restored.ErrorValue();
             return restored;
         }

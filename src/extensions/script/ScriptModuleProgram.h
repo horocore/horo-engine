@@ -18,7 +18,7 @@ namespace Horo::Extensions {
     struct ScriptModuleProgramInput final {
         ScriptModuleRuntimeKind runtime{ScriptModuleRuntimeKind::Lua54};
         std::string package;
-        std::string module;
+        std::string moduleId;
         std::filesystem::path root;
         std::filesystem::path source;
         std::shared_ptr<const Security::NativeArtifactGate> currentTrust;

@@ -41,7 +41,7 @@ namespace Horo::Extensions {
             return Result<void>::Success();
         }
 
-        Result<void> PublishService(NativeServiceModule &nativeModule, NativeServicePublication &publication) {
+        Result<void> PublishService(const NativeServiceModule &nativeModule, NativeServicePublication &publication) {
             const auto host = nativeModule.host.lock();
             const auto code = nativeModule.moduleCode.lock();
             const auto retirement = nativeModule.retirement.lock();
@@ -68,7 +68,7 @@ namespace Horo::Extensions {
             return Result<void>::Success();
         }
 
-        Result<void> PublishScript(NativeServiceModule &nativeModule, NativeServicePublication &publication) {
+        Result<void> PublishScript(const NativeServiceModule &nativeModule, NativeServicePublication &publication) {
             if (publication.shape.scriptApi.empty())
                 return Result<void>::Success();
             const auto host = nativeModule.host.lock();
@@ -133,7 +133,7 @@ namespace Horo::Extensions {
                     return script;
             }
             for (const auto &client : nativeModule->clients) {
-                auto provider = FindNativeService(*nativeModule->host.lock(), client->import);
+                auto provider = FindNativeService(*nativeModule->host.lock(), client->resolvedImport);
                 if (provider.HasError())
                     return Result<void>::Failure(provider.ErrorValue());
                 client->provider = provider.Value();

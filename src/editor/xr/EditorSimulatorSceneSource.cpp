@@ -27,10 +27,11 @@ namespace Horo::Editor {
     Result<std::unique_ptr<EditorSimulatorSceneSource>> EditorSimulatorSceneSource::Create(SceneSource::SceneSourceDocument values,
                                                                                            const Runtime::SceneDefinitionId identity) {
         using Output = Result<std::unique_ptr<EditorSimulatorSceneSource>>;
-        const bool imported = std::ranges::any_of(values.objects, [](const auto &object) {
+        if (const bool imported = std::ranges::any_of(values.objects,
+                                                      [](const auto &object) {
             return object.meshAsset.has_value();
         });
-        if (imported || !values.prefabInstances.empty() || !values.unsupportedComponentOwners.empty())
+            imported || !values.prefabInstances.empty() || !values.unsupportedComponentOwners.empty())
             return Output::Failure(MakeError(XR::XRErrors::OperationUnsupported));
         auto impl = std::make_unique<Impl>();
         if (auto loaded = impl->document.LoadSaved(std::move(values.objects), std::move(values.prefabInstances)); loaded.HasError())

@@ -191,8 +191,8 @@ namespace Horo::Application::Internal {
         if (!tracking)
             return;
         const auto devices = tracking->Devices();
-        const auto head = std::ranges::find(devices, XRTrackedDeviceRole::Head, &XRTrackedDeviceRecord::role);
-        if (head == devices.end() || head->state != XRTrackedDeviceState::Tracked)
+        if (const auto head = std::ranges::find(devices, XRTrackedDeviceRole::Head, &XRTrackedDeviceRecord::role);
+            head == devices.end() || head->state != XRTrackedDeviceState::Tracked)
             return;
         const auto &sample = *advanced.frame.views[0];
         const auto &components = sample.Components();

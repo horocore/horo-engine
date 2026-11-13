@@ -82,8 +82,11 @@ namespace Horo::Platform {
             while (offset < state.metadata.st_size) {
                 const auto remaining = static_cast<std::uint64_t>(state.metadata.st_size - offset);
                 const auto count = pread(state.file.value, buffer.data(), std::min<std::uint64_t>(buffer.size(), remaining), offset);
-                if (count < 0 && errno == EINTR && ++interruptions <= 64)
-                    continue;
+                if (count < 0 && errno == EINTR) {
+                    ++interruptions;
+                    if (interruptions <= 64)
+                        continue;
+                }
                 if (count <= 0)
                     return Failure<Sha256Digest>("Cannot read the complete executable within the admitted I/O budget.");
                 if (!builder.Update(std::span(buffer).first(static_cast<std::size_t>(count))))
@@ -136,14 +139,12 @@ namespace Horo::Platform {
     Result<ProcessImageIdentity> CaptureCurrentProcessImageIdentity() {
         try {
             auto state = std::make_shared<NativeState>();
-            auto opened = OpenImage(*state);
-            if (opened.HasError())
+            if (auto opened = OpenImage(*state); opened.HasError())
                 return Result<ProcessImageIdentity>::Failure(opened.ErrorValue());
             auto hash = HashImage(*state);
             if (hash.HasError())
                 return Result<ProcessImageIdentity>::Failure(hash.ErrorValue());
-            auto verified = VerifyNative(*state);
-            if (verified.HasError())
+            if (auto verified = VerifyNative(*state); verified.HasError())
                 return Result<ProcessImageIdentity>::Failure(verified.ErrorValue());
             return Result<ProcessImageIdentity>::Success(ProcessImageIdentity{hash.Value(), std::move(state)});
         } catch (const std::bad_alloc &) {

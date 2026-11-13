@@ -18,7 +18,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Admits only a real active Play epoch and its complete actual typed state inventory. */
-        Result<void> ValidateOwnerInputs(Runtime::RuntimeSceneService &scenes, const EditorPlaySaveEnvironment &environment,
+        Result<void> ValidateOwnerInputs(const Runtime::RuntimeSceneService &scenes, const EditorPlaySaveEnvironment &environment,
                                          const std::shared_ptr<const PlaySaveStorageSchema> &schema,
                                          const std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> &liveBindings,
                                          const std::shared_ptr<PlaySavePhysicsServices> &physics) {
@@ -109,8 +109,7 @@ namespace Horo::Application::Internal {
             return valid;
         if (command.kind == Cancel)
             return state_->CancelRequest();
-        const auto admitted = state_->AdmitCommand(command);
-        if (admitted.HasError())
+        if (const auto admitted = state_->AdmitCommand(command); admitted.HasError())
             return admitted;
         return state_->Publish();
     }

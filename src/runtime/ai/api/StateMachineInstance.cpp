@@ -124,16 +124,13 @@ namespace Horo::AI {
     Result<void> StateMachineInstance::Restart(AiTaskOperationContext operation) {
         if (evaluating_ || depth_ != 0 || operation.agent != binding_.agent)
             return Result<void>::Failure(MakeError(StateMachineErrors::StepInvalid));
-        const auto *previous = lifecycle_.Context();
-        if (!FreshRestart(previous, operation))
+        if (const auto *previous = lifecycle_.Context(); !FreshRestart(previous, operation))
             return Result<void>::Failure(MakeError(AIErrors::GenerationExhausted));
-        auto cancelled = lifecycle_.RequestCancellation(AiTaskCancellationReason::Superseded);
-        if (cancelled.HasError())
+        if (auto cancelled = lifecycle_.RequestCancellation(AiTaskCancellationReason::Superseded); cancelled.HasError())
             return Result<void>::Failure(cancelled.ErrorValue());
         std::destroy_at(&lifecycle_);
         std::construct_at(&lifecycle_);
-        auto started = lifecycle_.Start(std::move(operation));
-        if (started.HasError())
+        if (auto started = lifecycle_.Start(std::move(operation)); started.HasError())
             return Result<void>::Failure(started.ErrorValue());
         childOutcomes_.fill(AiTaskState::Idle);
         lastTick_.reset();
@@ -229,8 +226,7 @@ namespace Horo::AI {
                                                    const BlackboardSnapshot &blackboard, std::uint64_t tick, StateMachineActions *actions) {
         if (auto ready = CheckBoundary(blackboard); ready.HasError())
             return ready;
-        const auto action = PhaseAction(state, phase);
-        if (action) {
+        if (const auto action = PhaseAction(state, phase); action) {
             if (!actions)
                 return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
             auto invoked = actions->Invoke({state.id, *action, phase, *lifecycle_.Context(), blackboard, tick});
@@ -350,10 +346,11 @@ namespace Horo::AI {
 
     /** @brief Requires a synchronous adapter before an action-bearing plan can start. */
     bool StateMachineInstance::HasRequiredActions(const StateMachineActions *actions) const noexcept {
-        const bool calls = std::ranges::any_of(plan_->source_.states, [](const auto &state) {
+        if (const bool calls = std::ranges::any_of(plan_->source_.states,
+                                                   [](const auto &state) {
             return state.call.has_value();
         });
-        if (calls && (!actions || !actions->SupportsSubplans()))
+            calls && (!actions || !actions->SupportsSubplans()))
             return false;
         return actions || std::ranges::none_of(plan_->source_.states, [](const auto &state) {
             return state.entry || state.update || state.exit;
@@ -365,11 +362,11 @@ namespace Horo::AI {
         if (terminal == DecisionStateTerminal::None)
             return Result<bool>::Success(false);
         StopCalls(path_, 0, depth_, actions, AiTaskCancellationReason::Requested);
-        auto completed = terminal == DecisionStateTerminal::Succeeded
-                             ? lifecycle_.CompleteSuccess(binding_.agent)
-                             : lifecycle_.CompleteFailure(binding_.agent,
-                                                          {AiTaskFailureKind::Execution, MakeError(StateMachineErrors::AuthoredFailure)});
-        if (completed.HasError())
+        if (auto completed = terminal == DecisionStateTerminal::Succeeded
+                                 ? lifecycle_.CompleteSuccess(binding_.agent)
+                                 : lifecycle_.CompleteFailure(binding_.agent, {AiTaskFailureKind::Execution,
+                                                                               MakeError(StateMachineErrors::AuthoredFailure)});
+            completed.HasError())
             return Result<bool>::Failure(completed.ErrorValue());
         depth_ = 0;
         return Result<bool>::Success(true);

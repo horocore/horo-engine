@@ -95,18 +95,19 @@ namespace Horo::Packages {
                    HasRuntimeGrant(state.verified);
         }
 
-        bool SelectedRole(const GameplayRoleState &state, const HoroPackageId &package, std::string_view module, std::uint64_t generation) {
-            return state.verified.Identity().package == package && state.verified.Module().id == module &&
+        bool SelectedRole(const GameplayRoleState &state, const HoroPackageId &package, std::string_view moduleId,
+                          std::uint64_t generation) {
+            return state.verified.Identity().package == package && state.verified.Module().id == moduleId &&
                    state.verified.Identity().generation == generation;
         }
 
         std::shared_ptr<GameplayRoleState> FindRole(std::span<const std::weak_ptr<GameplayRoleState>> roles, std::thread::id owner,
-                                                    const HoroPackageId &package, std::string_view module, std::uint64_t generation) {
+                                                    const HoroPackageId &package, std::string_view moduleId, std::uint64_t generation) {
             if (std::this_thread::get_id() != owner)
                 return {};
             for (const auto &weak : roles) {
                 auto state = weak.lock();
-                if (state && LiveRole(*state) && SelectedRole(*state, package, module, generation))
+                if (state && LiveRole(*state) && SelectedRole(*state, package, moduleId, generation))
                     return state;
             }
             return {};

@@ -21,9 +21,9 @@ namespace Horo::Extensions {
             if (descriptor.structSize != sizeof(descriptor) || descriptor.schemaVersion != 1 || !descriptor.invokeAction ||
                 !Text(descriptor.activityId) || !Text(descriptor.drawerId) || !Text(descriptor.labelKey))
                 return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected));
-            auto form = Detail::CopyActivityForm(descriptor.initialSnapshot, {descriptor.drawerId.data, descriptor.drawerId.length},
-                                                 {descriptor.labelKey.data, descriptor.labelKey.length});
-            if (form.HasError())
+            if (auto form = Detail::CopyActivityForm(descriptor.initialSnapshot, {descriptor.drawerId.data, descriptor.drawerId.length},
+                                                     {descriptor.labelKey.data, descriptor.labelKey.length});
+                form.HasError())
                 return Result<void>::Failure(form.ErrorValue());
             return Result<void>::Success();
         }

@@ -121,9 +121,9 @@ namespace Horo::Editor {
                 static_cast<void>(frontend_.ReleaseGraphicsPipeline(pipeline));
         if (program.shadowSampler.IsValid())
             static_cast<void>(frontend_.ReleaseSampler(program.shadowSampler));
-        for (const auto module : {program.vertex, program.fragment})
-            if (module.IsValid())
-                static_cast<void>(frontend_.ReleaseShaderModule(module));
+        for (const auto shaderModule : {program.vertex, program.fragment})
+            if (shaderModule.IsValid())
+                static_cast<void>(frontend_.ReleaseShaderModule(shaderModule));
     }
 
     /** @copydoc EditorViewportRendererVulkan::EditorViewportRendererVulkan */

@@ -231,7 +231,8 @@ namespace Horo::Extensions {
                 return message.locale == "en-US" && message.key == command.descriptor.labelLocalizationKey;
             }))
                 return false;
-            const bool action = std::ranges::any_of(session.form.nodes, [&](const auto &node) {
+            if (const bool action = std::ranges::any_of(session.form.nodes,
+                                                        [&](const auto &node) {
                 return std::visit([&](const auto &typed) {
                     if constexpr (requires { typed.action; })
                         return typed.base.id.value == command.node && typed.action.value == command.action;
@@ -239,7 +240,7 @@ namespace Horo::Extensions {
                         return false;
                 }, node.payload);
             });
-            if (!action)
+                !action)
                 return false;
             session.commands.push_back(std::move(command));
         }
@@ -300,8 +301,7 @@ namespace Horo::Extensions {
 
     static HoroExtensionStatus StageActivitySession(const std::shared_ptr<EditorActivitySession> &session,
                                                     AssetImporterRegistrationSession &load, const HoroEditorActivitySnapshot &initial) {
-        const auto status = session->Publish(initial);
-        if (status != HORO_EXTENSION_SUCCESS)
+        if (const auto status = session->Publish(initial); status != HORO_EXTENSION_SUCCESS)
             return RejectActivityStage(load, status, "initial publication");
         if (!EditorActivityHostAccess::Stage(*load.editorHost, session))
             return RejectActivityStage(load, HORO_EXTENSION_ERROR_OUTPUT_REJECTED, "host staging");

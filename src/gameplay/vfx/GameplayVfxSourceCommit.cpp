@@ -10,7 +10,7 @@ namespace Horo::Gameplay::VfxContextDetail {
                     {moduleState.grant.producer, moduleState.nextSequence}};
         }
 
-        [[nodiscard]] GameplayVfxResolveOutcome Resolve(Detail::GameplayVfxSceneState &scene,
+        [[nodiscard]] GameplayVfxResolveOutcome Resolve(const Detail::GameplayVfxSceneState &scene,
                                                         const Detail::GameplayVfxModuleState &moduleState, const GameplayVfxEventKey key,
                                                         const GameplayVfxEventPayload &payload, const GameplayVfxReceipt &receipt,
                                                         const std::span<Vfx::VfxSpawnRequest> output) noexcept {
@@ -39,8 +39,7 @@ namespace Horo::Gameplay::VfxContextDetail {
             return {.status = ResourceBudgetExceeded};
         const auto receipt = Receipt(scene, moduleState);
         std::array<Vfx::VfxSpawnRequest, Vfx::VfxSpawnHardLimits::Layers> scratch;
-        const auto resolved = Resolve(scene, moduleState, key, payload, receipt, scratch);
-        if (resolved.status != Accepted)
+        if (const auto resolved = Resolve(scene, moduleState, key, payload, receipt, scratch); resolved.status != Accepted)
             return {.status = resolved.status};
         if (scene.pendingCount + scene.resultCount >= scene.pending.size())
             return {.status = EventQueueFull};

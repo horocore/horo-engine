@@ -16,9 +16,9 @@ namespace Horo::Gameplay::VfxContextDetail {
     Vfx::VfxSpawnStatus ClientStatus(const Detail::GameplayVfxClientState &client,
                                      std::shared_ptr<Detail::GameplayVfxSceneState> &scene) noexcept {
         using enum Horo::Vfx::VfxSpawnStatus;
-        if (client.module->owner != std::this_thread::get_id())
+        if (client.moduleState->owner != std::this_thread::get_id())
             return ThreadViolation;
-        if (client.retired || ScopeRevoked(client.lifetime) || !client.module->active)
+        if (client.retired || ScopeRevoked(client.lifetime) || !client.moduleState->active)
             return ShutDown;
         scene = client.scene.lock();
         return scene ? Status(*scene) : StaleScene;
@@ -27,9 +27,9 @@ namespace Horo::Gameplay::VfxContextDetail {
     Vfx::VfxSpawnStatus ProducerStatus(const Detail::GameplayVfxProducerState &producer,
                                        std::shared_ptr<Detail::GameplayVfxSceneState> &scene) noexcept {
         using enum Horo::Vfx::VfxSpawnStatus;
-        if (producer.module->owner != std::this_thread::get_id())
+        if (producer.moduleState->owner != std::this_thread::get_id())
             return ThreadViolation;
-        if (!producer.module->active)
+        if (!producer.moduleState->active)
             return ShutDown;
         scene = producer.scene.lock();
         return scene ? Status(*scene) : StaleScene;
@@ -91,7 +91,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<Detail::GameplayVfxSceneState> scene;
         if (const auto status = VfxContextDetail::ClientStatus(*state_, scene); status != Vfx::VfxSpawnStatus::Accepted)
             return {.status = status};
-        if (!AllowsEvent(*state_->module, event))
+        if (!AllowsEvent(*state_->moduleState, event))
             return {.status = Vfx::VfxSpawnStatus::PermissionDenied};
         return scene->table->FindEvent(event, schemaVersion);
     }
@@ -101,7 +101,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<Detail::GameplayVfxSceneState> scene;
         if (const auto status = VfxContextDetail::ClientStatus(*state_, scene); status != Vfx::VfxSpawnStatus::Accepted)
             return {.status = status};
-        if (std::ranges::find(state_->module->grant.tags, tag) == state_->module->grant.tags.end())
+        if (std::ranges::find(state_->moduleState->grant.tags, tag) == state_->moduleState->grant.tags.end())
             return {.status = Vfx::VfxSpawnStatus::PermissionDenied};
         return scene->table->FindTag(tag, schemaVersion);
     }
@@ -113,7 +113,7 @@ namespace Horo::Gameplay {
             return {.status = status};
         if (!state_->callback || !state_->entity.IsValid() || !scene->sourceOpen)
             return {.status = Vfx::VfxSpawnStatus::PermissionDenied};
-        return VfxContextDetail::Stage(*scene, *state_->module, key, payload, state_->lifetime);
+        return VfxContextDetail::Stage(*scene, *state_->moduleState, key, payload, state_->lifetime);
     }
 
     /** @copydoc GameplayVfxContext::Poll */
@@ -121,7 +121,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<Detail::GameplayVfxSceneState> scene;
         if (const auto status = VfxContextDetail::ClientStatus(*state_, scene); status != Vfx::VfxSpawnStatus::Accepted)
             return {.status = status};
-        return VfxContextDetail::Poll(*scene, *state_->module, receipt);
+        return VfxContextDetail::Poll(*scene, *state_->moduleState, receipt);
     }
 
     /** @copydoc GameplayVfxContext::IsUsable */
@@ -132,12 +132,12 @@ namespace Horo::Gameplay {
 
     /** @copydoc GameplayVfxContext::Scene */
     Vfx::VfxIdentityScope GameplayVfxContext::Scene() const noexcept {
-        return state_->module->scene;
+        return state_->moduleState->scene;
     }
 
     /** @copydoc GameplayVfxContext::ModuleId */
     std::string_view GameplayVfxContext::ModuleId() const noexcept {
-        return state_->module->grant.moduleId;
+        return state_->moduleState->grant.moduleId;
     }
 
     GameplayVfxCommittedProducer::GameplayVfxCommittedProducer(std::shared_ptr<Detail::GameplayVfxProducerState> state)
@@ -152,7 +152,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<Detail::GameplayVfxSceneState> scene;
         if (const auto status = VfxContextDetail::ProducerStatus(*state_, scene); status != Vfx::VfxSpawnStatus::Accepted)
             return {.status = status};
-        if (!AllowsEvent(*state_->module, event))
+        if (!AllowsEvent(*state_->moduleState, event))
             return {.status = Vfx::VfxSpawnStatus::PermissionDenied};
         return scene->table->FindEvent(event, schemaVersion);
     }
@@ -163,7 +163,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<Detail::GameplayVfxSceneState> scene;
         if (const auto status = VfxContextDetail::ProducerStatus(*state_, scene); status != Vfx::VfxSpawnStatus::Accepted)
             return {.status = status};
-        return VfxContextDetail::EmitCommitted(*scene, *state_->module, key, payload, committedTick);
+        return VfxContextDetail::EmitCommitted(*scene, *state_->moduleState, key, payload, committedTick);
     }
 
     /** @copydoc GameplayVfxCommittedProducer::IsUsable */

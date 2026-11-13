@@ -74,8 +74,7 @@ namespace Horo::Physics::Detail {
         void *Reallocate(void *memory, std::size_t oldSize, std::size_t newSize) noexcept {
             if (!memory)
                 return Allocate(newSize, 16);
-            const auto &header = Lookup(memory);
-            if (header.size != oldSize)
+            if (const auto &header = Lookup(memory); header.size != oldSize)
                 std::abort();
             void *next = Allocate(newSize, 16);
             std::memcpy(next, memory, std::min(oldSize, newSize));
@@ -129,8 +128,7 @@ namespace Horo::Physics::Detail {
             if (!Contains(memory))
                 std::abort();
             const auto begin = reinterpret_cast<std::uintptr_t>(storage_.data());
-            const auto address = reinterpret_cast<std::uintptr_t>(memory);
-            if (address - begin < sizeof(Header) || (address & 15U) != 0)
+            if (const auto address = reinterpret_cast<std::uintptr_t>(memory); address - begin < sizeof(Header) || (address & 15U) != 0)
                 std::abort();
             auto &header = *(static_cast<Header *>(memory) - 1);
             if (header.owner != reinterpret_cast<std::uintptr_t>(this) || header.tag != Tag || !header.live)

@@ -11,7 +11,7 @@ namespace Horo::Extensions {
     };
 
     namespace {
-        Result<std::shared_ptr<NativeServiceModule>> FindModule(NativeExtensionServiceState &host, const std::string_view extension,
+        Result<std::shared_ptr<NativeServiceModule>> FindModule(const NativeExtensionServiceState &host, const std::string_view extension,
                                                                 const std::string_view id) {
             if (host.owner != std::this_thread::get_id())
                 return Result<std::shared_ptr<NativeServiceModule>>::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
@@ -69,9 +69,8 @@ namespace Horo::Extensions {
             return value.caller.IsCancellationRequested() || value.invocation.IsCancellationRequested();
         }
 
-        Result<void> Finish(ScriptInvocationController &controller, const Result<std::int64_t> &result) {
-            auto observed = controller.ObserveCancellation();
-            if (observed.HasError())
+        Result<void> Finish(const ScriptInvocationController &controller, const Result<std::int64_t> &result) {
+            if (auto observed = controller.ObserveCancellation(); observed.HasError())
                 return Result<void>::Failure(observed.ErrorValue());
             if (result.HasError()) {
                 auto failed = controller.Fail(result.ErrorValue());
@@ -82,10 +81,10 @@ namespace Horo::Extensions {
                 if (completed.HasError())
                     return Result<void>::Failure(completed.ErrorValue());
             }
-            const auto snapshot = controller.Handle().Snapshot();
-            if (!snapshot || snapshot->state == ScriptInvocationStateKind::Cancelled)
+            if (const auto snapshot = controller.Handle().Snapshot(); !snapshot || snapshot->state == ScriptInvocationStateKind::Cancelled)
                 return Result<void>::Failure(MakeError(ExtensionErrors::ScriptInvocationCancelled));
-            return Result<void>::Success();
+            else
+                return Result<void>::Success();
         }
     }  // namespace
 

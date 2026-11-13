@@ -65,9 +65,18 @@ The platform layer includes:
 Call `LoadDynamicLibraryAtPath` when the host already has a native filesystem
 path, such as a project gameplay artifact or a shadow copy. The platform
 validates the absolute path and opens the canonical regular file with the native
-loader. Windows uses the wide API so project and library names are independent
-of the active code page. Existing text callers can keep using
+loader. Windows uses the wide API and the shared native filesystem spelling so
+project and library names are independent of the active code page and do not
+rely on a process-wide long-path policy setting. Existing text callers can keep using
 `LoadDynamicLibrary`, which converts its input using the platform path encoding.
+
+The wrapper allocation precedes native image acquisition. Once the native loader
+succeeds, the wrapper owns the image before any further fallible C++ work, including
+result construction. Failed admission cannot retain an unowned native reference.
+`GetSymbol` resolves the complete supplied name, including a non-null-terminated
+view; empty names and embedded NULs fail lookup. Its existing no-throw interface
+returns null when the name cannot be prepared because allocation or string extent
+validation fails. Such lookup failure does not consume or unload the library.
 
 ### Desktop file-manager integration
 

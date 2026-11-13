@@ -201,8 +201,32 @@ different absence policies; overlapping phase coverage for one provider is rejec
 Cycle diagnostics name one actual deterministic cycle rather than downstream blocked
 participants. Allocation failure returns a typed registry error, and fallible insertion
 completes before generation publication so membership and generation remain atomic.
+Accepted bindings share immutable descriptor storage between the live registry and
+issued snapshots. The final binding releases that storage; adapter leases retain
+their existing independent ownership. Graph and phase-plan scratch is filled in its
+original owner rather than transferred through checked-STL container moves.
+Registration constructs its final return value before publishing the new generation;
+failure constructing that value rolls back its inserted binding. This changes private
+C++ binding storage, so binary consumers rebuild with the matching SDK. Persistent
+archive identities and schemas retain their existing representation.
 The identity-sorted binding view remains the canonical manifest/query
 projection and is not used as an execution plan.
+
+`SaveOperationController` reserves its terminal Error slot and bounded callback
+buffer during admission. Terminal transitions copy inert snapshot metadata,
+move-assign the winning Error into that existing slot, and transfer the callback
+buffer's owner without moving a checked-STL vector. The dispatcher retains the
+same immutable snapshot and releases callback captures outside the operation lock,
+after all accepted observers have run. Cancellation/commit arbitration and late
+observer behavior retain their existing ordering.
+
+`Fail(const Error&, ...)` makes its fallible owned copy before attempting the
+transition; `Fail(Error&&, ...)` consumes directly into reserved terminal storage.
+Callers using the changed C++ overload symbols rebuild against the matching SDK.
+The private Play failure-publication adapter borrows its caller-owned result for
+the synchronous call, so a checked-STL parameter move cannot fail before original
+failure publication begins. If copying fails, it publishes the owned original
+before rethrowing, while a cancellation that already won remains authoritative.
 
 `Horo/Runtime/Save/SaveParticipation.h` is the installed gameplay/module-facing
 contract. A host-owned `SaveParticipationHost` issues weak clients for one exact

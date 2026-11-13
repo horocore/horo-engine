@@ -186,19 +186,20 @@ namespace Horo::Runtime {
                     return Result<void>::Failure(MakeError(SaveErrors::RestoreTransitionInvalid));
                 const std::size_t moduleLength = std::to_integer<unsigned>(encoded_[EnvelopeMagic.size()]);
                 const auto payload = std::span<const std::byte>{encoded_}.subspan(EnvelopePrefixBytes + moduleLength);
-                static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
-                // Prepare owned failures before project code runs; unwinding never allocates a replacement error.
-                return [this, payload, allocationFailure = Result<void>::Failure(MakeError(SaveErrors::RestoreAllocationFailed)),
-                        callbackFailure = Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed))]() mutable noexcept {
+                // Final error storage exists before project code; exception translation only assigns prepared state.
+                return Result<void>::CompleteInPlace(MakeError(SaveErrors::LifecycleCallbackFailed),
+                                                     [this, payload,
+                                                      allocationFailure = Result<void>::Failure(MakeError(
+                                                          SaveErrors::RestoreAllocationFailed))](Result<void> &outcome) mutable noexcept {
                     try {
-                        return PrepareActualCandidate(payload);
+                        outcome = PrepareActualCandidate(payload);
                     } catch (const std::bad_alloc &) {
-                        return std::move(allocationFailure);
+                        outcome = std::move(allocationFailure);
                     } catch (...) {
                         // Project modules may throw non-standard exceptions; none may cross the restore boundary.
-                        return std::move(callbackFailure);
+                        return;
                     }
-                }();
+                });
             }
 
             [[nodiscard]] Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &dependencies) override {
@@ -209,26 +210,30 @@ namespace Horo::Runtime {
                                                        const SaveRestoreReferenceView &references) override {
                 if (!candidate_)
                     return Result<void>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
-                static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
-                // Owned fallback construction may throw before project code; fault translation itself never allocates.
-                return [this, &references, allocationFailure = Result<void>::Failure(MakeError(SaveErrors::RestoreAllocationFailed)),
-                        callbackFailure = Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed))]() mutable noexcept {
+                return Result<void>::CompleteInPlace(MakeError(SaveErrors::LifecycleCallbackFailed),
+                                                     [this, &references,
+                                                      allocationFailure = Result<void>::Failure(MakeError(
+                                                          SaveErrors::RestoreAllocationFailed))](Result<void> &outcome) mutable noexcept {
                     try {
-                        if (auto fixed = candidate_->FixupRuntimeReferences(references); fixed.HasError())
-                            return fixed;
+                        if (auto fixed = candidate_->FixupRuntimeReferences(references); fixed.HasError()) {
+                            outcome = std::move(fixed);
+                            return;
+                        }
                         if (target_) {
-                            if (!target_->CanUse())
-                                return Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
+                            if (!target_->CanUse()) {
+                                outcome = Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
+                                return;
+                            }
                             Gameplay::Detail::BehaviorPersistenceHostAccess::Fixed(*target_);
                         }
                         ready_ = true;
-                        return Result<void>::Success();
+                        outcome = Result<void>::Success();
                     } catch (const std::bad_alloc &) {
-                        return std::move(allocationFailure);
+                        outcome = std::move(allocationFailure);
                     } catch (...) {
-                        return std::move(callbackFailure);
+                        return;
                     }
-                }();
+                });
             }
 
             void PublishPrepared() noexcept override {
@@ -248,27 +253,32 @@ namespace Horo::Runtime {
                 auto *actual = dynamic_cast<Gameplay::IPublishedGameplayPreparationRetirement *>(candidate_.get());
                 if (!actual)
                     return Result<bool>::Success(false);
-                // Prepare owned fallback before native callbacks; failure retains every source/code pin.
-                auto allocationFailure = Result<bool>::Failure(MakeError(SaveErrors::RestoreAllocationFailed));
-                auto callbackFailure = Result<bool>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
-                try {
-                    if (auto proof = actual->RetirePreparation(); proof.HasError())
-                        return Result<bool>::Failure(proof.ErrorValue());
-                } catch (const std::bad_alloc &) {
-                    return allocationFailure;
-                } catch (...) {
-                    return callbackFailure;
-                }
-                // Native destruction is outside publication and still protected by moduleLease_.
-                projection_.Clear();
-                candidate_.reset();
-                source_.reset();
-                publication_.reset();
-                target_.reset();
-                encoded_.clear();
-                moduleLease_.reset();
-                retired_ = true;
-                return Result<bool>::Success(true);
+                // Failed retirement keeps every source/code pin; only a completed callback releases them.
+                return Result<bool>::CompleteInPlace(MakeError(SaveErrors::LifecycleCallbackFailed),
+                                                     [this, actual,
+                                                      allocationFailure = Result<bool>::Failure(MakeError(
+                                                          SaveErrors::RestoreAllocationFailed))](Result<bool> &outcome) mutable noexcept {
+                    try {
+                        if (auto proof = actual->RetirePreparation(); proof.HasError()) {
+                            outcome = Result<bool>::Failure(proof.ErrorValue());
+                            return;
+                        }
+                        // Native destruction is outside publication and still protected by moduleLease_.
+                        projection_.Clear();
+                        candidate_.reset();
+                        source_.reset();
+                        publication_.reset();
+                        target_.reset();
+                        encoded_.clear();
+                        moduleLease_.reset();
+                        retired_ = true;
+                        outcome = Result<bool>::Success(true);
+                    } catch (const std::bad_alloc &) {
+                        outcome = std::move(allocationFailure);
+                    } catch (...) {
+                        return;
+                    }
+                });
             }
 
             void RollbackPrepared() noexcept override {
@@ -368,28 +378,35 @@ namespace Horo::Runtime {
         if (budget.HasError())
             return Result<CanonicalCaptureDisposition>::Failure(budget.ErrorValue());
         using Return = Result<CanonicalCaptureDisposition>;
-        static_assert(std::is_nothrow_move_constructible_v<Return>);
-        // Reserve both typed failures before invoking project code, including the allocation-failure result.
-        return [this, &sink, &budget, allocationFailure = Return::Failure(MakeError(SaveErrors::CaptureAllocationFailed)),
-                callbackFailure = Return::Failure(MakeError(SaveErrors::LifecycleCallbackFailed))]() mutable noexcept {
+        // Preparing final return storage avoids checked-STL Error moves after project code has thrown.
+        return Return::CompleteInPlace(MakeError(SaveErrors::LifecycleCallbackFailed),
+                                       [this, &sink, &budget,
+                                        allocationFailure = Return::Failure(MakeError(SaveErrors::CaptureAllocationFailed))](
+                                           Return &outcome) mutable noexcept {
             try {
                 auto captured = source_->CaptureRuntimeState(budget.Value());
-                if (captured.HasError())
-                    return Result<CanonicalCaptureDisposition>::Failure(captured.ErrorValue());
+                if (captured.HasError()) {
+                    outcome = Return::Failure(captured.ErrorValue());
+                    return;
+                }
                 auto payload = std::move(captured).Value();
-                if (payload.size() > budget.Value())
-                    return Result<CanonicalCaptureDisposition>::Failure(MakeError(SaveErrors::CaptureBudgetExceeded));
+                if (payload.size() > budget.Value()) {
+                    outcome = Return::Failure(MakeError(SaveErrors::CaptureBudgetExceeded));
+                    return;
+                }
                 const auto encoded = EncodeEnvelope(descriptor_, payload);
-                if (auto written = sink.WriteCopied(descriptor_.record, encoded); written.HasError())
-                    return Result<CanonicalCaptureDisposition>::Failure(written.ErrorValue());
-                return Result<CanonicalCaptureDisposition>::Success(CanonicalCaptureDisposition::Captured);
+                if (auto written = sink.WriteCopied(descriptor_.record, encoded); written.HasError()) {
+                    outcome = Return::Failure(written.ErrorValue());
+                    return;
+                }
+                outcome = Return::Success(CanonicalCaptureDisposition::Captured);
             } catch (const std::bad_alloc &) {
-                return std::move(allocationFailure);
+                outcome = std::move(allocationFailure);
             } catch (...) {
                 // Unknown project exceptions must become typed failures, not unwind through archive work.
-                return std::move(callbackFailure);
+                return;
             }
-        }();
+        });
     }
 
     /** @copydoc GameplayPersistenceAdapter::StageRestore */

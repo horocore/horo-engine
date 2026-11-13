@@ -21,7 +21,7 @@ namespace Horo::Gameplay::Detail {
 
     struct GameplayVfxClientState final {
         std::weak_ptr<GameplayVfxSceneState> scene;
-        std::shared_ptr<GameplayVfxModuleState> module;
+        std::shared_ptr<GameplayVfxModuleState> moduleState;
         std::shared_ptr<GameplayVfxScopeLifetime> lifetime;
         GameplayEntityRef entity;
         bool callback{};
@@ -30,7 +30,7 @@ namespace Horo::Gameplay::Detail {
 
     struct GameplayVfxProducerState final {
         std::weak_ptr<GameplayVfxSceneState> scene;
-        std::shared_ptr<GameplayVfxModuleState> module;
+        std::shared_ptr<GameplayVfxModuleState> moduleState;
     };
 
     struct GameplayVfxModuleSlot final {

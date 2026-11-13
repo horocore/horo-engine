@@ -2124,8 +2124,7 @@ namespace Horo::Editor {
                 if (!available.Value())
                     return Result<bool>::Success(false);
                 PrepareColorClock(context);
-                const auto preparedLighting = PrepareViewportLightingFrame();
-                if (preparedLighting.HasError()) {
+                if (const auto preparedLighting = PrepareViewportLightingFrame(); preparedLighting.HasError()) {
                     p_->presentation.viewportRenderer.FinishColorFrame(false);
                     if (preparedLighting.ErrorValue().code.Value() == ViewportColorErrors::Pending.code.Value())
                         return Result<bool>::Success(false);
@@ -2717,8 +2716,7 @@ namespace Horo::Editor {
         private:
             /** @brief Preserves the original nonfatal inventory error while preventing partially available GUI services. */
             static bool Refresh(Extensions::ExtensionInventory &inventory) {
-                const auto refreshed = inventory.Refresh();
-                if (refreshed.HasError()) {
+                if (const auto refreshed = inventory.Refresh(); refreshed.HasError()) {
                     LOG_ERROR("editor.extensions", "Unable to refresh extension inventory: %s", refreshed.ErrorValue().message.c_str());
                     return false;
                 }
@@ -3426,13 +3424,13 @@ namespace Horo::Editor {
     }
 
     static const Render::RenderBackendModuleInfo *SelectInteractiveBackend(EditorGuiOptions &options) {
-        const auto *module = ResolveCompiledBackendModuleInfo(options.rendererBackend);
-        if (!module || !module->supportsInteractivePresentation) {
+        const auto *backendModule = ResolveCompiledBackendModuleInfo(options.rendererBackend);
+        if (!backendModule || !backendModule->supportsInteractivePresentation) {
             LOG_CRITICAL("editor.renderer", "Requested renderer component '%s' is unavailable.", options.rendererBackend.c_str());
             return nullptr;
         }
-        options.rendererBackend = module->id.Value();
-        return module;
+        options.rendererBackend = backendModule->id.Value();
+        return backendModule;
     }
 
     /** @brief Validates startup inputs and composes the editor's installed modules. */

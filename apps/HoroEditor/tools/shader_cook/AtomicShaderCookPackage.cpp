@@ -370,8 +370,8 @@ namespace Horo::Editor::Offline {
         if (!source.is_absolute() || source.filename().empty())
             return IoFailure();
         std::error_code error;
-        const auto status = std::filesystem::symlink_status(source, error);
-        if (error || !std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
+        if (const auto status = std::filesystem::symlink_status(source, error);
+            error || !std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
             return IoFailure();
         if (auto absent = DestinationAbsent(destination); absent.HasError())
             return absent;

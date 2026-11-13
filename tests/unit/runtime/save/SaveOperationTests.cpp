@@ -373,13 +373,23 @@ TEST_CASE("Invalid commit outcome representations never publish terminal state",
 
 TEST_CASE("Operation admission maps every allocation point to typed failure", "[unit][runtime][save][operation]") {
     const SaveOperationDescriptor descriptor{.operation = 51, .kind = SaveOperationKind::Save, .maximumCompletionCallbacks = 1};
+    const auto admissionAllocations = [&] {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
+        auto created = CreateSaveOperation(descriptor);
+        const auto requests = measurement.Snapshot().requests;
+        REQUIRE(created.HasValue());
+        return requests;
+    }();
+    REQUIRE(admissionAllocations > 0);
     bool admitted = false;
-    for (std::size_t successfulAllocations = 0; successfulAllocations < 16 && !admitted; ++successfulAllocations) {
+    for (std::size_t successfulAllocations = 0; successfulAllocations <= admissionAllocations; ++successfulAllocations) {
+        INFO(successfulAllocations);
         auto created = [&] {
             Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
             return CreateSaveOperation(descriptor);
         }();
         admitted = created.HasValue();
+        CHECK(admitted == (successfulAllocations == admissionAllocations));
         if (!admitted)
             CHECK(created.ErrorValue().code.Value() == SaveErrors::OperationAllocationFailed.code.Value());
     }
@@ -391,38 +401,54 @@ TEST_CASE("Terminal transitions and abandonment allocate no storage after admiss
     const auto cancelledHandle = cancelled.Handle();
     SaveCancellationRequestResult request;
     SaveCommitGateResult cancelledGate;
+    std::size_t cancellationAllocations{};
     {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
         Tests::AllocationProbe::ScopedFailure failure;
         request = cancelledHandle.RequestCancellation();
         cancelledGate = cancelled.BeginCommit();
+        cancellationAllocations = measurement.Snapshot().requests;
     }
+    CHECK(cancellationAllocations == 0);
     CHECK(request == SaveCancellationRequestResult::Requested);
     CHECK(cancelledGate == SaveCommitGateResult::CancellationWon);
 
     auto completed = Operation(SaveOperationKind::RefreshCatalog, 54);
     SaveOperationTransitionResult completion;
+    std::size_t completionAllocations{};
     {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
         Tests::AllocationProbe::ScopedFailure failure;
         completion = completed.Complete(SaveOperationCommitOutcome::NotCommitted);
+        completionAllocations = measurement.Snapshot().requests;
     }
+    CHECK(completionAllocations == 0);
     CHECK(completion == SaveOperationTransitionResult::Applied);
 
     auto failed = Operation(SaveOperationKind::Save, 55);
     SaveOperationTransitionResult failureResult;
     Error failureError = MakeError(SaveErrors::CompositionInjectedFailure);
+    std::size_t failureAllocations{};
     {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
         Tests::AllocationProbe::ScopedFailure failure;
         failureResult = failed.Fail(std::move(failureError), SaveOperationCommitOutcome::NotCommitted);
+        failureAllocations = measurement.Snapshot().requests;
     }
+    CHECK(failureAllocations == 0);
     CHECK(failureResult == SaveOperationTransitionResult::Applied);
 
     auto abandonedController = Operation(SaveOperationKind::Save, 56);
     const SaveOperationHandle abandoned = abandonedController.Handle();
     std::optional<SaveOperationController> owner{std::move(abandonedController)};
+    std::size_t abandonmentAllocations{};
     {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
         Tests::AllocationProbe::ScopedFailure failure;
         owner.reset();
+        abandonmentAllocations = measurement.Snapshot().requests;
     }
+    CHECK(abandonmentAllocations == 0);
     CHECK(Snapshot(abandoned).state == SaveOperationState::Failed);
 }
 

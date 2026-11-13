@@ -218,8 +218,8 @@ namespace Horo::XR {
                 if (auto shape = ValidateXRHandJointRecord(joint, activeSession, descriptor.sampledAt, origin); shape.HasError())
                     return shape;
                 const auto *device = FindDevice(descriptor.devices, joint.device);
-                const auto role = joint.hand == XRHandedness::Left ? XRTrackedDeviceRole::LeftHand : XRTrackedDeviceRole::RightHand;
-                if (!device || device->role != role || device->state != XRTrackedDeviceState::Tracked ||
+                if (const auto role = joint.hand == XRHandedness::Left ? XRTrackedDeviceRole::LeftHand : XRTrackedDeviceRole::RightHand;
+                    !device || device->role != role || device->state != XRTrackedDeviceState::Tracked ||
                     !device->capabilities.Has(XRTrackedDeviceCapability::HandJoints))
                     return Reject<void>(XRErrors::TrackingSnapshotInvalid);
                 if (index > 0 && !(std::pair{descriptor.handJoints[index - 1].hand, descriptor.handJoints[index - 1].joint} <

@@ -38,8 +38,7 @@ namespace Horo::AI {
             const auto payload = reader.Bytes(reader.Count(maximum));
             if (!reader.Complete())
                 return Invalid<std::span<const std::uint8_t>>();
-            const auto actual = ComputeSha256(std::as_bytes(payload));
-            if (!std::ranges::equal(expected, actual.bytes))
+            if (const auto actual = ComputeSha256(std::as_bytes(payload)); !std::ranges::equal(expected, actual.bytes))
                 return Invalid<std::span<const std::uint8_t>>();
             return Result<std::span<const std::uint8_t>>::Success(payload);
         }

@@ -13,8 +13,8 @@ namespace Horo::Application::Internal {
         std::filesystem::path temporaryRoot;
         std::filesystem::path script;
         std::string package;
-        std::string module;
-        std::string import;
+        std::string moduleId;
+        std::string importId;
         std::string publisher;
         bool moduleOperation{};
         bool refreshReference{};

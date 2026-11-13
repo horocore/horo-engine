@@ -12,10 +12,10 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -243,11 +243,14 @@ namespace Horo::Runtime {
 
     /** @brief Rejects invalid or duplicate identities before persistence work. @param values Values to validate.
      * @return Success for a unique sequence, including an empty sequence; otherwise a typed identity error.
+     * @throws std::bad_alloc when uniqueness scratch storage cannot be allocated.
      */
     template <typename Tag>
     [[nodiscard]] Result<void> ValidateUniqueSaveIdentities(const std::span<const PersistentSaveIdentity<Tag>> values) {
-        std::unordered_set<PersistentSaveIdentity<Tag>, PersistentSaveIdentityHash<Tag>> uniqueValues;
-        uniqueValues.reserve(values.size());
+        if (values.empty())
+            return Result<void>::Success();
+        // Tree construction keeps allocation failure catchable, including MSVC Debug iterator bookkeeping.
+        std::set<PersistentSaveIdentity<Tag>> uniqueValues;
         for (const auto &value : values) {
             if (!value.IsValid())
                 return Result<void>::Failure(MakeError(SaveErrors::IdentityInvalid));

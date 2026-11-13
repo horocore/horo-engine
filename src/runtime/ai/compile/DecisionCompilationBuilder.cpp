@@ -69,8 +69,7 @@ namespace Horo::AI::Detail {
                                             .executionTask = candidate.sources[index].executionTask,
                                             .bindings = metadata.Value().plan,
                                             .providerProperties = source.properties};
-                auto executable = CompileFamily(graph, source);
-                if (executable.HasError())
+                if (auto executable = CompileFamily(graph, source); executable.HasError())
                     return executable;
                 candidate.graphs.push_back(std::move(graph));
                 return Result<void>::Success();

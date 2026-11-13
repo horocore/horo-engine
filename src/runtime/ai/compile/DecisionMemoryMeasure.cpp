@@ -55,8 +55,7 @@ namespace Horo::AI::Detail {
         }
 
         Result<void> ChargeProvider(DecisionStorageRequirements &storage, const DecisionNodeContract &contract) {
-            const auto &memory = contract.memory;
-            switch (memory.kind) {
+            switch (const auto &memory = contract.memory; memory.kind) {
                 case DecisionProviderMemoryKind::UnknownNative:
                     ++storage.unknownNativeProviders;
                     break;

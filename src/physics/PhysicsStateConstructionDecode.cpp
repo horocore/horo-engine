@@ -12,7 +12,7 @@ namespace Horo::Physics::StateDetail {
             return Overlaps(Bytes(a), std::span<const B>{b});
         }
 
-        bool AliasesStorage(ConstructionShapeStorage s, std::span<std::uint32_t> depths, std::span<const std::byte> input) noexcept {
+        bool AliasesStorage(const ConstructionShapeStorage &s, std::span<std::uint32_t> depths, std::span<const std::byte> input) noexcept {
             return Aliases(s.nodes, s.edges) || Aliases(s.nodes, s.roots) || Aliases(s.edges, s.roots) || Aliases(depths, s.nodes) ||
                    Aliases(depths, s.edges) || Aliases(depths, s.roots) || Overlaps(Bytes(s.nodes), input) ||
                    Overlaps(Bytes(s.edges), input) || Overlaps(Bytes(s.roots), input) || Overlaps(Bytes(depths), input);
@@ -33,7 +33,7 @@ namespace Horo::Physics::StateDetail {
                    ConsumeMinimum(h.roots, 12, remaining);
         }
 
-        bool Counts(ConstructionShapeHeader h, const PhysicsStateConstructionLimits &limits, ConstructionShapeStorage s,
+        bool Counts(ConstructionShapeHeader h, const PhysicsStateConstructionLimits &limits, const ConstructionShapeStorage &s,
                     std::span<std::uint32_t> depths) noexcept {
             return h.nodes <= limits.maximumNodes && h.edges <= limits.maximumEdges && h.roots <= limits.maximumRoots &&
                    h.nodes <= s.nodes.size() && h.edges <= s.edges.size() && h.roots <= s.roots.size() && h.nodes <= depths.size();

@@ -41,9 +41,9 @@ namespace Horo::Editor {
                     return Result<WorldPose>::Failure(view.ErrorValue());
                 const Math::Transform *local = view.Value().localTransform;
                 if (entity.entity.index < overrides.size()) {
-                    const auto &override = overrides[entity.entity.index];
-                    if (override.present && override.entity == entity)
-                        local = &override.localTransform;
+                    const auto &transformOverride = overrides[entity.entity.index];
+                    if (transformOverride.present && transformOverride.entity == entity)
+                        local = &transformOverride.localTransform;
                 }
                 const auto accumulated = AccumulatePose(*local, pose);
                 if (accumulated.HasError())

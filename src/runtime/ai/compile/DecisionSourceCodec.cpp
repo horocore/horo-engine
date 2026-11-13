@@ -52,8 +52,7 @@ namespace Horo::AI {
             source.blackboardVersion = {static_cast<std::uint32_t>(reader.Unsigned(4)), static_cast<std::uint32_t>(reader.Unsigned(4))};
             source.location = Detail::ReadLocation(reader);
             source.executionTask = reader.IdentityValue<TaskId>(true);
-            const auto family = reader.Unsigned(1);
-            if (family == 0) {
+            if (const auto family = reader.Unsigned(1); family == 0) {
                 auto tree = Detail::ReadTree(reader);
                 if (tree.HasError())
                     return Result<DecisionGraphSource>::Failure(tree.ErrorValue());

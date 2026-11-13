@@ -92,8 +92,7 @@ namespace Horo::Physics::StateDetail {
         /** @brief Uses subtraction before any indexing, independent of
          * attacker-provided lengths. */
         bool Reserve(std::size_t count) noexcept {
-            const auto size = reading_ || comparing_ ? input_.size() : output_.size();
-            if (failed_ || count > size - offset_) {
+            if (const auto size = reading_ || comparing_ ? input_.size() : output_.size(); failed_ || count > size - offset_) {
                 failed_ = true;
                 return false;
             }

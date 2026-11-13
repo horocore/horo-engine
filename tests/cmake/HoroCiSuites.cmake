@@ -30,6 +30,14 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroFoundationPublicHeaderConsumer
     HoroSecurityPublicHeaderConsumer
     HoroPlatformPublicHeaderConsumer
+    HoroFoundationResultTests
+    HoroDynamicLibraryTests
+    HoroRuntimeSaveIdentityTests
+    HoroRuntimeSaveParticipantRegistryTests
+    HoroRuntimeSaveCaptureSnapshotTests
+    HoroRuntimeSaveOperationTests
+    HoroRuntimeSaveAutosaveSchedulerTests
+    HoroRuntimeSavedSceneBootstrapTests
     HoroAnimationGraphValueAllocationTests
     HoroAnimationDocumentTests
     HoroUiStyleWorkspaceTests
@@ -297,6 +305,18 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroNavigationProjectBakeInputNativeTests
     HoroEditorNavigationBakeHostTests
 )
+
+if(WIN32)
+    list(APPEND HORO_CI_WINDOWS_TARGETS
+        HoroProcessImageIdentityTests
+        HoroPhysicsStateCodecTests
+        HoroPhysicsStateHostLifecycleTests)
+    if(HORO_BUILD_PHYSICS_NATIVE)
+        list(APPEND HORO_CI_WINDOWS_TARGETS
+            HoroPhysicsStateWorldTests
+            HoroPhysicsStateNativeTests)
+    endif()
+endif()
 
 set(HORO_CI_NAVIGATION_TARGETS
     HoroNavigationProjectSettingsTests

@@ -959,6 +959,26 @@ target_include_directories(HoroPhysicsStateCodecTests PRIVATE
 target_link_libraries(HoroPhysicsStateCodecTests PRIVATE HoroEngine::Physics Threads::Threads)
 horo_register_catch_test(HoroPhysicsStateCodecTests LABELS "unit;physics;state;headless")
 
+if(WIN32)
+    # Only this native qualification target sees the exact non-installed Windows implementation check.
+    set(_horo_windows_image_test_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/windows-process-image-test")
+    file(MAKE_DIRECTORY "${_horo_windows_image_test_headers}")
+    configure_file("${PROJECT_SOURCE_DIR}/src/platform/process_image/ProcessImageWindowsInternal.h"
+        "${_horo_windows_image_test_headers}/ProcessImageWindowsInternal.h" COPYONLY)
+    add_executable(HoroProcessImageIdentityChild support/ProcessImageIdentityWindowsChild.cpp)
+    target_compile_features(HoroProcessImageIdentityChild PRIVATE cxx_std_20)
+    target_link_libraries(HoroProcessImageIdentityChild PRIVATE HoroPlatformProcessImageInternal)
+    add_executable(HoroProcessImageIdentityTests
+        support/AllocationProbe.cpp unit/platform/ProcessImageIdentityWindowsTests.cpp)
+    target_include_directories(HoroProcessImageIdentityTests PRIVATE
+        "${_horo_windows_image_test_headers}" "${CMAKE_CURRENT_SOURCE_DIR}/support")
+    target_link_libraries(HoroProcessImageIdentityTests PRIVATE HoroPlatformProcessImageInternal)
+    target_compile_definitions(HoroProcessImageIdentityTests PRIVATE
+        HORO_PROCESS_IMAGE_CHILD_PATH=L"$<TARGET_FILE:HoroProcessImageIdentityChild>")
+    add_dependencies(HoroProcessImageIdentityTests HoroProcessImageIdentityChild)
+    horo_register_catch_test(HoroProcessImageIdentityTests LABELS "unit;platform;process-image;headless;ci-windows")
+endif()
+
 add_executable(HoroPhysicsStatePublicHeaderConsumer support/PhysicsStatePublicHeaderConsumer.cpp)
 target_compile_features(HoroPhysicsStatePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPhysicsStatePublicHeaderConsumer PRIVATE HoroEngine::Physics)
@@ -3332,6 +3352,7 @@ target_link_libraries(HoroProjectMigrationTests PRIVATE HoroEngine::ProjectMigra
         HoroEngine::NetworkApi HoroEngine::NavigationApi nlohmann_json::nlohmann_json)
 add_executable(HoroProjectMigrationTransactionTests
         unit/editor/ProjectMigrationTransactionTests.cpp
+        unit/editor/ProjectMutationAdmissionTests.cpp
 )
 target_compile_features(HoroProjectMigrationTransactionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroProjectMigrationTransactionTests PRIVATE
@@ -4063,6 +4084,24 @@ target_include_directories(HoroImmutableFileStorageTests PRIVATE ${PROJECT_SOURC
 horo_register_catch_test(HoroImmutableFileStorageTests LABELS "unit;platform;filesystem;headless;ci-windows;sonar-coverage")
 
 target_sources(HoroPlatformDesktopPublicHeaderConsumer PRIVATE support/FileManagerPublicContract.cpp)
+if(WIN32 OR (UNIX AND NOT ANDROID))
+    add_library(HoroDynamicLibraryFixture MODULE fixtures/platform/DynamicLibraryFixture.c)
+    target_compile_features(HoroDynamicLibraryFixture PRIVATE c_std_11)
+    set_target_properties(HoroDynamicLibraryFixture PROPERTIES C_EXTENSIONS OFF)
+    add_executable(HoroDynamicLibraryTests
+        unit/platform/DynamicLibraryTests.cpp
+        support/AllocationProbe.cpp)
+    target_compile_features(HoroDynamicLibraryTests PRIVATE cxx_std_20)
+    target_include_directories(HoroDynamicLibraryTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+    target_link_libraries(HoroDynamicLibraryTests PRIVATE HoroEngine::Platform Catch2::Catch2WithMain ${CMAKE_DL_LIBS})
+    target_compile_definitions(HoroDynamicLibraryTests PRIVATE
+        HORO_DYNAMIC_LIBRARY_FIXTURE_PATH="$<TARGET_FILE:HoroDynamicLibraryFixture>")
+    add_dependencies(HoroDynamicLibraryTests HoroDynamicLibraryFixture)
+    horo_register_catch_test(HoroDynamicLibraryTests
+        LABELS "unit;platform;native;allocation;headless;ci-windows;sonar-coverage"
+        PROPERTIES TIMEOUT 60)
+endif()
+
 add_executable(HoroFileManagerTests unit/platform/FileManagerTests.cpp)
 target_compile_features(HoroFileManagerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFileManagerTests PRIVATE HoroEngine::PlatformDesktop)

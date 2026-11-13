@@ -4,27 +4,53 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <exception>
+#include <initializer_list>
 #include <limits>
 #include <new>
+#include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 
 namespace Horo::Runtime {
     struct SaveParticipantRegistryDetail::SnapshotStorage final {
-        std::vector<SaveParticipantBinding> bindings;
-        std::vector<SaveParticipantBinding> captureBindings;
-        std::vector<SaveParticipantBinding> restoreBindings;
+        std::vector<SaveParticipantBinding> bindings = std::vector<SaveParticipantBinding>(std::initializer_list<SaveParticipantBinding>{});
+        std::vector<SaveParticipantBinding> captureBindings =
+            std::vector<SaveParticipantBinding>(std::initializer_list<SaveParticipantBinding>{});
+        std::vector<SaveParticipantBinding> restoreBindings =
+            std::vector<SaveParticipantBinding>(std::initializer_list<SaveParticipantBinding>{});
     };
 
     namespace {
-        using ParticipantIndices = std::unordered_map<SaveParticipantId, std::size_t, SaveParticipantIdHash>;
-
         struct PhasePlanGraph final {
-            std::vector<std::vector<std::size_t>> dependents;
-            std::vector<std::vector<std::size_t>> dependencies;
-            std::vector<std::size_t> dependencyCounts;
+            std::vector<std::vector<std::size_t>> dependents{std::size_t{0}};
+            std::vector<std::vector<std::size_t>> dependencies{std::size_t{0}};
+            std::vector<std::size_t> dependencyCounts = std::vector<std::size_t>(std::size_t{0});
             std::size_t participantCount{0};
+        };
+
+        /** @brief Publishes generation only after the caller's return object is fully constructed. */
+        class PendingParticipantRegistration final {
+        public:
+            PendingParticipantRegistration(std::vector<SaveParticipantBinding> &bindings, std::uint64_t &generation,
+                                           const std::uint64_t next) noexcept
+                : bindings_(bindings), generation_(generation), next_(next), exceptions_(std::uncaught_exceptions()) {}
+
+            ~PendingParticipantRegistration() {
+                if (std::uncaught_exceptions() != exceptions_)
+                    bindings_.pop_back();
+                else
+                    generation_ = next_;
+            }
+
+            PendingParticipantRegistration(const PendingParticipantRegistration &) = delete;
+            PendingParticipantRegistration &operator=(const PendingParticipantRegistration &) = delete;
+
+        private:
+            std::vector<SaveParticipantBinding> &bindings_;
+            std::uint64_t &generation_;
+            std::uint64_t next_;
+            int exceptions_;
         };
 
         /** @brief Projects every ordered registry operation to the canonical participant text. */
@@ -110,22 +136,39 @@ namespace Horo::Runtime {
             return role == Capture ? "capture" : "restore";
         }
 
+        /** @brief Canonicalizes accepted dependency copies without moving checked-STL participant strings. */
+        void CanonicalizeDependencies(const std::span<const SaveParticipantDependency> source,
+                                      std::vector<SaveParticipantDependency> &accepted) {
+            if (std::ranges::is_sorted(source))
+                return;
+            std::vector<std::size_t> order(source.size());
+            for (std::size_t index = 0; index < order.size(); ++index)
+                order[index] = index;
+            std::ranges::sort(order, {}, [source](const std::size_t index) -> const SaveParticipantDependency & {
+                return source[index];
+            });
+            // Source borrows the caller's descriptor; accepted owns a separate copy and retains its capacity.
+            accepted.clear();
+            for (const auto index : order)
+                accepted.push_back(source[index]);
+        }
+
         /** @brief Validates dependency identity, self-reference, and uniqueness rules. */
         [[nodiscard]] Result<void> ValidateDependencyMetadata(const CanonicalStateParticipantDescriptor &descriptor) {
             using enum SaveParticipantRole;
             if (descriptor.dependencies.size() > MaximumSaveParticipantCount)
                 return Result<void>::Failure(MakeError(SaveErrors::ParticipantDescriptorInvalid));
-            std::unordered_map<SaveParticipantId, std::byte, SaveParticipantIdHash> coveredPhases;
-            coveredPhases.reserve(descriptor.dependencies.size());
-            for (const SaveParticipantDependency &dependency : descriptor.dependencies) {
+            // This cold descriptor check is bounded to 256 edges and needs no fallible hash-container construction.
+            for (std::size_t index = 0; index < descriptor.dependencies.size(); ++index) {
+                const SaveParticipantDependency &dependency = descriptor.dependencies[index];
                 if (!dependency.participant.IsValid() || dependency.participant == descriptor.participant ||
                     !IsKnown(dependency.requirement) || !IsKnown(dependency.phase))
                     return Result<void>::Failure(MakeError(SaveErrors::ParticipantDescriptorInvalid));
                 const std::byte phaseMask = DependencyPhaseMask(dependency.phase);
-                std::byte &existingMask = coveredPhases[dependency.participant];
-                if ((existingMask & phaseMask) != std::byte{})
+                if (std::ranges::any_of(std::span{descriptor.dependencies}.first(index), [&](const auto &earlier) {
+                    return earlier.participant == dependency.participant && (DependencyPhaseMask(earlier.phase) & phaseMask) != std::byte{};
+                }))
                     return Result<void>::Failure(MakeError(SaveErrors::ParticipantDescriptorInvalid));
-                existingMask |= phaseMask;
                 const bool captureCompatible = !AppliesTo(dependency.phase, Capture) || HasSaveParticipantRole(descriptor.roles, Capture);
                 const bool restoreCompatible = !AppliesTo(dependency.phase, Restore) || HasSaveParticipantRole(descriptor.roles, Restore);
                 if (!captureCompatible || !restoreCompatible) {
@@ -149,25 +192,16 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief Builds the immutable participant-to-binding index used for graph validation. */
-        [[nodiscard]] ParticipantIndices BuildParticipantIndices(const std::vector<SaveParticipantBinding> &bindings) {
-            ParticipantIndices indices;
-            indices.reserve(bindings.size());
-            for (std::size_t index = 0; index < bindings.size(); ++index)
-                indices.try_emplace(bindings[index].Descriptor().participant, index);
-            return indices;
-        }
-
         /** @brief Adds one applicable validated dependency edge to a phase graph. */
         [[nodiscard]] Result<void> AddPhaseDependency(PhasePlanGraph &graph, const std::vector<SaveParticipantBinding> &bindings,
-                                                      const ParticipantIndices &indices, const SaveParticipantRole role,
-                                                      const std::size_t dependentIndex,
+                                                      const SaveParticipantRole role, const std::size_t dependentIndex,
                                                       const CanonicalStateParticipantDescriptor &descriptor,
                                                       const SaveParticipantDependency &dependency) {
             if (!AppliesTo(dependency.phase, role))
                 return Result<void>::Success();
-            const auto found = indices.find(dependency.participant);
-            if (found == indices.end()) {
+            // Snapshot owns the canonical identity-sorted bindings for the entire graph build.
+            const auto found = std::ranges::lower_bound(bindings, dependency.participant, {}, ParticipantOrderKey);
+            if (found == bindings.end() || found->Descriptor().participant != dependency.participant) {
                 if (dependency.requirement == SaveParticipantDependencyRequirement::Optional)
                     return Result<void>::Success();
                 return Result<void>::Failure(
@@ -175,40 +209,45 @@ namespace Horo::Runtime {
                                                                             "' requires missing " + std::string{PhaseName(role)} +
                                                                             " dependency '" + dependency.participant.Value() + "'."));
             }
-            if (const CanonicalStateParticipantDescriptor &provider = bindings[found->second].Descriptor();
-                !HasSaveParticipantRole(provider.roles, role)) {
+            if (const CanonicalStateParticipantDescriptor &provider = found->Descriptor(); !HasSaveParticipantRole(provider.roles, role)) {
                 return Result<void>::Failure(MakeError(SaveErrors::ParticipantDependencyPhaseIncompatible,
                                                        "Participant '" + descriptor.participant.Value() + "' depends on '" +
                                                            provider.participant.Value() + "' during " + std::string{PhaseName(role)} +
                                                            ", but the dependency does not support that phase."));
             }
-            graph.dependents[found->second].push_back(dependentIndex);
-            graph.dependencies[dependentIndex].push_back(found->second);
+            const auto providerIndex = static_cast<std::size_t>(found - bindings.begin());
+            graph.dependents[providerIndex].push_back(dependentIndex);
+            graph.dependencies[dependentIndex].push_back(providerIndex);
             ++graph.dependencyCounts[dependentIndex];
             return Result<void>::Success();
         }
 
         /** @brief Builds and validates the dependency graph for one operation phase. */
-        [[nodiscard]] Result<PhasePlanGraph> PreparePhaseGraph(const std::vector<SaveParticipantBinding> &bindings,
-                                                               const ParticipantIndices &indices, const SaveParticipantRole role) {
-            PhasePlanGraph graph{std::vector<std::vector<std::size_t>>(bindings.size()),
-                                 std::vector<std::vector<std::size_t>>(bindings.size()), std::vector<std::size_t>(bindings.size()), 0};
+        [[nodiscard]] Result<void> PreparePhaseGraph(const std::vector<SaveParticipantBinding> &bindings, const SaveParticipantRole role,
+                                                     PhasePlanGraph &graph) {
+            graph.dependents.reserve(bindings.size());
+            graph.dependencies.reserve(bindings.size());
+            graph.dependencyCounts.resize(bindings.size());
+            for (std::size_t index = 0; index < bindings.size(); ++index) {
+                graph.dependents.emplace_back(std::size_t{0});
+                graph.dependencies.emplace_back(std::size_t{0});
+            }
             for (std::size_t index = 0; index < bindings.size(); ++index) {
                 const CanonicalStateParticipantDescriptor &descriptor = bindings[index].Descriptor();
                 if (!HasSaveParticipantRole(descriptor.roles, role))
                     continue;
                 ++graph.participantCount;
                 for (const SaveParticipantDependency &dependency : descriptor.dependencies) {
-                    if (auto added = AddPhaseDependency(graph, bindings, indices, role, index, descriptor, dependency); added.HasError()) {
-                        return Result<PhasePlanGraph>::Failure(added.ErrorValue());
+                    if (auto added = AddPhaseDependency(graph, bindings, role, index, descriptor, dependency); added.HasError()) {
+                        return added;
                     }
                 }
             }
-            return Result<PhasePlanGraph>::Success(std::move(graph));
+            return Result<void>::Success();
         }
 
         /** @brief Recovers one deterministic cycle from the graph nodes left by Kahn traversal. */
-        [[nodiscard]] bool FindCycleFrom(const std::size_t index, const PhasePlanGraph &graph, const std::vector<bool> &emitted,
+        [[nodiscard]] bool FindCycleFrom(const std::size_t index, const PhasePlanGraph &graph, const std::vector<std::uint8_t> &emitted,
                                          std::vector<std::uint8_t> &colors, std::vector<std::size_t> &path,
                                          std::vector<std::size_t> &cycle) {
             colors[index] = 1;
@@ -230,10 +269,10 @@ namespace Horo::Runtime {
 
         /** @brief Creates an actionable diagnostic naming only one actual dependency cycle. */
         [[nodiscard]] Error MakeDependencyCycleError(const std::vector<SaveParticipantBinding> &bindings, const PhasePlanGraph &graph,
-                                                     const std::vector<bool> &emitted, const SaveParticipantRole role) {
+                                                     const std::vector<std::uint8_t> &emitted, const SaveParticipantRole role) {
             std::vector<std::uint8_t> colors(bindings.size());
-            std::vector<std::size_t> path;
-            std::vector<std::size_t> cycle;
+            std::vector<std::size_t> path(std::size_t{0});
+            std::vector<std::size_t> cycle(std::size_t{0});
             std::size_t index{};
             for (const std::uint8_t color : colors) {
                 if (!cycle.empty())
@@ -253,11 +292,9 @@ namespace Horo::Runtime {
         }
 
         /** @brief Emits one stable topological phase plan from a validated graph. */
-        [[nodiscard]] Result<std::vector<SaveParticipantBinding>> EmitStablePhasePlan(const std::vector<SaveParticipantBinding> &bindings,
-                                                                                      PhasePlanGraph graph,
-                                                                                      const SaveParticipantRole role) {
-            std::vector<bool> emitted(bindings.size());
-            std::vector<SaveParticipantBinding> plan;
+        [[nodiscard]] Result<void> EmitStablePhasePlan(const std::vector<SaveParticipantBinding> &bindings, PhasePlanGraph &graph,
+                                                       const SaveParticipantRole role, std::vector<SaveParticipantBinding> &plan) {
+            std::vector<std::uint8_t> emitted(bindings.size());
             plan.reserve(graph.participantCount);
             while (plan.size() < graph.participantCount) {
                 std::size_t selected = bindings.size();
@@ -269,23 +306,22 @@ namespace Horo::Runtime {
                     }
                 }
                 if (selected == bindings.size())
-                    return Result<std::vector<SaveParticipantBinding>>::Failure(MakeDependencyCycleError(bindings, graph, emitted, role));
+                    return Result<void>::Failure(MakeDependencyCycleError(bindings, graph, emitted, role));
                 emitted[selected] = true;
                 plan.push_back(bindings[selected]);
                 for (const std::size_t dependent : graph.dependents[selected])
                     --graph.dependencyCounts[dependent];
             }
-            return Result<std::vector<SaveParticipantBinding>>::Success(std::move(plan));
+            return Result<void>::Success();
         }
 
         /** @brief Builds one stable topological phase plan with actionable dependency diagnostics. */
-        [[nodiscard]] Result<std::vector<SaveParticipantBinding>> BuildPhasePlan(const std::vector<SaveParticipantBinding> &bindings,
-                                                                                 const ParticipantIndices &indices,
-                                                                                 const SaveParticipantRole role) {
-            auto graph = PreparePhaseGraph(bindings, indices, role);
-            if (graph.HasError())
-                return Result<std::vector<SaveParticipantBinding>>::Failure(graph.ErrorValue());
-            return EmitStablePhasePlan(bindings, std::move(graph).Value(), role);
+        [[nodiscard]] Result<void> BuildPhasePlan(const std::vector<SaveParticipantBinding> &bindings, const SaveParticipantRole role,
+                                                  std::vector<SaveParticipantBinding> &plan) {
+            PhasePlanGraph graph;
+            if (auto prepared = PreparePhaseGraph(bindings, role, graph); prepared.HasError())
+                return prepared;
+            return EmitStablePhasePlan(bindings, graph, role, plan);
         }
 
         /** @brief Computes the next registry generation without mutating published state. */
@@ -305,13 +341,13 @@ namespace Horo::Runtime {
         }
     }
 
-    SaveParticipantBinding::SaveParticipantBinding(CanonicalStateParticipantDescriptor descriptor,
+    SaveParticipantBinding::SaveParticipantBinding(std::shared_ptr<const CanonicalStateParticipantDescriptor> descriptor,
                                                    std::shared_ptr<const ICanonicalStateAdapter> adapter)
         : descriptor_(std::move(descriptor)), adapter_(std::move(adapter)) {}
 
     /** @copydoc SaveParticipantBinding::Descriptor */
     const CanonicalStateParticipantDescriptor &SaveParticipantBinding::Descriptor() const noexcept {
-        return descriptor_;
+        return *descriptor_;
     }
 
     /** @copydoc SaveParticipantBinding::Adapter */
@@ -389,12 +425,11 @@ namespace Horo::Runtime {
                         return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantRecordOwnershipDuplicate));
                 }
             }
-            CanonicalStateParticipantDescriptor ownedDescriptor = descriptor;
-            SaveParticipantRegistration registration{ownedDescriptor.participant, nextGeneration.Value()};
-            std::ranges::sort(ownedDescriptor.dependencies);
+            auto ownedDescriptor = std::make_shared<CanonicalStateParticipantDescriptor>(descriptor);
+            CanonicalizeDependencies(descriptor.dependencies, ownedDescriptor->dependencies);
             bindings_.push_back(SaveParticipantBinding{std::move(ownedDescriptor), std::move(adapter)});
-            generation_ = nextGeneration.Value();
-            return Result<SaveParticipantRegistration>::Success(std::move(registration));
+            const PendingParticipantRegistration publication(bindings_, generation_, nextGeneration.Value());
+            return Result<SaveParticipantRegistration>::SuccessInPlace(descriptor.participant, nextGeneration.Value());
         } catch (const std::bad_alloc &) {
             return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantRegistryAllocationFailed));
         }
@@ -425,15 +460,12 @@ namespace Horo::Runtime {
             auto storage = std::make_shared<SaveParticipantRegistryDetail::SnapshotStorage>();
             storage->bindings = bindings_;
             std::ranges::sort(storage->bindings, {}, ParticipantOrderKey);
-            const ParticipantIndices indices = BuildParticipantIndices(storage->bindings);
-            auto capturePlan = BuildPhasePlan(storage->bindings, indices, SaveParticipantRole::Capture);
-            if (capturePlan.HasError())
+            if (auto capturePlan = BuildPhasePlan(storage->bindings, SaveParticipantRole::Capture, storage->captureBindings);
+                capturePlan.HasError())
                 return Result<SaveParticipantRegistrySnapshot>::Failure(capturePlan.ErrorValue());
-            auto restorePlan = BuildPhasePlan(storage->bindings, indices, SaveParticipantRole::Restore);
-            if (restorePlan.HasError())
+            if (auto restorePlan = BuildPhasePlan(storage->bindings, SaveParticipantRole::Restore, storage->restoreBindings);
+                restorePlan.HasError())
                 return Result<SaveParticipantRegistrySnapshot>::Failure(restorePlan.ErrorValue());
-            storage->captureBindings = std::move(capturePlan).Value();
-            storage->restoreBindings = std::move(restorePlan).Value();
             return Result<SaveParticipantRegistrySnapshot>::Success({generation_, std::move(storage)});
         } catch (const std::bad_alloc &) {
             return Result<SaveParticipantRegistrySnapshot>::Failure(MakeError(SaveErrors::ParticipantRegistryAllocationFailed));

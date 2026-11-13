@@ -30,8 +30,7 @@ namespace Horo::Editor {
             return Result<bool>::Failure(MakeError(Runtime::SaveErrors::LifecycleUnavailable));
         const Runtime::FrameContext context{.frameNumber = ++frame, .cancellation = cancellation};
         const auto committed = scene->CommitSceneChanges(context);
-        auto *save = scene->SaveSession();
-        if (save) {
+        if (auto *save = scene->SaveSession(); save) {
             const auto pumped = save->CommitAtSafePoint(context);
             if (!save->IsSettled())
                 return pumped.HasError() ? Result<bool>::Failure(pumped.ErrorValue()) : Result<bool>::Success(false);
@@ -129,8 +128,7 @@ namespace Horo::Editor {
         if (std::this_thread::get_id() != owner_)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::ThreadAffinityViolation));
         closed_ = true;
-        const auto polled = Poll();
-        if (polled.HasError())
+        if (const auto polled = Poll(); polled.HasError())
             return Result<void>::Failure(polled.ErrorValue());
         return HasPending() ? Result<void>::Failure(MakeError(Runtime::SaveErrors::OperationInProgress)) : Result<void>::Success();
     }

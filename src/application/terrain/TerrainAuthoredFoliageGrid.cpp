@@ -49,8 +49,8 @@ namespace Horo::Application::TerrainCookDetail {
             if (delta > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
                 first.Value() > std::numeric_limits<std::int64_t>::max() - static_cast<std::int64_t>(delta))
                 return Return::Failure(MakeError(Terrain::TerrainSourceErrors::PrecisionLost));
-            const auto final = first.Value() + static_cast<std::int64_t>(delta);
-            if (std::abs(double(final) / 1000 - (origin + double(samples - 1) * spacing)) > tolerance)
+            const auto finalMillimeters = first.Value() + static_cast<std::int64_t>(delta);
+            if (std::abs(double(finalMillimeters) / 1000 - (origin + double(samples - 1) * spacing)) > tolerance)
                 return Return::Failure(MakeError(Terrain::TerrainSourceErrors::PrecisionLost));
             return Return::Success({first.Value(), step.Value()});
         }
