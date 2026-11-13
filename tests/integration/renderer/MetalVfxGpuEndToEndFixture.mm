@@ -770,6 +770,7 @@ namespace Horo::Render::Test {
         };
     }  // namespace
 
+    /** @copydoc RunEquivalentMetalVfxGpu */
     void RunEquivalentMetalVfxGpu(const std::filesystem::path &root) {
         if (MTLCreateSystemDefaultDevice() == nil)
             SKIP(VfxErrors::UnsupportedCapability.code.Value() << ": no native Metal compute device is available");
@@ -794,6 +795,7 @@ namespace Horo::Render::Test {
         }
     }
 
+    /** @copydoc RunBudgetMetalVfxGpu */
     void RunBudgetMetalVfxGpu(const std::filesystem::path &root) {
         if (MTLCreateSystemDefaultDevice() == nil)
             SKIP(VfxErrors::UnsupportedCapability.code.Value() << ": no native Metal compute device is available");
