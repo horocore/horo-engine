@@ -119,7 +119,7 @@ Sonar IDE, secrets and Codacy provider checks have not yet run on the final edit
 Any trust/authentication or platform limitation must stay recorded separately;
 no hosted, native-device or cross-platform clearance is implied.
 
-On 13 Novemberthe restored worktree was rebased onto the verified published parent. Its
+On 13 November the restored worktree was rebased onto the verified published parent. Its
 first bounded rebuild admission attempt measured CPU30 28.20% and free RAM 14.71%, below
 the required 25% RAM threshold; no configure/build/test child started. A subsequent
 documentation write exposed a full C: volume (zero free bytes). The guide was restored
@@ -134,3 +134,37 @@ resource checks passed, but nonblocking physical lock acquisition was busy. No
 configure, compiler or test child started. Draft publication is permitted by the
 13 November user instruction while external evidence remains incomplete. The
 final provider checks are not claimed as run or passed by these admission receipts.
+
+
+### Subsequent hosted evidence and fixes
+
+The hosted Sonar coverage producer for delivery head
+`153bd2c5c4c1fbadc11cdec78aff00f8a8dbc9a3` completed successfully in
+[run 43426633159](https://github.com/horocore/horo-engine/actions/runs/43426633159),
+job `131889527761`. Its Linux run passed 11,452 tests overall. The four owning
+suites passed AudioApi 169, Import 6, Cook 12 and VoiceRender 25 tests (212 total).
+Both Audio dependency/callback policy tests passed, and the AudioApi/AudioCook
+public-header consumer translation units compiled. This includes the active-voice
+replacement regression and the two allocation sweeps. It is evidence for that
+published head and platform, not for subsequent edits or Windows execution.
+
+The hosted analysis completed and uploaded its report, but the PR quality gate
+failed with two issues: `cpp:S5415` on the unnecessary descriptor move into a
+const-reference submission parameter, and `cpp:S6004` on the finite-sample guard's
+local scope. Both were corrected in `9affaaf`; fresh analysis is required.
+The published parent `139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d` was subsequently
+integrated with a normal merge, preserving published delivery history.
+
+[CI run 43426632988](https://github.com/horocore/horo-engine/actions/runs/43426632988)
+has successful Linux/GCC, macOS build, format/tooling and Android storage jobs.
+Its Windows test, D3D12 and Windows shader jobs stopped while fetching Lua 5.4.8
+with download status 35 (TLS); no Audio compilation/test pass follows from them.
+The macOS test job remains queued at this observation, so no replacement push is
+made while that same-branch run is nonterminal. Android APK qualification
+[run 43426633072](https://github.com/horocore/horo-engine/actions/runs/43426633072)
+passed. These hosted results do not replace the required local full preflight.
+
+A fresh local admission after integration measured CPU30 16.40%, available RAM
+33.75% and 11.20 GB free disk; the canonical nonblocking physical build lock was
+busy. No configure/compiler/test child started. Final-head Windows tests and the
+full Sonar IDE/secrets/Codacy check remain pending rather than implicitly passed.
