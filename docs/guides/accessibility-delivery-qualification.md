@@ -5,8 +5,11 @@ The initiative remains incomplete. Headless semantics do not qualify native
 assistive technology; compilation does not prove visible output or GPU behavior.
 
 Parent: HORO-1769 / #1813 [ACC-001]. The published target is
-`codex/editor-improvements` at `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`,
-verified on 2026-11-13. The initial implementation baseline was
+`codex/editor-improvements` at `139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`,
+verified and fetched on 2026-11-13. The source snapshots below still descend from
+the earlier `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc` base; they do not prove
+integration with the newly published target. No merge/rebase or history rewrite
+is part of that ref inspection. The initial implementation baseline was
 `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`.
 The reviewable delivery is [draft PR #3560](https://github.com/horocore/horo-engine/pull/3560).
 Local verification below includes commits beyond its published `55d9991` head;
@@ -37,7 +40,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 
 | Scope | Source commit | Built targets | Executed evidence |
 |---|---|---|---|
-| Input | `80f09f52b5f94f69b87c0bc9ed921e99540c278b` (exact patch tested before commit) | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **99/99 passed, zero skipped**, 1.52s; `build/acc-input-overflow-results.xml`, corresponding discovery JSON and `build/acc-input-overflow-verified-snapshot.json` |
+| Input controller core | `ec59e05e9` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **102/102 passed, zero skipped**, 1.57s; `build/acc-controller-core-ec59e05-results.xml` and corresponding discovery JSON. Later source changes require a fresh run. |
 | Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
 | Direct Input consumers | `d460d270be3a71c914c001d5302674c2f599672e` | Eleven targets: Character/Input UI/debugger/portable Android tests; staged Character/RuntimeUiInput/Android/XR consumers; direct navigation/pointer/debugger consumers | **62/62 passed, zero skipped**, 1.42s; `build/acc-input-consumers-d460d27-results.xml` and corresponding discovery JSON |
 | Captions / Runtime UI / optional bridge | `0b1f6eb7e223b0ece0d6137bf85a617be066d9d0` | HoroRuntimeUiAccessibilityTests, RuntimeUi staged/accessibility consumers, CaptionTransport staged/direct consumers, PlatformAccessibility staged/direct consumers | **49/49 passed, zero skipped**, 0.72s; `build/acc-caption-completion-0b1f6eb-results.xml` and corresponding discovery JSON |
@@ -49,6 +52,17 @@ GUI, SDL input and OpenGL, compiled the actual editor input-cutoff implementatio
 linked `HoroEditor.exe` and staged its runtime assets. It did not launch the editor
 or enable GPU smoke tests. Its presentation tests are display-independent ImGui
 render/model evidence, not observed native interaction or display output.
+
+The initial controller core adds explicitly selected device-owned SI samples,
+ordinary player filtering, independent transition consumption, source/device
+evidence, strict optional profile source fields and stale-handle rejection.
+Its three new regressions and the direct public consumer executed at `ec59e05`.
+The later `Gamepad` source spelling, zero-threshold neutrality and fixed-tick
+capture regression are not covered by that older compile. SDL opt-in/window-focus
+collection, seven SDL virtual-device regression sources, editor source controls
+and affected direct consumers still need native execution at the final snapshot.
+The old GUI/direct-consumer rows do not qualify the changed Input layouts or
+controller adapter. Physical controller and native interaction checks remain.
 
 The direct-consumer batch refreshed callers after the public binding layout
 change: Character **16**, Runtime UI input **19**, input debugger **15**, portable
