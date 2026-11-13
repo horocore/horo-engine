@@ -87,7 +87,12 @@ explicit authored CPU variant, identity 73, with 512 particles replacing a
 2,048-particle GPU primary. The variant declares 64 bytes per particle and a
 4 ms CPU work ceiling. Resolution must record CompatibleCpu, the exact variant,
 particle count, 32,768-byte memory projection and capability/policy revisions.
-A 4.0001 ms variant and a RequireGPU source both reject with MissingVariant.
+The fixture host binds selected variant 73 to its explicit 512-particle CPU
+descriptor, seeds the genuine CPU simulator, and advances gravity for two steps.
+All 512 positions, velocities and ages must match the exact binary-fraction
+reference. The 64-byte selection cost is authored metadata, not a measurement of
+that simulator's native memory. A 4.0001 ms variant and a RequireGPU source both
+reject with MissingVariant.
 
 | Authored composition | Permitted result and visible difference |
 | --- | --- |
@@ -98,7 +103,8 @@ A 4.0001 ms variant and a RequireGPU source both reject with MissingVariant.
 | Headless cosmetic source with explicit NullSuppression variant | Recorded suppression under the existing headless resolver contract |
 | Gameplay-required source | CPU authority and compatible requirements remain mandatory |
 
-The compute-less matrix proves pure resolver behavior. Native copy, map, dispatch,
+The compute-less matrix covers resolver admission and this fixture host's
+authored CPU substitute execution. Native copy, map, dispatch,
 completion and driver qualification require the separate native runs. GPU
 observations retain their authored cosmetic/diagnostic purpose and never grant
 gameplay authority.
@@ -116,7 +122,7 @@ package selected by `HORO_VFX_GPU_ASSET_ROOT`.
 | Vulkan, Windows RTX 5080 | Native parity and high-count budget pending |
 | Vulkan, Windows AMD Radeon | Native parity and high-count budget pending |
 | Metal, compatible macOS | External host and genuine cooked package required |
-| Compute-less profiles | Headless resolver matrix prepared, execution pending |
+| Compute-less profiles | Headless resolver and CPU substitute execution matrix prepared, test execution pending |
 | Null and protocol fakes | Logical ownership/readback evidence only |
 
 Native and headless execution results, exact commands and local analysis status
@@ -130,7 +136,7 @@ will be recorded after canonical physical-lock admission permits a bounded batch
 | VFX-003.1 / HORO-1708 / #1751 | Closed/Done decision is present in the base; normative VFX documentation specifies opt-in bounded asynchronous observation and CPU fallback | Native and headless runtime evidence is tracked by the implementation and qualification children |
 | VFX-003.2 / HORO-1731 / #1774 | Shared SoA-equivalent layout, logical preparation, native force/integration and cooked readback-policy paths are present; unsupported-source and readback-policy regressions exist | Execute logical, frontend, backend and native regression entry points on this worktree; check affected consumers and compute-less composition |
 | VFX-003.3 / HORO-1732 / #1775 | Version-one property tolerances, independent CPU oracle, twelve-step native force cases, finite-value and mismatch regression coverage are present | Compile and run headless comparison-policy cases; run real Vulkan parity on both inventoried Windows devices; obtain compatible macOS Metal evidence |
-| VFX-003.4 / HORO-1733 / #1776 | Four-profile unavailable/unqualified-compute matrix and the Vulkan and Metal 65,536-particle budget entries exist | Execute fallback cases and native budget runs; record device, driver, build mode, timing distribution, threshold and outcome; retain explicit unavailable-platform gaps |
+| VFX-003.4 / HORO-1733 / #1776 | Four-profile unavailable/unqualified-compute matrix with genuine CPU substitute execution and the Vulkan and Metal 65,536-particle budget entries exist | Execute fallback cases and native budget runs; record device, driver, build mode, timing distribution, threshold and outcome; retain explicit unavailable-platform gaps |
 
 The delivery branch was rebased onto published parent `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`.
 The targeted Python CI contract checks passed 40 tests after that rebase. Format

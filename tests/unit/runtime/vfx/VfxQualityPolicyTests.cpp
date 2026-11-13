@@ -1,4 +1,6 @@
+#include "Horo/Vfx/CpuParticleSimulator.h"
 #include "Horo/Vfx/VfxQualityPolicy.h"
+#include "support/VfxTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -6,6 +8,7 @@
 #include <limits>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 namespace Horo::Vfx {
     namespace {
@@ -85,6 +88,44 @@ namespace Horo::Vfx {
                     .expectedPolicyRevision = policy.Revision(),
                     .requirements = requirements,
                     .fallbackVariants = fallbacks};
+        }
+
+        /** @brief Executes this fixture host's authored variant 73 through the genuine CPU simulator after resolution. */
+        void CheckCpuSubstitute(const VfxResolution &selected) {
+            REQUIRE(selected.domain == ResolvedSimulationDomain::CPU);
+            REQUIRE(selected.selectedVariantId == 73);
+            auto data = Tests::ValidParticleDescriptorData();
+            data.simulationPreference = SimulationPreference::RequireCPU;
+            data.maximumParticles = 512;
+            data.shape = ParticleEmitterShape::Point;
+            data.spawnRate = {0, 0};
+            data.initialSpeed = {0, 0};
+            data.lifetimeSeconds = {10, 10};
+            data.collisionMode = ParticleCollisionMode::None;
+            const auto descriptor = Tests::ParticleDescriptor(data);
+            REQUIRE(selected.selectedCount == descriptor.Data().maximumParticles);
+            const auto scope = VfxIdentityScope::Create(73).Value();
+            const std::array forces{CpuParticleForceModule{.kind = CpuParticleForceKind::Gravity, .vector = {0, -1, 0}}};
+            auto created = CpuParticleSimulator::Create(descriptor, {.buffer = {scope, 1, 1},
+                                                                     .activation = {scope, 2, 1},
+                                                                     .effectSeed = 73,
+                                                                     .maximumBurstParticles = 512,
+                                                                     .forces = forces});
+            REQUIRE(created.HasValue());
+            auto simulator = std::move(created).Value();
+            REQUIRE(simulator.Advance({.deltaSeconds = 0, .burstCount = 512, .tick = 0}).HasValue());
+            for (std::uint64_t tick = 1; tick <= 2; ++tick)
+                REQUIRE(simulator.Advance({.deltaSeconds = .125F, .tick = tick}).HasValue());
+            const auto extracted = simulator.Extract();
+            REQUIRE(extracted.HasValue());
+            const auto &view = extracted.Value();
+            REQUIRE(view.positionY.size() == selected.selectedCount);
+            for (std::size_t i = 0; i < view.positionY.size(); ++i) {
+                CHECK(view.positionY[i] == -.046875F);
+                CHECK(view.velocityY[i] == -.25F);
+                CHECK(view.age[i] == .25F);
+            }
+            CHECK(simulator.Statistics().active == selected.selectedCount);
         }
 
         void CheckError(const Result<VfxResolution> &result, const ErrorCodeDescriptor &expected) {
@@ -246,6 +287,7 @@ namespace Horo::Vfx {
                 CHECK(selected.Value().selectedMemoryBytes == 512 * 64);
                 CHECK(selected.Value().capabilityRevision == capabilities.Revision());
                 CHECK(selected.Value().policyRevision == policy.Revision());
+                CheckCpuSubstitute(selected.Value());
 
                 fallback.workMilliseconds = 4.0001;
                 CheckError(resolve(), VfxErrors::MissingVariant);
