@@ -4,7 +4,7 @@ The editor's `GuiScreenHost` owns a bounded observation capture bound explicitly
 to its actual ImGui context. Shared controls submit role, resolved name, typed
 value and current framework state immediately after their real item. The first
 coverage includes buttons, activity/icon buttons, checkboxes, toggles, text
-inputs, and dropdown fields/rows. Other shared primitives and raw-widget bypass
+inputs, text links, theme chips, and dropdown fields/rows. Other shared primitives and raw-widget bypass
 coverage remain pending.
 
 This implements the design system's baseline metadata seam. These observations
@@ -65,10 +65,12 @@ modules; restart the development host. Component props, the versioned Runtime UI
 semantic schema and the gameplay module C ABI are unchanged. Public-header
 ownership remains with the existing `HoroGui` owner.
 
-Six added cases in `HoroEditorUiComponentsRenderTests` exercise actual shared
+Eight added cases in `HoroEditorUiComponentsRenderTests` exercise actual shared
 widgets and framework frame hooks: copied labels/typed values/redaction, observed
 focus ownership and allocation probing, foreign context isolation/rebinding,
-both destruction orders, capacity recovery and duplicate IDs. The full family
-now contains an expected 49 cases. Native execution and required final-source
+both destruction orders, capacity recovery, duplicate IDs, keyboard link activation
+and inherited link disablement. Text links now participate in actual framework
+keyboard navigation and retain their existing visible focus rendering. The full family
+now contains an expected 51 cases. Native execution and required final-source
 quality analysis are pending; the earlier 43-case result applies to the source
 before this integration.

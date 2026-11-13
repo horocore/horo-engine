@@ -102,9 +102,9 @@ The editor executable and 108-case presentation/SDL batch remain separate checks
 Subsequent source integrates context-bound shared-control observations into the
 actual `GuiScreenHost` and initial primitives. See
 [Editor shared-control metadata](editor-control-metadata.md) for bounded ownership,
-redaction, the host-layout rebuild requirement and remaining coverage. Six new
+redaction, the host-layout rebuild requirement and remaining coverage. Eight new
 actual-widget/lifecycle regressions raise the expected shared-control family to
-49; they require fresh native execution. These observations supply baseline
+51; they require fresh native execution. These observations supply baseline
 editor metadata, not Runtime UI focus/audience publication or native support.
 
 The direct-consumer batch refreshed callers after the public binding layout

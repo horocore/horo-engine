@@ -1553,3 +1553,73 @@ TEST_CASE("Duplicate actual widget identities reject the complete metadata attem
     CHECK(capture.Frame().controls.empty());
     CHECK(capture.Frame().text.empty());
 }
+
+TEST_CASE("Shared text links expose their rendered names and activate through actual keyboard navigation",
+          "[unit][editor][gui][input][accessibility][metadata]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    gui.io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    int activations = 0;
+    bool focused = false;
+    const auto draw = [&] {
+        ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({600, 450}, ImGuiCond_Always);
+        ImGui::Begin("Keyboard link");
+        activations += Ui::TextLink("##link", "Visible##literal", gui.fonts.sansCompact, Theme::TextPx::Label(), true);
+        focused = ImGui::IsItemFocused();
+        ImGui::End();
+    };
+    for (int frame = 0; frame < 3; ++frame)
+        RenderImGuiFrame(draw);
+    PressImGuiKey(*gui.io, ImGuiKey_Tab, draw);
+    REQUIRE(focused);
+    REQUIRE(GImGui->NavCursorVisible);
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 1);
+    CHECK(frame.Text(frame.controls[0].name) == "Visible##literal");
+    CHECK(frame.controls[0].role == UiAccessibilityRole::Link);
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Selected));
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Focused));
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Focusable));
+    CHECK(activations == 0);
+    PressImGuiKey(*gui.io, ImGuiKey_Enter, draw);
+    CHECK(activations == 1);
+}
+
+TEST_CASE("Disabled shared links and selected theme chips retain actual metadata without enabling activation",
+          "[unit][editor][gui][input][accessibility][metadata]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    gui.io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    bool activated = false;
+    ImVec2 center;
+    const auto draw = [&] {
+        ImGui::Begin("Disabled link");
+        ImGui::BeginDisabled();
+        activated = Ui::TextLink("##disabled-link", "Disabled link", gui.fonts.sansCompact, Theme::TextPx::Label()) || activated;
+        const auto minimum = ImGui::GetItemRectMin(), maximum = ImGui::GetItemRectMax();
+        center = {(minimum.x + maximum.x) * 0.5F, (minimum.y + maximum.y) * 0.5F};
+        ImGui::EndDisabled();
+        static_cast<void>(Ui::ThemeChip("Selected###stable-theme", {1, 0, 0, 1}, true, gui.fonts));
+        ImGui::End();
+    };
+    RenderImGuiFrame(draw);
+    ClickImGuiItem(*gui.io, center, draw);
+    PressImGuiKey(*gui.io, ImGuiKey_Enter, draw);
+    CHECK_FALSE(activated);
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 2);
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Disabled));
+    CHECK_FALSE(frame.controls[0].state.Has(UiAccessibilityStateFlag::Focusable));
+    CHECK(frame.Text(frame.controls[1].name) == "Selected");
+    CHECK(frame.controls[1].role == UiAccessibilityRole::Button);
+    CHECK(frame.controls[1].state.Has(UiAccessibilityStateFlag::Selected));
+}

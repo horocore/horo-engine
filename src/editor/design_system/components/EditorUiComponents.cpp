@@ -1032,7 +1032,10 @@ namespace Horo::Editor::Ui {
         const ImVec2 position = ImGui::GetCursorScreenPos();
         const ImVec2 textSize = resolvedFont->CalcTextSizeA(fontSize, FLT_MAX, 0.0F, label);
         const ImVec2 hitSize{textSize.x, std::max(textSize.y, 20.0F)};
-        const bool activated = ImGui::InvisibleButton(id, hitSize);
+        const bool activated = ImGui::InvisibleButton(id, hitSize, ImGuiButtonFlags_EnableNav);
+        RecordControlMetadata(UiAccessibilityRole::Link, label,
+                              current ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None, {}, false,
+                              Detail::EditorControlLabelKind::ResolvedText);
         const bool hovered = ImGui::IsItemHovered();
         const bool focused = ImGui::IsItemFocused();
         if (hovered)
@@ -2079,6 +2082,8 @@ namespace Horo::Editor::Ui {
         {
             Theme::ScopedTextStyle ts(fonts.sansCompact, Theme::TextPx::Label(), Theme::FontPx::SansCompact);
             clicked = ImGui::Button(label, ImVec2{82.0F, 32.0F});
+            RecordControlMetadata(UiAccessibilityRole::Button, label,
+                                  active ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None);
         }
         const ImVec2 min = ImGui::GetItemRectMin();
         ImGui::GetWindowDrawList()->AddCircleFilled({min.x + 12.0F, min.y + 16.0F}, 5.0F, Theme::U32(swatch), 16);
