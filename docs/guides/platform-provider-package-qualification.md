@@ -114,6 +114,32 @@ a successful configure or a native test result.
 Native configure/build/tests and final local quality preflight remain pending;
 this ledger must not be interpreted as completed parent acceptance.
 
+The draft delivery is [PR #3552](https://github.com/horocore/horo-engine/pull/3552).
+At head `30f524d86092ab13e11efd010b006b1918164ce3`, the remote format/tooling,
+Android storage and Android debug APK checks passed; the native platform matrix
+and Sonar coverage were still running or queued when reviewed. These checks do
+not establish execution of the package regressions.
+
+Codacy's check on that exact head reports `action_required`. Its changed-file
+report contains eleven warnings: eight Cppcheck `unusedStructMember` findings
+on the C audit POD, two Lizard size findings on the new C++ test, and one Lizard
+file-size finding on the changed Python CI test. Every audit member is written
+in `PlatformPackageFixture.c` and read by the C++ assertions (including the
+shared `CheckReleased` balance checks); the unused-member claims have concrete
+cross-language counterevidence. They have not been suppressed or resolved on the
+server. The new test's setup now lives in `PackagePlatformProviderTestSupport.h`,
+with image loading separated from fixture composition; this revision still
+requires native execution and cloud reanalysis.
+
+The C fixture also reports 30% duplication, exceeding the default 2% review
+target: three clone groups cover completion/query POD initialization shared
+with `AbiModule.c` and operations-table initialization shared with
+`PlatformProviderOperationsFixture.c`. Independent candidate ownership and audit
+hooks are intentional; the duplicate initialization remains an explicit review
+finding. Codacy did not map the three changed CMake files, so their metrics are
+unknown. Hosted findings, local Sonar IDE, CLI secrets and local Codacy results
+remain separate; none substitutes for an unexecuted local preflight.
+
 ## Session delivery, credential and external qualification gaps
 
 PLS-006 owns account/session replacement and old-scope observer withdrawal. At
