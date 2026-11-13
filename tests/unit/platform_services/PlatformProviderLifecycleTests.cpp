@@ -1,5 +1,16 @@
 #include "PlatformProviderLifecycleTestSupport.h"
 
+namespace {
+    /** @brief Launches one synthetic native request and drains its successful copied completion. */
+    void CompleteNativeRequest(PlatformProviderLifecycleHost &host, FixtureAudit *audit,
+                               const PlatformProviderLifecycleHost::RequestHandle &request, const std::uint64_t revision) {
+        CHECK(host.DispatchCompletions(0) == 0);
+        REQUIRE(horo_test_provider_emit_revision(audit, request.Id().value, request.Generation().value, revision) ==
+                HORO_EXTENSION_SUCCESS);
+        CHECK(host.DispatchCompletions(64) == 1);
+    }
+}  // namespace
+
 TEST_CASE("Configuration cannot reuse a provider admitted under another host profile", "[platform-services][lifecycle]") {
     Rig rig;
     rig.Publish();
@@ -295,10 +306,7 @@ TEST_CASE("Native session observers cannot deliver retained old success after re
     auto host = std::move(started).Value();
     auto request = host->UnlockAchievement({1});
     REQUIRE(request.HasValue());
-    CHECK(host->DispatchCompletions(0) == 0);
-    REQUIRE(horo_test_provider_emit(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value) ==
-            HORO_EXTENSION_SUCCESS);
-    CHECK(host->DispatchCompletions(64) == 1);
+    CompleteNativeRequest(*host, rig.audit.get(), request.Value(), 1);
     REQUIRE(host->Query(request.Value()).Value().state == PlatformRequestState::Succeeded);
     unsigned observed{};
     const auto switchAccount = [&] {
@@ -331,10 +339,7 @@ TEST_CASE("Native session observers cannot deliver retained old success after re
         ++observed;
     });
     REQUIRE(currentSubscription.HasValue());
-    CHECK(host->DispatchCompletions(0) == 0);
-    REQUIRE(horo_test_provider_emit_revision(rig.audit.get(), current.Value().Id().value, current.Value().Generation().value, 3) ==
-            HORO_EXTENSION_SUCCESS);
-    CHECK(host->DispatchCompletions(64) == 1);
+    CompleteNativeRequest(*host, rig.audit.get(), current.Value(), 3);
     CHECK(observed == 1);
     REQUIRE(host->Close().HasValue());
 }
@@ -407,9 +412,7 @@ TEST_CASE("Native session observers preserve moved admission evidence and reject
         ++observed;
     });
     REQUIRE(subscription.HasValue());
-    CHECK(host->DispatchCompletions(0) == 0);
-    REQUIRE(horo_test_provider_emit(rig.audit.get(), current.Id().value, current.Generation().value) == HORO_EXTENSION_SUCCESS);
-    CHECK(host->DispatchCompletions(64) == 1);
+    CompleteNativeRequest(*host, rig.audit.get(), current, 1);
     CHECK(observed == 1);
     REQUIRE(host->Close().HasValue());
 }
