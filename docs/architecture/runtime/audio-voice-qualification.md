@@ -85,6 +85,7 @@ Jira parent identities all resolve to HORO-550.
 | Deterministic capacity decisions | AudioVoiceAdmissionTests; all eight policies at 1, 64, 256 and 1024 physical slots, repeated identical inputs, plus existing rank/bucket/cooldown tests |
 | Cursor and loop phase through virtualization | AudioVoiceVirtualizationTests, AudioVoiceRenderStreamTests; partitioned resident advancement and real stream worker realization |
 | Resident playback at configured ceilings | AudioVoiceVirtualizationTests; 1, 64, 256 and 1024 actual prepared PCM owners, alternating physical/virtual execution, loop phase, pause/resume and cancellation with no callback allocation/free |
+| Capacity decisions committed to resident owners | AudioVoiceCapacityExecutionTests; all eight policies at 1, 64, 256 and 1024 physical voices, real stop/terminal/release before replacement, generation fencing, separate virtual admission and complete slot reuse |
 | Retrigger and variation | AudioRepeatedPlaybackTests |
 | Copied routing/spatial state | AudioVoiceRenderRuntimeTests; real PCM, mixer, retained publications and completed-block acknowledgement |
 | Unload/reset with active and terminal voices | AudioVoiceRenderRuntimeTests; Ready, Scheduled, Playing, Paused, Virtual, Stopping and all four terminal outcomes |

@@ -727,6 +727,7 @@ target_sources(HoroAudioPlaybackPublicHeaderConsumer PRIVATE support/AudioRepeat
 add_executable(HoroAudioPlaybackTests
     support/AllocationProbe.cpp
     unit/runtime/audio/AudioVoicePlaybackTests.cpp
+    unit/runtime/audio/AudioVoiceCapacityExecutionTests.cpp
     unit/runtime/audio/AudioVoiceVirtualizationTests.cpp
     unit/runtime/audio/AudioVoicePlaybackTestFixture.h
     unit/runtime/audio/AudioRepeatedPlaybackTests.cpp
