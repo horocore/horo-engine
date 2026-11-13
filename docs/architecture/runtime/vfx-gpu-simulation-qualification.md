@@ -114,7 +114,7 @@ package selected by `HORO_VFX_GPU_ASSET_ROOT`.
 Native and headless execution results, exact commands and local analysis status
 will be recorded after the shared Windows heavy-build queue permits validation.
 
-## Acceptance audit on 2026-11-11
+## Acceptance audit on 2026-11-13
 
 | Work item | Existing implementation or added coverage | Remaining acceptance evidence |
 | --- | --- | --- |
@@ -124,24 +124,29 @@ will be recorded after the shared Windows heavy-build queue permits validation.
 | VFX-003.3 / HORO-1732 / #1775 | Version-one property tolerances, independent CPU oracle, twelve-step native force cases, finite-value and mismatch regression coverage are present | Compile and run headless comparison-policy cases; run real Vulkan parity on both inventoried Windows devices; obtain compatible macOS Metal evidence |
 | VFX-003.4 / HORO-1733 / #1776 | Four-profile unavailable/unqualified-compute matrix and the 65,536-particle budget entry exist | Execute fallback cases and native budget runs; record device, driver, build mode, timing distribution, threshold and outcome; retain explicit unavailable-platform gaps |
 
-The local checkpoint was rebased onto parent `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`.
-The targeted Python CI contract checks passed 39 tests after that rebase. Format
+The delivery branch was rebased onto published parent `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`.
+The targeted Python CI contract checks passed 40 tests after that rebase. Format
 and diff checks passed. These checks leave the C++ and native rows above pending.
 
-The full-scope quality check against this parent recorded clean CLI
+The earlier full-scope quality check against parent `5d0aff9d6` recorded clean CLI
 secrets, incomplete Sonar IDE because the worktree compile database was absent,
 and incomplete Codacy coverage for CMake and Objective-C++ inputs. It retained the
 Metal fixture's `Lizard_file-nloc-medium` Warning and eight advisory duplication
 groups. Fresh full-scope analysis remains required after the final fixes and
 compiler context preparation.
 
-The primary Windows CI coordinator retains the next heavy slot. The next bounded
-VFX slot needs Release configuration and the `HoroVfxGpuSimulationTests`,
+The 2026-11-13 coordination policy admits bounded batches through the canonical
+physical heavy-build lock. The first configure attempt found that lock busy and
+started no CMake child. The next bounded VFX batch needs Release configuration
+and the `HoroVfxGpuSimulationTests`,
 `HoroGpuParticleSimulatorTests`, `HoroVfxApiTests`, `HoroGpuParticleLayoutTests`
 and `HoroVfxGpuGraphTests` builds and corresponding CTest entries. Subsequent slots
 cover native Vulkan parity/budget runs for the exact NVIDIA and AMD names,
-affected option/consumer checks and final analysis. Every heavy child must hold the canonical repository
+affected option/consumer checks and final analysis. Every heavy child must hold
+the canonical repository
 lock with its actual open-file handle verified before launch and use one worker.
-The current analysis helper's hardcoded two-worker preparation commands also need
-the coordinator-owned correction before an analysis build can run. Metal evidence
-requires an accessible compatible macOS host, native device and genuine package.
+The published parent's analysis helper now uses one worker for compiler-context
+preparation. Fresh full-scope preflight against the PR target remains pending.
+Metal evidence requires an accessible compatible macOS host, native device and
+genuine package. The draft delivery must retain these incomplete acceptance rows
+until actual runtime and quality evidence is recorded.
