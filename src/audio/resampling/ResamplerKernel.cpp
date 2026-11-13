@@ -55,7 +55,7 @@ namespace Horo::Audio::Detail {
     /** @copydoc ResamplerKernel::Prepare */
     Result<ResamplerKernel> ResamplerKernel::Prepare(const AudioResamplerPlan &plan, const std::uint64_t maximumBytes,
                                                      const AudioResamplerExecution execution) {
-        ResamplerEvaluator evaluator;
+        ResamplerEvaluator evaluator{};
         switch (execution) {
             case AudioResamplerExecution::Scalar:
                 evaluator = EvaluateScalar;

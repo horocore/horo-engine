@@ -9,6 +9,7 @@
 #include <limits>
 #include <ranges>
 #include <utility>
+#include <vector>
 
 namespace Horo::Audio {
     namespace {

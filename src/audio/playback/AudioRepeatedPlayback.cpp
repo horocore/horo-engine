@@ -136,9 +136,11 @@ namespace Horo::Audio {
             state_->CancelVoice(voice);
         }
         for (auto &lane : state_->lanes) {
-            if (lane && lane->binding.prototype.sceneContext == scene)
+            if (lane && (lane->binding.prototype.sceneContext == scene || state_->ExecutionContext(lane->binding.prototype) == scene))
                 lane->closed = true;
         }
+        if (state_->config.hostContext == scene)
+            state_->hostContextClosed = true;
         return Result<void>::Success();
     }
 
