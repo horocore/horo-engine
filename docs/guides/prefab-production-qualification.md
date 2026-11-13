@@ -104,6 +104,26 @@ release-stage tests alone cannot establish that full distribution matrix.
 
 ## Local validation record
 
+The first admitted evening batch completed on exact local checkout
+`ec3804e46` with MSVC Windows Release and the editor/render/input/audio adapters
+disabled. `cmake --build build/pq-release --target HoroPrefabTests --parallel 1`
+completed all 387 steps. Then
+`ctest --test-dir build/pq-release -R '^HoroPrefabTests::' --no-tests=error --timeout 60 --parallel 1 --output-on-failure`
+passed all 120 registered tests in 4.22 seconds. This includes the added shared
+8192-edge graph, exact nested fanout, variant-depth, deep diagnostic and overflow
+regressions. It does not execute the separate metrics, document-session, cook,
+debug snapshot, reference-corpus or fuzz targets. No complete parent or
+cross-platform qualification is inferred.
+
+The batch verified its actual canonical Windows lock handle before launching
+children, used affinity to one logical processor and recorded CPU, free memory
+and disk. It exited 0, its owner process exited, and the physical lock was
+released normally. Other ready topics receive a turn before the next Prefab
+batch. Local evidence is `build/prefab-qualification/resume-core-later.log` and
+the build's CTest `Testing/Temporary/LastTest.log`. MSVC also emitted shared-pointer
+atomic deprecation warnings and a byte-shift warning in `CookedPrefabCodec.cpp`;
+no warnings were suppressed or treated as test results.
+
 The evening 13 November restart rechecked the delivery rather than reusing old
 queue observations. All workflows on `6fa0ec27dea67489535050fce9dc683da8d9a2ba`
 had terminated. Linux, MSVC, macOS and Sonar coverage logs confirmed the invalid
