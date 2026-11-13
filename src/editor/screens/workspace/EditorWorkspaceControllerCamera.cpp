@@ -12,14 +12,17 @@ namespace Horo::Editor {
         }
 
         /** @brief Copies the current editor owner's base camera; never captures a pre-cinematic value. */
-        Runtime::CameraProposal AuthoringProposal(const EditorViewportCamera &camera) {
+        Runtime::CameraProposal AuthoringProposal(const EditorViewportCamera &camera, const std::uint64_t sceneRevision) {
             const auto kind = camera.projection == Runtime::CameraProjection::Perspective ? Render::RenderProjectionKind::Perspective
                                                                                           : Render::RenderProjectionKind::Orthographic;
-            return {{},
-                    {camera.position,
-                     camera.target,
-                     camera.up,
-                     {kind, camera.verticalFovRadians, camera.orthographicHeight, camera.nearPlane, camera.farPlane}}};
+            Runtime::CameraProposal proposal{{},
+                                             {camera.position,
+                                              camera.target,
+                                              camera.up,
+                                              {kind, camera.verticalFovRadians, camera.orthographicHeight, camera.nearPlane,
+                                               camera.farPlane}}};
+            proposal.sceneRevision = sceneRevision;
+            return proposal;
         }
 
         /** @brief Projects the committed copied runtime values into the existing viewport extraction contract. */
@@ -160,7 +163,8 @@ namespace Horo::Editor {
         }
         if (m_cameraPreview->frame == std::numeric_limits<std::uint64_t>::max())
             return Result<EditorViewportCamera>::Failure(MakeError(Runtime::CameraErrors::InvalidFrame));
-        const auto selection = m_cameraPreview->camera.Commit(++m_cameraPreview->frame, AuthoringProposal(base));
+        const auto selection =
+            m_cameraPreview->camera.Commit(++m_cameraPreview->frame, scene, AuthoringProposal(base, scene.StructuralRevision()));
         if (selection.HasError())
             return Result<EditorViewportCamera>::Failure(selection.ErrorValue());
         return Result<EditorViewportCamera>::Success(ViewportCamera(selection.Value().selected.values));

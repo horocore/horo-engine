@@ -161,6 +161,8 @@ dependency direction in [System Design](./foundation/system-design.md).
   determinism, allocation, parser, identity, buffer, tier, path, and platform evidence.
 - [Cinematic Foundation Contract Qualification](./runtime/cinematic-foundation-contract-qualification.md):
   identity byte order, hostile sequence parsing, deterministic sampling, allocation budget, and platform matrix.
+- [Cinematic Camera Qualification](./runtime/cinematic-camera-qualification.md):
+  CIN-003 child evidence, transition capability matrix, editor/runtime parity and native presentation qualification.
 - [Character Controller Architecture](./runtime/character-controller-architecture.md):
   kinematic capsule controller, slopes, steps, moving platforms, surface
   materials, and surface events.
