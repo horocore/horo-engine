@@ -90,8 +90,9 @@ These collection checks alone do not qualify timed router consumption or device 
 
 Regression sources cover legacy read/current write, policy round trip, layered
 profile replacement, malformed numeric and boolean types, unknown fields,
-duration bounds, version skew and sticky/physical conflict detection. They have
-not yet compiled or run under the allocated shared native build slot.
+duration bounds, version skew and sticky/physical conflict detection. The focused
+MSVC Input batch compiled and ran these cases as part of its 88/88 pass at
+`dcf772e`; native SDL publication and editor GUI checks remain separate.
 
 ## Router ownership and source migration
 
@@ -200,6 +201,9 @@ accessibility consumer now exercises this getter; regressions cover missing
 clock, retained-status/duplicate capture, complete neutralization, fresh hold
 after restoration and mapping-capacity failure. These cases and the consumer
 passed in the focused 88-case native batch at `dcf772e`.
+The separate `HoroCharacterInputTests` family and its staged/public consumer built
+at `6308740`; all 16 cases passed, including missing-clock cause preservation,
+pending-intent cancellation and jump repeats across zero/catch-up tick frames.
 Input's independently owned scoped persistence/capture work must be
 integrated without replacing its strengthened validation or adding another save
 path. That work and this version-two change are published in separate draft PRs

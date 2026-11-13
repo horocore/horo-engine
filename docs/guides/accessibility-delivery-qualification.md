@@ -23,12 +23,12 @@ does not permit a background waiter or interrupting another job.
 | Child | Jira / GitHub | Implementation and evidence | Remaining acceptance / dependencies |
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Added bounded SPSC cue/catalog transport, timeline, frame-captured appearance, safe-area arrangement and canonical paint extraction; regression cases written, not executed | Host localization/shaping/presentation composition, settings activation and actual native rendered evidence |
-| ACC-001.3 color | HORO-1807 / #1851 | Added independent numeric target, validated matrices and snapshot-backed synchronous query; regression cases written, not executed | Complete-image GPU pass and real backend evidence; existing ColorPipelinePlan explicitly provides cold admission only |
-| ACC-001.4 input | HORO-1808 / #1852 | Bounded router interpretation, explicit time/cancellation, profile-v2 codec/conflicts, tick projection and public headers built on MSVC; 88/88 focused cases passed at dcf772e. Editor host drains ended-context records; Input Mapping has exact-duration policy drafts | Character, SDL and GUI/application qualification; integrate scoped persistence/capture from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
-| ACC-001.5 visual | HORO-1809 / #1853 | Added UI scale/contrast snapshot with readable typography floor, visual-safety snapshot and typed effect suppression seam; regression cases written, not executed | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
+| ACC-001.3 color | HORO-1807 / #1851 | Independent numeric target, matrices and snapshot-backed query compiled; focused numeric/query/contract cases passed in the 11-case semantic batch at 6308740 | Complete-image GPU pass and real backend evidence; existing ColorPipelinePlan explicitly provides cold admission only |
+| ACC-001.4 input | HORO-1808 / #1852 | MSVC Input/public consumers: 88/88 cases passed at dcf772e. CharacterInput/public consumer: 16/16 passed at 6308740, including clock failure and repeat intent. Editor host drains ended-context records; Input Mapping has exact-duration policy drafts | SDL and GUI/application qualification; integrate scoped persistence/capture from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
+| ACC-001.5 visual | HORO-1809 / #1853 | UI scale/contrast snapshot with typography floor remains unexecuted. Visual-safety snapshot/tagged numeric suppression passed in the 11-case semantic batch at 6308740 | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Existing Runtime UI semantics; added optional platform transport interface, honest no-op Unsupported adapter and opt-in bounded semantic QA journal; tests written, not executed | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
-| ACC-001.7 assists | HORO-1811 / #1855 | Added inert domain contribution, typed tick snapshot for all seven preferences and revision-only hint adapter; lost/stale hint tests written, not executed | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
-| ACC-001.8 tooling | HORO-1812 / #1856 | Added evaluator/contrast panel, Windows CI contrast selection, explicit CI evidence-scope reporting and complete 55-criterion open editor inventory with regulatory/platform scope notes; C++ tests unexecuted | Qualify all four tools, execute numeric/theme/native checks and complete the applicability/observed evidence matrix; depends on all above |
+| ACC-001.7 assists | HORO-1811 / #1855 | Inert contribution, typed seven-preference snapshot, revision-only hints and allocation-failure retry passed in the 11-case semantic batch at 6308740 | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
+| ACC-001.8 tooling | HORO-1812 / #1856 | Numeric contrast and direct contract consumer passed in the 11-case semantic batch. Contrast panel/theme tests remain unexecuted; CI selection/scope reporting and 55-criterion open inventory are present | Qualify all four tools, execute theme/native checks and complete the applicability/observed evidence matrix; depends on all above |
 
 ## Interpretation of issue wording
 
@@ -98,6 +98,20 @@ CTest execution.
 
 ## Current local verification
 
+At clean `6308740ffc1b7167f2ffc7ef98044b1ffbe02837`, two separate bounded
+MSVC Debug batches also passed. The Foundation-only semantic batch built seven
+targets, including both staged header targets and three direct contract consumers;
+**11/11 cases passed, zero skipped** (0.24 seconds). It covers numeric color/query,
+contrast, visual-safety projection, gameplay snapshot/hint/retry and their SDK
+contracts. The CharacterInput batch built its test executable and staged/public
+contract consumer after its normal Runtime/Assets/Physics closure; **16/16 cases
+passed, zero skipped** (0.74 seconds). Both the new clock-failure and jump-repeat
+regressions ran. Evidence: `build/acc-semantic-results.xml`,
+`build/acc-character-results.xml` and their corresponding discovery inventories.
+Each batch independently verified the canonical physical handle/resource guards,
+ran build/CTest serially, then released the lock. These passes establish neither
+GPU/native assistive-technology behavior nor host settings/tick/effect activation.
+
 Latest Input validation: clean `dcf772e37900d8a9ca87d4bcb2a55942ce4ebb2e`,
 native MSVC 19.44, headless Debug, canonical nonblocking physical-lock ownership
 and resource checks, build/CTest parallelism one. The same four targets configured
@@ -159,7 +173,7 @@ from a color role or certify the complete editor.
 check also verified each new public header has exactly one registry entry, every
 new implementation unit is listed once, and new UI error references are declared.
 This is not a substitute for CMake configure or staged consumer compilation.
-Outside the focused Input scope above, new C++ tests have **not** run.
+Outside the Input, Character and Foundation-only semantic scopes above, new C++ tests have **not** run.
 The display-independent offline SDK compatibility pass ran with a short worktree
 temporary root: `python -m pytest -q --tb=short --basetemp build/acc-pytest
 tests/python/test_extension_sdk_compatibility.py`: **24 passed**. The earlier
