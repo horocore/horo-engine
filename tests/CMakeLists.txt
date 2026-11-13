@@ -6994,6 +6994,11 @@ if(TARGET HoroMetalGraphExecutionSmoke)
         HoroEditorClusteredLightingAssetsInternal HoroEditorViewportShaderRecipeInternal
         HoroRenderFrontendResourceAccessInternal HoroEngine::VfxApi HoroVfxGpuCookInternal)
     target_include_directories(HoroMetalGraphExecutionSmoke PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+    if(HORO_ENABLE_GPU_SMOKE_TESTS)
+        add_test(NAME HoroMetalVfxGpuBudget COMMAND HoroMetalGraphExecutionSmoke "[vfx-budget]")
+        set_tests_properties(HoroMetalVfxGpuBudget PROPERTIES
+            LABELS "gpu;metal;renderer;vfx;qualification;performance" RUN_SERIAL TRUE TIMEOUT 120 SKIP_RETURN_CODE 4)
+    endif()
 endif()
 
 if(TARGET HoroSdlMetalPresentationInternal AND TARGET HoroColorOutputCookInternal)

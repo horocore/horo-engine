@@ -47,7 +47,8 @@ timeouts and numerical mismatches fail. CTest recognizes all-skipped return code
 
 ## Budget policy version 1
 
-The opt-in `HoroVulkanVfxGpuBudget` entry runs 65,536 prepared particles with
+The opt-in `HoroVulkanVfxGpuBudget` and `HoroMetalVfxGpuBudget` entries each run
+65,536 prepared particles with
 gravity, wind and attraction, at a fixed simulation delta of 1/60 second. It uses
 a 64 by 64 offscreen RGBA8 target, the existing direct billboard draw and an
 authored disabled observation policy. Eight warmup frames precede 64 measured
@@ -59,8 +60,11 @@ The metric is CPU wall time from ordinary world preparation through graph
 scheduling, compute/draw submission and explicit completion observation. The
 nearest-rank p95 is sorted sample 61 of 64 and must be at most 16.667 ms.
 The executable prints p50, p95, maximum, workload, adapter and budget identity.
-This bounded test observes completion with `DeterministicTest` purpose. Production
-frame paths retain their asynchronous submission behavior. Diagnostics must show
+The Vulkan fixture observes completion with `DeterministicTest` purpose. Metal
+includes native presentation acquisition and its bounded command-buffer completion
+poll in the measured interval. These conservative wall metrics include host and
+wait overhead, rather than GPU timestamps. Production frame paths retain their
+asynchronous submission behavior. Diagnostics must show
 zero observation copies and copied bytes throughout this workload.
 
 `HORO_VULKAN_TEST_DEVICE` must name the exact native adapter for a budget run.
@@ -70,6 +74,10 @@ backend's typed unavailable result. An unset name visibly skips the budget test.
 The Windows fixture leases `vulkan-1.dll` from System32. Linux retains its existing
 system-loader paths. Locked JSON and HLSL evidence uses canonical LF text digests,
 including on CRLF Windows checkouts. Binary shader payload digests remain exact.
+The Metal budget uses the selected real device name and requires the same genuine
+authenticated family via `HORO_VFX_GPU_ASSET_ROOT` as the equivalence fixture.
+Record the macOS version and build as its driver context alongside the emitted
+measurements. A missing package or native device remains a visible evidence gap.
 
 ## Compute-less tier matrix
 
@@ -112,7 +120,7 @@ package selected by `HORO_VFX_GPU_ASSET_ROOT`.
 | Null and protocol fakes | Logical ownership/readback evidence only |
 
 Native and headless execution results, exact commands and local analysis status
-will be recorded after the shared Windows heavy-build queue permits validation.
+will be recorded after canonical physical-lock admission permits a bounded batch.
 
 ## Acceptance audit on 2026-11-13
 
@@ -122,7 +130,7 @@ will be recorded after the shared Windows heavy-build queue permits validation.
 | VFX-003.1 / HORO-1708 / #1751 | Closed/Done decision is present in the base; normative VFX documentation specifies opt-in bounded asynchronous observation and CPU fallback | Native and headless runtime evidence is tracked by the implementation and qualification children |
 | VFX-003.2 / HORO-1731 / #1774 | Shared SoA-equivalent layout, logical preparation, native force/integration and cooked readback-policy paths are present; unsupported-source and readback-policy regressions exist | Execute logical, frontend, backend and native regression entry points on this worktree; check affected consumers and compute-less composition |
 | VFX-003.3 / HORO-1732 / #1775 | Version-one property tolerances, independent CPU oracle, twelve-step native force cases, finite-value and mismatch regression coverage are present | Compile and run headless comparison-policy cases; run real Vulkan parity on both inventoried Windows devices; obtain compatible macOS Metal evidence |
-| VFX-003.4 / HORO-1733 / #1776 | Four-profile unavailable/unqualified-compute matrix and the 65,536-particle budget entry exist | Execute fallback cases and native budget runs; record device, driver, build mode, timing distribution, threshold and outcome; retain explicit unavailable-platform gaps |
+| VFX-003.4 / HORO-1733 / #1776 | Four-profile unavailable/unqualified-compute matrix and the Vulkan and Metal 65,536-particle budget entries exist | Execute fallback cases and native budget runs; record device, driver, build mode, timing distribution, threshold and outcome; retain explicit unavailable-platform gaps |
 
 The delivery branch was rebased onto published parent `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`.
 The targeted Python CI contract checks passed 40 tests after that rebase. Format
@@ -136,8 +144,9 @@ groups. Fresh full-scope analysis remains required after the final fixes and
 compiler context preparation.
 
 The 2026-11-13 coordination policy admits bounded batches through the canonical
-physical heavy-build lock. The first configure attempt found that lock busy and
-started no CMake child. The next bounded VFX batch needs Release configuration
+physical heavy-build lock. The configure and final-edit preflight attempts found that lock busy and
+started no CMake or analyzer child. The latest logs are
+`build/vfx-configure-20261113e.log` and `build/vfx-preflight-20261113d.log`. The next bounded VFX batch needs Release configuration
 and the `HoroVfxGpuSimulationTests`,
 `HoroGpuParticleSimulatorTests`, `HoroVfxApiTests`, `HoroGpuParticleLayoutTests`
 and `HoroVfxGpuGraphTests` builds and corresponding CTest entries. Subsequent slots

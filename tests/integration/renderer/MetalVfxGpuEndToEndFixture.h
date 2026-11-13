@@ -8,6 +8,7 @@ namespace Horo::Render::Test {
         Cancelled,
         TimedOut
     };
+    void RunBudgetMetalVfxGpu(const std::filesystem::path &);
     void RunDisabledMetalVfxGpu(const std::filesystem::path &);
     void RunEquivalentMetalVfxGpu(const std::filesystem::path &);
     void RunObservedMetalVfxGpu(const std::filesystem::path &, VfxGpuObservationCase);
