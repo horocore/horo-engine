@@ -46,7 +46,6 @@ namespace Horo::Editor {
         };
 
         void DrawActions(const EditorGuiContext &context);
-        void DrawActionValidation(std::span<const Input::ActionDescriptor> actions) const;
         void DrawActionTable(std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context);
         void DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context);
         void DrawDevices(const EditorGuiContext &context);

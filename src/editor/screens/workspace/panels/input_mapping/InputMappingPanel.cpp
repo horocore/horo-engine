@@ -141,18 +141,8 @@ namespace Horo::Editor {
             return;
         }
         selectedAction_ = std::min(selectedAction_, actions.size() - 1);
-        DrawActionValidation(actions);
         DrawActionTable(actions, context);
         DrawSelectedAction(actions[selectedAction_], context);
-    }
-
-    void InputMappingPanel::DrawActionValidation(const std::span<const Input::ActionDescriptor> actions) const {
-        const Input::BindingValidationReport validation = Input::ValidateBindingProfile(actions, router_->Profile());
-        for (const Input::BindingDiagnostic &diagnostic : validation.diagnostics) {
-            ImGui::PushStyleColor(ImGuiCol_Text, diagnostic.blocking ? Theme::Err() : Theme::Warn());
-            ImGui::TextWrapped("%s", diagnostic.message.c_str());
-            ImGui::PopStyleColor();
-        }
     }
 
     void InputMappingPanel::DrawActionTable(const std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context) {
