@@ -4082,6 +4082,24 @@ target_include_directories(HoroImmutableFileStorageTests PRIVATE ${PROJECT_SOURC
 horo_register_catch_test(HoroImmutableFileStorageTests LABELS "unit;platform;filesystem;headless;ci-windows;sonar-coverage")
 
 target_sources(HoroPlatformDesktopPublicHeaderConsumer PRIVATE support/FileManagerPublicContract.cpp)
+if(WIN32 OR (UNIX AND NOT ANDROID))
+    add_library(HoroDynamicLibraryFixture MODULE fixtures/platform/DynamicLibraryFixture.c)
+    target_compile_features(HoroDynamicLibraryFixture PRIVATE c_std_11)
+    set_target_properties(HoroDynamicLibraryFixture PROPERTIES C_EXTENSIONS OFF)
+    add_executable(HoroDynamicLibraryTests
+        unit/platform/DynamicLibraryTests.cpp
+        support/AllocationProbe.cpp)
+    target_compile_features(HoroDynamicLibraryTests PRIVATE cxx_std_20)
+    target_include_directories(HoroDynamicLibraryTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+    target_link_libraries(HoroDynamicLibraryTests PRIVATE HoroEngine::Platform Catch2::Catch2WithMain ${CMAKE_DL_LIBS})
+    target_compile_definitions(HoroDynamicLibraryTests PRIVATE
+        HORO_DYNAMIC_LIBRARY_FIXTURE_PATH="$<TARGET_FILE:HoroDynamicLibraryFixture>")
+    add_dependencies(HoroDynamicLibraryTests HoroDynamicLibraryFixture)
+    horo_register_catch_test(HoroDynamicLibraryTests
+        LABELS "unit;platform;native;allocation;headless;ci-windows;sonar-coverage"
+        PROPERTIES TIMEOUT 60)
+endif()
+
 add_executable(HoroFileManagerTests unit/platform/FileManagerTests.cpp)
 target_compile_features(HoroFileManagerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFileManagerTests PRIVATE HoroEngine::PlatformDesktop)

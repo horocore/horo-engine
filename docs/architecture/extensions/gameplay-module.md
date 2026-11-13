@@ -21,6 +21,13 @@ long-term extension C ABI.
 - Native code hot reload is optional development behavior and never a shipping requirement.
 - A project has one primary native gameplay module in the initial contract; additional gameplay modules, mods, or script packages are future extension points.
 
+Host-created native shadow copies retain at most 64 UTF-8 bytes of the source
+stem without splitting a code point, replace prior `.horo_reload_` suffixes,
+append a unique generation suffix, and keep the source library extension. Copying a prior shadow or rollback generation must
+not accumulate its inherited filename suffixes. Logical artifact paths remain
+the identity exposed to callers; native I/O spelling is prepared at the file and
+loader boundaries, including owned cleanup before an image is opened.
+
 Imported source libraries do not create another project module. The application
 selects a `Packages::GameplaySourceLibrary` from a sealed installed graph after
 explicit approval of that exact artifact for native compilation. It supplies the
