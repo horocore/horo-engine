@@ -1,3 +1,4 @@
+#include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
@@ -23,12 +24,63 @@ namespace Horo::Editor::SettingsModalInternal {
     using namespace Ui;
     using Theme::ScopedTextStyle;
 
+    namespace {
+        /** @brief Selects localized feedback from typed transaction state without reading draft values. */
+        const char *StatusTextKey(const SettingsState &state) {
+            switch (state.status) {
+                case SettingsModalStatus::Loaded:
+                    return "configuration.loaded";
+                case SettingsModalStatus::Applied:
+                    return "configuration.applied";
+                case SettingsModalStatus::Defaults:
+                    return "configuration.defaults";
+                case SettingsModalStatus::Failure:
+                    if (state.configurationFailure && (state.configurationFailure->code.Value() == "configuration.draft_stale" ||
+                                                       state.configurationFailure->code.Value() == "editor.settings.draft_stale"))
+                        return "configuration.stale";
+                    return "configuration.invalid";
+                case SettingsModalStatus::None:
+                    return static_cast<SettingsTab>(state.activeTab) == SettingsTab::ProjectConfiguration
+                               ? "configuration.project_persist_hint"
+                               : "configuration.persist_hint";
+            }
+            return "configuration.persist_hint";
+        }
+
+        /** @brief Restores one validated default preview through the shared authority without committing it. */
+        void RestoreDefaultDraft(SettingsState &state, EditorSettingsService &settings) {
+            LOG_INFO("editor.settings", "Restore Defaults clicked — draft reset to factory defaults.");
+            if (static_cast<SettingsTab>(state.activeTab) == SettingsTab::ProjectConfiguration) {
+                if (state.projectConfiguration) {
+                    const auto restored = state.projectConfiguration->RestoreDefaults();
+                    state.configurationFailure = restored.HasError() ? std::optional<Error>{restored.ErrorValue()} : std::nullopt;
+                    state.status = restored.HasError() ? SettingsModalStatus::Failure : SettingsModalStatus::Defaults;
+                }
+                return;
+            }
+            LoadSettingsForModal(state, settings);
+            const auto restored = state.configuration->RestoreDefaults();
+            if (restored.HasError()) {
+                state.configurationFailure = restored.ErrorValue();
+                state.status = SettingsModalStatus::Failure;
+                return;
+            }
+            auto defaults = DefaultEditorSettings();
+            ApplyEditorConfigurationSnapshot(*state.configuration->Preview(), defaults);
+            ApplySettingsToDraft(state, defaults);
+            state.appearance.pendingThemeIndex = state.appearance.themeIndex;
+            state.configurationPreviewed = true;
+            state.status = SettingsModalStatus::Defaults;
+        }
+    }  // namespace
+
     void DrawFooterStatus(const SettingsState &st, const EditorGuiContext &ctx, const float footerPaddingX, const float actionsStartX) {
         ImGui::SetCursorPos({footerPaddingX, (ImGui::GetWindowHeight() - ImGui::GetTextLineHeight()) * 0.5F});
-        if (st.dirty) {
+        if (st.dirty || (st.configuration && !st.configuration->Draft().proposedValues.empty()) ||
+            (st.projectConfiguration && !st.projectConfiguration->Draft().proposedValues.empty())) {
             ScopedTextStyle badge(ctx.theme.fonts.sansCompact, TextPx::Caption(), FontPx::SansCompact);
             ImGui::PushStyleColor(ImGuiCol_Text, Warn());
-            ImGui::TextUnformatted("unsaved");
+            ImGui::TextUnformatted(SettingsModal::kTextScope.Text(ctx.localization, "configuration.unsaved").c_str());
             ImGui::PopStyleColor();
             ImGui::SameLine(0.0F, 8.0F);
         }
@@ -37,30 +89,32 @@ namespace Horo::Editor::SettingsModalInternal {
         ImVec4 textColor = Dim();
         if (hasFeedback)
             textColor = Accent();
-        else if (st.statusIsError)
+        else if (st.status == SettingsModalStatus::Failure)
             textColor = Err();
         ImGui::PushStyleColor(ImGuiCol_Text, textColor);
         const auto navigationHint = SettingsModal::kTextScope.Text(ctx.localization, "navigation.save_policy_first");
-        const char *message =
-            st.navigationProjectDraftDirty ? navigationHint.c_str() : "Apply writes user preferences to ~/.horo/editor_settings.json";
+        const auto &status = SettingsModal::kTextScope.Text(ctx.localization, StatusTextKey(st));
+        const char *message = st.navigationProjectDraftDirty ? navigationHint.c_str() : status.c_str();
         if (hasFeedback)
             message = st.modalFeedback.c_str();
-        else if (!st.statusMessage.empty())
-            message = st.statusMessage.c_str();
         const auto prefab = st.prefab.owner.lock();
+        const bool project = static_cast<SettingsTab>(st.activeTab) == SettingsTab::ProjectConfiguration;
         const auto &prefabHint = SettingsModal::kTextScope.Text(ctx.localization, "prefab.save_first");
-        if (prefab && prefab->IsDirty())
+        if (!project && prefab && prefab->IsDirty())
             message = prefabHint.c_str();
         const auto origin = ImGui::GetWindowPos();
         ImGui::PushClipRect(origin, {origin.x + actionsStartX - 12.0F, origin.y + ImGui::GetWindowHeight()}, true);
         ImGui::TextUnformatted(message);
         ImGui::PopClipRect();
+        if (ImGui::IsItemHovered())
+            ShowTooltip(message, &ctx.theme.fonts);
         ImGui::PopStyleColor();
     }
 
     [[nodiscard]] bool DrawFooterActions(SettingsState &st, EditorSettingsService &settings, const EditorGuiContext &ctx,
                                          const float centeredActionY, float &actionsStartX) {
         const auto prefab = st.prefab.owner.lock();
+        const bool project = static_cast<SettingsTab>(st.activeTab) == SettingsTab::ProjectConfiguration;
         constexpr float actionH = 32.0F;
         const auto restoreDefaults = SettingsModal::kTextScope.Text(ctx.localization, "restore_defaults");
         const auto cancelLabel = SettingsModal::kTextScope.Text(ctx.localization, "cancel") + "###settings_cancel";
@@ -84,13 +138,11 @@ namespace Horo::Editor::SettingsModalInternal {
         if (Button({.label = restoreDefaults.c_str(),
                     .size = {restoreW, actionH},
                     .variant = ButtonVariant::Secondary,
+                    .enabled = !project || static_cast<bool>(st.projectConfiguration),
                     .font = ctx.theme.fonts.sansCompact,
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {
-            LOG_INFO("editor.settings", "Restore Defaults clicked — draft reset to factory defaults.");
-            ApplySettingsToDraft(st, DefaultEditorSettings());
-            st.statusMessage = "Defaults loaded into draft. Apply to persist.";
-            st.statusIsError = false;
+            RestoreDefaultDraft(st, settings);
         }
         ImGui::SameLine(0.0F, gap);
         if (Button({.label = cancelLabel.c_str(),
@@ -106,7 +158,7 @@ namespace Horo::Editor::SettingsModalInternal {
         if (Button({.label = applyLabel.c_str(),
                     .size = {applyW, actionH},
                     .variant = ButtonVariant::Primary,
-                    .enabled = !prefab || !prefab->IsDirty(),
+                    .enabled = project ? static_cast<bool>(st.projectConfiguration) : (!prefab || !prefab->IsDirty()),
                     .font = ctx.theme.fonts.sansCompact,
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {

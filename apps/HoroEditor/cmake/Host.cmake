@@ -128,6 +128,7 @@ if(HORO_BUILD_EDITOR_GUI)
     set_property(SOURCE HoroEditor/app/HoroEditorApp.cpp
         APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
     target_link_libraries(HoroEditor PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::RuntimeConsole HoroEditorConsoleLaunchInternal HoroEditorRuntimeConsoleViewInternal)
 
     if(BUILD_TESTING AND HORO_ENABLE_GPU_SMOKE_TESTS AND HORO_BUILD_RENDER_OPENGL)
         target_sources(HoroEditor PRIVATE HoroEditor/app/EditorSurfaceLifecycleQualification.cpp)

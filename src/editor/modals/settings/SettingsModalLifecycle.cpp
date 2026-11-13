@@ -1,4 +1,5 @@
 #include "../extension_pages/EditorPageView.h"
+#include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/SettingsModal.h"
@@ -22,6 +23,8 @@ namespace Horo::Editor {
         m_draft.collision.owner = std::move(projects.collision);
         m_draft.collision.error = std::move(projects.collisionError);
         m_draft.prefab.owner = std::move(projects.prefab);
+        m_draft.projectConfiguration = std::move(projects.configuration);
+        m_draft.projectConfigurationError = std::move(projects.configurationError);
         m_pagesUnsupported = pages.host && !pages.theme;
         if (pages.host && pages.theme)
             m_extensionPages = std::make_shared<EditorPageView>(context, std::move(pages.host), std::move(pages.theme));
@@ -78,14 +81,22 @@ namespace Horo::Editor {
 
     CloseDecision SettingsModal::CanClose(const ModalCloseReason reason) {
         m_draft.dirty = CollectDraftSettings(m_draft) != m_draft.committed;
+        const bool configurationDirty = m_draft.configuration && !m_draft.configuration->Draft().proposedValues.empty();
+        const bool projectDirty = m_draft.projectConfiguration && !m_draft.projectConfiguration->Draft().proposedValues.empty();
         const auto prefab = m_draft.prefab.owner.lock();
-        if (reason == ModalCloseReason::Cancelled ||
-            (!m_draft.dirty && !m_draft.navigationProjectDraftDirty && (!prefab || !prefab->IsDirty())))
+        if (reason == ModalCloseReason::Cancelled || (!m_draft.dirty && !configurationDirty && !projectDirty &&
+                                                      !m_draft.navigationProjectDraftDirty && (!prefab || !prefab->IsDirty())))
             return CloseDecision::Allow;
         return CloseDecision::Deny;
     }
 
     void SettingsModal::OnClose(const ModalCloseReason reason) {
+        if (m_draft.projectConfiguration)
+            m_draft.projectConfiguration->Cancel();
+        m_draft.projectConfiguration.reset();
+        m_draft.projectConfigurationError.reset();
+        if (m_draft.configuration)
+            m_draft.configuration->Cancel();
         if (reason == ModalCloseReason::Cancelled) {
             if (const auto owner = m_draft.prefab.owner.lock()) {
                 const auto snapshot = owner->Snapshot();
@@ -104,11 +115,23 @@ namespace Horo::Editor {
         }
         LOG_INFO("editor.settings", "SettingsModal closed (reason=%s, dirty=%s).", reasonStr, m_draft.dirty ? "yes" : "no");
 
-        if (m_draft.dirty && !m_revertedPublished && m_events) {
-            LOG_DEBUG("editor.settings", "Settings reverted — publishing Reverted event.");
-            m_events->Publish(
-                EditorSettingsChangedEvent{m_settings.Snapshot().revision, SettingsChangePhase::Reverted, SettingsDomain::All});
+        const bool revert = m_draft.dirty || m_draft.configurationPreviewed;
+        const auto committedSnapshot = m_settings.Snapshot();
+        if (revert && ImGui::GetCurrentContext() != nullptr) {
+            const auto &committed = committedSnapshot.settings;
+            int theme = static_cast<int>(committed.themePreset);
+            const auto &themes = Theme::GetThemeList();
+            for (std::size_t index = 0; index < themes.size(); ++index) {
+                if (!committed.themeId.empty() && themes[index].id == committed.themeId)
+                    theme = static_cast<int>(index);
+            }
+            Theme::SelectThemeByIndex(theme);
+        }
+        m_draft.configurationPreviewed = false;
+        if (revert && !m_revertedPublished && m_events) {
             m_revertedPublished = true;
+            LOG_DEBUG("editor.settings", "Settings reverted — publishing Reverted event.");
+            m_events->Publish(EditorSettingsChangedEvent{committedSnapshot.revision, SettingsChangePhase::Reverted, SettingsDomain::All});
         }
         m_draft.collision = {};
         m_draft.prefab = {};

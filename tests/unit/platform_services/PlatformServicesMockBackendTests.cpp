@@ -1,4 +1,5 @@
 #include "Horo/PlatformServices/PlatformRequestErrors.h"
+#include "PlatformCloudTestSupport.h"
 #include "PlatformServicesMockBackend.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -34,7 +35,8 @@ namespace Horo::PlatformServices::TestSupport {
                 REQUIRE(backend.SetResponse(operation, voidResponse).HasValue());
 
             MockPlatformServicesResponse writeResponse;
-            writeResponse.payload = CloudMutationResult{};
+            REQUIRE(backend.SetCloudSubject(CloudSubject(1, std::byte{1}, {7})).HasValue());
+            writeResponse.payload = CloudCommit(CloudWrite(CloudSubject(1, std::byte{1}, {7})));
             REQUIRE(backend.SetResponse(MockPlatformServicesOperation::WriteCloudObject, std::move(writeResponse)).HasValue());
 
             MockPlatformServicesResponse cloudResponse;
@@ -57,8 +59,8 @@ namespace Horo::PlatformServices::TestSupport {
             const auto achievement = backend.UnlockAchievement({});
             const auto score = backend.SubmitScore({});
             const auto stat = backend.WriteStat({});
-            const auto cloud = backend.ReadCloudObject({});
-            const auto cloudWrite = backend.WriteCloudObject({});
+            const auto cloud = backend.ReadCloudObject(CloudReadRequest{});
+            const auto cloudWrite = backend.WriteCloudObject(CloudWrite(CloudSubject(1, std::byte{1}, {7})));
             const auto presence = backend.SetPresence({});
             const auto clearPresence = backend.ClearPresence({});
             const auto friends = backend.QueryFriends({.pageSize = 1});
@@ -121,7 +123,7 @@ namespace Horo::PlatformServices::TestSupport {
         void VerifyManualClockBackend(MockPlatformServicesBackend &backend) {
             ActivateMock(backend);
             const auto friends = backend.QueryFriends({.pageSize = 1});
-            const auto cloud = backend.ReadCloudObject({});
+            const auto cloud = backend.ReadCloudObject(CloudReadRequest{});
             const auto presence = backend.SetPresence({});
             REQUIRE(friends.HasValue());
             REQUIRE(cloud.HasValue());
@@ -320,12 +322,14 @@ namespace Horo::PlatformServices::TestSupport {
         CHECK(backend.SetResponse(MockPlatformServicesOperation::ReadCloudObject, std::move(oversized)).HasError());
         CHECK(HasDiagnostic(backend, MockDiagnosticKind::InvalidScript));
 
-        REQUIRE(backend.ExpectSequence({MockPlatformServicesOperation::WriteCloudObject}).HasValue());
+        REQUIRE(backend.ExpectSequence({}).HasValue());
         ActivateMock(backend);
         const std::vector<std::byte> bytes(MockPlatformServicesBackend::MaximumPayloadBytes + 1);
-        CloudBlobWriteRequest request{.bytes = CloudBlobOwnedBytes::Copy(bytes).Value()};
-        CHECK(backend.WriteCloudObject(std::move(request)).HasError());
-        CHECK(HasDiagnostic(backend, MockDiagnosticKind::InvalidRequest));
+        auto request = CloudWrite(CloudSubject(1, std::byte{1}, {7}));
+        request.bytes = CloudBlobOwnedBytes::Copy(bytes).Value();
+        request.expectedDigest = ComputeSha256(bytes);
+        RequireError(backend.WriteCloudObject(std::move(request)), CloudObjectErrors::PayloadTooLarge);
+        CHECK(backend.Calls().empty());
         CHECK(backend.Requests().RecordCount() == 0);
     }
 }  // namespace Horo::PlatformServices::TestSupport

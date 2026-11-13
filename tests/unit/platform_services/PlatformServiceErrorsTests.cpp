@@ -1,4 +1,6 @@
 #include "Horo/Foundation/ErrorCodeRegistry.h"
+#include "Horo/PlatformServices/PlatformOfflineQueueErrors.h"
+#include "Horo/PlatformServices/PlatformOfflineQueueStorage.h"
 #include "Horo/PlatformServices/PlatformRequestErrors.h"
 #include "Horo/PlatformServices/PlatformServiceErrors.h"
 #include "Horo/PlatformServices/PlatformServicesBackend.h"
@@ -9,6 +11,42 @@
 #include <catch2/catch_test_macros.hpp>
 
 namespace Horo::PlatformServices::Tests {
+    TEST_CASE("Offline policy and storage share canonical registry descriptors", "[platform-services][offline][errors]") {
+        namespace Storage = ::Horo::PlatformOfflineQueue::PlatformOfflineQueueErrors;
+        CHECK(&OfflineQueueErrors::InvalidConfiguration == &Storage::InvalidConfiguration);
+        CHECK(&OfflineQueueErrors::CapacityExceeded == &Storage::CapacityExceeded);
+        CHECK(&OfflineQueueErrors::IdentityConflict == &Storage::IdentityConflict);
+        ModuleDescriptor module{.id = ModuleId{"horo.platform.services"}, .version = {1, 0, 0}};
+        module.errorDomains = {PlatformServiceErrorDomain(), PlatformOfflineErrorDomain()};
+        const std::array modules{module};
+        const auto registry = BuildErrorCodeRegistry(modules);
+        REQUIRE(registry.HasValue());
+        CHECK(registry.Value().DomainCount() == 2);
+        const std::array required{&Storage::InvalidConfiguration,
+                                  &Storage::InvalidPartition,
+                                  &Storage::InvalidRecord,
+                                  &Storage::UnsupportedVersion,
+                                  &Storage::PayloadTooLarge,
+                                  &Storage::CapacityExceeded,
+                                  &Storage::Corrupt,
+                                  &Storage::DurableUnavailable,
+                                  &Storage::StorageUnknown,
+                                  &Storage::IdentityConflict,
+                                  &Storage::RevisionConflict,
+                                  &OfflineQueueErrors::InvalidIntent,
+                                  &OfflineQueueErrors::Stale,
+                                  &OfflineQueueErrors::Expired,
+                                  &OfflineQueueErrors::InvalidTransition,
+                                  &OfflineQueueErrors::ClockMovedBackward,
+                                  &OfflineQueueErrors::QueueUnavailable};
+        for (const auto *descriptor : required) {
+            const auto *resolved = registry.Value().Resolve(MakeError(*descriptor));
+            REQUIRE(resolved != nullptr);
+            CHECK(resolved->summary == descriptor->summary);
+            CHECK(resolved->retryable == descriptor->retryable);
+        }
+    }
+
     TEST_CASE("Platform service errors register stable provider causes", "[platform-services][errors]") {
         ModuleDescriptor module{.id = ModuleId{"horo.platform.services"}, .version = {1, 0, 0}};
         module.errorDomains.push_back(PlatformServiceErrorDomain());
@@ -32,6 +70,8 @@ namespace Horo::PlatformServices::Tests {
 
     TEST_CASE("Application translation keeps capability, cancellation and timeout distinct", "[platform-services][errors]") {
         CHECK(ClassifyPlatformServiceError(MakeError(BackendErrors::ServiceUnavailable)) ==
+              PlatformServiceErrorKind::CapabilityUnavailable);
+        CHECK(ClassifyPlatformServiceError(MakeError(CloudObjectErrors::UnsupportedCapability)) ==
               PlatformServiceErrorKind::CapabilityUnavailable);
         CHECK(ClassifyPlatformServiceError(MakeError(FrontendErrors::NullProvider)) == PlatformServiceErrorKind::NullProvider);
         CHECK(ClassifyPlatformServiceError(MakeError(PlatformSessionErrors::NoSubject)) ==

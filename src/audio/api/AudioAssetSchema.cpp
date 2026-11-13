@@ -48,7 +48,7 @@ namespace Horo::Audio {
         }
 
         [[nodiscard]] Result<void> ValidateMedia(const AudioMediaDescriptor &media) {
-            if (media.frameCount == 0 || !ValidateAudioProcessingFormat(media.format))
+            if (media.frameCount == 0 || media.frameCount > (1ULL << 40U) || !ValidateAudioProcessingFormat(media.format))
                 return Invalid();
             return Result<void>::Success();
         }

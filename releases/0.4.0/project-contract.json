@@ -1,0 +1,521 @@
+{
+  "horoVersion": "0.4.0",
+  "documents": {
+    ".horo/project.json": {
+      "strictJsonBounds": {
+        "maximumBytes": 1048576,
+        "maximumDepth": 32,
+        "maximumKeys": 32768,
+        "maximumKeyBytes": 128,
+        "maximumStringBytes": 8192,
+        "profileAuthority": "exact_registered_release_and_persistent_contract"
+      },
+      "required": [
+        "horoVersion",
+        "persistentContract",
+        "projectId",
+        "name",
+        "projectVersion",
+        "createdAt",
+        "settings",
+        "platformServicesIdSalt"
+      ],
+      "optional": [
+        "compatibilityProof",
+        "migrationHistoryHead"
+      ],
+      "settingsRequired": [
+        "assetCompression",
+        "renderBackend",
+        "textureCompression",
+        "platformServices"
+      ],
+      "settingsOptional": [
+        "network"
+      ],
+      "network": {
+        "family": "project.settings.network",
+        "codec": "Horo::Network::ParseNetworkProjectSettings",
+        "portableContractVersion": 3,
+        "maximumDocumentBytes": 65536,
+        "required": [
+          "contractVersion",
+          "settings",
+          "revision",
+          "supportedRoles",
+          "defaultRole",
+          "profile",
+          "protocol",
+          "transport",
+          "defaultEndpoint",
+          "credentialRequirementId",
+          "replication"
+        ],
+        "unknownKeys": "reject",
+        "duplicateKeys": "reject",
+        "replication": {
+          "required": [
+            "completeness",
+            "declarations"
+          ],
+          "completeness": {
+            "0": "legacy_unknown",
+            "1": "authored_complete"
+          },
+          "maximumSchemas": 64,
+          "maximumOwnerIdentityBytes": 64,
+          "maximumFieldsAndTombstonesPerSchema": 128,
+          "maximumDefaultBytesPerField": 512,
+          "maximumTotalDefaultBytes": 8192,
+          "declarationRequired": [
+            "requirement",
+            "schema"
+          ],
+          "schemaRequired": [
+            "id",
+            "owner",
+            "version",
+            "compatibility",
+            "fields",
+            "tombstones"
+          ],
+          "compatibilityRequired": [
+            "minimum",
+            "maximum"
+          ],
+          "versionRequired": [
+            "major",
+            "minor"
+          ],
+          "versionComponentBits": 16,
+          "fieldRequired": [
+            "id",
+            "valueType",
+            "codec",
+            "introducedVersion",
+            "condition",
+            "requirement",
+            "writePolicy",
+            "limits",
+            "canonicalDefault",
+            "customCondition"
+          ],
+          "limitsRequired": [
+            "maximumEncodedBytes",
+            "maximumElementCount"
+          ],
+          "limitBits": 32,
+          "canonicalDefault": "nullable_lowercase_hex",
+          "ordering": "schema_then_field_identity_ascending",
+          "absentLegacyInventory": "unknown_never_complete_empty"
+        }
+      },
+      "platformServicesIdSalt": {
+        "format": "psid1: followed by exactly 32 lowercase hex digits",
+        "zero": "reject",
+        "authority": "sole_project_root",
+        "generation": "host_injected_os_entropy_once_in_creation_or_explicit_migration",
+        "maximumProjectIdBytes": 256
+      },
+      "platformServices": {
+        "schemaVersion": 1,
+        "required": [
+          "schemaVersion",
+          "provider",
+          "services"
+        ],
+        "providerRequired": [
+          "mode",
+          "key"
+        ],
+        "providerModes": [
+          "null",
+          "exact"
+        ],
+        "serviceOrder": [
+          "achievements",
+          "leaderboards_and_stats",
+          "cloud",
+          "presence",
+          "friends",
+          "session"
+        ],
+        "serviceRequirements": {
+          "0": "disabled",
+          "1": "optional",
+          "2": "required"
+        },
+        "hostProfile": "explicit_host_owned_not_authored",
+        "unknownKeys": "reject",
+        "duplicateKeys": "reject",
+        "maximumBytes": 65536,
+        "providerAdmission": "migration_validates_detached_portable_candidate_host_resolves_real_trusted_manifests_before_activation_no_fallback"
+      }
+    },
+    "core.navmesh.definition": {
+      "family": "navigation.definition",
+      "sourceExtension": ".horoasset",
+      "identityAuthority": "asset_registry_sidecar",
+      "envelope": "HNAV",
+      "envelopeVersion": [
+        1,
+        1
+      ],
+      "requiredRecordType": "0x4e41564445463031",
+      "payloadVersion": [
+        1,
+        0
+      ],
+      "codec": "Horo::Navigation::DecodeNavigationDefinitionRecord",
+      "payloadByteOrder": "little_endian",
+      "payloadFields": [
+        "coordinates.system:u32",
+        "coordinates.metersPerUnit:f32",
+        "tiles.tileSizeCells:u32",
+        "tiles.maximumTiles:u32",
+        "scope:u32",
+        "profiles:table",
+        "areas:table",
+        "filters:table"
+      ],
+      "profileFields": [
+        "id:u64",
+        "name:utf8_u32_bytes",
+        "radius:f32",
+        "height:f32",
+        "slope:f32",
+        "stepHeight:f32",
+        "cellSize:f32",
+        "cellHeight:f32",
+        "minimumRegionSize:f32"
+      ],
+      "areaFields": [
+        "id:u64",
+        "sourceKind:u32",
+        "sourceId:u64",
+        "cost:f32",
+        "flags:u64"
+      ],
+      "filterFields": [
+        "id:u64",
+        "sourceKind:u32",
+        "sourceId:u64",
+        "includedFlags:u64",
+        "excludedFlags:u64",
+        "overrides:table"
+      ],
+      "overrideFields": [
+        "areaId:u64",
+        "cost:f32"
+      ],
+      "tableCountBits": 32,
+      "maximumProfiles": 64,
+      "maximumAreas": 256,
+      "maximumFilters": 256,
+      "maximumOverridesPerFilter": 256,
+      "maximumProfileNameBytes": 256,
+      "maximumTileSizeCells": 4096,
+      "maximumTiles": 65536,
+      "maximumRecordBytes": 1048576,
+      "unknownRequiredRecords": "reject",
+      "unknownOptionalRecords": "preserve_inert",
+      "legacyPayloadInterpretation": "never_inferred",
+      "generatedData": "invalidate_rebuild_never_source_migrate"
+    },
+    ".horo/surfaces.json": {
+      "family": "project.settings.surfaces",
+      "versionAuthority": "project.horoVersion_and_persistentContract",
+      "schemaVersion": 1,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "revision",
+        "defaultSurfaceId",
+        "surfaces"
+      ],
+      "projectIdentity": "exact_existing_opaque_projectId",
+      "revision": "nonzero_u64",
+      "maximumDocumentBytes": 262144,
+      "maximumDepth": 8,
+      "maximumSurfaces": 256,
+      "maximumDisplayNameBytes": 128,
+      "surfaceRequired": [
+        "id",
+        "displayName"
+      ],
+      "surfaceIdentity": "nonzero_canonical_lowercase_rfc9562_uuid",
+      "surfaceOrder": "uuid_ascending",
+      "defaultSurfaceId": "null_or_member_of_surfaces",
+      "emptyCatalog": "valid_explicitly_unassigned",
+      "unknownKeys": "reject",
+      "duplicateKeys": "reject",
+      "duplicateIds": "reject",
+      "optionalGameplayTags": "not_in_v1",
+      "legacyAdoption": "preserve_projectId_empty_catalog_revision1_null_default_no_inference",
+      "maximumProjectIdBytes": 256,
+      "projectIdentityValidation": "existing_opaque_nonblank_utf8_no_display_label_policy"
+    },
+    "game.horo.collider": {
+      "family": "scene.component.collider",
+      "projectVersionAuthority": "project.horoVersion_and_persistentContract",
+      "currentSchemaVersion": 2,
+      "legacySchemaVersion": 1,
+      "surfaceBindings": {
+        "wire": "array",
+        "maximumEntries": 64,
+        "rowRequired": [
+          "slot",
+          "surface"
+        ],
+        "slot": "nonzero_u32_with_corresponding_physical_binding",
+        "surface": "nonzero_canonical_lowercase_rfc9562_uuid_member_of_captured_project_catalog",
+        "duplicateSlots": "reject",
+        "unknownRowKeys": "reject"
+      },
+      "legacySemantics": "absent_or_empty_never_inferred",
+      "nativeAdmission": "complete_captured_catalog_and_collider_slot_mapping_before_solver_preparation"
+    },
+    "game.horo.character_controller": {
+      "family": "scene.component.character_controller",
+      "projectVersionAuthority": "project.horoVersion_and_persistentContract",
+      "schemaVersion": 1,
+      "collisionOptional": [
+        "defaultSurface"
+      ],
+      "defaultSurface": "canonical_lowercase_nonzero_semantic_uuid_member_of_captured_catalog",
+      "absentDefaultSurface": "only_explicit_captured_project_default_or_semantic_unavailable",
+      "invalidPresentDefault": "reject_not_inherit",
+      "physicalMaterialFallback": "separate_identity_and_provenance"
+    },
+    ".horo/platform_services.ids.json": {
+      "family": "project.settings.platform_services.identities",
+      "requiredForOpen": true,
+      "schemaVersion": 1,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "algorithm",
+        "entries"
+      ],
+      "algorithm": "horo.platform-services.stable-id.v1",
+      "id": "sid1: followed by exactly 16 lowercase hex digits_nonzero",
+      "salt": "read_root_only_not_duplicated",
+      "entryRequired": [
+        "kind",
+        "canonicalKey",
+        "id",
+        "aliases",
+        "state",
+        "removalProvenance"
+      ],
+      "maximumEntries": 4096,
+      "maximumAliases": 16,
+      "maximumKeyBytes": 96,
+      "maximumRemovalProvenanceBytes": 256,
+      "maximumProjectIdBytes": 256,
+      "maximumDocumentBytes": 4194304,
+      "maximumDepth": 8,
+      "maximumMembers": 32768,
+      "maximumMemberBytes": 64,
+      "unknownKeys": "reject",
+      "duplicateKeys": "reject",
+      "tombstones": "permanent_no_restore_or_reassignment",
+      "fingerprint": "sha256_domain_horo.platform-services.registry-fingerprint.v2_NUL_canonical_document",
+      "canonical": "two_space_fixed_member_order_kind_then_unsigned_id_sorted_entries_unsigned_ascii_sorted_aliases_final_lf",
+      "kinds": {
+        "1": "achievement",
+        "2": "leaderboard",
+        "3": "stat",
+        "4": "presence_status"
+      }
+    },
+    ".horo/platform_services.achievements.json": {
+      "schemaVersion": 1,
+      "requiredForOpen": true,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "stableIdRegistryFingerprint",
+        "definitions"
+      ],
+      "maximumDocumentBytes": 4194304,
+      "maximumDefinitions": 4096,
+      "defaultMaximumDefinitions": 2048,
+      "maximumDepth": 8,
+      "maximumMembers": 65536,
+      "maximumMemberBytes": 64,
+      "unknownKeys": "reject",
+      "duplicateKeys": "reject",
+      "identity": "active_kind_checked_canonical_sid1",
+      "ledgerGeneration": "exact_sha256_fingerprint",
+      "canonical": "fixed_member_order_id_sorted_definitions_two_spaces_final_lf",
+      "family": "project.settings.platform_services.achievements",
+      "entryRequired": [
+        "id",
+        "authority",
+        "progress",
+        "presentation"
+      ],
+      "progressRequired": [
+        "kind",
+        "total"
+      ],
+      "presentationRequired": [
+        "titleLocalizationKey",
+        "descriptionLocalizationKey",
+        "hidden"
+      ],
+      "progressKinds": {
+        "0": "unlock_once_total1",
+        "1": "set_progress_maximum"
+      },
+      "authority": {
+        "0": "local_product",
+        "1": "authority_server"
+      },
+      "maximumLocalizationKeyBytes": 512,
+      "defaultMaximumLocalizationKeyBytes": 128
+    },
+    ".horo/platform_services.stats.json": {
+      "schemaVersion": 1,
+      "requiredForOpen": true,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "stableIdRegistryFingerprint",
+        "definitions"
+      ],
+      "maximumDocumentBytes": 4194304,
+      "maximumDefinitions": 4096,
+      "defaultMaximumDefinitions": 2048,
+      "maximumDepth": 8,
+      "maximumMembers": 65536,
+      "maximumMemberBytes": 64,
+      "unknownKeys": "reject",
+      "duplicateKeys": "reject",
+      "identity": "active_kind_checked_canonical_sid1",
+      "ledgerGeneration": "exact_sha256_fingerprint",
+      "canonical": "fixed_member_order_id_sorted_definitions_two_spaces_final_lf",
+      "family": "project.settings.platform_services.stats",
+      "entryRequired": [
+        "id",
+        "authority",
+        "valueKind",
+        "range",
+        "mutation",
+        "localizationKey",
+        "hidden"
+      ],
+      "rangeRequired": [
+        "minimum",
+        "maximum"
+      ],
+      "range": "lossless_signed_i64_inclusive",
+      "mutation": {
+        "0": "set_maximum",
+        "1": "set_minimum",
+        "2": "snapshot_at_revision",
+        "3": "add_once"
+      },
+      "maximumLocalizationKeyBytes": 512,
+      "defaultMaximumLocalizationKeyBytes": 128,
+      "authority": {
+        "0": "local_product",
+        "1": "authority_server"
+      },
+      "valueKind": {
+        "0": "signed_i64",
+        "1": "unsigned_i64_nonnegative_range"
+      }
+    },
+    ".horo/platform_services.leaderboards.json": {
+      "schemaVersion": 1,
+      "requiredForOpen": true,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "stableIdRegistryFingerprint",
+        "definitions"
+      ],
+      "maximumDocumentBytes": 4194304,
+      "maximumDefinitions": 4096,
+      "defaultMaximumDefinitions": 2048,
+      "maximumDepth": 8,
+      "maximumMembers": 65536,
+      "maximumMemberBytes": 64,
+      "unknownKeys": "reject",
+      "duplicateKeys": "reject",
+      "identity": "active_kind_checked_canonical_sid1",
+      "ledgerGeneration": "exact_sha256_fingerprint",
+      "canonical": "fixed_member_order_id_sorted_definitions_two_spaces_final_lf",
+      "family": "project.settings.platform_services.leaderboards",
+      "entryRequired": [
+        "id",
+        "authority",
+        "valueKind",
+        "range",
+        "ordering",
+        "sourceStat",
+        "localizationKey",
+        "hidden"
+      ],
+      "rangeRequired": [
+        "minimum",
+        "maximum"
+      ],
+      "range": "lossless_signed_i64_inclusive",
+      "ordering": {
+        "0": "highest_first",
+        "1": "lowest_first"
+      },
+      "sourceStat": "explicit_null_or_active_compatible_stat_same_ledger",
+      "maximumLocalizationKeyBytes": 512,
+      "defaultMaximumLocalizationKeyBytes": 128,
+      "authority": {
+        "0": "local_product",
+        "1": "authority_server"
+      },
+      "valueKind": {
+        "0": "signed_i64",
+        "1": "unsigned_i64_nonnegative_range"
+      }
+    },
+    ".horo/platform_services.presence.json": {
+      "schemaVersion": 1,
+      "requiredForOpen": true,
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "stableIdRegistryFingerprint",
+        "definitions"
+      ],
+      "maximumDocumentBytes": 4194304,
+      "maximumDefinitions": 4096,
+      "defaultMaximumDefinitions": 2048,
+      "maximumDepth": 8,
+      "maximumMembers": 65536,
+      "maximumMemberBytes": 64,
+      "unknownKeys": "reject",
+      "duplicateKeys": "reject",
+      "identity": "active_kind_checked_canonical_sid1",
+      "ledgerGeneration": "exact_sha256_fingerprint",
+      "canonical": "fixed_member_order_id_sorted_definitions_two_spaces_final_lf",
+      "family": "project.settings.platform_services.presence",
+      "entryRequired": [
+        "id",
+        "detailPolicy",
+        "maximumDetailUtf8Bytes",
+        "localizationKey",
+        "hidden"
+      ],
+      "detailPolicy": {
+        "0": "forbidden_zero_maximum",
+        "1": "optional_bounded_utf8"
+      },
+      "maximumLocalizationKeyBytes": 512,
+      "defaultMaximumLocalizationKeyBytes": 128,
+      "maximumPresenceDetailBytes": 4096,
+      "defaultMaximumPresenceDetailBytes": 1024
+    }
+  }
+}

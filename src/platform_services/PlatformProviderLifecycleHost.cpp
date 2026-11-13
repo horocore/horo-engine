@@ -282,6 +282,8 @@ namespace Horo::PlatformServices {
         if (admitted.HasError())
             return SubmitResult::Failure(admitted.ErrorValue());
         auto handle = std::move(admitted).Value();
+        handle.providerAuthority_ = state_;
+        handle.providerSessionRevision_ = sessionRevision;
         const auto admittedAt = state.requests.Query(handle).Value().timing.admittedAt;
         state.inFlight.emplace_back(handle.Id(), handle.Generation(), sessionRevision, service, operation,
                                     admittedAt + state.requestPolicy.timeouts[serviceIndex]);
@@ -326,7 +328,33 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformProviderLifecycleHost::OnComplete */
     Result<PlatformRequestSubscription> PlatformProviderLifecycleHost::OnComplete(  // NOSONAR(cpp:S5817) Mutates owned request store.
         const RequestHandle &request, std::function<void(const PlatformRequestSnapshot<void> &)> observer) {
-        return state_->requests.OnComplete(request, std::move(observer));
+        using SubscriptionResult = Result<PlatformRequestSubscription>;
+        if (state_->stages.closing || state_->stages.closed)
+            return SubscriptionResult::Failure(MakeError(RequestErrors::FrontendUnavailable));
+        if (request.providerAuthority_.owner_before(state_) || state_.owner_before(request.providerAuthority_))
+            return SubscriptionResult::Failure(MakeError(RequestErrors::Stale));
+        const auto revision = request.providerSessionRevision_;
+        {
+            std::scoped_lock lock{state_->mutex};
+            if (!state_->callbackOpen)
+                return SubscriptionResult::Failure(MakeError(RequestErrors::FrontendUnavailable));
+            if (revision == 0 || revision != state_->session.revision)
+                return SubscriptionResult::Failure(MakeError(PlatformSessionErrors::StaleSession));
+        }
+        if (!observer)
+            return SubscriptionResult::Failure(MakeError(FrontendErrors::InvalidRequest));
+        const std::weak_ptr<PlatformProviderLifecycleState> weakState = state_;
+        return state_->requests.OnComplete<void>(request, [weakState, revision, observer = std::move(observer)](const auto &snapshot) {
+            const auto state = weakState.lock();
+            if (!state)
+                return;
+            {
+                std::scoped_lock lock{state->mutex};
+                if (!state->callbackOpen || state->session.revision != revision)
+                    return;
+            }
+            observer(snapshot);
+        });
     }
 
     /** @copydoc PlatformProviderLifecycleHost::Session */
@@ -341,10 +369,12 @@ namespace Horo::PlatformServices {
         if (state.stages.closed)
             return Result<void>::Success();
         state.stages.closing = true;
+        // Caller delivery closes independently of native retirement, including failed or BUSY close stages.
+        state.requests.Shutdown();
+        CloseCallbackIngress(state);
         if (auto closed = CloseNativeAdmission(state_); closed.HasError())
             return closed;
         if (!state.stages.ingressClosed) {
-            CloseCallbackIngress(state);
             if (state.stages.ingressAttempted &&
                 Detail::InvokeProvider(state.operations.closeIngress, state.candidate) != HORO_EXTENSION_SUCCESS) {
                 state.quarantine = state_;
@@ -352,11 +382,12 @@ namespace Horo::PlatformServices {
             }
             state.stages.ingressClosed = true;
         }
-        for (const auto &request : state.inFlight) {
-            static_cast<void>(state.requests.RequestCancel(request.id, request.generation));
-            if (request.lease && !request.cancellationSent)
+        for (auto &request : state.inFlight) {
+            if (request.lease && !request.cancellationSent) {
+                request.cancellationSent = true;
                 static_cast<void>(
                     Detail::InvokeProvider(state.operations.cancel, state.candidate, request.id.value, request.generation.value));
+            }
         }
         if (!state.stages.drained && (state.stages.sessionAttempted || state.stages.ingressAttempted)) {
             if (const auto status = Detail::InvokeProvider(state.operations.drain, state.candidate); status != HORO_EXTENSION_SUCCESS) {
@@ -368,7 +399,6 @@ namespace Horo::PlatformServices {
             state.stages.drained = true;
         }
         state.inFlight.clear();
-        state.requests.Shutdown();
         if (auto stopped = StopNativeSession(state_); stopped.HasError())
             return stopped;
         if (!state.stages.servicesStopped && state.stages.servicesAttempted) {

@@ -2,19 +2,21 @@
 
 #include "EditorSettingsStoreInternal.h"
 #include "Horo/Editor/Localization/LocalizationTypes.h"
+#include "Horo/Foundation/Configuration.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Utf8.h"
+#include "Horo/Platform/ConfigurationFileStore.h"
+#include "JsonUtils.h"
 #include "editor/input/EditorInputActions.h"
 
 #include <algorithm>
-#include <charconv>
+#include <array>
 #include <cmath>
-#include <fstream>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
-#include <regex>
 #include <sstream>
 #include <system_error>
-#include <unordered_set>
 #include <vector>
 
 namespace Horo::Editor {
@@ -60,50 +62,58 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::string ReadWholeFile(const std::filesystem::path &path, std::string *outError) {
-            std::ifstream in(path, std::ios::binary);
-            if (!in.is_open()) {
-                if (outError) {
-                    *outError = "Failed to open editor settings file.";
-                }
-                return {};
-            }
-            std::ostringstream ss;
-            ss << in.rdbuf();
-            return ss.str();
+            NativeDurableFileSystem files;
+            ConfigurationFileStore store{files};
+            ConfigurationLimits limits;
+            limits.maximumDocumentBytes = 2 * 1024 * 1024;
+            auto read = store.Read(path, limits);
+            if (read.HasValue())
+                return std::move(read).Value();
+            if (outError)
+                *outError = read.ErrorValue().message;
+            return {};
         }
 
-        /** @brief Imports the retained legacy profile only while the canonical Settings field is absent. */
-        void ImportLegacyKeymap(EditorSettingsDocument &document) {
-            const auto path = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
-            if (std::error_code error; std::filesystem::exists(path, error) && !error) {
-                const auto profile = Input::LoadBindingProfile(path);
-                if (profile.HasValue())
-                    document.settings.keymap.profile = profile.Value();
-                else
-                    document.error = profile.ErrorValue().message;
+        /** @brief Reads the sole editor-user profile; malformed canonical data never falls back to an older settings field. */
+        bool ReadCanonicalKeymap(EditorSettingsDocument &document) {
+            const auto paths = Input::ResolveBindingProfilePaths({}, ResolveEditorSettingsHomeDirectory());
+            if (paths.HasError()) {
+                document.parseError = true;
+                document.error = paths.ErrorValue().message;
+                return true;
             }
+            const auto &path = paths.Value().editorUser;
+            std::error_code error;
+            const bool exists = std::filesystem::exists(path, error);
+            if (error) {
+                document.parseError = true;
+                document.error = error.message();
+                return true;
+            }
+            if (!exists)
+                return false;
+            const auto profile = Input::LoadBindingProfile(path);
+            if (profile.HasError()) {
+                document.parseError = true;
+                document.error = profile.ErrorValue().message;
+            } else
+                document.settings.keymap.profile = profile.Value();
+            return true;
         }
 
         /** @brief Reads the canonical typed profile without normalizing duplicate or malformed JSON into valid settings. */
-        bool ReadKeymap(const std::string &text, EditorSettingsDocument &document) {
+        bool ReadKeymap(const std::string &text, EditorSettingsDocument &document, nlohmann::json &parsed) {
             if (text.size() > 2 * 1024 * 1024) {
                 document.error = "Editor settings exceed the supported size.";
                 return false;
             }
-            std::vector<std::unordered_set<std::string>> objects;
-            bool duplicate = false;
-            const auto parsed =
-                nlohmann::json::parse(text, [&objects, &duplicate](int, nlohmann::json::parse_event_t event, const nlohmann::json &value) {
-                using Event = nlohmann::json::parse_event_t;
-                if (event == Event::object_start)
-                    objects.emplace_back();
-                else if (event == Event::object_end)
-                    objects.pop_back();
-                else if (event == Event::key && !objects.back().insert(value.get<std::string>()).second)
-                    duplicate = true;
-                return true;
-            }, false);
-            if (parsed.is_discarded() || !parsed.is_object() || duplicate) {
+            Foundation::JsonParseGuard guard{ConfigurationLimits{}.maximumNestingDepth};
+            if (!guard.Validate(text.begin(), text.end())) {
+                document.error = "Editor settings contain malformed JSON, duplicate keys, or excessive nesting.";
+                return false;
+            }
+            parsed = nlohmann::json::parse(text, nullptr, false);
+            if (parsed.is_discarded() || !parsed.is_object()) {
                 document.error = "Editor settings contain malformed JSON or duplicate keys.";
                 return false;
             }
@@ -112,9 +122,21 @@ namespace Horo::Editor {
                 document.error = "Editor settings schema version is unsupported.";
                 return false;
             }
+            if (const auto configuration = parsed.find("configuration"); configuration != parsed.end()) {
+                ConfigurationSchema schema;
+                static_cast<void>(schema.Seal());
+                const auto json = configuration->dump();
+                const auto validated = ConfigurationResolver::ParseDocument(schema, json, "editor-user");
+                if (validated.HasError()) {
+                    document.error = "Editor user configuration is invalid.";
+                    return false;
+                }
+                document.configurationJson = json;
+            }
+            if (ReadCanonicalKeymap(document))
+                return !document.parseError;
             const auto input = parsed.find("input");
             if (input == parsed.end() || (input->is_object() && !input->contains("bindingProfile"))) {
-                ImportLegacyKeymap(document);
                 return true;
             }
             if (!input->is_object() || !(*input)["bindingProfile"].is_object()) {
@@ -130,84 +152,93 @@ namespace Horo::Editor {
             return true;
         }
 
-        [[nodiscard]] std::string UnescapeJsonString(std::string_view value) {
-            std::string out;
-            out.reserve(value.size());
-            bool escaping = false;
-            for (const char c : value) {
-                if (escaping) {
-                    switch (c) {
-                        case 'n':
-                            out += '\n';
-                            break;
-                        case 'r':
-                            out += '\r';
-                            break;
-                        case 't':
-                            out += '\t';
-                            break;
-                        default:
-                            out += c;
-                            break;
-                    }
-                    escaping = false;
+        /** @brief Typed view of the bounded legacy document, excluding the separate shared configuration subtree. */
+        struct SettingsJsonInput {
+            const nlohmann::json &root;
+            bool invalidValue = false;
+        };
+
+        /** @brief Preserves flat legacy fields while rejecting ambiguous duplicate representations. */
+        const nlohmann::json *FindSettingMember(SettingsJsonInput &input, const char *key) {
+            const auto direct = input.root.find(key);
+            const nlohmann::json *found = direct == input.root.end() ? nullptr : &*direct;
+            constexpr std::array groups{"editor", "appearance", "codeEditor", "input",      "rendering",
+                                        "audio",  "network",    "packages",   "diagnostics"};
+            for (const char *group : groups) {
+                const auto object = input.root.find(group);
+                if (object == input.root.end())
+                    continue;
+                if (!object->is_object()) {
+                    input.invalidValue = true;
                     continue;
                 }
-                if (c == '\\') {
-                    escaping = true;
+                const auto value = object->find(key);
+                if (value == object->end())
                     continue;
+                if (found != nullptr) {
+                    input.invalidValue = true;
+                    return nullptr;
                 }
-                out += c;
+                found = &*value;
             }
-            return out;
+            return found;
         }
 
-        [[nodiscard]] std::optional<std::string> FindStringValue(const std::string &json, const char *key) {
-            const std::regex re(std::string{R"(")"} + key + R"re("\s*:\s*"((?:\\.|[^"])*)")re");
-            std::smatch match;
-            if (!std::regex_search(json, match, re) || match.size() < 2) {
+        /** @brief Reads a bounded decoded string with no regular-expression recursion. */
+        std::optional<std::string> FindStringValue(SettingsJsonInput &input, const char *key) {
+            const auto *value = FindSettingMember(input, key);
+            if (value == nullptr)
                 return std::nullopt;
+            if (value->is_string()) {
+                const auto &text = value->get_ref<const std::string &>();
+                if (text.size() <= ConfigurationLimits{}.maximumStringValueBytes && text.find('\0') == std::string::npos)
+                    return text;
             }
-            return UnescapeJsonString(match[1].str());
+            input.invalidValue = true;
+            return std::nullopt;
         }
 
-        [[nodiscard]] std::optional<bool> FindBoolValue(const std::string &json, const char *key) {
-            const std::regex re(std::string{"\""} + key + R"("\s*:\s*(true|false))");
-            std::smatch match;
-            if (!std::regex_search(json, match, re) || match.size() < 2) {
+        /** @brief Reads only JSON booleans and retains a typed-shape rejection. */
+        std::optional<bool> FindBoolValue(SettingsJsonInput &input, const char *key) {
+            const auto *value = FindSettingMember(input, key);
+            if (value == nullptr)
                 return std::nullopt;
-            }
-            return match[1].str() == "true";
+            if (value->is_boolean())
+                return value->get<bool>();
+            input.invalidValue = true;
+            return std::nullopt;
         }
 
-        [[nodiscard]] std::optional<int> FindIntValue(const std::string &json, const char *key) {
-            const std::regex re(std::string{"\""} + key + R"("\s*:\s*(-?\d+))");
-            std::smatch match;
-            if (!std::regex_search(json, match, re) || match.size() < 2) {
+        /** @brief Reads integers without signed/unsigned wrap or floating-point truncation. */
+        std::optional<int> FindIntValue(SettingsJsonInput &input, const char *key) {
+            const auto *value = FindSettingMember(input, key);
+            if (value == nullptr)
                 return std::nullopt;
+            if (value->is_number_unsigned()) {
+                const auto number = value->get<std::uint64_t>();
+                if (number <= static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+                    return static_cast<int>(number);
+            } else if (value->is_number_integer()) {
+                const auto number = value->get<std::int64_t>();
+                if (number >= std::numeric_limits<int>::min() && number <= std::numeric_limits<int>::max())
+                    return static_cast<int>(number);
             }
-            int value = 0;
-            const std::string text = match[1].str();
-            const auto *begin = text.data();
-            if (const auto *end = begin + text.size(); std::from_chars(begin, end, value).ec != std::errc{}) {
-                return std::nullopt;
-            }
-            return value;
+            input.invalidValue = true;
+            return std::nullopt;
         }
 
-        [[nodiscard]] std::optional<float> FindFloatValue(const std::string &json, const char *key) {
-            const std::regex re(std::string{"\""} + key + R"("\s*:\s*(-?\d+(?:\.\d+)?))");
-            std::smatch match;
-            if (!std::regex_search(json, match, re) || match.size() < 2) {
+        /** @brief Reads finite representable numeric preferences independently of process locale. */
+        std::optional<float> FindFloatValue(SettingsJsonInput &input, const char *key) {
+            const auto *value = FindSettingMember(input, key);
+            if (value == nullptr)
                 return std::nullopt;
+            if (value->is_number()) {
+                const auto number = value->get<double>();
+                if (std::isfinite(number) && std::abs(number) <= std::numeric_limits<float>::max())
+                    return static_cast<float>(number);
             }
-            try {
-                return std::stof(match[1].str());
-            } catch (const std::invalid_argument &) {
-                return std::nullopt;
-            } catch (const std::out_of_range &) {
-                return std::nullopt;
-            }
+            input.invalidValue = true;
+            return std::nullopt;
         }
 
         [[nodiscard]] bool IsHexColor(std::string_view value) {
@@ -279,7 +310,7 @@ namespace Horo::Editor {
             return Warning;
         }
 
-        void ApplyEditorGroup(const std::string &json, EditorSettings &s) {
+        void ApplyEditorGroup(SettingsJsonInput &json, EditorSettings &s) {
             if (auto v = FindStringValue(json, "startupBehavior"); v.has_value())
                 s.startupBehavior = ParseStartup(*v);
             if (auto v = FindIntValue(json, "autoSaveIntervalMinutes"); v.has_value())
@@ -294,7 +325,7 @@ namespace Horo::Editor {
                 s.languageTag = *v;
         }
 
-        void ApplyAppearanceGroup(const std::string &json, EditorSettings &s) {
+        void ApplyAppearanceGroup(SettingsJsonInput &json, EditorSettings &s) {
             if (auto v = FindStringValue(json, "themePreset"); v.has_value())
                 s.themePreset = ParseThemePreset(*v);
             if (auto v = FindStringValue(json, "themeId"); v.has_value())
@@ -317,7 +348,7 @@ namespace Horo::Editor {
                 s.codeFontFamily = *v;
         }
 
-        void ApplyInputGroup(const std::string &json, EditorSettings &s) {
+        void ApplyInputGroup(SettingsJsonInput &json, EditorSettings &s) {
             if (auto v = FindIntValue(json, "orbitSensitivity"); v.has_value())
                 s.orbitSensitivity = *v;
             if (auto v = FindIntValue(json, "panSensitivity"); v.has_value())
@@ -326,7 +357,7 @@ namespace Horo::Editor {
                 s.invertOrbitY = *v;
         }
 
-        void ApplyRenderingGroup(const std::string &json, EditorSettings &s) {
+        void ApplyRenderingGroup(SettingsJsonInput &json, EditorSettings &s) {
             if (auto v = FindStringValue(json, "viewportMode"); v.has_value())
                 s.viewportMode = ParseViewportMode(*v);
             if (auto v = FindBoolValue(json, "navigationShowAreas"); v.has_value())
@@ -343,7 +374,7 @@ namespace Horo::Editor {
                 s.textureStreamingBudget = *v;
         }
 
-        void ApplyAudioNetworkGroups(const std::string &json, EditorSettings &s) {
+        void ApplyAudioNetworkGroups(SettingsJsonInput &json, EditorSettings &s) {
             if (auto v = FindIntValue(json, "masterVolume"); v.has_value())
                 s.masterVolume = *v;
             if (auto v = FindStringValue(json, "audioOutputDevice"); v.has_value())
@@ -356,7 +387,7 @@ namespace Horo::Editor {
                 s.networkPreviewPreferences.simulatedLatencyMilliseconds = static_cast<std::uint32_t>(std::max(*v, 0));
         }
 
-        void ApplyPackageGroup(const std::string &json, EditorSettings &s) {
+        void ApplyPackageGroup(SettingsJsonInput &json, EditorSettings &s) {
             if (auto v = FindIntValue(json, "downloadThreads"); v.has_value()) {
                 s.packages.downloadThreads = *v;
                 return;
@@ -366,7 +397,7 @@ namespace Horo::Editor {
                 s.packages.downloadThreads = *v;
         }
 
-        void ApplyDiagnosticsPluginsGroups(const std::string &json, EditorSettings &s) {
+        void ApplyDiagnosticsPluginsGroups(SettingsJsonInput &json, EditorSettings &s) {
             if (auto v = FindStringValue(json, "consoleLogLevel"); v.has_value())
                 s.consoleLogLevel = ParseLogLevel(*v);
             if (auto v = FindBoolValue(json, "writeLogToFile"); v.has_value())
@@ -377,7 +408,7 @@ namespace Horo::Editor {
                 s.stutterThresholdMs = *v;
         }
 
-        void ApplyJsonValues(const std::string &json, EditorSettings &s) {
+        void ApplyJsonValues(SettingsJsonInput &json, EditorSettings &s) {
             ApplyEditorGroup(json, s);
             ApplyAppearanceGroup(json, s);
             ApplyInputGroup(json, s);
@@ -505,6 +536,23 @@ namespace Horo::Editor {
             }
         };
 
+        const EditorSettings defaults;
+        constexpr std::array textFields{&EditorSettings::defaultSceneOnProjectOpen,
+                                        &EditorSettings::languageTag,
+                                        &EditorSettings::themeId,
+                                        &EditorSettings::accentColorHex,
+                                        &EditorSettings::uiFontFamily,
+                                        &EditorSettings::codeFontFamily,
+                                        &EditorSettings::textureStreamingBudget};
+        for (const auto field : textFields) {
+            auto &text = settings.*field;
+            if (text.size() > ConfigurationLimits{}.maximumStringValueBytes || text.find('\0') != std::string::npos ||
+                !IsValidUtf8ScalarSequence(text)) {
+                markInvalid("Editor settings text must be bounded UTF-8 without NUL characters.");
+                text = defaults.*field;
+            }
+        }
+
         const auto bindings = Input::ValidateBindingProfile(EditorKeymapActions(settings.keymap.profile), settings.keymap.profile);
         if (!bindings.IsValid()) {
             markInvalid("Editor keymap contains an invalid or conflicting shortcut.");
@@ -527,10 +575,10 @@ namespace Horo::Editor {
         EditorSettingsDocument out;
         out.path = ResolveEditorSettingsPath();
         out.settings = DefaultEditorSettings();
+        (void)ReadCanonicalKeymap(out);
 
         if (std::error_code ec; !std::filesystem::exists(out.path, ec)) {
-            LOG_DEBUG("editor.settings", "editor_settings.json not found at '%s' — using defaults.", out.path.string().c_str());
-            ImportLegacyKeymap(out);
+            LOG_DEBUG("editor.settings", "editor_settings.json not found — using defaults.");
             std::string validationError;
             if (!ValidateEditorSettings(out.settings, &validationError))
                 out.error = std::move(validationError);
@@ -541,92 +589,160 @@ namespace Horo::Editor {
         std::string readError;
         const std::string json = ReadWholeFile(out.path, &readError);
         if (!readError.empty()) {
-            LOG_ERROR("editor.settings", "Failed to read editor_settings.json at '%s': %s", out.path.string().c_str(), readError.c_str());
+            LOG_ERROR("editor.settings", "Failed to read editor_settings.json: %s", readError.c_str());
             out.parseError = true;
             out.error = readError;
             return out;
         }
 
-        if (json.find('{') == std::string::npos || json.find('}') == std::string::npos) {
-            LOG_ERROR("editor.settings", "editor_settings.json at '%s' is not a valid JSON object.", out.path.string().c_str());
-            out.parseError = true;
-            out.error = "Editor settings file must contain a JSON object.";
-            return out;
-        }
-        if (const auto schemaVersion = FindIntValue(json, "schemaVersion");
-            json.find("\"schemaVersion\"") != std::string::npos && (!schemaVersion.has_value() || *schemaVersion != 1)) {
-            out.parseError = true;
-            out.error = "Editor settings schema version is unsupported.";
-            return out;
-        }
-
-        if (!ReadKeymap(json, out)) {
+        nlohmann::json parsed;
+        if (!ReadKeymap(json, out, parsed)) {
             out.parseError = true;
             return out;
         }
-        ApplyJsonValues(json, out.settings);
+        SettingsJsonInput input{parsed};
+        ApplyJsonValues(input, out.settings);
+        if (input.invalidValue) {
+            out.parseError = true;
+            out.error = "Editor settings contain an invalid type, encoding, size, or ambiguous field.";
+            out.settings = DefaultEditorSettings();
+            return out;
+        }
         if (std::string validationError; !ValidateEditorSettings(out.settings, &validationError)) {
             LOG_WARN("editor.settings", "editor_settings.json loaded but failed validation: %s", validationError.c_str());
             out.error = validationError;
         } else {
-            LOG_DEBUG("editor.settings", "editor_settings.json loaded successfully from '%s'.", out.path.string().c_str());
+            LOG_DEBUG("editor.settings", "editor_settings.json loaded successfully.");
         }
         return out;
     }
 
-    /** @copydoc SaveEditorSettingsDocument */
-    bool SaveEditorSettingsDocument(EditorSettingsDocument *doc, std::string *outError) {
-        if (outError) {
-            outError->clear();
-        }
-        if (!doc) {
-            if (outError) {
-                *outError = "Editor settings document is null.";
-            }
+    namespace {
+        /** @brief Translates a native persistence failure at the legacy editor string-error boundary. */
+        bool ReportPersistenceFailure(const Error &error, std::string *outError) {
+            if (outError)
+                *outError = error.message;
             return false;
         }
 
+        /** @brief Owns the exclusive writer lease through private preparation and tracked publication. */
+        bool PublishSettingsDocument(EditorSettingsDocument &doc, const std::string &text, std::string *outError) {
+            NativeDurableFileSystem files;
+            auto lockPath = doc.path;
+            lockPath += ".lock";
+            auto lock = files.TryAcquireExclusive(lockPath, "horo.editor.settings");
+            if (lock.HasError())
+                return ReportPersistenceFailure(lock.ErrorValue(), outError);
+            auto prepared = doc.path;
+            prepared += ".tmp";
+            const auto removed = files.RemoveDurable(prepared);
+            if (removed.HasError())
+                return ReportPersistenceFailure(removed.ErrorValue(), outError);
+            bool created = false;
+            const auto written = files.WritePrivateDurable(prepared, std::as_bytes(std::span{text.data(), text.size()}), created);
+            if (written.HasError()) {
+                if (created)
+                    static_cast<void>(files.RemoveDurable(prepared));
+                return ReportPersistenceFailure(written.ErrorValue(), outError);
+            }
+            AtomicFileReplacementReceipt receipt;
+            const auto published = files.AtomicReplaceTracked(prepared, doc.path, receipt);
+            if (published.HasError() && !receipt.WasCommitted()) {
+                static_cast<void>(files.RemoveDurable(prepared));
+                return ReportPersistenceFailure(published.ErrorValue(), outError);
+            }
+            if (published.HasError())
+                LOG_WARN("editor.settings", "Settings replacement committed with a durability diagnostic: code=%s.",
+                         published.ErrorValue().code.Value().c_str());
+
+            doc.loadedFromDisk = true;
+            doc.parseError = false;
+            doc.error = published.HasError() ? published.ErrorValue().message : std::string{};
+            LOG_DEBUG("editor.settings", "editor_settings.json published atomically.");
+            return true;
+        }
+
+        /** @brief Establishes the prior canonical input authority before retiring an embedded legacy field. */
+        bool PrepareProfileAuthority(const std::filesystem::path &settingsPath, const std::filesystem::path &profilePath,
+                                     std::string *outError) {
+            std::error_code error;
+            std::filesystem::create_directories(settingsPath.parent_path(), error);
+            if (error) {
+                if (outError)
+                    *outError = error.message();
+                return false;
+            }
+            const bool exists = std::filesystem::exists(profilePath, error);
+            if (error) {
+                if (outError)
+                    *outError = error.message();
+                return false;
+            }
+            if (exists)
+                return true;
+            const auto previous = LoadEditorSettingsDocument();
+            if (previous.parseError) {
+                if (outError)
+                    *outError = previous.error;
+                return false;
+            }
+            const auto seeded = Input::SaveBindingProfileAtomically(profilePath, previous.settings.keymap.profile);
+            if (seeded.HasError()) {
+                if (outError)
+                    *outError = seeded.ErrorValue().message;
+                return false;
+            }
+            return true;
+        }
+
+    }  // namespace
+
+    /** @copydoc SaveEditorSettingsDocument */
+    bool SaveEditorSettingsDocument(EditorSettingsDocument *doc, std::string *outError, const ConfigurationSnapshot *configuration) {
+        if (outError)
+            outError->clear();
+        if (!doc) {
+            if (outError)
+                *outError = "Editor settings document is null.";
+            return false;
+        }
         doc->path = ResolveEditorSettingsPath();
         if (std::string validationError; !ValidateEditorSettings(doc->settings, &validationError)) {
-            if (outError) {
+            if (outError)
                 *outError = validationError;
-            }
+            return false;
+        }
+        const auto paths = Input::ResolveBindingProfilePaths({}, ResolveEditorSettingsHomeDirectory());
+        if (paths.HasError()) {
+            if (outError)
+                *outError = paths.ErrorValue().message;
             return false;
         }
 
-        const std::filesystem::path dir = doc->path.parent_path();
-        std::error_code ec;
-        std::filesystem::create_directories(dir, ec);
-        if (ec) {
-            if (outError) {
-                *outError = ec.message();
-            }
+        if (configuration)
+            doc->configurationJson = configuration->SourceToJson(ConfigurationSource::User);
+        else if (!doc->configurationJson.empty()) {
+            if (outError)
+                *outError = "A validated configuration snapshot is required to save shared settings.";
             return false;
         }
-
-        std::ofstream out(doc->path, std::ios::binary | std::ios::trunc);
-        if (!out.is_open()) {
-            if (outError) {
-                *outError = "Failed to open editor settings file for writing.";
-            }
+        std::ostringstream out;
+        SettingsStoreInternal::WriteSettings(out, doc->settings, doc->configurationJson);
+        const auto text = out.str();
+        if (text.size() > 2 * 1024 * 1024) {
+            if (outError)
+                *outError = "Editor settings exceed the supported size.";
             return false;
         }
-
-        const auto &s = doc->settings;
-        SettingsStoreInternal::WriteSettings(out, s);
-
-        if (!out.good()) {
-            LOG_ERROR("editor.settings", "I/O error while writing editor_settings.json to '%s'.", doc->path.string().c_str());
-            if (outError) {
-                *outError = "Failed while writing editor settings file.";
-            }
+        const auto &profilePath = paths.Value().editorUser;
+        if (!PrepareProfileAuthority(doc->path, profilePath, outError) || !PublishSettingsDocument(*doc, text, outError))
+            return false;
+        const auto saved = Input::SaveBindingProfileAtomically(profilePath, doc->settings.keymap.profile);
+        if (saved.HasError()) {
+            if (outError)
+                *outError = saved.ErrorValue().message;
             return false;
         }
-
-        doc->loadedFromDisk = true;
-        doc->parseError = false;
-        doc->error.clear();
-        LOG_DEBUG("editor.settings", "editor_settings.json saved to '%s'.", doc->path.string().c_str());
         return true;
     }
 }  // namespace Horo::Editor

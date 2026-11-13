@@ -760,6 +760,10 @@ namespace Horo::Editor {
                     actions.push_back({Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
                                        Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults)});
                 }
+                const auto profile = inputRouter_->Profile();
+                if (const auto applied = ActivateEditorInputProfile(*inputRouter_, profile, actions); applied.HasError())
+                    LOG_ERROR("editor.input", "Keeping last valid input actions after module command update: %s",
+                              applied.ErrorValue().message.c_str());
                 settingsService_->SetContributedInputActions(std::move(actions));
                 extensionCommandRevision_ = revision;
             }
@@ -884,6 +888,8 @@ namespace Horo::Editor {
                                              MakeError(CollisionSettingsError(CollisionSettingsFailure::Unsupported)));
         const auto prefab =
             activeScreen_ ? activeScreen_->PrefabSettings() : Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
+        auto projectConfiguration =
+            activeScreen_ ? activeScreen_->ProjectConfiguration() : Result<std::shared_ptr<ConfigurationSettingsSession>>::Success(nullptr);
         auto modal =
             std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
                                             SettingsModalProjectOpening{
@@ -894,6 +900,10 @@ namespace Horo::Editor {
                                                     collision.HasError() ? std::optional<Error>{collision.ErrorValue()} : std::nullopt,
                                                 .prefab = prefab.HasValue() ? std::weak_ptr{prefab.Value()}
                                                                             : std::weak_ptr<PrefabProjectSettingsSession>{},
+                                                .configuration = projectConfiguration.HasValue() ? projectConfiguration.Value() : nullptr,
+                                                .configurationError = projectConfiguration.HasError()
+                                                                          ? std::optional<Error>{projectConfiguration.ErrorValue()}
+                                                                          : std::nullopt,
                                             },
                                             SettingsModalPagePresentation{editorPageHost_,
                                                                           extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr,

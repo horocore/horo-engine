@@ -85,41 +85,47 @@ namespace Horo::Agent {
         /** @brief Feed complete response lines to the parser without retaining unbounded payloads. */
         std::size_t WriteResponse(char *data,  // NOSONAR: libcurl's C callback requires a mutable char pointer.
                                   std::size_t size, std::size_t count,
-                                  void *user) {  // NOSONAR: libcurl requires this exact C callback signature.
+                                  void *user) noexcept {  // NOSONAR: libcurl requires this exact C callback signature.
             auto &state = *static_cast<HttpContext *>(user);
-            if (size != 0 && count > (std::numeric_limits<std::size_t>::max)() / size) {
-                state.oversized = true;
-                return 0;
-            }
-            const std::size_t bytes = size * count;
-            if (state.stop.stop_requested()) {
-                state.cancelled = true;
-                return 0;
-            }
-            long responseStatus = 0;
-            curl_easy_getinfo(state.curl, CURLINFO_RESPONSE_CODE, &responseStatus);
-            if (responseStatus < 200 || responseStatus >= 300)
-                return bytes;
-            if (bytes > kMaximumDiscoveryBytes || state.pending.size() > kMaximumDiscoveryBytes - bytes) {
-                state.oversized = true;
-                return 0;
-            }
-            state.pending.append(data, bytes);
-            std::size_t newline;
-            while ((newline = state.pending.find('\n')) != std::string::npos) {
-                bool accepted = false;
-                try {
-                    accepted = newline <= kMaximumLineBytes && state.consume(std::string_view(state.pending).substr(0, newline));
-                } catch (...) {  // NOSONAR: no user callback exception may unwind across libcurl's C frame.
-                    state.invalid = true;
-                }
-                if (!accepted) {
-                    state.oversized = newline > kMaximumLineBytes;
+            try {
+                if (size != 0 && count > (std::numeric_limits<std::size_t>::max)() / size) {
+                    state.oversized = true;
                     return 0;
                 }
-                state.pending.erase(0, newline + 1);
+                const std::size_t bytes = size * count;
+                if (state.stop.stop_requested()) {
+                    state.cancelled = true;
+                    return 0;
+                }
+                long responseStatus = 0;
+                curl_easy_getinfo(state.curl, CURLINFO_RESPONSE_CODE, &responseStatus);
+                if (responseStatus < 200 || responseStatus >= 300)
+                    return bytes;
+                if (bytes > kMaximumDiscoveryBytes || state.pending.size() > kMaximumDiscoveryBytes - bytes) {
+                    state.oversized = true;
+                    return 0;
+                }
+                state.pending.append(data, bytes);
+                std::size_t newline;
+                while ((newline = state.pending.find('\n')) != std::string::npos) {
+                    bool accepted = false;
+                    try {
+                        accepted = newline <= kMaximumLineBytes && state.consume(std::string_view(state.pending).substr(0, newline));
+                    } catch (...) {  // NOSONAR: no user callback exception may unwind across libcurl's C frame.
+                        state.invalid = true;
+                    }
+                    if (!accepted) {
+                        state.oversized = newline > kMaximumLineBytes;
+                        return 0;
+                    }
+                    state.pending.erase(0, newline + 1);
+                }
+                return bytes;
+            } catch (...) {
+                // Buffer growth can fail before the guarded consumer is entered; never unwind through libcurl.
+                state.invalid = true;
+                return 0;
             }
-            return bytes;
         }
 
         /** @brief Abort an in-flight transfer when its caller requests cancellation. */

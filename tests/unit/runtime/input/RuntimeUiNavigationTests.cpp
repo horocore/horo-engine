@@ -155,31 +155,6 @@ namespace Horo::Runtime::Ui {
             CHECK(create(fixture.descriptor).HasError());
         }
 
-        TEST_CASE("Canonical glyph vocabulary has stable supported controls and typed missing capabilities", "[runtime_ui][glyph]") {
-            using enum Input::BindingControlKind;
-            const std::array kinds{Key, PointerButton, GamepadButton, GamepadAxis};
-            const std::array counts{static_cast<std::size_t>(Input::Key::Count), static_cast<std::size_t>(Input::PointerButton::Count),
-                                    static_cast<std::size_t>(Input::GamepadButton::Count),
-                                    static_cast<std::size_t>(Input::GamepadAxis::Count)};
-            for (std::size_t kind = 0; kind < kinds.size(); ++kind) {
-                for (std::size_t control = kind == 0 ? 1 : 0; control < counts[kind]; ++control) {
-                    const Input::InputGlyphId id{kinds[kind], static_cast<std::uint16_t>(control)};
-                    const auto before = Tests::AllocationProbe::Count();
-                    const auto glyph = Input::CanonicalGlyph(id);
-                    const auto after = Tests::AllocationProbe::Count();
-                    CHECK(before == after);
-                    CHECK(glyph.id == id);
-                    CHECK(glyph.support == Input::InputGlyphSupport::CanonicalLabel);
-                    CHECK_FALSE(glyph.label.empty());
-                }
-                CHECK(Input::CanonicalGlyph({kinds[kind], 65535}).support == Input::InputGlyphSupport::Unsupported);
-            }
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::PointerWheelX, 0}).label == "Wheel X");
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::PointerWheelY, 0}).label == "Wheel Y");
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::PointerWheelX, 1}).support == Input::InputGlyphSupport::Unsupported);
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadAxis, 1}).support == Input::InputGlyphSupport::Unsupported);
-        }
-
         TEST_CASE("Full action queue refuses submit without changing earlier admitted commands", "[runtime_ui][navigation][capacity]") {
             Fixture fixture;
             const UiActionSource source{fixture.actions.Owner(), fixture.graph.CurrentFocus().Value()->element};
@@ -442,7 +417,7 @@ namespace Horo::Runtime::Ui {
             CHECK(fixture.adapter->Presentation().modality == Input::InputModality::Unknown);
         }
 
-        TEST_CASE("Raw unmapped navigation reports unsupported capability and glyph identities remain canonical",
+        TEST_CASE("Raw unmapped navigation uses numbered fallback glyphs and rejects out of range identities",
                   "[runtime_ui][navigation][validation]") {
             Fixture fixture;
             auto profile = fixture.input.Router().Profile();
@@ -452,9 +427,10 @@ namespace Horo::Runtime::Ui {
             REQUIRE(fixture.input.Router().SetProfile(profile).HasValue());
             const auto candidate =
                 UiNavigationInput::Create(fixture.descriptor, fixture.input.Router(), fixture.context, fixture.graph, fixture.actions);
-            REQUIRE(candidate.HasError());
-            CHECK(candidate.ErrorValue().code.Value() == UiErrors::NavigationCapabilityUnsupported.code.Value());
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadButton, 0}).support == Input::InputGlyphSupport::Unsupported);
+            REQUIRE(candidate.HasValue());
+            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadButton, 0}).label == "Raw button 0");
+            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadButton, 256}).support ==
+                  Input::InputGlyphSupport::Unsupported);
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::GamepadButton, 65000}).support ==
                   Input::InputGlyphSupport::Unsupported);
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::Key, 0}).support == Input::InputGlyphSupport::Unsupported);

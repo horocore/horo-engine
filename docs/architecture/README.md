@@ -159,8 +159,12 @@ dependency direction in [System Design](./foundation/system-design.md).
   CPU/GPU particle systems, VFX graphs, decals, and volumetric effects.
 - [VFX Foundation Contract Qualification](./runtime/vfx-foundation-contract-qualification.md):
   determinism, allocation, parser, identity, buffer, tier, path, and platform evidence.
+- [GPU Particle Simulation Qualification](./runtime/vfx-gpu-simulation-qualification.md):
+  versioned force-equivalence tolerances, native budget workloads and compute-less tiers.
 - [Cinematic Foundation Contract Qualification](./runtime/cinematic-foundation-contract-qualification.md):
   identity byte order, hostile sequence parsing, deterministic sampling, allocation budget, and platform matrix.
+- [Cinematic Camera Qualification](./runtime/cinematic-camera-qualification.md):
+  CIN-003 child evidence, transition capability matrix, editor/runtime parity and native presentation qualification.
 - [Character Controller Architecture](./runtime/character-controller-architecture.md):
   kinematic capsule controller, slopes, steps, moving platforms, surface
   materials, and surface events.
@@ -232,6 +236,8 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Audio Middleware Integration Model](../adr/072-audio-middleware-integration-model.md):
   event-bridge versus backend-replacement ownership, stable frontend identities,
   native coexistence, budgets, bank activation, profiling, and distribution.
+- [Input System Qualification](./runtime/input-system-qualification.md): persistence,
+  device, remapping and platform/device evidence matrix.
 - [Input Architecture](./runtime/input-architecture.md): input snapshots, action
   maps, focus, capture, modal routing, and simulation input frames.
 - [Game UI And HUD](./runtime/game-ui-and-hud.md): runtime game menus, HUDs,

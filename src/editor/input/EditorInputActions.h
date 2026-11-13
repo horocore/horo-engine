@@ -18,6 +18,8 @@ namespace Horo::Editor {
     inline constexpr auto kActionToolRotate = "editor.tool.rotate";
     inline constexpr auto kActionToolScale = "editor.tool.scale";
     inline constexpr auto kActionViewportFocusSelected = "editor.viewport.focus_selected";
+    inline constexpr auto kActionRuntimeConsoleToggle = "editor.runtime_console.toggle";
+    inline constexpr auto kActionRuntimeOverlaysToggle = "editor.runtime_overlays.toggle";
 
     inline constexpr auto kActionSourceSelectAll = "editor.source.select_all";
     inline constexpr auto kActionSourceCopy = "editor.source.copy";
@@ -47,6 +49,13 @@ namespace Horo::Editor {
                                                                            std::span<const Input::ActionDescriptor> contributions = {});
     /** @brief Filters a complete editor profile for the builtin workspace router. */
     [[nodiscard]] Input::InputBindingProfile BuiltinEditorInputProfile(const Input::InputBindingProfile &profile);
+    /** @brief Activates a changed complete editor profile through the host's existing router.
+     * @param router Borrowed host authority. @param profile Complete effective layer composition.
+     * @param contributions Currently admitted module commands.
+     * @return Validation result. Identical bindings/descriptors retain their routing and collection generations.
+     */
+    [[nodiscard]] Result<void> ActivateEditorInputProfile(Input::InputRouter &router, Input::InputBindingProfile profile,
+                                                          std::span<const Input::ActionDescriptor> contributions = {});
     /** @brief Parses a normalized extension command shortcut into one physical key binding; unsupported keys fail closed. */
     [[nodiscard]] std::optional<Input::InputBinding> ParseEditorShortcut(std::string_view shortcut);
 

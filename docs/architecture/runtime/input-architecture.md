@@ -137,6 +137,16 @@ available only where policy allows it.
 Contexts are pushed and removed through RAII tokens. A destroyed tab, modal,
 tool, or play session cannot leave an active context behind.
 
+The host can explicitly register a `FocusedGuiWidget` with
+`InputContextPropagation::GameplayPassThrough` for non-mutating inspection.
+This widget retains its normal priority and exclusive text focus, but its presence
+alone does not exclude the existing Gameplay context. All other contexts,
+modal/native-dialog barriers, window focus and per-transition consumption still
+apply. It cannot admit workspace/tool contexts or grant any gameplay capability.
+The ordinary two-argument registration remains Exclusive. This is the central
+policy used by the runtime console's explicit pass-through option; adapters must
+not bypass `IsContextActive` or read raw input to emulate it.
+
 [ADR-078](../../adr/078-runtime-ui-input-context-and-player-routing.md) specializes
 the ADR-073 UI ownership boundary with generation-checked
 `RuntimeUiInputContextId` values. Device, input user, local player, logical viewport
@@ -311,6 +321,19 @@ clears a builder at player/session ownership changes. Recording stores the
 already assigned value frames; replay feeds those frames directly to simulation,
 without repeating action routing or OS events.
 
+For jump and interact, configured semantic repeat edges enter the same pending
+command latch as activation edges. Multiple edges before a fixed tick coalesce
+into one command. A repeat therefore survives a presentation frame with no tick,
+but does not fire again on later catch-up ticks. Movement transition bits retain
+their physical/semantic transition meaning and do not turn repeats into presses.
+
+If a routed binding cannot advance because its host sample clock is absent or
+mapping capacity is exhausted, capture clears the complete held/pending command
+projection. An earlier zero-tick frame cannot leave a stale command queued after
+that failure. `LastCaptureStatus()` retains the original `ClockUnavailable` or
+`CapacityExceeded` outcome, including duplicate captures of the same sample.
+Optional missing actions remain neutral; an eligible capture still resolves.
+
 The concrete frame also carries the move action's `down`, `pressed`, and
 `released` bits. These preserve existing semantic callbacks even when opposing
 movement bindings cancel the axis value; their edges follow the same once-per-
@@ -460,6 +483,24 @@ Player 3 -> Gamepad B
 Future local co-op flows such as "press any button to join" are built on top of
 device lifecycle and assignment primitives. They do not bypass the action-map or
 snapshot model.
+
+### Controller Motion Collection
+
+Controller gyroscopes use an explicit `GyroscopeSource::Gamepad` binding.
+The copied SI sample belongs to the exact `GamepadDeviceId` incarnation in the raw
+snapshot; ordinary player assignment and transition consumption apply before
+semantic publication. Platform motion remains a separate explicit source, never
+a fallback for an unavailable controller. Desired source/calibration live in the
+canonical binding profile, not in a second motion-preference authority.
+
+The host derives controller collection interest from validated effective bindings
+at configuration boundaries. SDL enables supported native sensors only for
+requested, bound-window, focused collection. Disablement, focus/window changes
+and disconnect neutralize old evidence. A native enable failure is unavailable,
+not support. Queued SDL events from a retired collection epoch are rejected using
+the SDL event-clock cutoff; sensor timestamps remain copied nanoseconds in their
+independent native clock domain. No rate integration, clock-epoch conversion,
+player assignment or profile discovery occurs in the platform adapter.
 
 ### Deadzone And Normalization
 
@@ -624,9 +665,88 @@ profile and emits a diagnostic; profiles are never partially applied. New
 projects create a valid `.horo/input.json` during atomic project staging.
 
 The editor registers real action descriptors and exposes them through the
-`Input Mapping` workspace panel. Settings retains viewport sensitivity and
-inversion only, and directs binding edits to this panel so there is no second
-string-based shortcut authority.
+`Input Mapping` workspace panel. INP-001.6 retains the existing Settings input
+workflow as the editor-global profile editor. Input Mapping edits project-user
+overrides. Both use Input's typed profile representation, validation and atomic
+serializer. The active router supplies effective bindings to workspace/source
+interaction and module commands. Settings drafts represent the global layer;
+they are composed with the active project's layers before routing activation.
+
+`ResolveBindingProfilePaths` resolves project and user paths beneath their
+admitted roots. Project IDs are single portable UTF-8 filename components;
+separators, reserved Windows names and escaping redirects are rejected before
+profile I/O. The host protects the admitted parent namespace through access.
+`LoadBindingProfileLayers` loads a complete ordered candidate. Runtime pause
+menus use `InputRouter::ReloadProfile` to project the authored layers onto their
+existing action registry. Inactive editor/module overrides remain on disk.
+`CommitBindingProfileChange` validates the effective candidate before publishing
+one per-action change to the selected user scope and activating the same router.
+An edit does not copy project defaults into the global user file.
+
+Editor and runtime rebinding use `InputBindingCapture`. Creation snapshots
+gamepad baselines on the owner thread. Polling uses committed frames, exact
+context/configuration/assignment/device generations and the router's existing
+weak lifecycle anchor. It retains no snapshot references and allocates no normal
+poll storage. Focus loss, preemption, Escape, retired owners and changed device
+generations cancel capture. Resting raw trigger axes require deliberate motion.
+Terminal delivery neutralizes routing in the capture frame and blocks lower
+contexts through the following close frame. The host retains its context through
+terminal delivery; hidden editor presentation withdraws its own capture.
+The Input Mapping panel replaces a selected binding while preserving the other
+controls and the selected binding's output component/scale. Adding, removing and
+selecting axis component/direction publish complete per-action overrides through
+the same validated scope. Capture completion cannot activate another panel control.
+
+The former embedded `editor_settings.json` `input.bindingProfile` is imported
+when the canonical editor-user file is absent. Settings save or project-entry
+migration establishes the prior valid user profile before retiring that field.
+New Settings writes omit it. A corrupt canonical file emits an error and cannot
+revive a stale embedded profile.
+
+Keyboard/pointer player ownership is explicit through `AssignKeyboardMouse`.
+Player zero owns those controls initially. Player-filtered reads exclude other
+owners; aggregate reads retain editor/global delivery. Gamepad bindings without
+keyboard chords remain eligible while another player holds keyboard modifiers.
+Pointer-device loss retires pointing controls while keyboard/gamepad ownership
+continues. Focus loss retires every control and rejects later unfocused events.
+Gamepad incarnations remain distinct across collector replacement. Disconnect
+release evidence belongs to the old player for one frame and does not erase a
+held keyboard binding. Digital bindings contribute thresholded zero/one pulses
+before their configured scale and action aggregation, including a press/release
+pair committed in one frame; analog bindings retain continuous signed values.
+
+Raw gamepad controls have stable numbered text glyphs and participate in Runtime
+UI navigation. `IInputGlyphProvider` is an optional host-pinned package adapter;
+`ResolveInputGlyph` requires the same canonical identity and falls back to core
+text for missing or unsupported package presentation. Runtime UI retains the
+provider through its descriptor/presentation lifetime. The SDL adapter accepts
+host-admitted mapping records. Raw-to-canonical upgrades and mapping changes
+publish a fresh device generation through ordinary event collection, requiring
+explicit reassignment. Rumble checks native capability, validates finite
+amplitudes and stops on focus/window/mapping retirement and adapter shutdown.
+
+### INP-001.6/7 consumer migration
+
+The new profile/capture/player/glyph APIs are additive in the existing `HoroInput`
+public header. Header ownership and target dependencies retain their existing
+registrations. Input, Runtime UI, editor Services/GUI, application hosts, XR
+consumers and staged public-header consumers rebuild together. Explicit
+player-filtered reads now receive keyboard/pointer values only from their owner;
+hosts assigning those controls to another player call `AssignKeyboardMouse`.
+Existing aggregate reads retain their signature. The appended optional glyph
+provider in `UiNavigationInputDescriptor` and borrowed router in
+`EditorGuiContext` preserve omitted aggregate defaults while requiring consumer
+rebuilds. Package retirement recreates adapters after releasing old borrowed
+presentations. InputCollection's existing registration invalidation and neutral
+commit contract also applies after profile or assignment changes.
+Digital consumers that previously inspected a continuous axis through a Digital
+descriptor must declare Axis1D instead. Digital consumers use the descriptor's
+threshold and retain independent down/pressed/released flags. Editor Settings
+validates global binding edits against admitted project layers before saving;
+unchanged action/profile activation preserves routing and collection generations.
+
+The [qualification matrix](input-system-qualification.md) records executable
+coverage and outstanding platform/device evidence.
 
 ## Testing
 
@@ -735,7 +855,6 @@ application sampling adapters accept the same handle by const reference; the hos
 retains the mutable handle for Commit/Cancel. Explicitly typed projection member
 pointers must also adopt that const-reference parameter. Const does not grant
 concurrent collection access.
-
 
 ### Reserved Source Admission Before Dependent Readiness
 

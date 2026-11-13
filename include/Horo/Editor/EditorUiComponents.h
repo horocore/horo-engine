@@ -529,7 +529,14 @@ namespace Horo::Editor::Ui {
         UiIcon leadingIcon{UiIcon::None}; /**< Optional semantic icon before the selected value. */
     };
 
-    /** @brief Renders a styled dropdown with optional error styling. Returns true if the selection changed. */
+    /** @brief Renders the shared keyboard- and mouse-operable dropdown over borrowed labels.
+     * @param id Stable caller identity. @param value Selected entry index. @param items Non-null UTF-8 labels.
+     * @param itemCount Number of labels. @param fonts Editor typography handles. @param options Shared presentation.
+     * @return True only when an enabled selection changes the value; choosing the current value merely closes the popup.
+     * @details Keyboard navigation follows Dear ImGui's owner input. Disabled controls/rows cannot activate.
+     * Popup labels wrap within the field width while retaining the semantic label font and minimum row height.
+     * @pre An ImGui frame/window is active; labels and fonts outlive the call.
+     */
     [[nodiscard]] bool ComboControl(const char *id, int *value, const char *const *items, int itemCount, const Theme::Fonts &fonts,
                                     ComboControlOptions options = {});
 
@@ -538,10 +545,13 @@ namespace Horo::Editor::Ui {
      * @param id Stable UI identity.
      * @param value Selected entry index.
      * @param itemCount Number of entries exposed by @p source.
-     * @param source Non-owning entry callbacks valid for the duration of this call.
+     * @param source Non-owning entry callbacks valid for this call; label callbacks return non-null UTF-8.
      * @param fonts Editor typography handles.
      * @param options Optional error, height, and size presentation.
      * @return True when an enabled entry changed the selection.
+     * @details Keyboard activation and pointer clicks share one selection path. Navigation skips disabled rows;
+     * choosing the current entry closes without a change. Wrapped rows preserve semantic typography.
+     * @pre An ImGui frame/window is active; callbacks and fonts outlive the call.
      */
     [[nodiscard]] bool ComboControl(const char *id, int *value, int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,
                                     ComboControlOptions options = {});
@@ -552,7 +562,24 @@ namespace Horo::Editor::Ui {
         BottomDockToolbar,
     };
 
-    /** @brief Optional visual configuration shared by text inputs. */
+    /** @brief Semantic line-editor requests; native key handling remains inside the shared text primitive. */
+    enum class InputTextNavigationAction {
+        Complete,
+        Previous,
+        Next
+    };
+
+    /** @brief Synchronous optional whole-line replacement for completion/history, never retained or invoked outside the control call.
+     * The callback must not draw UI. Its returned UTF-8 bytes must remain valid through this control call and fit its buffer.
+     * The primitive copies replacements before editing native storage, including when the returned view aliases current text.
+     */
+    struct InputTextNavigation {
+        void *context{}; /**< Borrowed caller state, alive throughout the control call. */
+        std::optional<std::string_view> (*replace)(void *, InputTextNavigationAction, std::string_view, std::size_t){};
+        /**< Receives caller state, action, current UTF-8 bytes and cursor byte offset; returns a replacement or no change. */
+    };
+
+    /** @brief Optional visual and keyboard configuration shared by text inputs. */
     struct InputTextOptions {
         bool error{false};                                   /**< Whether to render validation-error styling. */
         float width{-1.0F};                                  /**< Logical width; negative fills available content. */
@@ -561,6 +588,8 @@ namespace Horo::Editor::Ui {
         float prefixIconWidth{0.0F};                         /**< Left padding reserved for a caller-drawn icon. */
         ComponentSize componentSize{ComponentSize::Small};   /**< Shared theme-backed size preset. */
         InputTextSurface surface{InputTextSurface::Default}; /**< Semantic background surface. */
+        bool submitOnEnter{false}; /**< Return Enter submission rather than ordinary edit intent; stored text still updates normally. */
+        InputTextNavigation *navigation{}; /**< Optional synchronous Tab/Up/Down replacement; null preserves normal text behavior. */
     };
 
     /**
@@ -584,7 +613,7 @@ namespace Horo::Editor::Ui {
      * @param bufferSize Capacity of @p buffer, including the null terminator.
      * @param fonts Editor typography handles.
      * @param options Optional validation and presentation configuration.
-     * @return True when the text changed.
+     * @return True when the text changed, or on Enter submission when submitOnEnter is enabled.
      */
     [[nodiscard]] bool InputTextControl(const char *id, char *buffer, size_t bufferSize, const Theme::Fonts &fonts,
                                         const InputTextOptions &options = {});
@@ -596,7 +625,7 @@ namespace Horo::Editor::Ui {
      * @param maxSize Maximum storage size, including the null terminator.
      * @param fonts Editor typography handles.
      * @param options Optional validation and presentation configuration.
-     * @return True when the text changed.
+     * @return True when the text changed, or on Enter submission when submitOnEnter is enabled.
      */
     [[nodiscard]] bool InputTextControl(const char *id, std::string &value, size_t maxSize, const Theme::Fonts &fonts,
                                         const InputTextOptions &options = {});

@@ -137,6 +137,30 @@ namespace Horo::Cinematic {
         CHECK(hooks.cuts[0].camera == SequenceCameraTargetId{88, 1});
     }
 
+    TEST_CASE("Frame camera crossings preserve authored transition metadata", "[unit][cinematic][evaluation][camera]") {
+        const std::array keys{SequenceFrameCameraCutKey{Track(40), Key(2), {77, 1}, 2},
+                              SequenceFrameCameraCutKey{Track(40),
+                                                        Key(5),
+                                                        {88, 1},
+                                                        5,
+                                                        CameraTransitionTier::SingleViewBlend,
+                                                        CameraTransitionFallback::HardCut,
+                                                        2,
+                                                        CameraBlendCurve::SmoothStep}};
+        auto plan = Plan({}, {}, keys);
+        auto cursor = MakeSequenceFrameCursor(Playing(), SequenceCursorResetPolicy::EmitCurrentBoundary).Value();
+        ScratchStorage scratch;
+        HookProbe hooks;
+        REQUIRE(plan.Evaluate(Playing(), 6, cursor, scratch.View(), Hooks(hooks)).HasValue());
+        REQUIRE(hooks.cutCount == 2);
+        CHECK(hooks.cuts[0].transitionTier == CameraTransitionTier::HardCut);
+        const auto &transition = hooks.cuts[1];
+        CHECK(transition.transitionTier == CameraTransitionTier::SingleViewBlend);
+        CHECK(transition.fallback == CameraTransitionFallback::HardCut);
+        CHECK(transition.transitionDuration == 2);
+        CHECK(transition.transitionCurve == CameraBlendCurve::SmoothStep);
+    }
+
     TEST_CASE("Frame edges fire exactly once and zero speed stays evaluable", "[unit][cinematic][evaluation][events]") {
         const std::array events{SequenceFrameEventKey{Track(1), Key(1), 0, true}, SequenceFrameEventKey{Track(1), Key(2), 5, true},
                                 SequenceFrameEventKey{Track(1), Key(3), 10, true}};

@@ -426,7 +426,7 @@ camera snapshot, selection epoch and generic discontinuity evidence without choo
 camera authority or exposing backend APIs to Cinematic Runtime. ADR-119 owns the
 complete contract.
 
-The implemented baseline composition is `HoroEngine::CinematicCameraRuntime`:
+The implemented composition is `HoroEngine::CinematicCameraRuntime`:
 `CinematicCameraPlayback` consumes the canonical frame-plan camera keys and
 required scene bindings, then submits copied proposals to the view's
 `HoroEngine::CameraRuntime` owner. The editor viewport controller uses the same
@@ -434,6 +434,20 @@ composition for programmatic preview and extracts its committed camera without
 changing the authoring camera. See the
 [hard-cut runtime integration guide](../../guides/hard-camera-cut-runtime-migration.md)
 for public target ownership, lifecycle and caller migration.
+
+Canonical frame-plan camera keys carry the authored transition tier, explicit
+fallback, integer duration and Linear/SmoothStep curve. `CameraService` admits
+host-selected hard-cut-only or single-view interpolation support. This one-view
+composition rejects required dual-view cross-fades with a typed unsupported
+result. Its explicit hard-cut fallback preserves the authored destination.
+True cross-fade admission still requires frontend compositor and resource-budget
+implementation and qualification.
+
+Camera proposals carry the exact Scene structural revision sampled by their
+producer. Camera commit requires the current Scene view and rejects stale pending
+proposals or same-frame re-extraction after a Scene mutation. Hosts republish
+camera values for a new rendered frame after a rebase, preserving immutable
+decisions already paired with older frame-owned model transforms.
 
 ### 4. Event Track
 

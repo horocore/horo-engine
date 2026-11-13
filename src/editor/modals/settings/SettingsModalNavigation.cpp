@@ -114,6 +114,11 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {packages.c_str(), "K", Packages}, ctx);
         DrawNavItem(st, {updates.c_str(), "U", Updates}, ctx);
         DrawNavGroup(tools.c_str(), ctx);
+        DrawNavItem(st, {SettingsModal::kTextScope.Text(ctx.localization, "configuration.title").c_str(), "C", Configuration}, ctx);
+        if (st.projectConfiguration || st.projectConfigurationError)
+            DrawNavItem(st,
+                        {SettingsModal::kTextScope.Text(ctx.localization, "configuration.project_nav").c_str(), "P", ProjectConfiguration},
+                        ctx);
         DrawNavItem(st, {diagnostics.c_str(), "D", Diagnostics}, ctx);
         DrawNavItem(st, {plugins.c_str(), "P", Plugins}, ctx);
         if (st.extensionPages) {
@@ -496,6 +501,12 @@ namespace Horo::Editor::SettingsModalInternal {
             using enum SettingsTab;
             case General:
                 DrawGeneral(st, ctx);
+                break;
+            case Configuration:
+                DrawConfiguration(st, ctx);
+                break;
+            case ProjectConfiguration:
+                DrawConfiguration(st, ctx, ConfigurationSource::Project);
                 break;
             case Appearance:
                 DrawAppearance(st, ctx);

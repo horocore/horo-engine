@@ -408,7 +408,50 @@ namespace Horo::Diagnostics {
             manifest += "]}";
             return manifest;
         }
+
+        /** @brief Rejects spellings that cannot name one new absolute output file. */
+        bool ValidDestinationSpelling(const std::filesystem::path &path) {
+            const auto name = path.filename();
+            return !path.empty() && path.is_absolute() && !name.empty() && name != "." && name != ".." &&
+                   path.native().find(std::filesystem::path::value_type{}) == std::filesystem::path::string_type::npos;
+        }
+
+        /** @brief Inspects the destination and its existing parent chain without creating directories. */
+        Result<void> ValidateDestinationAncestors(const std::filesystem::path &outputPath) {
+            std::error_code error;
+            for (auto current = outputPath; !current.empty();) {
+                const auto status = std::filesystem::symlink_status(current, error);
+                if (error && error != std::errc::no_such_file_or_directory)
+                    return Result<void>::Failure(
+                        MakeBundleError(ObservabilityErrors::InvalidBundleRequest, "Diagnostic bundle destination cannot be inspected."));
+                if (std::filesystem::exists(status) && (current == outputPath || !std::filesystem::is_directory(current, error) || error))
+                    return Result<void>::Failure(MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
+                                                                 "Diagnostic bundle destination is occupied or has an invalid parent."));
+                const auto parent = current.parent_path();
+                if (parent == current)
+                    break;
+                current = parent;
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
+
+    /** @copydoc ValidateDiagnosticBundleDestination */
+    Result<void> ValidateDiagnosticBundleDestination(const std::filesystem::path &outputPath) {
+        if (!ValidDestinationSpelling(outputPath))
+            return Result<void>::Failure(
+                MakeBundleError(ObservabilityErrors::InvalidBundleRequest, "Diagnostic bundle output must name a new absolute file."));
+        if (const auto ancestors = ValidateDestinationAncestors(outputPath); ancestors.HasError())
+            return ancestors;
+        std::error_code error;
+        auto temporaryPath = outputPath;
+        temporaryPath += ".tmp";
+        const auto temporary = std::filesystem::symlink_status(temporaryPath, error);
+        if ((error && error != std::errc::no_such_file_or_directory) || std::filesystem::exists(temporary))
+            return Result<void>::Failure(MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
+                                                         "Diagnostic bundle temporary destination is occupied or unavailable."));
+        return Result<void>::Success();
+    }
 
     /** @copydoc GenerateDiagnosticBundle */
     Result<DiagnosticBundleSummary> GenerateDiagnosticBundle(const DiagnosticBundleRequest &request) {
@@ -419,12 +462,10 @@ namespace Horo::Diagnostics {
                 MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
                                 "Diagnostic bundle output must be absolute and the byte limit must be non-zero."));
 
-        std::error_code error;
-        if (std::filesystem::exists(request.outputPath, error) || error)
-            return Result<DiagnosticBundleSummary>::Failure(
-                MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
-                                "Diagnostic bundle output already exists or cannot be inspected."));
+        if (const auto destination = ValidateDiagnosticBundleDestination(request.outputPath); destination.HasError())
+            return Result<DiagnosticBundleSummary>::Failure(destination.ErrorValue());
 
+        std::error_code error;
         std::filesystem::create_directories(request.outputPath.parent_path(), error);
         if (error)
             return Result<DiagnosticBundleSummary>::Failure(
@@ -445,7 +486,8 @@ namespace Horo::Diagnostics {
 
         const std::string manifest = BuildManifestJson(metadata, missingOptional, prepared);
 
-        const std::filesystem::path temporaryPath = request.outputPath.string() + ".tmp";
+        auto temporaryPath = request.outputPath;
+        temporaryPath += ".tmp";
         error.clear();
         if (std::filesystem::exists(temporaryPath, error) || error)
             return Result<DiagnosticBundleSummary>::Failure(

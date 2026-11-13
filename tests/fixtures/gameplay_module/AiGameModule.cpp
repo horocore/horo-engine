@@ -1,5 +1,6 @@
 #include "Horo/Gameplay/GameplayAiContext.h"
 #include "Horo/Gameplay/NativeDecisionNode.h"
+#include "Horo/Gameplay/NativePerceptionSense.h"
 
 #include <memory>
 #include <stdexcept>
@@ -100,11 +101,67 @@ namespace {
 }  // namespace
 HORO_AI_NODE(FixtureDecisionNode, "101")
 
+namespace {
+    std::uint32_t *perceptionLifecycleCounters{};
+    bool perceptionMetadataFailure{};
+
+    /** @brief Real module-owned bounded sense used to observe construction, invocation and destruction across retirement. */
+    class FixturePerceptionSense final : public Horo::AI::IPerceptionSenseProvider {
+    public:
+        static Horo::AI::PerceptionSenseContract DescribePerceptionSense() {
+            using namespace Horo::AI;
+            if (perceptionMetadataFailure)
+                throw std::runtime_error("fixture sense metadata failure");
+            PerceptionSenseContract contract;
+            contract.sense.origin = {PerceptionDescriptorSourceKind::Native, PerceptionProviderId::Create(601).Value(), 1};
+            contract.sense.displayName = "fixture spatial sense";
+            contract.sense.requiredCapabilities = PerceptionCapabilitySet::Of(PerceptionCapability::SpatialCandidateQuery);
+            contract.stimulus = {StimulusTypeId::Create(602).Value(), contract.sense.origin, "fixture spatial observation", 1, {}};
+            contract.workUnits = 4;
+            contract.maximumCandidates = 2;
+            return contract;
+        }
+
+        FixturePerceptionSense() {
+            if (perceptionLifecycleCounters)
+                ++perceptionLifecycleCounters[0];
+        }
+
+        ~FixturePerceptionSense() override {
+            if (perceptionLifecycleCounters)
+                ++perceptionLifecycleCounters[2];
+        }
+
+        /** @copydoc Horo::AI::IPerceptionSenseProvider::Evaluate */
+        Horo::Result<std::size_t> Evaluate(const Horo::AI::PerceptionSenseInput &input,
+                                           const std::span<Horo::AI::PerceptionSenseSample> output,
+                                           Horo::AI::AiWorkBudget &budget) override {
+            if (perceptionLifecycleCounters)
+                ++perceptionLifecycleCounters[1];
+            for (std::size_t index = 0; index < input.candidates.size(); ++index) {
+                if (!budget.Consume())
+                    return Horo::Result<std::size_t>::Failure(Horo::MakeError(Horo::AI::AIErrors::SchedulerBudgetExhausted));
+                output[index] = {static_cast<std::uint32_t>(index), input.candidates[index].position.Millimeters()[0] < 1500};
+            }
+            return Horo::Result<std::size_t>::Success(input.candidates.size());
+        }
+    };
+}  // namespace
+HORO_AI_SENSE(FixturePerceptionSense, "102")
+
+/** @brief Installs caller-owned test counters before descriptor capture or native provider invocation. */
+extern "C" HORO_GAME_EXPORT void HoroTestObservePerceptionSenseLifecycle(std::uint32_t *counters, const bool failMetadata) noexcept {
+    perceptionLifecycleCounters = counters;
+    perceptionMetadataFailure = failMetadata;
+}
+
 extern "C" HORO_GAME_EXPORT void HoroTestObserveDecisionNodeLifecycle(std::uint32_t *counters) noexcept {
     decisionLifecycleCounters = counters;
 }
 
 extern "C" HORO_GAME_EXPORT Horo::Gameplay::IGameModule *CreateGameModule() noexcept {
+    if (perceptionLifecycleCounters)
+        ++perceptionLifecycleCounters[3];
     return std::make_unique<AiModule>().release();
 }
 

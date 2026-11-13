@@ -441,6 +441,12 @@ namespace Horo::Runtime::Ui {
         return storage_ ? storage_->revision : UiAccessibilitySemanticRevision{};
     }
 
+    /** @copydoc UiAccessibilityChangePublisher::IsCurrentSnapshot */
+    bool UiAccessibilityChangePublisher::IsCurrentSnapshot(const UiAccessibilitySnapshot &snapshot) const noexcept {
+        return storage_ && !storage_->retired && storage_->baseline && snapshot.IsValid() &&
+               storage_->baseline->storage_ == snapshot.storage_;
+    }
+
     /** @copydoc UiAccessibilityChangePublisher::Changes */
     std::span<const UiAccessibilityChange> UiAccessibilityChangePublisher::Changes() const noexcept {
         return storage_ ? std::span<const UiAccessibilityChange>{storage_->changes} : std::span<const UiAccessibilityChange>{};

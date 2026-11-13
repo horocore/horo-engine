@@ -1,5 +1,6 @@
 #include "Horo/Prefab/PrefabSourceResolver.h"
 
+#include "Horo/Prefab/PrefabDiagnostics.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "PrefabSourceExpansionInternal.h"
 #include "PrefabValueOverridesInternal.h"
@@ -75,6 +76,10 @@ namespace Horo::Prefab {
             std::string context = std::format("Prefab instance {} source chain", instance.Value());
             for (const Assets::AssetId source : sourceChain)
                 context += " -> " + source.ToString();
+            if (sourceChain.size() > 2 && context.size() + 2 + error.message.size() > MaximumPrefabDiagnosticMessageBytes) {
+                context = std::format("Prefab instance {} source chain ({} assets, intermediate assets omitted) {} -> {}", instance.Value(),
+                                      sourceChain.size(), sourceChain.front().ToString(), sourceChain.back().ToString());
+            }
             error.message = context + ": " + error.message;
         }
 

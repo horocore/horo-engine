@@ -264,8 +264,42 @@ namespace Horo::Application {
         CHECK_FALSE(session.application->Query(1).HasValue());
     }
 
-    TEST_CASE("Navigation MCP executes only an exact host-approved registry mutation and refuses replay",
-              "[navigation][application][mcp]") {
+    TEST_CASE("Navigation GUI application and CLI publish equivalent results exactly once",
+              "[navigation][application][cli][qualification]") {
+        Session gui;
+        const auto guiResult = gui.Execute(Navigation::NavigationBakeExecutionMode::BuildAndPublish);
+        REQUIRE(guiResult.state == OperationState::Succeeded);
+        REQUIRE(guiResult.publication);
+        REQUIRE(guiResult.inputFingerprint);
+        CHECK(gui.builder->builds.load() == 2);
+
+        Session cli;
+        unsigned acquisitions{};
+        auto dispatcher = Dispatcher(cli, acquisitions);
+        const std::array<std::string_view, 4> arguments{"navigation", "bake", "--definition", "00000000-0000-0000-0000-000000000001"};
+        const auto parsed = Cli::CliOptionParser::Parse(arguments, dispatcher.Registry());
+        REQUIRE(parsed.HasValue());
+        const auto configuration = Configuration();
+        const auto terminal = dispatcher.Dispatch(parsed.Value(), {.invocation = {1}, .configuration = &configuration});
+        REQUIRE(terminal.Outcome().HasValue());
+        REQUIRE(terminal.Correlation().operation);
+        const auto cliResult = cli.application->Query(terminal.Correlation().operation->value);
+        REQUIRE(cliResult.HasValue());
+        REQUIRE(cliResult.Value().publication);
+        CHECK(acquisitions == 1);
+        CHECK(cli.builder->builds.load() == 2);
+        CHECK(cliResult.Value().inputFingerprint == guiResult.inputFingerprint);
+        CHECK(cliResult.Value().publication->generation.manifestDigest == guiResult.publication->generation.manifestDigest);
+        CHECK_FALSE(cli.application->Query(cliResult.Value().id + 1).HasValue());
+    }
+
+    TEST_CASE("Navigation approved MCP publishes the GUI application result once and refuses replay",
+              "[navigation][application][mcp][qualification]") {
+        Session gui;
+        const auto guiResult = gui.Execute(Navigation::NavigationBakeExecutionMode::BuildAndPublish);
+        REQUIRE(guiResult.state == OperationState::Succeeded);
+        REQUIRE(guiResult.publication);
+        REQUIRE(guiResult.inputFingerprint);
         Session session;
         auto policy = std::make_shared<Mcp::McpAuthorization>(std::make_shared<Mcp::Test::Entropy>());
         REQUIRE(policy->SetTrust("project-one", 3, true).HasValue());
@@ -277,37 +311,36 @@ namespace Horo::Application {
         const std::vector<std::string> capabilities{"horo.navigation.bake"};
         const auto published = registry.Publish(std::move(tools).Value(), capabilities);
         REQUIRE(published.HasValue());
-        const auto admission = Mcp::Test::Authenticate({.clientIdentity = "local-client",
-                                                        .capabilities = capabilities,
-                                                        .projectIdentity = "project-one",
-                                                        .authorizationRevision = 3,
-                                                        .registryRevision = published.Value()},
-                                                       policy);
-        Mcp::McpRequestContext context{.session = {1, 1},
-                                       .clientIdentity = admission.clientIdentity,
-                                       .capabilities = admission.capabilities,
-                                       .projectIdentity = admission.projectIdentity,
-                                       .authorizationRevision = admission.authorizationRevision,
-                                       .registryRevision = admission.registryRevision,
-                                       .deadline = std::chrono::steady_clock::now() + std::chrono::minutes{1},
-                                       .authority = admission.authority,
-                                       .authorization = policy,
-                                       .requestIdentity = 7};
-        const nlohmann::json arguments{{"validateOnly", true}};
+        auto context = Mcp::Test::Context({.clientIdentity = "local-client",
+                                           .capabilities = capabilities,
+                                           .projectIdentity = "project-one",
+                                           .authorizationRevision = 3,
+                                           .registryRevision = published.Value()},
+                                          policy);
+        context.deadline = std::chrono::steady_clock::now() + std::chrono::minutes{1};
+        context.requestIdentity = 7;
+        REQUIRE(context.authorization == policy);
+        const auto mcpArguments = nlohmann::json::object();
         const auto snapshot = registry.Read();
-        CHECK(snapshot->Invoke({"navigation.bake"}, arguments, context).HasError());
+        CHECK(snapshot->Invoke({"navigation.bake"}, mcpArguments, context).HasError());
         CHECK_FALSE(session.application->Query(1).HasValue());
-        const Mcp::McpRequest request{.id = 7, .method = "tools/call", .params = {{"name", "navigation.bake"}, {"arguments", arguments}}};
+        const Mcp::McpRequest request{.id = 7,
+                                      .method = "tools/call",
+                                      .params = {{"name", "navigation.bake"}, {"arguments", mcpArguments}}};
         const auto challenge = policy->Challenge(context, request, std::chrono::minutes{1});
         REQUIRE(challenge.HasValue());
         REQUIRE(policy->Decide(challenge.Value(), true).HasValue());
-        const auto started = snapshot->Invoke({"navigation.bake"}, arguments, context);
+        const auto started = snapshot->Invoke({"navigation.bake"}, mcpArguments, context);
         REQUIRE(started.HasValue());
         const auto id = std::stoull(started.Value().at("operationId").get<std::string>());
-        CHECK(session.Finish(id).state == OperationState::Succeeded);
-        CHECK(snapshot->Invoke({"navigation.bake"}, arguments, context).HasError());
+        const auto mcpResult = session.Finish(id);
+        REQUIRE(mcpResult.state == OperationState::Succeeded);
+        REQUIRE(mcpResult.publication);
+        CHECK(mcpResult.inputFingerprint == guiResult.inputFingerprint);
+        CHECK(mcpResult.publication->generation.manifestDigest == guiResult.publication->generation.manifestDigest);
+        CHECK(snapshot->Invoke({"navigation.bake"}, mcpArguments, context).HasError());
         CHECK_FALSE(session.application->Query(id + 1).HasValue());
-        CHECK(session.builder->builds.load() == 0);
-        CHECK_FALSE(std::filesystem::exists(session.service.targetRoot));
+        CHECK(session.builder->builds.load() == 2);
+        CHECK(std::filesystem::is_regular_file(session.service.targetRoot / "current.json"));
     }
 }  // namespace Horo::Application

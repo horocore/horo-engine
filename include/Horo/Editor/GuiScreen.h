@@ -21,6 +21,7 @@ namespace Horo::Runtime {
 namespace Horo::Editor {
     class NavigationProjectSettingsSession;
     class PrefabProjectSettingsSession;
+    class ConfigurationSettingsSession;
 
     /**
      * @file GuiScreen.h
@@ -136,6 +137,12 @@ namespace Horo::Editor {
 
     public:
         virtual ~GuiScreen() = default;
+
+        /** @brief Opens a modal-owned descriptor draft over this exact project's revocable source operations.
+         * @return Shared generic session, null outside a project, or the original project admission error. */
+        [[nodiscard]] virtual Result<std::shared_ptr<ConfigurationSettingsSession>> ProjectConfiguration() {
+            return Result<std::shared_ptr<ConfigurationSettingsSession>>::Success(nullptr);
+        }
 
         /** @brief Returns this project host's navigation settings authority.
          * @return Borrowed owner, explicit null for nonproject screens, or original admission failure.

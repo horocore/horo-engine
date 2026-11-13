@@ -67,6 +67,8 @@ namespace Horo::Editor {
             Digital(kActionToolRotate, true, {KeyBinding(E)}),
             Digital(kActionToolScale, true, {KeyBinding(R)}),
             Digital(kActionViewportFocusSelected, false, {KeyBinding(F)}),
+            Digital(kActionRuntimeConsoleToggle, false, {KeyBinding(F10, true, true), KeyBinding(F10, false, true, true)}),
+            Digital(kActionRuntimeOverlaysToggle, false, {KeyBinding(F11, true, true), KeyBinding(F11, false, true, true)}),
             Input::ActionDescriptor{Input::ActionId{kGameplayMoveAction},
                                     Input::ActionValueType::Axis2D,
                                     Input::InputContextId{kEditorWorkspaceInputContext},
@@ -121,6 +123,15 @@ namespace Horo::Editor {
             });
         });
         return filtered;
+    }
+
+    /** @copydoc ActivateEditorInputProfile */
+    Result<void> ActivateEditorInputProfile(Input::InputRouter &router, Input::InputBindingProfile profile,
+                                            const std::span<const Input::ActionDescriptor> contributions) {
+        auto actions = EditorKeymapActions(profile, contributions);
+        if (profile == router.Profile() && std::ranges::equal(actions, router.Actions()))
+            return Result<void>::Success();
+        return router.SetActionMap(std::move(actions), std::move(profile));
     }
 
     /** @copydoc ParseEditorShortcut */

@@ -1,5 +1,7 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQueryPerception.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
@@ -247,11 +249,104 @@ namespace Horo::AI {
                     .count == 0);
         }
 
+        TEST_CASE("EQS perceived candidates use only current authorized actors in stable order", "[unit][ai][eqs][generator]") {
+            PublicationFixture fixture(3);
+            auto view = fixture.scene->View();
+            const auto duplicate = ProjectPerceptionSource(fixture.additional.back().entity);
+            REQUIRE(
+                fixture.memory
+                    .Observe({.key = {MakeIdentity<PerceptionListenerTypeId>(2), SenseTypeIds::Sight, StimulusTypeIds::Visual, duplicate}},
+                             1)
+                    .HasValue());
+            fixture.source.visibility = PerceptionGameplayVisibility::Hidden;
+            fixture.Publish(2);
+            const auto published = fixture.Sync();
+            REQUIRE(published.HasValue());
+            REQUIRE(published.Value().memory.count == 3);
+            const QueryPerceivedEntitySource source{view, fixture.publication, fixture.broadphase, *fixture.blackboard};
+            std::array<QueryGeneratedItem, 3> items;
+            const QueryGeneratorOutput output{{MakeIdentity<QueryStageId>(1), MakeIdentity<QueryGeneratorId>(2),
+                                               MakeIdentity<QueryProviderId>(3), published.Value().revision},
+                                              items.size(),
+                                              items};
+            const auto generated = GenerateQueryPerceivedEntities(source, output);
+            REQUIRE(generated.HasValue());
+            REQUIRE(generated.Value().itemCount == 2);
+            CHECK(std::get<Runtime::EntityRef>(items[0]) == fixture.additional[0].entity);
+            CHECK(std::get<Runtime::EntityRef>(items[1]) == fixture.additional[1].entity);
+            fixture.Publish(3);
+            ExpectError(GenerateQueryPerceivedEntities(source, output), AIErrors::PerceptionSpatialStale);
+        }
+
+        TEST_CASE("EQS perception tests fence the authorized listener revision and distinguish lost observations",
+                  "[unit][ai][eqs][perception]") {
+            PublicationFixture fixture;
+            const auto target = fixture.source.entity;
+            REQUIRE(fixture.memory
+                        .MarkLost({MakeIdentity<PerceptionListenerTypeId>(1), SenseTypeIds::Sight, StimulusTypeIds::Visual,
+                                   ProjectPerceptionSource(target)},
+                                  1)
+                        .HasValue());
+            const auto published = fixture.Sync(2);
+            REQUIRE(published.HasValue());
+            const auto view = fixture.scene->View();
+            const QueryPerceivedEntitySource source{view, fixture.publication, fixture.broadphase, *fixture.blackboard};
+            QueryPerceptionTest test{MakeIdentity<QueryStageId>(3), fixture.agent, published.Value().revision,
+                                     QueryPerceptionMatch::Remembered, SenseTypeIds::Sight};
+            const auto remembered = EvaluateQueryPerception(source, test, target);
+            REQUIRE(remembered.HasValue());
+            CHECK(remembered.Value().filter == true);
+            REQUIRE(remembered.Value().metric.has_value());
+            CHECK(*remembered.Value().metric > 0);
+            test.match = QueryPerceptionMatch::CurrentlySensed;
+            const auto sensed = EvaluateQueryPerception(source, test, target);
+            REQUIRE(sensed.HasValue());
+            CHECK(sensed.Value().filter == false);
+            CHECK(sensed.Value().metric == 0);
+            const auto oldRevision = test.revision++;
+            ExpectError(EvaluateQueryPerception(source, test, target), AIErrors::EnvironmentQueryContextStale);
+            test.revision = oldRevision;
+            fixture.source.visibility = PerceptionGameplayVisibility::Hidden;
+            fixture.Publish(2);
+            ExpectError(EvaluateQueryPerception(source, test, target), AIErrors::PerceptionSpatialStale);
+        }
+
+        TEST_CASE("one perception projection issues one blackboard notification and rejects recursive publication",
+                  "[unit][ai][perception][filter]") {
+            PublicationFixture fixture;
+
+            struct Probe final {
+                PublicationFixture *fixture;
+                std::size_t calls{};
+                std::size_t changedKeys{};
+                bool rejected{};
+            } probe{&fixture};
+
+            const auto notify = [](void *context, const BlackboardNotificationBatch &batch) noexcept {
+                auto &state = *static_cast<Probe *>(context);
+                ++state.calls;
+                state.changedKeys = batch.Changes().size();
+                const auto recursive = state.fixture->Sync();
+                state.rejected =
+                    recursive.HasError() && recursive.ErrorValue().code.Value() == AIErrors::BlackboardReentrantMutation.code.Value();
+            };
+            const auto observer = fixture.blackboard->RegisterObserverAtBlackboardSync(
+                {fixture.agent, {fixture.agent.incarnation, {1, 1}}, fixture.keys.sources, notify, &probe});
+            REQUIRE(observer.HasValue());
+            REQUIRE(fixture.Sync().HasValue());
+            REQUIRE(fixture.Sync().HasValue());
+            CHECK(probe.calls == 1);
+            CHECK(probe.changedKeys == 2);
+            CHECK(probe.rejected);
+            REQUIRE(fixture.blackboard->RemoveObserverAtBlackboardSync(observer.Value()).Value());
+        }
+
         TEST_CASE("17 through 32 admitted records fail without partial blackboard or debug publication", "[unit][ai][perception][filter]") {
             for (std::size_t count = 17; count <= 32; ++count) {
                 INFO("memory entries: " << count);
                 PublicationFixture fixture(count);
                 ExpectError(fixture.Sync(), AIErrors::PerceptionDescriptorLimitExceeded);
+                CHECK(fixture.publication.RejectedByCapacity() == count);
                 CHECK(fixture.Read(fixture.keys.sources).count == 0);
                 CHECK(fixture.Read(fixture.keys.positions).count == 0);
                 CHECK(fixture.blackboard->CaptureCanonical().HasValue());
@@ -262,6 +357,7 @@ namespace Horo::AI {
                 const auto first = fixture.Sync();
                 REQUIRE(first.HasValue());
                 REQUIRE(first.Value().memory.count == 1);
+                CHECK(fixture.publication.RejectedByCapacity() == 0);
                 for (auto &extra : fixture.additional)
                     extra.visibility = PerceptionGameplayVisibility::Everyone;
                 fixture.Publish(3);
@@ -321,6 +417,8 @@ namespace Horo::AI {
             fixture.Publish(2);
             PerceptionPublication wrongProjection;
             const PerceptionBlackboardProjection wrong{fixture.keys.sources, MakeIdentity<BlackboardKeyId>(3)};
+            CHECK(fixture.keys.Validate(*fixture.schema).Value() == MaximumBlackboardCollectionElements);
+            ExpectError(wrong.Validate(*fixture.schema), AIErrors::BlackboardValueTypeMismatch);
             ExpectError(wrongProjection.PublishAtBlackboardSync(*fixture.scene, fixture.broadphase, fixture.listener.entity, fixture.memory,
                                                                 *fixture.blackboard, wrong, 1),
                         AIErrors::BlackboardValueTypeMismatch);

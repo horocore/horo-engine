@@ -66,18 +66,13 @@ namespace Horo::Editor {
             return result;
         }
 
-        [[nodiscard]] std::string SourceFingerprint(const std::filesystem::path &projectRoot) {
-            const auto path = projectRoot / ".horo/project.json";
-            std::ifstream input(path, std::ios::binary | std::ios::ate);
-            if (!input)
-                return {};
-            const std::streamsize size = input.tellg();
-            if (size <= 0 || size > 64 * 1024)
-                return {};
-            std::string contents(static_cast<std::size_t>(size), '\0');
-            input.seekg(0);
-            input.read(contents.data(), size);
-            return input ? contents : std::string{};
+        /** @brief Rechecks owned platform sources at load/session boundaries without installing runtime state. */
+        [[nodiscard]] Result<void> PlatformSourcesCurrent(
+            const std::shared_ptr<const Application::PlatformServicesProjectSourceSnapshot> &sources,
+            const CancellationToken cancellation = {}) {
+            if (!sources)
+                return Result<void>::Failure(OpenError(ProjectOpenErrors::SessionStale));
+            return Application::RevalidatePlatformServicesProjectSources(*sources, cancellation);
         }
 
         /** @brief Rechecks exact catalog bytes before each project-session publication boundary. */
@@ -127,7 +122,7 @@ namespace Horo::Editor {
             std::vector<PreparedDerivedState> derived;
             bool cancellationDeferred{};
             Application::ProjectSurfaceFileSnapshot surfaces;
-            std::string metadataFingerprint;
+            std::shared_ptr<const Application::PlatformServicesProjectSourceSnapshot> platformServices;
         };
 
         struct BackgroundCompletion {
@@ -172,6 +167,7 @@ namespace Horo::Editor {
         ProjectMigrationTransactionService &transactions;
         const RendererAvailabilitySnapshot &rendererAvailability;
         std::vector<IProjectOpenDerivedStateContributor *> derivedContributors;
+        Application::PlatformServicesProjectValidationContext platformPolicy;
         std::optional<Operation> operation;
         std::shared_ptr<ProjectSessionActivationLease::State> sessions{std::make_shared<ProjectSessionActivationLease::State>()};
         std::uint64_t nextOperation{1};
@@ -258,17 +254,6 @@ namespace Horo::Editor {
                           static_cast<unsigned long long>(id.value), cause->code.Value().c_str(), cause->message.c_str());
         }
 
-        /** @brief Captures a stable root byte identity bound to the compatibility-selected project. */
-        [[nodiscard]] Result<std::string> CaptureOpenMetadata(const std::filesystem::path &root, const std::string_view expectedId) {
-            auto fingerprint = SourceFingerprint(root);
-            auto metadata = Application::LoadProjectMetadata(root);
-            if (fingerprint.empty() || metadata.HasError())
-                return Result<std::string>::Failure(OpenError(ProjectOpenErrors::SessionStale));
-            if (metadata.Value().projectId != expectedId || SourceFingerprint(root) != fingerprint)
-                return Result<std::string>::Failure(OpenError(ProjectOpenErrors::SessionStale));
-            return Result<std::string>::Success(std::move(fingerprint));
-        }
-
         /** @brief Validates saved default authoring before any derived-state preparation. */
         [[nodiscard]] Result<void> ValidateDefaultProjectScene(const std::filesystem::path &root) {
             auto scene = LoadProjectDefaultScene(root);
@@ -339,9 +324,6 @@ namespace Horo::Editor {
                 return fail(resolved.ErrorValue());
             CompatibilityResolution compatibility = std::move(resolved).Value();
 
-            auto metadata = CaptureOpenMetadata(request.projectRoot, compatibility.snapshot.metadata->projectId);
-            if (metadata.HasError())
-                return fail(metadata.ErrorValue());
             auto surfaces = Application::LoadProjectSurfaceSettings(request.projectRoot, compatibility.snapshot.metadata->projectId);
             if (surfaces.HasError())
                 return fail(surfaces.ErrorValue());
@@ -352,11 +334,17 @@ namespace Horo::Editor {
             if (cancellation.IsCancellationRequested() && !compatibility.cancellationDeferred)
                 return fail(OpenError(ProjectOpenErrors::Cancelled));
 
+            const auto sourceCancellation = compatibility.cancellationDeferred ? CancellationToken{} : cancellation;
+            auto platform = Application::CapturePlatformServicesProjectSources(request.projectRoot, compatibility.snapshot,
+                                                                               state.platformPolicy, sourceCancellation);
+            if (platform.HasError())
+                return fail(std::move(platform).ErrorValue());
+            auto platformSnapshot = std::make_shared<const Application::PlatformServicesProjectSourceSnapshot>(std::move(platform).Value());
             SetPhase(completion, ProjectOpenPhase::RebuildingDerivedState);
             BackgroundResult result{.metadata = *compatibility.snapshot.metadata,
                                     .cancellationDeferred = compatibility.cancellationDeferred,
                                     .surfaces = std::move(surfaces).Value(),
-                                    .metadataFingerprint = std::move(metadata).Value()};
+                                    .platformServices = std::move(platformSnapshot)};
             if (auto prepared = PrepareOpenDerived(state, result, request, cancellation); prepared.HasError())
                 return fail(prepared.ErrorValue());
             std::lock_guard lock(completion->mutex);
@@ -398,9 +386,10 @@ namespace Horo::Editor {
             return Result<void>::Failure(OpenError(ProjectOpenErrors::SessionStale));
         std::lock_guard lock(state_->mutex);
         if (state_->status != State::Status::Reserved || !state_->candidate.has_value() || state_->candidate->id != id_ ||
-            SourceFingerprint(state_->candidate->projectRoot) != state_->candidate->sourceFingerprint ||
             !SurfaceSourceCurrent(state_->candidate->projectRoot, state_->candidate->surfaces))
             return Result<void>::Failure(OpenError(ProjectOpenErrors::SessionStale));
+        if (auto sources = PlatformSourcesCurrent(state_->candidate->platformServices); sources.HasError())
+            return Result<void>::Failure(WrapError(ProjectOpenErrors::SessionStale, sources.ErrorValue()));
         state_->status = State::Status::Consumed;
         committed_ = true;
         return Result<void>::Success();
@@ -468,13 +457,25 @@ namespace Horo::Editor {
     ProjectOpenService::ProjectOpenService(JobSystem &jobs, DurableFileSystem &files, ProjectOpenPreflightService &preflight,
                                            ProjectMutationCoordinator &mutations, ProjectMigrationTransactionService &transactions,
                                            const RendererAvailabilitySnapshot &rendererAvailability,
-                                           const std::span<IProjectOpenDerivedStateContributor *const> contributors) {
-        state_ = std::make_unique<State>(
-            State{jobs, files, preflight, mutations, transactions, rendererAvailability, {contributors.begin(), contributors.end()}});
+                                           const std::span<IProjectOpenDerivedStateContributor *const> contributors,
+                                           Application::PlatformServicesProjectValidationContext platformPolicy) {
+        state_ = std::make_unique<State>(State{jobs,
+                                               files,
+                                               preflight,
+                                               mutations,
+                                               transactions,
+                                               rendererAvailability,
+                                               {contributors.begin(), contributors.end()},
+                                               std::move(platformPolicy)});
     }
 
     ProjectOpenService::~ProjectOpenService() {
         Shutdown();
+    }
+
+    /** @copydoc ProjectOpenService::PlatformPolicy */
+    const Application::PlatformServicesProjectValidationContext &ProjectOpenService::PlatformPolicy() const noexcept {
+        return state_->platformPolicy;
     }
 
     /** @copydoc ProjectOpenService::Start */
@@ -540,9 +541,10 @@ namespace Horo::Editor {
         std::lock_guard lock(state_->sessions->mutex);
         if (state_->sessions->shutdown || state_->sessions->status != ProjectSessionActivationLease::State::Status::Ready ||
             !state_->sessions->candidate.has_value() || state_->sessions->candidate->id != session ||
-            SourceFingerprint(state_->sessions->candidate->projectRoot) != state_->sessions->candidate->sourceFingerprint ||
             !SurfaceSourceCurrent(state_->sessions->candidate->projectRoot, state_->sessions->candidate->surfaces))
             return Result<ProjectSessionActivationLease>::Failure(OpenError(ProjectOpenErrors::SessionStale));
+        if (auto sources = PlatformSourcesCurrent(state_->sessions->candidate->platformServices); sources.HasError())
+            return Result<ProjectSessionActivationLease>::Failure(WrapError(ProjectOpenErrors::SessionStale, sources.ErrorValue()));
         state_->sessions->status = ProjectSessionActivationLease::State::Status::Reserved;
         return Result<ProjectSessionActivationLease>::Success(ProjectSessionActivationLease{state_->sessions, session});
     }
@@ -646,12 +648,18 @@ namespace Horo::Editor {
         void PublishOpenSession(StateType &state, OperationType &operation, BackgroundResult &result, std::vector<std::string> revisions) {
             auto &snapshot = operation.snapshot;
             snapshot.phase = ProjectOpenPhase::PreparingWorkspace;
-            const std::string fingerprint = SourceFingerprint(operation.request.projectRoot);
-            if (fingerprint != result.metadataFingerprint || !SurfaceSourceCurrent(operation.request.projectRoot, result.surfaces)) {
+            if (!SurfaceSourceCurrent(operation.request.projectRoot, result.surfaces)) {
                 snapshot.phase = ProjectOpenPhase::Failed;
                 snapshot.outcome = ProjectOpenOutcome::Failed;
                 snapshot.progress = 1.0F;
                 snapshot.diagnostic = OpenError(ProjectOpenErrors::SessionStale);
+                return;
+            }
+            if (auto sources = PlatformSourcesCurrent(result.platformServices); sources.HasError()) {
+                snapshot.phase = ProjectOpenPhase::Failed;
+                snapshot.outcome = ProjectOpenOutcome::Failed;
+                snapshot.progress = 1.0F;
+                snapshot.diagnostic = WrapError(ProjectOpenErrors::SessionStale, sources.ErrorValue());
                 return;
             }
             const ProjectSessionCandidateId sessionId{state.nextSession++};
@@ -662,9 +670,9 @@ namespace Horo::Editor {
                                                                     operation.request.projectRoot,
                                                                     snapshot.projectName,
                                                                     snapshot.requiredRendererBackend,
-                                                                    fingerprint,
                                                                     std::move(revisions),
-                                                                    std::move(result.surfaces)};
+                                                                    std::move(result.surfaces),
+                                                                    std::move(result.platformServices)};
                 state.sessions->status = decltype(state.sessions->status)::Ready;
             }
             snapshot.readySession = sessionId;
@@ -701,6 +709,16 @@ namespace Horo::Editor {
         snapshot.cancellationDeferred = result->cancellationDeferred;
         if (FinishCancelledOpen(snapshot, result->cancellationDeferred, operation.cancellation.Token().IsCancellationRequested()))
             return;
+        const auto cancellation = result->cancellationDeferred ? CancellationToken{} : operation.cancellation.Token();
+        const auto sources = PlatformSourcesCurrent(result->platformServices, cancellation);
+        if (!SurfaceSourceCurrent(operation.request.projectRoot, result->surfaces) || sources.HasError()) {
+            snapshot.phase = ProjectOpenPhase::Failed;
+            snapshot.outcome = ProjectOpenOutcome::Failed;
+            snapshot.progress = 1.0F;
+            snapshot.diagnostic = sources.HasError() ? WrapError(ProjectOpenErrors::SessionStale, sources.ErrorValue())
+                                                     : OpenError(ProjectOpenErrors::SessionStale);
+            return;
+        }
         auto revisions = InstallOpenDerived(snapshot, *result);
         if (!revisions)
             return;

@@ -85,7 +85,7 @@ namespace Horo::Cli {
         CliOptionValueKind valueKind{};              /**< Typed value grammar. */
         bool required{};                             /**< Whether callers must provide the option. */
         bool repeatable{};                           /**< Whether more than one occurrence is accepted. */
-        bool sensitive{};                            /**< Whether presentation layers must redact its value. */
+        bool sensitive{};                            /**< Protected-channel input only. Ordinary argv values are rejected. */
         std::optional<std::string> defaultValue;     /**< Canonical default spelling, when present. */
         std::vector<std::string> enumerationValues;  /**< Closed value set for `Enumeration` options. */
         CliNumericRange numericRange;                /**< Optional range for numeric values. */
@@ -154,7 +154,7 @@ namespace Horo::Cli {
 
     /** @brief Bounded default and maximum execution deadline declared by a command. */
     struct CliTimeoutPolicy final {
-        std::uint64_t defaultMilliseconds{}; /**< Default host deadline; zero disables timeouts. */
+        std::uint64_t defaultMilliseconds{}; /**< Default host deadline; zero leaves the deadline opt-in. */
         std::uint64_t maximumMilliseconds{}; /**< Largest caller-selected deadline; zero disables overrides. */
 
         [[nodiscard]] auto operator<=>(const CliTimeoutPolicy &) const = default;

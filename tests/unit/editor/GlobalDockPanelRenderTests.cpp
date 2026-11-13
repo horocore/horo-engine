@@ -18,6 +18,7 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 #include "editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPane.h"
 #include "editor/screens/workspace/panels/global_dock/panes/operations/GlobalDockOperationsPane.h"
+#include "editor/screens/workspace/panels/global_dock/panes/platform/PlatformDiagnosticsPane.h"
 #include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
@@ -37,6 +38,31 @@
 #include <vector>
 
 namespace {
+    /** @brief Records presentation queries without any service, SDK or mutable queue ownership. */
+    class TestPlatformDiagnostics final : public Horo::PlatformServices::IPlatformDiagnostics {
+    public:
+        mutable unsigned queries{};
+        unsigned commands{};
+        bool allowCommand{};
+
+        [[nodiscard]] Horo::Result<Horo::PlatformServices::PlatformDiagnosticsSnapshot> Query() const override {
+            ++queries;
+            Horo::PlatformServices::PlatformDiagnosticsSnapshot snapshot;
+            snapshot.offline.active = 17;
+            snapshot.offline.activeCapacity = 64;
+            snapshot.offline.retained = 23;
+            snapshot.offline.retainedCapacity = 256;
+            snapshot.canSuspendPending = allowCommand;
+            return Horo::Result<Horo::PlatformServices::PlatformDiagnosticsSnapshot>::Success(snapshot);
+        }
+
+        [[nodiscard]] Horo::Result<std::size_t> SuspendPending(Horo::PlatformServices::PlatformProviderGeneration,
+                                                               Horo::PlatformServices::PlatformOfflineQueueGeneration) override {
+            ++commands;
+            return Horo::Result<std::size_t>::Success(0);
+        }
+    };
+
     class TestGlobalDockPane final : public Horo::Editor::IGlobalDockPane {
     public:
         TestGlobalDockPane() : IGlobalDockPane("test.global_dock") {}
@@ -161,7 +187,7 @@ namespace {
         CHECK((*world)->GetDisplayName() == "workspace.panel.world_composition");
 
         const auto &panels = registry.GetAllPanels();
-        REQUIRE(std::ranges::none_of(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
+        REQUIRE(std::ranges::any_of(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
             return panel->GetId() == "horo.input_mapping";
         }));
         const auto globalDock = std::ranges::find_if(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
@@ -170,6 +196,7 @@ namespace {
         REQUIRE((globalDock != panels.end()));
         auto concreteDock = std::dynamic_pointer_cast<GlobalDockPanel>(*globalDock);
         REQUIRE(concreteDock);
+        CHECK(concreteDock->ActivatePane("horo.global_dock.platform"));
         REQUIRE(concreteDock->ActivatePane("test.global_dock.custom"));
     }
 
@@ -545,6 +572,28 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
         ImGui::Render();
         REQUIRE((tabPanel.ActiveTab() == tab));
     }
+
+    TestPlatformDiagnostics platformDiagnostics;
+    GlobalDockPanel platformPanel;
+    REQUIRE(platformPanel.RegisterPane(std::make_unique<PlatformDiagnosticsPane>()));
+    REQUIRE(platformPanel.ActivatePane("horo.global_dock.platform"));
+    PanelContext platformContext{.dataBus = editorEvents, .platformDiagnostics = &platformDiagnostics};
+    platformPanel.OnAttach(platformContext);
+    for (const bool allowed : {false, true}) {
+        platformDiagnostics.allowCommand = allowed;
+        for (const float width : {260.0F, 900.0F}) {
+            ImGui::NewFrame();
+            RenderAtWidth(width, "PlatformDiagnosticsMatrix", platformPanel, context);
+            ImGui::Render();
+        }
+    }
+    CHECK(platformDiagnostics.queries == 4);
+    CHECK(platformDiagnostics.commands == 0);
+    platformPanel.OnDetach();
+    ImGui::NewFrame();
+    RenderAtWidth(260.0F, "PlatformDiagnosticsDetached", platformPanel, context);
+    ImGui::Render();
+    CHECK(platformDiagnostics.queries == 4);
 
     Log::StructuredLogStore logStore{8};
     for (std::size_t level = 0; level < 5; ++level) {

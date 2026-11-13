@@ -95,9 +95,11 @@ namespace Horo::Editor {
          * @param mutations Shared project mutation coordinator.
          * @param jobs Scheduler consumed by migration preparation.
          * @param storagePolicy Conservative admission and cleanup bounds.
+         * @param executionServices Host-selected preparation capabilities retained by this service and each synchronous execution.
          */
         ProjectMigrationTransactionService(DurableFileSystem &files, WallClock &wallClock, ProjectMutationCoordinator &mutations,
-                                           JobSystem &jobs, const ProjectMigrationStoragePolicy &storagePolicy = {}) noexcept;
+                                           JobSystem &jobs, const ProjectMigrationStoragePolicy &storagePolicy = {},
+                                           Application::ProjectMigrationExecutionServices executionServices = {}) noexcept;
 
         /** @brief Prepares, validates, and durably publishes one migration. @param request Transaction request. @return
          * Commit result or typed failure. */
@@ -123,5 +125,6 @@ namespace Horo::Editor {
         ProjectMutationCoordinator &mutations_;
         JobSystem &jobs_;
         ProjectMigrationStoragePolicy storagePolicy_;
+        Application::ProjectMigrationExecutionServices executionServices_;
     };
 }  // namespace Horo::Editor

@@ -2,14 +2,32 @@
 #include "Horo/Runtime/Input.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <utility>
 
 namespace Horo::Input {
     namespace {
         template <typename Enum> constexpr std::size_t Index(Enum value) noexcept {
             return static_cast<std::size_t>(value);
+        }
+
+        /** @brief Issues a connection incarnation once per process, including collector replacement.
+         * Independent collectors may connect on their own owner threads. The relaxed atomic protects only
+         * incarnation uniqueness, never collector state. Zero permanently marks exhaustion. The counter
+         * owns no resources, has no callbacks and is never reset during shutdown.
+         */
+        std::uint64_t NextGamepadGeneration() noexcept {
+            static std::atomic<std::uint64_t> next{1};
+            auto candidate = next.load(std::memory_order_relaxed);
+            while (candidate != 0) {
+                const auto successor = candidate == std::numeric_limits<std::uint64_t>::max() ? 0 : candidate + 1;
+                if (next.compare_exchange_weak(candidate, successor, std::memory_order_relaxed))
+                    return candidate;
+            }
+            return 0;
         }
 
         void Advance(ButtonState &state) noexcept {
@@ -21,8 +39,50 @@ namespace Horo::Input {
             if (state.down == down)
                 return;
             state.down = down;
-            state.pressed = down;
-            state.released = !down;
+            state.pressed |= down;
+            state.released |= !down;
+        }
+
+        /** @brief Cancels activation while preserving terminal release evidence after ownership loss. */
+        void ReleaseForLoss(ButtonState &state) noexcept {
+            state.released |= state.down;
+            state.down = false;
+            state.pressed = false;
+        }
+
+        /** @brief Retires pointing controls without disturbing keyboard, gamepad or sensor ownership. */
+        void NeutralizePointer(RawInputSnapshot &snapshot) noexcept {
+            for (ButtonState &state : snapshot.pointer.buttons)
+                ReleaseForLoss(state);
+            for (auto &touch : snapshot.touches) {
+                if (touch.id.IsValid()) {
+                    touch.cancelled = true;
+                    ReleaseForLoss(touch.contact);
+                }
+            }
+            snapshot.pointer.deltaX = 0.0F;
+            snapshot.pointer.deltaY = 0.0F;
+            snapshot.pointer.wheelX = 0.0F;
+            snapshot.pointer.wheelY = 0.0F;
+        }
+
+        /** @brief Validates copied sensor facts before replacing the current sample; unavailability burns old timing/data. */
+        bool PublishSensorSample(SensorSample &current, SensorSample sample) noexcept {
+            if (sample.availability > SensorAvailability::Available)
+                return false;
+            if (sample.availability == SensorAvailability::Available) {
+                if (sample.timestampNanoseconds <= 0 || sample.timestampNanoseconds < current.timestampNanoseconds ||
+                    !std::ranges::all_of(sample.value, [](const float value) {
+                    return std::isfinite(value);
+                }))
+                    return false;
+            } else {
+                sample.value = {};
+                sample.counter = 0;
+                sample.timestampNanoseconds = 0;
+            }
+            current = sample;
+            return true;
         }
     }  // namespace
 
@@ -44,7 +104,6 @@ namespace Horo::Input {
     struct RawInputCollector::Impl {
         std::array<RawInputSnapshot, 2> snapshots;
         std::size_t write{0};
-        std::uint64_t nextGeneration{1};
     };
 
     RawInputCollector::RawInputCollector() : impl_(std::make_unique<Impl>()) {
@@ -56,11 +115,13 @@ namespace Horo::Input {
 
     RawInputCollector::~RawInputCollector() = default;
 
-    void RawInputCollector::BeginFrame(const FrameNumber frame) {
+    /** @copydoc RawInputCollector::BeginFrame */
+    void RawInputCollector::BeginFrame(const FrameNumber frame, const std::optional<InputSampleTime> sampleTime) {
         RawInputSnapshot &next = impl_->snapshots[impl_->write];
         const RawInputSnapshot &previous = impl_->snapshots[1 - impl_->write];
         next = previous;
         next.frame = frame;
+        next.sampleTime = sampleTime;
         next.text.clear();
         next.pointer.deltaX = 0.0F;
         next.pointer.deltaY = 0.0F;
@@ -86,26 +147,39 @@ namespace Horo::Input {
     }
 
     void RawInputCollector::SetKey(const Key key, const bool down) {
+        if (down && !impl_->snapshots[impl_->write].window.focused)
+            return;
         auto &keys = impl_->snapshots[impl_->write].keyboard;
         if (Index(key) < keys.size())
             Set(keys[Index(key)], down);
     }
 
     void RawInputCollector::SetPointerButton(const PointerButton button, const bool down) {
+        const auto &window = impl_->snapshots[impl_->write].window;
+        if (down && (!window.focused || !window.pointerDeviceAvailable))
+            return;
         auto &buttons = impl_->snapshots[impl_->write].pointer.buttons;
         if (Index(button) < buttons.size())
             Set(buttons[Index(button)], down);
     }
 
     void RawInputCollector::SetPointerPosition(const float x, const float y) {
+        if (!std::isfinite(x) || !std::isfinite(y))
+            return;
         PointerState &pointer = impl_->snapshots[impl_->write].pointer;
-        pointer.deltaX += x - pointer.x;
-        pointer.deltaY += y - pointer.y;
+        const auto &window = impl_->snapshots[impl_->write].window;
+        if (window.focused && window.pointerDeviceAvailable) {
+            pointer.deltaX += x - pointer.x;
+            pointer.deltaY += y - pointer.y;
+        }
         pointer.x = x;
         pointer.y = y;
     }
 
     void RawInputCollector::AddPointerWheel(const float x, const float y) {
+        const auto &window = impl_->snapshots[impl_->write].window;
+        if (!window.focused || !window.pointerDeviceAvailable || !std::isfinite(x) || !std::isfinite(y))
+            return;
         PointerState &pointer = impl_->snapshots[impl_->write].pointer;
         pointer.wheelX += x;
         pointer.wheelY += y;
@@ -178,6 +252,8 @@ namespace Horo::Input {
 
     void RawInputCollector::AppendText(const std::string_view utf8) {
         RawInputSnapshot &snapshot = impl_->snapshots[impl_->write];
+        if (!snapshot.window.focused)
+            return;
         if (constexpr std::size_t maximumTextBytes = 4096;
             utf8.size() > maximumTextBytes - snapshot.text.size() || !IsValidUtf8ScalarSequence(utf8))
             return;
@@ -190,6 +266,8 @@ namespace Horo::Input {
 
     void RawInputCollector::SetTextComposition(const std::string_view utf8, const std::int32_t selectionStart,
                                                const std::int32_t selectionLength) {
+        if (!impl_->snapshots[impl_->write].window.focused)
+            return;
         TextCompositionState &composition = impl_->snapshots[impl_->write].composition;
         if (constexpr std::size_t maximumCompositionBytes = 4096;
             utf8.size() > maximumCompositionBytes || !IsValidUtf8ScalarSequence(utf8)) {
@@ -210,55 +288,49 @@ namespace Horo::Input {
     /** @copydoc RawInputCollector::SetSensorSample */
     bool RawInputCollector::SetSensorSample(const SensorKind sensor, SensorSample sample) noexcept {
         auto &sensors = impl_->snapshots[impl_->write].sensors;
-        if (Index(sensor) >= sensors.size() || sample.availability > SensorAvailability::Available)
+        return Index(sensor) < sensors.size() && PublishSensorSample(sensors[Index(sensor)], sample);
+    }
+
+    /** @copydoc RawInputCollector::SetGamepadGyroscopeSample */
+    bool RawInputCollector::SetGamepadGyroscopeSample(const GamepadDeviceId id, const SensorSample sample) noexcept {
+        auto &snapshot = impl_->snapshots[impl_->write];
+        const auto pad = std::ranges::find(snapshot.gamepads, id, &GamepadState::id);
+        if (pad == snapshot.gamepads.end() || (!snapshot.window.focused && sample.availability == SensorAvailability::Available))
             return false;
-        if (sample.availability == SensorAvailability::Available) {
-            if (sample.timestampNanoseconds <= 0 || sample.timestampNanoseconds < sensors[Index(sensor)].timestampNanoseconds ||
-                !std::ranges::all_of(sample.value, [](float value) {
-                return std::isfinite(value);
-            }))
-                return false;
-        } else {
-            sample.value = {};
-            sample.counter = 0;
-            sample.timestampNanoseconds = 0;
-        }
-        sensors[Index(sensor)] = sample;
-        return true;
+        return PublishSensorSample(pad->gyroscope, sample);
     }
 
     void RawInputCollector::SetModifiers(const ModifierState modifiers) noexcept {
-        impl_->snapshots[impl_->write].modifiers = modifiers;
+        auto &snapshot = impl_->snapshots[impl_->write];
+        snapshot.modifiers = snapshot.window.focused ? modifiers : ModifierState{};
     }
 
     void RawInputCollector::SetWindowState(const WindowInputState state) noexcept {
-        impl_->snapshots[impl_->write].window = state;
-        if (!state.focused || !state.pointerDeviceAvailable)
+        auto &snapshot = impl_->snapshots[impl_->write];
+        snapshot.window = state;
+        if (!state.focused)
             Neutralize();
+        else if (!state.pointerDeviceAvailable)
+            NeutralizePointer(snapshot);
     }
 
     void RawInputCollector::Neutralize() noexcept {
         RawInputSnapshot &snapshot = impl_->snapshots[impl_->write];
         for (ButtonState &state : snapshot.keyboard)
-            Set(state, false);
-        for (ButtonState &state : snapshot.pointer.buttons)
-            Set(state, false);
-        for (auto &touch : snapshot.touches) {
-            if (touch.id.IsValid()) {
-                touch.cancelled = true;
-                Set(touch.contact, false);
-            }
-        }
+            ReleaseForLoss(state);
+        NeutralizePointer(snapshot);
         for (auto &sensor : snapshot.sensors) {
             if (sensor.availability == SensorAvailability::Available)
                 sensor = {.availability = SensorAvailability::Suspended};
         }
         snapshot.modifiers = {};
         for (GamepadState &gamepad : snapshot.gamepads) {
+            if (gamepad.gyroscope.availability == SensorAvailability::Available)
+                gamepad.gyroscope = {.availability = SensorAvailability::Suspended};
             for (ButtonState &state : gamepad.buttons)
-                Set(state, false);
+                ReleaseForLoss(state);
             for (ButtonState &state : gamepad.rawButtons)
-                Set(state, false);
+                ReleaseForLoss(state);
             gamepad.axes.fill(0.0F);
             std::ranges::fill(gamepad.rawAxes, 0.0F);
         }
@@ -271,13 +343,18 @@ namespace Horo::Input {
 
     GamepadDeviceId RawInputCollector::ConnectGamepad(std::string name, const bool canonicalMapping, const std::size_t rawButtonCount,
                                                       const std::size_t rawAxisCount) {
+        if (rawButtonCount > 256 || rawAxisCount > 256)
+            return {};
         auto &pads = impl_->snapshots[impl_->write].gamepads;
         std::uint32_t slot = 0;
         while (std::ranges::any_of(pads, [slot](const GamepadState &pad) {
             return pad.id.slot == slot;
         }))
             ++slot;
-        const GamepadDeviceId id{slot, impl_->nextGeneration++};
+        const auto generation = NextGamepadGeneration();
+        if (generation == 0)
+            return {};
+        const GamepadDeviceId id{slot, generation};
         GamepadState state{.id = id, .name = std::move(name), .canonicalMapping = canonicalMapping};
         state.rawButtons.resize(rawButtonCount);
         state.rawAxes.resize(rawAxisCount);
@@ -293,6 +370,8 @@ namespace Horo::Input {
     }
 
     bool RawInputCollector::SetGamepadButton(const GamepadDeviceId id, const GamepadButton button, const bool down) {
+        if (!impl_->snapshots[impl_->write].window.focused)
+            return false;
         auto &pads = impl_->snapshots[impl_->write].gamepads;
         const auto pad = std::ranges::find(pads, id, &GamepadState::id);
         if (pad == pads.end() || Index(button) >= pad->buttons.size())
@@ -302,15 +381,20 @@ namespace Horo::Input {
     }
 
     bool RawInputCollector::SetGamepadAxis(const GamepadDeviceId id, const GamepadAxis axis, const float value) {
+        if (!impl_->snapshots[impl_->write].window.focused)
+            return false;
         auto &pads = impl_->snapshots[impl_->write].gamepads;
         const auto pad = std::ranges::find(pads, id, &GamepadState::id);
         if (pad == pads.end() || Index(axis) >= pad->axes.size() || !std::isfinite(value))
             return false;
-        pad->axes[Index(axis)] = std::clamp(value, -1.0F, 1.0F);
+        const float minimum = axis == GamepadAxis::LeftTrigger || axis == GamepadAxis::RightTrigger ? 0.0F : -1.0F;
+        pad->axes[Index(axis)] = std::clamp(value, minimum, 1.0F);
         return true;
     }
 
     bool RawInputCollector::SetRawGamepadButton(const GamepadDeviceId id, const std::size_t button, const bool down) {
+        if (!impl_->snapshots[impl_->write].window.focused)
+            return false;
         auto &pads = impl_->snapshots[impl_->write].gamepads;
         const auto pad = std::ranges::find(pads, id, &GamepadState::id);
         if (pad == pads.end() || button >= pad->rawButtons.size())
@@ -320,6 +404,8 @@ namespace Horo::Input {
     }
 
     bool RawInputCollector::SetRawGamepadAxis(const GamepadDeviceId id, const std::size_t axis, const float value) {
+        if (!impl_->snapshots[impl_->write].window.focused)
+            return false;
         auto &pads = impl_->snapshots[impl_->write].gamepads;
         const auto pad = std::ranges::find(pads, id, &GamepadState::id);
         if (pad == pads.end() || axis >= pad->rawAxes.size() || !std::isfinite(value))

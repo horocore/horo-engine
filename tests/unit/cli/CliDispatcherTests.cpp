@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -389,6 +390,32 @@ namespace Horo::Cli {
         CHECK(fixture.state.observedDeadline == fixture.state.observedDeadlineAfterDelay);
         CHECK(*fixture.state.observedDeadline >= before + std::chrono::seconds{1});
         CHECK(*fixture.state.observedDeadline <= after + std::chrono::seconds{1});
+    }
+
+    TEST_CASE("CLI dispatcher retains a host deadline that already includes startup time", "[cli][timeout]") {
+        DispatcherFixture fixture;
+        CliInvocationStopController stop{std::chrono::milliseconds{500}};
+        const auto original = stop.Deadline();
+        REQUIRE(original);
+        auto invocation = Invocation(fixture.configuration);
+        invocation.cancellation = stop.Token();
+        invocation.stopControl = &stop;
+        REQUIRE(fixture.dispatcher.Dispatch(Request(), invocation).Outcome().HasValue());
+        CHECK(fixture.state.observedDeadline == original);
+        CHECK(stop.Deadline() == original);
+    }
+
+    TEST_CASE("CLI dispatcher rejects unrepresentable default deadlines before use case execution", "[cli][timeout]") {
+        UseCaseState state;
+        ProjectInspectionUseCase useCase{state};
+        auto descriptor = Descriptor();
+        descriptor.timeout = {.defaultMilliseconds = std::numeric_limits<std::uint64_t>::max(),
+                              .maximumMilliseconds = std::numeric_limits<std::uint64_t>::max()};
+        auto dispatcher = MakeDispatcher(state, useCase, descriptor);
+        REQUIRE(dispatcher.HasValue());
+        const auto configuration = Configuration();
+        RequireError(std::move(dispatcher).Value().Dispatch(Request(), Invocation(configuration)), CliErrors::ExecutionContextInvalid);
+        CHECK(state.calls == 0);
     }
 
     TEST_CASE("CLI execution context preserves an explicitly unlimited deadline") {

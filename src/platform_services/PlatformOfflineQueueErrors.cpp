@@ -1,18 +1,13 @@
 #include "Horo/PlatformServices/PlatformOfflineQueueErrors.h"
 
+#include "Horo/PlatformServices/PlatformOfflineQueueStorage.h"
+
 namespace Horo::PlatformServices::OfflineQueueErrors {
     namespace {
         const ErrorDomainId Domain{"horo.platform.offline"};
     }
 
-    const ErrorCodeDescriptor InvalidConfiguration{.domain = Domain,
-                                                   .code = ErrorCode{"platform.offline.invalid_configuration"},
-                                                   .defaultSeverity = ErrorSeverity::Error,
-                                                   .summary = "Platform offline queue limits are invalid.",
-                                                   .remediationHint =
-                                                       "Use finite capacities, lifetimes, retention, and generation within engine limits.",
-                                                   .retryable = false,
-                                                   .userActionable = false};
+    const ErrorCodeDescriptor &InvalidConfiguration = ::Horo::PlatformOfflineQueue::PlatformOfflineQueueErrors::InvalidConfiguration;
     const ErrorCodeDescriptor InvalidIntent{.domain = Domain,
                                             .code = ErrorCode{"platform.offline.invalid_intent"},
                                             .defaultSeverity = ErrorSeverity::Error,
@@ -20,20 +15,8 @@ namespace Horo::PlatformServices::OfflineQueueErrors {
                                             .remediationHint = "Submit the original typed intent with a valid lane and bounded payload.",
                                             .retryable = false,
                                             .userActionable = false};
-    const ErrorCodeDescriptor CapacityExceeded{.domain = Domain,
-                                               .code = ErrorCode{"platform.offline.capacity_exceeded"},
-                                               .defaultSeverity = ErrorSeverity::Error,
-                                               .summary = "Platform offline intent capacity is exhausted.",
-                                               .remediationHint = "Wait for legal terminal compaction or reduce admitted work.",
-                                               .retryable = true,
-                                               .userActionable = false};
-    const ErrorCodeDescriptor IdentityConflict{.domain = Domain,
-                                               .code = ErrorCode{"platform.offline.identity_conflict"},
-                                               .defaultSeverity = ErrorSeverity::Error,
-                                               .summary = "Platform offline intent identity was reused with different content.",
-                                               .remediationHint = "Retain the original immutable Horo intent identity and envelope.",
-                                               .retryable = false,
-                                               .userActionable = false};
+    const ErrorCodeDescriptor &CapacityExceeded = ::Horo::PlatformOfflineQueue::PlatformOfflineQueueErrors::CapacityExceeded;
+    const ErrorCodeDescriptor &IdentityConflict = ::Horo::PlatformOfflineQueue::PlatformOfflineQueueErrors::IdentityConflict;
     const ErrorCodeDescriptor Stale{.domain = Domain,
                                     .code = ErrorCode{"platform.offline.stale"},
                                     .defaultSeverity = ErrorSeverity::Error,

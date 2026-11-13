@@ -1,6 +1,7 @@
 #include "Horo/CharacterInput/DesiredMotionAdapter.h"
 
 #include "Horo/Physics/CharacterErrors.h"
+#include "Horo/Runtime/InputAccessibility.h"
 
 #include <algorithm>
 #include <cmath>
@@ -138,6 +139,10 @@ namespace Horo::CharacterInput {
         Result<void> CaptureSample(Input::InputRouter &router, const Input::InputContextToken &context) {
             const auto movement = router.ReadActionEvidence(context, binding.move, principal.player);
             const auto jump = router.ReadActionEvidence(context, binding.jump, principal.player);
+            if (movement.status == Input::ActionReadStatus::ClockUnavailable || jump.status == Input::ActionReadStatus::ClockUnavailable) {
+                ClearInput();
+                return Result<void>::Failure(MakeError(Input::InputAccessibilityErrors::ClockUnavailable));
+            }
             if (movement.status != Input::ActionReadStatus::Resolved || jump.status != Input::ActionReadStatus::Resolved) {
                 ClearInput();
                 return Result<void>::Failure(MakeError(Character::CharacterErrors::CapacityExceeded));
@@ -151,7 +156,7 @@ namespace Horo::CharacterInput {
             heldVelocity = Math::Vec3{(binding.right.x * movement.value.x + binding.forward.x * movement.value.y) * scale,
                                       (binding.right.y * movement.value.x + binding.forward.y * movement.value.y) * scale,
                                       (binding.right.z * movement.value.x + binding.forward.z * movement.value.y) * scale};
-            pendingJump = pendingJump || jump.value.pressed;
+            pendingJump = pendingJump || jump.value.pressed || jump.value.repeated;
             return Result<void>::Success();
         }
     };

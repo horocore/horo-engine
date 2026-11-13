@@ -118,6 +118,8 @@ namespace Horo::Gameplay {
         registries.registry = std::move(registry).Value();
         if (bundle.decisionNodeCount != 0)
             decisionNodes.assign(bundle.decisionNodes, bundle.decisionNodes + bundle.decisionNodeCount);
+        if (bundle.perceptionSenseCount != 0)
+            perceptionSenses.assign(bundle.perceptionSenses, bundle.perceptionSenses + bundle.perceptionSenseCount);
         return Result<void>::Success();
     }
 

@@ -7,8 +7,10 @@
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/PlatformServices/PlatformDiagnostics.h"
 #include "WorkspacePathText.h"
 #include "editor/screens/NavigationErrors.h"
+#include "editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.h"
 
 #include <imgui.h>
 
@@ -34,6 +36,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
               .operationControl = services.TryGet<IOperationControl>(),
               .networkDebuggerQuery = services.TryGetConst<Application::INetworkDebuggerQuery>(),
               .networkDebuggerControl = services.TryGet<Application::INetworkDebuggerControl>(),
+              .platformDiagnostics = services.TryGet<PlatformServices::IPlatformDiagnostics>(),
           },
           projectServices_{
               .assetRegistry = services.TryGet<Assets::AssetRegistry>(),
@@ -71,12 +74,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         host_.SetCurrentProjectRoot(controller_->ProjectRoot());
         LoadProjectInputProfile(controller_->ProjectRoot());
         if (auto attached = AttachXrInput(); attached.HasError()) {
-            if (input_.previousProfile) {
-                if (auto restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError())
-                    LOG_ERROR("editor.input", "Failed to restore the host profile after XR admission: %s",
-                              restored.ErrorValue().message.c_str());
-                input_.previousProfile.reset();
-            }
+            RestoreWorkspaceInputProfile();
+            input_.profilePaths.reset();
             return attached;
         }
         RestoreExtensionWorkspace();
@@ -89,12 +88,18 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
         AttachWorkspacePanels();
         UpdateStatusItems();
+        const auto platformSources = activation.Candidate().platformServices;
         if (auto committed = activation.Commit(); committed.HasError()) {
             contributions_.panels.DetachAll();
+            DetachXrInput();
+            RestoreWorkspaceInputProfile();
+            input_.profilePaths.reset();
             viewportSceneState_.Clear();
             controller_.reset();
             return committed;
         }
+        platformSources_ = platformSources;
+        settings_.SetInputProfilePaths(input_.profilePaths);
         return Result<void>::Success();
     }
 
@@ -236,6 +241,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @brief Route captured source creation commands through their exclusive transient workflows. */
     bool EditorWorkspaceScreen::TryOpenCreationModal(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
+        if (command.command == OpenGyroscopeBinding && command.gyroscopeBinding) {
+            const auto opened = modalHost_.OpenRoot(MakeGyroscopeBindingModal(context_, input_.router, *command.gyroscopeBinding));
+            if (opened.HasError())
+                LOG_WARN("editor.input", "Gyroscope editor could not open: %s", opened.ErrorValue().message.c_str());
+            return true;
+        }
         if (command.command == CreatePrefabFromSelection && command.objectPayload) {
             OpenPrefabCreationModal(*command.objectPayload);
             return true;

@@ -5,6 +5,17 @@ namespace Horo::Input::Errors {
         const ErrorDomainId Domain{"horo.input"};
     }
 
+    /** @copydoc RoutingIdentityExhausted */
+    const ErrorCodeDescriptor RoutingIdentityExhausted{
+        .domain = Domain,
+        .code = ErrorCode{"input.routing.identity_exhausted"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Input routing identity space is exhausted.",
+        .remediationHint = "Recreate the input owner after its existing contexts and captures retire.",
+        .retryable = false,
+        .userActionable = false,
+    };
+
     const ErrorCodeDescriptor CollectionInvalid{
         .domain = Domain,
         .code = ErrorCode{"input.collection.invalid"},

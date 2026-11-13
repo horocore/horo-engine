@@ -125,22 +125,35 @@ localized tooltips.
 command registry. Runtime Input owns the binding representation, validation and
 canonical physical keys (including Equal and Minus). Settings > Input projects
 registered digital actions, records a complete chord, supports per-action reset,
-and commits only a valid profile through the existing atomic settings workflow.
-The committed profile is serialized with Input's versioned serializer under
-`input.bindingProfile` in `editor_settings.json`; the GUI never maintains a
-second live keymap. Startup imports a legacy `.horo/input/editor.json` only when
-that canonical field is absent. The legacy file is retained, and subsequent
-settings commits establish canonical ownership. Both workspace action routing
-and focused source interaction use the committed effective bindings. Modals and
-unfocused source views cannot dispatch source shortcuts.
+and commits only a valid profile through Input's atomic profile persistence.
+The editor-user authority is `.horo/input/editor.json` under the platform user
+configuration home, following the Input architecture's project/global/project-user
+topology. Settings retains a typed draft and committed global snapshot. The active
+router supplies effective bindings to workspace and focused source interaction.
+Input Mapping commits project-user overrides through `CommitBindingProfileChange`.
+Settings changes reload the active project's layers before router activation.
+Modals and unfocused source views cannot dispatch source shortcuts.
+
+INP-001.6 migrates the former `input.bindingProfile` field in
+`editor_settings.json`. When the canonical user file is absent, loading imports
+that field. The next successful save establishes the prior valid profile in the
+canonical file before retiring the embedded field, then atomically publishes the
+candidate profile. Subsequent loads use the canonical file. Corruption there is
+reported instead of reviving an older embedded value. New Settings writes omit
+the embedded profile. Existing project files and action identities retain their
+formats.
 
 `EditorSettings` and its modal draft now carry the typed keymap value. Editor
 Services, GUI, executable hosts and Settings consumers must be rebuilt together;
 an already-running host cannot hot-reload this layout change. Equal and Minus
 are appended physical-key identities, preserving earlier numeric IDs, while
 Input snapshot consumers must rebuild for the larger key-state array. Existing
-valid Settings JSON without the new field remains supported; no project or
-source-file format changes.
+valid Settings JSON with or without the old embedded field remains readable.
+The appended borrowed router in `EditorGuiContext` requires GUI/host/public-header
+consumers to rebuild together. Aggregate initializers may omit it and retain the
+Settings snapshot path used by isolated UI tests. Production composition supplies
+the live host router. Extension shortcut caches observe that router's binding
+revision, including project-user edits.
 
 Cmd/Ctrl + Equal (with or without Shift), Minus and 0 adjust/reset view-local
 font zoom. The persisted Settings code font size remains the base. Zoom and

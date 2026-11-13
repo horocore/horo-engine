@@ -37,7 +37,8 @@ namespace Horo::Cli {
         /**
          * @brief Emits only the descriptor-declared version-one progress record, or human stderr progress.
          * @param event Bounded progress from the dispatcher mailbox.
-         * @return Success, or a typed protocol admission error without writing an invalid record.
+         * @return Success, a typed protocol admission error, or a host failure when a stream rejects output.
+         * @note Each emitted progress record is flushed before returning.
          */
         [[nodiscard]] Result<void> Progress(const CliProgressEvent &event);
         /**
@@ -46,10 +47,12 @@ namespace Horo::Cli {
          * @return Stable exit code and any original untranslatable error, retained for diagnostics.
          * @note Repeated completion returns the original outcome without additional output. Partial failures
          * retain successful fields and canonical per-item errors; their first error determines the exit category.
+         * An already failed stream yields host exit one. Writable stdout retains that same envelope exit,
+         * and any original terminal error is retained as a cause.
          */
         [[nodiscard]] CliPresentationOutcome Complete(const CliTerminalResult &terminal);
         /**
-         * @brief Emits the reserved exit-one envelope for unexpected pre-initialization host failure.
+         * @brief Emits the reserved exit-one envelope for an unexpected native host failure.
          * @return Closed presentation outcome; normal application failures must use Complete.
          */
         [[nodiscard]] CliPresentationOutcome HostFailure();

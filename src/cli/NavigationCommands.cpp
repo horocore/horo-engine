@@ -196,6 +196,7 @@ namespace Horo::Cli {
                 .contractVersion = {1, 0, 0},
                 .sideEffects = CliSideEffectPolicy::WritesFiles,
                 .cancellation = CliCancellationPolicy::Cooperative,
+                .timeout = {.maximumMilliseconds = 86'400'000},
                 .ownerId = "horo.navigation.cli"};
     }
 

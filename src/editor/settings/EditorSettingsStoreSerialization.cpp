@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <locale>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -31,7 +32,15 @@ namespace Horo::Editor::SettingsStoreInternal {
                         out += "\\t";
                         break;
                     default:
-                        out += c;
+                        if (static_cast<unsigned char>(c) < 0x20U) {
+                            constexpr char hex[] = "0123456789abcdef";
+                            const auto byte = static_cast<unsigned char>(c);
+                            out += "\\u00";
+                            out += hex[byte >> 4U];
+                            out += hex[byte & 0x0fU];
+                        } else {
+                            out += c;
+                        }
                         break;
                 }
             }
@@ -195,9 +204,7 @@ namespace Horo::Editor::SettingsStoreInternal {
             out << "  \"input\": {\n";
             out << R"(    "orbitSensitivity": )" << settings.orbitSensitivity << ",\n";
             out << R"(    "panSensitivity": )" << settings.panSensitivity << ",\n";
-            out << R"(    "invertOrbitY": )" << BoolString(source.invertOrbitY) << ",\n";
-            const auto profile = Input::SerializeBindingProfile(source.keymap.profile);
-            out << R"(    "bindingProfile": )" << profile.Value() << "\n";
+            out << R"(    "invertOrbitY": )" << BoolString(source.invertOrbitY) << "\n";
             out << "  },\n";
         }
 
@@ -247,7 +254,8 @@ namespace Horo::Editor::SettingsStoreInternal {
         }
     }  // namespace
 
-    void WriteSettings(std::ostream &out, const EditorSettings &settings) {
+    void WriteSettings(std::ostream &out, const EditorSettings &settings, const std::string_view configuration) {
+        out.imbue(std::locale::classic());
         const SanitizedSettings sanitized = SanitizeForWrite(settings);
         out << "{\n";
         out << "  \"schemaVersion\": 1,\n";
@@ -268,6 +276,19 @@ namespace Horo::Editor::SettingsStoreInternal {
         WriteAudioGroup(out, sanitized);
         WriteNetworkGroup(out, sanitized);
         WritePackageGroup(out, sanitized);
+        if (!configuration.empty()) {
+            out << "  \"configuration\": ";
+            auto remaining = configuration;
+            while (!remaining.empty()) {
+                const auto end = remaining.find('\n');
+                out << remaining.substr(0, end);
+                if (end == std::string_view::npos || end + 1 == remaining.size())
+                    break;
+                out << "\n  ";
+                remaining.remove_prefix(end + 1);
+            }
+            out << ",\n";
+        }
         WriteDiagnosticsGroup(out, sanitized);
         out << "}\n";
     }

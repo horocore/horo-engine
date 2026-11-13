@@ -68,7 +68,9 @@ namespace Horo::PlatformServices {
             bool closed{};
         };
 
-        std::mutex mutex;  // Protects callback ingress and session evidence; native calls run without this lock.
+        // Callback ingress and terminal session fencing take this before the request-store lock.
+        // Native calls and observer dispatch run without either lock; owner-lane teardown closes ingress before drain.
+        std::mutex mutex;
         std::array<Completion, MaximumRequests> completions{};
         std::size_t completionHead{};
         std::size_t completionCount{};

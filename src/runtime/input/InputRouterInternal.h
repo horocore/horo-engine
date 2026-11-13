@@ -1,5 +1,6 @@
 #pragma once
 #include "Horo/Runtime/InputCollection.h"
+#include "InputAccessibilityRouter.h"
 #include "InputCollectionInternal.h"
 
 #include <algorithm>
@@ -41,6 +42,8 @@ namespace Horo::Input {
             std::uint64_t token;
             InputContextId id;
             InputContextKind kind;
+            InputContextPropagation propagation{InputContextPropagation::Exclusive};
+            StickyModifierLatch sticky;
         };
 
         struct Capture {
@@ -49,6 +52,11 @@ namespace Horo::Input {
             PointerButton button;
             IInputCaptureOwner *owner;
         };
+
+        /** @brief Inspection may share eligibility, but mouse delivery remains exclusive to an existing capture owner. */
+        [[nodiscard]] bool MayRoutePointer(const std::uint64_t context) const noexcept {
+            return !capture || capture->context == context;
+        }
 
         // One owner and one delivery window govern all committed text and pre-edit state.
         struct TextFocusState {
@@ -67,11 +75,18 @@ namespace Horo::Input {
         std::optional<Capture> capture;
         std::vector<ActionDescriptor> actions;
         InputBindingProfile profile;
+        std::vector<Detail::AccessibilityActionIdentity> accessibilityActions;
+        Detail::InputAccessibilityRouter accessibility;
+        /** @brief Tests actual owner eligibility; publication-only routing suspension is optional for lifecycle cancellation. */
+        [[nodiscard]] bool ContextEligible(std::uint64_t token, bool requireRouting = true) const noexcept;
+        /** @brief Cancels preempted/focus-lost contexts before any replacement action can be read. */
+        void CancelIneligibleAccessibility() noexcept;
 
         /** @brief Frame-local admission ledger shared by direct reads and action evaluation/rollback. */
         struct ConsumptionState final {
             std::bitset<static_cast<std::size_t>(Key::Count)> keys;
             std::bitset<static_cast<std::size_t>(PointerButton::Count)> pointerButtons;
+            std::bitset<static_cast<std::size_t>(SensorAxis::Count)> gyroTransitions;
             std::bitset<MaximumTouchContacts> touchContacts;
             bool pointerMotion{};
             GamepadTransitions gamepadTransitions;
@@ -81,12 +96,16 @@ namespace Horo::Input {
 
         ConsumptionState consumed;
         InputDeviceAssignments assignments;
+        // Exact pre-disconnect owners survive current-assignment pruning for one release frame.
+        std::array<std::optional<GamepadDeviceId>, 256> previousPlayerDevices{};
+        std::optional<PlayerId> keyboardMousePlayer{0};
         std::uint64_t configurationRevision{1};
         std::uint64_t assignmentRevision{1};
         ActionReadStatus lastActionStatus{ActionReadStatus::Unavailable};
         std::uint64_t nextToken{1};
         bool modalBarrier{false};
         bool blockNextFrame{false};
+        bool bindingCaptureTerminal{false};
         TextFocusState textFocus;
     };
 

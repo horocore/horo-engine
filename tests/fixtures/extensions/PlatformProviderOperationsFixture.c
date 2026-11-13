@@ -96,6 +96,17 @@ HoroExtensionStatus horo_test_provider_emit(FixtureAudit *audit, uint64_t reques
     return Complete(audit->sink, requestId, generation, 0, 1, 0, payload, sizeof(payload));
 }
 
+HoroExtensionStatus horo_test_provider_emit_revision(FixtureAudit *audit, uint64_t requestId, uint64_t generation, uint64_t revision) {
+    const HoroPlatformProviderCompletion completion = {.structSize = sizeof(HoroPlatformProviderCompletion),
+                                                       .requestId = requestId,
+                                                       .requestGeneration = generation,
+                                                       .sessionRevision = revision,
+                                                       .service = 0,
+                                                       .operation = HORO_PLATFORM_OPERATION_ACHIEVEMENT_UNLOCK,
+                                                       .resultCode = HORO_PLATFORM_PROVIDER_SUCCESS};
+    return audit->sink == NULL ? HORO_EXTENSION_ERROR_OUTPUT_REJECTED : audit->sink->complete(audit->sink->context, &completion);
+}
+
 HoroExtensionStatus horo_test_provider_emit_failure(FixtureAudit *audit, uint64_t requestId, uint64_t generation, uint32_t resultCode) {
     static const uint8_t privatePayload[] = "token=private-account@example.com";
     return Complete(audit->sink, requestId, generation, 0, HORO_PLATFORM_OPERATION_ACHIEVEMENT_UNLOCK, resultCode, privatePayload,

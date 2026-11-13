@@ -69,7 +69,8 @@ namespace Horo::AI {
         /** @copydoc IAiTaskJob::Run */
         [[nodiscard]] Result<void> Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const final;
         /** @brief Runs immutable bounded work; consume before each step and observe cancellation between steps.
-         * @param operation Exact detached task. @param cancellation Cooperative worker ancestry. @param budget Finite work allowance.
+         * @param operation Exact detached task; check all its cancellation ancestors between bounded steps.
+         * @param cancellation Also observe this Foundation worker ancestry. @param budget Finite work allowance.
          * @return Original typed result; an over-budget attempt becomes SchedulerBudgetExhausted. */
         [[nodiscard]] virtual Result<void> RunSlice(const AiTaskOperationContext &operation, const CancellationToken &cancellation,
                                                     AiWorkBudget &budget) const = 0;

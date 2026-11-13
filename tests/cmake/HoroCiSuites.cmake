@@ -22,6 +22,14 @@ set(HORO_CI_AUDIO_TARGETS
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroFoundationConfigurationTests
+    HoroFoundationModuleDescriptorTests
+    HoroFoundationModuleHostCompositionTests
+    HoroSecurityBaselineTests
+    HoroEditorSettingsStoreTests
+    HoroFoundationPublicHeaderConsumer
+    HoroSecurityPublicHeaderConsumer
+    HoroPlatformPublicHeaderConsumer
     HoroFoundationResultTests
     HoroDynamicLibraryTests
     HoroRuntimeSaveIdentityTests
@@ -54,6 +62,9 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroSceneSourceTests
     HoroColorPipelineTests
     HoroColorCreativeLookPackageTests
+    HoroVisualAccessibilityTests
+    HoroVisualAccessibilityContractConsumer
+    HoroContrastContractConsumer
     HoroProjectCollisionSettingsTests
     HoroCollisionSettingsPublicConsumer
     HoroPublicationLockFoundationConsumer
@@ -122,6 +133,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroExtensionsPublicHeaderConsumer
     HoroAITests
     HoroAISightTests
+    HoroAINavigationTests
+    HoroAINavigationIntegrationPublicHeaderConsumer
     HoroAIPublicHeaderConsumer
     HoroAISceneIntegrationPublicHeaderConsumer
     HoroAISightIntegrationPublicHeaderConsumer
@@ -164,6 +177,12 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCliProductionOutputContract
     HoroCliMcpServeTests
     HoroPlatformTests
+    HoroPlatformRequestTests
+    HoroPlatformProviderAdmissionTests
+    HoroPlatformServicesCompositionTests
+    HoroPlatformFriendsPublicConsumer
+    HoroPlatformServicesPublicHeaderConsumer
+    HoroPlatformServicesExtensionPublicHeaderConsumer
     HoroImmutableFileStorageTests
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests
@@ -198,6 +217,14 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroAssetCookServiceTests
     HoroAssetsPublicHeaderConsumer
     HoroInputTests
+    HoroRuntimeConsoleTests
+    HoroRuntimeConsolePublicHeaderConsumer
+    HoroRuntimeConsoleStartupPublicHeaderConsumer
+    HoroRuntimeConsoleUiPublicHeaderConsumer
+    HoroRuntimeConsoleDefaultsPublicHeaderConsumer
+    HoroRuntimeConsoleProductTests
+    HoroRuntimeConsoleScenePublicHeaderConsumer
+    HoroRuntimeConsoleSceneTests
     HoroAndroidInputTests
     HoroAndroidInputIntegrationPublicHeaderConsumer
     HoroCharacterInputTests
@@ -236,6 +263,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroEditorActivityBoundaryTests
 
     HoroPackageLifecycleTests
+    HoroPlatformProviderPackageTests
+    HoroPackageHostSurfacePublicHeaderConsumer
     HoroPackageApplicationTests
     HoroPackageApplicationPublicHeaderConsumer
     HoroCliPackageAdaptersPublicHeaderConsumer
@@ -308,6 +337,10 @@ if(WIN32)
             HoroPhysicsStateWorldTests
             HoroPhysicsStateNativeTests)
     endif()
+endif()
+
+if(NOT HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Editor" AND NOT HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Development")
+    list(REMOVE_ITEM HORO_CI_WINDOWS_TARGETS HoroRuntimeConsoleSceneTests)
 endif()
 
 set(HORO_CI_NAVIGATION_TARGETS
@@ -466,6 +499,7 @@ function(horo_finalize_ci_suites)
     endif()
 
     set_property(TEST
+        HoroSecurityBaselineTests
         HoroSceneAllocationJunitPathContract
         HoroCharacterAllocationJunitPathContract
         HoroRuntimeUiSceneReconciliationPublicHeaderConsumer
@@ -478,6 +512,9 @@ function(horo_finalize_ci_suites)
         HoroPrefabSceneExpansionContractConsumer
         HoroRuntimeUiScreenTransitionPublicHeaderConsumer
         HoroExtensionManagerTests
+        HoroPlatformProviderAdmissionTests
+        HoroPlatformServicesCompositionTests
+        HoroPlatformFriendsPublicConsumer
         HoroNavigationCoordinatorPublicConsumer
         HoroGameplayPhysicsPublicHeaderConsumer
         HoroGameplayPhysicsSdkContract

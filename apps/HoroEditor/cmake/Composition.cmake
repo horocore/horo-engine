@@ -1,4 +1,28 @@
 # Included from apps/CMakeLists.txt; source and binary directories remain scoped to apps/.
+# One non-installed host token boundary; headless tests use the same parser as the real graphical root.
+set(HORO_NETWORK_CONSOLE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/network_console_headers")
+file(MAKE_DIRECTORY "${HORO_NETWORK_CONSOLE_HEADERS}")
+configure_file(shared/console/NetworkConsoleInspection.h "${HORO_NETWORK_CONSOLE_HEADERS}/NetworkConsoleInspection.h" COPYONLY)
+configure_file(shared/console/NetworkConsoleOverlay.h "${HORO_NETWORK_CONSOLE_HEADERS}/NetworkConsoleOverlay.h" COPYONLY)
+add_library(HoroNetworkConsoleInspectionInternal STATIC EXCLUDE_FROM_ALL shared/console/NetworkConsoleInspection.cpp
+    shared/console/NetworkConsoleOverlay.cpp)
+target_compile_features(HoroNetworkConsoleInspectionInternal PUBLIC cxx_std_20)
+target_include_directories(HoroNetworkConsoleInspectionInternal PUBLIC "${HORO_NETWORK_CONSOLE_HEADERS}")
+target_link_libraries(HoroNetworkConsoleInspectionInternal PUBLIC HoroEngine::RuntimeConsole HoroEngine::NetworkDebuggerApplication)
+
+set(HORO_EDITOR_CONSOLE_LAUNCH_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_console_launch_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_CONSOLE_LAUNCH_HEADERS}")
+configure_file(HoroEditor/composition/console/EditorConsoleLaunch.h
+    "${HORO_EDITOR_CONSOLE_LAUNCH_HEADERS}/EditorConsoleLaunch.h" COPYONLY)
+configure_file(HoroEditor/composition/console/EditorConsoleExecution.h
+    "${HORO_EDITOR_CONSOLE_LAUNCH_HEADERS}/EditorConsoleExecution.h" COPYONLY)
+add_library(HoroEditorConsoleLaunchInternal STATIC EXCLUDE_FROM_ALL HoroEditor/composition/console/EditorConsoleLaunch.cpp
+    HoroEditor/composition/console/EditorConsoleExecution.cpp)
+target_compile_features(HoroEditorConsoleLaunchInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorConsoleLaunchInternal PUBLIC "${HORO_EDITOR_CONSOLE_LAUNCH_HEADERS}")
+target_link_libraries(HoroEditorConsoleLaunchInternal PUBLIC HoroEngine::RuntimeConsoleStartup)
+target_link_libraries(HoroEditorConsoleLaunchInternal PRIVATE HoroRuntimeConsoleTelemetryInternal HoroRuntimeConsoleSceneInternal HoroNetworkConsoleInspectionInternal)
+
 if(HORO_BUILD_XR_OPENXR)
     # First-party installed-component admission belongs to the application root,
     # not XRRuntime, ExtensionHost or a concrete renderer. Only this staged

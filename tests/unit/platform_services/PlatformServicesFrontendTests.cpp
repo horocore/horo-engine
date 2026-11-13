@@ -86,14 +86,16 @@ namespace Horo::PlatformServices {
         RequireError(frontend.QueryFriendsLeaderboard({subject, {}, 0, 1}), FrontendErrors::InvalidRequest);
         RequireError(frontend.WriteStat({subject, {}, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.ReadCloudObject(CloudReadRequest{subject, {}}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), CloudObjectErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), CloudObjectErrors::InvalidRequest);
         const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{1}});
         REQUIRE(key.HasValue());
-        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}),
+                     CloudObjectErrors::PayloadTooLarge);
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryFriends({subject, 1, std::numeric_limits<std::uint32_t>::max()}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 5}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, std::numeric_limits<std::uint32_t>::max(), 1}),
@@ -301,6 +303,35 @@ namespace Horo::PlatformServices {
         CHECK(backend->requests.RecordCount() == 0);
     }
 
+    TEST_CASE("A retired frontend handle cannot cancel a new account request with reused numeric identity",
+              "[platform-services][frontend][session][cancellation]") {
+        auto oldBackend = std::make_shared<RoutingBackend>();
+        const auto oldSession = Session();
+        auto oldFrontend = Frontend(oldBackend, oldSession);
+        auto oldRequest = oldFrontend.UnlockAchievement({*oldSession.Subject(), {1}});
+        REQUIRE(oldRequest.HasValue());
+        REQUIRE(oldFrontend.Close().HasValue());
+        auto currentBackend = std::make_shared<RoutingBackend>();
+        const auto currentSession = Session({8}, {6});
+        auto currentFrontend = Frontend(currentBackend, currentSession);
+        auto currentRequest = currentFrontend.UnlockAchievement({*currentSession.Subject(), {1}});
+        REQUIRE(currentRequest.HasValue());
+        CHECK(oldRequest.Value().Id() == currentRequest.Value().Id());
+        CHECK(oldRequest.Value().Generation() == currentRequest.Value().Generation());
+        RequireError(currentFrontend.RequestCancel(oldRequest.Value()), RequestErrors::Stale);
+        CHECK(currentBackend->cancelCalls == 0);
+        CHECK_FALSE(currentBackend->requests.Query(currentRequest.Value()).Value().cancellationRequested);
+        auto movedFrontend = std::move(currentFrontend);
+        PlatformRequestHandle<void> movedRequest;
+        movedRequest = std::move(currentRequest).Value();
+        REQUIRE(movedFrontend.RequestCancel(movedRequest).HasValue());
+        CHECK(currentBackend->cancelCalls == 1);
+        auto backendOnly = currentBackend->requests.Admit<void>();
+        REQUIRE(backendOnly.HasValue());
+        RequireError(movedFrontend.RequestCancel(backendOnly.Value()), RequestErrors::Stale);
+        CHECK(currentBackend->cancelCalls == 1);
+    }
+
     TEST_CASE("Platform Services frontend exposes only bounded public service limits", "[platform-services][frontend][capability]") {
         auto backend = std::make_shared<RoutingBackend>();
         auto frontend = Frontend(backend, Session());
@@ -325,7 +356,11 @@ namespace Horo::PlatformServices {
         auto created = PlatformServicesFrontend::Create(backend, backend->snapshot, session);
         REQUIRE(created.HasValue());
         auto enabled = std::move(created).Value();
-        REQUIRE(enabled.WriteCloudObject(MutationWrite(subject)).HasValue());
+        auto submittedWrite = enabled.WriteCloudObject(MutationWrite(subject));
+        REQUIRE(submittedWrite.HasValue());
+        auto writeHandle = std::move(submittedWrite).Value();
+        REQUIRE(enabled.RequestCancel(writeHandle).HasValue());
+        CHECK(backend->requests.Query(writeHandle).Value().state == PlatformRequestState::Cancelling);
         auto write = MutationWrite(subject);
         const auto revision = ProviderObjectRevision::Copy(std::array{std::byte{5}});
         REQUIRE(revision.HasValue());
@@ -333,7 +368,12 @@ namespace Horo::PlatformServices {
                                       .key = write.key,
                                       .expectedRevision = revision.Value(),
                                       .mutation = write.mutation};
-        REQUIRE(enabled.DeleteCloudObject(remove).HasValue());
+        auto submittedDelete = enabled.DeleteCloudObject(remove);
+        REQUIRE(submittedDelete.HasValue());
+        auto deleteHandle = std::move(submittedDelete).Value();
+        REQUIRE(enabled.RequestCancel(deleteHandle).HasValue());
+        CHECK(backend->requests.Query(deleteHandle).Value().state == PlatformRequestState::Cancelling);
+        CHECK(backend->cancelCalls == 2);
         REQUIRE(enabled.QueryCloudQuota(subject).HasValue());
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 3);
         write.mutation = {};

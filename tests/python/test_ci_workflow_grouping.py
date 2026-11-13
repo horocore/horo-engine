@@ -56,6 +56,9 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
+    "HoroFoundationConfigurationTests", "HoroFoundationModuleDescriptorTests",
+    "HoroFoundationModuleHostCompositionTests", "HoroSecurityBaselineTests", "HoroEditorSettingsStoreTests",
+    "HoroFoundationPublicHeaderConsumer", "HoroSecurityPublicHeaderConsumer", "HoroPlatformPublicHeaderConsumer",
     # Reduced Windows builds own these allocation and native-image regressions.
     "HoroDynamicLibraryTests",
     "HoroFoundationResultTests",
@@ -70,6 +73,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroFoundationJobSystemTests", "HoroRuntimeSceneAssetDiscoveryTests", "HoroAssetLoadResultAllocationTests",
     "HoroFoundationJsonTests", "HoroAssetIdAllocationTests", "HoroOperationIdentityAllocationTests",
     "HoroSceneSourceTests", "HoroColorPipelineTests", "HoroColorCreativeLookPackageTests", "HoroPrefabMetricsTests",
+    "HoroVisualAccessibilityTests", "HoroVisualAccessibilityContractConsumer", "HoroContrastContractConsumer",
     "HoroWorkspaceLayoutPersistenceTests", "HoroWorkspaceRecoveryPublicHeaderConsumer",
     "HoroNavigationProjectSettingsTests", "HoroNavigationProjectSettingsPublicConsumer",
     "HoroPrefabSceneCookHostTests",
@@ -97,6 +101,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroGameplayAiIntegrationPublicHeaderConsumer", "HoroGameplayAiScriptBridgePublicHeaderConsumer",
     "HoroGameplayApiPublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
     "HoroAITests", "HoroAISightTests", "HoroAIPublicHeaderConsumer",
+    "HoroAINavigationTests", "HoroAINavigationIntegrationPublicHeaderConsumer",
     "HoroAISceneIntegrationPublicHeaderConsumer", "HoroAISightIntegrationPublicHeaderConsumer",
     "HoroGameplayPerceptionIntegrationPublicHeaderConsumer",
     "HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer",
@@ -117,6 +122,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroInspectorBehaviorBindingTests", "HoroInspectorBehaviorPublicHeaderConsumer",
     "HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer",
     "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
+    "HoroPlatformRequestTests", "HoroPlatformProviderAdmissionTests", "HoroPlatformServicesCompositionTests",
+    "HoroPlatformFriendsPublicConsumer", "HoroPlatformServicesPublicHeaderConsumer",
+    "HoroPlatformServicesExtensionPublicHeaderConsumer",
     "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
     "HoroCliMcpServeTests", "HoroImmutableFileStorageTests",
     "HoroVfxApiTests", "HoroVfxRenderExtractionTests",
@@ -134,6 +142,11 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroSceneRuntimeConversionPublicHeaderConsumer", "HoroSceneRuntimeConversionTests", "HoroSceneDocumentTests",
     "HoroAssetCookServiceTests", "HoroAssetsPublicHeaderConsumer",
     "HoroAssetRegistryTests", "HoroInputTests", "HoroAndroidInputTests", "HoroAndroidInputIntegrationPublicHeaderConsumer",
+    "HoroRuntimeConsoleTests", "HoroRuntimeConsolePublicHeaderConsumer",
+    "HoroRuntimeConsoleStartupPublicHeaderConsumer",
+    "HoroRuntimeConsoleUiPublicHeaderConsumer",
+    "HoroRuntimeConsoleDefaultsPublicHeaderConsumer", "HoroRuntimeConsoleProductTests",
+    "HoroRuntimeConsoleScenePublicHeaderConsumer", "HoroRuntimeConsoleSceneTests",
     "HoroInputSdlTests", "HoroRuntimeUiInputTests",
     "HoroRuntimeUiInputDebuggerTests", "HoroRuntimeUiInputDebuggerContractConsumer",
     "HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer",
@@ -150,6 +163,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroPublicationLockFoundationConsumer",
     "HoroProjectCollisionSettingsPublicHeaderConsumer",
     "HoroPackageLifecycleTests", "HoroPackageLifecyclePublicHeaderConsumer",
+    "HoroPlatformProviderPackageTests", "HoroPackageHostSurfacePublicHeaderConsumer",
     "HoroPackageApplicationTests", "HoroPackageApplicationPublicHeaderConsumer",
     "HoroCliPackageAdaptersPublicHeaderConsumer", "HoroMcpPackageAdaptersPublicHeaderConsumer",
     "HoroEditorPackageAdaptersPublicHeaderConsumer",
@@ -209,6 +223,22 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_platform_identity_windows_build_and_test_membership_match() -> None:
+    required = {"HoroPlatformRequestTests", "HoroPlatformProviderAdmissionTests", "HoroPlatformServicesCompositionTests",
+                "HoroPlatformFriendsPublicConsumer", "HoroPlatformServicesPublicHeaderConsumer",
+                "HoroPlatformServicesExtensionPublicHeaderConsumer"}
+    assert required <= targets("HORO_CI_WINDOWS_TARGETS")
+    direct = re.search(r"set_property\(TEST\s+(.+?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
+    assert direct is not None
+    assert {"HoroPlatformProviderAdmissionTests", "HoroPlatformServicesCompositionTests",
+            "HoroPlatformFriendsPublicConsumer"} <= set(direct.group(1).split())
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    discovered = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
+    assert discovered is not None
+    assert "HoroPlatformRequestTests" in discovered.group(1).split()
+    assert "unit/platform_services/PlatformProviderSessionLifecycleTests.cpp" in tests_cmake
 
 
 def test_windows_checked_stl_regressions_have_headless_build_and_discovery_closure() -> None:

@@ -23,6 +23,13 @@ namespace Horo::Input {
         SdlInputBackend &operator=(const SdlInputBackend &) = delete;
 
         void BeginFrame(FrameNumber frame);
+        /** @brief Requests controller gyro collection at the next BeginFrame boundary; disabled by default.
+         * @param enabled Host-derived interest from validated effective bindings, never a player assignment.
+         * @details The owner serializes this call with polling. Only focused, bound-window collection enables native sensors.
+         * Focus loss, disablement and reconnect clear old samples; the next fresh native event must pass both clock fences.
+         * Unsupported/native-failed devices remain explicit in their copied sample availability. No sensor fallback occurs.
+         */
+        void SetGamepadGyroscopeEnabled(bool enabled) noexcept;
         /** @brief Selects the exact window supplying keyboard, pointer, and text events; zero disables window-local input. */
         void BindWindow(SDL_WindowID windowId) noexcept;
         void ProcessEvent(const SDL_Event &event);
@@ -30,6 +37,12 @@ namespace Horo::Input {
         [[nodiscard]] const RawInputSnapshot &Commit();
         [[nodiscard]] RawInputCollector &Collector() noexcept;
         [[nodiscard]] IGamepadHaptics *Haptics() noexcept;
+        /** @brief Installs one host-admitted optional package mapping through SDL's native mapping boundary.
+         * @param mapping One bounded UTF-8 mapping record, with no newline or embedded NUL.
+         * @return Success or a native validation diagnostic. Resulting device changes enter the ordinary event/snapshot path.
+         * @pre The host owns package admission and serializes installation with event collection.
+         */
+        [[nodiscard]] Result<void> InstallGamepadMapping(std::string_view mapping);
 
         /** @brief Enables native text/IME for a window after positioning its candidate area. */
         [[nodiscard]] bool StartTextInput(SDL_Window *window, SdlTextInputArea area) const noexcept;

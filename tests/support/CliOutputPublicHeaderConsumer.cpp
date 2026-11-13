@@ -5,6 +5,11 @@
 #include <sstream>
 
 int main() {
+    const Horo::Cli::CliInvocationStopController stop{std::chrono::milliseconds{0}};
+    if (stop.Deadline())
+        return 5;
+    if (Horo::Diagnostics::ValidateDiagnosticBundleDestination({}).HasValue())
+        return 4;
     const auto errors = Horo::Cli::CliErrors::ErrorDomain();
     const auto bundles = Horo::Diagnostics::DiagnosticBundleErrorDomain();
     const std::vector<Horo::ModuleDescriptor> modules{{.id = {"horo.cli"}, .version = {1, 0, 0}, .errorDomains = {errors}},

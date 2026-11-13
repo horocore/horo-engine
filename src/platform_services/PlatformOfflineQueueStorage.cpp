@@ -20,8 +20,12 @@ namespace Horo::PlatformOfflineQueue {
         constexpr std::size_t RecordFixedBytes =
             16 + 16 + sizeof(std::uint8_t) + sizeof(std::uint8_t) + sizeof(std::uint64_t) + sizeof(std::uint32_t);
 
-        [[nodiscard]] Error PathError(const ErrorCodeDescriptor &descriptor, const std::filesystem::path &path) {
-            return MakeError(descriptor, std::string{descriptor.summary} + " Path: " + path.generic_string());
+        /** @brief Preserves filesystem error identity while excluding private locators and unrestricted native detail. */
+        [[nodiscard]] Error StorageError(const Error &error) {
+            return Error{.code = error.code,
+                         .domain = error.domain,
+                         .severity = error.severity,
+                         .message = "An offline intent storage operation failed. Inspect the protected store through its owner."};
         }
 
         [[nodiscard]] bool IsKnown(const PlatformOfflineIntentState state) noexcept {
@@ -123,13 +127,13 @@ namespace Horo::PlatformOfflineQueue {
                                                                   const PlatformOfflineQueueLimits &limits) {
             if (std::error_code status; !std::filesystem::exists(path, status)) {
                 if (status)
-                    return Result<std::vector<std::byte>>::Failure(PathError(PlatformOfflineQueueErrors::DurableUnavailable, path));
+                    return Result<std::vector<std::byte>>::Failure(MakeError(PlatformOfflineQueueErrors::DurableUnavailable));
                 return Result<std::vector<std::byte>>::Success({});
             }
 
             std::ifstream input(path, std::ios::binary);
             if (!input)
-                return Result<std::vector<std::byte>>::Failure(PathError(PlatformOfflineQueueErrors::DurableUnavailable, path));
+                return Result<std::vector<std::byte>>::Failure(MakeError(PlatformOfflineQueueErrors::DurableUnavailable));
 
             std::vector<std::byte> document;
             std::array<char, 8192> buffer{};
@@ -140,13 +144,13 @@ namespace Horo::PlatformOfflineQueue {
                     break;
                 const auto byteCount = static_cast<std::size_t>(count);
                 if (document.size() > limits.maximumDocumentBytes || byteCount > limits.maximumDocumentBytes - document.size())
-                    return Result<std::vector<std::byte>>::Failure(PathError(PlatformOfflineQueueErrors::CapacityExceeded, path));
+                    return Result<std::vector<std::byte>>::Failure(MakeError(PlatformOfflineQueueErrors::CapacityExceeded));
                 const auto oldSize = document.size();
                 document.resize(oldSize + byteCount);
                 std::ranges::copy(std::as_bytes(std::span{buffer}.first(byteCount)), document.begin() + oldSize);
             }
             if (input.bad())
-                return Result<std::vector<std::byte>>::Failure(PathError(PlatformOfflineQueueErrors::DurableUnavailable, path));
+                return Result<std::vector<std::byte>>::Failure(MakeError(PlatformOfflineQueueErrors::DurableUnavailable));
             return Result<std::vector<std::byte>>::Success(std::move(document));
         }
 
@@ -156,10 +160,9 @@ namespace Horo::PlatformOfflineQueue {
         };
 
         [[nodiscard]] Result<QueueDocumentView> ReadQueueDocumentView(const std::vector<std::byte> &document,
-                                                                      const std::filesystem::path &path,
                                                                       const PlatformOfflineQueueLimits &limits) {
             if (document.size() < HeaderBytes)
-                return Result<QueueDocumentView>::Failure(PathError(PlatformOfflineQueueErrors::Corrupt, path));
+                return Result<QueueDocumentView>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
 
             std::size_t offset = 0;
             std::array<std::byte, Magic.size()> magic{};
@@ -170,23 +173,23 @@ namespace Horo::PlatformOfflineQueue {
             if (!ReadBytes(document, offset, magic) || !ReadU32(document, offset, schemaVersion) ||
                 !ReadU32(document, offset, recordCount) || !ReadU64(document, offset, bodyByteCount) ||
                 !ReadBytes(document, offset, encodedDigest))
-                return Result<QueueDocumentView>::Failure(PathError(PlatformOfflineQueueErrors::Corrupt, path));
+                return Result<QueueDocumentView>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
             if (magic != Magic)
-                return Result<QueueDocumentView>::Failure(PathError(PlatformOfflineQueueErrors::Corrupt, path));
+                return Result<QueueDocumentView>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
             if (schemaVersion != PlatformOfflineQueueSchemaVersion)
                 return Result<QueueDocumentView>::Failure(MakeError(PlatformOfflineQueueErrors::UnsupportedVersion));
             if (recordCount > limits.maximumRecords)
                 return Result<QueueDocumentView>::Failure(MakeError(PlatformOfflineQueueErrors::CapacityExceeded));
             if (bodyByteCount > static_cast<std::uint64_t>(limits.maximumDocumentBytes - HeaderBytes) ||
                 bodyByteCount != document.size() - HeaderBytes)
-                return Result<QueueDocumentView>::Failure(PathError(PlatformOfflineQueueErrors::Corrupt, path));
+                return Result<QueueDocumentView>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
 
             Sha256Digest expectedDigest;
             for (std::size_t index = 0; index < expectedDigest.bytes.size(); ++index)
                 expectedDigest.bytes[index] = std::to_integer<std::uint8_t>(encodedDigest[index]);
             if (const auto body = std::span<const std::byte>{document}.subspan(HeaderBytes, static_cast<std::size_t>(bodyByteCount));
                 ComputeSha256(body) != expectedDigest)
-                return Result<QueueDocumentView>::Failure(PathError(PlatformOfflineQueueErrors::Corrupt, path));
+                return Result<QueueDocumentView>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
             return Result<QueueDocumentView>::Success(QueueDocumentView{
                 .recordCount = recordCount,
                 .body = std::span<const std::byte>{document}.subspan(HeaderBytes, static_cast<std::size_t>(bodyByteCount)),
@@ -194,7 +197,6 @@ namespace Horo::PlatformOfflineQueue {
         }
 
         [[nodiscard]] Result<PlatformOfflineQueueRecord> ReadQueueRecord(const std::span<const std::byte> body, std::size_t &offset,
-                                                                         const std::filesystem::path &path,
                                                                          const PlatformOfflineQueueLimits &limits) {
             PlatformOfflineQueueRecord record;
             std::byte state{};
@@ -203,7 +205,7 @@ namespace Horo::PlatformOfflineQueue {
             if (!ReadBytes(body, offset, record.identity.bytes) || !ReadBytes(body, offset, record.partition.bytes) ||
                 !ReadByte(body, offset, state) || !ReadByte(body, offset, operation) || !ReadU64(body, offset, record.sequence) ||
                 !ReadU32(body, offset, payloadBytes))
-                return Result<PlatformOfflineQueueRecord>::Failure(PathError(PlatformOfflineQueueErrors::Corrupt, path));
+                return Result<PlatformOfflineQueueRecord>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
             if (payloadBytes > limits.maximumPayloadBytes || payloadBytes > body.size() - offset)
                 return Result<PlatformOfflineQueueRecord>::Failure(MakeError(PlatformOfflineQueueErrors::PayloadTooLarge));
 
@@ -211,7 +213,7 @@ namespace Horo::PlatformOfflineQueue {
             record.operation = static_cast<PlatformOfflineOperationKind>(std::to_integer<std::uint8_t>(operation));
             record.payload.resize(payloadBytes);
             if (!ReadBytes(body, offset, record.payload))
-                return Result<PlatformOfflineQueueRecord>::Failure(PathError(PlatformOfflineQueueErrors::Corrupt, path));
+                return Result<PlatformOfflineQueueRecord>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
             if (const auto valid = ValidateRecord(record, limits); valid.HasError())
                 return Result<PlatformOfflineQueueRecord>::Failure(valid.ErrorValue());
             return Result<PlatformOfflineQueueRecord>::Success(std::move(record));
@@ -219,13 +221,12 @@ namespace Horo::PlatformOfflineQueue {
 
         [[nodiscard]] Result<std::vector<PlatformOfflineQueueRecord>> DecodeQueueRecords(const QueueDocumentView &document,
                                                                                          const PlatformOfflineSubjectPartition &partition,
-                                                                                         const std::filesystem::path &path,
                                                                                          const PlatformOfflineQueueLimits &limits) {
             std::vector<PlatformOfflineQueueRecord> records;
             records.reserve(document.recordCount);
             std::size_t offset = 0;
             for (std::uint32_t index = 0; index < document.recordCount; ++index) {
-                auto record = ReadQueueRecord(document.body, offset, path, limits);
+                auto record = ReadQueueRecord(document.body, offset, limits);
                 if (record.HasError())
                     return Result<std::vector<PlatformOfflineQueueRecord>>::Failure(record.ErrorValue());
                 if (record.Value().partition != partition)
@@ -238,7 +239,7 @@ namespace Horo::PlatformOfflineQueue {
                 records.push_back(std::move(record).Value());
             }
             if (offset != document.body.size())
-                return Result<std::vector<PlatformOfflineQueueRecord>>::Failure(PathError(PlatformOfflineQueueErrors::Corrupt, path));
+                return Result<std::vector<PlatformOfflineQueueRecord>>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
             return Result<std::vector<PlatformOfflineQueueRecord>>::Success(std::move(records));
         }
     }  // namespace
@@ -256,8 +257,8 @@ namespace Horo::PlatformOfflineQueue {
     }
 
     PlatformOfflineQueueStorage::PlatformOfflineQueueStorage(DurableFileSystem &files, std::filesystem::path root,
-                                                             const PlatformOfflineQueueLimits limits) noexcept
-        : files_(&files), root_(std::move(root)), limits_(limits) {}
+                                                             const PlatformOfflineQueueLimits limits)
+        : files_(&files), root_(std::move(root)), limits_(limits), identity_(std::make_shared<const Identity>()) {}
 
     Result<PlatformOfflineQueueStorage> PlatformOfflineQueueStorage::Create(DurableFileSystem &files, std::filesystem::path root,
                                                                             const PlatformOfflineQueueLimits &limits) {
@@ -323,32 +324,77 @@ namespace Horo::PlatformOfflineQueue {
         return Result<std::vector<std::byte>>::Success(std::move(document));
     }
 
+    /** @copydoc PlatformOfflineQueueStorage::Load */
     Result<std::vector<PlatformOfflineQueueRecord>> PlatformOfflineQueueStorage::Load(
         const PlatformOfflineSubjectPartition &partition) const {
+        auto snapshot = LoadSnapshot(partition);
+        if (snapshot.HasError())
+            return Result<std::vector<PlatformOfflineQueueRecord>>::Failure(snapshot.ErrorValue());
+        return Result<std::vector<PlatformOfflineQueueRecord>>::Success(std::move(snapshot).Value().records);
+    }
+
+    /** @copydoc PlatformOfflineQueueStorage::LoadSnapshot */
+    Result<PlatformOfflineQueueSnapshot> PlatformOfflineQueueStorage::LoadSnapshot(const PlatformOfflineSubjectPartition &partition) const {
+        if (!identity_ || files_ == nullptr || root_.empty())
+            return Result<PlatformOfflineQueueSnapshot>::Failure(MakeError(PlatformOfflineQueueErrors::InvalidConfiguration));
         if (!partition.IsValid())
-            return Result<std::vector<PlatformOfflineQueueRecord>>::Failure(MakeError(PlatformOfflineQueueErrors::InvalidPartition));
+            return Result<PlatformOfflineQueueSnapshot>::Failure(MakeError(PlatformOfflineQueueErrors::InvalidPartition));
+        if (const auto fence = CheckQuarantine(partition); fence.HasError())
+            return Result<PlatformOfflineQueueSnapshot>::Failure(fence.ErrorValue());
         const std::filesystem::path path = PartitionPath(partition);
         std::error_code existsError;
         const bool exists = std::filesystem::exists(path, existsError);
         if (existsError)
-            return Result<std::vector<PlatformOfflineQueueRecord>>::Failure(
-                PathError(PlatformOfflineQueueErrors::DurableUnavailable, path));
+            return Result<PlatformOfflineQueueSnapshot>::Failure(MakeError(PlatformOfflineQueueErrors::DurableUnavailable));
         const auto documentResult = ReadDocument(path, limits_);
         if (documentResult.HasError())
-            return Result<std::vector<PlatformOfflineQueueRecord>>::Failure(documentResult.ErrorValue());
+            return Result<PlatformOfflineQueueSnapshot>::Failure(documentResult.ErrorValue());
         const std::vector<std::byte> &document = documentResult.Value();
-        if (!exists && document.empty())
-            return Result<std::vector<PlatformOfflineQueueRecord>>::Success({});
-        if (document.empty())
-            return Result<std::vector<PlatformOfflineQueueRecord>>::Failure(PathError(PlatformOfflineQueueErrors::Corrupt, path));
-        const auto documentView = ReadQueueDocumentView(document, path, limits_);
-        if (documentView.HasError())
-            return Result<std::vector<PlatformOfflineQueueRecord>>::Failure(documentView.ErrorValue());
-        return DecodeQueueRecords(documentView.Value(), partition, path, limits_);
+        PlatformOfflineQueueSnapshot snapshot;
+        if (exists || !document.empty()) {
+            if (document.empty())
+                return Result<PlatformOfflineQueueSnapshot>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
+            const auto documentView = ReadQueueDocumentView(document, limits_);
+            if (documentView.HasError())
+                return Result<PlatformOfflineQueueSnapshot>::Failure(documentView.ErrorValue());
+            auto records = DecodeQueueRecords(documentView.Value(), partition, limits_);
+            if (records.HasError())
+                return Result<PlatformOfflineQueueSnapshot>::Failure(records.ErrorValue());
+            snapshot.records = std::move(records).Value();
+        }
+        snapshot.revision.storage_ = identity_;
+        snapshot.revision.partition_ = partition;
+        snapshot.revision.digest_ = ComputeSha256(document).bytes;
+        snapshot.revision.documentExists_ = exists || !document.empty();
+        return Result<PlatformOfflineQueueSnapshot>::Success(std::move(snapshot));
     }
 
+    /** @copydoc PlatformOfflineQueueStorage::CheckRevision */
+    Result<void> PlatformOfflineQueueStorage::CheckRevision(const std::filesystem::path &path,
+                                                            const PlatformOfflineQueueRevision &expected) const {
+        std::error_code existsError;
+        const bool exists = std::filesystem::exists(path, existsError);
+        if (existsError)
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::DurableUnavailable));
+        const auto current = ReadDocument(path, limits_);
+        if (current.HasError())
+            return Result<void>::Failure(current.ErrorValue());
+        if ((exists || !current.Value().empty()) != expected.documentExists_ || ComputeSha256(current.Value()).bytes != expected.digest_)
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::RevisionConflict));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PlatformOfflineQueueStorage::Publish */
     Result<void> PlatformOfflineQueueStorage::Publish(const PlatformOfflineSubjectPartition &partition,
-                                                      const std::span<const PlatformOfflineQueueRecord> records) const {
+                                                      const std::span<const PlatformOfflineQueueRecord> records,
+                                                      const PlatformOfflineQueueRevision &expected) const {
+        if (!identity_ || files_ == nullptr || root_.empty())
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::InvalidConfiguration));
+        if (!partition.IsValid())
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::InvalidPartition));
+        if (expected.storage_.expired() || expected.storage_.owner_before(identity_) || identity_.owner_before(expected.storage_) ||
+            expected.partition_ != partition)
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::RevisionConflict));
         const auto document = Encode(partition, records);
         if (document.HasError())
             return Result<void>::Failure(document.ErrorValue());
@@ -359,20 +405,74 @@ namespace Horo::PlatformOfflineQueue {
         preparedPath += ".tmp";
         auto acquired = files_->TryAcquireExclusive(lockPath, "horo.platform.offline");
         if (acquired.HasError())
-            return Result<void>::Failure(acquired.ErrorValue());
+            return Result<void>::Failure(StorageError(acquired.ErrorValue()));
         [[maybe_unused]] auto publicationLock = std::move(acquired).Value();  // Hold through durable write and atomic replacement.
+
+        if (const auto fence = CheckQuarantine(partition); fence.HasError())
+            return fence;
+
+        if (const auto revision = CheckRevision(destination, expected); revision.HasError())
+            return revision;
 
         const auto available = files_->AvailableBytes(destination.parent_path());
         if (available.HasError())
-            return Result<void>::Failure(available.ErrorValue());
+            return Result<void>::Failure(StorageError(available.ErrorValue()));
         if (available.Value() < document.Value().size())
             return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::CapacityExceeded));
 
         if (auto written = files_->WriteDurable(preparedPath, document.Value()); written.HasError()) {
             static_cast<void>(files_->RemoveDurable(preparedPath));
-            return Result<void>::Failure(written.ErrorValue());
+            return Result<void>::Failure(StorageError(written.ErrorValue()));
         }
         if (auto replaced = files_->AtomicReplace(preparedPath, destination); replaced.HasError())
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::StorageUnknown));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PlatformOfflineQueueStorage::CheckQuarantine */
+    Result<void> PlatformOfflineQueueStorage::CheckQuarantine(const PlatformOfflineSubjectPartition &partition) const {
+        auto fence = PartitionPath(partition);
+        fence += ".quarantined";
+        std::error_code error;
+        const bool quarantined = std::filesystem::exists(fence, error);
+        if (error)
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::DurableUnavailable));
+        if (quarantined)
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::Corrupt));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PlatformOfflineQueueStorage::Quarantine */
+    Result<void> PlatformOfflineQueueStorage::Quarantine(const PlatformOfflineSubjectPartition &partition) const {
+        if (!identity_ || files_ == nullptr || root_.empty())
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::InvalidConfiguration));
+        if (!partition.IsValid())
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::InvalidPartition));
+        auto lockPath = PartitionPath(partition);
+        lockPath += ".lock";
+        auto acquired = files_->TryAcquireExclusive(lockPath, "horo.platform.offline");
+        if (acquired.HasError())
+            return Result<void>::Failure(StorageError(acquired.ErrorValue()));
+        [[maybe_unused]] auto publicationLock = std::move(acquired).Value();
+        const auto loaded = Load(partition);
+        if (loaded.HasValue())
+            return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::InvalidRecord));
+        const auto &code = loaded.ErrorValue().code.Value();
+        if (code != PlatformOfflineQueueErrors::Corrupt.code.Value() && code != PlatformOfflineQueueErrors::InvalidRecord.code.Value() &&
+            code != PlatformOfflineQueueErrors::UnsupportedVersion.code.Value() &&
+            code != PlatformOfflineQueueErrors::PayloadTooLarge.code.Value() &&
+            code != PlatformOfflineQueueErrors::IdentityConflict.code.Value() &&
+            code != PlatformOfflineQueueErrors::CapacityExceeded.code.Value())
+            return Result<void>::Failure(loaded.ErrorValue());
+
+        auto fence = PartitionPath(partition);
+        fence += ".quarantined";
+        auto prepared = fence;
+        prepared += ".tmp";
+        constexpr std::array marker{std::byte{'Q'}, std::byte{'1'}};
+        if (const auto written = files_->WriteDurable(prepared, marker); written.HasError())
+            return Result<void>::Failure(StorageError(written.ErrorValue()));
+        if (const auto published = files_->AtomicReplace(prepared, fence); published.HasError())
             return Result<void>::Failure(MakeError(PlatformOfflineQueueErrors::StorageUnknown));
         return Result<void>::Success();
     }
