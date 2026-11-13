@@ -8,7 +8,7 @@ declared by `Input.h`; including `InputAccessibility.h` still exposes it through
 the existing include relationship. Raw physical snapshots are unchanged by this
 binding-model change.
 
-### Gyroscope rate bindings
+## Gyroscope rate bindings
 
 The same Input-owned model also appends `BindingControlKind::GyroscopeAxis`,
 `GyroscopeBindingPolicy` and the `InputBinding::gyroscope` field. Existing control
@@ -70,8 +70,11 @@ repeating an existing key or changing storage beyond `chordSize` cannot disguise
 two bindings for the same transition. Such profiles are rejected atomically;
 remove the redundant binding instead of reordering its chord. This changes no
 wire fields or raw input state. The new regression checks map/profile rejection,
-unchanged revision and preservation of a genuinely different chord. It is not
-included in the historical 95-case pass below; its native rerun is pending.
+unchanged revision and preservation of a genuinely different chord. It passed
+in the **96/96 native Input** batch at `eac1e8f` (zero skips, 1.44 seconds),
+alongside both Input test targets and staged/explicit public consumers. Evidence:
+`build/acc-input-chord-eac1e8f-results.xml` and corresponding discovery JSON.
+The earlier 95-case pass below predates this correction.
 
 The native MSVC Debug batch at `2b2175ca9847ca97dd50d648563a3cafbc2f82bd`
 built both Input test executables and staged/explicit public consumers, then passed
@@ -270,11 +273,12 @@ not read after invalidation.
 Model and headless GUI regression sources cover exact decimal round trips,
 invalid fields, bounds, stale generation/ABA rejection, peer preservation,
 canonical codec round trips and sticky conflicts, plus paired locale/narrow form
-drawing. These C++ tests have not compiled or run. The paired localization and
-SDK Python pass is now **26 passed**, which does not qualify native behavior or
-visual interaction. Input workstream rebinding capture/persistence integration,
-additional host withdrawal composition and gyro remain implementation/qualification work.
-This checkpoint does not qualify ACC-001.4.
+drawing. The GUI batch at `2b2175c` compiled the editor application and passed
+**98/98 GUI/SDL cases**; the later Input batch at `eac1e8f` passed **96/96**,
+including chord-set identity. These distinct source snapshots and checks are
+recorded in the delivery guide. Scoped capture/persistence integration,
+controller gyro collection and native interaction/hardware qualification remain.
+These checkpoints do not qualify ACC-001.4.
 The graphical editor now drains removed-context withdrawals at its actual input
 cutoff, after the router adopts the committed sample and before screen input
 capture. It releases only ended-owner name leases and never delivers them to a
@@ -283,7 +287,8 @@ their ordinary release reads. The new bounded lifecycle regression repeats more
 than the complete mapping capacity through context replacement without an explicit
 router `EndFrame`, then checks that host draining cannot steal a live modal
 cancellation. This model regression passed in the 88-case Input batch; the
-graphical application TU and other compositions still need qualification.
+graphical application cutoff compiled in the `2b2175c` GUI batch. Actual native
+interaction and hardware qualification remain incomplete.
 
 `GameplayInputFrameBuilder` now clears all held and pending commands when any
 routed action reports `ClockUnavailable` or `CapacityExceeded`. Previously its

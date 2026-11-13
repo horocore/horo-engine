@@ -1,7 +1,7 @@
 # Editor accessibility qualification record
 
 Status on 2026-11-11: **not qualified**. This record belongs to HORO-1812 /
-#1856 [ACC-001.8] under HORO-1769 / #1813. It inventories the complete editor
+[#1856](https://github.com/horocore/horo-engine/issues/1856) [ACC-001.8] under HORO-1769 / #1813. It inventories the complete editor
 target and makes missing evidence explicit; no table entry is a conformance pass.
 The [delivery record](accessibility-delivery-qualification.md) owns implementation,
 commands and current execution results. No platform or legal approval is inferred

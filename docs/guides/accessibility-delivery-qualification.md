@@ -18,7 +18,7 @@ it must not be attributed to that older remote snapshot.
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Fixed cue/catalog transport, bounded timeline, appearance, safe-area layout and canonical paint/resource lifetimes; 49-case UI batch passed | Host localization/shaping/presentation composition, settings activation and visible native output |
 | ACC-001.3 color | HORO-1807 / #1851 | Foundation-only matrices and authoritative snapshot query; numeric/query/contract cases passed in the 11-case semantic batch | Complete-image GPU execution, cooked shader ABI migration, settings activation and real backend evidence |
-| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, calibrated platform gyro and atomic persistence; **95/95 Input** and **98/98 GUI/SDL** passed at 2b2175c, including physical identity/chord exclusivity and modal validity/gating fixes. Editor application and affected public consumers built; earlier CharacterInput 16/16 passed | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; controller motion collection, device evidence and native interaction qualification |
+| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, calibrated platform gyro and atomic persistence; **96/96 Input** passed at eac1e8f, including chord-set identity. **98/98 GUI/SDL** and the editor application built at 2b2175c; direct Input consumers passed **62/62** at d460d27 | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; controller motion collection, device evidence and native interaction qualification |
 | ACC-001.5 visual | HORO-1809 / #1853 | Atomic UI scale/contrast projection, readable typography floor and tagged safety projection passed in UI/semantic batches | Both editor theme layers, coherent DPI/font/UI scale, actual Camera/VFX/animation consumers and visual qualification |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Runtime UI semantics, truthful Null Unsupported bridge, retained desired preference and bounded opt-in QA journal passed in the UI batch | Native adapters, default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Inert contribution, seven typed preferences, authoritative snapshot and revision-only hint/retry contracts passed in the semantic batch | Host tick composition, game-owned supported/authorized consumers and shared settings contribution |
@@ -37,7 +37,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 
 | Scope | Clean commit | Built targets | Executed evidence |
 |---|---|---|---|
-| Input | `2b2175ca9847ca97dd50d648563a3cafbc2f82bd` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **95/95 passed, zero skipped**, 1.47s; `build/acc-input-identity-2b2175c-results.xml` and corresponding discovery JSON |
+| Input | `eac1e8f17caf4a24c442954145fe659c29cdb6ef` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **96/96 passed, zero skipped**, 1.44s; `build/acc-input-chord-eac1e8f-results.xml` and corresponding discovery JSON |
 | Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
 | Direct Input consumers | `d460d270be3a71c914c001d5302674c2f599672e` | Eleven targets: Character/Input UI/debugger/portable Android tests; staged Character/RuntimeUiInput/Android/XR consumers; direct navigation/pointer/debugger consumers | **62/62 passed, zero skipped**, 1.42s; `build/acc-input-consumers-d460d27-results.xml` and corresponding discovery JSON |
 | Captions / Runtime UI / optional bridge | `df38a89c2006ef57f0e33a7b91e2c37a4b05bd1b` | HoroRuntimeUiAccessibilityTests, RuntimeUi staged/accessibility consumers, CaptionTransport staged/direct consumers, PlatformAccessibility staged/direct consumers | **49/49 passed, zero skipped**, 0.72s; `build/acc-caption-results.xml` and discovery JSON |
@@ -58,9 +58,10 @@ for current input integration; the Android cases are portable producer/lifecycle
 tests, not NDK/device qualification. Offline SDK compatibility repeated at
 `d460d27` with **24/24 passed** (0.22 seconds), independently of these C++ tests.
 
-The later internal chord-set identity correction at `4a7ae9b` rejects reordered
-or repeated-key aliases through both map and profile admission. Its new native
-regression is pending; the earlier passes above do not validate that correction.
+The internal chord-set identity correction at `4a7ae9b` rejects reordered or
+repeated-key aliases through both map and profile admission. Its new regression
+executed successfully in the 96-case Input batch at `eac1e8f`, including unchanged
+map/profile revision on rejection and preservation of a genuinely different chord.
 
 The GUI batch executed all ten new Contrast/Input Mapping cases: exact duration
 round trips, malformed drafts, canonical Apply with peer preservation and stale
@@ -152,6 +153,34 @@ creation privilege. These unit results do not replace the required full-scope
 rerun or establish any C++ sensor result.
 The separate Windows compiler/CLI and OS-adapter suites passed **68 tests** in
 10.35 seconds (`build/acc-quality-platform-results.xml`).
+
+The subsequent full attempt at `eac1e8f` completed the 59 translation-unit and
+27 header contexts, including CMake/object preparation, then reached managed IDE
+project synchronization. The source VS Code profile had no `horocore` connection;
+the managed log explicitly reported that the connection ID did not exist. The
+check was stopped under the working contract, and its owned processes and managed
+window retired. `build/acc-preflight-connection-incomplete-eac1e8f.json` records
+this incomplete attempt; it is not an official analyzer report or C++ sensor pass.
+The existing VS Code connection needs configuration and the next managed window
+needs review. No credentials or Workspace Trust settings were changed.
+
+Independent checks at that same clean commit used the complete final-base
+106-file selection and verified source freshness. The supported CLI secrets
+function (`sonar analyze secrets`) returned exit 0 with no findings;
+`build/acc-cli-secrets-eac1e8f.json` is explicitly a secrets-only provider result.
+The official `check --only codacy --base origin/codex/editor-improvements
+--timeout 900` returned **incomplete / exit 2**, not stale. Its report is
+`1794594068440665100-2c9a2a1f.json` in the external report cache, retained locally
+as `build/acc-codacy-eac1e8f.json`. Neither partial check replaces full preflight.
+
+That Codacy snapshot contains **85 findings: 62 Info and 23 Warning**. All findings,
+including contextual ones, remain in the report without claims about their age.
+It also records two Semgrep partial C++ parses, seven skipped large files and
+missing/incomplete Jackson execution. Six CMake paths have no configured local
+analyzer. Raw complexity and CPD completed as advisory estimates, with 59 clone
+groups and their unchanged partners retained. Markdown markup and redundant test
+imports have been corrected; a same-scope rerun is required after those edits.
+No rules, exclusions or cloud configuration were changed to hide incomplete work.
 
 For published head `55d9991`,
 [SonarCloud run 43427932437](https://github.com/horocore/horo-engine/actions/runs/43427932437)

@@ -16,11 +16,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import analyze as preflight
-import analyze as support
-import analyze as tools
-import analyze as sonar
-import analyze as sessions
 from analyze import AnalysisError as AnalysisError
+
+# Fixture names identify responsibilities within the same canonical helper module.
+support = tools = sonar = sessions = preflight
 
 
 def git(root: Path, *args: str) -> str:
@@ -141,8 +140,7 @@ def test_ownership_rejects_pid_reuse_and_substring_profile():
 
 def test_terminate_never_signals_stale_or_unrelated_process(monkeypatch):
     monkeypatch.setattr(sessions, 'session_processes', lambda: {123: {"started": "new", "argv": ["code"]}})
-    import analyze as quality_platform
-    monkeypatch.setattr(quality_platform, 'terminate_processes', lambda *_: pytest.fail("must not signal unowned process"))
+    monkeypatch.setattr(sessions, 'terminate_processes', lambda *_: pytest.fail("must not signal unowned process"))
     assert not sessions.terminate({"pid": 123, "started": "old", "profile": "/cache/profile"})
 
 

@@ -749,7 +749,6 @@ retains the mutable handle for Commit/Cancel. Explicitly typed projection member
 pointers must also adopt that const-reference parameter. Const does not grant
 concurrent collection access.
 
-
 ### Reserved Source Admission Before Dependent Readiness
 
 `InputActionSourceToken::Validate` is an additive read-only admission query required by
