@@ -517,7 +517,7 @@ namespace Horo::Audio {
             auto *state = selected->state.get();
             JobDescriptor descriptor;
             descriptor.parentCancellation = state->cancellation.Token();
-            auto submitted = jobs_.SubmitResult(std::move(descriptor), [state, source = state->source](const CancellationToken &token) {
+            auto submitted = jobs_.SubmitResult(descriptor, [state, source = state->source](const CancellationToken &token) {
                 return Fill(*state, source, token);
             });
             if (submitted.HasError()) {

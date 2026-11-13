@@ -99,8 +99,8 @@ namespace Horo::Audio {
             state_ = AudioStreamDecoderState::Failed;
             return Result<AudioStreamDecodedBlock>::Failure(MakeError(AudioStreamDecoderErrors::ProtocolViolation));
         }
-        const auto samples = output.first(static_cast<std::size_t>(progress.frames) * spec_.outputFormat.layout.orderedChannels.size());
-        if (!std::ranges::all_of(samples, [](const auto sample) {
+        if (const auto samples = output.first(static_cast<std::size_t>(progress.frames) * spec_.outputFormat.layout.orderedChannels.size());
+            !std::ranges::all_of(samples, [](const auto sample) {
             return std::isfinite(sample);
         })) {
             state_ = AudioStreamDecoderState::Failed;
