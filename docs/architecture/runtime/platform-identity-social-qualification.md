@@ -88,6 +88,36 @@ results. No heavy job is queued while the main CI owner holds priority.
 
 ## Execution status
 
+### 2026-11-13 resumed delivery
+
+The ten delivery patches were rebased without conflicts onto published
+`origin/codex/editor-improvements` at `3df476ff4`; range-diff marked each equivalent.
+This base contains both C11 admission-fixture support and the Windows offline-queue
+allocation-ownership fix. Current regression execution remains required.
+
+The user authorized normal branch push and truthful draft review while acceptance
+remains open. The current protocol permits one atomic nonblocking acquisition of
+the canonical physical build lock with actual-handle, CPU/RAM and one-worker guards;
+old named-grant HOLD text is historical. The first observer RED attempt did not
+launch an engine child: CPU30 was 34.44%, but free RAM was 10.33%, below 25%.
+The local helper now preserves the canonical cleanup guard without a probe/release/
+blocking-reacquire race. Subsequent full validation attempts and provider outcomes
+must be reported separately; resource deferral is not an analyzer or native pass.
+
+Windows CI previously omitted Platform Services qualification from its focused
+closure. Six request/native/composition/social/header targets and the direct CTest
+labels are now registered. The source-level grouping regression suite passed
+41/41; native configure/build/runtime validation is still pending.
+
+Fresh doctor found installed tools and a usable local IDE profile, but Codacy cloud
+configuration comparison failed authentication. Doctor is not C++ sensor execution,
+a secrets scan or a Codacy code analysis. Final scope must use the actual published
+PR target, `--base origin/codex/editor-improvements`, with final worktree inputs.
+The previous 83-case result predates the changed handle and remains historical.
+Provider/credential/private-native/OS/consent/certification qualification stays open.
+
+### Earlier 2026-11-11 evidence
+
 The tests above are coverage locations, not a claim that they have passed on every
 host. Targeted Windows Debug configuration with MSVC 19.44 completed after the
 helper verified its actual canonical shared-lock file handle. Earlier sandbox
