@@ -21,6 +21,7 @@ namespace Horo::AI {
                                                 binding_.firstTaskGeneration, binding_.blackboard};
             binding.capabilityCancellation = binding_.operation.capabilityCancellation;
             binding.diagnostics = binding_.operation.diagnostics;
+            binding.ownerCancellation = binding_.operation.ownerCancellation;
             auto runner = BehaviorTreeInstance::Create(action, binding, std::move(callbacks).Value());
             if (runner.HasError())
                 return Result<void>::Failure(runner.ErrorValue());

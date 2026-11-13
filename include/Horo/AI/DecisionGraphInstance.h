@@ -2,6 +2,7 @@
 /** @file DecisionGraphInstance.h
  * @brief Host-driven BT/HSM/Utility composition with independently allocated call occurrences and no scheduler ownership.
  */
+#include "Horo/AI/AiDecisionTaskReservation.h"
 #include "Horo/AI/DecisionGraphCompiler.h"
 #include "Horo/AI/DecisionStepTrace.h"
 
@@ -35,9 +36,29 @@ namespace Horo::AI {
      */
     class DecisionGraphInstance final {
     public:
+        /** @brief Creates a graph with an explicit non-Scene host's exclusive logical namespace.
+         * @param plan Complete compiled closure. @param providers Exact compiler-captured executable generation.
+         * @param binding Host-owned schema, parent operation and exclusive task range.
+         * @return Owned graph or typed admission/storage failure before execution.
+         * @details Scene hosts use the owner-issued reservation overload. This metadata does not acquire Scene authority.
+         */
         [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> Create(std::shared_ptr<const CookedDecisionPlan> plan,
                                                                                    std::shared_ptr<const DecisionNodeGeneration> providers,
                                                                                    DecisionGraphInstanceBinding binding);
+        /** @brief Creates a graph using the actual Scene AI allocator's exclusive reservation and schema publication.
+         * @param plan Complete current closure. @param providers Exact executable generation captured by the compiler.
+         * @param reservation Move-only actual owner scope; consumed on success or failure without reclaiming indices.
+         * @param operation Admitted parent operation; its cancellation and capability ancestors are preserved.
+         * Its ownerCancellation is replaced by the reservation's actual agent-parented scope.
+         * @return Owned graph retaining the reservation or typed schema/capacity/lifetime/storage failure.
+         * @details Provider factories run only after owner/schema/range admission. Children use the real range with fresh
+         * slot generations; the graph's destruction cancels the reservation. The raw binding overload remains for
+         * explicit non-Scene composition/test owners; raw metadata is never a substitute for this actual Scene reservation.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> Create(std::shared_ptr<const CookedDecisionPlan> plan,
+                                                                                   std::shared_ptr<const DecisionNodeGeneration> providers,
+                                                                                   AiDecisionTaskReservation reservation,
+                                                                                   AiTaskOperationContext operation);
         /** @brief Logical composition-adapter allocation per occurrence; family kernels report their own extents. */
         [[nodiscard]] static std::uint64_t CoreStorageBytes(const DecisionCompiledGraph &graph) noexcept;
         [[nodiscard]] Result<AiTaskState> Step(const DecisionGraphStepInput &input);
@@ -99,6 +120,7 @@ namespace Horo::AI {
         std::uint64_t lastTick_{};
         const DecisionGraphStepInput *input_{};
         DecisionStepTrace *trace_{};
+        std::optional<AiDecisionTaskReservation> reservation_;
     };
 
     /** @brief Planned canonical HSM additions, to be placed on the existing source/runner types, not a parallel runner.

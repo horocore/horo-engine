@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 29 / `gameplay-sdk29`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 30 / `gameplay-sdk30`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -195,6 +195,26 @@ Rollback: stop the host and restore the complete SDK8 engine, matching module
 binaries and descriptor bundles, project backup and locks. Rebuilding SDK9 source
 against SDK8 requires removing the Physics-context/accessor use and its component
 link; never load an SDK9 module into SDK8 by changing a manifest/fingerprint.
+
+## Gameplay SDK29 → SDK30 (Custom perception provider leases)
+
+`GeneratedGameplayDescriptorBundle` appends `perceptionSenses` and
+`perceptionSenseCount`. `GameplaySdkBoundaryVersion` becomes 30 because the
+complete generated bundle has a different native layout. Rebuild every gameplay
+module and SDK consumer, including modules with no custom senses, with the same
+compiler and SDK snapshot. Regenerate descriptors through `project.py gameplay`;
+`HORO_AI_SENSE` emits inert metadata and module-owned factory/destroy pairs.
+
+`LoadedGameModule::AcquirePerceptionSenses` retains the actual module generation.
+The composition root creates instances at an owner safe point, after the frozen
+registry and explicit capability grants agree. Providers consume only frozen
+candidate facts and return bounded input indices; built-in Gameplay event types
+cannot be replaced. Retire instances and release their generation leases before
+native unload. Copying descriptor metadata does not retain executable authority.
+
+Rollback requires restoring the matching SDK29 engine and module binaries, then
+rebuild against that exact snapshot if sources changed. Do not relabel an SDK30
+bundle as SDK29 or preserve two bundle layouts behind a compatibility flag.
 
 ## Retirement source API migration in this snapshot
 

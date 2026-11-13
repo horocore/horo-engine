@@ -147,6 +147,9 @@ namespace Horo::AI {
         BehaviorTreeExecutionPlan &operator=(const BehaviorTreeExecutionPlan &) = delete;
 
     private:
+        friend class BehaviorTreeInstance;
+        /** @brief Checks exact admitted schema/provider/key bindings before reusing an existing executor. */
+        [[nodiscard]] bool HasCompatibleBindings(const BehaviorTreeExecutionPlan &candidate) const noexcept;
         [[nodiscard]] static Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> CompileAdmitted(
             std::shared_ptr<const DecisionAssetPlan> bindings, DecisionNodeId root, std::span<const BehaviorTreeExecutionNode> nodes,
             std::span<const BehaviorTreeExecutionService> services, const BehaviorTreeExecutionLimits &limits, bool composed);
@@ -230,11 +233,13 @@ namespace Horo::AI {
     struct BehaviorTreeInstanceBinding final {
         AgentHandle agent;
         CancellationToken cancellation;
-        std::uint32_t firstTaskSlot{}; /**< Owner reserves plan.TaskSlots() consecutive slots exclusively for this instance's lifetime. */
+        std::uint32_t firstTaskSlot{};        /**< Start of the owner's exclusive declared or initial-plan-sized task reservation. */
         std::uint32_t firstTaskGeneration{1}; /**< Owner-issued seed; generations never wrap, including across reload/restart. */
         BlackboardInstanceBinding blackboard; /**< Exact admitted schema publication and blackboard instance generation. */
         CancellationToken capabilityCancellation;
         std::shared_ptr<const Telemetry::OperationContext> diagnostics;
+        std::optional<std::size_t> availableTaskSlots; /**< Owner-reserved range; absent captures the initial plan's exact requirement. */
+        CancellationToken ownerCancellation;           /**< Actual owner reservation, kept separate from operation/module cancellation. */
     };
 
     /** @brief Single-owner allocation-bounded tree instance; scene decision scheduling remains with AIDecisionSystem. */
@@ -277,8 +282,23 @@ namespace Horo::AI {
         /** @brief Atomically offers a compiled replacement at the owner safe point.
          * @param candidate Complete admitted plan; null is rejected without changing the active tree.
          * @return True when compatible state was retained, false after abort/reset, or typed failure preserving the old instance.
+         * @details Revalidates the originally owner-reserved task-slot capacity and subplan support before publication.
+         * A growing plan requires sufficient availableTaskSlots at Create; it cannot claim adjacent task identities.
+         * Changed provider/node/key bindings require the overload accepting a prepared replacement executor.
+         * Incompatible storage, including
+         * async mailboxes, is prepared before cancelling old tasks. After successful replacement, the next evaluation
+         * must use a tick strictly later than the last evaluation; events cannot execute a second plan in that old tick.
          */
         [[nodiscard]] Result<bool> Replace(std::shared_ptr<const BehaviorTreeExecutionPlan> candidate);
+        /** @brief Atomically replaces plan storage and its prepared executor at the owner safe point.
+         * @param candidate Complete admitted plan using the same exact blackboard schema.
+         * @param replacementExecutor Executor already bound to the candidate's providers/properties; null reuses existing bindings only.
+         * @return False after restarting with a new executor, true for compatible reuse, or typed failure preserving old execution.
+         * @details All storage is prepared before old tasks are cancelled. New executor callbacks cannot start until a later tick.
+         * A different executor always restarts state, even if the plan itself is compatible; opaque provider state is never copied.
+         */
+        [[nodiscard]] Result<bool> Replace(std::shared_ptr<const BehaviorTreeExecutionPlan> candidate,
+                                           std::unique_ptr<IBehaviorTreeExecutor> replacementExecutor);
         /** @brief Idempotently cancels work and fences further evaluation; also called by the destructor. */
         void Shutdown() noexcept;
         /** @brief Returns one stable node's subtree status. @param node Stable identity. @return Status or typed missing identity failure.
@@ -300,6 +320,9 @@ namespace Horo::AI {
     private:
         friend class BehaviorTreeExecutionPlan;
         friend class DecisionGraphInstance;
+        /** @brief Validates replacement ownership, schema, task range and executor binding before any cancellation. */
+        [[nodiscard]] Result<void> AdmitReplacement(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate,
+                                                    const IBehaviorTreeExecutor *replacementExecutor) const;
         /** @brief Copies non-idle node outcomes after evaluation, without task payloads or provider calls.
          * @param occurrence Exact owning compiled call. @param trace Bounded owner-supplied evidence buffer.
          */
@@ -356,6 +379,7 @@ namespace Horo::AI {
         std::unique_ptr<Frame[]> frames_;
         std::shared_ptr<Detail::AiTaskMailbox> mailbox_;
         std::uint64_t tick_{};
+        std::uint64_t replacementTick_{};
         std::uint64_t evaluation_{};
         std::uint32_t nextGeneration_{};
         AiTaskResumeReason reason_{AiTaskResumeReason::FixedTick};

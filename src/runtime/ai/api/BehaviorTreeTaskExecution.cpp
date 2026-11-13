@@ -14,7 +14,7 @@ namespace Horo::AI {
         nextGeneration_ = nextGeneration_ == std::numeric_limits<std::uint32_t>::max() ? 0 : nextGeneration_ + 1;
         state.task.emplace();
         if (const auto started = state.task->Start({plan_->Nodes()[node].execution.task, handle, binding_.agent, binding_.cancellation,
-                                                    binding_.capabilityCancellation, binding_.diagnostics});
+                                                    binding_.capabilityCancellation, binding_.diagnostics, binding_.ownerCancellation});
             started.HasError())
             return Result<void>::Failure(started.ErrorValue());
         if (auto continuation = mailbox_->Bind(node, *state.task->Context()); continuation.HasError()) {

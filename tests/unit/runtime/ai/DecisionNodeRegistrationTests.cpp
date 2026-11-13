@@ -9,6 +9,7 @@ namespace Horo::AI {
     namespace {
         using BehaviorTreeTestSupport::Fixture;
         using BehaviorTreeTestSupport::Node;
+        using TestSupport::ExpectError;
         using TestSupport::MakeIdentity;
 
         DecisionNodeRegistration Registration(std::shared_ptr<BehaviorTreeTestSupport::Probe> &probe) {
@@ -116,6 +117,43 @@ namespace Horo::AI {
             CHECK(fixture.probe->destroyed == 1);
             generation.reset();
             CHECK(weak.expired());
+        }
+
+        TEST_CASE("Bound decision executor replacement prepares new node callbacks before cancelling the old tree", "[ai][decision-node]") {
+            using enum BehaviorTreeOperation;
+            using enum AiTaskState;
+            Fixture fixture({Node(1, Task)});
+            fixture.probe->outcome[1] = Running;
+            const auto registration = Registration(fixture.probe);
+            auto admission = std::make_shared<std::atomic_bool>(true);
+            auto captured = DecisionNodeGeneration::Capture(std::span{&registration, 1}, admission);
+            REQUIRE(captured.HasValue());
+            auto generation = captured.Value();
+            auto original = fixture.Plan();
+            auto callbacks = generation->CreateExecutor(generation, *original, {});
+            REQUIRE(callbacks.HasValue());
+            BehaviorTreeInstanceBinding binding{fixture.agent, {}, 100, 1, fixture.blackboard->Binding()};
+            binding.availableTaskSlots = 8;
+            auto created = BehaviorTreeInstance::Create(original, binding, std::move(callbacks).Value());
+            REQUIRE(created.HasValue());
+            auto instance = std::move(created).Value();
+            REQUIRE(fixture.Evaluate(*instance, 1) == Running);
+            fixture.nodes = {Node(1, Sequence, {2, 3}), Node(2, Task), Node(3, Task)};
+            fixture.probe->outcome[3] = Running;
+            auto candidate = fixture.Plan();
+            ExpectError(instance->Replace(candidate), AIErrors::DecisionAssetDescriptorIncompatible);
+            CHECK(fixture.probe->aborts[1] == 0);
+            auto replacement = generation->CreateExecutor(generation, *candidate, {});
+            REQUIRE(replacement.HasValue());
+            auto replaced = instance->Replace(candidate, std::move(replacement).Value());
+            REQUIRE(replaced.HasValue());
+            CHECK_FALSE(replaced.Value());
+            CHECK(fixture.probe->aborts[1] == 1);
+            CHECK(fixture.probe->cleanups[1] == 1);
+            CHECK(fixture.probe->starts[2] == 0);
+            REQUIRE(fixture.Evaluate(*instance, 2) == Running);
+            CHECK(fixture.probe->starts[2] == 1);
+            CHECK(fixture.probe->starts[3] == 1);
         }
 
         TEST_CASE("Decision node generation rejects off-owner creation without touching factories", "[ai][decision-node]") {

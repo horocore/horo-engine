@@ -124,14 +124,14 @@ namespace Horo::AI {
 
     /** @copydoc BlackboardSnapshot::Revision */
     Result<std::uint64_t> BlackboardSnapshot::Revision() const {
-        if (!generationActive_->load())
+        if (!generationActive_ || !generationActive_->load())
             return Result<std::uint64_t>::Failure(Failure(AIErrors::BlackboardInstanceStale));
         return Result<std::uint64_t>::Success(revision_);
     }
 
     /** @copydoc BlackboardSnapshot::Read */
     Result<std::optional<BlackboardValue>> BlackboardSnapshot::Read(const BlackboardKeyId key) const {
-        if (!generationActive_->load())
+        if (!generationActive_ || !generationActive_->load())
             return Result<std::optional<BlackboardValue>>::Failure(Failure(AIErrors::BlackboardInstanceStale));
         const std::size_t index = FindKey(*schema_, key);
         if (index == schema_->Keys().size())

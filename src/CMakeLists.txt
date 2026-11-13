@@ -948,6 +948,7 @@ target_link_libraries(HoroUiTemplateHost PUBLIC HoroEngine::UiTemplateInstances 
 
 add_library(HoroGameplayApi STATIC
         gameplay/api/NativeDecisionNode.cpp
+        gameplay/api/NativePerceptionSense.cpp
         gameplay/api/PersistenceRegistration.cpp
         gameplay/api/GameEventRegistry.cpp
         gameplay/api/BehaviorTypes.cpp
@@ -1131,6 +1132,7 @@ target_include_directories(HoroGameplayModuleHost PUBLIC ${PROJECT_SOURCE_DIR}/i
 target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 
 add_library(HoroGameplayLua STATIC
+    gameplay/lua/LuaPerceptionSense.cpp
     gameplay/lua/LuaDecisionNode.cpp
         gameplay/lua/LuaBehavior.cpp
         gameplay/lua/LuaVfxBinding.cpp
@@ -1665,6 +1667,7 @@ add_library(HoroAI STATIC
         runtime/ai/compile/DecisionEnvironmentIdentity.cpp
         runtime/ai/compile/DecisionGraphCompiler.cpp
         runtime/ai/compile/DecisionGraphInstance.cpp
+    runtime/ai/compile/DecisionGraphReservation.cpp
         runtime/ai/compile/DecisionGraphLowering.cpp
         runtime/ai/compile/DecisionMemoryMeasure.cpp
         runtime/ai/compile/DecisionProviderAdmission.cpp
@@ -1709,7 +1712,11 @@ add_library(HoroAI STATIC
     runtime/ai/api/EnvironmentQueryScoring.cpp
     runtime/ai/api/UtilitySelector.cpp
         runtime/ai/api/NullAIRuntime.cpp
+        runtime/ai/api/AiDecisionTaskReservation.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
+        runtime/ai/api/PerceptionSenseErrors.cpp
+        runtime/ai/registration/PerceptionSenseGeneration.cpp
+        runtime/ai/registration/PerceptionSenseInstance.cpp
         runtime/ai/api/PerceptionEventRouting.cpp
         runtime/ai/api/PerceptionErrors.cpp
         runtime/ai/api/PerceptionFiltering.cpp
@@ -1737,7 +1744,9 @@ add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AISceneActivation.cpp
         runtime/ai/integration/AISceneStructural.cpp
         runtime/ai/integration/AISceneRestore.cpp
+        runtime/ai/integration/AISceneDecisionReservation.cpp
         runtime/ai/integration/AIScenePerceptionSource.cpp
+        runtime/ai/integration/PerceptionSenseScene.cpp
         runtime/ai/integration/EnvironmentQueryContexts.cpp
     runtime/ai/integration/EnvironmentQueryGenerators.cpp
     runtime/ai/integration/EnvironmentQueryExecution.cpp

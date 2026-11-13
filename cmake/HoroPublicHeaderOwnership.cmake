@@ -498,6 +498,7 @@ horo_configure_target_header_boundary(HoroNetworkChaosHarness PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/NativeDecisionNode.h
+    Horo/Gameplay/NativePerceptionSense.h
     Horo/Gameplay/GameEventRegistry.h
     Horo/Gameplay/Behavior.h
     Horo/Gameplay/BehaviorRestore.h
@@ -570,6 +571,7 @@ horo_configure_target_header_boundary(HoroShaderBuild PUBLIC_HEADERS
     Horo/Application/ShaderBuildService.h
 )
 horo_configure_target_header_boundary(HoroGameplayLua PUBLIC_HEADERS
+    Horo/Gameplay/LuaPerceptionSense.h
     Horo/Gameplay/LuaDecisionNode.h
     Horo/Gameplay/LuaBehavior.h
 )
@@ -766,6 +768,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AITaskContinuation.h
     Horo/AI/AITaskJobService.h
     Horo/AI/AITaskScheduler.h
+    Horo/AI/AiDecisionTaskReservation.h
     Horo/AI/BehaviorTree.h
     Horo/AI/BehaviorTreeRuntime.h
     Horo/AI/DecisionWakePolicy.h
@@ -779,6 +782,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/UtilityDecision.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
+    Horo/AI/PerceptionSenseProvider.h
     Horo/AI/PerceptionEventRouting.h
     Horo/AI/PerceptionFiltering.h
     Horo/AI/PerceptionMemory.h
@@ -788,6 +792,7 @@ horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
     Horo/AI/AISceneActivation.h
     Horo/AI/AIScenePerceptionSource.h
     Horo/AI/PerceptionSpatialBroadphase.h
+    Horo/AI/PerceptionSenseScene.h
     Horo/AI/EnvironmentQueryContexts.h
     Horo/AI/EnvironmentQueryGenerators.h
     Horo/AI/EnvironmentQueryExecution.h

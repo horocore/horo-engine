@@ -25,7 +25,12 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskJobLease::Run */
     Result<void> AiTaskJobLease::Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const {
-        return state_->work->Run(operation, cancellation);
+        if (operation.IsCancellationRequested() || cancellation.IsCancellationRequested())
+            return JobCancelled();
+        auto result = state_->work->Run(operation, cancellation);
+        if (operation.IsCancellationRequested() || cancellation.IsCancellationRequested())
+            return JobCancelled();
+        return result;
     }
 
     struct AiTaskJobService::Entry final {

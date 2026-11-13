@@ -253,6 +253,44 @@ namespace Horo::AI {
             CHECK(fixture.Step(*instance, 2) == AiTaskState::Succeeded);
         }
 
+        TEST_CASE("Decision trace rejects invalid observation admission without rewriting retained evidence",
+                  "[ai][decision-graph-runtime][trace]") {
+            Fixture fixture;
+            const std::array sources{TaskTree(1)};
+            auto instance = fixture.Instance(fixture.Compile(sources, 1));
+            auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            DecisionStepTrace trace;
+            REQUIRE(instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace).HasValue());
+            const auto retained = trace;
+            auto current = fixture.binding;
+            SECTION("cancelled operation still requires exact owner metadata") {
+                fixture.cancellation.RequestCancellation();
+                ++current.agent.slot.index;
+            }
+            SECTION("live operation rejects a revoked read lease before trace publication") {
+                REQUIRE(fixture.blackboard->TeardownAtBlackboardSync().HasValue());
+            }
+            const auto rejected = instance->StepWithTrace({2, current, snapshot.Value(), {}}, trace);
+            TestSupport::ExpectError(rejected, AIErrors::BlackboardInstanceStale);
+            CHECK(trace.Header().agent == retained.Header().agent);
+            CHECK(trace.Header().tick == retained.Header().tick);
+            CHECK(trace.Header().blackboardRevision == retained.Header().blackboardRevision);
+            CHECK(std::ranges::equal(trace.Records(), retained.Records()));
+            CHECK(fixture.probe.resumes == 0);
+            CHECK(fixture.probe.aborts == 0);
+            CHECK(fixture.probe.cleanups == 0);
+            fixture.cancellation.RequestCancellation();
+            auto cancelled = instance->StepWithTrace({2, fixture.binding, snapshot.Value(), {}}, trace);
+            REQUIRE(cancelled.HasValue());
+            CHECK(cancelled.Value() == AiTaskState::Cancelled);
+            CHECK(trace.Header().agent == fixture.binding.agent);
+            CHECK(trace.Header().tick == 2);
+            CHECK(trace.Header().blackboardRevision == snapshot.Value().CapturedRevision());
+            CHECK(fixture.probe.aborts == 1);
+            CHECK(fixture.probe.cleanups == 1);
+        }
+
         TEST_CASE("Decision graph requires the actual captured immutable schema lease before executing a task",
                   "[ai][decision-graph-runtime]") {
             Fixture fixture;

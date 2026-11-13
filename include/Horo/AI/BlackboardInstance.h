@@ -191,7 +191,7 @@ namespace Horo::AI {
     /** @brief Immutable owned observation stable across commits and expiring on generation replacement or teardown. */
     class BlackboardSnapshot final {
     public:
-        /** @brief Returns the captured revision. @return Revision or typed stale failure after generation expiry. */
+        /** @brief Returns the captured revision. @return Revision or typed stale failure after generation expiry or move. */
         [[nodiscard]] Result<std::uint64_t> Revision() const;
 
         /** @brief Returns historical correlation identity without checking permission to read snapshot values.
@@ -204,7 +204,8 @@ namespace Horo::AI {
         /**
          * @brief Reads a typed value without exposing mutable instance storage.
          * @param key Stable schema key.
-         * @return Owned optional value or a typed stale/unknown-key failure, including revoked derived-value permission.
+         * @return Owned optional value or a typed stale/unknown-key failure, including moved-from observations and revoked
+         * derived-value permission.
          */
         [[nodiscard]] Result<std::optional<BlackboardValue>> Read(BlackboardKeyId key) const;
 

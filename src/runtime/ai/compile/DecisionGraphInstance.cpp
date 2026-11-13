@@ -119,6 +119,7 @@ namespace Horo::AI {
                                                 binding_.firstTaskGeneration, binding_.blackboard};
             binding.capabilityCancellation = binding_.operation.capabilityCancellation;
             binding.diagnostics = binding_.operation.diagnostics;
+            binding.ownerCancellation = binding_.operation.ownerCancellation;
             auto instance =
                 BehaviorTreeInstance::Create(*tree, binding, std::make_unique<CallAdapter>(*this, index, std::move(callbacks).Value()));
             if (instance.HasError())
@@ -232,6 +233,11 @@ namespace Horo::AI {
             return Invalid<void>(AIErrors::TaskTransitionInvalid);
         const auto schema = plan_->Graphs()[plan_->Occurrences()[0].plan].bindings->BlackboardSchema();
         if (!MatchesBlackboard(input, binding_.blackboard, schema))
+            return Invalid<void>(AIErrors::BlackboardInstanceStale);
+        // Metadata still identifies this owner when revocation has expired the observation's read lease.
+        if (binding_.operation.IsCancellationRequested())
+            return Result<void>::Success();
+        if (input.blackboard.Revision().HasError())
             return Invalid<void>(AIErrors::BlackboardInstanceStale);
         if (!UtilityBudgetsAvailable(input))
             return Invalid<void>(AIErrors::TaskContextInvalid);

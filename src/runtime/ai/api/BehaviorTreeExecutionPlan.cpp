@@ -116,6 +116,29 @@ namespace Horo::AI {
             return Result<std::vector<std::size_t>>::Success(std::move(parents));
         }
 
+        /** @brief Identifies only executable provider roles; ordinary controls invoke no factory callback. */
+        std::optional<BehaviorTreeOperation> CallbackRole(const BehaviorTreeOperation operation) noexcept {
+            if (operation == BehaviorTreeOperation::Task || operation == BehaviorTreeOperation::BlackboardCheck)
+                return operation;
+            return {};
+        }
+
+        /** @brief Keeps the provider callback set stable across control-only edits and preorder changes. */
+        bool CompatibleCallbacks(const BehaviorTreeExecutionPlan &left, const BehaviorTreeExecutionPlan &right) noexcept {
+            if (left.Nodes().size() != right.Nodes().size() || left.Services().size() != right.Services().size())
+                return false;
+            for (const auto &node : left.Nodes()) {
+                const auto found = std::ranges::find(right.Nodes(), node.execution.id, [](const auto &entry) {
+                    return entry.execution.id;
+                });
+                if (found == right.Nodes().end() || CallbackRole(node.execution.operation) != CallbackRole(found->execution.operation))
+                    return false;
+            }
+            return std::ranges::all_of(left.Services(), [&](const auto &service) {
+                return std::ranges::find(right.Services(), service.id, &BehaviorTreeExecutionService::id) != right.Services().end();
+            });
+        }
+
         /** @brief Matches full admitted bindings; schema pointer identity fences the exact publication. */
         bool CompatibleBindings(const DecisionAssetPlan &left, const DecisionAssetPlan &right) noexcept {
             if (left.Asset() != right.Asset() || left.SchemaVersion() != right.SchemaVersion() ||
@@ -282,10 +305,14 @@ namespace Horo::AI {
         return span;
     }
 
+    /** @copydoc BehaviorTreeExecutionPlan::HasCompatibleBindings */
+    bool BehaviorTreeExecutionPlan::HasCompatibleBindings(const BehaviorTreeExecutionPlan &candidate) const noexcept {
+        return CompatibleBindings(*bindings_, *candidate.bindings_) && CompatibleCallbacks(*this, candidate);
+    }
+
     /** @copydoc BehaviorTreeExecutionPlan::IsCompatible */
     bool BehaviorTreeExecutionPlan::IsCompatible(const BehaviorTreeExecutionPlan &candidate) const noexcept {
-        if (nodes_.size() != candidate.nodes_.size() || services_ != candidate.services_ ||
-            !CompatibleBindings(*bindings_, *candidate.bindings_))
+        if (nodes_.size() != candidate.nodes_.size() || services_ != candidate.services_ || !HasCompatibleBindings(candidate))
             return false;
         for (std::size_t index = 0; index < nodes_.size(); ++index)
             if (nodes_[index].execution != candidate.nodes_[index].execution)

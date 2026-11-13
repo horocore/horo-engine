@@ -8,6 +8,8 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::AI::AIErrors {
+    /** @brief A custom sense factory or evaluation failed or returned invalid bounded output. */
+    extern const ErrorCodeDescriptor PerceptionProviderFailed;
     /** @brief An environment-query generator or test threw instead of returning its typed provider result. */
     extern const ErrorCodeDescriptor EnvironmentQueryProviderFailed;
     /** @brief Fixed-tick scheduler settings, registration or cooperative limits are invalid. */
