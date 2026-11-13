@@ -3071,6 +3071,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorThemeBehaviorTests.cpp
             unit/editor/AccessibilityContrastPanelTests.cpp
             unit/editor/InputMappingAccessibilityTests.cpp
+            unit/editor/InputGyroscopeEditorTests.cpp
             unit/editor/EditorGuiCompositionTests.cpp
     )
     target_compile_features(HoroEditorPresentationTests PRIVATE cxx_std_20)

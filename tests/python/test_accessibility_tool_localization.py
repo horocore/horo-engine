@@ -36,3 +36,18 @@ def test_binding_accessibility_copy_covers_duration_editing_and_rejection() -> N
     assert direct_keys <= keys
     assert {"toggle", "sticky", "repeat", "hold_ms", "delay_ms", "interval_ms", "invalid", "stale", "apply", "cancel"} <= keys
     assert all(catalog[prefix + key]["text"] for catalog in catalogs for key in keys)
+
+
+def test_gyroscope_editor_copy_is_paired_and_covers_modal_and_validation() -> None:
+    prefix = "workspace.input_mapping.gyro."
+    catalogs = [json.loads((ROOT / f"assets/localization/editor/{locale}.json").read_text(encoding="utf-8"))["messages"]
+                for locale in ("en-US", "tr-TR")]
+    keys = {key.removeprefix(prefix) for key in catalogs[0] if key.startswith(prefix)}
+    assert keys == {key.removeprefix(prefix) for key in catalogs[1] if key.startswith(prefix)}
+    folder = ROOT / "src/editor/screens/workspace/panels/input_mapping"
+    rendered: set[str] = set()
+    for filename in ("InputMappingPanel.cpp", "InputGyroscopeEditor.cpp"):
+        rendered |= set(re.findall(r'"gyro\.([a-z_]+)"', (folder / filename).read_text(encoding="utf-8")))
+    assert rendered <= keys
+    assert {"add", "edit", "title", "hint", "axis", "component", "calibration", "sensitivity", "invalid", "apply_failed"} <= keys
+    assert all(catalog[prefix + key]["text"] for catalog in catalogs for key in keys)

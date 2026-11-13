@@ -54,9 +54,16 @@ gyro axes remain conflicts despite different calibration, scale or output compon
 
 The added gyro/router/profile regression sources and the extended atomic
 save/load case with spaces and a non-ASCII path are pending native execution;
-the earlier 88-case Input pass predates this extension. Editor gyro capture and
-sensitivity controls, SDL controller collection and actual device evidence are
-not established by this contract change.
+the earlier 88-case Input pass predates this extension. A subsequent editor change
+adds explicit Add/Edit commands routed through the existing exclusive modal host.
+Its owned numeric draft preserves full float precision and invalid intermediate
+text; axis, component, calibration and sensitivity reach the same SetProfile
+authority only on Apply. Revision plus an exact replacement baseline rejects
+retargeting, append preserves all existing bindings, and Cancel/close writes
+nothing. Six model/modal/render regression sources and the paired English/Turkish
+copy check cover that workflow; C++ execution and native interaction are still
+pending. Automatic motion-gesture capture, SDL controller collection and actual
+device evidence remain separate acceptance work.
 
 ## Wire and source migration
 

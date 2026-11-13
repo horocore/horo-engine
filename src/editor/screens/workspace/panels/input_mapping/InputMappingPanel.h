@@ -89,10 +89,11 @@ namespace Horo::Editor {
             Profiles
         };
 
-        void DrawActions(const EditorGuiContext &context);
+        void DrawActions(const EditorGuiContext &context, EditorWorkspaceViewCommandData &command);
         void DrawActionValidation(std::span<const Input::ActionDescriptor> actions) const;
         void DrawActionTable(std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context);
-        void DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context);
+        void DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context,
+                                EditorWorkspaceViewCommandData &command);
         /** @brief Draws an explicitly selected binding's draft and commits only through the canonical profile owner. */
         void DrawAccessibilityControls(const Input::ActionDescriptor &action, const EditorGuiContext &context);
         void DrawDevices(const EditorGuiContext &context);

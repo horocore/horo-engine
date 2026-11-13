@@ -169,7 +169,7 @@ namespace Horo::Editor {
         ImGui::BeginChild("##InputMappingContent", {size.x, size.y - 30.0F}, false, ImGuiWindowFlags_NoSavedSettings);
         PollBindingCapture(context);
         if (page_ == Page::Actions)
-            DrawActions(context);
+            DrawActions(context, command);
         else if (page_ == Page::Devices)
             DrawDevices(context);
         else
@@ -181,7 +181,7 @@ namespace Horo::Editor {
         ImGui::EndChild();
     }
 
-    void InputMappingPanel::DrawActions(const EditorGuiContext &context) {
+    void InputMappingPanel::DrawActions(const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
         if (router_ == nullptr)
             return;
         const auto actions = router_->Actions();
@@ -192,7 +192,7 @@ namespace Horo::Editor {
         selectedAction_ = std::min(selectedAction_, actions.size() - 1);
         DrawActionValidation(actions);
         DrawActionTable(actions, context);
-        DrawSelectedAction(actions[selectedAction_], context);
+        DrawSelectedAction(actions[selectedAction_], context, command);
     }
 
     void InputMappingPanel::DrawActionValidation(const std::span<const Input::ActionDescriptor> actions) const {
@@ -230,7 +230,8 @@ namespace Horo::Editor {
         }
     }
 
-    void InputMappingPanel::DrawSelectedAction(const Input::ActionDescriptor &selectedAction, const EditorGuiContext &context) {
+    void InputMappingPanel::DrawSelectedAction(const Input::ActionDescriptor &selectedAction, const EditorGuiContext &context,
+                                               EditorWorkspaceViewCommandData &command) {
         ImGui::Separator();
         ImGui::TextUnformatted(selectedAction.id.Value().c_str());
         const auto &bindings = BindingsFor(selectedAction, router_->Profile());
@@ -240,7 +241,27 @@ namespace Horo::Editor {
                 ImGui::BulletText("%s%s%s%s%s", binding.requiredModifiers.control ? "Ctrl+" : "",
                                   binding.requiredModifiers.command ? "Cmd+" : "", binding.requiredModifiers.shift ? "Shift+" : "",
                                   binding.requiredModifiers.alt ? "Alt+" : "", KeyName(binding.key));
-            else
+            else if (binding.kind == Input::BindingControlKind::GyroscopeAxis) {
+                const std::array axisKeys{"gyro.axis_x", "gyro.axis_y", "gyro.axis_z"};
+                const auto axis = static_cast<std::size_t>(binding.gyroscope.axis);
+                ImGui::BulletText("%s: %s", LocalizedText(context.localization, "gyro.binding").c_str(),
+                                  LocalizedText(context.localization, axis < axisKeys.size() ? axisKeys[axis] : "gyro.axis_unknown")
+                                      .c_str());
+                ImGui::PushID(static_cast<int>(bindingIndex));
+                const bool edit = Ui::Button({.label = LocalizedText(context.localization, "gyro.edit").c_str(),
+                                              .variant = Ui::ButtonVariant::Secondary,
+                                              .font = context.theme.fonts.sans});
+                ImGui::PopID();
+                if (edit) {
+                    listeningAction_.reset();
+                    bindingCaptureContext_.Reset();
+                    command.command = EditorWorkspaceViewCommand::OpenGyroscopeBinding;
+                    command.gyroscopeBinding =
+                        GyroscopeBindingEditRequest{selectedAction.id, router_->RoutingState({}).configurationRevision,
+                                                    GyroscopeBindingReplacement{bindingIndex, binding}};
+                    return;
+                }
+            } else
                 ImGui::BulletText("%s %d", InputMappingPanel::kTextScope.Text(context.localization, "binding").c_str(),
                                   static_cast<int>(binding.kind));
             if (binding.kind == Input::BindingControlKind::GamepadAxis || binding.kind == Input::BindingControlKind::RawGamepadAxis) {
@@ -268,6 +289,16 @@ namespace Horo::Editor {
             }
         }
         DrawAccessibilityControls(selectedAction, context);
+        if (selectedAction.valueType != Input::ActionValueType::Digital &&
+            Ui::Button({.label = LocalizedText(context.localization, "gyro.add").c_str(),
+                        .variant = Ui::ButtonVariant::Secondary,
+                        .font = context.theme.fonts.sans})) {
+            listeningAction_.reset();
+            bindingCaptureContext_.Reset();
+            command.command = EditorWorkspaceViewCommand::OpenGyroscopeBinding;
+            command.gyroscopeBinding = GyroscopeBindingEditRequest{selectedAction.id, router_->RoutingState({}).configurationRevision, {}};
+            return;
+        }
         const std::string &rebind = InputMappingPanel::kTextScope.Text(context.localization, "rebind");
         if (Ui::Button({.label = rebind.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
             listeningAction_ = selectedAction.id;

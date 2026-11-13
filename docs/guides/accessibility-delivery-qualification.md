@@ -214,8 +214,13 @@ router/profile owner, with typed SI calibration, ordinary sensitivity/deadzone,
 availability/focus neutralization and physical-axis conflict validation. The
 migration guide records its public layout/wire additions. Six new regression
 cases and the extended public consumer are pending execution; none is covered by
-the earlier 88-case Input result. Editor gyro editing/capture, SDL controller
-motion collection and real device qualification remain open.
+the earlier 88-case Input result. Subsequent source adds owned Add/Edit intents
+and an exclusive gyro modal through the existing workspace command and modal
+hosts. Axis/calibration/sensitivity drafts apply only through canonical SetProfile;
+six model/modal/render regression sources are pending. Paired-copy/CI Python
+checks passed **43 tests** after those UI edits. Automatic motion-gesture capture,
+SDL controller motion collection, native interaction and device qualification
+remain open.
 
 ### Native bridge, editor semantics and gameplay
 

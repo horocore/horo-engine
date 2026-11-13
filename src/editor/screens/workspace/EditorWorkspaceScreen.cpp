@@ -9,6 +9,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "WorkspacePathText.h"
 #include "editor/screens/NavigationErrors.h"
+#include "editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.h"
 
 #include <imgui.h>
 
@@ -236,6 +237,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @brief Route captured source creation commands through their exclusive transient workflows. */
     bool EditorWorkspaceScreen::TryOpenCreationModal(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
+        if (command.command == OpenGyroscopeBinding && command.gyroscopeBinding) {
+            const auto opened = modalHost_.OpenRoot(MakeGyroscopeBindingModal(context_, input_.router, *command.gyroscopeBinding));
+            if (opened.HasError())
+                LOG_WARN("editor.input", "Gyroscope editor could not open: %s", opened.ErrorValue().message.c_str());
+            return true;
+        }
         if (command.command == CreatePrefabFromSelection && command.objectPayload) {
             OpenPrefabCreationModal(*command.objectPayload);
             return true;
