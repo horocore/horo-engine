@@ -49,7 +49,32 @@ Publication is a review checkpoint, not evidence that the parent acceptance or i
 open children are complete. The Jira parent `HORO-1829` and `[PLS-007]` GitHub #1873
 and replay child `HORO-1873` / `[PLS-007.5]` #1917 were read and verified again.
 
+The first pushed checkpoint `99149c6` was exercised by CI run `43425300195`.
+Tooling passed with 1849 Python cases and 57 skips; Android storage, Windows D3D12,
+Windows shaders and the macOS reference SDK jobs passed. Two isolated Windows
+lock cases also passed locally. The overall CI run **failed**: Linux GUI, Linux
+shaders and the macOS build exposed the Foundation class/namespace collision
+described below; the Windows job also failed to download the pinned Lua archive.
+Successful auxiliary jobs and later network subsets do not establish queue or
+editor qualification. The namespace fix and its combined-header regression are
+subsequent inputs and require a fresh run. The actual-worktree full preflight
+admission was retried after that fix, but the canonical physical lock was busy;
+no Sonar IDE, secrets or Codacy provider was started by that attempt.
+
 ## Public contract migration
+
+The Foundation operating-system bundle is renamed from `Horo::PlatformServices`
+to `Horo::PlatformHostServices`. The old class name conflicts with the existing
+`Horo::PlatformServices` namespace when editor diagnostics and OS contracts meet;
+CI exposed that conflict in the XR editor translation unit. A compatibility alias
+would preserve the collision and is therefore unavailable. Consumers must replace
+the bundle type/constructor spelling and rebuild. Its borrowed services, capability
+semantics, constructor arguments and owning Foundation header/target remain the same.
+The implementation, both current Foundation test callers and architectural examples
+are migrated. The staged Platform Services public consumer now includes
+`Foundation/Platform.h` together with online service/diagnostic contracts and checks
+the renamed bundle's constructor. `HoroPlatformTests`, that consumer and the editor
+build are required regression evidence; execution after this fix remains pending.
 
 `HoroEngine::PlatformServices` continues to own the offline policy/storage headers
 and now owns `PlatformDiagnostics.h` in `HoroPublicHeaderOwnership.cmake`.

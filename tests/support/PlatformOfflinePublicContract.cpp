@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Platform.h"
 #include "Horo/PlatformServices/PlatformCloudObjects.h"
 #include "Horo/PlatformServices/PlatformDiagnostics.h"
 #include "Horo/PlatformServices/PlatformOfflineQueueStorage.h"
@@ -19,6 +20,8 @@ namespace {
 }  // namespace
 
 static_assert(std::is_trivially_copyable_v<Horo::PlatformServices::PlatformOfflineQueueDiagnostics>);
+static_assert(std::is_constructible_v<Horo::PlatformHostServices, Horo::FileSystem &, Horo::Clock &, Horo::ProcessService &,
+                                      Horo::UserDirectories &>);
 static_assert(!std::is_same_v<Horo::PlatformServices::PlatformOfflineIntentId, Horo::PlatformOfflineQueue::PlatformOfflineIntentId>);
 static_assert(!std::is_constructible_v<Horo::PlatformServices::PlatformOfflineOperation, Horo::PlatformServices::CloudMutationIntent>);
 static_assert(!std::is_constructible_v<Horo::PlatformServices::PlatformOfflineOperation, Horo::PlatformServices::FriendsQuery>);
