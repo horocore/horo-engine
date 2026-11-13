@@ -125,6 +125,16 @@ host-permission skip for directory symlink creation. Its real compiler/ccache
 consumer case was deselected because that workload also needs physical heavy-lock
 admission. The two new nonblocking lock regressions passed independently.
 
+The 13 November quality doctor found Sonar CLI 1.10.0, Codacy CLI 0.25.0,
+VS Code 1.145.3, CMake 4.3.1 and Ninja 1.13.2. Its cloud configuration read
+again failed with exit 2 and requested Codacy authentication verification.
+The local JSON basename is `1794572917031716300-5e33ff08.json`. This prerequisite
+report provides no Sonar IDE C++ execution, secrets-scan or Codacy lint result.
+The delivery branch was normally pushed after confirming it had no prior CI run.
+Native tests and full provider preflight remain explicitly incomplete. The user's
+13 November authorization permits reviewable draft delivery with these external
+gaps recorded. Parent and child acceptance remains open.
+
 Initial worktree was clean and detached at
 `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`. The dedicated branch was created
 without modifying the main checkout. Its six delivery commits were subsequently
