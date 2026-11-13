@@ -48,6 +48,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 
 | Scope | Source commit | Built targets | Executed evidence |
 |---|---|---|---|
+| SDL controller lifecycle | `bd1dd6d3a6480c12276a6178481ce4d6c74a1c06` | HoroInputSdlTests and its Input/SDL dependencies | **18/18 passed, zero skipped**, 1.32s; `build/acc-controller-sdl-bd1dd6d-results.xml`, matching discovery JSON and native log. Includes eight controller gyro cases using real SDL virtual-device APIs. |
 | Input controller core refresh | `74b798cee9f2e878f493386188d343dd65298fab` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **104/104 passed, zero skipped**, 1.59s; `build/acc-controller-core-74b798c-results.xml`, matching discovery JSON and native log. Includes later source spelling, zero-threshold and fixed-tick changes. |
 | Input controller core | `ec59e05e9` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **102/102 passed, zero skipped**, 1.57s; `build/acc-controller-core-ec59e05-results.xml` and corresponding discovery JSON. Later source changes require a fresh run. |
 | Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
@@ -68,9 +69,11 @@ evidence, strict optional profile source fields and stale-handle rejection.
 Its three new regressions and the direct public consumer executed at `ec59e05`.
 The later `Gamepad` source spelling, zero-threshold neutrality and fixed-tick
 capture regression executed in the 104-case refresh at `74b798c`.
-SDL opt-in/window-focus collection, eight SDL virtual-device regression sources,
-editor source/device controls, shared combo keyboard interaction and affected
-direct consumers still need native execution at the final snapshot.
+SDL opt-in/window-focus collection and all eight SDL virtual-device regressions
+executed in the 18-case batch at `bd1dd6d`. Editor source/device controls, shared
+combo keyboard interaction and affected direct consumers still need native
+execution at the final snapshot. The later core refactors need their own fresh
+106-case Input run; compiling the Input dependency for SDL does not execute them.
 The old GUI/direct-consumer rows do not qualify the changed Input layouts or
 controller adapter. Physical controller and native interaction checks remain.
 
@@ -78,9 +81,9 @@ Controller teardown now retires native sensor interest through one close path fo
 gamepad removal, joystick removal and backend destruction. The new removal-order
 regression retains a real extra SDL joystick reference: closing the backend's
 gamepad reference alone does not guarantee native sensor retirement. Both event
-orders, duplicate removal and a late sensor event are exercised in the source;
-native execution is pending. Current SDL discovery is expected to contain 18
-cases, and the combined presentation/SDL family 108.
+orders, duplicate removal and a late sensor event passed in the native SDL batch.
+The combined presentation/SDL family is expected to contain 108 cases and still
+needs execution. Virtual-device evidence is not physical controller qualification.
 
 The direct-consumer batch refreshed callers after the public binding layout
 change: Character **16**, Runtime UI input **19**, input debugger **15**, portable
