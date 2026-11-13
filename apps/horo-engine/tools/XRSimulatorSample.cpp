@@ -71,8 +71,7 @@ int main(const int argc, char **argv) {
         std::cerr << "Usage: HoroXRSimulatorSample <project-root> [project-relative-scenario.json]\n";
         return 2;
     }
-    const auto result = Run(argv[1], argc == 3 ? std::string_view{argv[2]} : std::string_view{});
-    if (result.HasError()) {
+    if (const auto result = Run(argv[1], argc == 3 ? std::string_view{argv[2]} : std::string_view{}); result.HasError()) {
         std::cerr << result.ErrorValue().domain.Value() << '/' << result.ErrorValue().code.Value() << ": " << result.ErrorValue().message
                   << '\n';
         return 1;

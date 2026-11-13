@@ -342,8 +342,7 @@ namespace Horo::XR {
         if (bytes.empty() || bytes.size() > XRSimulatorHardLimits::MaximumEncodedBytes)
             return Invalid();
         BoundedSax parser;
-        const auto *first = reinterpret_cast<const char *>(bytes.data());
-        if (!Json::sax_parse(first, first + bytes.size(), &parser))
+        if (const auto *first = reinterpret_cast<const char *>(bytes.data()); !Json::sax_parse(first, first + bytes.size(), &parser))
             return Invalid();
         return Decode(parser.root);
     }
