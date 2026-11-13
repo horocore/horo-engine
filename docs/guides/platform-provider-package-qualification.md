@@ -108,6 +108,9 @@ use. Build `HoroPlatformTests`, `HoroFoundationPublicHeaderConsumer`,
 `HoroPlatformPublicHeaderConsumer`,
 `HoroPlatformServicesExtensionPublicHeaderConsumer` and the package targets below
 to validate the migration. These new revisions are not yet executed.
+All three affected generated consumer targets are also selected explicitly by
+the Windows CI group, so both include-order translation units are built there
+alongside the existing platform runtime tests.
 
 Build and run these targets with GUI, interactive renderer and proprietary SDKs
 absent:

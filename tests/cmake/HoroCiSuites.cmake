@@ -230,6 +230,9 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPackageLifecycleTests
     HoroPlatformProviderPackageTests
     HoroPackageHostSurfacePublicHeaderConsumer
+    HoroFoundationPublicHeaderConsumer
+    HoroPlatformPublicHeaderConsumer
+    HoroPlatformServicesExtensionPublicHeaderConsumer
     HoroPackageApplicationTests
     HoroPackageApplicationPublicHeaderConsumer
     HoroCliPackageAdaptersPublicHeaderConsumer

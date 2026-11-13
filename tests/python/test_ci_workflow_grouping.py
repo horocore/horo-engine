@@ -143,6 +143,8 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroProjectCollisionSettingsPublicHeaderConsumer",
     "HoroPackageLifecycleTests", "HoroPackageLifecyclePublicHeaderConsumer",
     "HoroPlatformProviderPackageTests", "HoroPackageHostSurfacePublicHeaderConsumer",
+    "HoroFoundationPublicHeaderConsumer", "HoroPlatformPublicHeaderConsumer",
+    "HoroPlatformServicesExtensionPublicHeaderConsumer",
     "HoroPackageApplicationTests", "HoroPackageApplicationPublicHeaderConsumer",
     "HoroCliPackageAdaptersPublicHeaderConsumer", "HoroMcpPackageAdaptersPublicHeaderConsumer",
     "HoroEditorPackageAdaptersPublicHeaderConsumer",
