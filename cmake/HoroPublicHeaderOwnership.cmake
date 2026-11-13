@@ -675,6 +675,8 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/MeshEditorPayload.h
     Horo/Assets/PreFracturedSource.h
 )
+# Stream replacement and diagnostic additions remain AudioApi contracts; the explicit
+# AudioStreamingFactoryPublicContract consumer exercises them without private headers.
 horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioSpatialModel.h
     Horo/Audio/AudioAssetSchema.h
@@ -706,6 +708,7 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
     Horo/Audio/AudioSourceImporter.h
 )
+# Schema v3 loop metadata and cook policy remain owned by the existing AudioCook surface.
 horo_configure_target_header_boundary(HoroAudioCook PUBLIC_HEADERS
     Horo/Audio/AudioCookProfile.h
     Horo/Audio/AudioCooker.h

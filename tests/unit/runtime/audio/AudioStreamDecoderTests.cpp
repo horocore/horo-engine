@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -16,7 +17,8 @@ namespace Horo::Audio {
             Throw,
             ThrowNonStd,
             BadProgress,
-            Cancel
+            Cancel,
+            NonFinite
         };
 
         struct FakeProvider final {
@@ -49,6 +51,8 @@ namespace Horo::Audio {
                     self.owner->Cancel();
                 for (auto &sample : output)
                     sample = 0.5F;
+                if (self.behavior == Behavior::NonFinite)
+                    output.back() = std::numeric_limits<float>::quiet_NaN();
                 if (self.behavior == Behavior::BadProgress)
                     return Result<AudioStreamDecodeProgress>::Success({3, false});
                 const auto frames = std::min(static_cast<std::uint32_t>(output.size() / 2), static_cast<std::uint32_t>(5 - firstFrame));
@@ -90,6 +94,20 @@ namespace Horo::Audio {
             CHECK(result.ErrorValue().code.Value() == descriptor.code.Value());
         }
     }  // namespace
+
+    TEST_CASE("Runtime stream decoder rejects non-finite PCM before committing its cursor", "[unit][audio][stream_decoder]") {
+        FakeProvider fake;
+        fake.behavior = Behavior::NonFinite;
+        auto created = AudioStreamDecoder::Create(Spec(), Provider(fake));
+        REQUIRE(created.HasValue());
+        auto decoder = std::move(created).Value();
+        std::array<AudioSample, 4> output{};
+        std::array<std::byte, 16> scratch{};
+        RequireCode(decoder.Decode(output, scratch, 2), AudioStreamDecoderErrors::ProtocolViolation);
+        CHECK(decoder.CursorFrame() == 0);
+        CHECK(decoder.State() == AudioStreamDecoderState::Failed);
+        RequireCode(decoder.Decode(output, scratch, 2), AudioStreamDecoderErrors::LifecycleUnavailable);
+    }
 
     TEST_CASE("Runtime stream decoder admits bounded progressive blocks and exact terminal seek", "[unit][audio][stream_decoder]") {
         FakeProvider fake;

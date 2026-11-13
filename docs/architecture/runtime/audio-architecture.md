@@ -519,6 +519,59 @@ Audio cache or publication authority. AST owns generic artifact staging and
 publication, while the Audio strategy validates its manifest on both fresh cooks
 and exact cache hits.
 
+Cook schema v3 additionally retains source-authored loop regions as validated
+half-open frame ranges. The independent PCM chunk entries are exact byte/frame
+seek anchors; PCM has zero encoder delay, padding and preroll. The explicit
+`preRollFrames` and `loopCrossfadeFrames` profile fields currently admit zero only:
+the policy is exact wrap, without an implicit overlap or frame subtraction.
+Unsupported nonzero requests fail planning.
+WAV sampler loops requiring reverse/ping-pong playback, fractional-frame endpoints
+or finite repeat counts are rejected as unsupported before decoding because the
+current schema cannot preserve those semantics. A loop need not align to a chunk;
+the worker caps decoding at its exclusive end and seeks to its begin. Reference
+PCM tests require zero cursor error and bit-exact samples, including the authored
+boundary jump; they do not promise to remove a discontinuity already in the source.
+
+`AudioStreamingService::StageReplacement` binds one separately retained immutable
+provider generation and reserves its complete stream charge alongside the old
+stream. Only the same asset and processing format are compatible; duration and
+codec may change after ordinary validation. Candidate ports remain unavailable
+until `CommitReplacement` observes valid prefetched media. Failed/cancelled or
+abandoned candidates retire independently and preserve the last good stream.
+The selected baseline policy retains existing voices on their old ports and
+starts new replacement ports at frame zero. Commit never retargets an existing
+voice, fades samples, or releases the predecessor. Voice control owns any explicit
+fade/restart transition and detached retirement, using the ordinary voice lifecycle
+contract. Candidate preparation creates no second asset registry, cache or worker
+pool. Per-stream source leases keep provider code alive through decoder release.
+
+Stream snapshots expose ring fill/capacity, reserved sample/scratch/package bytes,
+cumulative worker decode nanoseconds, scheduler submission rejections, terminal
+failure and underrun counts. The aggregate snapshot retains invalid-request and
+byte/slot-budget rejection counters separately from callback starvation, even after
+stream retirement. Decode timing excludes open, seek, scheduler wait and callback
+work; it is diagnostic evidence, not a deadline guarantee. Current control-observed
+starvation causes distinguish pending workers, positioning, suspension, scheduler
+overload and terminal states. These observations do not reconstruct historical
+callback causality. Rate limiting coalesces exact underrun deltas without a diagnostic
+queue or dropped reports; counters saturate instead of wrapping. No callback
+formats text, measures wall time, submits jobs, decodes media or releases leases.
+
+Migration: schema v1/v2 cooked artifacts require ordinary AST recooking and cache
+invalidation through the changed `AudioCookSchemaVersion` fingerprint. Runtime
+never falls back to source files. Rebuild native consumers of the additive cook,
+stream snapshot and service declarations. Their public headers remain owned by
+`HoroAudioCook` and `HoroAudioApi`; generated consumers plus the explicit streaming
+consumer cover the existing target boundaries. Authored media duration is bounded
+to 2^40 frames, matching the ordinary runtime streaming envelope; larger descriptors
+fail validation without normalization. Direct runtime decoder calls now reject
+non-finite PCM before committing cursor progress; callers discard failed output.
+Stream admission now borrows its request for the call and creates its owned copy
+inside the typed allocation-failure boundary. Existing lvalue/rvalue calls remain
+source-compatible; member-function pointer declarations must use the new const-reference
+signature. This avoids an allocating MSVC Debug container move terminating before
+the service can return its typed capacity failure.
+
 ### Loudness And Metering Metadata
 
 Cooked audio assets carry loudness metadata for mixing, normalization, and
@@ -546,13 +599,13 @@ manufactured from RMS or sample peak. Normalization gain targets -23 LUFS only
 when integrated loudness is available. The pinned analysis implementation is a
 private AudioImport dependency, never a public or callback dependency.
 
-Cook schema v2 embeds the analysis result alongside the PCM payload in one AST
+Cook schema v3 retains the v2 analysis result alongside the PCM payload in one AST
 artifact. The analysis has its own version and digest; cooked inspection validates
 the bounded waveform pyramid and finite measurements before exposing it to editor
 or runtime callers. Inspection receives only cooked bytes and never opens or
 re-decodes the source. Resident PCM, import decode-block, and waveform storage
 estimates are derived from admitted counts, not observed allocator usage. Existing
-schema v1 artifacts require an ordinary AST recook; there is no parallel Audio
+schema v1/v2 artifacts require an ordinary AST recook; there is no parallel Audio
 metadata cache or source-of-truth sidecar.
 
 The importer result now groups its former flat `waveform`, `loudness`, and
