@@ -48,6 +48,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 
 | Scope | Source commit | Built targets | Executed evidence |
 |---|---|---|---|
+| Shared-control render refresh | `c76538c65836e097418c93ee455c084b33665928` | HoroEditorUiComponentsRenderTests and HoroGuiPublicHeaderConsumer | **43/43 passed, zero skipped**, 2.82s; `build/acc-controls-c76538c-results.xml`, matching discovery JSON and native log. Includes real Tab/Enter navigation, disabled rows, no-op selection and long localized preview geometry. |
 | Shared-control render attempt | `eb355d7d22aed95bcb6072b57b380de430ed04af` | HoroEditorUiComponentsRenderTests, HoroGuiPublicHeaderConsumer; all 233 native build steps passed | **42/43 passed, one failed**, 2.78s. Keyboard test did not open the popup after programmatic focus; `build/acc-controls-eb355d7-red-results.xml`, matching discovery JSON and `build/acc-controls-preview-native.log` retain the failure. This is not a passing qualification. |
 | SDL controller lifecycle | `bd1dd6d3a6480c12276a6178481ce4d6c74a1c06` | HoroInputSdlTests and its Input/SDL dependencies | **18/18 passed, zero skipped**, 1.32s; `build/acc-controller-sdl-bd1dd6d-results.xml`, matching discovery JSON and native log. Includes eight controller gyro cases using real SDL virtual-device APIs. |
 | Input controller core refresh | `74b798cee9f2e878f493386188d343dd65298fab` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **104/104 passed, zero skipped**, 1.59s; `build/acc-controller-core-74b798c-results.xml`, matching discovery JSON and native log. Includes later source spelling, zero-threshold and fixed-tick changes. |
@@ -71,9 +72,10 @@ Its three new regressions and the direct public consumer executed at `ec59e05`.
 The later `Gamepad` source spelling, zero-threshold neutrality and fixed-tick
 capture regression executed in the 104-case refresh at `74b798c`.
 SDL opt-in/window-focus collection and all eight SDL virtual-device regressions
-executed in the 18-case batch at `bd1dd6d`. Editor source/device controls, shared
-combo keyboard interaction and affected direct consumers still need native
-execution at the final snapshot. The later core refactors need their own fresh
+executed in the 18-case batch at `bd1dd6d`. Shared combo keyboard interaction
+passed in the 43-case refresh at `c76538c`. Editor source/device controls and
+affected direct consumers still need native execution at the final snapshot.
+The later core refactors need their own fresh
 106-case Input run; compiling the Input dependency for SDL does not execute them.
 The old GUI/direct-consumer rows do not qualify the changed Input layouts or
 controller adapter. Physical controller and native interaction checks remain.
@@ -94,7 +96,7 @@ hidden navigation; activation requires ordinary keyboard navigation. The fixture
 now enters through actual Tab input and checks field focus and navigation state
 before Enter. Preview geometry assertions now compare glyphs against the actual
 drawn arrow rather than duplicating a reserved-width constant. The full 43-case
-rerun is pending; these test edits do not establish a passing keyboard result.
+rerun at `c76538c` passed, including those keyboard and geometry assertions.
 The editor executable and 108-case presentation/SDL batch remain separate checks.
 
 The direct-consumer batch refreshed callers after the public binding layout
