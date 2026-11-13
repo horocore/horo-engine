@@ -1,7 +1,10 @@
 # Input System Qualification
 
 This matrix tracks all eight INP-001 children against the integrated capability.
-The delivery base is `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`.
+The delivery branch forked from `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`.
+On the resumed audit, the published PR target advanced to
+`139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`; the existing delivery history is
+preserved, and validation selects `origin/codex/editor-improvements` explicitly.
 Source/test coverage and executed qualification are recorded independently.
 
 ## Full Capability Audit
@@ -114,16 +117,20 @@ Hosted CI compiled the core Input targets successfully on Windows/MSVC at
 `8b0f9ed44d30de787af67efff6aaed180dcf97d5`: the `ci-windows-debug`
 preset builds `HoroCiWindowsChecks`, including `HoroInputTests`,
 `HoroAndroidInputTests`, `HoroInputSdlTests`, `HoroRuntimeUiInputTests` and
-`HoroInputPublicHeaderConsumer`. Test execution was still pending when this
-record was written. This evidence excludes GUI targets and subsequent local
-fixes. The Android package workflow also succeeded at that published head;
+`HoroInputPublicHeaderConsumer`. The completed Windows job succeeded; its log
+records 85 passing `HoroInputTests` cases, 9 Android adapter cases, 12 SDL adapter
+cases and 20 Runtime UI Input cases. These 126 cases have no failed or skipped
+log entries. This evidence excludes GUI targets and subsequent local fixes.
+The Android package workflow also succeeded at that published head;
 package success does not substitute for the targeted Input test results.
 
 The same head's hosted Sonar coverage build failed in the new Settings
 regression: it referenced the retired `BuildEditorAppearanceConfigurationSchema`
 helper. The local candidate now uses `CreateEditorConfigurationSchema` with
 default editor settings, matching the current declaration and neighboring tests.
-That fix still requires compilation and test execution. Two other CI jobs failed
+The completed Linux and macOS jobs failed at the same retired helper; downstream
+macOS and Sonar jobs therefore lacked complete producer inputs. The local fix
+still requires compilation and test execution. Two other CI jobs failed
 while downloading Lua 5.4.8 with an SSL connection reset, before source compilation;
 no TLS verification or dependency policy was changed to bypass those failures.
 
