@@ -1,598 +1,275 @@
 # ACC-001 delivery and qualification
 
-This matrix tracks implementation and acceptance evidence for the complete
-initiative. An entry remains incomplete until its integrated acceptance criteria
-and required platform evidence exist. Existing Runtime UI semantic tests do not
-qualify native assistive technology.
+This record distinguishes implemented contracts from integrated product acceptance.
+The initiative remains incomplete. Headless semantics do not qualify native
+assistive technology; compilation does not prove visible output or GPU behavior.
 
-Original baseline: `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`.
-Current published parent: `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc` on
-`origin/codex/editor-improvements`, verified from the remote on 2026-11-13.
-The earlier local parent was `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08` (C11 admission
-fixture correction). GitHub and Jira bodies
-were read on 2026-11-11; all seven implementation children were Open / To Do.
-ACC-001.1 / HORO-1805 is already delivered and is not reimplemented.
+Parent: HORO-1769 / #1813 [ACC-001]. The published target is
+`codex/editor-improvements` at `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`,
+verified on 2026-11-13. The initial implementation baseline was
+`f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`.
+The reviewable delivery is [draft PR #3560](https://github.com/horocore/horo-engine/pull/3560).
+Local verification below includes commits beyond its published `55d9991` head;
+it must not be attributed to that older remote snapshot.
 
-The 2026-11-13 user restart supersedes the historical named-grant and global
-source-freeze restrictions described in older evidence below. Own-worktree
-changes and authorized normal push/draft delivery may proceed independently.
-Heavy work still requires atomic nonblocking admission through the real shared
-OS lock, verified physical handle, resource guards and one worker; a busy lock
-does not permit a background waiter or interrupting another job.
+## Current acceptance matrix
 
-| Child | Jira / GitHub | Implementation and evidence | Remaining acceptance / dependencies |
+| Child | Jira / GitHub | Implemented and verified | Remaining acceptance |
 |---|---|---|---|
-| ACC-001.2 captions | HORO-1806 / #1850 | SPSC cue/catalog transport, timeline, appearance, safe-area arrangement, canonical paint/lifetimes and public consumers compiled and passed in the 49-case UI batch at df38a89 | Host localization/shaping/presentation composition, settings activation and actual native rendered evidence |
-| ACC-001.3 color | HORO-1807 / #1851 | Independent numeric target, matrices and snapshot-backed query compiled; focused numeric/query/contract cases passed in the 11-case semantic batch at 6308740 | Complete-image GPU pass and real backend evidence; existing ColorPipelinePlan explicitly provides cold admission only |
-| ACC-001.4 input | HORO-1808 / #1852 | MSVC Input/public consumers: 88/88 cases passed at dcf772e. CharacterInput/public consumer: 16/16 passed at 6308740, including clock failure and repeat intent. Editor host drains ended-context records; Input Mapping has exact-duration policy drafts | SDL and GUI/application qualification; integrate scoped persistence/capture from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
-| ACC-001.5 visual | HORO-1809 / #1853 | UI scale/contrast snapshot and typography floor passed in the 49-case UI batch at df38a89. Visual-safety snapshot/tagged numeric suppression passed in the 11-case semantic batch at 6308740 | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
-| ACC-001.6 bridge | HORO-1810 / #1854 | Runtime UI semantics, optional platform transport, honest Null Unsupported adapter, desired preference and bounded opt-in semantic QA journal passed in the 49-case UI batch at df38a89 | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
-| ACC-001.7 assists | HORO-1811 / #1855 | Inert contribution, typed seven-preference snapshot, revision-only hints and allocation-failure retry passed in the 11-case semantic batch at 6308740 | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
-| ACC-001.8 tooling | HORO-1812 / #1856 | Numeric contrast and direct contract consumer passed in the 11-case semantic batch. Contrast panel/theme tests remain unexecuted; CI selection/scope reporting and 55-criterion open inventory are present | Qualify all four tools, execute theme/native checks and complete the applicability/observed evidence matrix; depends on all above |
+| ACC-001.2 captions | HORO-1806 / #1850 | Fixed cue/catalog transport, bounded timeline, appearance, safe-area layout and canonical paint/resource lifetimes; 49-case UI batch passed | Host localization/shaping/presentation composition, settings activation and visible native output |
+| ACC-001.3 color | HORO-1807 / #1851 | Foundation-only matrices and authoritative snapshot query; numeric/query/contract cases passed in the 11-case semantic batch | Complete-image GPU execution, cooked shader ABI migration, settings activation and real backend evidence |
+| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, repeat/clock failure propagation; Input 88/88 and CharacterInput 16/16 passed. GUI drafts, SDL sample time and actual editor application compiled; GUI/SDL 92/92 passed | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; gyro interpretation and device evidence; native interaction qualification |
+| ACC-001.5 visual | HORO-1809 / #1853 | Atomic UI scale/contrast projection, readable typography floor and tagged safety projection passed in UI/semantic batches | Both editor theme layers, coherent DPI/font/UI scale, actual Camera/VFX/animation consumers and visual qualification |
+| ACC-001.6 bridge | HORO-1810 / #1854 | Runtime UI semantics, truthful Null Unsupported bridge, retained desired preference and bounded opt-in QA journal passed in the UI batch | Native adapters, default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
+| ACC-001.7 assists | HORO-1811 / #1855 | Inert contribution, seven typed preferences, authoritative snapshot and revision-only hint/retry contracts passed in the semantic batch | Host tick composition, game-owned supported/authorized consumers and shared settings contribution |
+| ACC-001.8 tooling | HORO-1812 / #1856 | Numeric contrast/public consumer passed. Live theme-pair inspection, built-in opaque primary text, paired-locale narrow/wide render and Input Mapping draft tests passed in GUI batch. CI selection and 55-criterion inventory are present | Complete all four tools, native interaction checks and observed applicability/qualification matrix; depends on preceding children |
 
-## Interpretation of issue wording
+No parent/child issue state or ADR approval state was changed by this delivery.
 
-The normative accessibility architecture and ADR-015 take precedence over older
-issue summaries. Captions originate independently of audio success, mute and
-device availability. Audio observations cannot restart an existing semantic cue.
-For ACC-001.7 the bus carries only `ConfigurationRevision`; every simulation tick
-captures the authoritative configuration even when hints are lost or stale.
-Assist values never become bus state and cannot bypass server authority.
+## Native verification
 
-### ACC-001.1 decision audit (2026-11-13)
+Each batch used its exact clean source commit, native MSVC 19.44 Debug with
+embedded debug information, the verified canonical physical OS lock, nonblocking
+admission and CPU/RAM/storage checks. Builds and CTest ran with one worker.
+The lock was released between batches. Discovery required complete Catch
+`Target::case` families and explicit consumers; `--no-tests=error` prevented an
+empty selection from passing. Reports are local ignored artifacts, not source.
 
-[ACC-001.1 / #1849](https://github.com/horocore/horo-engine/issues/1849)
-is a closed ownership decision, not delivery of the seven runtime children. Its
-current body retains unchecked acceptance boxes and older Audio/PostProcessing
-wording. The controlling sources are
-[ADR-015](../adr/015-accessibility-ownership-typed-transport-and-non-gating-policy.md)
-and the normative accessibility architecture. ADR-015 still labels itself
-`Proposed`; this audit does not change its approval state or reopen the issue.
-The normative architecture governs the implementation independently of that
-metadata.
+| Scope | Clean commit | Built targets | Executed evidence |
+|---|---|---|---|
+| Input | `dcf772e37900d8a9ca87d4bcb2a55942ce4ebb2e` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **88/88 passed, zero skipped**, 1.36s; `build/acc-input-results.xml` and `build/acc-input-discovery.json` |
+| Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
+| Character input | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | HoroCharacterInputTests, HoroCharacterInputPublicHeaderConsumer | **16/16 passed, zero skipped**, 0.74s; `build/acc-character-results.xml` and discovery JSON |
+| Captions / Runtime UI / optional bridge | `df38a89c2006ef57f0e33a7b91e2c37a4b05bd1b` | HoroRuntimeUiAccessibilityTests, RuntimeUi staged/accessibility consumers, CaptionTransport staged/direct consumers, PlatformAccessibility staged/direct consumers | **49/49 passed, zero skipped**, 0.72s; `build/acc-caption-results.xml` and discovery JSON |
+| GUI / SDL / editor application | `ba5844883ac76ba135838d70ae5002dec733317b` | HoroEditorPresentationTests, HoroGuiPublicHeaderConsumer, HoroInputSdlTests, **HoroEditor** | **92/92 passed, zero skipped**, 50.99s: 82 presentation and 10 SDL cases; `build/acc-gui-results.xml` and `build/acc-gui-discovery.json` |
 
-| Decision obligation | Current source evidence | Audit boundary |
-|---|---|---|
-| Name each authority and typed transport | ADR-015's ownership table covers captions, color, input, native bridge, gameplay, UI scale/contrast, motion/flash and developer validation | Present as a written contract; does not establish host activation |
-| Keep settings authoritative outside the bus | Domain contributions are inert; `GameplayAssistTickSnapshot`, `ColorAccessibilitySnapshot`, caption/UI/safety and platform views retain immutable configuration. `GameplayAccessibilityStateEvent` contains only a revision, and its sole production publisher is `GameplayAssistSettingsAdapter::NotifyCommitted` | The mandatory host tick capture is not integrated; no claim that event delivery activates assists |
-| Preserve independent consumers and non-gating | `src/CMakeLists.txt` creates CaptionTransport, VisualAccessibility, GameplayAccessibility and PlatformAccessibility without quality/tier selection. `cmake/HoroDependencyPolicy.cmake` keeps visual/gameplay targets Foundation-only and caption transport dependency-free; the bridge consumes RuntimeUi semantics | Source inspection supports independent library composition. Native/backend/product support still requires configured builds and actual host capability evidence |
+All batches configured successfully, including header ownership and dependency
+direction checks. Affected staged/public consumers compiled. The GUI batch enabled
+GUI, SDL input and OpenGL, compiled the actual editor input-cutoff implementation,
+linked `HoroEditor.exe` and staged its runtime assets. It did not launch the editor
+or enable GPU smoke tests. Its presentation tests are display-independent ImGui
+render/model evidence, not observed native interaction or display output.
 
-The caption contract therefore must not be reduced to an Audio event consumer,
-and color queries must not obtain their authority from an executing renderer.
-The final SDR shader currently encodes composed display-linear color but has no
-accessibility matrix input; `ColorPipelinePlan` remains a cold metadata/pin
-candidate without an execution or publication owner. A new enum, CPU transform,
-or shader-only edit would not prove ACC-001.3 complete. Implementation must also
-provide the real composed-image execution, cooked shader ABI migration and
-backend/native evidence. No existing decision is reimplemented by this audit.
+The GUI batch executed all ten new Contrast/Input Mapping cases: exact duration
+round trips, malformed drafts, canonical Apply with peer preservation and stale
+revision rejection, sticky-conflict rejection, valid/invalid localized narrow
+forms, live theme-pair selection, opaque composition validation, paired-locale
+narrow/wide contrast rendering, and built-in primary-text contrast across both
+theme layers. These do not prove every theme role or UI state is accessible.
 
-The cold `ColorPipelinePlan` must not be confused with the existing editor
-viewport execution owner. `EditorViewportColorPipeline` realizes real cooked
-programs and reflected uniform buffers; `MetalViewportClusteredFrame::AppendColorPasses`
-uses `EditorViewportColorGraph::AppendScene` and `AppendEncode` around the actual
-display-linear overlay work. `EditorViewportColorMaterials.cpp` writes the final
-encode parameters through the selected resource owner. This is the existing
-execution path to extend, with its candidate/accepted generations and deferred
-resource retirement preserved. Its current encoder has only `OutputControl`,
-not an accessibility matrix. This viewport path does not prove whole-editor GUI
-composition, OpenGL/Vulkan parity or a working desired-setting activation path.
-The canonical color-output recipe currently admits only the Metal target; any
-new encoder ABI needs genuine recooking and matching reflection/package evidence,
-without rewriting the original locked capture files as if they were new outputs.
+Input regression evidence includes bounded mapping capacity and rollback,
+allocation-free reads, held/toggle/repeat/sticky semantics, context/device/player
+retirement, monotonic host time and cancellation provenance. Character tests
+include repeat across zero/catch-up ticks and clock failure clearing old intent.
+UI evidence includes SPSC concurrency/no callback allocation, catalog/text lifetime,
+replay/session bounds, safe areas, immutable paint/resource ownership, reading and
+focus order, retained announcements, QA journal identity/privacy and Null behavior.
 
-## Evidence boundaries
+### Failures retained and corrected
 
-Native Windows, macOS and Linux support requires the corresponding adapter and
-actual assistive-technology interoperability evidence. Null is Unsupported;
-recording is test-only. Headless tests, code review and compilation prove their
-specific contracts only. GPU smoke tests, gyro hardware and visual interaction
-checks are unverified until their actual commands and observations are recorded.
-WCAG targets and CVAA/EAA/TRC alignment are qualification goals, not a legal
-certification claim. External platform assessment remains product-owner work.
+At `b9d39cc`, Input compiled but the new test source failed because Catch2 could
+not decompose `REQUIRE(a && b)`. Commit `20a19f6` split the assertions; no test
+execution was claimed for that first attempt.
 
-Required final validation: targeted regression and public consumer builds,
-supported affected CMake compositions, worktree-aware local analysis, then full
-Sonar IDE / CLI secrets / Codacy preflight against the verified target after final
-edits. Heavy checks use the existing shared `heavy_build_lock`, serial build and
-CTest execution.
-
-## Current local verification
-
-At clean `df38a89c2006ef57f0e33a7b91e2c37a4b05bd1b`, the captions/Runtime UI
-batch configured and built seven targets on native MSVC Debug. All affected
-Runtime UI, CaptionTransport and PlatformAccessibility staged headers compiled.
-Exact discovery admitted the complete RuntimeUiAccessibility family and three
-explicit public consumers: **49/49 passed, zero skipped**, in 0.72 seconds.
-Evidence: `build/acc-caption-results.xml` and `build/acc-caption-discovery.json`.
-This covers callback/SPSC allocation and lifetime invariants, timeline/session and
-replay bounds, appearance revisions, canonical caption paint extraction, retained
-paint ownership, reference aspect ratios, semantic reading/focus/announcement
-contracts, QA journal and truthful Unsupported native behavior. The batch used
-the canonical verified physical handle/resource guards and serial build/CTest,
-then released the lock. This is headless model/extraction evidence: actual host
-localization/shaping/presentation, visible glyphs, native screen readers and
-platform interoperability remain unqualified. GUI tool and application translation
-units still need their separate GUI-enabled build and interaction checks.
-
-At clean `6308740ffc1b7167f2ffc7ef98044b1ffbe02837`, two separate bounded
-MSVC Debug batches also passed. The Foundation-only semantic batch built seven
-targets, including both staged header targets and three direct contract consumers;
-**11/11 cases passed, zero skipped** (0.24 seconds). It covers numeric color/query,
-contrast, visual-safety projection, gameplay snapshot/hint/retry and their SDK
-contracts. The CharacterInput batch built its test executable and staged/public
-contract consumer after its normal Runtime/Assets/Physics closure; **16/16 cases
-passed, zero skipped** (0.74 seconds). Both the new clock-failure and jump-repeat
-regressions ran. Evidence: `build/acc-semantic-results.xml`,
-`build/acc-character-results.xml` and their corresponding discovery inventories.
-Each batch independently verified the canonical physical handle/resource guards,
-ran build/CTest serially, then released the lock. These passes establish neither
-GPU/native assistive-technology behavior nor host settings/tick/effect activation.
-
-Latest Input validation: clean `dcf772e37900d8a9ca87d4bcb2a55942ce4ebb2e`,
-native MSVC 19.44, headless Debug, canonical nonblocking physical-lock ownership
-and resource checks, build/CTest parallelism one. The same four targets configured
-and built; exact discovery admitted **88 cases**, including the new cancellation
-cause regression. **All 88 passed, zero skipped**, in 1.36 seconds. The explicit
-public consumer and every affected staged Input header compiled. Local evidence:
-`build/acc-input-results.xml` and `build/acc-input-discovery.json`. This supersedes
-the failed Input run below; its original output/discovery were preserved as
+At `e3afd1f`, all four Input targets built and 87 cases ran: **86 passed, one
+failed**. The deferred-release fast path returned `Resolved` after missing host
+time, losing the original `ClockUnavailable` cause. Commits `f7129c7` and
+`49a1780` retain typed cancellation provenance with the old mapping, including an
+unread physical release and a removed action map. The subsequent 88/88 batch
+validated the fix. Original failure output/discovery remain in
 `build/acc-input-e3afd-failure.log` and `build/acc-input-e3afd-discovery.json`.
-This pass qualifies its Input scope only; it does not establish Character,
-SDL, GUI/application, gyro, other accessibility families or full quality results.
 
-The subsequent admitted Input batch at clean
-`e3afd1f205ccaa2d9ad8e3b5680657d63d7c66e9` configured and built all four requested
-targets, including the staged public headers and explicit accessibility consumer.
-The discovery guard admitted **87 cases** across both Input Catch families and
-the direct consumer. CTest ran serially: **86 passed, 1 failed**. The failing
-`Gameplay Capture Preserves Clock Failures And Clears Previously Latched Commands`
-case expected `ClockUnavailable` but received `Resolved`; the deferred-release
-fast path had discarded the original timed cancellation cause. The host-cutoff,
-repeat, capacity and public-consumer cases passed in this batch. These results
-are retained in `build/acc-input-e3afd-failure.log` and the discovery
-inventory in `build/acc-input-e3afd-discovery.json` (local evidence, not committed output).
+The early MSVC C1902 compiler-probe failure was superseded by native embedded-debug
+builds above. An earlier cache-test repeat failed with ENOSPC; the later exact
+retry passed. Neither failed attempt is counted as successful verification.
 
-Commits `f7129c7` and `49a1780` retain the typed cancellation cause with the
-old mapping before consulting the current action map, including an unread
-physical release followed by loss of host time. New regressions cover retained
-and removed action maps. The corrected batch retry was refused by the busy
-physical lock before any compiler/test child; the subsequent 88/88 pass above
-validated the fixes. Editor-host, Character, other accessibility families, GUI/GPU,
-native assistive technology and full quality checks still need their own evidence.
+## Python and quality evidence
 
-The first admitted native Input batch used clean
-`b9d39cc6b715337489d7d8ca1cf0a79635250b4a`, native MSVC 19.44, headless Debug,
-the verified canonical physical lock and one worker. Configure completed, including
-public-header ownership and dependency-direction checks. All `HoroInput`
-implementation objects compiled and `HoroInput.lib` linked. The build stopped at
-step 157/174 because the newly added host-cutoff test used `REQUIRE(a && b)`,
-which Catch2 cannot decompose. Commit `20a19f6` splits those assertions; its
-incremental retry was refused by the now-busy physical lock before any child.
-**No CTest case ran.** This is partial compilation evidence, not an Input,
-editor-host, public-consumer or overall accessibility pass. Other C++ feature
-families remain uncompiled. The graphical editor now drains ended-context
-withdrawals at its input cutoff; that application TU still requires its GUI build.
+The paired accessibility-copy, offline SDK and CI grouping suites passed with
+**66 tests** after published-base integration (`build/acc-current-python.xml`).
+After adding eleven theme pairs, the affected paired-copy/CI suites passed again
+with **42 tests**. The independent offline SDK suite passed **24 tests** with a
+short temporary root. These cover catalog/metadata contracts, not C++ behavior.
 
-The contrast tool now exposes eleven explicit live theme pairs: primary text on
-the four token surfaces, muted text on root/panel, dim text on raised, native
-text on window/popup/frame, and native disabled text on window. The custom opaque
-color draft remains available. The selected pair is read on each evaluation;
-unknown selectors or non-opaque colors cannot produce a cached success. New
-regression sources check pair selection, live native style changes, and rejection
-of unknown composition. These C++ cases remain uncompiled/unexecuted. The paired
-catalog and CI selection Python pass after this change is **42 passed**.
-Disabled-text results are diagnostic; [WCAG 2.2 contrast criteria](https://www.w3.org/TR/WCAG22/#contrast-minimum)
-exempt text in inactive components. The inspector does not infer applicability
-from a color role or certify the complete editor.
+The final cache/runner retry passed **107 tests, four skipped**
+(`build/acc-cache-python.xml`). Three skips require Windows symlink privileges;
+one requires a real compiler/ccache fixture. An earlier same-scope ENOSPC run is
+superseded only for that exact Python scope. Formatting and `git diff --check`
+were checked after source edits.
 
-`git diff --check` passes after current edits. A lightweight static registration
-check also verified each new public header has exactly one registry entry, every
-new implementation unit is listed once, and new UI error references are declared.
-This is not a substitute for CMake configure or staged consumer compilation.
-Outside the Input, Character, Foundation-only semantic and Runtime UI scopes above,
-new C++ tests have **not** run.
-The display-independent offline SDK compatibility pass ran with a short worktree
-temporary root: `python -m pytest -q --tb=short --basetemp build/acc-pytest
-tests/python/test_extension_sdk_compatibility.py`: **24 passed**. The earlier
-sandbox-temp attempt had 21 fixture path errors and 3 passes; the short-root repeat
-completed all 24. This is SDK metadata coverage, not new C++ behavior coverage.
-The first serial skeleton configure acquired `scripts.dev.heavy_build_lock` in the
-initial sandbox, then failed in the compiler probe with MSVC C1902 (PDB manager
-mismatch). Its physical lock handle was not verified, so that attempt is not
-evidence of correct cross-sandbox serialization.
-The later elevated helper had no compiler children and was stopped while waiting
-for that same lock, to give the main CI workstream its requested priority. No new
-heavy check will start until the coordinator releases that priority window.
-The next helper must also verify its actual open physical heavy-build lock handle
-against the coordinator's reference before configure/build/test, not merely compare
-the Git common directory or textual cache path. A mismatched sandbox/AC handle is
-a stop condition, with no private-lock or permission fallback.
+Full final-base Sonar IDE, CLI secrets and Codacy results remain required and must
+be reported separately in PR validation, including findings, errors, skipped files,
+C++ sensor execution, submitted-file scope, freshness and the official report path.
+An empty issue list or exit 2 is not a pass. The supported command is:
 
-`rtk proxy <python> scripts/analyze.py doctor --offline` completed with status
-incomplete (exit 2): Sonar CLI 1.10.0, Codacy 0.25.0 and VS Code 1.145.3 found;
-CMake/Ninja were absent from that command's PATH. Cloud drift was deliberately
-not checked by this offline prerequisite diagnosis. This is neither a Sonar IDE
-analysis nor CLI secrets/Codacy execution. The next check must use the initialized
-native tool environment and the actual final worktree scope.
+```sh
+python scripts/analyze.py check --worktree . --base origin/codex/editor-improvements --timeout 900 --code-user-data <existing-portable-profile>
+```
 
-A subsequent offline doctor with the existing portable VS Code user-data profile
-and explicit native CMake/Ninja PATH completed **ready_for_local_check (exit 0)**.
-The earlier default-profile check was incomplete because that default settings
-file did not exist; no authentication or trust policy was changed. Tool discovery
-now includes CMake 4.3.1 and Ninja 1.13.2. This prerequisite success still does not
-prove connected-mode authentication, Workspace Trust, C++ sensor execution,
-CLI secrets results, Codacy findings or cloud drift. Those remain final-check work.
+Use the initialized compiler environment, verified own compile database and the
+same physical lock/resource guards. The current published preparation path builds
+with one worker. Earlier two-worker preparation and named-main-grant restrictions
+are historical and do not block this version. A busy lock defers the batch without
+a waiter; it does not prohibit independent own-worktree edits. Yield between
+bounded batches to other ready owners.
 
-The subsequent online `doctor --timeout 45 --code-user-data <existing-portable-profile>`
-still reported local prerequisites ready and exit 0, but its independent
-`cloudConfiguration` was **incomplete**: cloud configuration read failed (exit 2),
-requiring Codacy authentication verification. Cloud drift is therefore unverified;
-the top-level exit 0 is not treated as cloud success. The cached report is
-`1794386611801302300-fa4293c8.json` in this worktree's external quality-report cache.
+The 2026-11-13 doctor found local prerequisites ready: CMake 4.3.1, Ninja 1.13.2,
+VS Code 1.145.3, Sonar CLI 1.10 and Codacy 0.25. Its independent Codacy cloud
+configuration comparison remained incomplete (exit 2/authentication). The official
+external-cache report basename is `1794573359424626900-cddeab7f.json`. Readiness
+is not connected-mode authentication, Workspace Trust or C++ sensor evidence.
 No credentials, trust policy, rules or cloud configuration were changed.
+`build/acc-preflight-admission-20261113.json` records admission attempts only;
+it is explicitly **not an analyzer report** and cannot establish provider success.
 
-The baseline `scripts/analyze.py` prepares compiler context with a hard-coded
-`--parallel 2`, even when reusing a database. The current machine policy requires
-every native build to use `--parallel 1`, under the verified physical shared lock.
-Do not run this conflicting preparation path or substitute another analyzer.
-Resolve the serial preparation contract with the owning CI/tooling workstream
-before full final analysis; ACC does not silently patch or monkey-patch that helper.
-The coordinator has reported that its serial-worker correction is in preparation;
-no release of the shared build slot has been received.
+For published head `55d9991`,
+[SonarCloud run 43427932437](https://github.com/horocore/horo-engine/actions/runs/43427932437)
+failed during instrumented Debug configuration: Lua FetchContent download returned
+HTTP 500. Coverage build/tests and analysis did not execute; the later Sonar job
+correctly refused missing coverage/native inputs. Authentication had passed its
+earlier check, so this is not reported as a missing-token diagnosis or a quality
+gate result. The inspected local log is
+`build/acc-sonar-43427932437-configure.log`. Main CI and Android were still queued
+at the same observation; no replacement push or run cancellation was performed.
 
-## New contract boundaries and migration
+Windows interaction automation initialization failed before any UI action with
+`failed to write kernel assets: The system cannot find the path specified.
+(os error 3)`. Manual hover, active, disabled, keyboard focus, popup and native
+narrow/localized interaction remain unverified. No GPU smoke, gyro hardware,
+Windows UIA, macOS accessibility or Linux AT-SPI interoperability pass is claimed.
 
-Fixed caption payloads are owned by the header-only `HoroCaptionTransport`, whose
-standalone consumer has no UI, Audio, renderer or Foundation dependency. UI
-arrangement/catalog transport are owned by `HoroRuntimeUi`; its staged public
-consumer includes the caption/settings interfaces. The SPSC queue pins one catalog before the
-producer starts. The control owner stops/joins that producer before destruction.
-The UI timeline owns independent catalog leases after dequeue, and uses a bounded
-64-sequence replay window. A host assigns session-qualified monotonically
-increasing IDs before fan-out. Timeline session generations cannot be reused,
-including after cancellation or backwards-clock invalidation. Queue overflow
-drops newest and increments a saturating diagnostic counter. Audio observations cannot replace accepted text or
-restart a cue. Headless arrangement is not proof of visible caption rendering.
+## Ownership and integration boundaries
 
-`HoroVisualAccessibility` and `HoroGameplayAccessibility` depend only on Foundation.
-Their isolated public consumers do not link renderer, UI implementation, native
-input or simulation. No existing caller is removed or compatibility alias added.
-These new domains expose inert contributions; application composition must
-register them explicitly. Capture validates domain ranges before deriving a new
-consumer view; a failed projection cannot replace the consumer's last-good view.
+### Captions
 
-The contributions are not yet wired into a shipped host's settings activation.
-Foundation's current SettingDescriptor has type/source/reload metadata but no
-domain range-validation callback. Host integration must validate candidate domain
-projections **before** configuration publication, not merely let consumers reject
-an already committed invalid value. The current projection tests prove rejection
-at the typed consumer boundary only. This remains a shared CFG integration gap;
-the ACC change does not install a competing resolver or modify CFG-owned schema
-infrastructure.
+`HoroCaptionTransport` is header-only and independent of UI, Audio, renderer and
+Foundation. Its fixed cue payload is semantic and session-qualified. The UI-owned
+SPSC queue pins a catalog before the producer starts; its control owner stops and
+joins the producer before destruction. Overflow drops newest and increments a
+saturating diagnostic. Timeline leases survive dequeue and use a bounded 64-sequence
+replay window; session generations cannot be reused after cancellation or backwards
+time. Audio observations never replace text or restart an accepted cue.
 
-Foundation currently represents numeric configuration as integers. New domain wire
-encodings are explicit fixed point, preserving typed runtime floats without
-changing shared CFG infrastructure or adding string parsing: color severity and
-gameplay strengths/multipliers use thousandths; color coefficients use millionths;
-the gameplay invulnerability window uses milliseconds. For example severity 500
-means 0.5 and a damage multiplier of 1000 means 1.0. Keys have one live encoding,
-not parallel aliases. The UI domain alone owns high contrast; the color query
-reads that key from its retained authoritative snapshot without registering it.
+Runtime UI owns arrangement/settings and canonical `CaptionRenderer` extraction.
+The host must supply existing retained elements, actually localized/shaped glyphs,
+font/resource generations, exact catalog/appearance and the locale-snapshot
+commitment. Animated hosts forward their real canonical frame lease. Extraction
+creates no alternate UI tree, resolver or fabricated presentation receipt.
+Host text preparation and actual composition/presentation are still missing.
 
-The separate `HoroPlatformAccessibility` adapter boundary depends on the existing
-Runtime UI semantic owner; baseline `HoroPlatform` gains no reverse UI dependency.
-It exposes no native handles. Only the no-op implementation currently exists:
-its capability is Unsupported, its queues/schema range are zero, and Submit
-returns Unsupported (ShuttingDown after explicit shutdown). It produces no actions,
-native effects or recordings. No Windows/macOS/Linux native support is claimed.
+### Color and visual safety
 
-`UiAccessibilityReviewLog` is an independent opt-in semantic diagnostic journal,
-not the null adapter and not a speech delivery queue. It copies 64 owned event
-records, counts overwritten diagnostics and omits oversized text whole. Content
-recording is separately explicit; changing recording policy scrubs previous rows.
-It consumes publisher changes rather than polling elements and never acknowledges
-speech. A journal row is not evidence of native delivery.
-The additive `UiAccessibilityChangePublisher::IsCurrentSnapshot` contract checks
-the exact adopted immutable storage lease. Equal numeric descriptors from another
-extractor do not establish publication identity. The journal uses this check before
-mutation; existing publisher callers require no migration. New regression coverage
-includes independent snapshots with equal revisions, copied leases and retirement.
-
-Input's new `DigitalAffordance` and `StickyModifierLatch` are narrow mapping
-helpers, not another router/profile/persistence authority. The existing router now
-owns bounded per-incarnation interpretation and old-owner cancellation delivery.
-Ended contexts expose owned scoped withdrawals through an explicit host drain,
-whose application teardown composition and the external persistence work remain
-acceptance gaps. The [migration guide](input-accessibility-binding-migration.md)
-records bounds, public consumer changes and unexecuted lifecycle regressions.
-The later [binding migration](input-accessibility-binding-migration.md) adds the
-policy to the canonical typed binding/profile path and extends conflict validation.
-It also fixes the manual Input accessibility consumer to move the successful
-Result before invoking mutable `Cancel`; the earlier const `Value()` call could
-not compile. Native validation remains pending rather than inferred from that
-static correction.
-
-UI's own contribution declares `accessibility.visual.ui.*`; safety owns only
-`accessibility.visual.safety.*`. The UI view projects readable text sizes with a
-16-DIP floor, but it does not pretend a new font atlas or coherent DPI layout was
-published. The existing editor `Theme::SetUiScalePercent` explicitly remains a
-no-op pending coherent font/layout scaling. Connecting both theme layers and the
-actual frame owner, and reconciling the pre-existing editor appearance scale
-preference with one accessibility authority, remain required integration work.
-No legacy flat `visual.ui_scale`, `visual.high_contrast`, `visual.reduce_motion` or
-`visual.flash_suppression` keys were found in active source/assets on this baseline.
-
-The existing Input Mapping panel already invokes the canonical binding validator
-and displays its diagnostics. This is useful existing evidence for the essential
-action tool; it has not been counted as fresh UI qualification. Extension forms
-also already export `EditorUiAccessibleNode` metadata. Neither establishes
-default metadata for every built-in shared control or native editor exposure.
-
-## Numeric references
-
-Full-strength color matrices follow the
+`HoroVisualAccessibility` depends only on Foundation. It captures authoritative
+configuration independently of a renderer. Full-severity matrices use the Machado
+reference, bounded row-major coefficients and identity interpolation. Numeric wire
+encodings are explicit: severity/strengths use thousandths and matrix coefficients
+use millionths. UI alone owns high contrast; color queries do not register a second
+key. Full-strength matrices follow the
 [Machado/Oliveira/Fernandes model](https://profs.ic.uff.br/~laffernandes/content/publications/journal/2009_tvcg_15(6)/machado_oliveira_fernandes-tvcg-15(6)-2009-corrected.pdf),
-cross-checked against the published
-[Colour v0.4.7 reference dataset](https://github.com/colour-science/colour/blob/v0.4.7/colour/blindness/datasets/machado2010.py).
-Strength interpolates from identity; it does not claim physiological severity
-modeling. The matrix space is display-linear sRGB; HDR/other primaries need an
-explicit space adaptation in the renderer. These transforms are simulation/reference
-modes, not a claim to restore a person's color perception.
+cross-checked against the pinned
+[Colour v0.4.7 dataset](https://github.com/colour-science/colour/blob/v0.4.7/colour/blindness/datasets/machado2010.py).
+Strength interpolates from identity; it does not model physiological severity or
+claim to restore color perception. The matrix space is display-linear sRGB;
+HDR/other primaries require explicit renderer space adaptation.
 
-The contrast evaluator follows the W3C
-[AA minimum](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html) and
-[AAA enhanced](https://www.w3.org/WAI/WCAG22/Understanding/contrast-enhanced.html)
-thresholds. Inputs must be actual composed sRGB colors; alpha with an unknown
-backdrop is not silently treated as opaque. Typography classification is supplied
-from actual font metrics. Numeric contrast passing is one criterion, not complete
-WCAG compliance or legal certification.
+The cold `ColorPipelinePlan` provides admission metadata, not execution. The real
+editor viewport owner is `EditorViewportColorPipeline`; its programs/materials and
+`MetalViewportClusteredFrame::AppendColorPasses` surround display-linear overlays
+with actual scene and SDR encode work. The current final shader has only
+`OutputControl`, no accessibility matrix. Its canonical recipe is Metal-only.
+A new encoder ABI requires genuine cooking/reflection/package outputs, preserving
+original locked captures and deferred resource retirement. Required ordering is
+scene/exposure/look/ACES, display-linear UI, complete-composite accessibility,
+containment/dither/one encoding, then present. Viewport evidence alone would not
+qualify whole-editor GUI composition or other backends.
 
-## Local delivery commits
+UI owns `accessibility.visual.ui.*`; safety owns
+`accessibility.visual.safety.*`. Snapshot projection enforces a 16-DIP typography
+floor but does not publish a font atlas or coherent DPI layout. Existing
+`Theme::SetUiScalePercent` remains a no-op pending that integration. Camera, VFX
+and animation must consume policy at their actual owner boundaries; numeric
+suppression helpers alone do not implement those behaviors.
 
-These are traceable local implementation slices, not completed acceptance claims.
-No branch push or pull request has been performed.
+### Input
 
-| Slice | Local commit |
-|---|---|
-| Caption transport/settings/layout | `8d4dd2b2a`, `2a478e471` |
-| Color query/reference transforms | `22e402137` |
-| Input affordance state and neutral-boundary fix | `21823b65b`, `8b4329747` |
-| UI and visual safety preferences | `1a6aff479` |
-| Bridge capability and semantic journal | `cca891531` |
-| Gameplay preference snapshots and revision hints | `293d86528` |
-| Contrast evaluator / qualification matrix | `929b465e7` |
-| Exact semantic publication QA journal check | `456758017` |
-| Editor contrast workspace panel | `bd5e7134a` |
+The canonical typed binding/profile path owns digital affordance policy, conflict
+validation and v1-neutral/v2 persistence. The router owns bounded per-incarnation
+interpretation and scoped withdrawals; it never changes raw facts or uses frame
+numbers as elapsed time. The actual editor drains ended-context records at its
+input cutoff without dispatching dead callbacks or retargeting releases.
+Gameplay and Character tick captures preserve repeats and clear held/pending
+intent on unavailable clocks/capacity while retaining the typed cause.
 
-The tooling slice also corrects the semantic journal header registration, so the
-canonical Runtime UI public-header consumer includes that new public contract.
+The existing Input Mapping tool uses shared controls, paired localization, exact
+microsecond-preserving decimal millisecond drafts and canonical Apply/Cancel.
+Configuration revision plus the complete original binding fences stale drafts.
+The [binding migration guide](input-accessibility-binding-migration.md) records
+API/layout changes, limits and rebuild requirements. Integration with
+[Input PR #3550](https://github.com/horocore/horo-engine/pull/3550) must preserve
+both scoped persistence/capture and the accessibility policy; it is not delivered
+by these independent passing tests. Gyro still needs interpretation and hardware.
 
-## Editor contrast tool integration
+### Native bridge, editor semantics and gameplay
 
-The default workspace registry now exposes `horo.accessibility_contrast` in the
-right dock. Its shared color controls inspect exact opaque #RRGGBB custom drafts;
-invalid intermediate text has no cached passing result. Theme inspection reads
-current primary-text and root-surface tokens without 8-bit quantization, and
-rejects non-opaque/invalid pairs with a localized composition diagnostic. The
-standard/large category is explicit and documents the actual-font-metric rule.
-Visible ratios are rounded for display; pass/fail comparisons are not.
+`HoroPlatformAccessibility` consumes existing Runtime UI semantics without making
+baseline Platform depend on UI. Its public surface exposes no native handles.
+Only Null currently exists: Unsupported, zero queues/schema, no effects or
+recording, and ShuttingDown after shutdown. Desired preference remains distinct
+from actual capability. Runtime UI retains focus/action authority and native
+visibility requires actual matching presentation evidence.
 
-`HoroGui` gains a private dependency on `HoroVisualAccessibility`; no public GUI
-header or public dependency is added. Regression cases cover invalid edits,
-unquantized theme inputs, unknown composition, default registry integration, and
-English/Turkish narrow/wide headless rendering. A headless test checks standard AA
-for primary text on the four opaque built-in panel surfaces and native ImGui text
-on WindowBg. Those deliberately bounded pairs do not qualify dim/muted text,
-interactive states, arbitrary project themes, or complete editor WCAG compliance.
-They require the GUI test composition; headless skeleton configuration alone
-cannot run them. Compilation, execution and manual popup/focus interaction remain
-pending. A lightweight paired-catalog Python check plus the SDK metadata tests
-completed with **25 passed** after the panel integration.
+`UiAccessibilityReviewLog` is an independent opt-in 64-record journal, not a speech
+queue or native adapter. Text recording requires separate consent, oversized text
+is omitted whole and policy changes scrub old rows. It consumes the exact adopted
+publisher storage lease; equal numeric revisions are insufficient. It never
+acknowledges speech. Extension forms already export accessible metadata; that
+does not supply default metadata for all built-in shared controls.
 
-## Local parent integration
+`HoroGameplayAccessibility` is Foundation-only. Each tick must capture the
+configuration authority regardless of dropped/stale revision hints. The adapter
+publishes only `ConfigurationRevision`; preferences never become bus state or a
+server grant. Current `GameRuntimeContext` has no accessibility tick binding and
+`ConfigurationService::Snapshot` takes a mutex. An explicit SDK migration,
+nonblocking tick-start composition and game-owned authorized consumers remain
+required; no ambient lookup, alternate resolver or event-state cache was added.
 
-The coordinator explicitly authorized rebasing onto the unpublished local parent
-`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`. The clean-worktree rebase replayed all
-12 ACC commits without conflicts. `git range-diff` against the previous stack at
-`cc109b4b3` showed every patch unchanged (`=` for all 12 entries). The paired-copy
-and offline SDK metadata tests repeated after rebase: **25 passed**. Native ACC
-compilation, GUI interaction and full local quality analysis remain unexecuted.
-No heavy slot was granted by that integration message; the main regression queue
-retains priority. No remote fetch or push was used to locate the local parent.
+All domain contributions are inert. Current Foundation descriptors lack domain
+range validation before publication. The published CFG
+[draft PR #3556](https://github.com/horocore/horo-engine/pull/3556), head
+`e7b809b3326f493d6642aa4e5e4600fe4d003b2a` inspected on 2026-11-13, introduces
+canonical descriptor validation and a shared settings session. Host activation must
+compose that authority and validate every candidate before commit; rejecting an
+already committed value in a typed consumer is insufficient. That integration has
+not been applied here, and no sibling worktree was edited.
 
-## Resumed initiative audit and remaining ownership
+## Decision audit and qualification limits
 
-Live GitHub acceptance bodies were re-read for parent #1813 and every child
-#1849--#1856. Parent and implementation children remain open; #1849 is closed.
-The closed decision is supported by the normative architecture's explicit owners,
-typed transports and non-gating rule, but its status does not qualify all later
-product compositions. A persistent active goal now covers every remaining child,
-integrated acceptance, regression and qualification rather than stopping at a local
-checkpoint. No Jira or issue state was changed by this audit.
+[ACC-001.1 / #1849](https://github.com/horocore/horo-engine/issues/1849) is a closed
+ownership decision, not completion of the seven runtime children. Its body retains
+unchecked boxes and older Audio/PostProcessing wording. Normative accessibility
+architecture controls implementation. ADR-015 still says Proposed; this audit
+does not change its approval status or reimplement the decision. Its ownership,
+inert contributions, independent targets and revision-only transport are reflected
+in this change, while actual host activation remains open.
 
-| Dependency/evidence | Owner and required next input |
-|---|---|
-| ACC C++ regression and staged consumer execution | Main CI coordinator grants one bounded serial headless configure/build/CTest slot; ACC verifies the physical canonical lock handle before using it. No waiter is queued. |
-| GUI contrast render and theme checks | ACC needs a subsequent GUI-enabled build/test composition under the same serialized slot, then actual popup/focus/narrow-state interaction checks. |
-| Pre-publication domain validation and shared settings menu | CFG owning workstream provides candidate validation/activation integration; ACC composes its inert domain contributions without another resolver. |
-| Binding lifetime/conflict/persistence integration | Input owning workstream supplies the standard persistence/capture path; ACC extends affordance policy through that same authority. Gyro additionally needs actual supported hardware. |
-| Complete-image color execution | Renderer/ACC integration must retain composed UI through the final display-linear transform and verify available real backends; cold admission is insufficient. |
-| Native bridge interoperability | ACC/Platform implements adapters; platform QA supplies real Windows UIA, macOS accessibility and Linux AT-SPI interoperability evidence. None is inferred from Null or headless tests. |
-| Cloud configuration comparison | Codacy account authentication must permit the read-only configuration fetch; its current failure remains independent of local tool readiness. |
+The [editor qualification inventory](accessibility-editor-qualification.md) covers
+all 55 exact WCAG 2.2 A/AA identifiers and levels, checked against the official
+Recommendation. No criterion is passed or silently marked not applicable.
+WCAG2ICT frames native-software interpretation; CVAA/EAA/TRC notes are scoped
+qualification goals, not legal certification. The Commission overview did not
+establish article-level conclusions when EUR-Lex required verification.
 
-## Caption paint extraction integration
+Contrast evaluates actual opaque composed sRGB colors without rounding borderline
+results. Unknown composition produces no pass. Eleven explicit live theme pairs
+cover token primary/muted/dim and native text/disabled roles; arbitrary opaque
+custom colors remain available. Disabled-text results are diagnostic because
+[WCAG 2.2 contrast criteria](https://www.w3.org/TR/WCAG22/#contrast-minimum) exempt
+inactive components. The tool cannot infer applicability from a color role or
+certify the complete editor.
 
-`CaptionRenderer` now reserves bounded scratch and the ordinary `UiRenderExtractor`
-at setup. It uses the host's existing retained elements, prepared localized/shaped
-glyphs and stable font generations; it creates no alternate UI tree, localization
-resolver or native handles. It requires the exact queue catalog lease and coherent
-frame appearance and the host's exact locale-selection/localization-snapshot
-commitment. The copied commitment is evidence supplied by the existing text owner,
-not a new authority or proof of translation correctness. Future cues do not paint, Sound/Music respect the display
-preference, and disabling publishes an empty paint snapshot. It emits canonical
-background/text commands with safe-area clipping, decodes encoded sRGB appearance
-colors into linear UI paint, and combines background alpha with opacity.
-
-New regressions exercise the actual canonical extraction boundary: allocation-free
-successful paint, independent semantic time, settings coherence/retry, catalog
-identity, duplicate rejection, invalid glyph/resource ranges, capacity exhaustion,
-snapshot lifetime after source/presenter destruction, and three reference aspect
-ratios. The staged Runtime UI consumer includes the new public header. These C++
-tests have not run. Application localization/shaping and native presentation still
-need composition and real rendered evidence; this extraction is not reported as
-completed caption acceptance or a platform qualification.
-The additive public API is owned by Runtime UI with no dependency expansion or
-existing caller removal. Animated hosts must pass the actual canonical frame lease;
-the presenter forwards it to the existing extractor's lineage/pinning overload,
-preserving queued-reader retirement. It never fabricates a frame or completion
-receipt. Existing non-animated extraction remains explicit and separately bounded.
-
-## Input router integration checkpoint
-
-The Input-owned router now applies the profile's typed affordance policy through
-bounded transactional mapping, explicit host sample time and scoped cancellation
-delivery. The migration guide records the added repeat/status/withdrawal API,
-non-reusable identities, neutral admission and fixed limits. Actual router test
-sources cover holds/repeat, sticky chords, skipped reads, configuration changes,
-focus/modal/time/device/player lifetimes, owned withdrawals, capacity rollback
-and allocation-free reads. The staged consumer exercises the new public drain.
-None of these C++ tests or consumers has compiled or run yet.
-
-After these edits, the paired localization and SDK Python command recorded above
-passed again: **25 passed**. `git diff --check` passed and changed C++ was formatted.
-These checks do not validate C++ behavior. The first requested native slice remains
-Input tests and its two staged consumers; the main CI board grants another owner
-the sole heavy slot. No ACC heavy process or background waiter was launched.
-Full Sonar IDE, CLI secrets and Codacy preflight remains incomplete pending the
-serialized analysis slot and supported preparation path; cloud configuration
-authentication remains a separate previously recorded gap. Host withdrawal,
-rebinding UI execution, scoped persistence integration and gyro are still acceptance work.
-
-## Input Mapping accessibility editing
-
-The existing digital-binding view now opens a typed property draft for toggle,
-sticky modifiers, hold and repeat durations. It commits only on Apply through
-the existing full-profile validation/cancellation owner, preserves other bindings
-and uses the ordinary save/reload controls. Exact millisecond text preserves
-microseconds; invalid input is retained without implicit clamping or substitution.
-Configuration revision and full original binding checks reject stale drafts,
-including replacement/restoration of an otherwise equal mapping. The form uses
-shared controls, wrapped labels and paired English/Turkish copy.
-
-New model/GUI regression sources are registered with `HoroEditorPresentationTests`.
-They remain uncompiled/unexecuted; mouse, keyboard, focus, hover/disabled and
-native theme interaction still need the allocated GUI composition and manual
-review. The paired-copy/SDK Python pass after these edits is **26 passed**.
-`git diff --check` and formatting passed. Native and full quality validation are
-still incomplete under the main coordinator's heavy-slot hold. The own Input
-Mapping code fork still needs authorized integration with Input's unpublished
-scoped capture/persistence changes; no sibling worktree source was changed.
-
-## Editor qualification inventory and CI selection audit
-
-The [editor qualification record](accessibility-editor-qualification.md) now
-inventories every current WCAG 2.2 A/AA criterion, maps Horo workflow/evidence
-gaps to owners, and distinguishes source evidence from observed native results.
-A read-only comparison with the pinned official Recommendation HTML confirmed
-**55 exact unique identifiers and levels**. No entry is passed or silently
-not-applicable. The record uses WCAG2ICT to frame native-software interpretation
-and cites official CVAA/EAA/public platform guidance for limited scope notes;
-actual legal applicability and authorized TRC qualification remain open decisions.
-The EUR-Lex directive text was unavailable behind a verification page, so no
-article-level conclusion is asserted from the Commission's overview.
-
-CI source inspection found that Windows' focused Debug registry omitted the new
-numeric contrast tests. It now includes `HoroVisualAccessibilityTests` and the
-two visual/contrast staged consumers; direct consumers also carry `ci-windows`.
-Linux/macOS GUI-enabled Debug already includes the presentation target containing
-the opaque built-in primary-text pair cases. CI summary copy explicitly reports
-Windows' missing GUI-linked theme coverage and the narrow scope of other checks.
-No CI or native result is inferred from these selection edits. CMake configure,
-actual discovered labels, CTest execution and final quality preflight are pending.
-
-The local ACC helper's old filter named executable targets, but Catch discovery
-registers `Target::case` names. It could therefore have selected only the direct
-consumer. This was found before any ACC native test execution or claimed pass.
-The helper now matches the case-family prefixes, requires every expected family
-and direct consumer in a JSON discovery manifest, and uses `--no-tests=error`.
-Its syntax was checked; it was not launched under the coordinator's HOLD.
-
-The paired-copy, offline SDK and existing CI grouping Python suites ran after
-these edits with **65 passed**. This validates their catalog/metadata/registry
-contracts, not generated CTest membership, C++ behavior or conformance. The
-changed-source diff check passed. All heavy analysis remains incomplete.
-
-Gameplay integration inspection separately confirmed two unresolved boundaries:
-the current `GameRuntimeContext` / behavior callback context has no accessibility
-tick binding, and `ConfigurationService::Snapshot` currently takes `m_mutex`.
-There are no aim-assist, damage or QTE behavior consumers in the active source
-tree beyond the new desired-preference model. Native SDK boundary migration,
-an explicitly owned tick-start acquisition path satisfying the non-blocking
-contract, and game-owned supported/authorized behavior consumers remain required.
-No ambient settings lookup, bus-state cache or silent authority grant was added.
-
-## 2026-11-13 restart and published-base integration
-
-The six preserved CI/qualification paths were committed as `366451048` after the
-paired-copy/SDK/CI Python suites repeated with **65 passed**. The remote parent
-was verified with `git ls-remote` and fetched. Authorized rebase then replayed
-all 19 ACC commits onto `3df476ff` without conflicts. Range-diff recorded 18
-unchanged patches and one context-only change around the parent's expanded CI
-inventory; the new parent entries remain intact. The pre-rebase stack is retained
-by a local backup ref. This evidence concerns patch integration, not native behavior.
-
-The known CharacterInput missing-clock diagnostic now retains the typed Input
-cause and clears pending intent; its focused native regression is authored.
-`heavy_build_lock(repo, blocking=False)` now forwards nonblocking admission to
-the existing OS lock. Default callers retain their blocking behavior. A regression
-checks refusal under a live owner, preservation of that owner's lock, and admission
-after release, using isolated temporary fixture caches. No fallback execution lock
-is introduced. The first cache/runner Python pass recorded **107 passed, 4 skipped**.
-Three skips require Windows symlink privileges and one requires a real
-compiler/ccache fixture. A same-scope repeat hit host disk exhaustion:
-**100 passed, 4 skipped, 2 failed, 5 setup errors**, with ENOSPC in Git fixture/temp
-writes. That repeat is incomplete infrastructure evidence. The system drive was
-verified at zero free bytes; this worktree's build outputs were only about 1 MiB.
-No shared cache, sibling files or live job was removed. A fresh cache/runner run
-and native/quality execution remain pending adequate actual storage and resources.
-After published-base integration, the paired-copy/SDK/CI grouping suites passed
-again with **66 passed**, recorded in the local ignored JUnit report
-`build/acc-current-python.xml`; they do not exercise the new C++ behavior.
-The local ACC batch helper must use this nonblocking API and the current resource
-and physical-handle guards; it no longer requires a named main-chat grant.
-
-## Current delivery preparation on 2026-11-13
-
-The parent identity was verified in Jira and GitHub as
-`HORO-1769 / #1813 [ACC-001] Accessibility Subsystem`. The initial caption-named
-local branch is retained; the complete topic now uses
-`feat/HORO-1769_accessibility_subsystem` for normal delivery. The published target
-remains `codex/editor-improvements` at `3df476ff`. No merge, force push, history
-rewrite of published ACC commits or issue-state mutation is authorized by this
-record.
-
-The final cache/runner retry completed **107 passed, 4 skipped**, with the same
-three Windows symlink-privilege skips and one real compiler/ccache fixture skip.
-Its local ignored report is `build/acc-cache-python.xml`. This supersedes the
-failed ENOSPC repeat for that exact Python scope; it does not prove C++ behavior.
-The paired-copy/SDK/CI grouping pass remains **66 passed** in
-`build/acc-current-python.xml`.
-
-Two V2 Input batch attempts returned busy at the real OS lock before compiler or
-analyzer startup, without a waiter. The full final-base preflight command was
-also requested through nonblocking physical-lock admission, which returned busy.
-`build/acc-preflight-admission-20261113.json` is explicitly an **admission receipt,
-not an analyzer report**: Sonar IDE, CLI secrets and Codacy are all `not_run`.
-They remain required. No clean security, quality or native result is inferred.
-
-The new doctor run found local tools ready but its independent Codacy cloud
-configuration fetch remained incomplete (exit 2/authentication). The official
-doctor report basename is `1794573359424626900-cddeab7f.json` in the external
-worktree quality cache. This is prerequisite evidence only; it does not prove
-connected-mode authentication or C++ sensor execution.
-
-A reviewable draft may expose this work and run remote CI under the explicit
-restart authorization, with these unresolved checks and all seven implementation
-gaps visible. It must remain incomplete and must not close parent/child issues
-or claim acceptance. Full native, public-consumer, GUI/GPU/AT/hardware and final
-local quality evidence must still be completed for the entire initiative.
+CI selection includes numeric contrast and public consumers in focused Windows
+Debug. GUI-linked theme cases belong to GUI-enabled Linux/macOS Debug, and were
+also executed locally in the Windows GUI batch above. Selection changes and
+headless output do not qualify GPU, native AT, all interactive states or every
+supported host composition. Final acceptance requires their actual observed
+evidence and complete final-base quality results.
