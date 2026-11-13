@@ -10,6 +10,49 @@ namespace {
         return InputBinding{.kind = BindingControlKind::Key, .key = key, .scale = scale, .component = component};
     }
 
+    TEST_CASE("Assigned gyro look rates reach fixed tick commands and recording without presentation integration",
+              "[unit][runtime][input][gyroscope]") {
+        InputRouter router;
+        const ActionId look{"look"};
+        const InputContextId play{"play"};
+        const InputBinding yaw{.kind = BindingControlKind::GyroscopeAxis,
+                               .gyroscope = {SensorAxis::Y, 2, GyroscopeSource::AssignedGamepad}};
+        const InputBinding pitch{.kind = BindingControlKind::GyroscopeAxis,
+                                 .scale = -1,
+                                 .component = 1,
+                                 .gyroscope = {SensorAxis::X, 4, GyroscopeSource::AssignedGamepad}};
+        REQUIRE(router.SetActionMap({{look, ActionValueType::Axis2D, play, true, {yaw, pitch}}}).HasValue());
+        auto context = router.PushContext(play, InputContextKind::Gameplay);
+        RawInputCollector collector;
+        collector.BeginFrame(900);
+        VirtualGamepad controller{collector};
+        const auto id = controller.Connect();
+        REQUIRE(controller.SetGyroscopeSample({SensorAvailability::Available, {1, 1, 0}, 0, 1}));
+        router.BeginFrame(collector.Commit());
+        REQUIRE(router.AssignGamepad(0, id));
+        GameplayInputFrameBuilder builder{{}, look, {}, {}};
+        builder.Capture(router, context, 0);
+        builder.Capture(router, context, 0);
+        const auto first = builder.Consume(10), catchUp = builder.Consume(11);
+        CHECK(first.lookX == 0.5F);
+        CHECK(first.lookY == -0.25F);
+        CHECK(catchUp.lookX == first.lookX);
+        CHECK(catchUp.lookY == first.lookY);
+        GameplayInputRecording recording;
+        recording.Record(first);
+        recording.Record(catchUp);
+        CHECK(recording.Next() == first);
+        CHECK(recording.Next() == catchUp);
+        collector.BeginFrame(901);
+        REQUIRE(controller.SetGyroscopeSample({.availability = SensorAvailability::Disabled}));
+        router.BeginFrame(collector.Commit());
+        builder.Capture(router, context, 0);
+        const auto stopped = builder.Consume(12);
+        CHECK(stopped.lookX == 0);
+        CHECK(stopped.lookY == 0);
+        CHECK(builder.LastCaptureStatus() == ActionReadStatus::Resolved);
+    }
+
     std::array<GameplayInputFrame, 3> ProduceCadence(const bool catchUp) {
         RawInputCollector collector;
         InputRouter router;
