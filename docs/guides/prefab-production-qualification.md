@@ -15,7 +15,7 @@ remaining children remain To Do in Jira and open in GitHub.
 
 | Jira / GitHub / alias | Existing implementation and executable evidence | Added qualification or remaining acceptance evidence |
 | --- | --- | --- |
-| HORO-1076 / #1076 / PFB-008.1 | `PrefabDiagnostics.cpp`, `PrefabDiagnosticsTests.cpp` cover stable descriptors, typed foreign causes, identity, exact bounded context and Build Output projection. | A new regression covers deep resolver failures crossing the message budget. Long composition/source-chain messages now summarize omitted intermediate entries while retaining endpoints and the originating error. Native execution is pending. A closed GitHub issue does not resolve the Jira status discrepancy. |
+| HORO-1076 / #1076 / PFB-008.1 | `PrefabDiagnostics.cpp`, `PrefabDiagnosticsTests.cpp` cover stable descriptors, typed foreign causes, identity, exact bounded context and Build Output projection. | A new regression covers deep resolver failures crossing the message budget. Long composition/source-chain messages now summarize omitted intermediate entries while retaining endpoints and the originating error. Native execution and production publication integration remain unqualified. A closed GitHub issue does not resolve the Jira status discrepancy. |
 | HORO-1077 / #1077 / PFB-008.2 | `PrefabMetricsTests.cpp`, `PrefabMetricCookHostTests.cpp` cover bounded tags, real parse/resolve/cache/cook, zero-allocation disabled producers, terminal receipt and retired telemetry generations. | Run the existing metrics and host targets. Logical span events qualify only the implemented telemetry boundary. |
 | HORO-1078 / #1078 / PFB-008.3 | `PrefabDebugSnapshot.cpp`, `PrefabDebugSnapshotTests.cpp`, `ScenePrefabDebugSnapshotTests.cpp` cover immutable owned evidence, provenance, cancellation and explicit zero/exact-prefix truncation. | Run both model and scene targets. |
 | HORO-1079 / #1079 / PFB-008.4 | `PrefabDiagnosticsTests.cpp` projects bounded source hints to Build Output. `SourceFileOpenService` and workspace source operations own containment, routing and localized failures. | New source-service test checks Prefab routing/focus, a moved source hint and missing handler. Current-revision AssetId/member/property/edge navigation remains unqualified. |
@@ -76,6 +76,17 @@ Unavailable OS/device/backend execution is recorded as skipped with the missing
 capability. Missing product contracts or measurement gates remain incomplete.
 
 ## Concrete remaining dependencies
+
+A 13 November production-call audit found the definitions of
+`MakePrefabDiagnosticRecord` and `MakePrefabBuildOutputRecord` in
+`PrefabDiagnostics.cpp`, with no references to those factories elsewhere under
+`src/` or `apps/`. The merged diagnostic model and its executable contract tests
+therefore establish available representation/projection APIs. They do not by
+themselves prove that actual parse, graph, editor, cook or spawn failures retain
+and publish complete typed context through the product. Production integration
+remains an explicit parent-acceptance gap. It must preserve the existing error
+owner and captured revision authority, with no revision inferred from message
+text, path hint or a newer mutable registry.
 
 `SourceOpenRequest` currently carries path/origin/mode/line/column. It has no
 AssetId, source revision, prefab-local member/property or dependency-edge selection
