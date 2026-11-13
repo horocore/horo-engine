@@ -149,7 +149,8 @@ namespace Horo::CharacterInput {
          * @brief Captures owned held axes and pending jump edges once per committed presentation snapshot.
          * @param router Live router borrowed only until return.
          * @param context Exact original context token borrowed only until return.
-         * @return Success or typed routing/capacity failure. Focus/preemption clears pending intent. Configuration,
+         * @return Success or typed routing/capacity failure; Input::InputAccessibilityErrors::ClockUnavailable preserves missing
+         * host time for timed bindings and clears all pending intent. Focus/preemption clears pending intent. Configuration,
          * assignment or context replacement fail closed until a fresh adapter is created; no old edges cross reload.
          */
         [[nodiscard]] Result<void> CaptureInput(Input::InputRouter &router, const Input::InputContextToken &context);

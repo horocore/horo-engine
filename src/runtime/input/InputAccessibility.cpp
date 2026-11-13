@@ -108,6 +108,14 @@ namespace Horo::Input {
     }
 
     namespace InputAccessibilityErrors {
+        /** @copydoc ClockUnavailable */
+        const ErrorCodeDescriptor ClockUnavailable{ErrorDomainId{"horo.input"},
+                                                   ErrorCode{"input.accessibility.clock_unavailable"},
+                                                   ErrorSeverity::Error,
+                                                   "Timed input accessibility mapping has no host sample clock.",
+                                                   "Provide explicit monotonic sample time at the input collection boundary.",
+                                                   true,
+                                                   false};
         /** @copydoc CapacityExceeded */
         const ErrorCodeDescriptor CapacityExceeded{ErrorDomainId{"horo.input"},
                                                    ErrorCode{"input.accessibility.capacity_exceeded"},

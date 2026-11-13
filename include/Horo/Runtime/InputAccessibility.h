@@ -80,5 +80,7 @@ namespace Horo::Input {
         extern const ErrorCodeDescriptor InvalidPolicy;
         /** @brief Fixed semantic mapping inventory or setup identity storage cannot admit this request. */
         extern const ErrorCodeDescriptor CapacityExceeded;
+        /** @brief A timed semantic binding cannot advance without explicit host sample time. */
+        extern const ErrorCodeDescriptor ClockUnavailable;
     }  // namespace InputAccessibilityErrors
 }  // namespace Horo::Input

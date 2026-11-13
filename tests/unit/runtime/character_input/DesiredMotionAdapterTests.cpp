@@ -2,8 +2,10 @@
 #include "AllocationProbe.h"
 #include "Horo/CharacterInput/DesiredMotionAdapter.h"
 #include "Horo/Physics/CharacterErrors.h"
+#include "Horo/Runtime/InputAccessibility.h"
 
 #include <limits>
+#include <optional>
 
 namespace {
     using namespace Horo;
@@ -39,8 +41,9 @@ namespace {
             return std::move(adapter).Value();
         }
 
-        void Frame(const Input::FrameNumber frame, const bool moving, const bool jumping, const bool focused = true) {
-            collector.BeginFrame(frame);
+        void Frame(const Input::FrameNumber frame, const bool moving, const bool jumping, const bool focused = true,
+                   const std::optional<Input::InputSampleTime> time = std::nullopt) {
+            collector.BeginFrame(frame, time);
             collector.SetKey(Input::Key::W, moving);
             collector.SetKey(Input::Key::Space, jumping);
             collector.SetWindowState({.focused = focused});
@@ -58,6 +61,37 @@ namespace {
                                                     active.world->IssueCapability().Value(), active.controller);
         REQUIRE(created.HasValue());
         return std::move(created).Value();
+    }
+
+    TEST_CASE("Timed input clock failure preserves its cause and clears previously captured Character intent",
+              "[character][input][accessibility]") {
+        auto active = SpawnedActiveWorldWithController();
+        InputFixture input;
+        Input::InputBinding jump{.key = Input::Key::Space};
+        jump.accessibility.digital.holdMicroseconds = 10;
+        REQUIRE(input.router.SetProfile({.overrides = {{Input::ActionId{"jump"}, {jump}}}}).HasValue());
+        auto adapter = input.Adapter(active);
+        input.Frame(1, true, false, true, Input::InputSampleTime{0});
+        REQUIRE(adapter.CaptureInput(input.router, input.context).HasValue());
+        input.Frame(2, true, true, true, Input::InputSampleTime{1});
+        REQUIRE(adapter.CaptureInput(input.router, input.context).HasValue());
+        input.Frame(3, true, true);
+        RequireError(adapter.CaptureInput(input.router, input.context), Input::InputAccessibilityErrors::ClockUnavailable);
+        const auto absent = adapter.ConsumeInput(1, 1).Value();
+        REQUIRE_FALSE(absent.Intent().velocityMetersPerSecond.has_value());
+        REQUIRE_FALSE(absent.Intent().jumpRequested);
+
+        input.Frame(4, true, true, true, Input::InputSampleTime{20});
+        REQUIRE(adapter.CaptureInput(input.router, input.context).HasValue());
+        REQUIRE_FALSE(adapter.ConsumeInput(2, 2).Value().Intent().jumpRequested);
+        input.Frame(5, true, false, true, Input::InputSampleTime{21});
+        REQUIRE(adapter.CaptureInput(input.router, input.context).HasValue());
+        input.Frame(6, true, true, true, Input::InputSampleTime{22});
+        REQUIRE(adapter.CaptureInput(input.router, input.context).HasValue());
+        REQUIRE_FALSE(adapter.ConsumeInput(3, 3).Value().Intent().jumpRequested);
+        input.Frame(7, true, true, true, Input::InputSampleTime{32});
+        REQUIRE(adapter.CaptureInput(input.router, input.context).HasValue());
+        REQUIRE(adapter.ConsumeInput(4, 4).Value().Intent().jumpRequested);
     }
 
     TEST_CASE("Desired motion preserves absence versus explicit neutral through Character execution", "[character][input]") {

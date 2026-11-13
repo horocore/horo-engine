@@ -109,6 +109,15 @@ fresh activation's `pressed`. The router advances accessibility state at most on
 per committed sample, so repeated reads preserve held state without replaying
 synthetic edges. These public layout and enum additions require consumer rebuilds.
 
+`DesiredMotionAdapter::CaptureInput` now preserves missing host time as
+`Input::InputAccessibilityErrors::ClockUnavailable` instead of incorrectly
+reporting Character capacity exhaustion. It clears all pending movement/jump
+intent on that failure. Its public return contract is broadened by this specific
+typed Input error; callers must preserve it when presenting capture failures.
+This adds no Character authority, dependency or callback ABI. The regression
+source verifies cause, neutralization, recovery and a fresh complete hold after
+time returns; native execution remains pending.
+
 Focus loss, context preemption/removal, accepted configuration replacement,
 device disconnect/reassignment and reversed time retire the old incarnation.
 Rejected candidates preserve the active map and state. Live owners drain their
