@@ -58,18 +58,19 @@ physical control. The same identity helper governs duplicate and chord/sticky
 overlap checks. Profiles that previously used inactive-field differences to hide
 duplicate bindings are now rejected; remove the duplicate or assign a genuinely
 different control. Rejection preserves the current map/profile and revision.
-The added all-kind identity/sticky regression is pending its native rerun.
+The all-kind identity/sticky regression passed in the 95-case native rerun below.
 Analog axis exclusivity also remains in force when either binding has a chord:
 chord keys may be held together and cannot grant two actions the same physical
 axis. Exact, mutually exclusive ordinary modifier states remain separate modes.
 The regression covers gyro, gamepad/raw axes and both wheel axes with chords,
 and checks that different modifier modes are still admitted.
 
-The native MSVC Debug batch at `f1f97b73ab83566272dc85c0e49b95f9d52d1700`
+The native MSVC Debug batch at `2b2175ca9847ca97dd50d648563a3cafbc2f82bd`
 built both Input test executables and staged/explicit public consumers, then passed
-**94/94 cases with zero skips** in 1.46 seconds. This includes all six added
+**95/95 cases with zero skips** in 1.47 seconds. This includes all six added
 gyro/router/profile cases and the extended atomic save/load case with spaces and
-a non-ASCII path. Reports are `build/acc-input-gyro-f1f97b7-results.xml` and its
+a non-ASCII path, plus the all-kind identity/sticky/chord regression. Reports are
+`build/acc-input-identity-2b2175c-results.xml` and its
 discovery JSON. The earlier 88-case Input pass predates the extension.
 A subsequent editor change
 adds explicit Add/Edit commands routed through the existing exclusive modal host.
@@ -78,11 +79,11 @@ text; axis, component, calibration and sensitivity reach the same SetProfile
 authority only on Apply. Revision plus an exact replacement baseline rejects
 retargeting, append preserves all existing bindings, and Cancel/close writes
 nothing. All six model/modal/render cases ran in the **98/98** GUI/SDL batch at
-`8212db832ae6d35b93d0eea4872a9fc40f636817` (53.73 seconds, zero skipped), alongside
+`2b2175ca9847ca97dd50d648563a3cafbc2f82bd` (54.04 seconds, zero skipped), alongside
 the actual editor and staged GUI header builds. Its retained report is
-`build/acc-gui-gyro-8212db8-results.xml`. Paired-copy/CI Python checks passed
-**43 tests**. Later commits `830ac15` and `a6174d8` tighten physical identity and
-use an error-free frame validity query; their Input/GUI reruns remain pending.
+`build/acc-gui-identity-2b2175c-results.xml`. Paired-copy/CI Python checks passed
+**43 tests** after the final source fixes. This includes the physical identity,
+chord exclusivity, error-free frame validity query and strengthened modal-gating checks.
 Native interaction, automatic motion-gesture capture, SDL controller collection
 and actual device evidence remain separate acceptance work.
 
