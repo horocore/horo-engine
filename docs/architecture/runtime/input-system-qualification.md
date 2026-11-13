@@ -81,6 +81,11 @@ The first resumed C++ batch returned Windows lock contention (error 33) without
 starting a child build or creating a background waiter. Named scheduling grants
 are no longer a prerequisite; the physical repository lock and resource guards
 remain mandatory. This contention result provides no C++ test or quality result.
+The guarded full Sonar IDE, CLI secrets and Codacy invocation was also deferred
+at the same physical lock (error 33), before any provider ran. Its state is
+incomplete: no submitted-file list, C++ sensor execution or current provider
+diagnostics exist yet. A draft review may expose this work to remote CI while
+these local requirements remain open; it cannot count them as successful.
 
 ## Reproducible Targeted Qualification
 
@@ -113,7 +118,7 @@ selection is an error. Native Android-device execution is separate from the
 headless Android adapter contract suite above.
 
 After final source fixes, run `python3 scripts/analyze.py check --base
-codex/editor-improvements --compile-commands build/skeleton/compile_commands.json`
+origin/codex/editor-improvements --compile-commands build/skeleton/compile_commands.json`
 inside the assigned analysis slot and physical lock. Use the worktree's actual
 VS Code profile/extension overrides when required. Review freshness, submitted
 and skipped files, sensor execution and errors; report Sonar IDE, CLI secrets and
