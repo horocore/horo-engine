@@ -291,6 +291,8 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformOfflineQueueStorage.cpp
         platform_services/PlatformProgressionErrors.cpp
         platform_services/PlatformProgressionIdempotency.cpp
+        platform_services/PlatformProgressionCoalescer.cpp
+        platform_services/PlatformProgressionReplay.cpp
         platform_services/PlatformProjectConfiguration.cpp
         platform_services/PlatformProjectSettings.cpp
         platform_services/PlatformProviderManifestCook.cpp
@@ -325,6 +327,11 @@ add_library(HoroPlatformServicesAuthoring STATIC
 add_library(HoroEngine::PlatformServicesAuthoring ALIAS HoroPlatformServicesAuthoring)
 target_compile_features(HoroPlatformServicesAuthoring PUBLIC cxx_std_20)
 target_link_libraries(HoroPlatformServicesAuthoring PUBLIC HoroEngine::PlatformServices HoroEngine::Application HoroEngine::Assets PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroProgressionApplication STATIC application/ProgressionUseCases.cpp)
+add_library(HoroEngine::ProgressionApplication ALIAS HoroProgressionApplication)
+target_compile_features(HoroProgressionApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroProgressionApplication PUBLIC HoroEngine::PlatformServices)
 
 add_library(HoroPackages STATIC
         packages/cache/PackageCache.cpp

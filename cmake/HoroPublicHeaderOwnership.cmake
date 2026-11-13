@@ -147,6 +147,8 @@ horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/PlatformFriendsCoordinator.h
     Horo/PlatformServices/PlatformOfflineQueueStorage.h
     Horo/PlatformServices/PlatformProgressionIdempotency.h
+    Horo/PlatformServices/PlatformProgressionCoalescer.h
+    Horo/PlatformServices/PlatformProgressionReplay.h
     Horo/PlatformServices/PlatformProjectConfiguration.h
     Horo/PlatformServices/PlatformProjectSettings.h
     Horo/PlatformServices/PlatformProviderManifestCook.h
@@ -169,6 +171,10 @@ horo_configure_target_header_boundary(HoroPlatformServicesAuthoring PUBLIC_HEADE
     Horo/Application/PlatformServicesDefinitionCodec.h
     Horo/Application/PlatformServicesProjectSources.h
     Horo/Application/PlatformServicesProjectCook.h
+)
+
+horo_configure_target_header_boundary(HoroProgressionApplication PUBLIC_HEADERS
+    Horo/Application/ProgressionUseCases.h
 )
 
 horo_configure_target_header_boundary(HoroPlatformServicesExtension PUBLIC_HEADERS
