@@ -59,6 +59,59 @@ namespace Horo::Editor {
             return true;
         }
 
+        const char *GyroscopeAvailabilityKey(const Input::SensorAvailability availability) noexcept {
+            using enum Input::SensorAvailability;
+            switch (availability) {
+                case Unsupported:
+                    return "gyro.availability_unsupported";
+                case Disabled:
+                    return "gyro.availability_disabled";
+                case PermissionRequired:
+                    return "gyro.availability_permission_required";
+                case Suspended:
+                    return "gyro.availability_suspended";
+                case AwaitingSample:
+                    return "gyro.availability_awaiting_sample";
+                case NativeFailure:
+                    return "gyro.availability_native_failure";
+                case Available:
+                    return "gyro.availability_available";
+            }
+            return "gyro.availability_unknown";
+        }
+
+        std::array<char, 48> DeviceCardId(const Input::GamepadDeviceId device) noexcept {
+            std::array<char, 48> id{};
+            const auto slot = std::to_chars(id.data(), id.data() + id.size(), device.slot);
+            *slot.ptr = ':';
+            const auto generation = std::to_chars(slot.ptr + 1, id.data() + id.size() - 1, device.sessionGeneration);
+            *generation.ptr = '\0';
+            return id;
+        }
+
+        void DrawDeviceAssignment(const Input::GamepadDeviceId device, Input::InputRouter &router, const EditorGuiContext &context) {
+            const auto player = router.PlayerForGamepad(device);
+            const bool custom = player && *player >= 4;
+            std::array<char, 16> customNumber{};
+            if (custom)
+                (void)std::to_chars(customNumber.data(), customNumber.data() + customNumber.size() - 1,
+                                    static_cast<std::uint64_t>(*player) + 1);
+            const std::array<const char *, 6> items{InputMappingPanel::kTextScope.Text(context.localization, "unassigned").c_str(),
+                                                    "1",
+                                                    "2",
+                                                    "3",
+                                                    "4",
+                                                    customNumber.data()};
+            int assignment = player ? (custom ? 5 : static_cast<int>(*player) + 1) : 0;
+            ImGui::TextWrapped("%s", InputMappingPanel::kTextScope.Text(context.localization, "player").c_str());
+            ImGui::SetNextItemWidth(std::max(1.0F, ImGui::GetContentRegionAvail().x));
+            if (Ui::ComboControl("Player", &assignment, items.data(), custom ? 6 : 5, context.theme.fonts)) {
+                if (assignment == 0)
+                    router.UnassignGamepad(device);
+                else if (assignment <= 4)
+                    (void)router.AssignGamepad(static_cast<Input::PlayerId>(assignment - 1), device);
+            }
+        }
     }  // namespace
 
     void InputMappingPanel::OnAttach(PanelContext &context) {
@@ -70,6 +123,7 @@ namespace Horo::Editor {
         listeningAction_.reset();
         bindingCapture_.reset();
         deadzoneDraft_.reset();
+        accessibilityAction_.reset();
         router_ = nullptr;
     }
 
@@ -78,6 +132,7 @@ namespace Horo::Editor {
         bindingCapture_.reset();
         listeningAction_.reset();
         deadzoneDraft_.reset();
+        accessibilityAction_.reset();
         statusMessage_.clear();
     }
 
@@ -96,6 +151,7 @@ namespace Horo::Editor {
             listeningAction_.reset();
             bindingCapture_.reset();
             deadzoneDraft_.reset();
+        accessibilityAction_.reset();
             statusMessage_.clear();
             projectRoot_ = WorkspaceNativePath(viewModel.projectRoot);
             projectRootText_ = viewModel.projectRoot;
@@ -119,7 +175,7 @@ namespace Horo::Editor {
         ImGui::BeginChild("##InputMappingContent", contentSize, false, ImGuiWindowFlags_NoSavedSettings);
         PollBindingCapture(context);
         if (page_ == Page::Actions)
-            DrawActions(context);
+            DrawActions(context, command);
         else if (page_ == Page::Devices)
             DrawDevices(context);
         else
@@ -132,7 +188,7 @@ namespace Horo::Editor {
         ImGui::EndChild();
     }
 
-    void InputMappingPanel::DrawActions(const EditorGuiContext &context) {
+    void InputMappingPanel::DrawActions(const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
         if (router_ == nullptr)
             return;
         const auto actions = router_->Actions();
@@ -142,7 +198,7 @@ namespace Horo::Editor {
         }
         selectedAction_ = std::min(selectedAction_, actions.size() - 1);
         DrawActionTable(actions, context);
-        DrawSelectedAction(actions[selectedAction_], context);
+        DrawSelectedAction(actions[selectedAction_], context, command);
     }
 
     void InputMappingPanel::DrawActionTable(const std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context) {
@@ -161,6 +217,7 @@ namespace Horo::Editor {
                                       {std::max(1.0F, ImGui::GetContentRegionAvail().x), 0.0F})) {
                     if (selectedAction_ != index)
                         deadzoneDraft_.reset();
+        accessibilityAction_.reset();
                     selectedAction_ = index;
                 }
                 ImGui::TableSetColumnIndex(1);
@@ -175,9 +232,10 @@ namespace Horo::Editor {
         }
     }
 
-    void InputMappingPanel::DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context) {
+    void InputMappingPanel::DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
         if (displayedAction_ != action.id) {
             deadzoneDraft_.reset();
+        accessibilityAction_.reset();
             displayedAction_ = action.id;
         }
         ImGui::Separator();
@@ -189,7 +247,8 @@ namespace Horo::Editor {
             ImGui::PushID(static_cast<int>(index));
             const bool changed = DrawBindingDirection(action, bindings, index, context) ||
                                  DrawBindingActions(action, bindings, index, context) ||
-                                 DrawBindingDeadzone(action, bindings, index, context);
+                                 DrawBindingDeadzone(action, bindings, index, context) ||
+                                 DrawExtendedBindingAction(action, bindings, index, context, command);
             ImGui::PopID();
             // Publishing a profile may retire the borrowed bindings storage.
             if (changed)
@@ -198,6 +257,42 @@ namespace Horo::Editor {
         const auto &add = kTextScope.Text(context.localization, "add_binding");
         if (Ui::Button({.label = add.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans}))
             StartBindingCapture(action.id, std::nullopt, context);
+        DrawAccessibilityControls(action, context);
+        if (action.valueType != Input::ActionValueType::Digital &&
+            Ui::Button({.label = LocalizedText(context.localization, "gyro.add").c_str(),
+                        .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
+            listeningAction_.reset();
+            bindingCaptureContext_.Reset();
+            command.command = EditorWorkspaceViewCommand::OpenGyroscopeBinding;
+            command.gyroscopeBinding = GyroscopeBindingEditRequest{action.id, router_->RoutingState({}).configurationRevision, {}};
+        }
+    }
+
+    bool InputMappingPanel::DrawExtendedBindingAction(const Input::ActionDescriptor &action,
+                                                       const std::span<const Input::InputBinding> bindings,
+                                                       const std::size_t index, const EditorGuiContext &context,
+                                                       EditorWorkspaceViewCommandData &command) {
+        const auto &binding = bindings[index];
+        if (binding.kind == Input::BindingControlKind::GyroscopeAxis &&
+            Ui::Button({.label = LocalizedText(context.localization, "gyro.edit").c_str(),
+                        .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
+            listeningAction_.reset();
+            bindingCaptureContext_.Reset();
+            command.command = EditorWorkspaceViewCommand::OpenGyroscopeBinding;
+            command.gyroscopeBinding = GyroscopeBindingEditRequest{
+                action.id, router_->RoutingState({}).configurationRevision, GyroscopeBindingReplacement{index, binding}};
+            return true;
+        }
+        if (action.valueType != Input::ActionValueType::Digital ||
+            !Ui::Button({.label = LocalizedText(context.localization, "accessibility.edit").c_str(),
+                         .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans}))
+            return false;
+        accessibilityAction_ = action.id;
+        accessibilityBinding_ = index;
+        accessibilityConfigurationRevision_ = router_->RoutingState({}).configurationRevision;
+        accessibilityBaseline_ = binding;
+        accessibilityDraft_ = BindingAccessibilityEditorDraft::FromPolicy(binding.accessibility);
+        return true;
     }
 
     bool InputMappingPanel::DrawBindingDirection(const Input::ActionDescriptor &action, const std::span<const Input::InputBinding> bindings,
@@ -241,6 +336,7 @@ namespace Horo::Editor {
         const auto applied = CommitBindingChange(std::move(change));
         statusMessage_ = applied.HasError() ? applied.ErrorValue().message : kTextScope.Text(context.localization, "binding_updated");
         deadzoneDraft_.reset();
+        accessibilityAction_.reset();
         return true;
     }
 
@@ -261,6 +357,7 @@ namespace Horo::Editor {
         const auto applied = CommitBindingChange(std::move(change));
         statusMessage_ = applied.HasError() ? applied.ErrorValue().message : std::string{};
         deadzoneDraft_.reset();
+        accessibilityAction_.reset();
         return true;
     }
 
@@ -282,6 +379,20 @@ namespace Horo::Editor {
         }
     }
 
+    void DrawInputDeviceCard(const Input::GamepadState &gamepad, Input::InputRouter &router, const EditorGuiContext &context) {
+        const auto id = DeviceCardId(gamepad.id);
+        Ui::ScopedCard card(id.data(), {0.0F, 0.0F}, Theme::Layout::CardPad, Theme::Layout::CardPad, Theme::Bg2(), true);
+        ImGui::TextWrapped("%s", gamepad.name.c_str());
+        ImGui::TextWrapped("%s %u / %s %llu", InputMappingPanel::kTextScope.Text(context.localization, "slot").c_str(), gamepad.id.slot,
+                           InputMappingPanel::kTextScope.Text(context.localization, "generation").c_str(),
+                           static_cast<unsigned long long>(gamepad.id.sessionGeneration));
+        ImGui::TextWrapped("%s: %s", InputMappingPanel::kTextScope.Text(context.localization, "gyro.status").c_str(),
+                           InputMappingPanel::kTextScope
+                               .Text(context.localization, GyroscopeAvailabilityKey(gamepad.gyroscope.availability))
+                               .c_str());
+        DrawDeviceAssignment(gamepad.id, router, context);
+    }
+
     void InputMappingPanel::DrawDevices(const EditorGuiContext &context) {
         if (router_ == nullptr)
             return;
@@ -297,27 +408,8 @@ namespace Horo::Editor {
             ImGui::TextUnformatted(InputMappingPanel::kTextScope.Text(context.localization, "no_devices").c_str());
             return;
         }
-        for (const Input::GamepadState &gamepad : gamepads) {
-            // Decimal uint32 slot, separator, uint64 incarnation and terminator fit in 32 bytes.
-            // A reused slot cannot inherit an old device's open assignment popup.
-            std::array<char, 32> cardId{};
-            auto *suffix = std::to_chars(cardId.data(), cardId.data() + cardId.size() - 1, gamepad.id.slot).ptr;
-            *suffix++ = '-';
-            suffix = std::to_chars(suffix, cardId.data() + cardId.size() - 1, gamepad.id.sessionGeneration).ptr;
-            *suffix = '\0';
-            Ui::ScopedCard card(cardId.data(), {0.0F, 0.0F}, Theme::Layout::CardPad, Theme::Layout::CardPad, Theme::Bg2(), true);
-            ImGui::TextWrapped("%s", gamepad.name.c_str());
-            ImGui::TextWrapped("%s %u / %s %llu", InputMappingPanel::kTextScope.Text(context.localization, "slot").c_str(), gamepad.id.slot,
-                               InputMappingPanel::kTextScope.Text(context.localization, "generation").c_str(),
-                               static_cast<unsigned long long>(gamepad.id.sessionGeneration));
-            auto assignment = router_->PlayerForGamepad(gamepad.id);
-            if (DrawPlayerAssignment("##GamepadPlayer", assignment, context)) {
-                if (!assignment)
-                    router_->UnassignGamepad(gamepad.id);
-                else
-                    static_cast<void>(router_->AssignGamepad(*assignment, gamepad.id));
-            }
-        }
+        for (const Input::GamepadState &gamepad : gamepads)
+            DrawInputDeviceCard(gamepad, *router_, context);
     }
 
     void InputMappingPanel::DrawProfiles(const EditorGuiContext &context) {

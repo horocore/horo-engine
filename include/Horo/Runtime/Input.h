@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Result.h"
 
 #include <array>
+#include <compare>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -22,6 +23,12 @@ namespace Horo::Input {
     using SimulationTick = std::uint64_t;
     using PlayerId = std::uint8_t;
     inline constexpr std::size_t MaximumConsumedGamepadTransitions = 4'096;
+    /** @brief Maximum effective binding count for an action opting into semantic accessibility mapping. */
+    inline constexpr std::size_t MaximumAccessibilityBindingsPerAction = 64;
+    /** @brief Maximum typed action-name byte count for an action opting into semantic accessibility mapping. */
+    inline constexpr std::size_t MaximumAccessibilityActionIdBytes = 256;
+    /** @brief Maximum live/retiring (context, binding, player) incarnations; consumed identities retire at an owner frame boundary. */
+    inline constexpr std::size_t MaximumAccessibilityMappings = 1024;
 
     /** @brief Stable physical-key identity independent of a native window API. */
     enum class Key : std::uint16_t {
@@ -269,6 +276,16 @@ namespace Horo::Input {
         std::array<float, static_cast<std::size_t>(GamepadAxis::Count)> axes{};
         std::vector<ButtonState> rawButtons;
         std::vector<float> rawAxes;
+        SensorSample gyroscope; /**< Owned SI sample for this exact device incarnation; unsupported unless explicitly collected. */
+    };
+
+    /** @brief Host-provided monotonic sample boundary for deterministic semantic hold/repeat interpretation.
+     * @details The host chooses a stable real or replay time domain for a router session. Input never samples a clock implicitly.
+     * Equal timestamps are permitted. Missing time is explicit; frame ordinal is never interpreted as elapsed time.
+     */
+    struct InputSampleTime final {
+        std::uint64_t microseconds{};
+        [[nodiscard]] constexpr auto operator<=>(const InputSampleTime &) const noexcept = default;
     };
 
     /** @brief Immutable value snapshot committed once after platform event polling. */
@@ -286,6 +303,7 @@ namespace Horo::Input {
         WindowInputState window{};
 
         std::array<SensorSample, static_cast<std::size_t>(SensorKind::Count)> sensors{}; /**< Owned permission-filtered sensor evidence. */
+        std::optional<InputSampleTime> sampleTime; /**< Exact host sample boundary; never synthesized from physical transitions. */
 
         [[nodiscard]] const ButtonState &State(Key key) const noexcept;
         [[nodiscard]] const ButtonState &State(PointerButton button) const noexcept;
@@ -300,7 +318,11 @@ namespace Horo::Input {
         RawInputCollector(const RawInputCollector &) = delete;
         RawInputCollector &operator=(const RawInputCollector &) = delete;
 
-        void BeginFrame(FrameNumber frame);
+        /** @brief Starts collection with an explicit optional host time boundary.
+         * @param frame Correlation ordinal, never a duration. @param sampleTime Stable monotonic/replay time, or unavailable.
+         * @details Every call replaces time metadata, including clearing an earlier timestamp when none is provided.
+         */
+        void BeginFrame(FrameNumber frame, std::optional<InputSampleTime> sampleTime = std::nullopt);
         void SetKey(Key key, bool down);
         void SetPointerButton(PointerButton button, bool down);
         void SetPointerPosition(float x, float y);
@@ -338,6 +360,13 @@ namespace Horo::Input {
         [[nodiscard]] bool DisconnectGamepad(GamepadDeviceId id);
         [[nodiscard]] bool SetGamepadButton(GamepadDeviceId id, GamepadButton button, bool down);
         [[nodiscard]] bool SetGamepadAxis(GamepadDeviceId id, GamepadAxis axis, float value);
+        /** @brief Publishes copied SI gyro evidence for one exact connected device incarnation without allocation.
+         * @param id Current device handle. @param sample Available radians/second or an explicit unavailable state.
+         * @return False without mutation for stale devices, invalid samples or available data while unfocused.
+         * Available timestamps must be positive and nonregressing; unavailable data is zeroed and resets the timestamp domain.
+         * @pre Host serializes collection and explicitly owns native sensor enablement.
+         */
+        [[nodiscard]] bool SetGamepadGyroscopeSample(GamepadDeviceId id, SensorSample sample) noexcept;
         [[nodiscard]] bool SetRawGamepadButton(GamepadDeviceId id, std::size_t button, bool down);
         [[nodiscard]] bool SetRawGamepadAxis(GamepadDeviceId id, std::size_t axis, float value);
         [[nodiscard]] const RawInputSnapshot &Commit();
@@ -417,6 +446,7 @@ namespace Horo::Input {
         GamepadAxis,
         RawGamepadButton,
         RawGamepadAxis,
+        GyroscopeAxis, /**< Explicit platform or assigned-controller motion source. */
     };
     /** @brief Deadzone transformation applied before action aggregation. */
     enum class DeadzoneKind : std::uint8_t {
@@ -424,6 +454,59 @@ namespace Horo::Input {
         Axial,
         Radial,
         Threshold
+    };
+
+    /** @brief Deterministic mapping policy; durations use the owner's monotonic microsecond clock. */
+    struct DigitalAffordancePolicy final {
+        bool toggle{};
+        std::uint64_t holdMicroseconds{};
+        bool repeat{};
+        std::uint64_t repeatDelayMicroseconds{400000};
+        std::uint64_t repeatIntervalMicroseconds{100000};
+        /** @brief Checks bounded hold/delay and positive bounded repeat interval. @return True when admitted. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] bool operator==(const DigitalAffordancePolicy &) const noexcept = default;
+    };
+
+    /** @brief Inert per-binding semantic accessibility policy; never rewrites raw input facts. */
+    struct BindingAccessibilityPolicy final {
+        DigitalAffordancePolicy digital;
+        bool stickyModifiers{};
+        /** @brief Checks the bounded digital policy. @return Whether all policy fields are admitted. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        /** @brief Reports whether semantic interpretation is requested. @return True for toggle, hold, repeat or sticky modifiers. */
+        [[nodiscard]] bool IsEnabled() const noexcept;
+        [[nodiscard]] bool operator==(const BindingAccessibilityPolicy &) const noexcept = default;
+    };
+
+    /** @brief Native device-coordinate component; no camera/screen orientation is inferred. */
+    enum class SensorAxis : std::uint8_t {
+        X,
+        Y,
+        Z,
+        Count
+    };
+
+    /** @brief Physical motion source; unavailable sources never fall back to another sensor. */
+    enum class GyroscopeSource : std::uint8_t {
+        Platform,
+        Gamepad,
+        Count
+    };
+
+    /** @brief Gyroscope normalization before the ordinary binding deadzone, scale and component projection.
+     * @details The platform supplies radians/second in its documented device coordinates. A magnitude equal
+     * to radiansPerSecondAtFullScale produces a unit axis; scale supplies sensitivity/inversion. This is a
+     * rate control like a stick, never an integrated angle or frame-dependent mouse delta. The gameplay
+     * owner applies its normal tick duration. Unavailable samples contribute zero without enabling sensors.
+     */
+    struct GyroscopeBindingPolicy final {
+        SensorAxis axis{SensorAxis::X};
+        float radiansPerSecondAtFullScale{1.0F};
+        GyroscopeSource source{GyroscopeSource::Platform}; /**< Gamepad uses the ordinary exact player/device filter. */
+        /** @brief Checks the source, axis and finite inclusive [0.001, 1000] rad/s calibration. @return Whether admitted. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] bool operator==(const GyroscopeBindingPolicy &) const noexcept = default;
     };
 
     /** @brief Typed binding from one control, modifiers, or chord into an action component. */
@@ -441,7 +524,10 @@ namespace Horo::Input {
         std::uint8_t component{0};
         DeadzoneKind deadzoneKind{DeadzoneKind::None};
         float deadzone{0.0F};
-        float digitalThreshold{0.5F};
+        float digitalThreshold{
+            0.5F}; /**< Nonzero filtered axes at/above this magnitude are held; zero remains neutral even at threshold zero. */
+        BindingAccessibilityPolicy accessibility; /**< Digital-action semantic interpretation, persisted by the canonical profile codec. */
+        GyroscopeBindingPolicy gyroscope;         /**< Used only by GyroscopeAxis; other controls retain its neutral default. */
         [[nodiscard]] friend bool operator==(const InputBinding &, const InputBinding &) noexcept = default;
     };
 
@@ -462,6 +548,7 @@ namespace Horo::Input {
         bool down{false};
         bool pressed{false};
         bool released{false};
+        bool repeated{false}; /**< Semantic mapping repeat, separate from the activation press edge. */
     };
 
     /** @brief Presentation modality derived from eligible semantic input, never device assignment. */
@@ -471,7 +558,8 @@ namespace Horo::Input {
         Gamepad,
         Touch,
         Pen,
-        Accessibility
+        Accessibility,
+        Motion /**< Platform motion sensor, without implied gamepad or player assignment. */
     };
 
     /** @brief Stable canonical control identity; glyph packages may realize it without owning input. */
@@ -493,7 +581,8 @@ namespace Horo::Input {
     enum class ActionReadStatus : std::uint8_t {
         Resolved,
         Unavailable,
-        CapacityExceeded
+        CapacityExceeded,
+        ClockUnavailable /**< A timed mapping has no explicit host sample clock; its old active state is withdrawn. */
     };
 
     /** @brief Semantic value with post-filter, routing-eligible modality evidence. Releases are never meaningful. */
@@ -502,6 +591,16 @@ namespace Horo::Input {
         std::optional<ActionSource> source;
         bool meaningful{};
         ActionReadStatus status{ActionReadStatus::Unavailable};
+    };
+
+    /** @brief Owned semantic withdrawal emitted when a context ends before its action reader can drain release.
+     * @details The immutable typed name lease survives profile/map replacement and router destruction. The record names
+     * only its original context/player; it never authorizes delivery to a replacement context or invokes a dead owner.
+     */
+    struct RetiredInputActionRelease final {
+        std::uint64_t contextIdentity{};
+        std::shared_ptr<const ActionId> action;
+        std::optional<PlayerId> player;
     };
 
     /** @brief Glyph realization availability, independent of navigation capability. */
@@ -550,11 +649,12 @@ namespace Horo::Input {
         [[nodiscard]] friend bool operator==(const BindingOverride &, const BindingOverride &) noexcept = default;
     };
 
-    /** @brief Schema-versioned collection of per-action binding overrides.
-     * @details Schema 1 supports a 1–256-byte UTF-8 profile identity, at most 4096 overrides and 64 bindings per override.
-     */
+    /** @brief Single canonical profile wire/in-memory version; legacy version one is upgraded only by ParseBindingProfile. */
+    inline constexpr std::uint32_t CurrentInputBindingProfileSchema = 2;
+
+    /** @brief Schema-versioned collection of per-action binding overrides. */
     struct InputBindingProfile {
-        std::uint32_t schemaVersion{1};
+        std::uint32_t schemaVersion{CurrentInputBindingProfileSchema};
         std::string profileId{"default"};
         std::vector<BindingOverride> overrides;
         [[nodiscard]] friend bool operator==(const InputBindingProfile &, const InputBindingProfile &) noexcept = default;
@@ -573,6 +673,7 @@ namespace Horo::Input {
         MalformedProfile,
         DeviceExclusivityViolation,
         AmbiguousContext,
+        InvalidAccessibility,
     };
 
     /** @brief One actionable profile validation diagnostic. */
@@ -604,9 +705,21 @@ namespace Horo::Input {
      * @return A schema-compatible merged profile, or an error without partial application.
      */
     [[nodiscard]] Result<InputBindingProfile> MergeBindingProfiles(const InputBindingProfile &lower, const InputBindingProfile &higher);
-    /** @brief Parses one complete schema-versioned profile without partial recovery. */
+    /** @brief Parses one complete profile and returns the single canonical version-two model without partial recovery.
+     * @param json Bounded complete JSON document; legacy version one must not contain accessibility or gyroscope policy fields.
+     * @return Canonical profile or typed malformed/version failure. No file is rewritten and no router state changes.
+     * @details Legacy neutral bindings migrate on read; new accessibility fields require exact booleans and bounded integer
+     * microseconds. Floating versions, unknown policy fields and unsupported versions are rejected before numeric narrowing.
+     * Gyroscope controls require a typed axis and bounded SI calibration; control kinds never wrap through a byte-sized enum.
+     * @throws std::bad_alloc When owned parse/model storage cannot be allocated.
+     */
     [[nodiscard]] Result<InputBindingProfile> ParseBindingProfile(std::string_view json);
-    /** @brief Serializes a structurally valid schema profile to deterministic JSON. */
+    /** @brief Serializes a canonical profile and its typed accessibility policies to deterministic version-two JSON.
+     * @param profile Canonical in-memory version and domain-valid binding policies.
+     * @return Complete JSON or typed schema/policy failure; legacy in-memory versions are not silently reinterpreted.
+     * @details Call ValidateBindingProfile with the real action map before live installation; serialization does not own that map.
+     * @throws std::bad_alloc When output/model storage cannot be allocated.
+     */
     [[nodiscard]] Result<std::string> SerializeBindingProfile(const InputBindingProfile &profile);
     /** @brief Loads and parses a bounded profile file. */
     [[nodiscard]] Result<InputBindingProfile> LoadBindingProfile(const std::filesystem::path &path);
@@ -776,11 +889,21 @@ namespace Horo::Input {
          * No XR/native dependency or alternate commit owner is introduced. */
         [[nodiscard]] Result<InputActionCollection> ActionCollection(const InputContextToken &context,
                                                                      std::optional<GamepadDeviceId> assignedDevice = std::nullopt) const;
-        /** @brief Cancels any capture still held after its initiating button release was delivered to handlers. */
+        /** @brief Cancels released pointer capture and reclaims drained semantic mapping identities.
+         * @details Pending old-owner releases remain until delivered. The next committed sample also performs this cleanup.
+         */
         void EndFrame() noexcept;
-        /** @brief Registers a context until the returned move-only token is destroyed. */
+        /** @brief Registers a context until the returned move-only token is destroyed.
+         * @param id Host-owned context category. @param kind Routing priority and interaction role.
+         * @return New non-reusable context incarnation, or an empty token if routing identities are exhausted.
+         * @details Preempted semantic mappings withdraw to their original owner before a replacement can read.
+         */
         [[nodiscard]] InputContextToken PushContext(InputContextId id, InputContextKind kind);
-        /** @brief Acquires exclusive pointer capture for the currently eligible context. */
+        /** @brief Acquires exclusive pointer capture for the currently eligible context.
+         * @param context Exact eligible live owner. @param button Initiating pointer button.
+         * @param owner Capture callback owner, which must obey its existing lifetime contract.
+         * @return Exclusive capture or a typed inactive, busy or routing-identity-exhausted error.
+         */
         [[nodiscard]] Result<PointerCaptureToken> CapturePointer(const InputContextToken &context, PointerButton button,
                                                                  IInputCaptureOwner &owner);
         /** @brief Cancels active capture synchronously and notifies its owner once. */
@@ -829,18 +952,29 @@ namespace Horo::Input {
         /**
          * @brief Resolves and consumes the same action as ReadAction, including canonical source evidence.
          * @param context Exact live matching context.
-         * @param action Registered action identity.
+         * @param action Registered action identity, or an old identity awaiting withdrawal after configuration replacement.
          * @param player Optional exact player assignment, including keyboard/pointer ownership.
          * @return Neutral evidence when blocked/missing. CapacityExceeded atomically refuses this action's transitions;
-         *         previously admitted consumers are preserved. Meaningful evidence comes only from unconsumed press edges.
+         *         previously admitted consumers are preserved. ClockUnavailable refuses timed mapping without explicit sample time.
+         *         Meaningful evidence comes only from unconsumed press edges.
          * @details Call this or ReadAction once per action per frame. Exact simultaneous sources prefer keyboard/mouse,
-         *          then gamepad in snapshot order. This does not poll a backend or change assignment.
+         *          then gamepad in snapshot order. Accessibility activation/release/repeat edges are delivered once per committed
+         *          sample; subsequent reads preserve held state. Repeat is distinct from pressed. A still-live preempted owner may
+         *          drain its pending cancellation release even while routing is blocked. Missing-clock reads can carry that release.
+         *          New mappings require neutral physical input before a fresh press. This does not poll a backend or change assignment.
          */
         [[nodiscard]] ActionEvidence ReadActionEvidence(const InputContextToken &context, const ActionId &action,
                                                         std::optional<PlayerId> player = std::nullopt);
         /** @brief Returns the last ReadAction/ReadActionEvidence outcome for legacy value-only consumers. @return Typed
          * unavailable/admission result. */
         [[nodiscard]] ActionReadStatus LastActionStatus() const noexcept;
+        /** @brief Drains one bounded old-context withdrawal without allocation or invoking gameplay/UI callbacks.
+         * @param release Output written only on success; its immutable action-name lease may outlive this router.
+         * @return True for one retired-owner release, false leaves output unchanged.
+         * @details The host drains at its ordinary input/owner cutoff. Live but preempted owners consume their own release
+         * through ReadActionEvidence instead. Undrained retired withdrawals retain a fixed mapping slot; exhaustion is explicit.
+         */
+        [[nodiscard]] bool TryDequeueRetiredActionRelease(RetiredInputActionRelease &release) noexcept;
         /** @brief Copies context identity, configuration/assignment generations and current/previous scan sizes.
          * @param context Borrowed token; a foreign/removed token yields zero identity.
          * @return Routing evidence without retaining a snapshot or context borrow. */
@@ -952,7 +1086,10 @@ namespace Horo::Input {
     /** @brief Headless-capable composition that owns collection, immutable frame commit, and semantic routing. */
     class InputService {
     public:
-        void BeginFrame(FrameNumber frame);
+        /** @brief Starts the canonical collection path with host-owned semantic timing.
+         * @param frame Correlation ordinal. @param sampleTime Explicit time carried unchanged into the committed immutable snapshot.
+         */
+        void BeginFrame(FrameNumber frame, std::optional<InputSampleTime> sampleTime = std::nullopt);
         [[nodiscard]] RawInputCollector &Collector() noexcept;
         [[nodiscard]] InputRouter &Router() noexcept;
         [[nodiscard]] const RawInputSnapshot &CommitFrame();
@@ -988,9 +1125,18 @@ namespace Horo::Input {
          * @param context Gameplay context; inactive or unfocused input neutralizes held and pending commands.
          * @param player Optional player assignment owned by this builder.
          * @details Edges survive presentation frames with no fixed tick and fire on the next tick only.
+         *          Jump and interact accept activation and configured semantic repeat edges. Multiple
+         *          pending edges coalesce into one command; catch-up ticks do not repeat that command.
+         *          A missing timed sample clock or mapping capacity failure clears the complete pending
+         *          projection. LastCaptureStatus preserves that failure until a new snapshot is captured.
          *          Call once per committed snapshot after all higher-priority input consumers have run.
          */
         void Capture(InputRouter &router, const InputContextToken &context, std::optional<PlayerId> player = std::nullopt);
+        /** @brief Returns the last committed capture outcome; repeated captures of the same sample preserve it.
+         * @return Resolved after an eligible capture, Unavailable after reset/focus/context loss, or the original
+         * ClockUnavailable/CapacityExceeded failure. Optional absent actions remain neutral in an eligible capture.
+         */
+        [[nodiscard]] ActionReadStatus LastCaptureStatus() const noexcept;
         /**
          * @brief Returns a value command for one fixed tick without accessing device or router state.
          * @param tick Tick assigned by the fixed-step scheduler; successive calls must use successive ticks.
@@ -1001,12 +1147,15 @@ namespace Horo::Input {
         void Reset() noexcept;
 
     private:
+        /** @brief Clears held and pending values without reopening capture of an already observed snapshot. */
+        void ClearCapturedInput() noexcept;
         ActionId move_;
         ActionId look_;
         ActionId jump_;
         ActionId interact_;
         FrameNumber capturedFrame_{0};
         bool hasCapturedFrame_{false};
+        ActionReadStatus lastCaptureStatus_{ActionReadStatus::Unavailable};
         float moveX_{0.0F};
         float moveY_{0.0F};
         float lookX_{0.0F};
@@ -1077,6 +1226,10 @@ namespace Horo::Input {
         [[nodiscard]] bool Press(GamepadButton button);
         [[nodiscard]] bool Release(GamepadButton button);
         [[nodiscard]] bool SetAxis(GamepadAxis axis, float value);
+        /** @brief Publishes gyro facts through the ordinary device-owned collector path.
+         * @param sample Copied SI evidence. @return Whether the current connected incarnation admitted it.
+         */
+        [[nodiscard]] bool SetGyroscopeSample(SensorSample sample) noexcept;
 
         [[nodiscard]] GamepadDeviceId Id() const noexcept {
             return id_;

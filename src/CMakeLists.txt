@@ -8,6 +8,31 @@ add_library(HoroFoundation STATIC ${HORO_FOUNDATION_SOURCES})
 
 add_library(HoroEngine::Foundation ALIAS HoroFoundation)
 
+add_library(HoroCaptionTransport INTERFACE)
+add_library(HoroEngine::CaptionTransport ALIAS HoroCaptionTransport)
+target_compile_features(HoroCaptionTransport INTERFACE cxx_std_20)
+
+add_library(HoroVisualAccessibility STATIC
+        runtime/accessibility/VisualAccessibility.cpp
+        runtime/accessibility/VisualAccessibilitySettings.cpp
+        runtime/accessibility/VisualSafetySettings.cpp
+        runtime/accessibility/Contrast.cpp
+)
+add_library(HoroEngine::VisualAccessibility ALIAS HoroVisualAccessibility)
+target_compile_features(HoroVisualAccessibility PUBLIC cxx_std_20)
+target_link_libraries(HoroVisualAccessibility PUBLIC HoroEngine::Foundation)
+
+add_library(HoroGameplayAccessibility STATIC gameplay/accessibility/GameplayAccessibility.cpp)
+add_library(HoroEngine::GameplayAccessibility ALIAS HoroGameplayAccessibility)
+target_compile_features(HoroGameplayAccessibility PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayAccessibility PUBLIC HoroEngine::Foundation)
+
+# Optional adapter boundary; the baseline Platform target acquires no UI dependency.
+add_library(HoroPlatformAccessibility STATIC platform/NullAccessibilityBridge.cpp platform/AccessibilitySettings.cpp)
+add_library(HoroEngine::PlatformAccessibility ALIAS HoroPlatformAccessibility)
+target_compile_features(HoroPlatformAccessibility PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformAccessibility PUBLIC HoroEngine::Foundation HoroEngine::RuntimeUi)
+
 target_compile_features(HoroFoundation PUBLIC cxx_std_20)
 target_compile_definitions(HoroFoundation PUBLIC HORO_ENABLE_TELEMETRY=$<BOOL:${HORO_ENABLE_TELEMETRY}>)
 target_include_directories(HoroFoundation
@@ -746,6 +771,10 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingStorePreparation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
+        runtime/ui/UiCaptions.cpp
+        runtime/ui/UiCaptionRenderer.cpp
+        runtime/ui/UiCaptionSettings.cpp
+        runtime/ui/UiVisualAccessibility.cpp
         runtime/ui/UiElementPresentation.cpp
         runtime/ui/UiElementAuthoringProjection.cpp
         runtime/ui/UiStyleAssetValidation.cpp
@@ -769,6 +798,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiDiagnostics.cpp
         runtime/ui/UiDiagnosticDescriptors.cpp
         runtime/ui/UiAccessibility.cpp
+        runtime/ui/UiAccessibilityReview.cpp
         runtime/ui/UiAccessibilityReading.cpp
         runtime/ui/UiAccessibilityInteraction.cpp
         runtime/ui/UiAccessibilityChanges.cpp
@@ -903,7 +933,7 @@ target_link_libraries(HoroUiAnimationIntegrationInternal INTERFACE HoroEngine::R
 
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
 target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
-target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::SceneIdentity HoroEngine::Foundation HoroEngine::Assets
+target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::SceneIdentity HoroEngine::Foundation HoroEngine::Assets HoroEngine::CaptionTransport
         PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz HoroThirdParty::Unicode)
 target_include_directories(HoroRuntimeUi PRIVATE
         $<TARGET_PROPERTY:HoroRationalDurationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
@@ -2802,6 +2832,10 @@ target_compile_features(HoroPrefabSceneExpansion PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefabSceneExpansion PUBLIC HoroEngine::PrefabAuthoring HoroEngine::RuntimeScene)
 
 add_library(HoroInput STATIC
+        runtime/input/InputAccessibility.cpp
+        runtime/input/InputAccessibilityRouter.cpp
+        runtime/input/InputAccessibilityProfile.cpp
+        runtime/input/InputGyroscope.cpp
         runtime/input/RawInputCollector.cpp
         runtime/input/Input.cpp
         runtime/input/InputBindingCapture.cpp
@@ -4130,6 +4164,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/InspectorAudioEditSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelAudioWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
+            editor/screens/workspace/panels/input_mapping/InputMappingAccessibility.cpp
+            editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.cpp
+            editor/screens/workspace/panels/accessibility/AccessibilityContrastPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/world_composition/WorldCompositionTab.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
@@ -4282,6 +4319,7 @@ target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
             HoroThirdParty::ImGui
             PRIVATE
             HoroEngine::EditorRenderExtraction
+            HoroEngine::VisualAccessibility
             nlohmann_json::nlohmann_json
     )
 

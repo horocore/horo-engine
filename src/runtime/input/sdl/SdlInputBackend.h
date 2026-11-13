@@ -23,6 +23,13 @@ namespace Horo::Input {
         SdlInputBackend &operator=(const SdlInputBackend &) = delete;
 
         void BeginFrame(FrameNumber frame);
+        /** @brief Requests controller gyro collection at the next BeginFrame boundary; disabled by default.
+         * @param enabled Host-derived interest from validated effective bindings, never a player assignment.
+         * @details The owner serializes this call with polling. Only focused, bound-window collection enables native sensors.
+         * Focus loss, disablement and reconnect clear old samples; the next fresh native event must pass both clock fences.
+         * Unsupported/native-failed devices remain explicit in their copied sample availability. No sensor fallback occurs.
+         */
+        void SetGamepadGyroscopeEnabled(bool enabled) noexcept;
         /** @brief Selects the exact window supplying keyboard, pointer, and text events; zero disables window-local input. */
         void BindWindow(SDL_WindowID windowId) noexcept;
         void ProcessEvent(const SDL_Event &event);

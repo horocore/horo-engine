@@ -778,6 +778,21 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: ctest --preset "${{ matrix.preset }}"
 
+      - name: Report accessibility contrast coverage scope
+        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        run: |
+          {
+            echo '### Accessibility contrast evidence scope'
+            echo 'Numeric sRGB contrast cases and staged consumers are selected in the native Debug composition. Use the CTest results for actual outcomes.'
+            if [ "$RUNNER_OS" = 'Windows' ]; then
+              echo 'The Windows headless composition does not configure editor theme-pair tests. GUI/theme interaction coverage remains unqualified.'
+            else
+              echo 'The GUI-enabled composition also registers display-independent primary-text theme-pair cases in HoroEditorPresentationTests. These cover only the explicitly tested opaque pairs.'
+            fi
+            echo 'These checks do not qualify native screen-reader interoperability, every UI state, complete editor WCAG conformance, or product/platform certification.'
+            echo 'Scope and remaining evidence: docs/guides/accessibility-editor-qualification.md.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Test Release audio checks
         if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}
         run: ctest --preset ci-audio-release

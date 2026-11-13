@@ -231,10 +231,22 @@ namespace Horo::Input {
     }  // namespace
 
     struct SdlInputBackend::Impl {
+        /** @brief Verified native activation, distinct from desired collection and retirement ownership. */
+        enum class GyroscopeState {
+            Disabled,
+            Enabled,
+            Failed
+        };
+
         struct Device {
             GamepadDeviceId id;
             SDL_Gamepad *gamepad{nullptr};
             SDL_Joystick *joystick{nullptr};
+            GyroscopeState gyroState{GyroscopeState::Disabled};
+            bool gyroTouched{};         /**< This owner attempted a native state change and must retire it on close. */
+            std::uint64_t gyroCutoff{}; /**< SDL event clock; never compared with the independent sensor clock. */
+            std::uint64_t gyroEventTimestamp{};
+            std::uint64_t gyroSensorTimestamp{};
         };
 
         /** @brief Window-local native identity mapping; terminal slots cannot be reused within a collection frame. */
@@ -257,6 +269,8 @@ namespace Horo::Input {
         int pointerWidth{};
         int pointerHeight{};
         bool touchAdmissionClosed{};
+        bool gyroRequested{};
+        bool gyroSyncPending{};
 
         void HandleKeyboardEvent(const SDL_Event &event);
         void HandlePointerEvent(const SDL_Event &event);
@@ -269,6 +283,9 @@ namespace Horo::Input {
         void HandleTouchEvent(const SDL_TouchFingerEvent &event);
         void CancelTouches(TouchCancellationReason reason) noexcept;
         void StopRumble() noexcept;
+        void ConfigureGyroscope(Device &device) noexcept;
+        void SyncGyroscopes() noexcept;
+        void HandleGyroscopeEvent(const SDL_GamepadSensorEvent &event) noexcept;
     };
 
     /** @brief Cancels effects before the window or focus owner is retired. */
@@ -278,6 +295,61 @@ namespace Horo::Input {
             if (device.gamepad)
                 (void)SDL_RumbleGamepad(device.gamepad, 0, 0, 0);
         }
+    }
+
+    /** @brief Applies host interest at a collection boundary; native failure never permits publication. */
+    void SdlInputBackend::Impl::ConfigureGyroscope(Device &device) noexcept {
+        if (!device.gamepad || !SDL_GamepadHasSensor(device.gamepad, SDL_SENSOR_GYRO)) {
+            (void)collector.SetGamepadGyroscopeSample(device.id, {});
+            return;
+        }
+        const bool active = gyroRequested && windowId != 0 && windowState.focused;
+        device.gyroCutoff = SDL_GetTicksNS();
+        device.gyroEventTimestamp = device.gyroSensorTimestamp = 0;
+        bool succeeded = true;
+        if (active != (device.gyroState == GyroscopeState::Enabled) || device.gyroState == GyroscopeState::Failed) {
+            device.gyroTouched = true;
+            succeeded = SDL_SetGamepadSensorEnabled(device.gamepad, SDL_SENSOR_GYRO, active);
+        }
+        device.gyroState = !succeeded ? GyroscopeState::Failed : active ? GyroscopeState::Enabled : GyroscopeState::Disabled;
+        const auto availability = !succeeded      ? SensorAvailability::NativeFailure
+                                  : active        ? SensorAvailability::AwaitingSample
+                                  : gyroRequested ? SensorAvailability::Suspended
+                                                  : SensorAvailability::Disabled;
+        (void)collector.SetGamepadGyroscopeSample(device.id, {.availability = availability});
+    }
+
+    /** @brief Runs native enable/disable only on explicit interest or window lifecycle changes. */
+    void SdlInputBackend::Impl::SyncGyroscopes() noexcept {
+        for (auto &[id, device] : devices) {
+            (void)id;
+            ConfigureGyroscope(device);
+        }
+        gyroSyncPending = false;
+    }
+
+    /** @brief Copies one current-incarnation SI sample; independent nanosecond clocks retain their own fences. */
+    void SdlInputBackend::Impl::HandleGyroscopeEvent(const SDL_GamepadSensorEvent &event) noexcept {
+        const auto found = devices.find(event.which);
+        if (event.sensor != SDL_SENSOR_GYRO || found == devices.end())
+            return;
+        auto &device = found->second;
+        if (device.gyroState != GyroscopeState::Enabled || !gyroRequested || !windowState.focused || windowId == 0 ||
+            event.timestamp <= device.gyroCutoff || event.timestamp < device.gyroEventTimestamp ||
+            event.sensor_timestamp < device.gyroSensorTimestamp)
+            return;
+        device.gyroEventTimestamp = event.timestamp;
+        if (event.sensor_timestamp == 0 || event.sensor_timestamp > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+            !std::ranges::all_of(event.data, [](const float value) {
+            return std::isfinite(value);
+        })) {
+            (void)collector.SetGamepadGyroscopeSample(device.id, {.availability = SensorAvailability::NativeFailure});
+            return;
+        }
+        device.gyroSensorTimestamp = event.sensor_timestamp;
+        (void)collector.SetGamepadGyroscopeSample(device.id, {.availability = SensorAvailability::Available,
+                                                              .value = {event.data[0], event.data[1], event.data[2]},
+                                                              .timestampNanoseconds = static_cast<std::int64_t>(event.sensor_timestamp)});
     }
 
     /** @brief Closes the current native touch batch; later motion cannot revive cancelled slots. */
@@ -405,6 +477,7 @@ namespace Horo::Input {
             case SDL_EVENT_WINDOW_FOCUS_GAINED:
                 windowState.focused = true;
                 collector.SetWindowState(windowState);
+                SyncGyroscopes();
                 break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 StopRumble();
@@ -412,6 +485,7 @@ namespace Horo::Input {
                 CancelTouches(TouchCancellationReason::SurfaceLost);
                 windowState.focused = false;
                 collector.SetWindowState(windowState);
+                SyncGyroscopes();
                 break;
             case SDL_EVENT_WINDOW_MOUSE_ENTER:
                 windowState.pointerInside = true;
@@ -450,7 +524,9 @@ namespace Horo::Input {
             SDL_CloseGamepad(gamepad);
             return;
         }
-        devices.try_emplace(native, id, gamepad, nullptr);
+        const auto [opened, inserted] = devices.try_emplace(native, id, gamepad, nullptr);
+        (void)inserted;
+        ConfigureGyroscope(opened->second);
     }
 
     /** @brief Retires old mapping ownership and effects before issuing a fresh canonical incarnation. */
@@ -463,8 +539,12 @@ namespace Horo::Input {
         const char *name = SDL_GetGamepadName(found->second.gamepad);
         found->second.id = collector.ConnectGamepad(name ? name : "SDL Gamepad", true);
         if (!found->second.id.IsValid()) {
+            if (found->second.gyroTouched)
+                (void)SDL_SetGamepadSensorEnabled(found->second.gamepad, SDL_SENSOR_GYRO, false);
             SDL_CloseGamepad(found->second.gamepad);
             devices.erase(found);
+        } else {
+            ConfigureGyroscope(found->second);
         }
     }
 
@@ -474,9 +554,11 @@ namespace Horo::Input {
         if (found == devices.end())
             return;
         (void)collector.DisconnectGamepad(found->second.id);
-        if (found->second.gamepad)
+        if (found->second.gamepad) {
+            if (found->second.gyroTouched)
+                (void)SDL_SetGamepadSensorEnabled(found->second.gamepad, SDL_SENSOR_GYRO, false);
             SDL_CloseGamepad(found->second.gamepad);
-        else if (found->second.joystick)
+        } else if (found->second.joystick)
             SDL_CloseJoystick(found->second.joystick);
         devices.erase(found);
     }
@@ -558,22 +640,35 @@ namespace Horo::Input {
         impl_->StopRumble();
         for (auto &[nativeId, device] : impl_->devices) {
             static_cast<void>(nativeId);
-            if (device.gamepad)
+            if (device.gamepad) {
+                if (device.gyroTouched)
+                    (void)SDL_SetGamepadSensorEnabled(device.gamepad, SDL_SENSOR_GYRO, false);
                 SDL_CloseGamepad(device.gamepad);
-            else if (device.joystick)
+            } else if (device.joystick)
                 SDL_CloseJoystick(device.joystick);
         }
     }
 
     void SdlInputBackend::BeginFrame(const FrameNumber frame) {
-        impl_->collector.BeginFrame(frame);
+        impl_->collector.BeginFrame(frame, InputSampleTime{SDL_GetTicksNS() / 1000});
         for (auto &touch : impl_->touches)
             if (touch.terminal)
                 touch = {};
         impl_->touchAdmissionClosed = false;
         if (impl_->neutralizeOnBeginFrame) {
             impl_->collector.Neutralize();
+            impl_->collector.SetWindowState(impl_->windowState);
             impl_->neutralizeOnBeginFrame = false;
+        }
+        if (impl_->gyroSyncPending)
+            impl_->SyncGyroscopes();
+    }
+
+    /** @copydoc SdlInputBackend::SetGamepadGyroscopeEnabled */
+    void SdlInputBackend::SetGamepadGyroscopeEnabled(const bool enabled) noexcept {
+        if (impl_->gyroRequested != enabled) {
+            impl_->gyroRequested = enabled;
+            impl_->gyroSyncPending = true;
         }
     }
 
@@ -587,9 +682,12 @@ namespace Horo::Input {
         impl_->windowId = windowId;
         impl_->pointerWidth = 0;
         impl_->pointerHeight = 0;
-        if (auto *window = SDL_GetWindowFromID(windowId))
+        if (auto *window = SDL_GetWindowFromID(windowId)) {
             (void)SDL_GetWindowSize(window, &impl_->pointerWidth, &impl_->pointerHeight);
+            impl_->windowState.focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+        }
         impl_->neutralizeOnBeginFrame = true;
+        impl_->gyroSyncPending = true;
     }
 
     void SdlInputBackend::ProcessEvent(const SDL_Event &event) {
@@ -630,6 +728,9 @@ namespace Horo::Input {
             case SDL_EVENT_GAMEPAD_BUTTON_UP:
             case SDL_EVENT_GAMEPAD_AXIS_MOTION:
                 impl_->HandleGamepadEvent(event);
+                break;
+            case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
+                impl_->HandleGyroscopeEvent(event.gsensor);
                 break;
             case SDL_EVENT_JOYSTICK_ADDED:
             case SDL_EVENT_JOYSTICK_REMOVED:

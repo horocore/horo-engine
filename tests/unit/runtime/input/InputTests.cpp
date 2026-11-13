@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <utility>
 
 namespace {
     using namespace Horo::Input;
@@ -22,6 +23,81 @@ namespace {
 
     InputBinding KeyBinding(const Key key, const float scale = 1.0F, const std::uint8_t component = 0) {
         return InputBinding{.kind = BindingControlKind::Key, .key = key, .scale = scale, .component = component};
+    }
+
+    TEST_CASE("Finite binding scales cancel before action saturation", "[unit][runtime][input]") {
+        const std::array scenarios{std::pair{ActionValueType::Axis1D, DeadzoneKind::None},
+                                   std::pair{ActionValueType::Axis2D, DeadzoneKind::None},
+                                   std::pair{ActionValueType::Axis2D, DeadzoneKind::Radial}};
+        for (const float sign : {1.0F, -1.0F}) {
+            for (const auto [type, deadzone] : scenarios) {
+                CAPTURE(sign, type, deadzone);
+                const float scale = sign * std::numeric_limits<float>::max();
+                std::vector bindings{KeyBinding(Key::A, scale), KeyBinding(Key::B, scale), KeyBinding(Key::C, -scale),
+                                     KeyBinding(Key::D, -scale), KeyBinding(Key::E, sign * 0.25F)};
+                for (auto &binding : bindings) {
+                    binding.deadzoneKind = deadzone;
+                    binding.deadzone = 0.0F;
+                    binding.component = type == ActionValueType::Axis2D ? 1 : 0;
+                }
+                const InputContextId contextId{"gameplay"};
+                const ActionId actionId{"look"};
+                InputRouter router;
+                REQUIRE(router.SetActionMap({ActionDescriptor{actionId, type, contextId, false, std::move(bindings)}}).HasValue());
+                auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+                RawInputCollector collector;
+                collector.BeginFrame(1);
+                for (const auto key : {Key::A, Key::B, Key::C, Key::D, Key::E})
+                    collector.SetKey(key, true);
+                router.BeginFrame(collector.Commit());
+                const auto first = router.ReadActionEvidence(context, actionId);
+                CHECK(first.status == ActionReadStatus::Resolved);
+                CHECK(first.value.x == (type == ActionValueType::Axis1D ? sign * 0.25F : 0.0F));
+                CHECK(first.value.y == (type == ActionValueType::Axis2D ? sign * 0.25F : 0.0F));
+                CHECK(first.value.pressed);
+                CHECK(first.value.down);
+                const auto held = router.ReadAction(context, actionId);
+                CHECK(held.x == first.value.x);
+                CHECK(held.y == first.value.y);
+                CHECK_FALSE(held.pressed);
+                collector.BeginFrame(2);
+                collector.Neutralize();
+                router.BeginFrame(collector.Commit());
+                const auto released = router.ReadAction(context, actionId);
+                CHECK(released.x == 0.0F);
+                CHECK(released.y == 0.0F);
+                CHECK(released.released);
+                CHECK_FALSE(released.down);
+            }
+        }
+    }
+
+    TEST_CASE("Finite wheel products cancel before action saturation", "[unit][runtime][input]") {
+        const float scale = std::numeric_limits<float>::max();
+        const InputContextId contextId{"gameplay"};
+        const ActionId actionId{"look"};
+        InputRouter router;
+        REQUIRE(router
+                    .SetActionMap({ActionDescriptor{actionId,
+                                                    ActionValueType::Axis1D,
+                                                    contextId,
+                                                    false,
+                                                    {{.kind = BindingControlKind::PointerWheelX, .scale = scale},
+                                                     {.kind = BindingControlKind::PointerWheelY, .scale = -scale},
+                                                     KeyBinding(Key::E, -0.5F)}}})
+                    .HasValue());
+        auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        collector.AddPointerWheel(scale, scale);
+        collector.SetKey(Key::E, true);
+        router.BeginFrame(collector.Commit());
+        const auto evidence = router.ReadActionEvidence(context, actionId);
+        CHECK(evidence.status == ActionReadStatus::Resolved);
+        CHECK(evidence.value.x == -0.5F);
+        CHECK(evidence.value.y == 0.0F);
+        CHECK(evidence.value.pressed);
+        CHECK(evidence.value.down);
     }
 
     TEST_CASE("Snapshot Transitions Are Frame Local", "[unit][runtime][input]") {
@@ -401,6 +477,23 @@ namespace {
         REQUIRE(LoadBindingProfile(paths.projectUser).Value().overrides.front().bindings.front().key == Key::C);
     }
 
+    TEST_CASE("Gyroscope profiles round trip through canonical persistence", "[unit][runtime][input][gyro]") {
+        const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+        const std::filesystem::path directory = std::filesystem::temp_directory_path() / ("horo input-ü-" + std::to_string(suffix));
+        const std::filesystem::path path = directory / "profil.json";
+        const InputBinding gyroscope{.kind = BindingControlKind::GyroscopeAxis, .scale = -0.5F, .gyroscope = {SensorAxis::Y, 2.5F}};
+        const InputBindingProfile profile{.profileId = "user",
+                                          .overrides = {BindingOverride{ActionId{"jump"}, {KeyBinding(Key::Space)}},
+                                                        BindingOverride{ActionId{"look"}, {gyroscope}}}};
+        REQUIRE((SaveBindingProfileAtomically(path, profile).HasValue()));
+        const Horo::Result<InputBindingProfile> loaded = LoadBindingProfile(path);
+        REQUIRE((loaded.HasValue() && loaded.Value().profileId == "user"));
+        REQUIRE(loaded.Value().overrides[1].bindings[0] == gyroscope);
+        std::error_code error;
+        std::filesystem::remove_all(directory, error);
+        REQUIRE((!error));
+    }
+
     TEST_CASE("Profile Conflicts Reservations And Layering Are Typed", "[unit][runtime][input]") {
         const InputContextId workspace{"workspace"};
         const std::array actions{ActionDescriptor{ActionId{"first"}, ActionValueType::Digital, workspace, true, {KeyBinding(Key::A)}},
@@ -452,6 +545,46 @@ namespace {
         REQUIRE((dupDiag->message.find("action.second") != std::string::npos));
         REQUIRE((dupDiag->message.find("action.first") != std::string::npos));
         REQUIRE((dupDiag->message.find("workspace") != std::string::npos));
+    }
+
+    TEST_CASE("Chord permutations and repeated members cannot disguise duplicate transitions", "[unit][runtime][input][accessibility]") {
+        const ActionId action{"play.chord"};
+        const InputContextId context{"play"};
+        for (const bool repeatedMember : {false, true}) {
+            auto first = KeyBinding(Key::K);
+            first.chord[0] = Key::L;
+            first.chord[1] = Key::M;
+            first.chordSize = 2;
+            auto alias = first;
+            alias.chord[0] = Key::M;
+            alias.chord[1] = Key::L;
+            if (repeatedMember) {
+                alias.chord[2] = Key::L;
+                alias.chordSize = 3;
+            } else {
+                // Storage beyond chordSize never participates in physical matching.
+                alias.chord[2] = Key::N;
+            }
+            InputRouter router;
+            REQUIRE(router.SetActionMap({{action, ActionValueType::Digital, context, true, {first}}}).HasValue());
+            const auto revision = router.RoutingState({}).configurationRevision;
+            const InputBindingProfile candidate{.overrides = {{action, {first, alias}}}};
+            const auto validation = ValidateBindingProfile(router.Actions(), candidate);
+            REQUIRE_FALSE(validation.IsValid());
+            REQUIRE(std::ranges::any_of(validation.diagnostics, [](const BindingDiagnostic &diagnostic) {
+                return diagnostic.code == BindingDiagnosticCode::DuplicateBinding;
+            }));
+            REQUIRE(router.SetProfile(candidate).HasError());
+            REQUIRE(router.SetActionMap({{action, ActionValueType::Digital, context, true, {first, alias}}}).HasError());
+            REQUIRE(router.RoutingState({}).configurationRevision == revision);
+            REQUIRE(router.Profile().overrides.empty());
+            REQUIRE(router.Actions().front().defaultBindings.size() == 1);
+            REQUIRE(router.Actions().front().defaultBindings.front() == first);
+
+            alias.chord[0] = Key::N;
+            alias.chordSize = 1;
+            REQUIRE(router.SetActionMap({{action, ActionValueType::Digital, context, true, {first, alias}}}).HasValue());
+        }
     }
 
     TEST_CASE("Conflict Validation Reports AmbiguousChord Overlap", "[unit][runtime][input]") {

@@ -65,6 +65,25 @@ namespace Horo::Input {
             snapshot.pointer.wheelX = 0.0F;
             snapshot.pointer.wheelY = 0.0F;
         }
+
+        /** @brief Validates copied sensor facts before replacing the current sample; unavailability burns old timing/data. */
+        bool PublishSensorSample(SensorSample &current, SensorSample sample) noexcept {
+            if (sample.availability > SensorAvailability::Available)
+                return false;
+            if (sample.availability == SensorAvailability::Available) {
+                if (sample.timestampNanoseconds <= 0 || sample.timestampNanoseconds < current.timestampNanoseconds ||
+                    !std::ranges::all_of(sample.value, [](const float value) {
+                    return std::isfinite(value);
+                }))
+                    return false;
+            } else {
+                sample.value = {};
+                sample.counter = 0;
+                sample.timestampNanoseconds = 0;
+            }
+            current = sample;
+            return true;
+        }
     }  // namespace
 
     const ButtonState &RawInputSnapshot::State(const Key key) const noexcept {
@@ -96,11 +115,13 @@ namespace Horo::Input {
 
     RawInputCollector::~RawInputCollector() = default;
 
-    void RawInputCollector::BeginFrame(const FrameNumber frame) {
+    /** @copydoc RawInputCollector::BeginFrame */
+    void RawInputCollector::BeginFrame(const FrameNumber frame, const std::optional<InputSampleTime> sampleTime) {
         RawInputSnapshot &next = impl_->snapshots[impl_->write];
         const RawInputSnapshot &previous = impl_->snapshots[1 - impl_->write];
         next = previous;
         next.frame = frame;
+        next.sampleTime = sampleTime;
         next.text.clear();
         next.pointer.deltaX = 0.0F;
         next.pointer.deltaY = 0.0F;
@@ -267,21 +288,16 @@ namespace Horo::Input {
     /** @copydoc RawInputCollector::SetSensorSample */
     bool RawInputCollector::SetSensorSample(const SensorKind sensor, SensorSample sample) noexcept {
         auto &sensors = impl_->snapshots[impl_->write].sensors;
-        if (Index(sensor) >= sensors.size() || sample.availability > SensorAvailability::Available)
+        return Index(sensor) < sensors.size() && PublishSensorSample(sensors[Index(sensor)], sample);
+    }
+
+    /** @copydoc RawInputCollector::SetGamepadGyroscopeSample */
+    bool RawInputCollector::SetGamepadGyroscopeSample(const GamepadDeviceId id, const SensorSample sample) noexcept {
+        auto &snapshot = impl_->snapshots[impl_->write];
+        const auto pad = std::ranges::find(snapshot.gamepads, id, &GamepadState::id);
+        if (pad == snapshot.gamepads.end() || (!snapshot.window.focused && sample.availability == SensorAvailability::Available))
             return false;
-        if (sample.availability == SensorAvailability::Available) {
-            if (sample.timestampNanoseconds <= 0 || sample.timestampNanoseconds < sensors[Index(sensor)].timestampNanoseconds ||
-                !std::ranges::all_of(sample.value, [](float value) {
-                return std::isfinite(value);
-            }))
-                return false;
-        } else {
-            sample.value = {};
-            sample.counter = 0;
-            sample.timestampNanoseconds = 0;
-        }
-        sensors[Index(sensor)] = sample;
-        return true;
+        return PublishSensorSample(pad->gyroscope, sample);
     }
 
     void RawInputCollector::SetModifiers(const ModifierState modifiers) noexcept {
@@ -309,6 +325,8 @@ namespace Horo::Input {
         }
         snapshot.modifiers = {};
         for (GamepadState &gamepad : snapshot.gamepads) {
+            if (gamepad.gyroscope.availability == SensorAvailability::Available)
+                gamepad.gyroscope = {.availability = SensorAvailability::Suspended};
             for (ButtonState &state : gamepad.buttons)
                 ReleaseForLoss(state);
             for (ButtonState &state : gamepad.rawButtons)

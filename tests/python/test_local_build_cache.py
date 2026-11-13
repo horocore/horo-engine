@@ -341,6 +341,19 @@ def test_heavy_lock_supports_nonblocking_admission(repository: tuple[Path, Path,
     with cache.heavy_build_lock(repo, blocking=False):
         pass
 
+def test_heavy_lock_nonblocking_admission_refuses_a_busy_owner_without_stealing_it(repository: tuple[Path, Path, str]) -> None:
+    repo, root, _ = repository
+    with cache.heavy_build_lock(repo):
+        with pytest.raises(BlockingIOError):
+            with cache.heavy_build_lock(repo, blocking=False):
+                pytest.fail("Busy heavy work must not be admitted")
+        with pytest.raises(BlockingIOError):
+            with cache._FileLock(root / "heavy-build.lock", blocking=False):
+                pytest.fail("Refusal must preserve the original owner's lock")
+    with cache.heavy_build_lock(repo, blocking=False):
+        assert (root / "heavy-build.lock").exists()
+
+
 
 def test_reader_lock_releases_when_build_raises(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository

@@ -529,7 +529,14 @@ namespace Horo::Editor::Ui {
         UiIcon leadingIcon{UiIcon::None}; /**< Optional semantic icon before the selected value. */
     };
 
-    /** @brief Renders a styled dropdown with optional error styling. Returns true if the selection changed. */
+    /** @brief Renders the shared keyboard- and mouse-operable dropdown over borrowed labels.
+     * @param id Stable caller identity. @param value Selected entry index. @param items Non-null UTF-8 labels.
+     * @param itemCount Number of labels. @param fonts Editor typography handles. @param options Shared presentation.
+     * @return True only when an enabled selection changes the value; choosing the current value merely closes the popup.
+     * @details Keyboard navigation follows Dear ImGui's owner input. Disabled controls/rows cannot activate.
+     * Popup labels wrap within the field width while retaining the semantic label font and minimum row height.
+     * @pre An ImGui frame/window is active; labels and fonts outlive the call.
+     */
     [[nodiscard]] bool ComboControl(const char *id, int *value, const char *const *items, int itemCount, const Theme::Fonts &fonts,
                                     ComboControlOptions options = {});
 
@@ -538,10 +545,13 @@ namespace Horo::Editor::Ui {
      * @param id Stable UI identity.
      * @param value Selected entry index.
      * @param itemCount Number of entries exposed by @p source.
-     * @param source Non-owning entry callbacks valid for the duration of this call.
+     * @param source Non-owning entry callbacks valid for this call; label callbacks return non-null UTF-8.
      * @param fonts Editor typography handles.
      * @param options Optional error, height, and size presentation.
      * @return True when an enabled entry changed the selection.
+     * @details Keyboard activation and pointer clicks share one selection path. Navigation skips disabled rows;
+     * choosing the current entry closes without a change. Wrapped rows preserve semantic typography.
+     * @pre An ImGui frame/window is active; callbacks and fonts outlive the call.
      */
     [[nodiscard]] bool ComboControl(const char *id, int *value, int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,
                                     ComboControlOptions options = {});

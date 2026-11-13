@@ -577,6 +577,7 @@ namespace Horo::Runtime::Ui {
     private:
         struct Storage;
         friend class UiAccessibilityExtractor;
+        friend class UiAccessibilityChangePublisher;
         explicit UiAccessibilitySnapshot(std::shared_ptr<const Storage> storage) noexcept;
         void Retain() const noexcept;
         void Release() noexcept;

@@ -15,6 +15,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Security/SecureMemory.h"
 #include "Horo/Security/SecurityErrors.h"
+#include "Horo/Runtime/Input.h"
 #include "editor/EditorServiceErrors.h"
 
 #include <algorithm>
@@ -520,10 +521,12 @@ namespace Horo::Editor {
         /** @brief Writes portable root metadata before adding semantic settings to the staged project. */
         [[nodiscard]] bool WritePortableScaffolding(CreationWriter &writer, const std::filesystem::path &staging,
                                                     const Application::PlatformServicesInitialDocuments &initial) {
+            const auto inputProfile = Input::SerializeBindingProfile({.profileId = "project-default"});
+            if (inputProfile.HasError())
+                return false;
             if (!writer.Write(staging / ".horo/project.json", initial.projectSource) ||
                 !writer.Write(staging / ".horo/plugins.json", "{\n  \"schemaVersion\": 1,\n  \"requestedPlugins\": []\n}\n") ||
-                !writer.Write(staging / ".horo/input.json",
-                              "{\n  \"schemaVersion\": 1,\n  \"profileId\": \"project-default\",\n  \"overrides\": []\n}\n")) {
+                !writer.Write(staging / ".horo/input.json", inputProfile.Value())) {
                 return false;
             }
 

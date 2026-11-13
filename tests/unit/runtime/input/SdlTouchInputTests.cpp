@@ -7,6 +7,17 @@
 namespace {
     using namespace Horo::Input;
 
+    TEST_CASE("SDL committed input carries a monotonic host sample boundary", "[unit][input][sdl][accessibility][time]") {
+        SdlInputBackend backend;
+        backend.BeginFrame(1);
+        const auto first = backend.Commit().sampleTime;
+        REQUIRE(first.has_value());
+        backend.BeginFrame(2);
+        const auto second = backend.Commit().sampleTime;
+        REQUIRE(second.has_value());
+        REQUIRE(second->microseconds >= first->microseconds);
+    }
+
     void BindSurface(SdlInputBackend &backend) {
         backend.BindWindow(7);
         backend.BeginFrame(1);

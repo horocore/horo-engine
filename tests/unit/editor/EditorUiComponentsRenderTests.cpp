@@ -103,6 +103,15 @@ namespace {
         ImGui::Render();
     }
 
+    /** @brief Sends one keyboard press and release through the actual Dear ImGui navigation input. */
+    template <typename DrawFrame> void PressImGuiKey(ImGuiIO &io, const ImGuiKey key, DrawFrame &&drawFrame) {
+        io.AddKeyEvent(key, true);
+        RenderImGuiFrame(drawFrame);
+        io.AddKeyEvent(key, false);
+        RenderImGuiFrame(drawFrame);
+        RenderImGuiFrame(drawFrame);
+    }
+
     /** @brief Sends a complete pointer click sequence while rendering each interaction state. */
     template <typename DrawFrame> void ClickImGuiItem(ImGuiIO &io, const ImVec2 position, DrawFrame &&drawFrame) {
         io.AddMousePosEvent(position.x, position.y);
@@ -1216,4 +1225,81 @@ TEST_CASE("Context submenus flip at the right edge and remain inside the viewpor
             }
         }
     }
+}
+
+TEST_CASE("Shared combo keyboard navigation skips disabled rows and preserves no-op selection with wrapped labels",
+          "[unit][editor][gui][input][accessibility]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext imgui{{400, 700}};
+    imgui.io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    const std::array labels{"First", "Unavailable",
+                            "A deliberately long localized option that must wrap without shrinking the shared label typography"};
+    const Ui::ComboItemSource source{.label = [&](const int index) {
+        return labels[index];
+    }, .enabled = [](const int index) {
+        return index != 1;
+    }};
+    int selected = 0;
+    bool changed = false, focus = true;
+    const auto draw = [&] {
+        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({260, 600}, ImGuiCond_Always);
+        if (focus)
+            ImGui::SetNextWindowFocus();
+        ImGui::Begin("Keyboard combo interaction");
+        if (focus)
+            ImGui::SetKeyboardFocusHere();
+        focus = false;
+        ImGui::SetNextItemWidth(180);
+        changed = Ui::ComboControl("KeyboardChoice", &selected, static_cast<int>(labels.size()), source, imgui.fonts) || changed;
+        ImGui::End();
+    };
+    for (int frame = 0; frame < 3; ++frame)
+        RenderImGuiFrame(draw);
+    REQUIRE(GImGui->NavId != 0);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    REQUIRE_FALSE(GImGui->OpenPopupStack.empty());
+    CHECK(selected == 0);
+    CHECK_FALSE(changed);
+    REQUIRE(GImGui->OpenPopupStack.back().Window != nullptr);
+    CHECK(GImGui->OpenPopupStack.back().Window->Size.y > 3 * 28.0F);
+    CHECK(GImGui->OpenPopupStack.back().Window->ScrollMax.x == 0);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    CHECK(GImGui->OpenPopupStack.empty());
+    CHECK_FALSE(changed);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    REQUIRE_FALSE(GImGui->OpenPopupStack.empty());
+    PressImGuiKey(*imgui.io, ImGuiKey_DownArrow, draw);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    CHECK(selected == 2);
+    CHECK(changed);
+    CHECK(GImGui->OpenPopupStack.empty());
+}
+
+TEST_CASE("Disabled shared combo rejects pointer and keyboard activation", "[unit][editor][gui][input][accessibility]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext imgui{{400, 500}};
+    imgui.io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    const std::array labels{"First", "Second"};
+    int selected = 0;
+    bool changed = false;
+    ImVec2 center;
+    const auto draw = [&] {
+        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({300, 400}, ImGuiCond_Always);
+        ImGui::Begin("Disabled combo interaction");
+        ImGui::BeginDisabled();
+        ImGui::SetNextItemWidth(180);
+        changed = Ui::ComboControl("DisabledChoice", &selected, labels.data(), static_cast<int>(labels.size()), imgui.fonts) || changed;
+        const auto minimum = ImGui::GetItemRectMin(), maximum = ImGui::GetItemRectMax();
+        center = {(minimum.x + maximum.x) * 0.5F, (minimum.y + maximum.y) * 0.5F};
+        ImGui::EndDisabled();
+        ImGui::End();
+    };
+    RenderImGuiFrame(draw);
+    ClickImGuiItem(*imgui.io, center, draw);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    CHECK(selected == 0);
+    CHECK_FALSE(changed);
+    CHECK(GImGui->OpenPopupStack.empty());
 }
