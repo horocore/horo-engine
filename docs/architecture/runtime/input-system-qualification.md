@@ -110,11 +110,29 @@ check is separate from an issue-free file audit and from the pending full local
 preflight. The raw API evidence is retained at
 `build/input-delivery/codacy-cloud13.json` outside Git.
 
+Hosted CI compiled the core Input targets successfully on Windows/MSVC at
+`8b0f9ed44d30de787af67efff6aaed180dcf97d5`: the `ci-windows-debug`
+preset builds `HoroCiWindowsChecks`, including `HoroInputTests`,
+`HoroAndroidInputTests`, `HoroInputSdlTests`, `HoroRuntimeUiInputTests` and
+`HoroInputPublicHeaderConsumer`. Test execution was still pending when this
+record was written. This evidence excludes GUI targets and subsequent local
+fixes. The Android package workflow also succeeded at that published head;
+package success does not substitute for the targeted Input test results.
+
+The same head's hosted Sonar coverage build failed in the new Settings
+regression: it referenced the retired `BuildEditorAppearanceConfigurationSchema`
+helper. The local candidate now uses `CreateEditorConfigurationSchema` with
+default editor settings, matching the current declaration and neighboring tests.
+That fix still requires compilation and test execution. Two other CI jobs failed
+while downloading Lua 5.4.8 with an SSL connection reset, before source compilation;
+no TLS verification or dependency policy was changed to bypass those failures.
+
 ## Reproducible Targeted Qualification
 
 These commands describe the required runs, not successful execution. On the
-shared Windows host, an explicit slot and the verified physical repository
-heavy-build lock are prerequisites. Keep one build/test worker. Dependency source
+shared Windows host, the verified physical repository heavy-build lock and
+resource guards are prerequisites; a named scheduling grant is unnecessary.
+Keep one build/test worker. Dependency source
 overrides may reuse admitted source caches, but compilation databases and build
 outputs belong to this worktree.
 
@@ -142,7 +160,7 @@ headless Android adapter contract suite above.
 
 After final source fixes, run `python3 scripts/analyze.py check --base
 origin/codex/editor-improvements --compile-commands build/skeleton/compile_commands.json`
-inside the assigned analysis slot and physical lock. Use the worktree's actual
+inside the verified physical lock after resource admission. Use the worktree's actual
 VS Code profile/extension overrides when required. Review freshness, submitted
 and skipped files, sensor execution and errors; report Sonar IDE, CLI secrets and
 Codacy independently. An incomplete/authentication result is not a clean gate.
