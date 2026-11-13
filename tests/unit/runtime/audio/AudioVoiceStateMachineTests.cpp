@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace Horo::Audio {
     namespace {
@@ -22,6 +23,38 @@ namespace Horo::Audio {
         template <typename T> void RequireError(const Result<T> &result, const ErrorCodeDescriptor &descriptor) {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == descriptor.code.Value());
+        }
+
+        TEST_CASE("Configured full registries survive repeated churn without stale handle aliasing", "[audio][voice][qualification]") {
+            for (const std::uint32_t capacity : {1U, 64U, 256U, 1024U}) {
+                CAPTURE(capacity);
+                auto voices = Prepared(capacity, 16);
+                std::vector<AudioVoiceHandle> previous;
+                for (std::uint32_t cycle = 0; cycle < 4; ++cycle) {
+                    std::vector<AudioVoiceHandle> current;
+                    current.reserve(capacity);
+                    for (std::uint32_t slot = 0; slot < capacity; ++slot) {
+                        const auto admitted = voices.CreateVoice();
+                        REQUIRE(admitted.HasValue());
+                        const auto handle = admitted.Value();
+                        REQUIRE(voices.Transition(handle, AudioVoiceState::Ready).HasValue());
+                        if (!previous.empty()) {
+                            CHECK(voices.TryCancel(previous[slot]) == &AudioErrors::HandleStale);
+                            CHECK(voices.State(handle).Value() == AudioVoiceState::Ready);
+                        }
+                        current.push_back(handle);
+                    }
+                    RequireError(voices.CreateVoice(), AudioErrors::HandleCapacityExhausted);
+                    for (const auto handle : current) {
+                        REQUIRE(voices.Cancel(handle).HasValue());
+                        CHECK(voices.TryCancel(handle) == &AudioErrors::VoiceInvalidTransition);
+                        CHECK(voices.Snapshot(handle).Value().terminalReason == AudioVoiceTerminalReason::Cancelled);
+                        REQUIRE(voices.Release(handle).HasValue());
+                    }
+                    previous = std::move(current);
+                }
+                REQUIRE(voices.BeginShutdown().HasValue());
+            }
         }
 
         TEST_CASE("Audio voice state machine follows the complete playback lifecycle", "[unit][audio][voice]") {

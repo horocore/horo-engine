@@ -723,12 +723,14 @@ target_include_directories(HoroAudioDspTests PRIVATE ${PROJECT_SOURCE_DIR}/src/a
 target_compile_features(HoroAudioDspTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioDspTests PRIVATE HoroEngine::AudioDsp)
 horo_register_catch_test(HoroAudioDspTests LABELS "unit;audio;headless")
+target_sources(HoroAudioPlaybackPublicHeaderConsumer PRIVATE support/AudioRepeatedPlaybackPublicContract.cpp)
 add_executable(HoroAudioPlaybackTests
     support/AllocationProbe.cpp
     unit/runtime/audio/AudioVoicePlaybackTests.cpp
     unit/runtime/audio/AudioVoiceVirtualizationTests.cpp
     unit/runtime/audio/AudioVoicePlaybackTestFixture.h
     unit/runtime/audio/AudioRepeatedPlaybackTests.cpp
+    unit/runtime/audio/AudioRepeatedPlaybackLifecycleTests.cpp
     unit/runtime/audio/AudioRepeatedPlaybackTestFixture.h
     unit/runtime/audio/AudioPlaybackTestSupport.h
 )
@@ -750,7 +752,9 @@ horo_register_catch_test(HoroAudioVoiceRenderTests LABELS "unit;audio;headless;r
 
 add_executable(HoroAudioEditorPreviewTests
     support/AllocationProbe.cpp
-    unit/runtime/audio/AudioFrontendTests.cpp)
+    unit/runtime/audio/AudioFrontendTests.cpp
+    unit/runtime/audio/AudioFrontendStreamTests.cpp
+    unit/runtime/audio/AudioFrontendTestFixture.h)
 target_include_directories(HoroAudioEditorPreviewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_features(HoroAudioEditorPreviewTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioEditorPreviewTests PRIVATE

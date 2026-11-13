@@ -1015,6 +1015,15 @@ a project needs broadcast-style auto-ducking.
 
 ## Voice Model
 
+Persistent resident playback uses an explicit host-admitted
+`AudioRepeatedPlaybackConfig::hostContext`. A KeepAlive request's voice and
+scheduled command scope belong to that context from admission; its producer lane
+remains tied to the source scene. Source unload closes the lane, while host
+retirement cancels the retained playback and pending starts. No callback resource
+is transferred during unload. Missing host opt-in rejects the request. See the
+[voice qualification and migration ledger](audio-voice-qualification.md) for the
+additive configuration contract and validation status.
+
 ### AUD-003.8 immutable callback voice state
 
 `HoroEngine::AudioVoiceRender` owns the host-composed `AudioVoiceRenderRuntime`
@@ -2714,6 +2723,10 @@ scope and in `NDEBUG` builds. No callback log, exception, heap fallback, blockin
 wait, or unbounded scan is added by the instrumentation itself.
 
 ## Testing
+
+The [Voice Playback Qualification](audio-voice-qualification.md) ledger maps
+AUD-003 source/test coverage and records its remaining device-recovery evidence
+gates. A listed test is not a claim that its hardware/platform lane has passed.
 
 The following is the cumulative contract catalogue. The 1.0 qualification gate
 requires the AUD-001 through AUD-011 items that are implemented by that checkpoint.
