@@ -36,4 +36,18 @@ namespace Horo::Tests::CameraCuts {
                 {{SequenceBlendMode::Blend, 9}, {SequenceBlendMode::Blend, 9}}};
     }
 
+    inline SequencePlaybackActivation TransitionActivation(const CameraTransitionTier tier = CameraTransitionTier::SingleViewBlend,
+                                                           const CameraBlendCurve curve = CameraBlendCurve::Linear,
+                                                           const CameraTransitionFallback fallback = CameraTransitionFallback::Fail,
+                                                           const SequenceTime duration = 2) {
+        auto activation = Activation();
+        std::array keys{activation.plan.CameraKeys()[0], activation.plan.CameraKeys()[1]};
+        keys[1].transitionTier = tier;
+        keys[1].fallback = fallback;
+        keys[1].transitionDuration = duration;
+        keys[1].transitionCurve = curve;
+        activation.plan = Take(SequenceFrameEvaluationPlan::Create(10, SequenceLoopMode::Once, 4, {}, {}, keys));
+        return activation;
+    }
+
 }  // namespace Horo::Tests::CameraCuts

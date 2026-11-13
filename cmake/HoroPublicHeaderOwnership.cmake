@@ -1018,6 +1018,7 @@ horo_configure_target_header_boundary(HoroCinematicVfxBridge PUBLIC_HEADERS
     Horo/Cinematic/VfxEventAdapter.h
 )
 horo_configure_target_header_boundary(HoroCameraRuntime PUBLIC_HEADERS
+    # Scene-fenced camera selection, single-view interpolation and host capability admission stay in this boundary.
     Horo/Runtime/Camera/CameraErrors.h
     Horo/Runtime/Camera/CameraService.h
 )
