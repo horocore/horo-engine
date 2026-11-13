@@ -66,6 +66,20 @@ or shader-only edit would not prove ACC-001.3 complete. Implementation must also
 provide the real composed-image execution, cooked shader ABI migration and
 backend/native evidence. No existing decision is reimplemented by this audit.
 
+The cold `ColorPipelinePlan` must not be confused with the existing editor
+viewport execution owner. `EditorViewportColorPipeline` realizes real cooked
+programs and reflected uniform buffers; `MetalViewportClusteredFrame::AppendColorPasses`
+uses `EditorViewportColorGraph::AppendScene` and `AppendEncode` around the actual
+display-linear overlay work. `EditorViewportColorMaterials.cpp` writes the final
+encode parameters through the selected resource owner. This is the existing
+execution path to extend, with its candidate/accepted generations and deferred
+resource retirement preserved. Its current encoder has only `OutputControl`,
+not an accessibility matrix. This viewport path does not prove whole-editor GUI
+composition, OpenGL/Vulkan parity or a working desired-setting activation path.
+The canonical color-output recipe currently admits only the Metal target; any
+new encoder ABI needs genuine recooking and matching reflection/package evidence,
+without rewriting the original locked capture files as if they were new outputs.
+
 ## Evidence boundaries
 
 Native Windows, macOS and Linux support requires the corresponding adapter and
