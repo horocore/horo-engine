@@ -19,6 +19,9 @@ namespace {
             SDL_QuitSubSystem(SDL_INIT_VIDEO);
             SDL_ResetHint(SDL_HINT_VIDEO_DRIVER);
         }
+
+        HiddenVideo(const HiddenVideo &) = delete;
+        HiddenVideo &operator=(const HiddenVideo &) = delete;
     };
 
     /** @brief Real SDL virtual device; backend native enable calls and queued samples use SDL's ordinary driver path. */
@@ -66,6 +69,9 @@ namespace {
                 (void)SDL_DetachVirtualJoystick(native);
             SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
         }
+
+        MotionDevice(const MotionDevice &) = delete;
+        MotionDevice &operator=(const MotionDevice &) = delete;
 
         void Begin(SdlInputBackend &backend) {
             backend.BeginFrame(++frame);

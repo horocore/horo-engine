@@ -17,12 +17,12 @@ namespace Horo::Input {
         for (auto binding : bindings) {
             binding.digitalThreshold = 0;
             binding.deadzone = 0;
+            RawInputCollector collector;
             InputRouter router;
             const ActionId action{"rate"};
             const InputContextId play{"play"};
             REQUIRE(router.SetActionMap({{action, ActionValueType::Axis1D, play, true, {binding}}}).HasValue());
             auto context = router.PushContext(play, InputContextKind::Gameplay);
-            RawInputCollector collector;
             collector.BeginFrame(1);
             const auto id = collector.ConnectGamepad("motion");
             router.BeginFrame(collector.Commit());

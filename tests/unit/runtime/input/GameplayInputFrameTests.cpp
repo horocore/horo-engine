@@ -12,6 +12,7 @@ namespace {
 
     TEST_CASE("Assigned gyro look rates reach fixed tick commands and recording without presentation integration",
               "[unit][runtime][input][gyroscope]") {
+        RawInputCollector collector;
         InputRouter router;
         const ActionId look{"look"};
         const InputContextId play{"play"};
@@ -22,7 +23,6 @@ namespace {
                                  .gyroscope = {SensorAxis::X, 4, GyroscopeSource::Gamepad}};
         REQUIRE(router.SetActionMap({{look, ActionValueType::Axis2D, play, true, {yaw, pitch}}}).HasValue());
         auto context = router.PushContext(play, InputContextKind::Gameplay);
-        RawInputCollector collector;
         collector.BeginFrame(900);
         VirtualGamepad controller{collector};
         const auto id = controller.Connect();
