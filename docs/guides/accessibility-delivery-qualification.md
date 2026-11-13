@@ -98,6 +98,26 @@ CTest execution.
 
 ## Current local verification
 
+The subsequent admitted Input batch at clean
+`e3afd1f205ccaa2d9ad8e3b5680657d63d7c66e9` configured and built all four requested
+targets, including the staged public headers and explicit accessibility consumer.
+The discovery guard admitted **87 cases** across both Input Catch families and
+the direct consumer. CTest ran serially: **86 passed, 1 failed**. The failing
+`Gameplay Capture Preserves Clock Failures And Clears Previously Latched Commands`
+case expected `ClockUnavailable` but received `Resolved`; the deferred-release
+fast path had discarded the original timed cancellation cause. The host-cutoff,
+repeat, capacity and public-consumer cases passed in this batch. These results
+are retained in `build/skeleton/Testing/Temporary/LastTest.log` and the discovery
+inventory in `build/acc-input-discovery.json` (local evidence, not committed output).
+
+Commits `f7129c7` and `49a1780` retain the typed cancellation cause with the
+old mapping before consulting the current action map, including an unread
+physical release followed by loss of host time. New regressions cover retained
+and removed action maps. The corrected batch retry was refused by the busy
+physical lock before any compiler/test child; **the fixes have not yet passed
+native tests**. Editor-host, Character, other accessibility families, GUI/GPU,
+native assistive technology and full quality checks still need their own evidence.
+
 The first admitted native Input batch used clean
 `b9d39cc6b715337489d7d8ca1cf0a79635250b4a`, native MSVC 19.44, headless Debug,
 the verified canonical physical lock and one worker. Configure completed, including
