@@ -18,8 +18,7 @@ namespace Horo::Application::Internal {
         /** @brief Requires both actual native adapter and actual solver implementations in the verified executable. */
         Result<void> VerifyStaticPhysics(const Platform::ProcessImageIdentity &identity,
                                          Physics::Detail::PhysicsStateImageAddresses addresses) {
-            const auto adapter = identity.VerifyStaticCodeAddress(addresses.adapter);
-            if (adapter.HasError())
+            if (const auto adapter = identity.VerifyStaticCodeAddress(addresses.adapter); adapter.HasError())
                 return adapter;
             return identity.VerifyStaticCodeAddress(addresses.solver);
         }
@@ -34,8 +33,7 @@ namespace Horo::Application::Internal {
         const auto identity = Platform::CaptureCurrentProcessImageIdentity();
         if (identity.HasError())
             return Result<void>::Failure(identity.ErrorValue());
-        const auto verified = VerifyStaticPhysics(identity.Value(), addresses);
-        if (verified.HasError())
+        if (const auto verified = VerifyStaticPhysics(identity.Value(), addresses); verified.HasError())
             return verified;
         return runtime.BindStateSnapshotBuild({.executableArtifact = identity.Value().Artifact(),
                                                .physicsArtifact = identity.Value().Artifact(),

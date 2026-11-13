@@ -10,7 +10,7 @@ namespace Horo::Physics::StateDetail {
             return ConstructionManifestRowSize(h, tail, rowsSize) && rowsSize == tail;
         }
 
-        PhysicsStateConstructionManifest View(PhysicsStateShapeRecipes shapes, ConstructionManifestStorage s) noexcept {
+        PhysicsStateConstructionManifest View(const PhysicsStateShapeRecipes &shapes, const ConstructionManifestStorage &s) noexcept {
             return {shapes, s.bodies, s.colliders, s.materials, s.joints, s.fixtures, s.queryChildren, s.owners};
         }
 
@@ -19,8 +19,8 @@ namespace Horo::Physics::StateDetail {
             return ConstructionManifestRows(comparison, m) && comparison.Complete();
         }
 
-        Result<PhysicsStateConstructionManifest> ReadTail(std::span<const std::byte> tail, PhysicsStateShapeRecipes shapes,
-                                                          ConstructionManifestStorage storage,
+        Result<PhysicsStateConstructionManifest> ReadTail(std::span<const std::byte> tail, const PhysicsStateShapeRecipes &shapes,
+                                                          const ConstructionManifestStorage &storage,
                                                           const PhysicsStateConstructionManifestLimits &limits,
                                                           PhysicsStateFpControl current, std::span<std::uint32_t> scratch) {
             using Outcome = Result<PhysicsStateConstructionManifest>;

@@ -6,8 +6,9 @@ namespace Horo::Application::Internal {
     namespace {
         class ScriptCommand final : public Cli::ICliCommandAdapter {
         public:
-            ScriptCommand(ExtensionScriptCliHost &script, Extensions::HeadlessExtensionHost &host, bool module = false)
-                : script_(script), host_(host), descriptor_(module ? DescribeModuleScriptCommand() : DescribeExtensionScriptCommand()) {}
+            ScriptCommand(ExtensionScriptCliHost &script, Extensions::HeadlessExtensionHost &host, bool moduleOperation = false)
+                : script_(script), host_(host),
+                  descriptor_(moduleOperation ? DescribeModuleScriptCommand() : DescribeExtensionScriptCommand()) {}
 
             const Cli::CliCommandDescriptor &GetDescriptor() const noexcept override {
                 return descriptor_;

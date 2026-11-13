@@ -263,16 +263,18 @@ namespace Horo::Runtime {
             return Return::Failure(MakeError(SaveErrors::OperationInvalid));
         bool admittedHere = false;
         try {
-            auto admitted = Admit(operation);
-            if (admitted.HasError())
+            // Retain the admitted Work through capture callbacks and request construction.
+            if (auto admitted = Admit(operation); admitted.HasError()) {
                 return Return::Failure(std::move(admitted).ErrorValue());
-            admittedHere = true;
-            work_->writer = std::move(writer);
-            capturePreparation_ = std::move(preparation);
-            capturePreparedFor_.reset();
-            if (!capturePreparation_)
-                (void)RequestCaptureBarrier(*work_);
-            return Return::Success(RuntimeSaveRequest(work_));
+            } else {
+                admittedHere = true;
+                work_->writer = std::move(writer);
+                capturePreparation_ = std::move(preparation);
+                capturePreparedFor_.reset();
+                if (!capturePreparation_)
+                    (void)RequestCaptureBarrier(*work_);
+                return Return::Success(RuntimeSaveRequest(work_));
+            }
         } catch (const std::bad_alloc &) {
             if (!admittedHere)
                 return Return::Failure(MakeError(SaveErrors::OperationAllocationFailed));
@@ -304,13 +306,15 @@ namespace Horo::Runtime {
         if (operation.kind != SaveOperationKind::Load || !source)
             return Return::Failure(MakeError(SaveErrors::OperationInvalid));
         try {
-            auto admitted = Admit(operation);
-            if (admitted.HasError())
+            // Dispatch may invoke host callbacks; keep the original admitted Work pinned until the request exists.
+            if (auto admitted = Admit(operation); admitted.HasError()) {
                 return Return::Failure(std::move(admitted).ErrorValue());
-            work_->source = std::move(source);
-            work_->handoff = std::move(handoff);
-            (void)Dispatch(work_);
-            return Return::Success(RuntimeSaveRequest(work_));
+            } else {
+                work_->source = std::move(source);
+                work_->handoff = std::move(handoff);
+                (void)Dispatch(work_);
+                return Return::Success(RuntimeSaveRequest(work_));
+            }
         } catch (const std::bad_alloc &) {
             return Return::Failure(MakeError(SaveErrors::OperationAllocationFailed));
         }

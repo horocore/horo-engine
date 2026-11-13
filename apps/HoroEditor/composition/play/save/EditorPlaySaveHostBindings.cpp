@@ -54,28 +54,29 @@ namespace Horo::Application::Internal {
     Result<void> EditorPlaySaveHost::State::BindActiveGameplay() {
         if (!liveBindings)
             return Result<void>::Success();
-        const auto active = scenes.ActiveScene();
-        if (!active)
+        if (const auto active = scenes.ActiveScene(); !active) {
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreContextInvalid));
-        auto identities = CurrentIdentities();
-        if (identities.HasError())
-            return Result<void>::Failure(identities.ErrorValue());
-        for (const auto &binding : *liveBindings) {
-            const auto *type = std::get_if<Gameplay::BehaviorTypeId>(&binding.declaration.ownerIdentity);
-            if (!type)
-                continue;
-            if (!behaviorOwner)
-                return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
-            auto target = behaviorOwner->BindingForActive(*type, identities.Value());
-            if (target.HasError())
-                return Result<void>::Failure(target.ErrorValue());
-            const auto installed = binding.adapter->BindRestoreCandidate(std::move(target).Value());
-            if (installed.HasError())
-                return Result<void>::Failure(installed.ErrorValue());
-            // The actual stable SourceSlot keeps the bound source; the original capture
-            // registry retains its canonical proxy.
+        } else {
+            auto identities = CurrentIdentities();
+            if (identities.HasError())
+                return Result<void>::Failure(identities.ErrorValue());
+            for (const auto &binding : *liveBindings) {
+                const auto *type = std::get_if<Gameplay::BehaviorTypeId>(&binding.declaration.ownerIdentity);
+                if (!type)
+                    continue;
+                if (!behaviorOwner)
+                    return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
+                auto target = behaviorOwner->BindingForActive(*type, identities.Value());
+                if (target.HasError())
+                    return Result<void>::Failure(target.ErrorValue());
+                const auto installed = binding.adapter->BindRestoreCandidate(std::move(target).Value());
+                if (installed.HasError())
+                    return Result<void>::Failure(installed.ErrorValue());
+                // The actual stable SourceSlot keeps the bound source; the original capture
+                // registry retains its canonical proxy.
+            }
+            return Result<void>::Success();
         }
-        return Result<void>::Success();
     }
 
     /** @copydoc EditorPlaySaveHost::State::RecomposeBindings */
@@ -138,8 +139,7 @@ namespace Horo::Application::Internal {
             if (auto removed = registry.Unregister(PlaySavePrefabDescriptor().participant); removed.HasError())
                 return Result<void>::Failure(removed.ErrorValue());
         }
-        const auto removed = registry.Unregister(PlaySaveSceneParticipant());
-        if (removed.HasError())
+        if (const auto removed = registry.Unregister(PlaySaveSceneParticipant()); removed.HasError())
             return Result<void>::Failure(removed.ErrorValue());
         barrier.reset();
         authority.reset();
@@ -201,8 +201,7 @@ namespace Horo::Application::Internal {
             return valid;
         try {
             state_->liveBindings = std::make_shared<const std::vector<Editor::PlaySaveGameplayBinding>>(std::move(bindings));
-            const auto composed = state_->RecomposeBindings();
-            if (composed.HasError()) {
+            if (const auto composed = state_->RecomposeBindings(); composed.HasError()) {
                 (void)state_->ReleaseRuntimeBindings();
                 return composed;
             }

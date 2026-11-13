@@ -91,8 +91,8 @@ namespace Horo::Extensions {
         }
     }  // namespace
 
-    Result<ScriptExportDescriptorSnapshotPtr> BuildScriptModuleReferenceApi(std::string module, ScriptExportVersion version) {
-        ScriptExportDescriptor api{.moduleId = std::move(module),
+    Result<ScriptExportDescriptorSnapshotPtr> BuildScriptModuleReferenceApi(std::string moduleId, ScriptExportVersion version) {
+        ScriptExportDescriptor api{.moduleId = std::move(moduleId),
                                    .id = "horo.reference.api",
                                    .nameSpace = "horo.reference",
                                    .version = version,

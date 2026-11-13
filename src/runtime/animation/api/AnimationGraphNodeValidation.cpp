@@ -147,10 +147,11 @@ namespace Horo::Animation::GraphCompileDetail {
     Validation ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data) {
         std::vector<GraphPin> expected(std::size_t{0});
         const ShapeContext context{definition, data, {definition.id, node.id, {}}, expected};
-        auto shape = std::visit([&context](const auto &payload) {
+        if (auto shape = std::visit(
+                [&context](const auto &payload) {
             return NodePins(payload, context);
         }, node.payload);
-        if (shape.HasError())
+            shape.HasError())
             return Validation::Failure(shape.ErrorValue());
         if (!UniqueIds(node.pins) || node.pins.size() != expected.size())
             return Validation::Failure(Failure(GraphMalformed, context.location));

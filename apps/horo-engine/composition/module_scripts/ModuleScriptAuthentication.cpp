@@ -113,19 +113,18 @@ namespace Horo::Application::Internal {
         }
 
         Result<std::string> Service(const Extensions::ExtensionManifest &manifest, const ExtensionScriptOptions &options) {
-            const auto moduleEntry = std::ranges::find(manifest.modules, options.module, &Extensions::ExtensionModuleManifest::id);
+            const auto moduleEntry = std::ranges::find(manifest.modules, options.moduleId, &Extensions::ExtensionModuleManifest::id);
             if (moduleEntry == manifest.modules.end())
                 return Denied<std::string>();
             if (std::ranges::find(moduleEntry->roles, Extensions::ExtensionModuleRole::ScriptProvider) == moduleEntry->roles.end())
                 return Denied<std::string>();
             if (options.moduleOperation) {
-                auto valid = Extensions::ValidateScriptModuleSelectedDeclaration(*moduleEntry);
-                if (valid.HasError())
+                if (auto valid = Extensions::ValidateScriptModuleSelectedDeclaration(*moduleEntry); valid.HasError())
                     return Result<std::string>::Failure(valid.ErrorValue());
                 return Result<std::string>::Success({});
             }
             const auto serviceImport =
-                std::ranges::find(moduleEntry->imports, options.import, &Extensions::ExtensionServiceImportManifest::id);
+                std::ranges::find(moduleEntry->imports, options.importId, &Extensions::ExtensionServiceImportManifest::id);
             if (serviceImport == moduleEntry->imports.end())
                 return Denied<std::string>();
             return Result<std::string>::Success(serviceImport->service);

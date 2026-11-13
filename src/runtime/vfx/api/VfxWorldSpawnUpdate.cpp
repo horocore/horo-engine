@@ -92,8 +92,7 @@ namespace Horo::Vfx::SpawnDetail {
                              const float deltaSeconds, VfxSpawnUpdate &report) noexcept {
             const CpuParticleSimulationStep step{deltaSeconds, instance.firstStep ? asset.initialBurst : 0,
                                                  instance.simulation.Statistics().steps, false};
-            const auto advanced = AdvanceKernel(instance.simulation, step);
-            if (advanced.status != CpuParticleAdvanceStatus::Complete) {
+            if (const auto advanced = AdvanceKernel(instance.simulation, step); advanced.status != CpuParticleAdvanceStatus::Complete) {
                 RecordKernelFailure(state, instance, advanced.failure, report);
                 Retire(asset, instance);
                 ++report.retired;

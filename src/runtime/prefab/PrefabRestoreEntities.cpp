@@ -206,8 +206,7 @@ namespace Horo::Prefab {
             auto record = ReferenceRecord(binding.target);
             if (record.HasError())
                 return Result<Detail::PrefabRestoredBinding>::Failure(record.ErrorValue());
-            const auto dynamic = nodes.find(record.Value()->identity);
-            if (dynamic != nodes.end())
+            if (const auto dynamic = nodes.find(record.Value()->identity); dynamic != nodes.end())
                 return DynamicBinding(binding.slot, declaration, dynamic->second);
             auto target = AuthoredTarget(*record.Value(), scene);
             if (target.HasError())

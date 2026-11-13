@@ -79,8 +79,7 @@ namespace Horo::XR::RuntimeInternal {
         auto *state = Find(session);
         if (!state)
             return;
-        auto &prepared = state->children[static_cast<std::size_t>(stage)];
-        if (children_ && prepared) {
+        if (auto &prepared = state->children[static_cast<std::size_t>(stage)]; children_ && prepared) {
             prepared = false;
             children_->Release(stage, session);
         }

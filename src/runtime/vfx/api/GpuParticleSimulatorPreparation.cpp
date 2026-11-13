@@ -178,8 +178,8 @@ namespace Horo::Vfx::GpuParticleDetail {
     Result<std::unique_ptr<Detail::GpuParticleSimulatorState>> PrepareGpuState(const ParticleCookAdmission &admission,
                                                                                const GpuParticleSimulatorCreateInfo &i) {
         using Outcome = Result<std::unique_ptr<Detail::GpuParticleSimulatorState>>;
-        const auto &d = admission.Descriptor().Data();
-        if (!SupportedSource(d, i) || (d.gpuReadback.enabled && i.initial.attributes.customFloatStreamCount))
+        if (const auto &d = admission.Descriptor().Data();
+            !SupportedSource(d, i) || (d.gpuReadback.enabled && i.initial.attributes.customFloatStreamCount))
             return Outcome::Failure(MakeError(VfxErrors::GpuSimulationUnsupported));
         if (!ValidSeedAdmission(admission, i))
             return Outcome::Failure(MakeError(VfxErrors::GpuSimulationInvalid));

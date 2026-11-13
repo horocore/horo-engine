@@ -314,10 +314,11 @@ namespace Horo::AI {
                     Add(AIErrors::DecisionAssetSchemaInvalid, {}, requirement.source, fallback, path);
                     return false;
                 }
-                const auto duplicate = std::ranges::find_if(unique, [&](const auto *existing) {
+                if (const auto duplicate = std::ranges::find_if(unique,
+                                                                [&](const auto *existing) {
                     return existing->key == requirement.key;
                 });
-                if (duplicate != unique.end()) {
+                    duplicate != unique.end()) {
                     if (!SameRequirementContract(**duplicate, requirement)) {
                         Add(AIErrors::DecisionAssetBindingAmbiguous, {}, requirement.source, nodeSource, path);
                         return false;

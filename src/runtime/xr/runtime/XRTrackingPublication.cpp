@@ -293,8 +293,8 @@ namespace Horo::XR::RuntimeInternal {
         const auto plan = lifecycle_->AcceptedPlan();
         if (!plan || limits_.maximumHandJoints == 0)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
-        const auto decision = plan->Decision(XRCapability::HandTracking).state;
-        if (decision != XRFeatureDecisionState::Required && decision != XRFeatureDecisionState::OptionalEnabled)
+        if (const auto decision = plan->Decision(XRCapability::HandTracking).state;
+            decision != XRFeatureDecisionState::Required && decision != XRFeatureDecisionState::OptionalEnabled)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
         return Result<void>::Success();
     }

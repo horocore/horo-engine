@@ -563,8 +563,8 @@ namespace Horo::Runtime {
                     WithAssetContext(MakeError(SceneErrors::AssetTypeMismatch), prep.definition.Id(), dependency.id));
             return Result<void>::Success();
         }
-        const auto maximum = std::min<std::size_t>(assetPreparationServices_.limits.maximumDependencies, 16384);
-        if (prep.entries.size() >= maximum)
+        if (const auto maximum = std::min<std::size_t>(assetPreparationServices_.limits.maximumDependencies, 16384);
+            prep.entries.size() >= maximum)
             return Result<void>::Failure(
                 WithAssetContext(MakeError(SceneErrors::AssetBudgetExceeded), prep.definition.Id(), dependency.id));
         const auto *record = prep.snapshot.Find(dependency.id);
@@ -611,8 +611,8 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene dependency discovery owner retired."));
             if (cancellation.IsCancellationRequested())
                 return JobCancelled();
-            const auto remaining = assetPreparationServices_.limits.maximumDependencyReferences - preparation_->discoveredReferences;
-            if (dependencies.Value().size() > remaining)
+            if (const auto remaining = assetPreparationServices_.limits.maximumDependencyReferences - preparation_->discoveredReferences;
+                dependencies.Value().size() > remaining)
                 return Result<void>::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
             preparation_->discoveredReferences += dependencies.Value().size();
             if (auto merged = MergePreparationDependencies(dependencies.Value()); merged.HasError())

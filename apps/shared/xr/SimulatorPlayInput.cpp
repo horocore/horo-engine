@@ -102,8 +102,8 @@ namespace Horo::Application::Internal {
         if (auto lane = impl_->Lane(); lane.HasError())
             return lane;
         Impl::Operation operation{*impl_};
-        const bool sampling = impl_->play == Editor::EditorPlayState::Playing || impl_->pendingStep;
-        if (!impl_->admitted || !impl_->runtime || !impl_->input || !sampling) {
+        if (const bool sampling = impl_->play == Editor::EditorPlayState::Playing || impl_->pendingStep;
+            !impl_->admitted || !impl_->runtime || !impl_->input || !sampling) {
             impl_->composition.router.BeginFrame(raw);
             return Result<void>::Success();
         }

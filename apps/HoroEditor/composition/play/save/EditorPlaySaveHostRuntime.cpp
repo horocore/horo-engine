@@ -128,10 +128,10 @@ namespace Horo::Application::Internal {
 
     /** @copydoc EditorPlaySaveHost::State::RegisterCoreCapture */
     Result<void> EditorPlaySaveHost::State::RegisterCoreCapture() {
-        const auto core = registry.Register(PlaySaveSceneDescriptor(),
-                                            std::make_shared<PlaySaveSceneCapture>(scenes, schema->baseline, schema->identities,
-                                                                                   liveBindings, prefabs, physics));
-        if (core.HasError())
+        if (const auto core = registry.Register(PlaySaveSceneDescriptor(),
+                                                std::make_shared<PlaySaveSceneCapture>(scenes, schema->baseline, schema->identities,
+                                                                                       liveBindings, prefabs, physics));
+            core.HasError())
             return Result<void>::Failure(core.ErrorValue());
         if (prefabs) {
             const auto added = registry.Register(PlaySavePrefabDescriptor(), std::make_shared<PlaySavePrefabCaptureAdapter>(prefabs));

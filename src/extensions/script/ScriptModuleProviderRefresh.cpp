@@ -100,14 +100,16 @@ namespace Horo::Extensions {
         using Output = Result<ScriptModuleUpdateReport>;
         if (auto lane = impl_->authority->RequireOpenOwner(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
-        auto current = impl_->authority->Source(candidate.Manifest().id, candidate.Module().id);
-        if (current.HasError())
+        if (auto current = impl_->authority->Source(candidate.Manifest().id, candidate.Module().id); current.HasError())
             return Output::Failure(current.ErrorValue());
-        if (auto verified = candidate.VerifyCurrent(); verified.HasError())
-            return Output::Failure(verified.ErrorValue());
-        return Output::Success({.kind = ScriptModuleUpdateKind::RestartRequired,
-                                .diagnostic = MakeError(ExtensionErrors::ScriptInvocationUnavailable,
-                                                        "Live native package replacement has no proven unload/quiescence contract; restart "
-                                                        "is required. The existing provider and bindings remain active.")});
+        else {
+            if (auto verified = candidate.VerifyCurrent(); verified.HasError())
+                return Output::Failure(verified.ErrorValue());
+            return Output::Success(
+                {.kind = ScriptModuleUpdateKind::RestartRequired,
+                 .diagnostic = MakeError(ExtensionErrors::ScriptInvocationUnavailable,
+                                         "Live native package replacement has no proven unload/quiescence contract; restart "
+                                         "is required. The existing provider and bindings remain active.")});
+        }
     }
 }  // namespace Horo::Extensions

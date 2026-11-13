@@ -225,7 +225,7 @@ namespace Horo::Editor::Proposals {
             }
 
             /** @brief Admits new file text without implying destination existence or mutation authority. */
-            Result<void> AdmitValue(CreateFile &file) {
+            Result<void> AdmitValue(const CreateFile &file) {
                 if (const auto charged = ChargeText(file.text, limits_, total_); charged.HasError())
                     return charged;
                 return Text(file.text) ? Result<void>::Success() : Fail<void>(Errors::Invalid);
@@ -239,7 +239,7 @@ namespace Horo::Editor::Proposals {
             }
 
             /** @brief Admits only exact file-base deletion evidence, never recursive directory removal. */
-            Result<void> AdmitValue(DeleteFile &file) const {
+            Result<void> AdmitValue(const DeleteFile &file) const {
                 return ValidBase(file.base, limits_) ? Result<void>::Success() : Fail<void>(Errors::Invalid);
             }
 

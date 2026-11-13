@@ -71,18 +71,19 @@ namespace Horo::Application::Internal {
 
     Result<std::filesystem::path> StageModuleScriptPackage(const ExtensionScriptOptions &options,
                                                            const AuthenticatedExtensionScript &packet) {
-        auto trusted = RevalidateModuleScriptPackage(packet);
-        if (trusted.HasError())
+        if (auto trusted = RevalidateModuleScriptPackage(packet); trusted.HasError())
             return Result<std::filesystem::path>::Failure(trusted.ErrorValue());
-        Candidate candidate;
-        if (auto claimed = candidate.Claim(options); claimed.HasError())
-            return Result<std::filesystem::path>::Failure(claimed.ErrorValue());
-        NativeDurableFileSystem files;
-        for (const auto &artifact : packet.artifacts)
-            if (auto written = Write(files, candidate.path, artifact); written.HasError())
-                return Result<std::filesystem::path>::Failure(written.ErrorValue());
-        candidate.owned = false;
-        return Result<std::filesystem::path>::Success(std::move(candidate.path));
+        else {
+            Candidate candidate;
+            if (auto claimed = candidate.Claim(options); claimed.HasError())
+                return Result<std::filesystem::path>::Failure(claimed.ErrorValue());
+            NativeDurableFileSystem files;
+            for (const auto &artifact : packet.artifacts)
+                if (auto written = Write(files, candidate.path, artifact); written.HasError())
+                    return Result<std::filesystem::path>::Failure(written.ErrorValue());
+            candidate.owned = false;
+            return Result<std::filesystem::path>::Success(std::move(candidate.path));
+        }
     }
 
     ExtensionScriptArtifactGate::ExtensionScriptArtifactGate(std::filesystem::path root,

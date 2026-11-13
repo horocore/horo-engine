@@ -266,7 +266,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
         }
 
         /** @brief Records exact set-zero resource variables without accepting duplicate register evidence. */
-        void GlobalVariable(Proof &proof, Words w, Node &node) {
+        void GlobalVariable(Proof &proof, Words w, const Node &node) {
             if (w[3] != 0 && w[3] != 2 && w[3] != 12)
                 throw EvidenceFailure{};
             if (w.size() != 4 || node.set != 0 || node.binding >= 5 || proof.resources[node.binding])

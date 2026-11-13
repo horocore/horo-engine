@@ -86,7 +86,7 @@ namespace Horo::Gameplay::Detail {
             return true;
         }
 
-        [[nodiscard]] Vfx::VfxSpawnStatus WorldStatus(const GameplayVfxBindingTable &table, Vfx::VfxWorld &world) noexcept {
+        [[nodiscard]] Vfx::VfxSpawnStatus WorldStatus(const GameplayVfxBindingTable &table, const Vfx::VfxWorld &world) noexcept {
             using enum Horo::Vfx::VfxSpawnStatus;
             const auto &compiled = GameplayVfxBindingAccess::State(table);
             for (const auto &binding : compiled.bindings)
@@ -100,7 +100,7 @@ namespace Horo::Gameplay::Detail {
             return Accepted;
         }
 
-        [[nodiscard]] Result<void> ValidateWorld(const GameplayVfxBindingTable &table, Vfx::VfxWorld &world) {
+        [[nodiscard]] Result<void> ValidateWorld(const GameplayVfxBindingTable &table, const Vfx::VfxWorld &world) {
             const auto status = WorldStatus(table, world);
             if (status == Vfx::VfxSpawnStatus::MissingAsset)
                 return Reject<void>(GameplayVfxErrors::AssetUnavailable);
@@ -116,7 +116,7 @@ namespace Horo::Gameplay::Detail {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<std::vector<Vfx::VfxSpawnAssetInfo>> ReloadPalette(Vfx::VfxWorld &world,
+        [[nodiscard]] Result<std::vector<Vfx::VfxSpawnAssetInfo>> ReloadPalette(const Vfx::VfxWorld &world,
                                                                                 const GameplayVfxBindingDocument &document) {
             std::vector<Vfx::VfxSpawnAssetInfo> palette;
             palette.reserve(Vfx::VfxSpawnHardLimits::Effects);
@@ -199,11 +199,11 @@ namespace Horo::Gameplay::Detail {
         moduleState->owner = scene->owner;
         auto client = std::make_shared<GameplayVfxClientState>();
         client->scene = scene;
-        client->module = moduleState;
+        client->moduleState = moduleState;
         client->lifetime = std::make_shared<GameplayVfxScopeLifetime>();
         auto producer = std::make_shared<GameplayVfxProducerState>();
         producer->scene = scene;
-        producer->module = moduleState;
+        producer->moduleState = moduleState;
         std::shared_ptr<const GameplayVfxContext> context{new GameplayVfxContext{std::move(client)}};
         std::shared_ptr<const GameplayVfxCommittedProducer> committed{new GameplayVfxCommittedProducer{std::move(producer)}};
         return {std::move(moduleState), std::move(context), std::move(committed)};
@@ -327,14 +327,14 @@ namespace Horo::Gameplay::Detail {
 
     /** @copydoc GameplayVfxHostAccess::RetireEntityClient */
     void GameplayVfxHostAccess::RetireEntityClient(const std::shared_ptr<const GameplayVfxContext> &client) noexcept {
-        if (!client || client->state_->module->owner != std::this_thread::get_id() || !client->state_->entity.IsValid())
+        if (!client || client->state_->moduleState->owner != std::this_thread::get_id() || !client->state_->entity.IsValid())
             return;
         client->state_->retired = true;
         client->state_->callback = false;
     }
 
     void GameplayVfxHostAccess::RevokeClient(const std::shared_ptr<const GameplayVfxContext> &client) noexcept {
-        if (client && client->state_->module->owner == std::this_thread::get_id())
+        if (client && client->state_->moduleState->owner == std::this_thread::get_id())
             client->state_->lifetime->revoked = true;
     }
 
@@ -351,7 +351,7 @@ namespace Horo::Gameplay::Detail {
     }
 
     void GameplayVfxHostAccess::LeaveCallback(const std::shared_ptr<const GameplayVfxContext> &client) noexcept {
-        if (client && client->state_->module->owner == std::this_thread::get_id())
+        if (client && client->state_->moduleState->owner == std::this_thread::get_id())
             client->state_->callback = false;
     }
 

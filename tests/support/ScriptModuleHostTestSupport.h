@@ -147,7 +147,7 @@ namespace Horo::Extensions::Tests::ModuleHostSupport {
                     .temporaryRoot = temporary,
                     .script = source,
                     .package = id,
-                    .module = module,
+                    .moduleId = module,
                     .publisher = key.root.publisherId,
                     .moduleOperation = true,
                     .runtime = runtime};

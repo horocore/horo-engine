@@ -9,7 +9,7 @@ namespace Horo::Application::Internal {
             return Output::Failure(MakeError(Extensions::ExtensionErrors::ScriptInvocationInvalid));
         Extensions::ScriptModuleProgramInput input{.runtime = packet->trustOptions.runtime,
                                                    .package = packet->manifest.id,
-                                                   .module = packet->trustOptions.module,
+                                                   .moduleId = packet->trustOptions.moduleId,
                                                    .root = root,
                                                    .source = packet->trustOptions.script,
                                                    .currentTrust = std::make_shared<ExtensionScriptArtifactGate>(root, packet)};

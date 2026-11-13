@@ -148,7 +148,7 @@ namespace Horo::Vfx::SpawnDetail {
         }
 
         /** @brief Preallocates queue/results/authority records and charges actual vector capacities. */
-        [[nodiscard]] std::unique_ptr<Detail::VfxWorldSpawnState> PrepareStorage(const VfxSpawnBudget budget,
+        [[nodiscard]] std::unique_ptr<Detail::VfxWorldSpawnState> PrepareStorage(const VfxSpawnBudget &budget,
                                                                                  const std::size_t assetCount) {
             auto state = std::make_unique<Detail::VfxWorldSpawnState>();
             state->budget = budget;
@@ -177,7 +177,7 @@ namespace Horo::Vfx::SpawnDetail {
 
         /** @brief Cold candidate construction; every failure destroys only unpublished ownership. */
         [[nodiscard]] Result<std::unique_ptr<Detail::VfxWorldSpawnState>> PrepareCandidate(
-            const VfxIdentityScope scene, const std::span<const VfxSpawnAssetPreparation> assets, const VfxSpawnBudget budget) {
+            const VfxIdentityScope scene, const std::span<const VfxSpawnAssetPreparation> assets, const VfxSpawnBudget &budget) {
             auto state = PrepareStorage(budget, assets.size());
             std::uint64_t instances{};
             std::uint64_t particles{};
@@ -206,9 +206,9 @@ namespace Horo::Vfx::SpawnDetail {
 
     VfxSpawnStatus ValidateBudget(const VfxSpawnBudget &budget) noexcept {
         using enum Horo::Vfx::VfxSpawnStatus;
-        const bool queues = budget.maximumPending > 0 && budget.maximumPending <= VfxSpawnHardLimits::Pending &&
-                            budget.maximumResults > 0 && budget.maximumResults <= VfxSpawnHardLimits::Results;
-        if (!queues)
+        if (const bool queues = budget.maximumPending > 0 && budget.maximumPending <= VfxSpawnHardLimits::Pending &&
+                                budget.maximumResults > 0 && budget.maximumResults <= VfxSpawnHardLimits::Results;
+            !queues)
             return InvalidRequest;
         const bool owners = budget.maximumOwners > 0 && budget.maximumOwners <= VfxSpawnHardLimits::Producers &&
                             budget.maximumProducers > 0 && budget.maximumProducers <= VfxSpawnHardLimits::Producers;

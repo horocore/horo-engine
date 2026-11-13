@@ -66,10 +66,10 @@ namespace Horo::Extensions {
 
     struct NativeServiceImportClient final {
         NativeServiceImportClient(std::weak_ptr<NativeServiceModule> owner, ResolvedExtensionServiceImport binding)
-            : module(std::move(owner)), import(std::move(binding)) {}
+            : moduleState(std::move(owner)), resolvedImport(std::move(binding)) {}
 
-        std::weak_ptr<NativeServiceModule> module;
-        ResolvedExtensionServiceImport import;
+        std::weak_ptr<NativeServiceModule> moduleState;
+        ResolvedExtensionServiceImport resolvedImport;
         std::weak_ptr<NativeServicePublication> provider;
     };
 

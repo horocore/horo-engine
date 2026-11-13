@@ -122,10 +122,11 @@ namespace {
 
 namespace {
     /** @brief Proves owned fallback preparation may throw before changing admission, callbacks or the published root. */
-    void RequireCapturePreflightFailure(WorldFixture &fixture, const SceneRuntimeId scene) {
+    void RequireCapturePreflightFailure(WorldFixture &fixture, const SceneRuntimeId scene, const std::size_t successfulAllocations) {
+        INFO(successfulAllocations);
         bool preflightThrew{};
         {
-            Horo::Tests::AllocationProbe::ScopedFailure fail;
+            Horo::Tests::AllocationProbe::ScopedFailure fail{successfulAllocations};
             try {
                 (void)fixture.world->CaptureAtSafePoint(*fixture.barrier,
                                                         SaveContentCaptureRequest{.phase = RuntimePhase::CommitDeferredLifecycleChanges,
@@ -148,15 +149,18 @@ TEST_CASE("Capture preparation allocation failure preserves the published world 
     WorldFixture fixture;
     const auto scene = fixture.service->ActiveScene()->RuntimeId();
     REQUIRE(fixture.barrier->Request(91, fixture.generation).HasValue());
-    RequireCapturePreflightFailure(fixture, scene);
     std::size_t fallbackRequests{};
     {
         Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
-        auto fallback = Result<SaveContentCaptureOutcome>::Failure(MakeError(SaveErrors::CanonicalCodecAllocationFailed));
+        auto fallback = Result<SaveContentCaptureOutcome>::CompleteInPlace(MakeError(SaveErrors::CanonicalCodecAllocationFailed),
+                                                                           [](Result<SaveContentCaptureOutcome> &) noexcept {
+        });
         fallbackRequests = measurement.Snapshot().requests;
         REQUIRE(fallback.HasError());
     }
     REQUIRE(fallbackRequests > 0);
+    for (std::size_t index = 0; index < fallbackRequests; ++index)
+        RequireCapturePreflightFailure(fixture, scene, index);
     bool rejected{};
     bool typedFailure{};
     std::size_t allocationsAfterFailure{};

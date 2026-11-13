@@ -80,7 +80,7 @@ namespace Horo::Animation::Detail {
 
         /** @brief Handoff envelope uses exactly consumed tick time, never a separate
          * wall clock. */
-        void Handoff(GraphInstanceState &state, ActionSlotState &slot, const std::int64_t consumed) noexcept {
+        void Handoff(const GraphInstanceState &state, ActionSlotState &slot, const std::int64_t consumed) noexcept {
             if (slot.handoffAction == NoActionIndex)
                 return;
             const auto duration = state.program->Actions()[slot.handoffAction].blendOut.ticks;
@@ -91,7 +91,7 @@ namespace Horo::Animation::Detail {
 
         /** @brief Blend-in runs alongside actual clip interval consumption; prepared
          * masks remain unchanged. */
-        void BlendIn(GraphInstanceState &state, ActionSlotState &slot, const GraphActionDefinition &action,
+        void BlendIn(const GraphInstanceState &state, ActionSlotState &slot, const GraphActionDefinition &action,
                      const std::int64_t consumed) noexcept {
             slot.blendElapsed = std::min(action.blendIn.ticks, slot.blendElapsed + consumed);
             slot.weight =

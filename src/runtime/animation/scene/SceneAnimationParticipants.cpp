@@ -11,6 +11,11 @@ namespace Horo::Runtime {
         ActivationCandidate(std::shared_ptr<State> owner, std::shared_ptr<Scope> prepared)
             : owner_(std::move(owner)), scope_(std::move(prepared)) {}
 
+        ActivationCandidate(const ActivationCandidate &) = delete;
+        ActivationCandidate &operator=(const ActivationCandidate &) = delete;
+        ActivationCandidate(ActivationCandidate &&) = delete;
+        ActivationCandidate &operator=(ActivationCandidate &&) = delete;
+
         ~ActivationCandidate() override {
             Shutdown();
         }

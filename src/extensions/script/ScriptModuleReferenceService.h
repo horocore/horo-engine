@@ -22,6 +22,6 @@ namespace Horo::Extensions {
         std::atomic<bool> closed_{};
     };
 
-    [[nodiscard]] Result<ScriptExportDescriptorSnapshotPtr> BuildScriptModuleReferenceApi(std::string module,
+    [[nodiscard]] Result<ScriptExportDescriptorSnapshotPtr> BuildScriptModuleReferenceApi(std::string moduleId,
                                                                                           ScriptExportVersion version = {1, 0, 0});
 }  // namespace Horo::Extensions

@@ -65,7 +65,7 @@ namespace Horo::Extensions {
             Sha256Builder hash;
             IdentityText(hash, "horo.module.program.v1");
             IdentityText(hash, input.package);
-            IdentityText(hash, input.module);
+            IdentityText(hash, input.moduleId);
             IdentityText(hash, input.source.generic_string());
             IdentityText(hash, input.runtime == ScriptModuleRuntimeKind::Lua54 ? "lua" : "javascript");
             static_cast<void>(hash.Update(std::as_bytes(std::span{source.ArtifactDigest().bytes})));
@@ -78,11 +78,11 @@ namespace Horo::Extensions {
         }
     }  // namespace
 
-    Result<void> ValidateScriptModuleSelectedDeclaration(const ExtensionModuleManifest &module) {
-        if (std::ranges::find(module.roles, ExtensionModuleRole::ScriptProvider) == module.roles.end())
+    Result<void> ValidateScriptModuleSelectedDeclaration(const ExtensionModuleManifest &moduleDeclaration) {
+        if (std::ranges::find(moduleDeclaration.roles, ExtensionModuleRole::ScriptProvider) == moduleDeclaration.roles.end())
             return Invalid("The signed module does not declare ScriptProvider ownership.");
-        if (std::ranges::any_of(module.imports, [](const auto &import) {
-            return import.id == "horo.reference";
+        if (std::ranges::any_of(moduleDeclaration.imports, [](const auto &serviceImport) {
+            return serviceImport.id == "horo.reference";
         }))
             return Invalid("The builtin alias horo.reference is reserved; rename the declared native import.");
         return Result<void>::Success();
@@ -120,7 +120,7 @@ namespace Horo::Extensions {
     Result<void> ScriptModuleProgram::SelectModule() {
         if (manifest_.id != input_.package || manifest_.modules.size() > 16)
             return Invalid("Signed module package identity/count is invalid.");
-        const auto found = std::ranges::find(manifest_.modules, input_.module, &ExtensionModuleManifest::id);
+        const auto found = std::ranges::find(manifest_.modules, input_.moduleId, &ExtensionModuleManifest::id);
         if (found == manifest_.modules.end())
             return Invalid("Selected module is absent from the signed manifest.");
         if (auto valid = ValidateScriptModuleSelectedDeclaration(*found); valid.HasError())

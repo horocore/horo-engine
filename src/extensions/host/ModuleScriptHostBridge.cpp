@@ -31,8 +31,7 @@ namespace Horo::Extensions {
         using Output = Result<std::shared_ptr<ModuleScriptHostAuthority>>;
         auto value = std::shared_ptr<ModuleScriptHostAuthority>{
             new ModuleScriptHostAuthority{std::make_unique<Impl>(NativeExtensionServiceHostAccess::State(host))}};
-        auto open = value->RequireOpenOwner();
-        if (open.HasError())
+        if (auto open = value->RequireOpenOwner(); open.HasError())
             return Output::Failure(open.ErrorValue());
         return Output::Success(std::move(value));
     }
@@ -70,8 +69,7 @@ namespace Horo::Extensions {
     }
 
     Result<std::uint64_t> ModuleScriptHostAuthority::IssueGeneration() {
-        auto admitted = RequireOpenOwner();
-        if (admitted.HasError())
+        if (auto admitted = RequireOpenOwner(); admitted.HasError())
             return Result<std::uint64_t>::Failure(admitted.ErrorValue());
         auto &next = impl_->state->nextGeneration;
         if (!next)
@@ -81,8 +79,7 @@ namespace Horo::Extensions {
 
     Result<ExtensionCapabilityAdmission> ModuleScriptHostAuthority::AdmitReference(std::string moduleId, std::uint64_t generation) const {
         using Output = Result<ExtensionCapabilityAdmission>;
-        auto admitted = RequireOpenOwner();
-        if (admitted.HasError())
+        if (auto admitted = RequireOpenOwner(); admitted.HasError())
             return Output::Failure(admitted.ErrorValue());
         const auto &actual = Policy();
         if (std::ranges::find(actual.availableCapabilities, ExtensionCapabilityId{HORO_EXTENSION_SERVICE_CAPABILITY}) ==

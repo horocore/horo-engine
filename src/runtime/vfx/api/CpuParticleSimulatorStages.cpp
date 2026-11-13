@@ -336,7 +336,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
 
         /** @brief Dispatches once per authored force while preserving per-particle accumulation order. */
         void ApplyOrderedForce(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulationStep &step,
-                               const CpuParticleSoAView view, const CpuParticleForceModule &force) {
+                               const CpuParticleSoAView &view, const CpuParticleForceModule &force) {
             switch (force.kind) {
                 case CpuParticleForceKind::Gravity:
                 case CpuParticleForceKind::Wind: {

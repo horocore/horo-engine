@@ -22,7 +22,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportColorGraph::Table */
-    RenderGraphResourceId EditorViewportColorGraph::Table(EditorViewportColorPipeline &pipeline, std::size_t index) {
+    RenderGraphResourceId EditorViewportColorGraph::Table(const EditorViewportColorPipeline &pipeline, std::size_t index) {
         const auto resource = Take(builder_->ImportTexture(pipeline.TableTexture(index), RenderGraphResourceClass::Persistent));
         tableInitial_ = pipeline.TableInitialState(queue_);
         initial_->push_back({resource, tableInitial_, RenderGraphInitialContents::Preserved});
@@ -36,7 +36,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportColorGraph::RasterTexture */
-    RenderGraphResourceId EditorViewportColorGraph::RasterTexture(EditorViewportColorPipeline &pipeline, std::size_t role,
+    RenderGraphResourceId EditorViewportColorGraph::RasterTexture(const EditorViewportColorPipeline &pipeline, std::size_t role,
                                                                   const MaterialResourceBinding &binding) {
         if (role == 1)
             return display_;
@@ -48,7 +48,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportColorGraph::RasterInputs */
-    void EditorViewportColorGraph::RasterInputs(EditorViewportColorPipeline &pipeline, std::size_t role, RenderGraphPassRef pass) {
+    void EditorViewportColorGraph::RasterInputs(const EditorViewportColorPipeline &pipeline, std::size_t role, RenderGraphPassRef pass) {
         using enum Horo::Render::RenderGraphAccess;
         using enum Horo::Render::RenderGraphUsageKind;
         const auto geometry = pipeline.GeometryBuffers();
@@ -77,7 +77,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportColorGraph::Raster */
-    void EditorViewportColorGraph::Raster(EditorViewportColorPipeline &pipeline, std::size_t role, RenderGraphPassRef pass,
+    void EditorViewportColorGraph::Raster(const EditorViewportColorPipeline &pipeline, std::size_t role, RenderGraphPassRef pass,
                                           RenderGraphResourceId color, RenderTextureViewHandle view) {
         Use(pass, color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment);
         workloads_[role + 1] = {pass, RenderGraphMaterialRaster{.color = color,
@@ -89,8 +89,9 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportColorGraph::AppendScene */
-    Result<RenderGraphPassRef> EditorViewportColorGraph::AppendScene(RenderGraphBuilder &builder, EditorViewportColorPipeline &pipeline,
-                                                                     RenderQueueId queue, std::vector<RenderGraphImportedState> &initial,
+    Result<RenderGraphPassRef> EditorViewportColorGraph::AppendScene(RenderGraphBuilder &builder,
+                                                                     const EditorViewportColorPipeline &pipeline, RenderQueueId queue,
+                                                                     std::vector<RenderGraphImportedState> &initial,
                                                                      RenderGraphResourceId scene, RenderGraphResourceId display,
                                                                      RenderTextureViewHandle displayView, RenderGraphPassRef after,
                                                                      FramebufferExtent extent) {
@@ -134,7 +135,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportColorGraph::AppendEncode */
-    Result<RenderGraphPassRef> EditorViewportColorGraph::AppendEncode(RenderGraphBuilder &builder, EditorViewportColorPipeline &pipeline,
+    Result<RenderGraphPassRef> EditorViewportColorGraph::AppendEncode(RenderGraphBuilder &builder,
+                                                                      const EditorViewportColorPipeline &pipeline,
                                                                       RenderGraphResourceId output, RenderTextureViewHandle outputView,
                                                                       RenderGraphPassRef after) {
         try {

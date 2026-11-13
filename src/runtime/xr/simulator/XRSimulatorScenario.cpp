@@ -127,8 +127,8 @@ namespace Horo::XR {
                 const auto &action = step.actions[index];
                 if (!ActionShape(action))
                     return Invalid();
-                const auto *source = FindSource(step, action.role);
-                if (!source || (action.active && source->state == XRTrackedDeviceState::Disconnected))
+                if (const auto *source = FindSource(step, action.role);
+                    !source || (action.active && source->state == XRTrackedDeviceState::Disconnected))
                     return Invalid();
                 if (index > 0 && step.actions[index - 1].bindingIndex >= action.bindingIndex)
                     return Invalid();
@@ -151,8 +151,7 @@ namespace Horo::XR {
                 if (!JointShape(joint))
                     return Invalid();
                 const auto role = joint.hand == XRHandedness::Left ? XRTrackedDeviceRole::LeftHand : XRTrackedDeviceRole::RightHand;
-                const auto *source = FindSource(step, role);
-                if (!source || source->state != XRTrackedDeviceState::Tracked)
+                if (const auto *source = FindSource(step, role); !source || source->state != XRTrackedDeviceState::Tracked)
                     return Invalid();
                 if (index > 0 &&
                     !(std::pair{step.joints[index - 1].hand, step.joints[index - 1].joint} < std::pair{joint.hand, joint.joint}))
@@ -266,10 +265,11 @@ namespace Horo::XR {
             return Result<XRSimulatorScenario>::Failure(MakeError(XRSimulatorErrors::Invalid));
         if (descriptor.steps.size() > XRSimulatorHardLimits::MaximumSteps)
             return Result<XRSimulatorScenario>::Failure(MakeError(XRErrors::CapacityExceeded));
-        const bool bound = std::ranges::any_of(descriptor.bindings, [](const auto value) {
+        if (const bool bound = std::ranges::any_of(descriptor.bindings,
+                                                   [](const auto value) {
             return value != std::byte{};
         });
-        if (!bound && std::ranges::any_of(descriptor.steps, [](const auto &step) {
+            !bound && std::ranges::any_of(descriptor.steps, [](const auto &step) {
             return step.actionCount != 0;
         }))
             return Result<XRSimulatorScenario>::Failure(MakeError(XRSimulatorErrors::Invalid));

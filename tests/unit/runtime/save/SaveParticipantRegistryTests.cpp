@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "SaveCaptureSnapshotTestUtils.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 #include <string>
@@ -238,6 +239,42 @@ namespace Horo::Runtime {
             }
             REQUIRE(reachedSuccessfulSnapshot);
             CHECK(registry.Snapshot().Value().Find(Participant("horo.test.allocation")) != nullptr);
+        }
+
+        TEST_CASE("Dependency canonicalization allocation failures preserve registration and retry", "[unit][save][registry]") {
+            bool reachedSuccessfulRegistration = false;
+            for (std::size_t successfulAllocations = 0; successfulAllocations < 128 && !reachedSuccessfulRegistration;
+                 ++successfulAllocations) {
+                auto destructionCount = std::make_shared<int>();
+                auto adapter = Adapter(destructionCount);
+                auto descriptor = Descriptor("horo.test.allocation.dependencies");
+                descriptor.dependencies = {{Participant("horo.test.z"), SaveParticipantDependencyRequirement::Optional,
+                                            SaveParticipantDependencyPhase::Capture},
+                                           {Participant("horo.test.a"), SaveParticipantDependencyRequirement::Optional,
+                                            SaveParticipantDependencyPhase::Restore}};
+                CanonicalStateParticipantRegistry registry;
+                const auto generation = registry.Generation();
+                const auto registration = [&] {
+                    Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
+                    return registry.Register(descriptor, adapter);
+                }();
+                reachedSuccessfulRegistration = registration.HasValue();
+                if (!reachedSuccessfulRegistration) {
+                    CHECK(registration.ErrorValue().code.Value() == SaveErrors::ParticipantRegistryAllocationFailed.code.Value());
+                    CHECK(registry.Generation() == generation);
+                    CHECK(registry.Snapshot().Value().Bindings().empty());
+                    CHECK(adapter.use_count() == 1);
+                    REQUIRE(registry.Register(descriptor, adapter).HasValue());
+                }
+                CHECK(registry.Generation() == generation + 1);
+                CHECK(descriptor.dependencies.front().participant == Participant("horo.test.z"));
+                const auto snapshot = registry.Snapshot().Value();
+                const auto *binding = snapshot.Find(descriptor.participant);
+                REQUIRE(binding != nullptr);
+                CHECK(std::ranges::is_sorted(binding->Descriptor().dependencies));
+                CHECK(binding->Descriptor().dependencies.front().participant == Participant("horo.test.a"));
+            }
+            REQUIRE(reachedSuccessfulRegistration);
         }
 
         TEST_CASE("Participant registry enforces its explicit capacity", "[unit][save][registry]") {

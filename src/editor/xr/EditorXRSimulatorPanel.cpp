@@ -85,8 +85,7 @@ namespace Horo::Editor {
         auto euler = prior.ToEulerRadians();
         ImGui::PushID(static_cast<int>(index));
         constexpr std::array roles{"head", "left_controller", "right_controller", "source", "left_hand", "right_hand"};
-        const auto role = static_cast<std::size_t>(source.role);
-        if (role < roles.size())
+        if (const auto role = static_cast<std::size_t>(source.role); role < roles.size())
             ImGui::TextWrapped("%s", kTextScope.Text(context.localization, roles[role]).c_str());
         bool changed =
             ImGui::DragFloat3(kTextScope.Text(context.localization, "position").c_str(), &source.pose.position.x, 0.01F, -100, 100);
@@ -169,8 +168,7 @@ namespace Horo::Editor {
             Apply(snapshot, Replay);
         constexpr std::array states{"capture_idle",    "capture_armed",  "capture_recording", "capture_complete",
                                     "capture_partial", "capture_failed", "capture_cancelled"};
-        const auto index = static_cast<std::size_t>(snapshot.state.capture.state);
-        if (index < states.size())
+        if (const auto index = static_cast<std::size_t>(snapshot.state.capture.state); index < states.size())
             ImGui::TextWrapped("%s", kTextScope.Text(context.localization, states[index]).c_str());
         ImGui::Text("%s: %zu; %s: %zu", kTextScope.Text(context.localization, "captured_steps").c_str(), snapshot.state.capture.steps,
                     kTextScope.Text(context.localization, "dropped_steps").c_str(), snapshot.state.capture.dropped);

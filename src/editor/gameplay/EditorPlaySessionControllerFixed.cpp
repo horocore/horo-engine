@@ -73,8 +73,7 @@ namespace Horo::Editor {
             FlushPendingStop();
             return Result<void>::Success();
         }
-        auto prepared = fixedAttempt_->scene->PrepareRuntimeFixedCommit(context);
-        if (prepared.HasError())
+        if (auto prepared = fixedAttempt_->scene->PrepareRuntimeFixedCommit(context); prepared.HasError())
             return RejectFixedAttempt(context, prepared.ErrorValue());
         if (stopPending_) {
             AbortRuntimeFixedUpdate(context);

@@ -136,8 +136,8 @@ namespace Horo::Application::Internal {
     std::optional<Editor::EditorPlayXrPreview> SimulatorPlayHost::Preview() const noexcept {
         if (!impl_->Readable())
             return {};
-        const auto current = impl_->runtime->Snapshot();
-        if (current.session.session != impl_->previewSession || current.relativeNanoseconds != impl_->previewTime)
+        if (const auto current = impl_->runtime->Snapshot();
+            current.session.session != impl_->previewSession || current.relativeNanoseconds != impl_->previewTime)
             return {};
         return impl_->preview;
     }

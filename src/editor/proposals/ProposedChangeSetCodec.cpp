@@ -64,7 +64,7 @@ namespace Horo::Editor::Proposals {
         /** @brief Rejects duplicate keys and nesting beyond sixteen before retaining unbounded structure. */
         Json Parse(std::string_view text) {
             std::vector<std::set<std::string>> objects;
-            const auto callback = [&objects](int depth, Json::parse_event_t event, Json &value) {
+            const auto callback = [&objects](int depth, Json::parse_event_t event, const Json &value) {
                 if (depth > 16)
                     throw InvalidWire{};
                 if (event == Json::parse_event_t::object_start)

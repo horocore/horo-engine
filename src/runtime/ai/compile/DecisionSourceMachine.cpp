@@ -125,8 +125,7 @@ namespace Horo::AI::Detail {
             transition.source = reader.IdentityValue<DecisionNodeId>();
             transition.target = reader.IdentityValue<DecisionNodeId>();
             transition.priority = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(reader.Unsigned(4)));
-            const auto event = reader.IdentityValue<StateMachineEventId>(true);
-            if (event.IsValid())
+            if (const auto event = reader.IdentityValue<StateMachineEventId>(true); event.IsValid())
                 transition.event = event;
             transition.guards = ReadSequence<StateMachineGuard>(reader, StateMachineLimits::GuardsPerTransition, ReadGuard);
             if (reader.Boolean())

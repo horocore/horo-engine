@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
-#include <type_traits>
+#include <string>
 
 namespace Horo::Runtime {
     namespace {
@@ -32,46 +32,40 @@ namespace Horo::Runtime {
         /** @brief Retains logical asset declarations and derives only actual installed native capture requirements. */
         Result<CanonicalEncodedValue> CapturedRequirements(const SaveContentDetail::WorldState &world,
                                                            const SaveParticipantRegistrySnapshot &participants) {
-            try {
-                auto requirements = world.content->requirements;
-                if (requirements.empty() && world.content->legacy) {
-                    requirements.emplace_back(SaveContentRequirementsParticipant(), SaveContentNecessity::Required,
-                                              SaveAssetContentRequirement{Assets::AssetId::FromBytes(world.descriptor.baseScene.Bytes()),
-                                                                          world.descriptor.expectedAssetType,
-                                                                          world.descriptor.contentDigest});
-                }
-                // Logical asset identities and expected source digests remain stable. The typed project policy
-                // resolves admitted physical substitutions again on load; capture is not an asset-ID migration.
-                for (const auto &installation : world.content->installed->modules) {
-                    const auto &native = installation.Descriptor();
-                    const auto *binding = participants.Find(native.participant.participant);
-                    if (!binding || !HasSaveParticipantRole(binding->Descriptor().roles, SaveParticipantRole::Capture))
-                        continue;
-                    if (!installation.CanAdmit() || binding->Adapter().get() != installation.AcquireAdapter().get() ||
-                        binding->Descriptor() != native.participant)
-                        return Result<CanonicalEncodedValue>::Failure(MakeError(SaveErrors::RestoreActivationStale));
-                    const SaveModuleContentRequirement declaration{native.moduleId, native.moduleVersion};
-                    const auto existing = std::ranges::find_if(requirements, [&](const SaveContentRequirement &entry) {
-                        return entry.owner == native.participant.participant &&
-                               std::holds_alternative<SaveModuleContentRequirement>(entry.content);
-                    });
-                    if (existing != requirements.end()) {
-                        if (std::get<SaveModuleContentRequirement>(existing->content) != declaration)
-                            return Result<CanonicalEncodedValue>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
-                        existing->necessity = native.participant.required ? SaveContentNecessity::Required : SaveContentNecessity::Optional;
-                    } else {
-                        requirements.emplace_back(native.participant.participant,
-                                                  native.participant.required ? SaveContentNecessity::Required
-                                                                              : SaveContentNecessity::Optional,
-                                                  declaration);
-                    }
-                }
-                if (auto sorted = SaveContentDetail::SortRequirements(requirements); sorted.HasError())
-                    return Result<CanonicalEncodedValue>::Failure(sorted.ErrorValue());
-                return EncodeSaveContentRequirements(requirements);
-            } catch (const std::bad_alloc &) {
-                return Result<CanonicalEncodedValue>::Failure(MakeError(SaveErrors::CanonicalCodecAllocationFailed));
+            auto requirements = world.content->requirements;
+            if (requirements.empty() && world.content->legacy) {
+                requirements.emplace_back(SaveContentRequirementsParticipant(), SaveContentNecessity::Required,
+                                          SaveAssetContentRequirement{Assets::AssetId::FromBytes(world.descriptor.baseScene.Bytes()),
+                                                                      world.descriptor.expectedAssetType, world.descriptor.contentDigest});
             }
+            // Logical asset identities and expected source digests remain stable. The typed project policy
+            // resolves admitted physical substitutions again on load; capture is not an asset-ID migration.
+            for (const auto &installation : world.content->installed->modules) {
+                const auto &native = installation.Descriptor();
+                const auto *binding = participants.Find(native.participant.participant);
+                if (!binding || !HasSaveParticipantRole(binding->Descriptor().roles, SaveParticipantRole::Capture))
+                    continue;
+                if (!installation.CanAdmit() || binding->Adapter().get() != installation.AcquireAdapter().get() ||
+                    binding->Descriptor() != native.participant)
+                    return Result<CanonicalEncodedValue>::Failure(MakeError(SaveErrors::RestoreActivationStale));
+                const SaveModuleContentRequirement declaration{native.moduleId, native.moduleVersion};
+                const auto existing = std::ranges::find_if(requirements, [&](const SaveContentRequirement &entry) {
+                    return entry.owner == native.participant.participant &&
+                           std::holds_alternative<SaveModuleContentRequirement>(entry.content);
+                });
+                if (existing != requirements.end()) {
+                    if (std::get<SaveModuleContentRequirement>(existing->content) != declaration)
+                        return Result<CanonicalEncodedValue>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
+                    existing->necessity = native.participant.required ? SaveContentNecessity::Required : SaveContentNecessity::Optional;
+                } else {
+                    requirements.emplace_back(native.participant.participant,
+                                              native.participant.required ? SaveContentNecessity::Required : SaveContentNecessity::Optional,
+                                              declaration);
+                }
+            }
+            if (auto sorted = SaveContentDetail::SortRequirements(requirements); sorted.HasError())
+                return Result<CanonicalEncodedValue>::Failure(sorted.ErrorValue());
+            return EncodeSaveContentRequirements(requirements);
         }
 
         /** @brief Required owner-bound declaration; generic unadmitted capture cannot bypass degraded-world project policy. */
@@ -228,47 +222,65 @@ namespace Horo::Runtime {
                                                                            SaveParticipantRegistrySnapshot participants,
                                                                            const SaveDegradedWorldPolicy policy) const {
         const auto &generation = request.generation;
-        static_assert(std::is_nothrow_move_constructible_v<Result<SaveContentCaptureOutcome>>);
-        // Error storage is prepared before admission mutates any world/barrier state. Unwinding only moves owned storage.
-        auto allocationFailure = Result<SaveContentCaptureOutcome>::Failure(MakeError(SaveErrors::CanonicalCodecAllocationFailed));
-        try {
-            auto view = CurrentWorld(state_);
-            if (view.HasError())
-                return Result<SaveContentCaptureOutcome>::Failure(view.ErrorValue());
-            if (state_->captureAdmission ||
-                (policy != SaveDegradedWorldPolicy::Reject && policy != SaveDegradedWorldPolicy::PreserveOpaque) ||
-                (state_->content->degraded && policy != SaveDegradedWorldPolicy::PreserveOpaque))
-                return Result<SaveContentCaptureOutcome>::Failure(MakeError(SaveErrors::RestoreContextInvalid));
-            if (generation.scene != view.Value().RuntimeId().value || generation.registry != participants.Generation())
-                return Result<SaveContentCaptureOutcome>::Failure(MakeError(SaveErrors::RestoreActivationStale));
-            if (auto registry = ValidateCaptureRegistry(*state_, participants); registry.HasError())
-                return Result<SaveContentCaptureOutcome>::Failure(registry.ErrorValue());
-            const RuntimeSaveCaptureProvenance provenance{request.capturedState, request.epoch, generation.scene,
-                                                          view.Value().StructuralRevision(), generation.registry};
-            auto requirements = CapturedRequirements(*state_, participants);
-            if (requirements.HasError())
-                return Result<SaveContentCaptureOutcome>::Failure(requirements.ErrorValue());
-            // Allocate the immutable admission seal before invoking any capture callback or consuming barrier readiness.
-            auto seal = PrepareCaptureSeal(*state_, provenance);
-            if (seal.HasError())
-                return Result<SaveContentCaptureOutcome>::Failure(seal.ErrorValue());
-            state_->captureRequirements = std::move(requirements).Value();
-            state_->captureAdmission = provenance;
-            const CaptureAdmission admission{*state_};
-            auto captured = barrier.CaptureAtSafePoint(request.phase, generation, provenance, std::move(participants), request.limits);
-            if (captured.HasError())
-                return Result<SaveContentCaptureOutcome>::Failure(captured.ErrorValue());
-            auto outcome = std::move(captured).Value();
-            SaveContentCaptureOutcome result{outcome.barrier, {}, std::move(outcome.error)};
-            if (outcome.capture) {
-                if (auto owners = ValidateCapturedOwners(*state_, *outcome.capture); owners.HasError())
-                    result.error = owners.ErrorValue();
-                else
-                    result.capture = SaveContentSnapshot{std::move(*outcome.capture), std::move(seal).Value()};
+        using Return = Result<SaveContentCaptureOutcome>;
+        // Explicit empty-string construction keeps preflight failure catchable on checked MSVC.
+        // Final error storage exists before any admission mutation or capture callback.
+        return Return::CompleteInPlace(MakeError(SaveErrors::CanonicalCodecAllocationFailed, std::string(std::size_t{0}, '\0')),
+                                       [&](Return &completed) {
+            try {
+                auto view = CurrentWorld(state_);
+                if (view.HasError()) {
+                    completed = Return::Failure(view.ErrorValue());
+                    return;
+                }
+                if (state_->captureAdmission ||
+                    (policy != SaveDegradedWorldPolicy::Reject && policy != SaveDegradedWorldPolicy::PreserveOpaque) ||
+                    (state_->content->degraded && policy != SaveDegradedWorldPolicy::PreserveOpaque)) {
+                    completed = Return::Failure(MakeError(SaveErrors::RestoreContextInvalid));
+                    return;
+                }
+                if (generation.scene != view.Value().RuntimeId().value || generation.registry != participants.Generation()) {
+                    completed = Return::Failure(MakeError(SaveErrors::RestoreActivationStale));
+                    return;
+                }
+                if (auto registry = ValidateCaptureRegistry(*state_, participants); registry.HasError()) {
+                    completed = Return::Failure(registry.ErrorValue());
+                    return;
+                }
+                const RuntimeSaveCaptureProvenance provenance{request.capturedState, request.epoch, generation.scene,
+                                                              view.Value().StructuralRevision(), generation.registry};
+                auto requirements = CapturedRequirements(*state_, participants);
+                if (requirements.HasError()) {
+                    completed = Return::Failure(requirements.ErrorValue());
+                    return;
+                }
+                // Allocate the immutable admission seal before invoking any capture callback or consuming barrier readiness.
+                auto seal = PrepareCaptureSeal(*state_, provenance);
+                if (seal.HasError()) {
+                    completed = Return::Failure(seal.ErrorValue());
+                    return;
+                }
+                state_->captureRequirements = std::move(requirements).Value();
+                state_->captureAdmission = provenance;
+                const CaptureAdmission admission{*state_};
+                auto captured = barrier.CaptureAtSafePoint(request.phase, generation, provenance, std::move(participants), request.limits);
+                if (captured.HasError()) {
+                    completed = Return::Failure(captured.ErrorValue());
+                    return;
+                }
+                auto outcome = std::move(captured).Value();
+                SaveContentCaptureOutcome result{outcome.barrier, {}, std::move(outcome.error)};
+                if (outcome.capture) {
+                    if (auto owners = ValidateCapturedOwners(*state_, *outcome.capture); owners.HasError())
+                        result.error = owners.ErrorValue();
+                    else
+                        result.capture = SaveContentSnapshot{std::move(*outcome.capture), std::move(seal).Value()};
+                }
+                completed = Return::Success(std::move(result));
+            } catch (const std::bad_alloc &) {
+                // Keep the already-owned canonical allocation failure in its final return storage.
+                return;
             }
-            return Result<SaveContentCaptureOutcome>::Success(std::move(result));
-        } catch (const std::bad_alloc &) {
-            return allocationFailure;
-        }
+        });
     }
 }  // namespace Horo::Runtime

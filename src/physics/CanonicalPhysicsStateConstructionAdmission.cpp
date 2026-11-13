@@ -8,14 +8,16 @@ namespace Horo::Physics::Detail {
             return pool.Tracking() == PhysicsStateConstructionTracking::Required;
         }
 
-        Result<StateDetail::ConstructionRecipeLease> Missing(StateDetail::ConstructionRecipePool &pool, const ErrorCodeDescriptor &error) {
+        Result<StateDetail::ConstructionRecipeLease> Missing(const StateDetail::ConstructionRecipePool &pool,
+                                                             const ErrorCodeDescriptor &error) {
             return Required(pool) ? Result<StateDetail::ConstructionRecipeLease>::Failure(MakeError(error))
                                   : Result<StateDetail::ConstructionRecipeLease>::Success({});
         }
     }  // namespace
 
     namespace {
-        Result<void> AdmitRecipeProfile(StateDetail::ConstructionRecipePool &pool, const StateDetail::ConstructionRecipeLease &recipe) {
+        Result<void> AdmitRecipeProfile(const StateDetail::ConstructionRecipePool &pool,
+                                        const StateDetail::ConstructionRecipeLease &recipe) {
             auto actual = pool.Read(recipe);
             if (actual.HasError())
                 return Result<void>::Failure(actual.ErrorValue());
@@ -28,7 +30,7 @@ namespace Horo::Physics::Detail {
         }
     }  // namespace
 
-    Result<void> ValidateCanonicalRecipeAdmission(StateDetail::ConstructionRecipePool *pool,
+    Result<void> ValidateCanonicalRecipeAdmission(const StateDetail::ConstructionRecipePool *pool,
                                                   const StateDetail::ConstructionRecipeLease *recipe) {
         if (!pool)
             return recipe && recipe->IsValid() ? Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid))
@@ -38,7 +40,7 @@ namespace Horo::Physics::Detail {
         return AdmitRecipeProfile(*pool, *recipe);
     }
 
-    Result<StateDetail::ConstructionRecipeLease> ValidateCanonicalCreatedRecipe(StateDetail::ConstructionRecipePool *pool,
+    Result<StateDetail::ConstructionRecipeLease> ValidateCanonicalCreatedRecipe(const StateDetail::ConstructionRecipePool *pool,
                                                                                 const StateDetail::ConstructionRecipeLease *recipe,
                                                                                 const std::optional<PhysicsStateFpControl> &control,
                                                                                 const Sha256Digest &actualRecipe) {

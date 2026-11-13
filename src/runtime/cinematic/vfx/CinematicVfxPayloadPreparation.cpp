@@ -106,8 +106,8 @@ namespace Horo::Cinematic::VfxEventDetail {
         if (projection.parameters.size() > Vfx::VfxSpawnHardLimits::Parameters ||
             (projection.parameterSchema == 0) != projection.parameters.empty())
             return false;
-        const auto &position = projection.positionArguments;
-        if (position[0] == position[1] || position[0] == position[2] || position[1] == position[2])
+        if (const auto &position = projection.positionArguments;
+            position[0] == position[1] || position[0] == position[2] || position[1] == position[2])
             return false;
         for (std::size_t index = 1; index < projection.parameters.size(); ++index)
             if (projection.parameters[index - 1].channel >= projection.parameters[index].channel)

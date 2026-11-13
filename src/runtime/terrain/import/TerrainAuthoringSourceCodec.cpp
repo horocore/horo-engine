@@ -204,9 +204,8 @@ namespace Horo::Terrain {
         }
 
         Result<void> ValidateSourceHeader(const TerrainAuthoringSource &value) {
-            const auto &source = value.source;
-            if (!SourceIdentities(source) || !GridDimensions(source) || !Coordinates(source) ||
-                value.layers.has_value() != (source.layerCount != 0))
+            if (const auto &source = value.source; !SourceIdentities(source) || !GridDimensions(source) || !Coordinates(source) ||
+                                                   value.layers.has_value() != (source.layerCount != 0))
                 return Result<void>::Failure(MakeError(TerrainSourceErrors::InvalidDimensions));
             return Result<void>::Success();
         }
@@ -233,8 +232,8 @@ namespace Horo::Terrain {
             if (!value.layers)
                 return Result<void>::Success();
             const auto &binding = *value.layers;
-            const bool identities = binding.asset.IsValid() && binding.id.IsValid() && binding.revision.IsValid();
-            if (!identities || !DigestPresent(binding.digest) || !LayerOrder(binding, value.source.layerCount))
+            if (const bool identities = binding.asset.IsValid() && binding.id.IsValid() && binding.revision.IsValid();
+                !identities || !DigestPresent(binding.digest) || !LayerOrder(binding, value.source.layerCount))
                 return Result<void>::Failure(MakeError(TerrainSourceErrors::InvalidSample));
             return Result<void>::Success();
         }
@@ -276,8 +275,8 @@ namespace Horo::Terrain {
             if (layout.samples > remaining / layout.visitsPerSample)
                 return Result<void>::Failure(MakeError(TerrainSourceErrors::LimitExceeded));
             const auto visits = layout.samples * layout.visitsPerSample;
-            const auto hashChunks = (layout.EncodedBytes() - DigestBytes + HashChunkBytes - 1) / HashChunkBytes;
-            if (hashChunks > remaining - visits)
+            if (const auto hashChunks = (layout.EncodedBytes() - DigestBytes + HashChunkBytes - 1) / HashChunkBytes;
+                hashChunks > remaining - visits)
                 return Result<void>::Failure(MakeError(TerrainSourceErrors::LimitExceeded));
             return Result<void>::Success();
         }
@@ -403,8 +402,8 @@ namespace Horo::Terrain {
                 return Return::Failure(MakeError(TerrainSourceErrors::UnsupportedFormat));
             if (limits.maximumBytes == 0 || limits.maximumBytes > MaximumBytes)
                 return Return::Failure(MakeError(TerrainSourceErrors::LimitExceeded));
-            const auto bodyBytes = bytes.size() - std::min<std::size_t>(bytes.size(), DigestBytes);
-            if ((bodyBytes + HashChunkBytes - 1) / HashChunkBytes > limits.maximumWorkItems)
+            if (const auto bodyBytes = bytes.size() - std::min<std::size_t>(bytes.size(), DigestBytes);
+                (bodyBytes + HashChunkBytes - 1) / HashChunkBytes > limits.maximumWorkItems)
                 return Return::Failure(MakeError(TerrainSourceErrors::LimitExceeded));
             return Payload(bytes, limits.maximumBytes, token);
         }
@@ -479,8 +478,8 @@ namespace Horo::Terrain {
         }
 
         Result<void> ValidateSamplePayload(const Reader &reader, const SourceLayout &layout) {
-            const auto remaining = reader.bytes.size() - reader.at;
-            if (layout.samples != remaining / layout.sampleBytes || remaining % layout.sampleBytes != 0)
+            if (const auto remaining = reader.bytes.size() - reader.at;
+                layout.samples != remaining / layout.sampleBytes || remaining % layout.sampleBytes != 0)
                 return Result<void>::Failure(MakeError(TerrainSourceErrors::InvalidBytes));
             return Result<void>::Success();
         }
@@ -639,8 +638,7 @@ namespace Horo::Terrain {
         try {
             if (!value.asset.IsValid())
                 return Return::Failure(MakeError(TerrainErrors::IdentityInvalid));
-            auto valid = TerrainMaterialLayerSet::Create(value.layers, configuration);
-            if (valid.HasError())
+            if (auto valid = TerrainMaterialLayerSet::Create(value.layers, configuration); valid.HasError())
                 return Return::Failure(std::move(valid).ErrorValue());
             Writer writer;
             writer.bytes.reserve(LayerBytes);
@@ -679,8 +677,7 @@ namespace Horo::Terrain {
             auto value = std::move(identity).Value();
             if (auto read = ReadMaterialLayers(reader, value.layers); read.HasError())
                 return Return::Failure(std::move(read).ErrorValue());
-            auto valid = TerrainMaterialLayerSet::Create(value.layers, configuration);
-            if (valid.HasError())
+            if (auto valid = TerrainMaterialLayerSet::Create(value.layers, configuration); valid.HasError())
                 return Return::Failure(std::move(valid).ErrorValue());
             return Return::Success(std::move(value));
         } catch (const std::bad_alloc &) {

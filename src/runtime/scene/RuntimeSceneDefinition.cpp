@@ -314,9 +314,9 @@ namespace Horo::Runtime {
             if (auto skeleton = require(component.skeleton.Asset(), "core.animation.skeleton"); skeleton.HasError())
                 return skeleton;
             const bool clip = component.source.kind == Animation::AnimationSourceKind::Clip;
-            auto source = require(clip ? component.source.clip.Asset() : component.source.graph.Asset(),
-                                  clip ? "core.animation.clip" : "core.animation.graph");
-            if (source.HasError())
+            if (auto source = require(clip ? component.source.clip.Asset() : component.source.graph.Asset(),
+                                      clip ? "core.animation.clip" : "core.animation.graph");
+                source.HasError())
                 return source;
             if (component.retarget.IsValid())
                 return require(component.retarget.Asset(), "core.animation.retarget_profile");

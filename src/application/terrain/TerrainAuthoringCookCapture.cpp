@@ -27,8 +27,7 @@ namespace Horo::Application::TerrainCookDetail {
 
         Result<void> Require(IdSet &ids, const Assets::AssetRegistrySnapshot &registry, Assets::AssetId asset, std::string_view type,
                              std::size_t maximum) {
-            const auto *record = registry.Find(asset);
-            if (!record || record->type.Value() != type)
+            if (const auto *record = registry.Find(asset); !record || record->type.Value() != type)
                 return Result<void>::Failure(MakeError(TerrainAuthoringCookErrors::Invalid));
             ids.insert(asset);
             if (ids.size() > maximum)
@@ -62,9 +61,9 @@ namespace Horo::Application::TerrainCookDetail {
 
         Result<void> AddDefinitionAssets(const TerrainAuthoringCookRequest &request, const Assets::AssetRegistrySnapshot &registry,
                                          const Terrain::FoliageTypeDefinitionData &definition, IdSet &ids) {
-            auto material = Require(ids, registry, Assets::AssetId::FromBytes(definition.assets.material.Bytes()), "core.material",
-                                    request.profile.assets.maximumAssets);
-            if (material.HasError())
+            if (auto material = Require(ids, registry, Assets::AssetId::FromBytes(definition.assets.material.Bytes()), "core.material",
+                                        request.profile.assets.maximumAssets);
+                material.HasError())
                 return material;
             for (std::size_t i = 0; i < definition.assets.meshLodCount; ++i) {
                 auto mesh = Require(ids, registry, Assets::AssetId::FromBytes(definition.assets.meshLods[i].Bytes()), "core.mesh",
@@ -131,8 +130,8 @@ namespace Horo::Application::TerrainCookDetail {
                 return source;
             if (source.Value().source.dataset != request.fence.dataset || source.Value().source.revision != request.fence.source)
                 return Return::Failure(MakeError(TerrainAuthoringCookErrors::Stale));
-            const auto layerDigest = source.Value().layers ? source.Value().layers->digest : Sha256Digest{};
-            if (layerDigest != request.fence.layerDigest)
+            if (const auto layerDigest = source.Value().layers ? source.Value().layers->digest : Sha256Digest{};
+                layerDigest != request.fence.layerDigest)
                 return Return::Failure(MakeError(TerrainAuthoringCookErrors::Stale));
             return source;
         }
@@ -200,8 +199,7 @@ namespace Horo::Application::TerrainCookDetail {
                                                                       request.profile.maximumCapturedBytes, cancellation);
         if (inputs.HasError())
             return Return::Failure(std::move(inputs).ErrorValue());
-        const auto *root = inputs.Value().Find(request.asset);
-        if (!root || root->sourceDigest != request.fence.sourceDigest)
+        if (const auto *root = inputs.Value().Find(request.asset); !root || root->sourceDigest != request.fence.sourceDigest)
             return Return::Failure(MakeError(TerrainAuthoringCookErrors::Stale));
         selected.erase(std::ranges::find(selected, request.asset));
         Capture capture{std::make_shared<const Assets::AssetCookInputSnapshot>(std::move(inputs).Value()), std::move(source).Value(),

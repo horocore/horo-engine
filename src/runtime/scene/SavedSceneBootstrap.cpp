@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <memory>
 #include <new>
-#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -53,21 +52,6 @@ namespace Horo::Runtime {
             });
         }
 
-        /** @brief Contains only the admitted foreign decoder invocation, moving preconstructed failure storage without allocating. */
-        Result<RuntimeSceneDefinition> InvokeBaselineDecoder(ISavedSceneBaselineDecoder &decoder,
-                                                             const SavedSceneBaselineDecodeInput &input,
-                                                             Result<RuntimeSceneDefinition> allocationFailure,
-                                                             Result<RuntimeSceneDefinition> contractFailure) noexcept {
-            static_assert(std::is_nothrow_move_constructible_v<Result<RuntimeSceneDefinition>>);
-            static_assert(std::is_nothrow_move_constructible_v<Error>);
-            try {
-                return decoder.DecodeBaseline(input);
-            } catch (const std::bad_alloc &) {
-                return allocationFailure;
-            } catch (...) {
-                return contractFailure;
-            }
-        }
     }  // namespace
 
     /** @copydoc SavedSceneTransitionMetadata::IsValid */
@@ -215,21 +199,40 @@ namespace Horo::Runtime {
                 return Result<PreparedSavedSceneBootstrap>::Failure(artifact.ErrorValue());
             const auto *resolved = artifact.Value();
             const SavedSceneBaselineDecodeInput input{descriptor, resolved->artifact};
-            auto allocationFailure = Failure<RuntimeSceneDefinition>(SaveErrors::RestoreAllocationFailed);
-            auto contractFailure = Failure<RuntimeSceneDefinition>(SaveErrors::RestoreAdapterContractInvalid);
-            auto decoded = InvokeBaselineDecoder(*decoder, input, std::move(allocationFailure), std::move(contractFailure));
-            if (decoded.HasError())
-                return Result<PreparedSavedSceneBootstrap>::Failure(std::move(decoded).ErrorValue());
-            if (auto admission = content.ValidateAdmission(); admission.HasError())
-                return Result<PreparedSavedSceneBootstrap>::Failure(admission.ErrorValue());
-            auto definition = std::move(decoded).Value();
-            if (definition.Id() != descriptor.definition || definition.Revision() != descriptor.revision)
-                return Failure<PreparedSavedSceneBootstrap>(SceneErrors::SaveBootstrapIncompatible);
-            if (descriptor.spawnAnchor && std::ranges::find(definition.Entities(), *descriptor.spawnAnchor,
-                                                            &RuntimeEntityDefinition::object) == definition.Entities().end())
-                return Failure<PreparedSavedSceneBootstrap>(SceneErrors::SaveBootstrapSpawnMissing);
-            return Result<PreparedSavedSceneBootstrap>::Success(
-                PreparedSavedSceneBootstrap{std::move(descriptor), resolved->installed, std::move(definition), std::move(content)});
+            using Return = Result<PreparedSavedSceneBootstrap>;
+            // The caller's final failure slot exists before foreign code; no Result/Error is moved after it throws.
+            return Return::CompleteInPlace(MakeError(SaveErrors::RestoreAdapterContractInvalid),
+                                           [&, allocationFailure = Failure<PreparedSavedSceneBootstrap>(
+                                                   SaveErrors::RestoreAllocationFailed)](Return &completed) mutable noexcept {
+                try {
+                    auto decoded = decoder->DecodeBaseline(input);
+                    if (decoded.HasError()) {
+                        completed = Return::Failure(std::move(decoded).ErrorValue());
+                        return;
+                    }
+                    if (auto admission = content.ValidateAdmission(); admission.HasError()) {
+                        completed = Return::Failure(admission.ErrorValue());
+                        return;
+                    }
+                    auto definition = std::move(decoded).Value();
+                    if (definition.Id() != descriptor.definition || definition.Revision() != descriptor.revision) {
+                        completed = Failure<PreparedSavedSceneBootstrap>(SceneErrors::SaveBootstrapIncompatible);
+                        return;
+                    }
+                    if (descriptor.spawnAnchor && std::ranges::find(definition.Entities(), *descriptor.spawnAnchor,
+                                                                    &RuntimeEntityDefinition::object) == definition.Entities().end()) {
+                        completed = Failure<PreparedSavedSceneBootstrap>(SceneErrors::SaveBootstrapSpawnMissing);
+                        return;
+                    }
+                    completed = Return::Success(
+                        PreparedSavedSceneBootstrap{std::move(descriptor), resolved->installed, std::move(definition), std::move(content)});
+                } catch (const std::bad_alloc &) {
+                    completed = std::move(allocationFailure);
+                } catch (...) {
+                    // Foreign standard and non-standard faults retain the prepared contract failure.
+                    return;
+                }
+            });
         } catch (const std::bad_alloc &) {
             return Failure<PreparedSavedSceneBootstrap>(SaveErrors::RestoreAllocationFailed);
         }

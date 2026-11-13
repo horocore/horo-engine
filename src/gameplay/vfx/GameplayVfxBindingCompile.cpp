@@ -20,8 +20,8 @@ namespace Horo::Gameplay::VfxBindingDetail {
             const auto info = std::ranges::find(context.prepared, asset, &Vfx::VfxSpawnAssetInfo::asset);
             if (info == context.prepared.end())
                 return Reject<const Vfx::VfxSpawnAssetInfo *>(GameplayVfxErrors::AssetUnavailable);
-            const auto checked = std::span{context.checked.data(), context.checkedCount};
-            if (std::ranges::find(checked, asset) != checked.end())
+            if (const auto checked = std::span{context.checked.data(), context.checkedCount};
+                std::ranges::find(checked, asset) != checked.end())
                 return Result<const Vfx::VfxSpawnAssetInfo *>::Success(&*info);
             auto exists = context.provider.Exists(asset, context.cancellation);
             if (exists.HasError())

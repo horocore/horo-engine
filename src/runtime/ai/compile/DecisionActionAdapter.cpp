@@ -86,8 +86,7 @@ namespace Horo::AI {
         action.generation = action.generation == std::numeric_limits<std::uint32_t>::max() ? 0 : action.generation + 1;
         std::destroy_at(&action.lifecycle);
         std::construct_at(&action.lifecycle);
-        auto started = action.lifecycle.Start(operation);
-        if (started.HasError())
+        if (auto started = action.lifecycle.Start(operation); started.HasError())
             return Result<void>::Failure(started.ErrorValue());
         if (action.lifecycle.State() != AiTaskState::Running)
             return Invalid<void>(AIErrors::TaskTransitionInvalid);
@@ -110,8 +109,7 @@ namespace Horo::AI {
         if (terminal->cancellationReason)
             provider->Abort(*operation, *terminal->cancellationReason);
         provider->Cleanup(*operation, *terminal);
-        auto cleaned = action.lifecycle.CompleteCleanup();
-        if (cleaned.HasError())
+        if (auto cleaned = action.lifecycle.CompleteCleanup(); cleaned.HasError())
             return Result<void>::Failure(cleaned.ErrorValue());
         if (terminal->state != AiTaskState::Succeeded && published.HasValue())
             return Invalid<void>(AIErrors::TaskFailureInvalid);

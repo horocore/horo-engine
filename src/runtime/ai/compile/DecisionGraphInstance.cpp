@@ -151,8 +151,8 @@ namespace Horo::AI {
                 return stepped;
             state.outcome = stepped.Value();
         } else {
-            auto stepped = state.machine->Step(input_->tick, input_->current, input_->blackboard, input_->events, state.actions.get());
-            if (stepped.HasError())
+            if (auto stepped = state.machine->Step(input_->tick, input_->current, input_->blackboard, input_->events, state.actions.get());
+                stepped.HasError())
                 return Result<AiTaskState>::Failure(stepped.ErrorValue());
             const auto *terminal = state.machine->TerminalResult();
             state.outcome = terminal ? terminal->state : AiTaskState::Running;

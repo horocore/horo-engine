@@ -302,15 +302,14 @@ namespace Horo::Runtime {
             return Failure<void>(SaveErrors::OperationInvalid);
         snapshot_.state = SaveBarrierState::Cancelled;
         ++snapshot_.revision;
-        static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
-        return [this, failure = Failure<void>(SaveErrors::LifecycleCallbackFailed)]() mutable noexcept {
+        return Result<void>::CompleteInPlace(MakeError(SaveErrors::LifecycleCallbackFailed), [this](Result<void> &completed) noexcept {
             try {
                 MeasureElapsed();
             } catch (...) {  // Timing failure must not prevent exact-request cancellation and acknowledgement.
-                return std::move(failure);
+                return;
             }
-            return Result<void>::Success();
-        }();
+            completed = Result<void>::Success();
+        });
     }
 
     /** @copydoc SaveCaptureBarrier::BeginShutdown */

@@ -99,8 +99,8 @@ namespace Horo::Extensions::Tests {
                         .temporaryRoot = temporary,
                         .script = "resources/reference.lua",
                         .package = id,
-                        .module = id + ".script",
-                        .import = id + ".backend-import",
+                        .moduleId = id + ".script",
+                        .importId = id + ".backend-import",
                         .publisher = key.root.publisherId};
             }
 

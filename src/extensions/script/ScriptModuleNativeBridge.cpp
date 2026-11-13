@@ -26,7 +26,7 @@ namespace Horo::Extensions {
 
         ScriptRuntimeBackendBindingInput Input(const ModuleScriptHostAuthority &host, const ModuleScriptNativeEvidence &actual,
                                                ScriptCapabilityProfile profile) {
-            ScriptRuntimeBackendBindingInput input{actual.import, actual.consumer, actual.provider, actual.code};
+            ScriptRuntimeBackendBindingInput input{actual.resolvedImport, actual.consumer, actual.provider, actual.code};
             input.service = actual.descriptor;
             input.capabilities = host.Capabilities();
             input.services = host.Services();
@@ -57,10 +57,10 @@ namespace Horo::Extensions {
     };
 
     Result<ScriptModuleImport> BindModuleScriptHostImport(const ModuleScriptHostAuthority &host, std::string_view package,
-                                                          std::string_view module, std::string_view id, std::string alias,
+                                                          std::string_view moduleId, std::string_view importId, std::string alias,
                                                           ScriptCapabilityProfile profile) {
         using Output = Result<ScriptModuleImport>;
-        auto resolved = host.Resolve(package, module, id);
+        auto resolved = host.Resolve(package, moduleId, importId);
         if (resolved.HasError())
             return Output::Failure(resolved.ErrorValue());
         if (!resolved.Value().Port())

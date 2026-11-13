@@ -246,9 +246,9 @@ namespace Horo::Editor {
                 defaults.push_back(*binding);
             actions.push_back({Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
                                Input::InputContextId{kEditorWorkspaceInputContext}, false, defaults});
-            for (const auto &override : profile.overrides)
-                if (override.action.Value() == entry.command.id.value)
-                    defaults = override.bindings;
+            for (const auto &bindingOverride : profile.overrides)
+                if (bindingOverride.action.Value() == entry.command.id.value)
+                    defaults = bindingOverride.bindings;
             commands_.push_back({entry.command.id.value, std::move(defaults)});
         }
         commandBindingsValid_ = Input::ValidateBindingProfile(EditorKeymapActions(profile, actions), profile).IsValid();
@@ -270,7 +270,8 @@ namespace Horo::Editor {
                 PrepareLayout(entry);
             return;
         }
-        std::vector<Entry> next;
+        // Preserve bad_alloc propagation when MSVC debug allocates the empty vector's iterator proxy.
+        std::vector<Entry> next(std::size_t{0});
         next.reserve(host_->Prepared().size());
         for (const auto &projection : host_->Prepared()) {
             next.push_back(PrepareEntry(projection, locale));

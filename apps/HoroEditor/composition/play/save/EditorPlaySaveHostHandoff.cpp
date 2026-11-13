@@ -114,15 +114,13 @@ namespace Horo::Application::Internal {
 
             /** @copydoc SceneAggregateRestore::PrepareScene */
             Result<void> PrepareScene(RuntimeScene &scene) override {
-                auto prepared = bundle_->PrepareScene(scene);
-                if (prepared.HasError())
+                if (auto prepared = bundle_->PrepareScene(scene); prepared.HasError())
                     return RecordFailure(std::move(prepared));
                 return RecordFailure(PrepareGameplay(scene));
             }
 
             Result<void> PrepareScene(RuntimeScene &scene, SceneRestoreCandidateCommands &commands) override {
-                auto prepared = bundle_->PrepareScene(scene, commands);
-                if (prepared.HasError())
+                if (auto prepared = bundle_->PrepareScene(scene, commands); prepared.HasError())
                     return RecordFailure(std::move(prepared));
                 return RecordFailure(PrepareGameplay(scene));
             }
@@ -178,10 +176,10 @@ namespace Horo::Application::Internal {
 
         private:
             /** @brief Preserve the actual failure before rollback cancellation only while this control still owns the original producer. */
-            template <typename T> Result<T> RecordFailure(Result<T> result) {
+            template <typename T> Result<T> RecordFailure(Result<T> &&result) {
                 if (control_->packet)
                     return PreservePlaySaveFailure(control_->packet->operation, std::move(result));
-                return result;
+                return std::move(result);
             }
 
             std::unique_ptr<SceneRestoreBundle> bundle_;
@@ -339,8 +337,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         if (pending.next != pending.loads.size() || active)
             return Result<void>::Success();
-        auto queued = QueueReady();
-        if (queued.HasError())
+        if (auto queued = QueueReady(); queued.HasError())
             RejectPending(queued.ErrorValue());
         else
             pending_.reset();  // Scene-owned PacketSource now retains the sole original packet and all source/lease roots.
@@ -349,8 +346,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PlaySaveSceneHandoff::ObservePending */
     void PlaySaveSceneHandoff::ObservePending() {
-        const auto &pending = *pending_;
-        if (!pending.draining && pending.control->packet->operation.ObserveCancellation() == SaveCancellationObservation::Cancelled)
+        if (const auto &pending = *pending_;
+            !pending.draining && pending.control->packet->operation.ObserveCancellation() == SaveCancellationObservation::Cancelled)
             RejectPending(CancelledPacketError(state_->operation));
         if (prefabs_)
             if (auto advanced = prefabs_->Provider().Advance(); advanced.HasError())

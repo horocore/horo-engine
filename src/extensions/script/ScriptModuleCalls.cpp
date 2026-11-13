@@ -47,11 +47,12 @@ namespace Horo::Extensions {
             if (!source)
                 return ScriptModuleContextAccess::Invoke(backend, request, cancel);
             const auto &owner = source->capability.Activation();
-            auto use = source->capability.AcquireUse(owner.ExtensionId(), owner.ModuleId(), owner.Generation());
-            if (use.HasError())
+            if (auto use = source->capability.AcquireUse(owner.ExtensionId(), owner.ModuleId(), owner.Generation()); use.HasError())
                 return Result<ScriptCallResult>::Failure(use.ErrorValue());
-            // The actual use guard and copied executable lease span the complete backend member call.
-            return ScriptModuleContextAccess::Invoke(backend, request, cancel);
+            else {
+                // The actual use guard and copied executable lease span the complete backend member call.
+                return ScriptModuleContextAccess::Invoke(backend, request, cancel);
+            }
         }
 
         void Execute(std::shared_ptr<const ScriptRuntimeBackendBinding> backend, std::shared_ptr<ScriptInvocationController> controller,

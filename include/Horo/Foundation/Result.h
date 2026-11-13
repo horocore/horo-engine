@@ -25,6 +25,21 @@ namespace Horo {
             return Result(std::in_place_type<T>, std::forward<Args>(args)...);
         }
 
+        /**
+         * @brief Prepares a failure in final return storage and synchronously completes that result in place.
+         * @param fallback Initial failure copied into final storage before completion starts.
+         * @param complete Synchronous completion receiving a call-scoped reference to the final result.
+         * @return The completed result without moving it after completion; return this factory as a prvalue.
+         * @throws Exceptions from preparing the initial failure or running completion; partial result storage is destroyed.
+         * @details Completion must not retain its result reference. It owns exception containment and the
+         * allocation contracts of its state transitions; this factory performs no implicit failure translation.
+         */
+        template <typename Completion>
+            requires requires(Completion &&complete, Result &result) { std::forward<Completion>(complete)(result); }
+        [[nodiscard]] static Result CompleteInPlace(const Error &fallback, Completion &&complete) {
+            return Result(InPlaceCompletion{}, fallback, std::forward<Completion>(complete));
+        }
+
         [[nodiscard]] static Result Failure(Error error) {
             return Result(std::move(error));
         }
@@ -78,6 +93,13 @@ namespace Horo {
         }
 
     private:
+        struct InPlaceCompletion final {};
+
+        template <typename Completion>
+        Result(InPlaceCompletion, const Error &fallback, Completion &&complete) : m_value(std::in_place_type<Error>, fallback) {
+            std::forward<Completion>(complete)(*this);
+        }
+
         template <typename... Args>
         explicit Result(std::in_place_type_t<T>, Args &&...args) : m_value(std::in_place_type<T>, std::forward<Args>(args)...) {}
 
@@ -97,6 +119,19 @@ namespace Horo {
 
         [[nodiscard]] static Result Failure(Error error) {
             return Result(std::move(error));
+        }
+
+        /** @brief Prepares a failure in final return storage, then synchronously invokes completion.
+         * @param fallback Initial failure copied into final storage before completion starts.
+         * @param complete Synchronous completion; must not retain the call-scoped result reference.
+         * @return Completed result without a subsequent result move; return this factory as a prvalue.
+         * @throws Exceptions preparing the initial failure or running completion; partial result storage is destroyed.
+         * @details Completion owns exception containment and all allocation contracts of its state transitions.
+         */
+        template <typename Completion>
+            requires requires(Completion &&complete, Result &result) { std::forward<Completion>(complete)(result); }
+        [[nodiscard]] static Result CompleteInPlace(const Error &fallback, Completion &&complete) {
+            return Result(InPlaceCompletion{}, fallback, std::forward<Completion>(complete));
         }
 
         [[nodiscard]] bool HasValue() const noexcept {
@@ -128,6 +163,12 @@ namespace Horo {
         }
 
     private:
+        struct InPlaceCompletion final {};
+
+        template <typename Completion> Result(InPlaceCompletion, const Error &fallback, Completion &&complete) : m_error(fallback) {
+            std::forward<Completion>(complete)(*this);
+        }
+
         Result() noexcept = default;
 
         explicit Result(Error error) : m_error(std::move(error)) {}

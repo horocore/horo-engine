@@ -859,8 +859,7 @@ namespace Horo::Animation {
         result.parameters_ = canonical.parameters;
         result.entry_ = entry.Value();
         std::set<AnimationClipId> clips;
-        auto definitions = CompileDefinitions(canonical, context, clips, result.definitions_);
-        if (definitions.HasError())
+        if (auto definitions = CompileDefinitions(canonical, context, clips, result.definitions_); definitions.HasError())
             return Result<AnimationGraphProgram>::Failure(definitions.ErrorValue());
         if (auto calls = BoundCalls(result.definitions_, context); calls.HasError())
             return Result<AnimationGraphProgram>::Failure(calls.ErrorValue());

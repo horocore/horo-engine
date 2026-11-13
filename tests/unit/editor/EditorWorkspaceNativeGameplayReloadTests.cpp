@@ -123,6 +123,7 @@ namespace {
         }
 
         void RequirePlaying() const {
+            INFO(controller_.ViewModel().playError);
             REQUIRE(controller_.ViewModel().playState == EditorPlayState::Playing);
             REQUIRE(controller_.ViewModel().playError.empty());
         }

@@ -7,7 +7,7 @@ namespace Horo::Animation::Detail {
     namespace {
         /** @brief Borrows exactly one prepared complete slot pose from a fixed flat
          * allocation. */
-        std::span<Math::Transform> Pose(GraphInstanceState &state, std::vector<Math::Transform> &values,
+        std::span<Math::Transform> Pose(const GraphInstanceState &state, std::vector<Math::Transform> &values,
                                         const std::uint32_t slot) noexcept {
             const auto joints = state.program->SkeletonBinding().joints;
             return std::span{values}.subspan(static_cast<std::size_t>(slot) * joints, joints);

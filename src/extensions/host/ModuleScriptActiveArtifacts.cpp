@@ -65,9 +65,9 @@ namespace Horo::Extensions {
             if (!code || !code->loaded || !code->artifactEvidence)
                 return Result<void>::Failure(
                     MakeError(ExtensionErrors::ScriptInvocationProviderRevoked, "Actual native load evidence is absent or retired."));
-            const auto found = std::ranges::find(artifacts, std::filesystem::path{nativeModule.declaration.entry},
-                                                 &ModuleScriptArtifactEvidence::relative);
-            if (found == artifacts.end() || !(code->artifactEvidence->ArtifactDigest() == found->evidence.ArtifactDigest() &&
+            if (const auto found = std::ranges::find(artifacts, std::filesystem::path{nativeModule.declaration.entry},
+                                                     &ModuleScriptArtifactEvidence::relative);
+                found == artifacts.end() || !(code->artifactEvidence->ArtifactDigest() == found->evidence.ArtifactDigest() &&
                                               code->artifactEvidence->PublisherId() == found->evidence.PublisherId() &&
                                               code->artifactEvidence->KeyId() == found->evidence.KeyId()))
                 return Result<void>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable,
@@ -82,8 +82,7 @@ namespace Horo::Extensions {
 
     Result<void> ModuleScriptHostAuthority::ValidateActiveArtifacts(const ExtensionManifest &manifest,
                                                                     std::span<const ModuleScriptArtifactEvidence> artifacts) const {
-        auto lane = RequireOpenOwner();
-        if (lane.HasError())
+        if (auto lane = RequireOpenOwner(); lane.HasError())
             return lane;
         for (const auto &declaration : manifest.modules) {
             if (PresentationOnly(declaration))

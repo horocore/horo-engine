@@ -103,10 +103,10 @@ namespace Horo::Runtime {
         if (state_ != RuntimeLifecycleState::Running)
             return StateFailure();
         for (std::size_t index = 0; index < startedParticipantCount_; ++index) {
-            auto prepared = ContainParticipantException([this, index, &context] {
+            if (auto prepared = ContainParticipantException([this, index, &context] {
                 return participants_[index]->PrepareFixedCommit(context);
             });
-            if (prepared.HasError())
+                prepared.HasError())
                 return prepared;
             if (state_ != RuntimeLifecycleState::Running)
                 return StateFailure();

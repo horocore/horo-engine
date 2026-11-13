@@ -1,6 +1,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 
 #include "GameModuleHostDetail.h"
+#include "Horo/Foundation/PathUtils.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
@@ -71,7 +72,7 @@ namespace Horo::Gameplay {
                                                                                          const bool ownedShadow) {
             auto image = std::make_shared<Detail::GameModuleCodeImage>(std::unique_ptr<Platform::DynamicLibrary>{});
             if (ownedShadow)
-                image->shadowArtifact = libraryPath;
+                image->shadowArtifact = Foundation::Paths::NativeApiPath(libraryPath);
             auto loaded = Platform::LoadDynamicLibraryAtPath(libraryPath);
             if (loaded.HasError())
                 return Result<std::shared_ptr<Detail::GameModuleCodeImage>>::Failure(loaded.ErrorValue());

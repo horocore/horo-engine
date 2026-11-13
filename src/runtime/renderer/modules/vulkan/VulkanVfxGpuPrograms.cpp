@@ -19,9 +19,9 @@ namespace Horo::Render::Detail {
             Modules &operator=(const Modules &) = delete;
 
             ~Modules() {
-                for (auto module : values)
-                    if (module)
-                        owner->native.destroyModule(owner->device, module, nullptr);
+                for (auto shaderModule : values)
+                    if (shaderModule)
+                        owner->native.destroyModule(owner->device, shaderModule, nullptr);
             }
         };
 

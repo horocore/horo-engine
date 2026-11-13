@@ -222,8 +222,8 @@ namespace Horo::AI {
                 return Failure<void>(AIErrors::DecisionAssetLimitExceeded);
             std::vector<DecisionNodeId> seen;
             for (const auto &entry : configuration) {
-                const auto node = std::ranges::find(plan.Nodes(), entry.node, &DecisionPlanNode::id);
-                if (node == plan.Nodes().end() || node->intrinsic != DecisionControlKind::Unspecified)
+                if (const auto node = std::ranges::find(plan.Nodes(), entry.node, &DecisionPlanNode::id);
+                    node == plan.Nodes().end() || node->intrinsic != DecisionControlKind::Unspecified)
                     return Failure<void>(AIErrors::DecisionAssetSchemaInvalid);
                 if (std::ranges::find(seen, entry.node) != seen.end())
                     return Failure<void>(AIErrors::DescriptorConflict);

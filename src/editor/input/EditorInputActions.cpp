@@ -83,9 +83,9 @@ namespace Horo::Editor {
 
     /** @copydoc EditorActionBindings */
     std::span<const Input::InputBinding> EditorActionBindings(const std::string_view id, const Input::InputBindingProfile &profile) {
-        for (const auto &override : profile.overrides)
-            if (override.action.Value() == id)
-                return override.bindings;
+        for (const auto &bindingOverride : profile.overrides)
+            if (bindingOverride.action.Value() == id)
+                return bindingOverride.bindings;
         for (const auto &action : RegisteredEditorInputActions())
             if (action.id.Value() == id)
                 return action.defaultBindings;

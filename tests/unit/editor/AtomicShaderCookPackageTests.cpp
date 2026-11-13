@@ -9,8 +9,13 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace {
     using namespace Horo;
@@ -153,7 +158,14 @@ TEST_CASE("Atomic shader directory publication preserves live and dangling desti
     SECTION("dangling directory link") {
         target = fixture.root.path / "missing target";
     }
-    fs::create_directory_symlink(target, fixture.destination);
+    std::error_code linkError;
+    fs::create_directory_symlink(target, fixture.destination, linkError);
+#if defined(_WIN32)
+    if (linkError == std::error_code{ERROR_PRIVILEGE_NOT_HELD, std::system_category()})
+        SKIP("Windows did not grant directory-symlink creation; this case requires a symlink-capable host.");
+#endif
+    INFO("Directory symlink fixture: " << linkError.message());
+    REQUIRE_FALSE(linkError);
     Tests::RequireActionableError(PublishShaderCookDirectory(fixture.source, fixture.destination),
                                   Render::ShaderCompilerPipelineErrors::ScratchIoFailed);
     CHECK(fs::is_symlink(fs::symlink_status(fixture.destination)));

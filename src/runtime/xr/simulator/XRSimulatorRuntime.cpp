@@ -130,9 +130,9 @@ namespace Horo::XR {
     Result<void> XRSimulatorRuntime::Impl::Activate(const XRSimulatorInitialState initial) {
         const auto capabilities = Capabilities(incarnation);
         const auto budget = query ? static_cast<std::uint32_t>(XRFakeLimits::MaximumActions) : 0U;
-        const auto activated = host.Activate(capabilities, Plan(capabilities), {2, 1, 1},
-                                             {5, 7, budget, XRHandTrackingHardLimits::MaximumJoints}, Value<XRWorldOriginRevision>(1));
-        if (activated.HasError())
+        if (const auto activated = host.Activate(capabilities, Plan(capabilities), {2, 1, 1},
+                                                 {5, 7, budget, XRHandTrackingHardLimits::MaximumJoints}, Value<XRWorldOriginRevision>(1));
+            activated.HasError())
             return Result<void>::Failure(activated.ErrorValue());
         activeBindings = candidateBindings;
         candidateBindings = {};

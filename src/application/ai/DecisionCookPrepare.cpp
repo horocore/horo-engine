@@ -38,8 +38,8 @@ namespace Horo::Application::DecisionCookDetail {
                     });
                     if (found == state.inputs.end() || found->graph.asset != id)
                         return Invalid<std::vector<std::size_t>>(AI::AIErrors::DecisionAssetSubtreeMissing);
-                    const auto index = static_cast<std::size_t>(found - state.inputs.begin());
-                    if (std::ranges::find(closure, index) == closure.end())
+                    if (const auto index = static_cast<std::size_t>(found - state.inputs.begin());
+                        std::ranges::find(closure, index) == closure.end())
                         closure.push_back(index);
                     if (closure.size() > state.limits.maximumAssets)
                         return Invalid<std::vector<std::size_t>>(AI::AIErrors::DecisionAssetLimitExceeded);

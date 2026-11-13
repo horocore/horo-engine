@@ -1,5 +1,7 @@
 #include "GameModuleHostTestHelpers.h"
 #include "GameplayRetirementTestSupport.h"
+#include "Horo/Foundation/PathUtils.h"
+#include "OwnedTestDirectory.h"
 
 #include <thread>
 
@@ -295,6 +297,71 @@ TEST_CASE("game module host validates an independent shadow artifact and removes
     module.reset();
     REQUIRE_FALSE(std::filesystem::exists(shadowPath));
     std::filesystem::remove_all(root, ignored);
+}
+
+TEST_CASE("Native shadow modules load from deep Unicode project paths", "[gameplay][module][paths][long-path]") {
+    Tests::OwnedTestDirectory directory{"native module long path"};
+    auto root = directory.Path();
+    while (root.native().size() < 300)
+        root /= std::filesystem::path{u8"nested module \u00fc"};
+    INFO("Native shadow root length: " << root.native().size());
+    auto loaded = GameModuleHost{}.LoadShadowCopy(std::filesystem::path{HORO_TEST_GAME_MODULE_PATH}, root, Expectation());
+    INFO((loaded.HasError() ? loaded.ErrorValue().message : "Native module artifact was opened."));
+    REQUIRE(loaded.HasValue());
+    REQUIRE_FALSE(loaded.Value().diagnostic);
+    auto module = std::move(loaded).Value().owner;
+    REQUIRE(module);
+    const auto shadow = module->LoadedArtifactPath();
+    REQUIRE(shadow.native().size() > 300);
+    REQUIRE(std::filesystem::is_regular_file(Foundation::Paths::NativeApiPath(shadow)));
+    module.reset();
+    CHECK_FALSE(std::filesystem::exists(Foundation::Paths::NativeApiPath(shadow)));
+    std::error_code cleanup;
+    std::filesystem::remove_all(Foundation::Paths::NativeApiPath(root), cleanup);
+    CHECK_FALSE(cleanup);
+}
+
+TEST_CASE("Native shadow filename bounds do not split Unicode code points", "[gameplay][module][paths][unicode]") {
+    Tests::OwnedTestDirectory directory{"native module filename boundary"};
+    const auto prefix = std::u8string(63, u8'a');
+    auto source = directory.Path() / std::filesystem::path{prefix + u8"\u6a21\u5757"};
+    const auto original = std::filesystem::path{HORO_TEST_GAME_MODULE_PATH};
+    source += original.extension();
+    REQUIRE(std::filesystem::copy_file(original, source));
+    auto loaded = GameModuleHost{}.LoadShadowCopy(source, directory.Path(), Expectation());
+    INFO((loaded.HasError() ? loaded.ErrorValue().message : "Native module artifact was opened."));
+    REQUIRE(loaded.HasValue());
+    REQUIRE_FALSE(loaded.Value().diagnostic);
+    auto module = std::move(loaded).Value().owner;
+    REQUIRE(module);
+    const auto shadow = module->LoadedArtifactPath();
+    CHECK(shadow.stem().u8string().starts_with(prefix + u8".horo_reload_"));
+    CHECK(shadow.extension() == original.extension());
+    module.reset();
+    CHECK_FALSE(std::filesystem::exists(shadow));
+}
+
+TEST_CASE("Native shadow generations remain reloadable across repeated copies", "[gameplay][module][paths][reload]") {
+    Tests::OwnedTestDirectory directory{"native module repeated shadow"};
+    const GameModuleHost host;
+    std::unique_ptr<LoadedGameModule> module;
+    std::filesystem::path source{HORO_TEST_GAME_MODULE_PATH};
+    for (std::uint32_t generation = 0; generation < 16; ++generation) {
+        INFO("Native shadow generation: " << generation);
+        auto loaded = host.LoadShadowCopy(source, directory.Path(), Expectation());
+        INFO((loaded.HasError() ? loaded.ErrorValue().message : "Native module artifact was opened."));
+        REQUIRE(loaded.HasValue());
+        REQUIRE_FALSE(loaded.Value().diagnostic);
+        const auto previous = source;
+        module = std::move(loaded).Value().owner;
+        REQUIRE(module);
+        source = module->LoadedArtifactPath();
+        REQUIRE(std::filesystem::is_regular_file(source));
+        if (generation != 0)
+            CHECK_FALSE(std::filesystem::exists(previous));
+    }
+    module.reset();
+    CHECK_FALSE(std::filesystem::exists(source));
 }
 
 TEST_CASE("generated gameplay bundle validation rejects incompatible identity before lifecycle activation") {
