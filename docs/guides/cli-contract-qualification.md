@@ -92,14 +92,15 @@ Its slow-writer regression holds output blocked while 65,537 producer reports
 complete, then verifies bounded retained text and ordered final presentation.
 A separate 4,096-invocation projection stress regression checks two-record
 terminal retention and release of each operation's cancellation callback owner.
-Final native run evidence for these additions remains pending.
+Final-head native run evidence remains pending. The previous Linux CI run below
+provides scoped evidence for the initial delivery head.
 
 The current application source tree and selected build contain no `horopak`
 executable target. Its approved packaging composition and absence of RenderApi
 dependencies therefore remain unqualified. The root guard also applies if
 that target is introduced later.
 
-Linux and macOS process-tree, signal, repeated interrupt, timeout, startup,
+Final-head Linux and macOS process-tree, signal, repeated interrupt, timeout, startup,
 shutdown and adapter suites require native runs. Windows evidence does not
 qualify those platforms. Symlink fixtures that cannot acquire native link
 creation privileges must be reported as skipped. Native permission-denial
@@ -132,6 +133,46 @@ They require the canonical machine-wide lock handle and stop on a mismatch.
 
 Final source, consumer and quality verification is pending physical heavy-build
 lock availability. The parent and both children retain their open acceptance.
+
+## Linux CI evidence for the previous delivery head
+
+The Sonar coverage job for delivery head
+`18dfd406a01ec4475bc03fa8cc4475e2a4698931` on base `3df476f` completed its
+instrumented Linux C++ build and canonical viewport cooks. Its CTest run
+selected 11,454 tests and failed exactly two. The scanner/quality-gate job did
+not execute because coverage prerequisites failed. Evidence is the
+[completed coverage job](https://github.com/horocore/horo-engine/actions/runs/43424909999/job/131883841281).
+
+| Relevant suite | Passed | Failed |
+| --- | ---: | ---: |
+| CLI registry/parser/dispatcher/presenter/lifecycle | 65 | 1 |
+| Native host progress pump | 2 | 0 |
+| Native production output contract | 1 | 0 |
+| CLI public-header consumer | 1 | 0 |
+| MCP serve unit contracts | 9 | 0 |
+| Native MCP stdio contract, including POSIX interrupts and timeout | 1 | 0 |
+| Headless dependency policy | 1 | 0 |
+| Navigation application/CLI/MCP adapters | 11 | 0 |
+| Native navigation CLI contracts | 7 | 0 |
+| Observability | 44 | 0 |
+| Host observability | 3 | 1 |
+| Shared package application adapters | 31 | 0 |
+| Module script product host | 27 | 0 |
+| Reference SDK/native CLI examples | 1 | 0 |
+
+The CLI help golden omitted the newly reserved `--timeout-ms` line. The host
+lifecycle regression watched Logger's accepted-log counter for spans, although
+`OperationSpan::Complete` submits directly to Telemetry. The fixes update the
+exact help contract and observe `Telemetry::Runtime::GetStatistics` before
+requiring the actual persisted history record. No production behavior or test
+acceptance was relaxed. These fixes require a fresh run.
+
+This evidence qualifies only the listed paths at that previous Linux delivery
+head. It does not qualify Windows console events, macOS execution, the pending
+provider integration, a missing packaging executable, or the final edited HEAD.
+The separate CI formatting job rejected one blank line; all 36 changed C++
+files now pass the exact pinned clang-format 19.1.7 locally. Android package
+qualification completed all three profiles successfully for that previous head.
 
 ## Whole-parent acceptance audit
 
