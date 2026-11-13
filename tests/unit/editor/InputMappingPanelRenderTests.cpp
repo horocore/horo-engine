@@ -219,6 +219,26 @@ namespace {
         CHECK(fixture.gui.input.ReadAction(fixture.workspace, action).x == -1.0F);
     }
 
+    TEST_CASE("Clicking outside Input Mapping abandons capture without authoring another surface's click", "[editor][input][gui]") {
+        MappingFixture fixture;
+        fixture.Draw(900);
+        fixture.ActivateRebind();
+        fixture.Draw(900);
+        REQUIRE_FALSE(fixture.gui.input.IsContextActive(fixture.workspace));
+        const auto profile = fixture.gui.input.Profile();
+        fixture.collector.BeginFrame(2);
+        fixture.collector.SetPointerButton(Input::PointerButton::Primary, true);
+        fixture.gui.input.BeginFrame(fixture.collector.Commit());
+        ImGui::GetIO().AddMousePosEvent(950, 780);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        fixture.Draw(900);
+        CHECK(fixture.gui.input.IsContextActive(fixture.workspace));
+        CHECK(fixture.gui.input.Profile() == profile);
+        const auto paths = Input::ResolveBindingProfilePaths({}, fixture.home.directory.Path());
+        REQUIRE(paths.HasValue());
+        CHECK_FALSE(std::filesystem::exists(paths.Value().editorUser));
+    }
+
     TEST_CASE("Hidden Input Mapping releases its capture without retiring another modal owner", "[editor][input][gui]") {
         MappingFixture fixture;
         fixture.Draw(900);

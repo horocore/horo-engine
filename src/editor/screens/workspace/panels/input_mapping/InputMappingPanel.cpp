@@ -357,6 +357,16 @@ namespace Horo::Editor {
     void InputMappingPanel::PollBindingCapture(const EditorGuiContext &context) {
         if (!listeningAction_ || !bindingCapture_ || router_ == nullptr)
             return;
+        // A click in another workspace surface abandons this widget's capture;
+        // it must not both activate that surface and author a pointer binding.
+        if (std::ranges::any_of(router_->Snapshot().pointer.buttons, &Input::ButtonState::pressed) &&
+            !ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
+            listeningAction_.reset();
+            bindingCapture_.reset();
+            bindingCaptureContext_.Reset();
+            statusMessage_.clear();
+            return;
+        }
         const auto result = bindingCapture_->Poll(*router_, bindingCaptureContext_);
         if (result.status == Input::BindingCaptureStatus::Pending)
             return;
