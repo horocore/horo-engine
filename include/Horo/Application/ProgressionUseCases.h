@@ -167,7 +167,7 @@ namespace Horo::Application {
          * @param candidate Receives registry-owned identity, authority and algebra. @return Ordering or original definition error. */
         [[nodiscard]] Result<PlatformServices::LeaderboardOrdering> ApplyDefinition(
             const ProgressionFact &fact, PlatformServices::PlatformProgressionMutationCandidate &candidate) const;
-        /** @brief Shares definition/authority/availability validation across the disjoint delivery paths.
+        /** @brief Shares definition and authority validation across the disjoint delivery paths.
          * @param fact Original committed fact. @return Exact envelope and ordering, or original structured failure. */
         [[nodiscard]] Result<PreparedIntent> PrepareFact(const ProgressionFact &fact) const;
         /** @brief Checks a retained occurrence/definition binding before either delivery owner can accept changed intent.

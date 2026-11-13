@@ -421,6 +421,15 @@ TEST_CASE("Progression selected durable owner and evidence survive failed prepar
     auto useCases = std::move(created).Value();
     auto requirements = ReplayRequirementsForStats(definitions);
     const auto fact = Fact(definitions.stats->Definitions().front().id);
+    gate.error = MakeError(BackendErrors::UnsupportedOperation);
+    const auto unavailable = useCases.PrepareDurableIntent(fact, requirements, qualifier);
+    REQUIRE(unavailable.HasError());
+    CHECK(unavailable.ErrorValue().code == BackendErrors::UnsupportedOperation.code);
+    CHECK(qualifier.calls == 0);
+    gate.error.reset();
+    const auto unavailableFallback = useCases.Submit(fact, 0);
+    REQUIRE(unavailableFallback.HasError());
+    CHECK(unavailableFallback.ErrorValue().code == PlatformProgressionErrors::IdempotencyConflict.code);
     qualifier.failure = MakeError(BackendErrors::UnsupportedOperation);
     REQUIRE(useCases.PrepareDurableIntent(fact, requirements, qualifier).HasError());
     const auto fallback = useCases.Submit(fact, 0);

@@ -147,9 +147,6 @@ namespace Horo::Application {
         const auto authorized = authority_.Authorize(candidate);
         if (authorized.HasError())
             return Result<PreparedIntent>::Failure(authorized.ErrorValue());
-        const auto supported = gate_.Validate(envelope.Value());
-        if (supported.HasError())
-            return Result<PreparedIntent>::Failure(supported.ErrorValue());
         return Result<PreparedIntent>::Success({envelope.Value(), definition.Value()});
     }
 
@@ -181,6 +178,9 @@ namespace Horo::Application {
             return Result<PlatformProgressionAdmission>::Failure(factBinding.ErrorValue());
         if (factBinding.Value() == FactDisposition::New)
             facts_->push_back({fact.occurrence, prepared.Value(), DeliveryOwner::Volatile, std::nullopt});
+        const auto supported = gate_.Validate(prepared.Value().envelope);
+        if (supported.HasError())
+            return Result<PlatformProgressionAdmission>::Failure(supported.ErrorValue());
         return coalescer_.Admit(prepared.Value().envelope, prepared.Value().ordering, tick);
     }
 
@@ -214,6 +214,9 @@ namespace Horo::Application {
             return Result<PlatformProgressionQualifiedReplayIntent>::Failure(factBinding.ErrorValue());
         if (factBinding.Value() == FactDisposition::New)
             facts_->push_back({fact.occurrence, prepared.Value(), DeliveryOwner::Durable, requirements});
+        const auto supported = gate_.Validate(prepared.Value().envelope);
+        if (supported.HasError())
+            return Result<PlatformProgressionQualifiedReplayIntent>::Failure(supported.ErrorValue());
         auto qualified = qualifier.Qualify(prepared.Value().envelope, requirements, prepared.Value().ordering);
         if (qualified.HasError())
             return qualified;
