@@ -76,7 +76,12 @@ namespace Horo::AI::Detail {
             }
 
             Result<void> CompileFamily(DecisionCompiledGraph &graph, const LoweredDecisionGraph &source) const {
-                if (source.stateMachine) {
+                if (source.utility) {
+                    auto plan = CookedUtilityPlan::CompileClosure(admission, graph.bindings, *source.utility);
+                    if (plan.HasError())
+                        return Result<void>::Failure(plan.ErrorValue());
+                    graph.execution = std::move(plan).Value();
+                } else if (source.stateMachine) {
                     auto plan = CookedStateMachinePlan::CompileClosure(admission, graph.bindings, *source.stateMachine);
                     if (plan.HasError())
                         return Result<void>::Failure(plan.ErrorValue());

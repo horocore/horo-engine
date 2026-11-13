@@ -54,10 +54,12 @@ namespace Horo::AI {
     Result<void> IAiBudgetedTaskJob::Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const {
         if (units_ == 0 || units_ > AiTaskSchedulerSettings::HardWorkUnits)
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
-        if (cancellation.IsCancellationRequested())
+        if (operation.IsCancellationRequested() || cancellation.IsCancellationRequested())
             return JobCancelled();
         AiWorkBudget budget{units_};
         auto result = RunSlice(operation, cancellation, budget);
+        if (operation.IsCancellationRequested() || cancellation.IsCancellationRequested())
+            return JobCancelled();
         if (result.HasError())
             return result;
         if (budget.Exhausted())

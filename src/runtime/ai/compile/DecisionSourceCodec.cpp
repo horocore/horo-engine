@@ -1,3 +1,4 @@
+#include "DecisionCompileDetail.h"
 #include "DecisionCompileLimits.h"
 #include "DecisionSourceWire.h"
 #include "Horo/AI/DecisionPlanCodec.h"
@@ -39,8 +40,10 @@ namespace Horo::AI {
                         return;
                     }
                     Detail::WriteTree(writer, *body);
-                } else
+                } else if constexpr (std::is_same_v<T, StateMachineAssetDescriptor>)
                     Detail::WriteMachine(writer, body);
+                else
+                    Detail::WriteUtility(writer, body);
             }, source.body);
         }
 
@@ -59,6 +62,8 @@ namespace Horo::AI {
                 source.body = std::move(tree).Value();
             } else if (family == 1)
                 source.body = Detail::ReadMachine(reader);
+            else if (family == 2)
+                source.body = Detail::ReadUtility(reader);
             else
                 return Invalid<DecisionGraphSource>();
             return Result<DecisionGraphSource>::Success(std::move(source));
@@ -91,6 +96,11 @@ namespace Horo::AI {
                 if (!*tree)
                     return Invalid<std::size_t>();
                 return Result<std::size_t>::Success((*tree)->Nodes().size());
+            }
+            if (const auto *utility = std::get_if<UtilityDecisionSource>(&source.body)) {
+                if (!Detail::ValidUtilitySourceBounds(*utility))
+                    return Result<std::size_t>::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
+                return Result<std::size_t>::Success(1 + utility->options.size());
             }
             const auto &machine = std::get<StateMachineAssetDescriptor>(source.body);
             if (machine.states.size() > StateMachineLimits::States || machine.transitions.size() > StateMachineLimits::Transitions)

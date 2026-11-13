@@ -1003,6 +1003,7 @@ target_link_libraries(HoroUiTemplateHost PUBLIC HoroEngine::UiTemplateInstances 
 
 add_library(HoroGameplayApi STATIC
         gameplay/api/NativeDecisionNode.cpp
+        gameplay/api/NativePerceptionSense.cpp
         gameplay/api/PersistenceRegistration.cpp
         gameplay/api/GameEventRegistry.cpp
         gameplay/api/BehaviorTypes.cpp
@@ -1186,6 +1187,7 @@ target_include_directories(HoroGameplayModuleHost PUBLIC ${PROJECT_SOURCE_DIR}/i
 target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 
 add_library(HoroGameplayLua STATIC
+    gameplay/lua/LuaPerceptionSense.cpp
     gameplay/lua/LuaDecisionNode.cpp
         gameplay/lua/LuaBehavior.cpp
         gameplay/lua/LuaVfxBinding.cpp
@@ -1720,11 +1722,17 @@ add_library(HoroAI STATIC
         runtime/ai/compile/DecisionEnvironmentIdentity.cpp
         runtime/ai/compile/DecisionGraphCompiler.cpp
         runtime/ai/compile/DecisionGraphInstance.cpp
+    runtime/ai/compile/DecisionGraphReservation.cpp
         runtime/ai/compile/DecisionGraphLowering.cpp
         runtime/ai/compile/DecisionMemoryMeasure.cpp
         runtime/ai/compile/DecisionProviderAdmission.cpp
         runtime/ai/compile/DecisionSourceCodec.cpp
         runtime/ai/compile/DecisionSourceMachine.cpp
+        runtime/ai/compile/DecisionSourceUtility.cpp
+        runtime/ai/compile/DecisionSourceProvider.cpp
+        runtime/ai/compile/DecisionUtilityLowering.cpp
+        runtime/ai/compile/UtilityDecision.cpp
+        runtime/ai/compile/DecisionUtilityRuntime.cpp
         runtime/ai/compile/DecisionSourceReachability.cpp
         runtime/ai/compile/DecisionSourceTree.cpp
         runtime/ai/compile/DecisionSourceValues.cpp
@@ -1756,8 +1764,14 @@ add_library(HoroAI STATIC
         runtime/ai/api/EnvironmentQueryAsset.cpp
         runtime/ai/api/EnvironmentQueryErrors.cpp
         runtime/ai/api/EnvironmentQueryRegistry.cpp
+    runtime/ai/api/EnvironmentQueryScoring.cpp
+    runtime/ai/api/UtilitySelector.cpp
         runtime/ai/api/NullAIRuntime.cpp
+        runtime/ai/api/AiDecisionTaskReservation.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
+        runtime/ai/api/PerceptionSenseErrors.cpp
+        runtime/ai/registration/PerceptionSenseGeneration.cpp
+        runtime/ai/registration/PerceptionSenseInstance.cpp
         runtime/ai/api/PerceptionEventRouting.cpp
         runtime/ai/api/PerceptionErrors.cpp
         runtime/ai/api/PerceptionFiltering.cpp
@@ -1785,8 +1799,14 @@ add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AISceneActivation.cpp
         runtime/ai/integration/AISceneStructural.cpp
         runtime/ai/integration/AISceneRestore.cpp
+        runtime/ai/integration/AISceneDecisionReservation.cpp
         runtime/ai/integration/AIScenePerceptionSource.cpp
+        runtime/ai/integration/PerceptionSenseScene.cpp
         runtime/ai/integration/EnvironmentQueryContexts.cpp
+    runtime/ai/integration/EnvironmentQueryGenerators.cpp
+    runtime/ai/integration/EnvironmentQueryExecution.cpp
+    runtime/ai/integration/EnvironmentQueryOwnerSource.cpp
+    runtime/ai/integration/EnvironmentQueryPerception.cpp
         runtime/ai/integration/PerceptionSpatialBroadphase.cpp)
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
@@ -1799,10 +1819,18 @@ target_compile_features(HoroGameplayAiIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayAiIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::AISceneIntegration)
 target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayAiIntegration)
 
-add_library(HoroAISightIntegration STATIC runtime/ai/integration/PerceptionSight.cpp)
+add_library(HoroAISightIntegration STATIC
+    runtime/ai/integration/PerceptionSight.cpp
+    runtime/ai/integration/EnvironmentQueryPhysics.cpp)
 add_library(HoroEngine::AISightIntegration ALIAS HoroAISightIntegration)
 target_compile_features(HoroAISightIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISightIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::Physics)
+
+# Explicit tactical Navigation composition keeps the AI core independent of Navigation owners.
+add_library(HoroAINavigationIntegration STATIC runtime/ai/integration/EnvironmentQueryNavigation.cpp)
+add_library(HoroEngine::AINavigationIntegration ALIAS HoroAINavigationIntegration)
+target_compile_features(HoroAINavigationIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAINavigationIntegration PUBLIC HoroEngine::AI HoroEngine::NavigationRuntime)
 
 add_library(HoroGameplayPerceptionIntegration STATIC gameplay/runtime/PerceptionEventSource.cpp)
 add_library(HoroEngine::GameplayPerceptionIntegration ALIAS HoroGameplayPerceptionIntegration)

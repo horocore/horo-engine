@@ -1,10 +1,12 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/DecisionAssetValidation.h"
+#include "Horo/AI/UtilitySelector.h"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -112,6 +114,103 @@ namespace Horo::AI {
 
         [[nodiscard]] auto MakeBooleanSchemas() {
             return std::array{Schema(7, 1, {Key(10, BlackboardValueKind::Boolean, Scalar(BlackboardScalarValue{false}))})};
+        }
+
+        TEST_CASE("Utility picks a finite stable tie and exposes bounded score evidence", "[unit][ai][utility]") {
+            const auto key = MakeIdentity<BlackboardKeyId>(10);
+            const auto schema = Schema(7, 1, {Key(10, BlackboardValueKind::Scalar, Scalar(BlackboardScalarValue{0.5}))});
+            const AgentHandle agent{AiRuntimeIncarnation::Create(7).Value(), {3, 4}};
+            auto blackboard = BlackboardInstance::Create({agent, schema->Identity(), schema->Version(), 1, 1}, schema);
+            REQUIRE(blackboard.HasValue());
+            auto snapshot = blackboard.Value()->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const std::array options{UtilityOption{MakeIdentity<DecisionNodeId>(2), MakeIdentity<TaskId>(7), 1, 0, {{.key = key}}},
+                                     UtilityOption{MakeIdentity<DecisionNodeId>(1), MakeIdentity<TaskId>(8), 1, 0, {{.key = key}}}};
+            const auto plan = UtilitySelector::Capture(schema, options);
+            REQUIRE(plan.HasValue());
+            std::array<UtilityScoreRecord, 3> evidence;
+            AiWorkBudget shortAgent{3}, global{8};
+            const auto yielded = plan.Value().Evaluate(snapshot.Value(), agent, shortAgent, global, evidence);
+            REQUIRE(yielded.HasValue());
+            CHECK(yielded.Value().budgetExhausted);
+            CHECK_FALSE(yielded.Value().selection);
+            CHECK(shortAgent.Remaining() == 3);
+            CHECK(global.Remaining() == 8);
+            AiWorkBudget sufficient{4};
+            const auto evaluated = plan.Value().Evaluate(snapshot.Value(), agent, sufficient, global, evidence);
+            REQUIRE(evaluated.HasValue());
+            REQUIRE(evaluated.Value().selection);
+            CHECK(evaluated.Value().selection->action == MakeIdentity<TaskId>(8));
+            CHECK(evaluated.Value().selection->score == 0.5);
+            CHECK(evaluated.Value().evidenceWritten == 3);
+            CHECK(evaluated.Value().evidenceDropped == 1);
+            CHECK(evidence[0].option == MakeIdentity<DecisionNodeId>(1));
+            CHECK(evidence[0].key == key);
+            CHECK_FALSE(evidence[1].key.IsValid());
+            CHECK(sufficient.Remaining() == 0);
+            CHECK(global.Remaining() == 4);
+        }
+
+        TEST_CASE("Utility rejects malformed policies and skips unavailable inputs", "[unit][ai][utility]") {
+            const auto key = MakeIdentity<BlackboardKeyId>(10);
+            const auto schema = Schema(7, 1,
+                                       {Key(10, BlackboardValueKind::Scalar, std::nullopt, BlackboardKeyAccess::ReadOnly,
+                                            BlackboardKeyPresence::Optional)});
+            UtilityOption option{MakeIdentity<DecisionNodeId>(1), MakeIdentity<TaskId>(2), 1, 0.5, {{.key = key}}};
+            option.considerations.front().maximum = std::numeric_limits<double>::infinity();
+            CHECK(UtilitySelector::Capture(schema, std::span{&option, 1}).HasError());
+            option.considerations.front().maximum = 1;
+            option.priority = std::numeric_limits<double>::quiet_NaN();
+            CHECK(UtilitySelector::Capture(schema, std::span{&option, 1}).HasError());
+            option.priority = 1;
+            const auto plan = UtilitySelector::Capture(schema, std::span{&option, 1});
+            REQUIRE(plan.HasValue());
+            const AgentHandle agent{AiRuntimeIncarnation::Create(7).Value(), {3, 4}};
+            auto blackboard = BlackboardInstance::Create({agent, schema->Identity(), schema->Version(), 1, 1}, schema);
+            REQUIRE(blackboard.HasValue());
+            auto snapshot = blackboard.Value()->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            AiWorkBudget shared{2};
+            const auto evaluated = plan.Value().Evaluate(snapshot.Value(), agent, shared, shared);
+            REQUIRE(evaluated.HasValue());
+            CHECK_FALSE(evaluated.Value().selection);
+            CHECK_FALSE(evaluated.Value().budgetExhausted);
+            CHECK(shared.Remaining() == 0);
+        }
+
+        TEST_CASE("Utility applies authored curves before weight and multiplier compensation", "[unit][ai][utility]") {
+            const auto key = MakeIdentity<BlackboardKeyId>(10);
+            const auto schema = Schema(7, 1, {Key(10, BlackboardValueKind::Scalar, Scalar(BlackboardScalarValue{0.5}))});
+            const AgentHandle agent{AiRuntimeIncarnation::Create(7).Value(), {3, 4}};
+            auto blackboard = BlackboardInstance::Create({agent, schema->Identity(), schema->Version(), 1, 1}, schema);
+            REQUIRE(blackboard.HasValue());
+            const auto snapshot = blackboard.Value()->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            UtilityOption option{MakeIdentity<DecisionNodeId>(1), MakeIdentity<TaskId>(2), 1, 0, {{.key = key}}};
+            double expected{};
+            SECTION("weighted power") {
+                option.considerations[0].curve = UtilityResponseCurve::Power;
+                option.considerations[0].parameter = 2;
+                option.considerations[0].weight = 0.5;
+                expected = 0.625;
+            }
+            SECTION("normalized logistic") {
+                option.considerations[0].curve = UtilityResponseCurve::Logistic;
+                option.considerations[0].parameter = 8;
+                expected = 0.5;
+            }
+            SECTION("compensated multiplier") {
+                option.compensation = 1;
+                option.considerations.push_back({.key = key});
+                expected = 0.390625;
+            }
+            const auto plan = UtilitySelector::Capture(schema, std::span{&option, 1});
+            REQUIRE(plan.HasValue());
+            AiWorkBudget budget{3};
+            const auto evaluated = plan.Value().Evaluate(snapshot.Value(), agent, budget, budget);
+            REQUIRE(evaluated.HasValue());
+            REQUIRE(evaluated.Value().selection);
+            CHECK(std::abs(evaluated.Value().selection->score - expected) < 1e-12);
         }
 
         [[nodiscard]] DecisionNodeDescriptor MakeNativeDescriptor() {

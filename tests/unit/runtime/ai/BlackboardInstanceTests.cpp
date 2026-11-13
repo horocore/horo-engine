@@ -145,6 +145,28 @@ namespace Horo::AI {
         CheckConsumed(batch);
     }
 
+    TEST_CASE("Moved blackboard snapshots reject reads while the destination retains its lease", "[unit][ai][blackboard-instance]") {
+        const auto schema = Schema({Key(10, BlackboardValueKind::Boolean)});
+        auto instance = Instance(schema);
+        auto captured = instance->Snapshot();
+        REQUIRE(captured.HasValue());
+        auto source = std::move(captured).Value();
+        const auto revision = source.CapturedRevision();
+        auto destination = std::move(source);
+        CHECK_FALSE(source.Schema());
+        ExpectError(source.Revision(), AIErrors::BlackboardInstanceStale);
+        ExpectError(source.Read(MakeIdentity<BlackboardKeyId>(10)), AIErrors::BlackboardInstanceStale);
+        REQUIRE(destination.Revision().HasValue());
+        CHECK(destination.Revision().Value() == revision);
+        REQUIRE(destination.Read(MakeIdentity<BlackboardKeyId>(10)).HasValue());
+        CHECK(destination.Read(MakeIdentity<BlackboardKeyId>(10)).Value() == Bool(false));
+        source = std::move(destination);
+        ExpectError(destination.Revision(), AIErrors::BlackboardInstanceStale);
+        ExpectError(destination.Read(MakeIdentity<BlackboardKeyId>(10)), AIErrors::BlackboardInstanceStale);
+        CHECK(source.Revision().Value() == revision);
+        CHECK(source.Read(MakeIdentity<BlackboardKeyId>(10)).Value() == Bool(false));
+    }
+
     TEST_CASE("Blackboard instance materializes typed schema defaults", "[unit][ai][blackboard-instance]") {
         auto schema = Schema({Key(2, BlackboardValueKind::Boolean, Bool(true)), Key(1, BlackboardValueKind::SignedInteger, Integer(9))});
         auto instance = Instance(schema);

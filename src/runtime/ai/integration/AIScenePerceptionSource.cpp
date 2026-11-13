@@ -2,6 +2,7 @@
 
 #include "Horo/AI/AIErrors.h"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -23,13 +24,36 @@ namespace Horo::AI {
             PerceptionPublicationSnapshot snapshot;
             BlackboardCollectionValue sources{.elementKind = BlackboardValueKind::EntityReference};
             BlackboardCollectionValue positions{.elementKind = BlackboardValueKind::WorldCoordinate};
+            std::size_t admittedCount{};
+
+            /** @brief Stages both collections under the same revocable permission. */
+            [[nodiscard]] Result<void> Stage(BlackboardWriteBatch &batch, const PerceptionBlackboardProjection &projection,
+                                             const std::shared_ptr<const BlackboardValueAuthorization> &authorization) const {
+                if (const auto source = batch.Stage({projection.sources, BlackboardValue{sources}, authorization}); source.HasError())
+                    return source;
+                return batch.Stage({projection.positions, BlackboardValue{positions}, authorization});
+            }
         };
 
+        /** @brief Resolves one projection key against the stable schema inventory. */
+        [[nodiscard]] Result<std::size_t> CollectionCapacity(const BlackboardSchema &schema, const BlackboardKeyId key,
+                                                             const BlackboardValueKind kind) {
+            const auto keys = schema.Keys();
+            const auto found = std::ranges::lower_bound(keys, key, {}, &BlackboardKeyDescriptor::key);
+            if (found == keys.end() || found->key != key)
+                return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardUnknownValueRejected));
+            if (found->access != BlackboardKeyAccess::ReadWrite)
+                return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardBatchInvalid));
+            if (found->kind != kind || found->cardinality != BlackboardValueCardinality::Collection)
+                return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardValueTypeMismatch));
+            return Result<std::size_t>::Success(found->maximumCollectionElements);
+        }
+
         /** @brief Filters remembered subject/provenance and bounds the complete paired projection before writes begin. */
-        [[nodiscard]] Result<ProjectionCandidate> BuildProjection(const Runtime::RuntimeSceneView &scene,
-                                                                  const PerceptionSpatialSnapshot &filtering,
-                                                                  const PerceptionMemorySnapshot &memory,
-                                                                  const PerceptionPublicationSnapshot &identity) {
+        [[nodiscard]] ProjectionCandidate BuildProjection(const Runtime::RuntimeSceneView &scene,
+                                                          const PerceptionSpatialSnapshot &filtering,
+                                                          const PerceptionMemorySnapshot &memory,
+                                                          const PerceptionPublicationSnapshot &identity, const std::size_t capacity) {
             ProjectionCandidate next{.snapshot = identity};
             for (std::size_t index = 0; index < memory.count; ++index) {
                 const auto &record = memory.entries[index];
@@ -37,8 +61,8 @@ namespace Horo::AI {
                     return filtering.Allows(identity.listener, {scene.RuntimeId(), {source.slot, source.generation}}, record.key.sense);
                 }; !admits(record.key.source) || !admits(record.provenance))
                     continue;
-                if (next.snapshot.memory.count == MaximumBlackboardCollectionElements)
-                    return Result<ProjectionCandidate>::Failure(MakeError(AIErrors::PerceptionDescriptorLimitExceeded));
+                if (++next.admittedCount > capacity)
+                    continue;
                 const auto offset = next.snapshot.memory.count++;
                 next.snapshot.memory.entries[offset] = record;
                 next.sources.elements[next.sources.count++] =
@@ -46,7 +70,7 @@ namespace Horo::AI {
                                                     record.key.source.generation};
                 next.positions.elements[next.positions.count++] = record.lastKnownPosition;
             }
-            return Result<ProjectionCandidate>::Success(std::move(next));
+            return next;
         }
     }  // namespace
 
@@ -60,6 +84,28 @@ namespace Horo::AI {
         return {.context = &scene, .isAlive = SceneSourceAlive};
     }
 
+    /** @copydoc PerceptionBlackboardProjection::Validate */
+    Result<std::size_t> PerceptionBlackboardProjection::Validate(const BlackboardSchema &schema) const {
+        if (!sources.IsValid() || !positions.IsValid() || sources == positions)
+            return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardBatchInvalid));
+        const auto sourceCapacity = CollectionCapacity(schema, sources, BlackboardValueKind::EntityReference);
+        if (sourceCapacity.HasError())
+            return sourceCapacity;
+        const auto positionCapacity = CollectionCapacity(schema, positions, BlackboardValueKind::WorldCoordinate);
+        if (positionCapacity.HasError())
+            return positionCapacity;
+        return Result<std::size_t>::Success(std::min(sourceCapacity.Value(), positionCapacity.Value()));
+    }
+
+    /** @copydoc PerceptionPublication::MatchesBinding */
+    bool PerceptionPublication::MatchesBinding(const Runtime::EntityRef listener, const std::uint64_t simulationTick,
+                                               const BlackboardInstanceBinding &binding,
+                                               const PerceptionBlackboardProjection &projection) const noexcept {
+        return !current_ || (current_->agent == binding.agent && current_->listener == listener && binding_ == binding &&
+                             projection_.sources == projection.sources && projection_.positions == projection.positions &&
+                             simulationTick >= current_->simulationTick && current_->revision != std::numeric_limits<std::uint64_t>::max());
+    }
+
     /** @copydoc PerceptionPublication::PublishAtBlackboardSync */
     Result<PerceptionPublicationSnapshot> PerceptionPublication::PublishAtBlackboardSync(
         Runtime::RuntimeScene &scene, const PerceptionSpatialBroadphase &filtering, const Runtime::EntityRef listener,
@@ -69,16 +115,17 @@ namespace Horo::AI {
         const auto spatial = filtering.Current();
         const auto view = scene.View();
         if (!spatial || !view.IsCurrent() || spatial->Scene() != view.RuntimeId() || listener.runtime != view.RuntimeId() ||
-            view.Get(listener).HasError() || memory.SceneIncarnation() != view.RuntimeId().value ||
+            view.Get(listener).HasError() || memory.SceneIncarnation() != view.RuntimeId().value || !blackboard.IsActive() ||
             blackboard.Binding().agent != memory.Agent() || !projection.sources.IsValid() || !projection.positions.IsValid() ||
             projection.sources == projection.positions)
             return PublicationResult::Failure(MakeError(AIErrors::PerceptionSpatialStale));
-        if (current_ && (current_->agent != memory.Agent() || current_->listener != listener || binding_ != blackboard.Binding() ||
-                         projection_.sources != projection.sources || projection_.positions != projection.positions ||
-                         simulationTick < current_->simulationTick || current_->revision == std::numeric_limits<std::uint64_t>::max()))
+        if (!MatchesBinding(listener, simulationTick, blackboard.Binding(), projection))
             return PublicationResult::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
         if (current_ && filtering_ == spatial && simulationTick == current_->simulationTick)
             return Current(view, filtering, blackboard);
+        const auto capacity = projection.Validate(*blackboard.SchemaAtSafePoint());
+        if (capacity.HasError())
+            return PublicationResult::Failure(capacity.ErrorValue());
         const auto remembered = memory.Snapshot(simulationTick, PerceptionSceneLiveness(scene));
         if (remembered.HasError())
             return PublicationResult::Failure(remembered.ErrorValue());
@@ -87,19 +134,16 @@ namespace Horo::AI {
                                                      .revision = current_ ? current_->revision + 1 : 1,
                                                      .spatialRevision = spatial->Revision(),
                                                      .simulationTick = simulationTick};
-        auto projected = BuildProjection(view, *spatial, remembered.Value(), identity);
-        if (projected.HasError())
-            return PublicationResult::Failure(projected.ErrorValue());
-        auto next = std::move(projected).Value();
+        auto next = BuildProjection(view, *spatial, remembered.Value(), identity, capacity.Value());
+        if (next.admittedCount > capacity.Value()) {
+            rejectedByCapacity_ = next.admittedCount;
+            return PublicationResult::Failure(MakeError(AIErrors::PerceptionDescriptorLimitExceeded));
+        }
         auto createdBatch = blackboard.BeginWriteBatch();
         if (createdBatch.HasError())
             return PublicationResult::Failure(createdBatch.ErrorValue());
         auto batch = std::move(createdBatch).Value();
-        if (const auto staged = batch.Stage({projection.sources, BlackboardValue{next.sources}, spatial->ReadAuthorization()});
-            staged.HasError())
-            return PublicationResult::Failure(staged.ErrorValue());
-        if (const auto staged = batch.Stage({projection.positions, BlackboardValue{next.positions}, spatial->ReadAuthorization()});
-            staged.HasError())
+        if (const auto staged = next.Stage(batch, projection, spatial->ReadAuthorization()); staged.HasError())
             return PublicationResult::Failure(staged.ErrorValue());
         const auto committed = blackboard.CommitAtBlackboardSync(std::move(batch));
         if (committed.HasError())
@@ -109,6 +153,7 @@ namespace Horo::AI {
         binding_ = blackboard.Binding();
         projection_ = projection;
         current_ = next.snapshot;
+        rejectedByCapacity_ = 0;
         return PublicationResult::Success(next.snapshot);
     }
 
@@ -119,8 +164,7 @@ namespace Horo::AI {
         if (!current_ || filtering.Current() != filtering_ || !scene.IsCurrent() || scene.RuntimeId() != current_->listener.runtime ||
             scene.Get(current_->listener).HasError() || !blackboard.IsActive() || blackboard.Binding() != binding_)
             return Result<PerceptionPublicationSnapshot>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
-        if (const auto board = blackboard.Snapshot();
-            board.HasError() || board.Value().Revision().HasError() || board.Value().Revision().Value() != current_->blackboardRevision)
+        if (blackboard.RevisionAtSafePoint() != current_->blackboardRevision)
             return Result<PerceptionPublicationSnapshot>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         for (std::size_t index = 0; index < current_->memory.count; ++index) {
             const auto &record = current_->memory.entries[index];
@@ -135,5 +179,6 @@ namespace Horo::AI {
     void PerceptionPublication::Reset() noexcept {
         current_.reset();
         filtering_.reset();
+        rejectedByCapacity_ = 0;
     }
 }  // namespace Horo::AI

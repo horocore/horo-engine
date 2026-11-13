@@ -25,11 +25,17 @@ namespace Horo::AI {
      */
     [[nodiscard]] PerceptionSourceLiveness PerceptionSceneLiveness(Runtime::RuntimeScene &scene) noexcept;
 
-    /** @brief Both keys are required writable collections with capacity for the admitted memory profile (at most
-     * MaximumBlackboardCollectionElements). */
+    /** @brief Paired writable collections; the smaller admitted key capacity bounds the atomic projection. */
     struct PerceptionBlackboardProjection final {
         BlackboardKeyId sources;   /**< EntityReference collection; exact admitted identities. */
         BlackboardKeyId positions; /**< WorldCoordinate collection; last-known memory facts only. */
+
+        /**
+         * @brief Validates the declared projection against the controller schema before sensing begins.
+         * @param schema Captured blackboard schema for the recipient.
+         * @return The shared item limit or a typed key, access or type failure.
+         */
+        [[nodiscard]] Result<std::size_t> Validate(const BlackboardSchema &schema) const;
     };
 
     /** @brief One complete filtered value publication shared by blackboard and debug readers. */
@@ -70,13 +76,26 @@ namespace Horo::AI {
         [[nodiscard]] Result<PerceptionPublicationSnapshot> Current(const Runtime::RuntimeSceneView &scene,
                                                                     const PerceptionSpatialBroadphase &filtering,
                                                                     const BlackboardInstance &blackboard) const;
+
+        /** @brief Returns the number of policy-admitted facts in the last capacity-rejected batch.
+         * @return Zero before a rejection or after a successful replacement or reset. Read on the owner lane.
+         */
+        [[nodiscard]] std::size_t RejectedByCapacity() const noexcept {
+            return rejectedByCapacity_;
+        }
+
         /** @brief Revokes stored debug publication at disable, replacement or unload. */
         void Reset() noexcept;
 
     private:
+        /** @brief Checks the retained recipient, schema, keys, and monotonic publication fence. */
+        [[nodiscard]] bool MatchesBinding(Runtime::EntityRef listener, std::uint64_t simulationTick,
+                                          const BlackboardInstanceBinding &binding,
+                                          const PerceptionBlackboardProjection &projection) const noexcept;
         std::optional<PerceptionPublicationSnapshot> current_;
         std::shared_ptr<const PerceptionSpatialSnapshot> filtering_;
         BlackboardInstanceBinding binding_;
         PerceptionBlackboardProjection projection_;
+        std::size_t rejectedByCapacity_{};
     };
 }  // namespace Horo::AI

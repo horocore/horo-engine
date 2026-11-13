@@ -133,6 +133,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroExtensionsPublicHeaderConsumer
     HoroAITests
     HoroAISightTests
+    HoroAINavigationTests
+    HoroAINavigationIntegrationPublicHeaderConsumer
     HoroAIPublicHeaderConsumer
     HoroAISceneIntegrationPublicHeaderConsumer
     HoroAISightIntegrationPublicHeaderConsumer
