@@ -52,6 +52,14 @@ control must reject it rather than silently drop it. Digital actions and enabled
 digital affordances cannot use a gyro binding. Duplicate or conflicting physical
 gyro axes remain conflicts despite different calibration, scale or output component.
 
+Physical identity comparisons also ignore fields inactive for the selected kind:
+changing `key` on a gyro/gamepad/wheel binding, for example, never creates a new
+physical control. The same identity helper governs duplicate and chord/sticky
+overlap checks. Profiles that previously used inactive-field differences to hide
+duplicate bindings are now rejected; remove the duplicate or assign a genuinely
+different control. Rejection preserves the current map/profile and revision.
+The added all-kind identity/sticky regression is pending its native rerun.
+
 The native MSVC Debug batch at `f1f97b73ab83566272dc85c0e49b95f9d52d1700`
 built both Input test executables and staged/explicit public consumers, then passed
 **94/94 cases with zero skips** in 1.46 seconds. This includes all six added

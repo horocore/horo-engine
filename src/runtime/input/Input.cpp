@@ -107,22 +107,44 @@ namespace Horo::Input {
             return false;
         }
 
+        /** @brief Compares only the physical identity selected by the control kind; inactive union-like fields cannot hide conflicts. */
+        bool SameControlIdentity(const InputBinding &left, const InputBinding &right) noexcept {
+            if (left.kind != right.kind)
+                return false;
+            using enum BindingControlKind;
+            switch (left.kind) {
+                case Key:
+                    return left.key == right.key;
+                case PointerButton:
+                    return left.pointerButton == right.pointerButton;
+                case GamepadButton:
+                    return left.gamepadButton == right.gamepadButton;
+                case GamepadAxis:
+                    return left.gamepadAxis == right.gamepadAxis;
+                case RawGamepadButton:
+                case RawGamepadAxis:
+                    return left.rawControl == right.rawControl;
+                case GyroscopeAxis:
+                    return left.gyroscope.axis == right.gyroscope.axis;
+                case PointerWheelX:
+                case PointerWheelY:
+                    return true;
+            }
+            return false;
+        }
+
         bool SameTransition(const InputBinding &left, const InputBinding &right) noexcept {
             if (!HasValidChordSize(left) || !HasValidChordSize(right))
                 return false;
-            return left.kind == right.kind && left.key == right.key && left.pointerButton == right.pointerButton &&
-                   left.gamepadButton == right.gamepadButton && left.gamepadAxis == right.gamepadAxis &&
-                   left.rawControl == right.rawControl && left.gyroscope.axis == right.gyroscope.axis &&
-                   left.requiredModifiers == right.requiredModifiers && left.chordSize == right.chordSize &&
+            return SameControlIdentity(left, right) && left.requiredModifiers == right.requiredModifiers &&
+                   left.chordSize == right.chordSize &&
                    std::equal(left.chord.begin(), left.chord.begin() + left.chordSize, right.chord.begin());
         }
 
         bool ChordsOverlap(const InputBinding &left, const InputBinding &right) noexcept {
             if (!HasValidChordSize(left) || !HasValidChordSize(right))
                 return false;
-            if (left.kind != right.kind || left.key != right.key || left.pointerButton != right.pointerButton ||
-                left.gamepadButton != right.gamepadButton || left.gamepadAxis != right.gamepadAxis || left.rawControl != right.rawControl ||
-                left.gyroscope.axis != right.gyroscope.axis || !RequiredModifiersOverlap(left, right))
+            if (!SameControlIdentity(left, right) || !RequiredModifiersOverlap(left, right))
                 return false;
             const auto contains = [](const InputBinding &larger, const InputBinding &smaller) {
                 return std::all_of(smaller.chord.begin(), smaller.chord.begin() + smaller.chordSize, [&](const Key key) {

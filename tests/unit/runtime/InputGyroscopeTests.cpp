@@ -180,6 +180,41 @@ namespace Horo::Input {
         REQUIRE(router.ReadAction(context, action).x == 0);
     }
 
+    TEST_CASE("Inactive binding fields cannot disguise a duplicate physical control or sticky overlap",
+              "[input][accessibility][bindings][conflicts]") {
+        const InputContextId context{"play"};
+        InputRouter router;
+        for (const auto &first :
+             {InputBinding{.kind = BindingControlKind::Key, .key = Key::K}, InputBinding{.kind = BindingControlKind::PointerButton},
+              InputBinding{.kind = BindingControlKind::PointerWheelX}, InputBinding{.kind = BindingControlKind::PointerWheelY},
+              InputBinding{.kind = BindingControlKind::GamepadButton}, InputBinding{.kind = BindingControlKind::GamepadAxis},
+              InputBinding{.kind = BindingControlKind::RawGamepadButton}, InputBinding{.kind = BindingControlKind::RawGamepadAxis},
+              GyroscopeBinding(SensorAxis::Y)}) {
+            INFO(static_cast<unsigned>(first.kind));
+            auto alias = first;
+            if (first.kind == BindingControlKind::Key)
+                alias.pointerButton = PointerButton::Secondary;
+            else
+                alias.key = Key::K;
+            REQUIRE(router.SetActionMap({{ActionId{"play.first"}, ActionValueType::Axis2D, context, true, {first}}}).HasValue());
+            REQUIRE(router.SetActionMap({{ActionId{"play.second"}, ActionValueType::Axis2D, context, true, {alias}}}).HasValue());
+            const auto revision = router.RoutingState({}).configurationRevision;
+            REQUIRE(router.SetActionMap({{ActionId{"play.first"}, ActionValueType::Axis2D, context, true, {first, alias}}}).HasError());
+            REQUIRE(router
+                        .SetActionMap({{ActionId{"play.first"}, ActionValueType::Axis2D, context, true, {first}},
+                                       {ActionId{"play.second"}, ActionValueType::Axis2D, context, true, {alias}}})
+                        .HasError());
+            REQUIRE(router.RoutingState({}).configurationRevision == revision);
+        }
+        InputBinding sticky{.kind = BindingControlKind::Key, .key = Key::K, .requiredModifiers = {.control = true}};
+        sticky.accessibility.stickyModifiers = true;
+        InputBinding plain{.kind = BindingControlKind::Key, .key = Key::K, .pointerButton = PointerButton::Secondary};
+        REQUIRE(router
+                    .SetActionMap({{ActionId{"play.modified"}, ActionValueType::Digital, context, true, {sticky}},
+                                   {ActionId{"play.plain"}, ActionValueType::Digital, context, true, {plain}}})
+                    .HasError());
+    }
+
     TEST_CASE("Gyroscope conflicts cannot be hidden by calibration sensitivity or output component changes",
               "[input][accessibility][gyroscope][validation]") {
         auto first = GyroscopeBinding(SensorAxis::Y);
