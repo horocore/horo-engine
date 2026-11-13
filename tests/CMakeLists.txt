@@ -3351,6 +3351,7 @@ target_link_libraries(HoroProjectMigrationTests PRIVATE HoroEngine::ProjectMigra
         HoroEngine::NetworkApi HoroEngine::NavigationApi nlohmann_json::nlohmann_json)
 add_executable(HoroProjectMigrationTransactionTests
         unit/editor/ProjectMigrationTransactionTests.cpp
+        unit/editor/ProjectMutationAdmissionTests.cpp
 )
 target_compile_features(HoroProjectMigrationTransactionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroProjectMigrationTransactionTests PRIVATE
