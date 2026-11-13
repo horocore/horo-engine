@@ -103,6 +103,15 @@ namespace Horo::Cinematic {
             Runtime::CameraTransitionResolution resolution{Runtime::CameraTransitionResolution::Requested};
         };
 
+        /** @brief Resolves and admits a complete detached track before acquiring live player or camera state.
+         * @param camera Final view owner and its immutable capability.
+         * @param keys Validated canonical camera keys. @param settings Required bindings and track end.
+         * @param scene Current activation scene. @param output Detached storage with one slot per key.
+         * @return Success or exact binding/transition failure; partial output is never published. */
+        [[nodiscard]] static Result<void> BindCuts(const Runtime::CameraService &camera, std::span<const SequenceFrameCameraCutKey> keys,
+                                                   const CameraCutActivation &settings, Runtime::RuntimeSceneView scene,
+                                                   std::span<BoundCut> output);
+
         CinematicCameraPlayback(CinematicRuntimeService &runtime, Runtime::CameraService &camera, const SequencePlayerHandle &player,
                                 const Runtime::CameraOverrideLease &lease, std::span<const BoundCut> cuts,
                                 const CameraCutActivation &settings) noexcept;

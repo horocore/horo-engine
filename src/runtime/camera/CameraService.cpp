@@ -21,6 +21,18 @@ namespace Horo::Runtime {
                 return Result<Math::Quaternion>::Failure(pose.ErrorValue());
             return Result<Math::Quaternion>::Success(pose.Value().rotation);
         }
+
+        /** @brief Interpolates view orientation while retaining the exact failing math operation. */
+        Result<Math::Quaternion> BlendRotation(const Render::RenderCameraView &from, const Render::RenderCameraView &to,
+                                               const float weight) {
+            const auto source = CameraRotation(from);
+            if (source.HasError())
+                return Result<Math::Quaternion>::Failure(source.ErrorValue());
+            const auto destination = CameraRotation(to);
+            if (destination.HasError())
+                return Result<Math::Quaternion>::Failure(destination.ErrorValue());
+            return Math::TrySlerp(source.Value(), destination.Value(), weight);
+        }
     }  // namespace
 
     /** @copydoc CameraService::Create */
@@ -88,12 +100,8 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    /** @copydoc CameraService::SubmitBlend */
-    Result<void> CameraService::SubmitBlend(const CameraOverrideLease &lease, const CameraProposal &from, const CameraProposal &to,
-                                            const float weight) {
-        const auto index = Resolve(lease);
-        if (index.HasError())
-            return Result<void>::Failure(index.ErrorValue());
+    /** @copydoc CameraService::ValidateBlend */
+    Result<void> CameraService::ValidateBlend(const CameraProposal &from, const CameraProposal &to, const float weight) const {
         if (transitions_ != CameraTransitionSupport::SingleViewBlend)
             return Result<void>::Failure(MakeError(CameraErrors::UnsupportedTransition));
         if (!ValidProposal(from, true) || !ValidProposal(to, true) || !std::isfinite(weight) || weight < 0.0F || weight > 1.0F)
@@ -102,13 +110,18 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(CameraErrors::StaleFrame));
         if (from.values.projection.kind != to.values.projection.kind)
             return Result<void>::Failure(MakeError(CameraErrors::IncompatibleTransition));
-        const auto source = CameraRotation(from.values);
-        const auto destination = CameraRotation(to.values);
-        if (source.HasError())
-            return Result<void>::Failure(WithCause(MakeError(CameraErrors::IncompatibleTransition), source.ErrorValue()));
-        if (destination.HasError())
-            return Result<void>::Failure(WithCause(MakeError(CameraErrors::IncompatibleTransition), destination.ErrorValue()));
-        const auto rotation = Math::TrySlerp(source.Value(), destination.Value(), weight);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc CameraService::SubmitBlend */
+    Result<void> CameraService::SubmitBlend(const CameraOverrideLease &lease, const CameraProposal &from, const CameraProposal &to,
+                                            const float weight) {
+        const auto index = Resolve(lease);
+        if (index.HasError())
+            return Result<void>::Failure(index.ErrorValue());
+        if (const auto valid = ValidateBlend(from, to, weight); valid.HasError())
+            return valid;
+        const auto rotation = BlendRotation(from.values, to.values, weight);
         if (rotation.HasError())
             return Result<void>::Failure(WithCause(MakeError(CameraErrors::IncompatibleTransition), rotation.ErrorValue()));
         auto blended = to;
@@ -190,19 +203,25 @@ namespace Horo::Runtime {
         return base && ValidProposal(*base, false);
     }
 
+    /** @copydoc CameraService::ValidateSceneFrame */
+    Result<void> CameraService::ValidateSceneFrame(const std::uint64_t renderedFrame, const RuntimeSceneView scene) const {
+        if (const auto valid = ValidateFrame(renderedFrame); valid.HasError())
+            return valid;
+        if (!scene.IsCurrent() || scene.RuntimeId() != context_.scene)
+            return Result<void>::Failure(MakeError(CameraErrors::InvalidContext));
+        if (HasCommittedFrame(renderedFrame) && committed_->selected.sceneRevision != scene.StructuralRevision())
+            return Result<void>::Failure(MakeError(CameraErrors::StaleFrame));
+        return Result<void>::Success();
+    }
+
     /** @copydoc CameraService::Commit */
     Result<CameraSelectionSnapshot> CameraService::Commit(const std::uint64_t renderedFrame, const RuntimeSceneView scene,
                                                           const std::optional<CameraProposal> &base) {
-        if (const auto valid = ValidateFrame(renderedFrame); valid.HasError())
+        if (const auto valid = ValidateSceneFrame(renderedFrame, scene); valid.HasError())
             return Result<CameraSelectionSnapshot>::Failure(valid.ErrorValue());
-        if (!scene.IsCurrent() || scene.RuntimeId() != context_.scene)
-            return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::InvalidContext));
         const auto sceneRevision = scene.StructuralRevision();
-        if (HasCommittedFrame(renderedFrame)) {
-            if (committed_->selected.sceneRevision != sceneRevision)
-                return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::StaleFrame));
+        if (HasCommittedFrame(renderedFrame))
             return Result<CameraSelectionSnapshot>::Success(*committed_);
-        }
         const Slot *winner = WinningProposal();
         if (!winner && !EligibleBase(base))
             return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::CameraUnavailable));

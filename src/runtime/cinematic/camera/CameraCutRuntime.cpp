@@ -75,6 +75,13 @@ namespace Horo::Cinematic {
             return Result<CameraTransitionTier>::Failure(MakeError(reason));
         }
 
+        /** @brief Restricts authored fallback to transition capability or representation failures. */
+        bool CanUseAuthoredFallback(const CameraTransitionFallback fallback, const Error &error) noexcept {
+            return fallback == CameraTransitionFallback::HardCut &&
+                   (error.code.Value() == Runtime::CameraErrors::IncompatibleTransition.code.Value() ||
+                    error.code.Value() == Runtime::CameraErrors::UnsupportedTransition.code.Value());
+        }
+
         /** @brief Admits an effective mode and compatible endpoints before acquiring player or camera state. */
         Result<CameraTransitionTier> AdmitTransition(const SequenceFrameCameraCutKey &key, const Runtime::CameraService &camera,
                                                      const Runtime::RuntimeSceneView scene, const Runtime::EntityRef previous,
@@ -99,6 +106,29 @@ namespace Horo::Cinematic {
             return Result<CameraTransitionTier>::Success(CameraTransitionTier::SingleViewBlend);
         }
     }  // namespace
+
+    /** @copydoc CinematicCameraPlayback::BindCuts */
+    Result<void> CinematicCameraPlayback::BindCuts(const Runtime::CameraService &camera,
+                                                   const std::span<const SequenceFrameCameraCutKey> keys,
+                                                   const CameraCutActivation &settings, const Runtime::RuntimeSceneView scene,
+                                                   const std::span<BoundCut> output) {
+        Runtime::EntityRef previous{};
+        for (std::size_t index = 0; index < keys.size(); ++index) {
+            const auto entity = BindCamera(keys[index], settings, scene);
+            if (entity.HasError())
+                return Result<void>::Failure(entity.ErrorValue());
+            const auto &key = keys[index];
+            const auto windowEnd = index + 1 < keys.size() ? keys[index + 1].time : settings.trackEnd;
+            const auto admitted = AdmitTransition(key, camera, scene, previous, entity.Value(), windowEnd);
+            if (admitted.HasError())
+                return Result<void>::Failure(admitted.ErrorValue());
+            output[index] = {key.time, entity.Value(), admitted.Value(), key.fallback, key.transitionDuration, key.transitionCurve};
+            if (admitted.Value() != key.transitionTier)
+                output[index].resolution = Runtime::CameraTransitionResolution::HardCutFallback;
+            previous = entity.Value();
+        }
+        return Result<void>::Success();
+    }
 
     /** @copydoc CinematicCameraPlayback::AccountCameraCrossing */
     void CinematicCameraPlayback::AccountCameraCrossing(const BorrowedCallbackContext &context,
@@ -126,21 +156,8 @@ namespace Horo::Cinematic {
         const auto keys = activation.plan.CameraKeys();
         const auto keyCount = keys.size();
         std::array<BoundCut, MaximumFrameCameraCuts> bound{};
-        Runtime::EntityRef previous{};
-        for (std::size_t index = 0; index < keys.size(); ++index) {
-            const auto entity = BindCamera(keys[index], cuts, scene);
-            if (entity.HasError())
-                return Result<CinematicCameraPlayback>::Failure(entity.ErrorValue());
-            const auto &key = keys[index];
-            const auto windowEnd = index + 1 < keys.size() ? keys[index + 1].time : cuts.trackEnd;
-            const auto admitted = AdmitTransition(key, camera, scene, previous, entity.Value(), windowEnd);
-            if (admitted.HasError())
-                return Result<CinematicCameraPlayback>::Failure(admitted.ErrorValue());
-            bound[index] = {key.time, entity.Value(), admitted.Value(), key.fallback, key.transitionDuration, key.transitionCurve};
-            if (admitted.Value() != key.transitionTier)
-                bound[index].resolution = Runtime::CameraTransitionResolution::HardCutFallback;
-            previous = entity.Value();
-        }
+        if (const auto boundResult = BindCuts(camera, keys, cuts, scene, std::span{bound}.first(keyCount)); boundResult.HasError())
+            return Result<CinematicCameraPlayback>::Failure(boundResult.ErrorValue());
         const auto player = activation.player.handle;
         const auto lease = camera.Acquire({camera.Context(), cuts.claim, cuts.priority});
         if (lease.HasError())
@@ -281,9 +298,7 @@ namespace Horo::Cinematic {
         if (cut.curve == CameraBlendCurve::SmoothStep)
             weight = weight * weight * (3.0 - 2.0 * weight);
         const auto blended = camera_->SubmitBlend(*lease_, source.Value(), destination, static_cast<float>(weight));
-        if (blended.HasError() && cut.fallback == CameraTransitionFallback::HardCut &&
-            (blended.ErrorValue().code.Value() == Runtime::CameraErrors::IncompatibleTransition.code.Value() ||
-             blended.ErrorValue().code.Value() == Runtime::CameraErrors::UnsupportedTransition.code.Value()))
+        if (blended.HasError() && CanUseAuthoredFallback(cut.fallback, blended.ErrorValue()))
             return SubmitFallback(destination);
         return blended;
     }

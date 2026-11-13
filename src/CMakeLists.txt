@@ -2159,6 +2159,7 @@ add_library(HoroCinematicRuntime STATIC
         runtime/cinematic/player/EventSession.cpp
         runtime/cinematic/player/PropertyTrackRuntime.cpp
         runtime/cinematic/player/SequenceEvaluation.cpp
+        runtime/cinematic/player/SequenceFrameCameraValidation.h
         runtime/cinematic/player/SequenceFrameBlend.cpp
         runtime/cinematic/player/SequenceEvaluationErrors.cpp
         runtime/cinematic/player/SequencePlayer.cpp

@@ -161,8 +161,17 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<std::size_t> Resolve(const CameraOverrideLease &lease) const;
         [[nodiscard]] bool ValidProposal(const CameraProposal &proposal, bool isOverride) const noexcept;
+        /** @brief Validates interpolation inputs before replacing any owner state.
+         * @param from Current source camera. @param to Destination from the same scene revision.
+         * @param weight Finite destination weight in [0,1].
+         * @return Success or typed capability, target, scene-revision or projection failure. */
+        [[nodiscard]] Result<void> ValidateBlend(const CameraProposal &from, const CameraProposal &to, float weight) const;
         [[nodiscard]] const Slot *WinningProposal() const noexcept;
         [[nodiscard]] Result<void> ValidateFrame(std::uint64_t renderedFrame) const;
+        /** @brief Validates frame ordering and the current extraction Scene fence.
+         * @param renderedFrame Requested non-zero frame. @param scene Current context-matching scene.
+         * @return Success or typed lifecycle, context or stale-frame failure. */
+        [[nodiscard]] Result<void> ValidateSceneFrame(std::uint64_t renderedFrame, RuntimeSceneView scene) const;
         [[nodiscard]] bool ChangesSelection(const CameraProposal &proposal, const std::optional<CameraClaimId> &claim) const noexcept;
         [[nodiscard]] bool CanAdvanceEpoch(bool changed) const noexcept;
         [[nodiscard]] bool HasCommittedFrame(std::uint64_t renderedFrame) const noexcept;

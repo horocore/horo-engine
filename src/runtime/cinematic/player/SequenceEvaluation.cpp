@@ -2,6 +2,7 @@
 
 #include "Horo/Cinematic/SequenceEvaluationErrors.h"
 #include "SequenceFrameBlend.h"
+#include "SequenceFrameCameraValidation.h"
 
 #include <algorithm>
 #include <array>
@@ -82,17 +83,6 @@ namespace Horo::Cinematic {
 
         [[nodiscard]] bool ValidEvent(const SequenceFrameEventKey &event, const SequenceTime duration) noexcept {
             return event.track.IsValid() && event.key.IsValid() && event.time >= 0 && event.time <= duration;
-        }
-
-        [[nodiscard]] bool ValidCamera(const SequenceFrameCameraCutKey &cut, const SequenceTime duration) noexcept {
-            if (cut.time < 0 || cut.time > duration)
-                return false;
-            const bool transitionValid = cut.transitionTier < CameraTransitionTier::Count &&
-                                         cut.fallback < CameraTransitionFallback::Count && cut.transitionCurve < CameraBlendCurve::Count &&
-                                         cut.transitionDuration >= 0 && cut.transitionDuration <= duration - cut.time &&
-                                         ((cut.transitionTier == CameraTransitionTier::HardCut) == (cut.transitionDuration == 0));
-            return cut.track.IsValid() && cut.key.IsValid() && cut.camera.IsValid() && cut.time >= 0 && cut.time <= duration &&
-                   transitionValid;
         }
 
         template <typename Value, typename IdentityLess, typename SameIdentity, typename CanonicalLess>
@@ -441,7 +431,7 @@ namespace Horo::Cinematic {
             return ValidEvent(event, duration);
         }) ||
             !std::ranges::all_of(cameraCuts, [&](const auto &cut) {
-            return ValidCamera(cut, duration);
+            return Detail::IsValidCameraCut(cut, duration);
         }))
             return Failed<SequenceFrameEvaluationPlan>(SequenceEvaluationErrors::Malformed);
         std::vector<SequenceFrameTrackDescriptor> orderedTracks(tracks.begin(), tracks.end());
