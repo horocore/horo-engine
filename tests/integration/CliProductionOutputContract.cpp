@@ -110,6 +110,7 @@ namespace {
 #endif
             return environment;
         }
+
         std::string executable_;
         Horo::NativeExternalProcessRunner runner_;
         TemporaryDirectory home_;
