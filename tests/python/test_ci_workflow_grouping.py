@@ -219,6 +219,7 @@ def test_platform_identity_windows_build_and_test_membership_match() -> None:
     discovered = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
     assert discovered is not None
     assert "HoroPlatformRequestTests" in discovered.group(1).split()
+    assert "unit/platform_services/PlatformProviderSessionLifecycleTests.cpp" in tests_cmake
 
 
 def test_windows_checked_stl_regressions_have_headless_build_and_discovery_closure() -> None:

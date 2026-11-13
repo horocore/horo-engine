@@ -5947,6 +5947,7 @@ add_test(NAME HoroBackendServiceRegistryTests COMMAND HoroBackendServiceRegistry
 add_executable(HoroPlatformProviderAdmissionTests
         fixtures/extensions/PlatformProviderOperationsFixture.c
         unit/platform_services/PlatformProviderAdmissionTests.cpp
+        unit/platform_services/PlatformProviderSessionLifecycleTests.cpp
         unit/platform_services/PlatformProviderLifecycleTests.cpp)
 target_compile_features(HoroPlatformProviderAdmissionTests PRIVATE cxx_std_20 c_std_11)
 set_target_properties(HoroPlatformProviderAdmissionTests PROPERTIES C_EXTENSIONS OFF)

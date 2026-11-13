@@ -112,6 +112,18 @@ namespace Horo::PlatformServices::Tests {
             return events;
         }
 
+        /** @brief Verifies the retained terminal error without depending on withdrawn observer delivery. */
+        inline void CheckTerminalFailure(const PlatformProviderLifecycleHost &host,
+                                         const PlatformProviderLifecycleHost::RequestHandle &request,
+                                         const PlatformRequestState expectedState, const ErrorCodeDescriptor &expectedError) {
+            const auto result = host.Query(request);
+            REQUIRE(result.HasValue());
+            CHECK(result.Value().state == expectedState);
+            REQUIRE(result.Value().terminal);
+            REQUIRE(result.Value().terminal->HasError());
+            CHECK(result.Value().terminal->ErrorValue()->code.Value() == expectedError.code.Value());
+        }
+
         struct Rig final {
             Extensions::ApplicationCapabilityRegistry capabilities;
             Extensions::BackendServiceRegistry services;
