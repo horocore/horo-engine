@@ -97,21 +97,17 @@ The two failures were diagnosed from their actual process stacks:
   allocation probe before the typed failure boundary. The local fix borrows the
   descriptor and copies owned storage inside that boundary; its new failure-site
   sweep still requires execution.
-- The existing resident voice allocation sweep aborted in the resampler's
-  coefficient-vector move. AUD-003 owns the separate prerequisite fix. Its local
-  commit `373867b12beb49b2c3e9979de64ba241eec37f4e` is not an ancestor of this
-  worktree's confirmed parent `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`.
-  A fresh broad voice-suite pass is not claimed, and the test remains enabled.
+- The existing resident voice allocation sweep aborted in the resampler coefficient-vector move. On 13 November the published parent `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc` was verified and adopted. Its `22cec166a` integration already uses `unique_ptr<float[]>`; the former missing-prerequisite observation against parent `5d0aff9d6` is historical. Fresh broad voice execution is still required and its test remains enabled.
 
 All thirteen children still require final integrated evidence at the delivered
 head. The four open GitHub children (#545, #547, #548, #549) have local source/test
 deliveries, not completed acceptance clearance. Closed GitHub states or differing
 Jira review states do not replace these gates.
 
-No heavy worker is queued. The next explicitly allocated slot must cover an
+No heavy worker is queued. Under the 13 November policy a named chat grant is no longer required. The next nonblocking physically admitted bounded batch must cover an
 incremental out-of-source Debug rebuild, the owning public-header consumers, the
 targeted media suites and relevant voice regressions, followed by a fresh full
-`scripts/analyze.py check --base codex/editor-improvements` using this worktree's
+`scripts/analyze.py check --base origin/codex/editor-improvements` using this worktree's
 compile database. Reconfigure for the updated parent before compiling. Use a
 nonblocking canonical lock acquisition and verify the actual open Windows lock
 handle before starting configure/build/test/analysis. An occupied, inaccessible or
@@ -122,3 +118,19 @@ configuration drift remained incomplete because authentication failed. The final
 Sonar IDE, secrets and Codacy provider checks have not yet run on the final edits.
 Any trust/authentication or platform limitation must stay recorded separately;
 no hosted, native-device or cross-platform clearance is implied.
+
+On 13 Novemberthe restored worktree was rebased onto the verified published parent. Its
+first bounded rebuild admission attempt measured CPU30 28.20% and free RAM 14.71%, below
+the required 25% RAM threshold; no configure/build/test child started. A subsequent
+documentation write exposed a full C: volume (zero free bytes). The guide was restored
+from its committed blob and only this task's regenerable old test PDBs were removed;
+original test logs/receipts and source commits were retained. These are resource-admission
+and recovery observations, not final-head build/test or analyzer passes. The final full
+Sonar IDE/secrets/Codacy preflight remains unrun until physical lock and resource
+admission permit it. Any draft delivery must retain that explicit gap.
+
+A second build admission attempt measured CPU30 15.10% and free RAM 34.28%;
+resource checks passed, but nonblocking physical lock acquisition was busy. No
+configure, compiler or test child started. Draft publication is permitted by the
+13 November user instruction while external evidence remains incomplete. The
+final provider checks are not claimed as run or passed by these admission receipts.
