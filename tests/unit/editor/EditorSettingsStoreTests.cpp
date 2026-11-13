@@ -510,7 +510,7 @@ TEST_CASE("Global binding authoring validates active project conflicts before pe
     using namespace Horo;
     using namespace Horo::Editor;
     KeymapHome home;
-    ConfigurationService configuration{BuildEditorAppearanceConfigurationSchema()};
+    ConfigurationService configuration{CreateEditorConfigurationSchema(DefaultEditorSettings())};
     EditorDataBus events;
     LocalizationService localization{LocaleTag{"en-US"}};
     EditorSettingsService service{DefaultEditorSettings(), configuration, events, localization};
