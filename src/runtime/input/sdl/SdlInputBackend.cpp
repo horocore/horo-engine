@@ -231,6 +231,20 @@ namespace Horo::Input {
             std::uint64_t gyroCutoff{}; /**< SDL event clock; never compared with the independent sensor clock. */
             std::uint64_t gyroEventTimestamp{};
             std::uint64_t gyroSensorTimestamp{};
+
+            /** @brief Retires this owner's sensor interest before releasing either native device reference. */
+            void Close() noexcept {
+                if (gamepad) {
+                    if (gyroTouched)
+                        (void)SDL_SetGamepadSensorEnabled(gamepad, SDL_SENSOR_GYRO, false);
+                    SDL_CloseGamepad(gamepad);
+                    gamepad = nullptr;
+                } else if (joystick) {
+                    SDL_CloseJoystick(joystick);
+                    joystick = nullptr;
+                }
+                gyroTouched = false;
+            }
         };
 
         /** @brief Window-local native identity mapping; terminal slots cannot be reused within a collection frame. */
@@ -496,11 +510,7 @@ namespace Horo::Input {
                 if (found == devices.end())
                     break;
                 (void)collector.DisconnectGamepad(found->second.id);
-                if (found->second.gamepad) {
-                    if (found->second.gyroTouched)
-                        (void)SDL_SetGamepadSensorEnabled(found->second.gamepad, SDL_SENSOR_GYRO, false);
-                    SDL_CloseGamepad(found->second.gamepad);
-                }
+                found->second.Close();
                 devices.erase(found);
                 break;
             }
@@ -544,10 +554,7 @@ namespace Horo::Input {
                 if (found == devices.end())
                     break;
                 (void)collector.DisconnectGamepad(found->second.id);
-                if (found->second.gamepad)
-                    SDL_CloseGamepad(found->second.gamepad);
-                else if (found->second.joystick)
-                    SDL_CloseJoystick(found->second.joystick);
+                found->second.Close();
                 devices.erase(found);
                 break;
             }
@@ -573,12 +580,7 @@ namespace Horo::Input {
     SdlInputBackend::~SdlInputBackend() {
         for (auto &[nativeId, device] : impl_->devices) {
             static_cast<void>(nativeId);
-            if (device.gamepad) {
-                if (device.gyroTouched)
-                    (void)SDL_SetGamepadSensorEnabled(device.gamepad, SDL_SENSOR_GYRO, false);
-                SDL_CloseGamepad(device.gamepad);
-            } else if (device.joystick)
-                SDL_CloseJoystick(device.joystick);
+            device.Close();
         }
     }
 

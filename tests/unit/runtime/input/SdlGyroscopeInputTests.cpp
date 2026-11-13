@@ -258,6 +258,33 @@ namespace {
         CHECK(device.disables == 1);
     }
 
+    TEST_CASE("SDL controller retirement disables sensors regardless of which removal event arrives first",
+              "[unit][input][sdl][gyroscope][retirement]") {
+        for (const auto first : {SDL_EVENT_GAMEPAD_REMOVED, SDL_EVENT_JOYSTICK_REMOVED}) {
+            INFO(static_cast<unsigned>(first));
+            MotionDevice device;
+            {
+                SdlInputBackend backend;
+                backend.BindWindow(7);
+                backend.SetGamepadGyroscopeEnabled(true);
+                const auto id = device.Id(device.Pump(backend));
+                REQUIRE(device.enables == 1);
+                REQUIRE(device.disables == 0);
+                device.Begin(backend);
+                SDL_Event removed{};
+                removed.type = first;
+                removed.jdevice.which = device.native;
+                backend.ProcessEvent(removed);
+                CHECK(device.disables == 1);
+                removed.type = first == SDL_EVENT_GAMEPAD_REMOVED ? SDL_EVENT_JOYSTICK_REMOVED : SDL_EVENT_GAMEPAD_REMOVED;
+                backend.ProcessEvent(removed);
+                backend.ProcessEvent(device.Event(1));
+                CHECK(backend.Commit().FindGamepad(id) == nullptr);
+            }
+            CHECK(device.disables == 1);
+        }
+    }
+
     TEST_CASE("SDL initially unfocused windows cannot enable requested controller motion before a focus event",
               "[unit][input][sdl][gyroscope][focus]") {
         HiddenVideo video;
