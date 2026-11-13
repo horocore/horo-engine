@@ -226,8 +226,13 @@ namespace Horo::Runtime {
          * @param outcome Known or unknown publication evidence.
          * @param now Current monotonic time used for the final pre-commit cancellation check.
          * @return Atomic terminal transition disposition.
+         * @details Lvalue errors are copied before attempting the transition; allocation failure leaves the operation unchanged.
+         * An rvalue error transfers into storage reserved at admission without constructing another Error on the terminal path.
          */
-        [[nodiscard]] SaveOperationTransitionResult Fail(Error error, SaveOperationCommitOutcome outcome,
+        [[nodiscard]] SaveOperationTransitionResult Fail(const Error &error, SaveOperationCommitOutcome outcome,
+                                                         std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+        /** @copydoc SaveOperationController::Fail */
+        [[nodiscard]] SaveOperationTransitionResult Fail(Error &&error, SaveOperationCommitOutcome outcome,
                                                          std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
     private:

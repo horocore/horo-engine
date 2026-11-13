@@ -56,6 +56,13 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
+    # Reduced Windows builds own these allocation regressions.
+    "HoroFoundationResultTests",
+    "HoroRuntimeSaveAutosaveSchedulerTests",
+    "HoroRuntimeSaveCaptureSnapshotTests",
+    "HoroRuntimeSaveOperationTests",
+    "HoroRuntimeSaveParticipantRegistryTests",
+    "HoroRuntimeSavedSceneBootstrapTests",
     "HoroAnimationGraphValueAllocationTests",
     "HoroAnimationDocumentTests",
     "HoroUiStyleWorkspaceTests",

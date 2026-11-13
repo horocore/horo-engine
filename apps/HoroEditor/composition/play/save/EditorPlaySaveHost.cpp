@@ -109,8 +109,7 @@ namespace Horo::Application::Internal {
             return valid;
         if (command.kind == Cancel)
             return state_->CancelRequest();
-        const auto admitted = state_->AdmitCommand(command);
-        if (admitted.HasError())
+        if (const auto admitted = state_->AdmitCommand(command); admitted.HasError())
             return admitted;
         return state_->Publish();
     }

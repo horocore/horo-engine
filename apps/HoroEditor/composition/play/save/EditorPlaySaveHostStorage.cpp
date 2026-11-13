@@ -117,11 +117,13 @@ namespace Horo::Application::Internal {
             const auto physics = ValidatePlaySavePhysicsArchive(archive, *schema);
             if (physics.HasError())
                 return Result<void>::Failure(physics.ErrorValue());
-            const auto core = DecodePlaySaveSceneStructure(*bytes.Value(), schema->baseline, schema->identities, physics.Value());
-            if (core.HasError())
+            if (const auto core = DecodePlaySaveSceneStructure(*bytes.Value(), schema->baseline, schema->identities, physics.Value());
+                core.HasError()) {
                 return Result<void>::Failure(core.ErrorValue());
-            const auto prefabs = DecodePlaySavePrefabs(archive, schema->prefabProfile, schema->identities.size());
-            return prefabs.HasError() ? Result<void>::Failure(prefabs.ErrorValue()) : Result<void>::Success();
+            } else {
+                const auto prefabs = DecodePlaySavePrefabs(archive, schema->prefabProfile, schema->identities.size());
+                return prefabs.HasError() ? Result<void>::Failure(prefabs.ErrorValue()) : Result<void>::Success();
+            }
         }
 
         /** @copydoc Runtime::ISaveSlotLifecycleHost::Verifier */

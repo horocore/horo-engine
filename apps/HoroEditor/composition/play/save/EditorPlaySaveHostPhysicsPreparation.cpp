@@ -49,8 +49,7 @@ namespace Horo::Application::Internal {
     Result<void> EditorPlaySaveHost::State::ReleasePhysicsCapture() {
         if (!physics)
             return Result<void>::Success();
-        const auto removed = registry.Unregister(Physics::Detail::PhysicsStateSaveParticipant());
-        if (removed.HasError())
+        if (const auto removed = registry.Unregister(Physics::Detail::PhysicsStateSaveParticipant()); removed.HasError())
             return Result<void>::Failure(removed.ErrorValue());
         physics->CloseCapture();
         return Result<void>::Success();
