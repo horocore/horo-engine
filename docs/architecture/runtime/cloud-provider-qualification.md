@@ -1,5 +1,29 @@
 # Cloud Provider Contract Qualification
 
+## Current delivery status — 13 November 2026
+
+User restart policy V2 supersedes the historical named-grant/HOLD restrictions
+recorded below. The delivery branch is rebased onto the verified published
+`origin/codex/editor-improvements` head
+`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`. The rebase preserves the cloud changes;
+the analysis-helper conflict retains the parent's fixed `--parallel 1` behavior,
+and both generator paths are checked even with a larger inherited parallelism value.
+
+The existing `heavy_build_lock` helper now accepts `blocking=False`, preserving its
+blocking default for existing callers. The public-helper regression verifies
+exclusive nonblocking admission and release after exceptions. Local bounded
+wrappers no longer depend on a named grant: they acquire the canonical OS lock
+atomically without waiting, verify its actual Windows handle, enforce CPU/RAM
+guards, and release at the batch boundary. No live job is interrupted.
+
+The first cloud batch admission on this restart returned **physical lock busy**;
+no configure/build/test started and no background waiter was created. Python
+analysis/cache checks completed in two complementary selections: 56 passed,
+2 skipped in total. These are not native cloud-test or full-quality results.
+The restart authorizes normal delivery-branch push and a reviewable draft PR with
+explicitly incomplete checks; it does not authorize merge, force-push, issue
+transitions, reduced quality rules or fabricated qualification evidence.
+
 This record tracks PLS-005 as a capability group. Public-engine qualification and
 private-provider certification are separate evidence. Neither scripted results nor
 the synchronous atomic test model establish a native provider's durable CAS or
