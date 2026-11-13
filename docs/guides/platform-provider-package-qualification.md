@@ -14,7 +14,7 @@ remain the normative implementation contracts.
 | PLS-002.3 / HORO-1840 / #1884 | Extension claim copying, exact identity/version admission, capability/factory revocation and executable leases. `PlatformProviderAdmissionTests.cpp`. Package permissions are additionally intersected with the exact installed package approval before host publication. | Native safety depends on a cooperating provider's retire/drain contract; refusal retains the code and requires explicit recovery. |
 | PLS-002.4 / HORO-1841 / #1885 | Exact selection; ordered services/session/ingress startup; partial initialization rollback; cancellation/drain/shutdown. `PlatformProviderLifecycleTests.cpp` and the installed package tests below. | The current operations ABI admits only achievement unlock in the lifecycle host. It does not qualify other native service adapters. Credential injection is still an integration dependency. |
 | PLS-002.5 / HORO-1842 / #1886 | Explicit Null/absence and product provenance, profile capabilities and transition retirement. `PlatformServicesCompositionTests.cpp`. | Signed shipping/server evidence, entitlements and real restricted products require their own release qualification. |
-| PLS-002.6 / HORO-1843 / #1887 | Verified archive installation, explicit native and role-aware activation, hostile claims, requests, replacement, revocation, rollback and uninstall. `PackagePlatformProviderLifecycleTests.cpp`. | Windows execution is pending the shared build slot. Linux/macOS execution and real vendor packages are not available in this worktree. |
+| PLS-002.6 / HORO-1843 / #1887 | Verified archive installation, explicit native and role-aware activation, hostile claims, requests, replacement, revocation, rollback and uninstall. `PackagePlatformProviderLifecycleTests.cpp`. | Windows execution awaits the physical build lock and sufficient resources. Linux/macOS execution and real vendor packages are not available in this worktree. |
 
 ## Reference package coverage
 
@@ -98,7 +98,19 @@ HoroFoundationConfigurationTests
 The new package tests and application composition consumer are included in the
 Windows CI target group. Linux and macOS native CI discover the package tests
 through the ordinary headless test registry. Inclusion is not a passed run.
-`tests/python/test_ci_workflow_grouping.py` passed locally: 39 tests.
+On 13 November 2026, the delivery stack was rebased onto published base
+`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`; range-diff confirmed both task patches
+were unchanged. `tests/python/test_ci_workflow_grouping.py` passed locally on that
+base: 40 tests. The earlier 39-case result was from the previous base.
+
+The obsolete named-grant scheduling gate has been removed under the current user
+policy. Bounded native work still requires atomic nonblocking acquisition of the
+canonical physical build lock, verified Windows handle identity, serial execution
+and the CPU/RAM guard. The first resumed configure attempt stopped at that guard:
+30-second CPU average 37.05%, available memory 15.68% (minimum 25%). It launched
+no CMake/build/test child and created no waiter. This is a resource deferral, not
+a successful configure or a native test result.
+
 Native configure/build/tests and final local quality preflight remain pending;
 this ledger must not be interpreted as completed parent acceptance.
 
