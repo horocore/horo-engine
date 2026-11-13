@@ -10,6 +10,7 @@ namespace Horo::Runtime::Ui {
     class UiAccessibilitySnapshot;
     class UiAccessibilityChangePublisher;
     struct UiAccessibilityActionRequest;
+    struct UiAccessibilityAnnouncementCursor;
     struct UiPresentationReceipt;
 }  // namespace Horo::Runtime::Ui
 
@@ -70,6 +71,8 @@ namespace Horo::Platform {
          * @param changes Borrowed corresponding change/retained-announcement producer.
          * @param receipt Exact successful presentation evidence; native adapters reject stale/failed/skipped receipts.
          * @return Explicit admission result. No borrowed reference may survive this call.
+         * @note Accepted queues owned work; it does not acknowledge retained announcements. The UI owner releases
+         * their publisher prefix only after receiving its matching announcement completion cursor.
          */
         [[nodiscard]] virtual AccessibilityEnqueueResult Submit(const Runtime::Ui::UiAccessibilitySnapshot &snapshot,
                                                                 const Runtime::Ui::UiAccessibilityChangePublisher &changes,
@@ -79,6 +82,16 @@ namespace Horo::Platform {
          * @return True when a bounded action was copied; false leaves action unchanged.
          */
         [[nodiscard]] virtual bool TryDequeueAction(Runtime::Ui::UiAccessibilityActionRequest &action) noexcept = 0;
+        /** @brief Dequeues one cumulative announcement handoff completion for the existing UI publisher.
+         * @param cursor Destination written only on success; validated by the UI owner through its publisher's Acknowledge.
+         * @return True when a copied completion was dequeued; false leaves cursor unchanged.
+         * @details A completion covers only an exact publisher/session prefix whose earlier accepted occurrences have
+         * all reached native API admission or observed cancellation. It never proves synthesized or heard speech.
+         * Queue admission, overflow, resynchronization and failed native calls cannot fabricate completion.
+         * Adapters retain completions within their bounded admission budget until drained, including during retirement;
+         * native callbacks never acknowledge or mutate the UI publisher directly. Calls use the composing owner thread.
+         */
+        [[nodiscard]] virtual bool TryDequeueAnnouncementCompletion(Runtime::Ui::UiAccessibilityAnnouncementCursor &cursor) noexcept = 0;
         /** @brief Idempotently closes admission and cancels pending work; native retirement remains host-owned. */
         virtual void Shutdown() noexcept = 0;
 
@@ -97,6 +110,8 @@ namespace Horo::Platform {
                                                         const Runtime::Ui::UiPresentationReceipt &receipt) noexcept override;
         /** @copydoc IPlatformAccessibilityBridge::TryDequeueAction */
         [[nodiscard]] bool TryDequeueAction(Runtime::Ui::UiAccessibilityActionRequest &action) noexcept override;
+        /** @copydoc IPlatformAccessibilityBridge::TryDequeueAnnouncementCompletion */
+        [[nodiscard]] bool TryDequeueAnnouncementCompletion(Runtime::Ui::UiAccessibilityAnnouncementCursor &cursor) noexcept override;
         /** @copydoc IPlatformAccessibilityBridge::Shutdown */
         void Shutdown() noexcept override;
 

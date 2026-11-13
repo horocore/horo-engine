@@ -306,6 +306,12 @@ recording, and ShuttingDown after shutdown. Desired preference remains distinct
 from actual capability. Runtime UI retains focus/action authority and native
 visibility requires actual matching presentation evidence.
 
+The bridge now declares a separate announcement-completion cursor channel so
+queue admission cannot silently acknowledge the UI publisher. Null produces no
+completion, including after shutdown. The [transport migration](platform-accessibility-bridge-migration.md)
+records the vtable rebuild, exact publisher ownership and regression scope.
+Its native rerun and real asynchronous adapters/host draining remain pending.
+
 `UiAccessibilityReviewLog` is an independent opt-in 64-record journal, not a speech
 queue or native adapter. Text recording requires separate consent, oversized text
 is omitted whole and policy changes scrub old rows. It consumes the exact adopted

@@ -42,17 +42,26 @@ namespace Horo::Runtime::Ui {
         UiAccessibilityActionRequest action{};
         action.node = snapshot.Nodes()[2].id;
         const auto original = action.node;
+        UiAccessibilityAnnouncementCursor cursor{tree.Instance(), tree.Canvas(), UiAccessibilityAnnouncementGeneration::Create(1).Value(),
+                                                 17};
+        const auto originalCursor = cursor;
+        Platform::IPlatformAccessibilityBridge &transport = bridge;
         const auto before = accessibilityAllocations.load();
         const auto result = bridge.Submit(snapshot, publisher, UiPresentationReceipt{});
         const auto produced = bridge.TryDequeueAction(action);
+        const auto completed = transport.TryDequeueAnnouncementCompletion(cursor);
         const auto after = accessibilityAllocations.load();
         REQUIRE(result == Platform::AccessibilityEnqueueResult::Unsupported);
         REQUIRE_FALSE(produced);
+        REQUIRE_FALSE(completed);
         REQUIRE(action.node == original);
+        REQUIRE(cursor == originalCursor);
         REQUIRE(after == before);
         bridge.Shutdown();
         bridge.Shutdown();
         REQUIRE(bridge.Submit(snapshot, publisher, UiPresentationReceipt{}) == Platform::AccessibilityEnqueueResult::ShuttingDown);
+        REQUIRE_FALSE(transport.TryDequeueAnnouncementCompletion(cursor));
+        REQUIRE(cursor == originalCursor);
         REQUIRE(publisher.Announcements().empty());
     }
 }  // namespace Horo::Runtime::Ui

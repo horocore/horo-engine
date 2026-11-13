@@ -18,6 +18,11 @@ namespace Horo::Platform {
         return false;
     }
 
+    /** @copydoc NullPlatformAccessibilityBridge::TryDequeueAnnouncementCompletion */
+    bool NullPlatformAccessibilityBridge::TryDequeueAnnouncementCompletion(Runtime::Ui::UiAccessibilityAnnouncementCursor &) noexcept {
+        return false;
+    }
+
     /** @copydoc NullPlatformAccessibilityBridge::Shutdown */
     void NullPlatformAccessibilityBridge::Shutdown() noexcept {
         stopped_ = true;
