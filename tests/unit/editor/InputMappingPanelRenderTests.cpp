@@ -219,7 +219,7 @@ namespace {
         CHECK(fixture.gui.input.ReadAction(fixture.workspace, action).x == -1.0F);
     }
 
-    TEST_CASE("Clicking outside Input Mapping abandons capture without authoring another surface's click", "[editor][input][gui]") {
+    TEST_CASE("Pointer gestures outside Input Mapping abandon capture without authoring another surface's input", "[editor][input][gui]") {
         MappingFixture fixture;
         fixture.Draw(900);
         fixture.ActivateRebind();
@@ -227,10 +227,16 @@ namespace {
         REQUIRE_FALSE(fixture.gui.input.IsContextActive(fixture.workspace));
         const auto profile = fixture.gui.input.Profile();
         fixture.collector.BeginFrame(2);
-        fixture.collector.SetPointerButton(Input::PointerButton::Primary, true);
+        SECTION("Pointer button") {
+            fixture.collector.SetPointerButton(Input::PointerButton::Primary, true);
+            ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        }
+        SECTION("Wheel") {
+            fixture.collector.AddPointerWheel(0.0F, 1.0F);
+            ImGui::GetIO().AddMouseWheelEvent(0.0F, 1.0F);
+        }
         fixture.gui.input.BeginFrame(fixture.collector.Commit());
         ImGui::GetIO().AddMousePosEvent(950, 780);
-        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
         fixture.Draw(900);
         CHECK(fixture.gui.input.IsContextActive(fixture.workspace));
         CHECK(fixture.gui.input.Profile() == profile);
