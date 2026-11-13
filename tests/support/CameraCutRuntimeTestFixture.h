@@ -8,8 +8,14 @@
 #include <utility>
 
 namespace Horo::Tests::CameraCuts {
-    /** @brief Retains camera/runtime owners and current Scene publication through each regression. */
+    /** @brief Retains stable-address camera/runtime owners and current Scene publication through each regression. */
     struct RuntimeCameraFixture final {
+        RuntimeCameraFixture() = default;
+        RuntimeCameraFixture(const RuntimeCameraFixture &) = delete;
+        RuntimeCameraFixture(RuntimeCameraFixture &&) = delete;
+        RuntimeCameraFixture &operator=(const RuntimeCameraFixture &) = delete;
+        RuntimeCameraFixture &operator=(RuntimeCameraFixture &&) = delete;
+
         std::unique_ptr<RuntimeScene> scene{Take(RuntimeScene::Create(SceneDefinition(), SceneRuntimeId{1}))};
         CinematicRuntimeService runtime{Take(CinematicRuntimeService::Create({{1, 1}}))};
         CameraService camera{Take(CameraService::Create({{1, 1}, scene->View().RuntimeId(), CameraViewDomain::Runtime}))};
