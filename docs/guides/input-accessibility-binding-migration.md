@@ -174,8 +174,17 @@ canonical codec round trips and sticky conflicts, plus paired locale/narrow form
 drawing. These C++ tests have not compiled or run. The paired localization and
 SDK Python pass is now **26 passed**, which does not qualify native behavior or
 visual interaction. Input workstream rebinding capture/persistence integration,
-host withdrawal composition and gyro remain implementation/qualification work.
+additional host withdrawal composition and gyro remain implementation/qualification work.
 This checkpoint does not qualify ACC-001.4.
+The graphical editor now drains removed-context withdrawals at its actual input
+cutoff, after the router adopts the committed sample and before screen input
+capture. It releases only ended-owner name leases and never delivers them to a
+replacement context or invokes a removed consumer. Live/preempted contexts retain
+their ordinary release reads. The new bounded lifecycle regression repeats more
+than the complete mapping capacity through context replacement without an explicit
+router `EndFrame`, then checks that host draining cannot steal a live modal
+cancellation. This regression and the graphical application change remain
+uncompiled/unexecuted; other application compositions still need qualification.
 Input's independently owned scoped persistence/capture work must be
 integrated without replacing its strengthened validation or adding another save
 path. That work and this version-two change currently live in separate unpushed

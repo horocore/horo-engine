@@ -285,6 +285,43 @@ namespace Horo::Input {
         }
     }
 
+    TEST_CASE("Host input cutoffs reclaim ended context slots without stealing live cancellation releases",
+              "[input][accessibility][router][withdrawal][capacity]") {
+        MappingFixture fixture{{.digital = {.toggle = true}}};
+        const auto sample = [&](const bool down) {
+            fixture.input.BeginFrame(++fixture.frame);
+            fixture.input.Collector().SetKey(Key::K, down);
+            static_cast<void>(fixture.input.CommitFrame());
+            return fixture.Read();
+        };
+        for (std::size_t index = 0; index < MaximumAccessibilityMappings + 1; ++index) {
+            static_cast<void>(sample(false));
+            const auto pressed = sample(true);
+            REQUIRE(pressed.status == ActionReadStatus::Resolved);
+            REQUIRE(pressed.value.down);
+            const auto oldIdentity = fixture.input.Router().RoutingState(fixture.context).contextIdentity;
+            fixture.context.Reset();
+            fixture.context = fixture.input.Router().PushContext(InputContextId{"play"}, InputContextKind::Gameplay);
+            // The production host drains after committing the next snapshot, without calling a removed owner.
+            fixture.input.BeginFrame(++fixture.frame);
+            static_cast<void>(fixture.input.CommitFrame());
+            RetiredInputActionRelease retired;
+            REQUIRE(fixture.input.Router().TryDequeueRetiredActionRelease(retired));
+            REQUIRE(retired.contextIdentity == oldIdentity);
+            REQUIRE(retired.action && *retired.action == fixture.action);
+            REQUIRE_FALSE(fixture.input.Router().TryDequeueRetiredActionRelease(retired));
+            REQUIRE_FALSE(fixture.Read().value.released);
+            REQUIRE_FALSE(fixture.Read().value.down);
+        }
+        static_cast<void>(sample(false));
+        REQUIRE(sample(true).value.down);
+        auto modal = fixture.input.Router().PushContext(InputContextId{"modal"}, InputContextKind::ModalRoot);
+        RetiredInputActionRelease retired;
+        REQUIRE_FALSE(fixture.input.Router().TryDequeueRetiredActionRelease(retired));
+        REQUIRE(fixture.Read().value.released);
+        REQUIRE_FALSE(fixture.Read().value.down);
+    }
+
     TEST_CASE("Assigned device changes retain old-player release ownership and require fresh input for the new player",
               "[input][accessibility][router][device]") {
         InputService input;

@@ -1762,6 +1762,13 @@ namespace Horo::Editor {
 #endif
                 else
                     p_->inputRouter.BeginFrame(raw);
+                // Removed contexts have already closed their consumers. Retire their owned name leases here,
+                // before a replacement screen reads actions; live/preempted contexts drain their own releases.
+                for (std::size_t index = 0; index < Input::MaximumAccessibilityMappings; ++index) {
+                    Input::RetiredInputActionRelease retired;
+                    if (!p_->inputRouter.TryDequeueRetiredActionRelease(retired))
+                        break;
+                }
                 screenHost_->OnInputSnapshot();
                 return Result<void>::Success();
             }
