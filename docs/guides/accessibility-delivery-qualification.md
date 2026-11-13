@@ -58,6 +58,10 @@ for current input integration; the Android cases are portable producer/lifecycle
 tests, not NDK/device qualification. Offline SDK compatibility repeated at
 `d460d27` with **24/24 passed** (0.22 seconds), independently of these C++ tests.
 
+The later internal chord-set identity correction at `4a7ae9b` rejects reordered
+or repeated-key aliases through both map and profile admission. Its new native
+regression is pending; the earlier passes above do not validate that correction.
+
 The GUI batch executed all ten new Contrast/Input Mapping cases: exact duration
 round trips, malformed drafts, canonical Apply with peer preservation and stale
 revision rejection, sticky-conflict rejection, valid/invalid localized narrow
@@ -129,6 +133,25 @@ is not connected-mode authentication, Workspace Trust or C++ sensor evidence.
 No credentials, trust policy, rules or cloud configuration were changed.
 `build/acc-preflight-admission-20261113.json` records admission attempts only;
 it is explicitly **not an analyzer report** and cannot establish provider success.
+
+A full official attempt at `4a7ae9b` was admitted with the verified physical
+handle, CPU 4% and available RAM 35%. It was deliberately cancelled after 1,226
+seconds during header-context preparation. A stack-only 97-sample capture located
+89 samples in Windows path canonicalization at `scripts/analyze.py:2225`;
+`build/acc-preflight-preparation-diagnostic.json` retains that diagnostic. All
+three owned processes were confirmed missing after cancellation. No official
+report was written and no provider pass is inferred. The cancellation record is
+`build/acc-preflight-cancelled-4a7ae9b.json`, not an analyzer result.
+
+Include search now probes missing/non-directory candidates before canonicalizing
+existing paths. Search order, symlink validation, staged-header content checks and
+native-build/sensor requirements remain in place. The helper regression suite
+passed **54 tests, one skipped**
+(`build/acc-quality-header-probe-results.xml`). The skip requires Windows symlink
+creation privilege. These unit results do not replace the required full-scope
+rerun or establish any C++ sensor result.
+The separate Windows compiler/CLI and OS-adapter suites passed **68 tests** in
+10.35 seconds (`build/acc-quality-platform-results.xml`).
 
 For published head `55d9991`,
 [SonarCloud run 43427932437](https://github.com/horocore/horo-engine/actions/runs/43427932437)
