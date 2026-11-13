@@ -24,7 +24,7 @@ does not permit a background waiter or interrupting another job.
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Added bounded SPSC cue/catalog transport, timeline, frame-captured appearance, safe-area arrangement and canonical paint extraction; regression cases written, not executed | Host localization/shaping/presentation composition, settings activation and actual native rendered evidence |
 | ACC-001.3 color | HORO-1807 / #1851 | Added independent numeric target, validated matrices and snapshot-backed synchronous query; regression cases written, not executed | Complete-image GPU pass and real backend evidence; existing ColorPipelinePlan explicitly provides cold admission only |
-| ACC-001.4 input | HORO-1808 / #1852 | Added bounded router interpretation, explicit time and owned cancellation, profile-v2 migration and conflict validation; existing Input Mapping panel exposes exact-duration policy drafts; C++ regressions not executed | Compile/run router and editor regressions/consumers; compose host withdrawal; integrate scoped persistence/capture from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
+| ACC-001.4 input | HORO-1808 / #1852 | Bounded router interpretation, explicit time/cancellation, profile-v2 codec/conflicts, tick projection and public headers built on MSVC; 88/88 focused cases passed at dcf772e. Editor host drains ended-context records; Input Mapping has exact-duration policy drafts | Character, SDL and GUI/application qualification; integrate scoped persistence/capture from INP-001.6 / HORO-1795 / #1839 owned by Input workstream; gyro device evidence |
 | ACC-001.5 visual | HORO-1809 / #1853 | Added UI scale/contrast snapshot with readable typography floor, visual-safety snapshot and typed effect suppression seam; regression cases written, not executed | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Existing Runtime UI semantics; added optional platform transport interface, honest no-op Unsupported adapter and opt-in bounded semantic QA journal; tests written, not executed | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Added inert domain contribution, typed tick snapshot for all seven preferences and revision-only hint adapter; lost/stale hint tests written, not executed | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
@@ -98,6 +98,18 @@ CTest execution.
 
 ## Current local verification
 
+Latest Input validation: clean `dcf772e37900d8a9ca87d4bcb2a55942ce4ebb2e`,
+native MSVC 19.44, headless Debug, canonical nonblocking physical-lock ownership
+and resource checks, build/CTest parallelism one. The same four targets configured
+and built; exact discovery admitted **88 cases**, including the new cancellation
+cause regression. **All 88 passed, zero skipped**, in 1.36 seconds. The explicit
+public consumer and every affected staged Input header compiled. Local evidence:
+`build/acc-input-results.xml` and `build/acc-input-discovery.json`. This supersedes
+the failed Input run below; its original output/discovery were preserved as
+`build/acc-input-e3afd-failure.log` and `build/acc-input-e3afd-discovery.json`.
+This pass qualifies its Input scope only; it does not establish Character,
+SDL, GUI/application, gyro, other accessibility families or full quality results.
+
 The subsequent admitted Input batch at clean
 `e3afd1f205ccaa2d9ad8e3b5680657d63d7c66e9` configured and built all four requested
 targets, including the staged public headers and explicit accessibility consumer.
@@ -107,15 +119,15 @@ the direct consumer. CTest ran serially: **86 passed, 1 failed**. The failing
 case expected `ClockUnavailable` but received `Resolved`; the deferred-release
 fast path had discarded the original timed cancellation cause. The host-cutoff,
 repeat, capacity and public-consumer cases passed in this batch. These results
-are retained in `build/skeleton/Testing/Temporary/LastTest.log` and the discovery
-inventory in `build/acc-input-discovery.json` (local evidence, not committed output).
+are retained in `build/acc-input-e3afd-failure.log` and the discovery
+inventory in `build/acc-input-e3afd-discovery.json` (local evidence, not committed output).
 
 Commits `f7129c7` and `49a1780` retain the typed cancellation cause with the
 old mapping before consulting the current action map, including an unread
 physical release followed by loss of host time. New regressions cover retained
 and removed action maps. The corrected batch retry was refused by the busy
-physical lock before any compiler/test child; **the fixes have not yet passed
-native tests**. Editor-host, Character, other accessibility families, GUI/GPU,
+physical lock before any compiler/test child; the subsequent 88/88 pass above
+validated the fixes. Editor-host, Character, other accessibility families, GUI/GPU,
 native assistive technology and full quality checks still need their own evidence.
 
 The first admitted native Input batch used clean
@@ -147,7 +159,7 @@ from a color role or certify the complete editor.
 check also verified each new public header has exactly one registry entry, every
 new implementation unit is listed once, and new UI error references are declared.
 This is not a substitute for CMake configure or staged consumer compilation.
-New C++ tests have **not** run.
+Outside the focused Input scope above, new C++ tests have **not** run.
 The display-independent offline SDK compatibility pass ran with a short worktree
 temporary root: `python -m pytest -q --tb=short --basetemp build/acc-pytest
 tests/python/test_extension_sdk_compatibility.py`: **24 passed**. The earlier

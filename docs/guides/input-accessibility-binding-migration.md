@@ -150,7 +150,9 @@ Regression sources exercise actual router reads, repeat timing, skipped reads,
 modal/focus/time cancellation, accepted and rejected rebinding, scoped name
 lifetimes, ended-owner coalescing, device/player generations, sticky reset,
 capacity rollback, owner-boundary reclamation and allocation-free action reads.
-They remain **uncompiled and unexecuted** pending the shared native build slot.
+The focused MSVC Debug Input batch at `dcf772e` compiled and ran both Input test
+families plus the explicit public consumer: **88 passed, zero skipped**. See the
+delivery qualification guide for the exact scope and earlier failed run.
 The existing Input Mapping panel now exposes an explicit per-binding accessibility
 draft for digital actions. It uses shared controls and paired English/Turkish copy,
 without introducing another profile file or settings authority. Millisecond text
@@ -183,8 +185,8 @@ replacement context or invokes a removed consumer. Live/preempted contexts retai
 their ordinary release reads. The new bounded lifecycle regression repeats more
 than the complete mapping capacity through context replacement without an explicit
 router `EndFrame`, then checks that host draining cannot steal a live modal
-cancellation. This regression and the graphical application change remain
-uncompiled/unexecuted; other application compositions still need qualification.
+cancellation. This model regression passed in the 88-case Input batch; the
+graphical application TU and other compositions still need qualification.
 
 `GameplayInputFrameBuilder` now clears all held and pending commands when any
 routed action reports `ClockUnavailable` or `CapacityExceeded`. Previously its
@@ -196,9 +198,11 @@ diagnostic in this frame path. Duplicate capture preserves the outcome, and
 Rebuild consumers of the changed public builder layout. The existing staged
 accessibility consumer now exercises this getter; regressions cover missing
 clock, retained-status/duplicate capture, complete neutralization, fresh hold
-after restoration and mapping-capacity failure. These changes still need their
-native build/test pass.
+after restoration and mapping-capacity failure. These cases and the consumer
+passed in the focused 88-case native batch at `dcf772e`.
 Input's independently owned scoped persistence/capture work must be
 integrated without replacing its strengthened validation or adding another save
-path. That work and this version-two change currently live in separate unpushed
-worktrees; merge conflicts in the common codec must preserve both contracts.
+path. That work and this version-two change are published in separate draft PRs
+[#3550](https://github.com/horocore/horo-engine/pull/3550) and
+[#3560](https://github.com/horocore/horo-engine/pull/3560); integration conflicts in
+the common codec must preserve both contracts.
