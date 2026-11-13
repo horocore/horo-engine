@@ -229,7 +229,6 @@ jobs:
           cmake -E copy_directory "$asset_root" "$editor_asset_root"
           printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$editor_asset_root" >> "$GITHUB_ENV"
       - name: Build Vulkan command smoke
-        if: runner.os == 'Linux'
         run: cmake --build build/ci --target HoroVulkanCommandExecutionSmoke --parallel 2
       - name: Report shader compiler cache statistics
         run: |
