@@ -1636,10 +1636,11 @@ const auto &Factories() {{
 '''
 
 
-def generated_exports(module_id: str, fingerprint: str, revision: int, count: int, node_count: int = 0) -> str:
+def generated_exports(module_id: str, fingerprint: str, revision: int, count: int, node_count: int = 0, sense_count: int = 0) -> str:
     behavior_pointer = "Descriptors().data()" if count else "nullptr"
     factory_pointer = "Factories().data()" if count else "nullptr"
     node_pointer = "DecisionNodes().data()" if node_count else "nullptr"
+    sense_pointer = "PerceptionSenses().data()" if sense_count else "nullptr"
     return f'''
 
 extern "C" HORO_GAME_EXPORT const Horo::Gameplay::GameModuleDescriptor *GetGameModuleDescriptor() noexcept {{
@@ -1670,6 +1671,8 @@ extern "C" HORO_GAME_EXPORT const Horo::Gameplay::GeneratedGameplayDescriptorBun
         .lifecycle = {{.create = &CreateGameModule, .destroy = &DestroyGameModule}},
         .decisionNodes = {node_pointer},
         .decisionNodeCount = {node_count},
+        .perceptionSenses = {sense_pointer},
+        .perceptionSenseCount = {sense_count},
     }};
     return &bundle;
 }}
@@ -1682,10 +1685,12 @@ def generated_source(
     revision: int,
     annotations: list[tuple[str, str, pathlib.Path]],
     nodes: list[tuple[str, str, pathlib.Path]] | None = None,
+    senses: list[tuple[str, str, pathlib.Path]] | None = None,
 ) -> str:
     nodes = nodes or []
-    return (generated_storage(annotations) + generated_node_storage(nodes)
-            + generated_exports(module_id, fingerprint, revision, len(annotations), len(nodes)))
+    senses = senses or []
+    return (generated_storage(annotations) + generated_node_storage(nodes) + generated_sense_storage(senses)
+            + generated_exports(module_id, fingerprint, revision, len(annotations), len(nodes), len(senses)))
 
 
 def generated_node_storage(nodes: list[tuple[str, str, pathlib.Path]]) -> str:
@@ -1707,21 +1712,51 @@ const auto &DecisionNodes() {{
 '''
 
 
-def decision_node_annotations(sources: list[tuple[pathlib.Path, str, str]]) -> list[tuple[str, str, pathlib.Path]]:
-    nodes = [(symbol, identity, source) for source, text, _ in sources
-             for symbol, identity in annotations_in(text, source, "HORO_AI_NODE")]
-    if len(nodes) > 128:
-        raise ValueError("decision node annotation count exceeds the supported limit")
+def native_ai_annotations(sources: list[tuple[pathlib.Path, str, str]], marker: str, kind: str,
+                          maximum: int, minimum: int) -> list[tuple[str, str, pathlib.Path]]:
+    records = [(symbol, identity, source) for source, text, _ in sources
+               for symbol, identity in annotations_in(text, source, marker)]
+    if len(records) > maximum:
+        raise ValueError(f"{kind} annotation count exceeds the supported limit")
     seen_ids: set[int] = set()
     seen_symbols: set[str] = set()
-    for symbol, identity, source in nodes:
-        if not re.fullmatch(r"[1-9][0-9]{0,19}", identity) or int(identity) > 2**64 - 1:
-            raise ValueError(f"invalid decision node identity in {source}")
+    for symbol, identity, source in records:
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", identity) or not minimum <= int(identity) <= 2**64 - 1:
+            raise ValueError(f"invalid {kind} identity in {source}")
         if int(identity) in seen_ids or symbol in seen_symbols:
-            raise ValueError(f"duplicate decision node annotation in {source}")
+            raise ValueError(f"duplicate {kind} annotation in {source}")
         seen_ids.add(int(identity))
         seen_symbols.add(symbol)
-    return sorted(nodes, key=lambda node: (int(node[1]), node[0]))
+    return sorted(records, key=lambda record: (int(record[1]), record[0]))
+
+
+def decision_node_annotations(sources: list[tuple[pathlib.Path, str, str]]) -> list[tuple[str, str, pathlib.Path]]:
+    return native_ai_annotations(sources, "HORO_AI_NODE", "decision node", 128, 1)
+
+
+def perception_sense_annotations(sources: list[tuple[pathlib.Path, str, str]]) -> list[tuple[str, str, pathlib.Path]]:
+    return native_ai_annotations(sources, "HORO_AI_SENSE", "perception sense", 64, 6)
+
+
+def generated_sense_storage(senses: list[tuple[str, str, pathlib.Path]]) -> str:
+    if not senses:
+        return ""
+    declarations = "\n".join(
+        f"Horo::AI::PerceptionSenseRegistration HoroGeneratedPerceptionSense_{symbol}() noexcept;"
+        for symbol, _, _ in senses
+    )
+    records = ",\n        ".join(f"HoroGeneratedPerceptionSense_{symbol}()" for symbol, _, _ in senses)
+    return f'''
+{declarations}
+namespace {{
+const auto &PerceptionSenses() {{
+    static const std::array<Horo::AI::PerceptionSenseRegistration, {len(senses)}> senses{{{{
+        {records}
+    }}}};
+    return senses;
+}}
+}}
+'''
 
 
 def validate_identity(module_id: str, fingerprint: str) -> None:
@@ -1756,8 +1791,9 @@ def generate_bundle(
     annotations.sort(key=lambda annotation: (annotation[1], annotation[0]))
     validate_annotations(annotations)
     nodes = decision_node_annotations(sources)
+    senses = perception_sense_annotations(sources)
     revision = descriptor_revision(module_id, annotations, [record[2] for record in sources])
-    write_atomic(generated_output, generated_source(module_id, fingerprint, revision, annotations, nodes))
+    write_atomic(generated_output, generated_source(module_id, fingerprint, revision, annotations, nodes, senses))
     write_atomic(generated_revision, f"{revision}\n")
 
 

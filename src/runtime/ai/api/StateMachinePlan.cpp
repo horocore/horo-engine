@@ -169,7 +169,7 @@ namespace Horo::AI {
                 return Invalid<void>();
             if (!state.call)
                 return Result<void>::Success();
-            if (!state.call->asset.IsValid() || state.call->kind >= DecisionPlanKind::Utility || !state.call->schema.IsValid())
+            if (!state.call->asset.IsValid() || state.call->kind >= DecisionPlanKind::Count || !state.call->schema.IsValid())
                 return Invalid<void>(AIErrors::DecisionAssetSubtreeIncompatible);
             return Result<void>::Success();
         }

@@ -34,6 +34,40 @@ namespace Horo::AI {
             CHECK(continuation.NotifyEvent() == Stale);
         }
 
+        TEST_CASE("Every operation capability and owner ancestor immediately revokes detached task publication", "[unit][ai][bt_async]") {
+            Fixture fixture({Node(1, Task)});
+            fixture.probe->outcome[1] = Running;
+            auto async = std::make_shared<AsyncProbe>();
+            CancellationSource operation;
+            CancellationSource capability;
+            CancellationSource owner;
+            BehaviorTreeInstanceBinding binding{fixture.agent, operation.Token(), 100, 1, fixture.blackboard->Binding()};
+            binding.capabilityCancellation = capability.Token();
+            binding.ownerCancellation = owner.Token();
+            auto created = BehaviorTreeInstance::Create(fixture.Plan(), binding, std::make_unique<AsyncExecutor>(fixture.probe, async));
+            REQUIRE(created.HasValue());
+            auto instance = std::move(created).Value();
+            REQUIRE(fixture.Evaluate(*instance, 1) == Running);
+            const auto continuation = async->continuations[1];
+            REQUIRE(continuation.IsCurrent());
+            SECTION("operation") {
+                operation.RequestCancellation();
+            }
+            SECTION("capability") {
+                capability.RequestCancellation();
+            }
+            SECTION("owner reservation") {
+                owner.RequestCancellation();
+            }
+            CHECK_FALSE(continuation.IsCurrent());
+            CHECK(Publish(continuation) == Stale);
+            CHECK(continuation.NotifyEvent() == Stale);
+            CHECK(fixture.Evaluate(*instance, 2) == Cancelled);
+            CHECK(fixture.probe->starts[1] == 1);
+            CHECK(fixture.probe->resumes[1] == 0);
+            CHECK(fixture.probe->cleanups[1] == 1);
+        }
+
         TEST_CASE("Parallel out-of-order candidates retain canonical failure and deterministic flow", "[unit][ai][bt_async]") {
             Fixture fixture(TaskParallel());
             fixture.probe->outcome.fill(Running);
@@ -47,6 +81,72 @@ namespace Horo::AI {
             CHECK(terminal.Value()->failure->cause.code.Value() == AIErrors::RuntimeUnavailable.code.Value());
             CHECK(fixture.probe->cleanups[2] == 1);
             CHECK(fixture.probe->cleanups[3] == 1);
+        }
+
+        TEST_CASE("Queued AI work checks every cancellation ancestor before invoking provider code", "[unit][ai][bt_async][jobs]") {
+            struct CountingWork final : IAiTaskJob {
+                mutable std::atomic<std::size_t> calls{};
+
+                Result<void> Run(const AiTaskOperationContext &, const CancellationToken &) const override {
+                    calls.fetch_add(1);
+                    return Result<void>::Success();
+                }
+            };
+
+            struct Release final {
+                std::shared_ptr<WorkSignals> signals;
+
+                ~Release() {
+                    if (signals)
+                        signals->release.release();
+                }
+
+                void Now() {
+                    signals->release.release();
+                    signals.reset();
+                }
+            };
+
+            JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+            auto signals = std::make_shared<WorkSignals>();
+            // Declared after jobs, so assertion unwinding releases the occupied worker before joining it.
+            Release release{signals};
+            auto occupied = jobs.SubmitResult({}, [signals](const CancellationToken &token) {
+                return Work{signals}.Run({}, token);
+            });
+            REQUIRE(occupied.HasValue());
+            REQUIRE(signals->started.try_acquire_for(std::chrono::seconds(5)));
+            Fixture fixture({Node(1, Task)});
+            fixture.probe->outcome[1] = Running;
+            CancellationSource operation;
+            CancellationSource capability;
+            CancellationSource owner;
+            BehaviorTreeInstanceBinding binding{fixture.agent, operation.Token(), 100, 1, fixture.blackboard->Binding()};
+            binding.capabilityCancellation = capability.Token();
+            binding.ownerCancellation = owner.Token();
+            auto async = std::make_shared<AsyncProbe>();
+            auto created = BehaviorTreeInstance::Create(fixture.Plan(), binding, std::make_unique<AsyncExecutor>(fixture.probe, async));
+            REQUIRE(created.HasValue());
+            auto instance = std::move(created).Value();
+            REQUIRE(fixture.Evaluate(*instance, 1) == Running);
+            CreateService(*async, jobs, 1);
+            auto work = std::make_shared<CountingWork>();
+            REQUIRE(async->jobs->Start(async->continuations[1], {std::make_shared<int>(1), work}).HasValue());
+            SECTION("operation") {
+                operation.RequestCancellation();
+            }
+            SECTION("capability") {
+                capability.RequestCancellation();
+            }
+            SECTION("owner") {
+                owner.RequestCancellation();
+            }
+            release.Now();
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            PumpUntilDrained(*async->jobs);
+            CHECK(work->calls.load() == 0);
+            CHECK(fixture.Evaluate(*instance, 2) == Cancelled);
+            CHECK(fixture.probe->cleanups[1] == 1);
         }
 
         TEST_CASE("Events coalesce in bounded storage and resume only during decision evaluation", "[unit][ai][bt_async]") {
@@ -108,6 +208,48 @@ namespace Horo::AI {
             CHECK(fixture.Evaluate(*instance, 5) == Failed);
             CHECK(instance->TaskResult(Id(2)).Value()->cancellationReason == AiTaskCancellationReason::TimedOut);
             CHECK(Publish(old) == Stale);
+        }
+
+        TEST_CASE("Growing reload prepares a fresh mailbox and revokes removed task continuations", "[unit][ai][bt_async]") {
+            Fixture fixture({Node(1, Task)});
+            fixture.probe->outcome[1] = Running;
+            auto async = std::make_shared<AsyncProbe>();
+            BehaviorTreeInstanceBinding binding{fixture.agent, {}, 100, 1, fixture.blackboard->Binding()};
+            binding.availableTaskSlots = 8;
+            auto created = BehaviorTreeInstance::Create(fixture.Plan(), binding, std::make_unique<AsyncExecutor>(fixture.probe, async));
+            REQUIRE(created.HasValue());
+            auto instance = std::move(created).Value();
+            REQUIRE(fixture.Evaluate(*instance, 1) == Running);
+            const auto old = async->continuations[1];
+            fixture.nodes = TaskSequence();
+            fixture.probe->outcome[2] = Succeeded;
+            fixture.probe->outcome[3] = Running;
+            auto replaced = instance->Replace(fixture.Plan(), std::make_unique<AsyncExecutor>(fixture.probe, async));
+            REQUIRE(replaced.HasValue());
+            CHECK_FALSE(replaced.Value());
+            CHECK(Publish(old) == Stale);
+            CHECK(fixture.probe->aborts[1] == 1);
+            CHECK(fixture.probe->cleanups[1] == 1);
+            REQUIRE(fixture.Evaluate(*instance, 2) == Running);
+            CHECK(fixture.probe->starts[2] == 1);
+            CHECK(fixture.probe->starts[3] == 1);
+            CHECK(async->continuations[3].IsCurrent());
+            CHECK(Publish(async->continuations[3]) == Accepted);
+            CHECK(fixture.Evaluate(*instance, 3) == Succeeded);
+            CHECK(Publish(old) == Stale);
+            CHECK(fixture.probe->cleanups[3] == 1);
+        }
+
+        TEST_CASE("Growing reload without reserved task slots leaves the old task and continuation active", "[unit][ai][bt_async]") {
+            auto [fixture, async, instance] = StartedTask{};
+            const auto old = async->continuations[1];
+            fixture.nodes = TaskSequence();
+            ExpectError(instance->Replace(fixture.Plan()), AIErrors::TaskContextInvalid);
+            CHECK(instance->RootStatus() == Running);
+            CHECK(old.IsCurrent());
+            CHECK(fixture.probe->aborts[1] == 0);
+            CHECK(Publish(old) == Accepted);
+            CHECK(fixture.Evaluate(*instance, 1, AiTaskResumeReason::Event) == Succeeded);
         }
 
         TEST_CASE("Reactive priority replacement cannot consume the superseded child's queued outcome", "[unit][ai][bt_async]") {

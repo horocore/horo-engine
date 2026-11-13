@@ -39,11 +39,14 @@ namespace Horo::AI {
         struct StepScope final {
             bool &evaluating;
             const DecisionGraphStepInput *&current;
+            DecisionStepTrace *&trace;
 
-            StepScope(bool &flag, const DecisionGraphStepInput *&slot, const DecisionGraphStepInput &input)
-                : evaluating(flag), current(slot) {
+            StepScope(bool &flag, const DecisionGraphStepInput *&slot, DecisionStepTrace *&traceSlot, const DecisionGraphStepInput &input,
+                      DecisionStepTrace *evidence)
+                : evaluating(flag), current(slot), trace(traceSlot) {
                 evaluating = true;
                 current = &input;
+                trace = evidence;
             }
 
             StepScope(const StepScope &) = delete;
@@ -51,6 +54,7 @@ namespace Horo::AI {
 
             ~StepScope() {
                 current = nullptr;
+                trace = nullptr;
                 evaluating = false;
             }
         };
@@ -67,6 +71,9 @@ namespace Horo::AI {
             result->plan_ = std::move(plan);
             result->providers_ = std::move(providers);
             result->binding_ = std::move(binding);
+            result->usesUtility_ = std::ranges::any_of(result->plan_->Graphs(), [](const auto &graph) {
+                return std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(graph.execution);
+            });
             result->occurrences_.reserve(result->plan_->Occurrences().size());
             for (std::size_t index = 0; index < result->plan_->Occurrences().size(); ++index) {
                 result->occurrences_.push_back(std::make_unique<OccurrenceState>());
@@ -112,11 +119,15 @@ namespace Horo::AI {
                                                 binding_.firstTaskGeneration, binding_.blackboard};
             binding.capabilityCancellation = binding_.operation.capabilityCancellation;
             binding.diagnostics = binding_.operation.diagnostics;
+            binding.ownerCancellation = binding_.operation.ownerCancellation;
             auto instance =
                 BehaviorTreeInstance::Create(*tree, binding, std::make_unique<CallAdapter>(*this, index, std::move(callbacks).Value()));
             if (instance.HasError())
                 return Result<void>::Failure(instance.ErrorValue());
             state.tree = std::move(instance).Value();
+        } else if (std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(graph.execution)) {
+            if (auto built = BuildUtility(index); built.HasError())
+                return built;
         } else {
             auto callbacks = providers_->CreateExecutor(providers_, *graph.bindings, plan_->Capabilities(), graph.providerProperties);
             if (callbacks.HasError())
@@ -138,6 +149,45 @@ namespace Horo::AI {
                !binding_.operation.IsCancellationRequested();
     }
 
+    /** @copydoc DecisionGraphInstance::TraceOccurrence */
+    DecisionTraceOccurrence DecisionGraphInstance::TraceOccurrence(const std::size_t index) const noexcept {
+        const auto &occurrence = plan_->Occurrences()[index];
+        return {plan_->Graphs()[occurrence.plan].asset, occurrence.callNode, static_cast<std::uint32_t>(index),
+                static_cast<std::uint32_t>(occurrence.parent)};
+    }
+
+    /** @copydoc DecisionGraphInstance::TraceMachine */
+    void DecisionGraphInstance::TraceMachine(const std::size_t index, const StateMachineStepResult &step) const noexcept {
+        const auto &state = *occurrences_[index];
+        const auto &occurrence = plan_->Occurrences()[index];
+        const auto task = plan_->Graphs()[occurrence.plan].executionTask;
+        const auto slot = binding_.firstTaskSlot + static_cast<std::uint32_t>(occurrence.firstTaskSlot);
+        trace_->Append({.kind = DecisionStepRecordKind::StateMachineStep,
+                        .occurrence = TraceOccurrence(index),
+                        .node = step.activeState,
+                        .task = task,
+                        .handle = {binding_.operation.agent.incarnation, {slot, state.generation}},
+                        .state = state.outcome,
+                        .lastTransition = step.lastTransition,
+                        .transitionCount = static_cast<std::uint32_t>(step.transitions)});
+    }
+
+    /** @copydoc DecisionGraphInstance::TraceMachineTransitions */
+    void DecisionGraphInstance::TraceMachineTransitions(const std::size_t index) const noexcept {
+        const auto &state = *occurrences_[index];
+        const auto &occurrence = plan_->Occurrences()[index];
+        const auto slot = binding_.firstTaskSlot + static_cast<std::uint32_t>(occurrence.firstTaskSlot);
+        std::uint32_t ordinal = 0;
+        for (const auto transition : state.machine->CommittedTransitions()) {
+            trace_->Append({.kind = DecisionStepRecordKind::StateMachineTransition,
+                            .occurrence = TraceOccurrence(index),
+                            .node = transition,
+                            .task = plan_->Graphs()[occurrence.plan].executionTask,
+                            .handle = {binding_.operation.agent.incarnation, {slot, state.generation}},
+                            .transitionCount = ++ordinal});
+        }
+    }
+
     Result<AiTaskState> DecisionGraphInstance::Advance(std::size_t index) {
         auto &state = *occurrences_[index];
         if (!Available() || !state.active || !input_)
@@ -145,19 +195,37 @@ namespace Horo::AI {
         if (Terminal(state.outcome) || state.lastTick == input_->tick)
             return Result<AiTaskState>::Success(state.outcome);
         state.lastTick = input_->tick;
-        if (state.tree) {
-            auto stepped = state.tree->Evaluate(input_->tick, input_->blackboard, input_->current.agent);
-            if (stepped.HasError())
-                return stepped;
-            state.outcome = stepped.Value();
-        } else {
-            auto stepped = state.machine->Step(input_->tick, input_->current, input_->blackboard, input_->events, state.actions.get());
-            if (stepped.HasError())
-                return Result<AiTaskState>::Failure(stepped.ErrorValue());
-            const auto *terminal = state.machine->TerminalResult();
-            state.outcome = terminal ? terminal->state : AiTaskState::Running;
-        }
+        if (state.utility)
+            return AdvanceUtility(index);
+        if (!state.tree)
+            return AdvanceMachine(index);
+        auto stepped = state.tree->Evaluate(input_->tick, input_->blackboard, input_->current.agent);
+        if (trace_)
+            state.tree->AppendTrace(TraceOccurrence(index), *trace_);
+        if (stepped.HasError())
+            return stepped;
+        state.outcome = stepped.Value();
+        return stepped;
+    }
+
+    /** @copydoc DecisionGraphInstance::AdvanceMachine */
+    Result<AiTaskState> DecisionGraphInstance::AdvanceMachine(const std::size_t index) {
+        auto &state = *occurrences_[index];
+        auto stepped = state.machine->Step(input_->tick, input_->current, input_->blackboard, input_->events, state.actions.get());
+        if (trace_)
+            TraceMachineTransitions(index);
+        if (stepped.HasError())
+            return Result<AiTaskState>::Failure(stepped.ErrorValue());
+        const auto *terminal = state.machine->TerminalResult();
+        state.outcome = terminal ? terminal->state : AiTaskState::Running;
+        if (trace_)
+            TraceMachine(index, stepped.Value());
         return Result<AiTaskState>::Success(state.outcome);
+    }
+
+    /** @copydoc DecisionGraphInstance::UtilityBudgetsAvailable */
+    bool DecisionGraphInstance::UtilityBudgetsAvailable(const DecisionGraphStepInput &input) const noexcept {
+        return !usesUtility_ || (input.utilityAgentBudget && input.utilityGlobalBudget);
     }
 
     Result<void> DecisionGraphInstance::ValidateStep(const DecisionGraphStepInput &input) const {
@@ -166,6 +234,13 @@ namespace Horo::AI {
         const auto schema = plan_->Graphs()[plan_->Occurrences()[0].plan].bindings->BlackboardSchema();
         if (!MatchesBlackboard(input, binding_.blackboard, schema))
             return Invalid<void>(AIErrors::BlackboardInstanceStale);
+        // Metadata still identifies this owner when revocation has expired the observation's read lease.
+        if (binding_.operation.IsCancellationRequested())
+            return Result<void>::Success();
+        if (input.blackboard.Revision().HasError())
+            return Invalid<void>(AIErrors::BlackboardInstanceStale);
+        if (!UtilityBudgetsAvailable(input))
+            return Invalid<void>(AIErrors::TaskContextInvalid);
         if (input.events.size() > StateMachineLimits::EventsPerStep)
             return Invalid<void>();
         if (!std::ranges::all_of(input.events, [](auto event) {
@@ -176,14 +251,41 @@ namespace Horo::AI {
     }
 
     Result<AiTaskState> DecisionGraphInstance::Step(const DecisionGraphStepInput &input) {
+        return StepImpl(input, nullptr);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepWithTrace */
+    Result<AiTaskState> DecisionGraphInstance::StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace) {
+        return StepImpl(input, &trace);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepImpl */
+    Result<AiTaskState> DecisionGraphInstance::StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace) {
         if (auto valid = ValidateStep(input); valid.HasError())
             return Result<AiTaskState>::Failure(valid.ErrorValue());
+        if (trace) {
+            trace->header_ = {.root = plan_->Root(),
+                              .planDigest = plan_->Digest(),
+                              .agent = input.current.agent,
+                              .tick = input.tick,
+                              .blackboardRevision = input.blackboard.CapturedRevision()};
+            trace->count_ = 0;
+            trace->dropped_ = 0;
+        }
+        auto result = StepValidated(input, trace);
+        if (trace)
+            trace->header_.outcome = result.HasValue() ? result.Value() : AiTaskState::Failed;
+        return result;
+    }
+
+    /** @copydoc DecisionGraphInstance::StepValidated */
+    Result<AiTaskState> DecisionGraphInstance::StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace) {
         if (!Available()) {
             const auto previous = occurrences_[0]->outcome;
             static_cast<void>(Cancel(AiTaskCancellationReason::ContextCancelled));
             return Result<AiTaskState>::Success(Terminal(previous) ? previous : AiTaskState::Cancelled);
         }
-        StepScope scope(evaluating_, input_, input);
+        StepScope scope(evaluating_, input_, trace_, input, trace);
         lastTick_ = input.tick;
         auto result = Advance(0);
         if (result.HasError() || !Available()) {
@@ -212,6 +314,12 @@ namespace Horo::AI {
             if (state.tree) {
                 if (auto restarted = state.tree->Restart(); restarted.HasError())
                     return restarted;
+            } else if (state.utility) {
+                for (auto &action : state.utility->actions) {
+                    if (auto restarted = action->Restart(); restarted.HasError())
+                        return restarted;
+                }
+                state.utility->selected.reset();
             } else {
                 if (state.generation == std::numeric_limits<std::uint32_t>::max())
                     return Invalid<void>(AIErrors::GenerationExhausted);
@@ -262,6 +370,12 @@ namespace Horo::AI {
         }
         if (state.machine)
             static_cast<void>(state.machine->Cancel(reason, state.actions.get()));
+        if (state.utility) {
+            const auto &utility =
+                *std::get<std::shared_ptr<const CookedUtilityPlan>>(plan_->Graphs()[plan_->Occurrences()[index].plan].execution);
+            for (std::size_t action = 0; action < state.utility->actions.size(); ++action)
+                static_cast<void>(state.utility->actions[action]->AbortSubtree(utility.Actions()[action]->Nodes()[0].execution.id, reason));
+        }
         state.active = false;
         if (!Terminal(state.outcome))
             state.outcome = AiTaskState::Cancelled;
@@ -295,6 +409,8 @@ namespace Horo::AI {
         auto bytes = sizeof(OccurrenceState) + sizeof(std::unique_ptr<OccurrenceState>);
         if (std::holds_alternative<std::shared_ptr<const BehaviorTreeExecutionPlan>>(graph.execution))
             return bytes + sizeof(CallAdapter);
+        if (const auto *utility = std::get_if<std::shared_ptr<const CookedUtilityPlan>>(&graph.execution))
+            return bytes + sizeof(UtilityAdapter) + (*utility)->Actions().size() * sizeof(std::unique_ptr<BehaviorTreeInstance>);
         bytes += sizeof(ActionAdapter);
         for (const auto &node : graph.bindings->Nodes())
             if (node.intrinsic == DecisionControlKind::Unspecified)

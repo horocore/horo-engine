@@ -37,13 +37,16 @@ namespace Horo::AI {
             const PerceptionDescriptorOrigin origin{.provider = MakeIdentity<PerceptionProviderId>(1)};
             const std::array senses{SenseTypeDescriptor{SenseTypeIds::Damage, origin, "damage", {}},
                                     SenseTypeDescriptor{SenseTypeIds::Touch, origin, "touch", {}},
+                                    SenseTypeDescriptor{SenseTypeIds::Hearing, origin, "hearing", {}},
                                     SenseTypeDescriptor{SenseTypeIds::Team, origin, "team", {}}};
             const std::array stimuli{StimulusTypeDescriptor{StimulusTypeIds::Damage, origin, "damage", 1, {}},
                                      StimulusTypeDescriptor{StimulusTypeIds::Contact, origin, "contact", 1, {}},
+                                     StimulusTypeDescriptor{StimulusTypeIds::Sound, origin, "sound", 1, {}},
                                      StimulusTypeDescriptor{StimulusTypeIds::Team, origin, "team", 1, {}}};
             const std::array listeners{Listener(10, SenseTypeIds::Damage, StimulusTypeIds::Damage),
                                        Listener(11, SenseTypeIds::Touch, StimulusTypeIds::Contact),
-                                       Listener(12, SenseTypeIds::Team, StimulusTypeIds::Team)};
+                                       Listener(12, SenseTypeIds::Team, StimulusTypeIds::Team),
+                                       Listener(13, SenseTypeIds::Hearing, StimulusTypeIds::Sound)};
             auto result = PerceptionDescriptorRegistry::Capture({senses, stimuli, listeners}, {});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
@@ -223,7 +226,7 @@ namespace Horo::AI {
                 const auto snapshot = ai.Snapshot().Value();
                 recipient = snapshot.Agents()[0].handle;
                 other = snapshot.Agents()[1].handle;
-                const std::array senses{SenseTypeIds::Damage, SenseTypeIds::Touch, SenseTypeIds::Team};
+                const std::array senses{SenseTypeIds::Damage, SenseTypeIds::Touch, SenseTypeIds::Team, SenseTypeIds::Hearing};
                 for (std::size_t index = 0; index < sources.size(); ++index) {
                     sources[index].entity = Entity(index + 1);
                     sources[index].layers = 1;
@@ -262,7 +265,106 @@ namespace Horo::AI {
                 REQUIRE(captured.HasValue());
                 return std::move(captured).Value();
             }
+
+            [[nodiscard]] CommittedPerceptionDelivery Sound() const {
+                return {{recipient, MakeIdentity<PerceptionListenerTypeId>(13),
+                         HearingPerceptionEvent{.source = Source(2),
+                                                .location = Math::WorldCoordinate64::FromMillimeters(1000, 0, 0),
+                                                .intensity = 0.5,
+                                                .radiusMeters = 1,
+                                                .tags = 7,
+                                                .emittedTick = 3,
+                                                .lifetimeTicks = 2},
+                         4},
+                        PerceptionFilterDecision::Accept};
+            }
         };
+
+        TEST_CASE("headless committed hearing coalesces sound facts for the same source and listener",
+                  "[unit][ai][perception][events][hearing]") {
+            Fixture server(Network::NetworkProjectRole::DedicatedServer);
+            auto memory = server.Memory(server.recipient);
+            auto other = server.Memory(server.other);
+            std::array records{server.Sound(), server.Sound()};
+            auto &latest = std::get<HearingPerceptionEvent>(records[1].delivery.event);
+            latest.location = Math::WorldCoordinate64::FromMillimeters(900, 0, 0);
+            const auto source =
+                PerceptionEventSource::Capture(*server.scene, server.ai, server.host, Network::NetworkModeWorldKind::AuthorityServer,
+                                               server.registry, server.filtering, records);
+            REQUIRE(source.HasValue());
+            REQUIRE(source.Value().Deliver(0, memory).HasValue());
+            REQUIRE(source.Value().Deliver(1, memory).HasValue());
+            ExpectError(source.Value().Deliver(1, other), AIErrors::PerceptionEventInvalid);
+            const auto snapshot = memory.Snapshot(4, PerceptionSceneLiveness(*server.scene)).Value();
+            REQUIRE(snapshot.count == 1);
+            CHECK(snapshot.entries[0].key.sense == SenseTypeIds::Hearing);
+            CHECK(snapshot.entries[0].key.stimulus == StimulusTypeIds::Sound);
+            CHECK(snapshot.entries[0].lastKnownPosition == latest.location);
+            ExpectError(other.Observe({.key = snapshot.entries[0].key}, 4), AIErrors::PerceptionEventUnauthorized);
+            CHECK(other.StoredCount() == 0);
+        }
+
+        TEST_CASE("sound delivery rejects expired, inaudible and unauthorized events", "[unit][ai][perception][events][hearing]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            auto record = fixture.Sound();
+            auto &sound = std::get<HearingPerceptionEvent>(record.delivery.event);
+            const auto deliver = [&] {
+                return fixture.Capture(std::span{&record, 1}).Deliver(0, memory);
+            };
+            SECTION("expired") {
+                record.delivery.simulationTick = 5;
+                ExpectError(deliver(), AIErrors::PerceptionEventStale);
+            }
+            SECTION("future") {
+                record.delivery.simulationTick = 2;
+                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
+            }
+            SECTION("outside radius") {
+                sound.radiusMeters = 0.999;
+                ExpectError(deliver(), AIErrors::PerceptionEventFiltered);
+            }
+            SECTION("producer denied") {
+                record.filter = PerceptionFilterDecision::Reject;
+                ExpectError(deliver(), AIErrors::PerceptionEventFiltered);
+            }
+            SECTION("source hidden") {
+                fixture.sources[1].visibility = PerceptionGameplayVisibility::Hidden;
+                REQUIRE(fixture.filtering.Publish(fixture.scene->View(), 2, fixture.listeners, fixture.sources).HasValue());
+                ExpectError(deliver(), AIErrors::PerceptionEventFiltered);
+            }
+            CHECK(memory.StoredCount() == 0);
+        }
+
+        TEST_CASE("sound delivery rejects malformed acoustic metadata", "[unit][ai][perception][events][hearing]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            auto record = fixture.Sound();
+            auto &sound = std::get<HearingPerceptionEvent>(record.delivery.event);
+            SECTION("non-finite intensity") {
+                sound.intensity = std::numeric_limits<double>::infinity();
+            }
+            SECTION("NaN intensity") {
+                sound.intensity = std::numeric_limits<double>::quiet_NaN();
+            }
+            SECTION("non-positive intensity") {
+                sound.intensity = 0;
+            }
+            SECTION("excessive intensity") {
+                sound.intensity = 1.01;
+            }
+            SECTION("non-finite radius") {
+                sound.radiusMeters = std::numeric_limits<double>::quiet_NaN();
+            }
+            SECTION("non-positive radius") {
+                sound.radiusMeters = 0;
+            }
+            SECTION("empty lifetime") {
+                sound.lifetimeTicks = 0;
+            }
+            ExpectError(fixture.Capture(std::span{&record, 1}).Deliver(0, memory), AIErrors::PerceptionEventInvalid);
+            CHECK(memory.StoredCount() == 0);
+        }
 
         TEST_CASE("committed damage and contact enter only the declared recipient memory", "[unit][ai][perception][events]") {
             Fixture fixture;

@@ -93,6 +93,16 @@ NavMeshProjectionGenerator submits Navigation-owned work; PerceivedEntitiesGener
 reads an authorized perception snapshot. Stable item indices are assigned before
 async dispatch using canonical generation/entity order.
 
+`Horo/AI/EnvironmentQueryGenerators.h` provides the candidate kernels through
+`HoroEngine::AISceneIntegration`. Lattice points use exact global millimeters
+and stable Z/X order. Out-of-range offsets are skipped and counted. Captured
+authored or Navigation-projected points preserve the provider's canonical input
+order. The perception path accepts only the currently authorized revision and
+deduplicates weak entity references. Each successful batch records the stage,
+generator, provider, and revision. Consumers supply bounded output storage and
+link the scene integration target. Navigation request dispatch and staged
+execution are composed separately from these kernels.
+
 GeometryLineOfSightTest measures physical obstruction through Physics.
 PerceivedVisibilityTest asks what an agent senses/remembers through Perception.
 Distance, dot-product, path-cost and cover-exposure tests declare all actual provider
@@ -110,6 +120,16 @@ eligible. Validation tests surface reproducible authoring errors. Ranking compar
 plan-versioned fixed-point ScoreKeys, then the configured tie-breaker and stable
 item index, with explicit precision/rounding and StageId aggregation order. No
 hash-map/pointer order or non-transitive epsilon comparator is permitted.
+
+`Horo/AI/EnvironmentQueryScoring.h` joins one bounded rule per compiled test
+stage to its declared provider. Scoring consumes captured provider facts in
+stable StageId order. Version-one keys round the normalized score to the nearest
+millionth, with half steps rounded up. A configured signed secondary key
+precedes the final item-index tie break. Missing, incomparable, failed and
+non-finite readings disqualify the candidate and identify the failed stage and
+provider. The owning provider adapter retains the original typed error. The
+scoring interface operates on caller-owned scratch and returns the eligible
+best-N prefix. Provider dispatch belongs to the staged query owner.
 
 ### Threading, Safe Points And Modes
 
@@ -230,3 +250,74 @@ are downstream acceptance requirements, not tests implemented by this ADR-only P
   dependencies or chooses an inappropriate accuracy/cache-reuse policy.
 - **Guaranteed physical interruption of every provider job**: Not implementable for
   all providers; cooperative cancellation and safe result suppression are required.
+
+## Owner-driven adaptive execution
+
+`Horo/AI/EnvironmentQueryExecution.h` admits a single-generator query with
+stable candidate-index tie breaking. The host supplies an exclusive adapter
+that pins the agent, context and provider publications. The adapter owns
+accepted asynchronous work and keeps that work cancellable until it returns a
+completion. Only BlackboardSync consumes provider completions and publishes
+terminal results. AiDecisionEvaluate advances work under the query, agent and
+global allowances supplied by the host. Generation reserves reduction work,
+and scoring is reserved before dispatching the candidate's first test.
+
+At the deadline, an eligible completion can contribute to the result. Partial
+results include only fully evaluated candidates. The host still owns adapter
+composition, provider quotas and scheduling across queries. Deterministic
+execution requires an owning-executor tick contract before it can use this seam.
+
+`EvaluateQueryPerception` reads the exact authorized listener publication for
+one live entity. It distinguishes remembered from currently sensed entities,
+optionally filters by sense and exposes only the match and highest eligible
+confidence. A replaced scene, publication, or candidate generation yields a
+typed stale result.
+
+The queued Physics probe lives in AISightIntegration, which already owns the
+Physics capability dependency. It checks the exact host publication and returns
+binary clearance from a bounded, blocking-only ray or overlap. The host supplies
+local-frame geometry and retires the probe on source replacement. Capacity
+backpressure admits no request. A stale binding cancels outstanding work.
+
+The Navigation adapter is owned by AINavigationIntegration, whose explicit
+dependencies are AI and NavigationRuntime. QueryNavigationProbe submits one
+bounded request to the injected NavigationCoordinator and consumes only its
+owner-published terminal record. It never dispatches or commits the coordinator,
+resets provider quotas or accesses backend storage. The host keeps the coordinator
+alive until probe cancellation/retirement, then drains provider jobs through the
+existing Navigation lifecycle. Reachable paths expose finite non-negative cost;
+partial or budget-limited paths remain incomparable, while exact provider errors
+retain their original domain and code.
+
+## Deterministic owner-kernel admission
+
+AdmitDeterministic requires IOwnerQueryExecutionSource. Its final transport
+methods execute bounded native generation/test kernels on the simulation owner,
+charge their captured work-unit limits and retain complete facts for the following
+BlackboardSync. The source cannot override the transport with worker-dependent
+polling. Each kernel consumes a local allowance; exceeding its declaration produces
+SchedulerBudgetExhausted and exposes no tactical winner.
+
+The host reserves the query, agent and global slices before execution. The existing
+deterministic AiTaskScheduler can reserve the complete agent allowance globally;
+the query then charges the same issued allowance once when agent/global references
+alias. Kernels still retain their pinned inputs and any provider-local reservations.
+
+Every consecutive BlackboardSync must precede Advance after submission. A skipped
+owner tick retires the retained result and produces SchedulerPhaseInvalid without
+consuming late facts. Cancellation and input invalidation retain their existing
+precedence. Results carry the admitted mode and actual terminal publication tick.
+
+Current NavigationCoordinator and queued Physics probes remain adaptive sources.
+Their deterministic admission requires a concrete bounded owner-kernel adapter
+and its provider reservation contract. There is no implicit conversion from their
+asynchronous probes into deterministic sources. Query result caching is absent
+from this execution path.
+
+Adaptive generator, test-admission and test-poll exceptions are confined to the
+owning QueryExecution. They produce EnvironmentQueryProviderFailed with bounded
+exception detail and no winners. Generation/admission failures publish at the
+next BlackboardSync; poll failures cancel the retained request and publish in
+the current sync. Exact typed Result errors retain their original domain/code.
+Cancellation and source invalidation still precede ordinary failure publication.
+This boundary adds no retry, worker wait or cross-query callback.

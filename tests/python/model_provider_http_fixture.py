@@ -58,7 +58,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_model_stream(payload["model"], cloud)
 
     def send_model_stream(self, model, cloud):
-        if model == "tools":
+        if model == "buffer-allocation":
+            text = "x" * 32768
+            frames = ([{"choices": [{"delta": {"content": text}}]}] if cloud else
+                      [{"message": {"content": text}}, {"done": True}])
+        elif model == "tools":
             if cloud:
                 frames = [
                     {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-1", "function": {"name": "scene_query", "arguments": "{\"target\":"}}]}}]},
@@ -91,9 +95,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if len(sys.argv) != 3:
+        raise ValueError("CTest must supply its test binary and exact configured test directory")
     binary = Path(sys.argv[1]).resolve(strict=True)
-    source_root = Path(__file__).resolve().parents[2]
-    if (not binary.is_relative_to(source_root / "build") or binary.parent.name != "tests"
+    test_directory = Path(sys.argv[2]).resolve(strict=True)
+    if (binary.parent != test_directory
             or binary.name not in {"HoroModelProviderTests", "HoroModelProviderTests.exe"}
             or not binary.is_file() or not os.access(binary, os.X_OK)):
         raise ValueError("CTest must supply the built HoroModelProviderTests executable")
@@ -105,7 +111,7 @@ def main():
     environment["NO_PROXY"] = "127.0.0.1,localhost"
     environment["no_proxy"] = "127.0.0.1,localhost"
     try:
-        # The executable is resolved inside this checkout's build/tests tree; no shell is used.
+        # The executable is resolved in the exact CMake-owned test directory, including external worktree builds.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         return subprocess.run([str(binary)], env=environment, check=False).returncode  # nosec B603
     finally:

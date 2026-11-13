@@ -1213,6 +1213,49 @@ origins carry a stable `PerceptionProviderId` plus a non-zero descriptor version
 Duplicate identities conflict across all origins instead of introducing implicit
 source precedence.
 
+Custom spatial provider execution uses `Horo/AI/PerceptionSenseProvider.h`, owned
+by `HoroEngine::AI`. `PerceptionSenseGeneration` captures inert contracts and the
+actual native executable owner's revocable admission alias. Capture never invokes
+a factory. The host admits the exact registry listener, descriptor versions and
+capabilities before constructing one agent/listener-bound instance. Copied source
+locations and origin labels are diagnostic metadata, never executable authority.
+Native and verified package roles acquire the same generation through their
+actual module host. Retirement closes admission before image unload; an instance
+pins that image until its module-owned destroy callback has returned on the owner
+thread. No callback may survive solely through a copied function pointer.
+
+Providers receive bounded frozen candidate identities and canonical positions.
+They return only binary outcomes indexed into that invocation's candidate set;
+they receive no Scene, blackboard, command or event capability. Built-in sense and
+stimulus identities are reserved, so this extension cannot forge Gameplay hearing,
+damage or team authority. Output indices must be unique and ascending. Exceptions,
+invalid output and declared-work overruns quarantine only the offending instance;
+original typed provider failures remain visible. Agent/global allowances reserve
+the full declared provider and validation cost before callbacks, charging an
+aliased allowance once. Native callback compliance is part of the admitted native
+module contract; source metadata cannot sandbox arbitrary native machine code.
+
+`Horo/AI/PerceptionSenseScene.h` belongs to `AISceneIntegration`. Its owner-only
+`RunPerceptionSenseAtSensePoll` gathers from the actual current spatial owner,
+charges a bounded query unit, and revalidates the publication lease and every
+entity generation after the provider returns. All outcomes stage into a private
+memory candidate before replacing agent memory. Truncation and omitted candidates
+are unknown evidence, not sensing loss. Blackboard projection remains a separate
+`BlackboardSync` transaction under the existing declared-key projection contract.
+This adapter is a composition seam; a host must explicitly dispatch it at the
+named phase. Native/package registration alone does not prove product dispatch.
+
+The native public capture path rejects Script origins. The private VM admission
+path is available only to `Gameplay::LuaPerceptionSenseProgram`, which uses the
+existing Lua sandbox and allocator with a bounded instruction hook. Its callback
+tier forbids Lua allocation and accepts only scalar integer positions, returning
+boolean/nil outcomes; it exposes no mutation, filesystem, clock, logging or random
+capability. The entire evaluation shares one instruction allowance. VM/source
+creation occurs at activation and each instance has its own enforced memory
+ceiling. Actual executable-parent revocation is mandatory; a Script label or
+unrelated decision-node lease is insufficient. The package host compiles only
+verified declared script bytes and retains its selected native perception parent.
+
 Registry capture resolves every listener against the identity-sorted sense and
 stimulus sets and against product-supplied, backend-neutral capability bits. A
 missing dependency, incompatible declared version interval, or capability rejects
@@ -1379,7 +1422,7 @@ query seam:
 | Sense | Timing Owner / Model | Authority & Source | Query Seam | Purpose |
 |---|---|---|---|---|
 | **Sight** | Periodic time-sliced (`PerceptionManager` tick) | `PerceptionManager` + `PhysicsWorld` | `PhysicsWorld::Raycast` / `Sweep` for LOS occlusion; `SceneRuntime` spatial index for candidates | Visual detection within FOV cone, peripheral angle, and sight radius |
-| **Hearing** | Periodic time-sliced / stimulus queue drain | `PerceptionManager` + `AudioStimulusEmitter` | Distance attenuation + optional `PhysicsWorld` acoustic obstruction raycast | Acoustic detection of footsteps, gunshots, explosions, and environmental noise |
+| **Hearing** | Bounded drain of committed Gameplay sound facts at the admitted sensing window | Authoritative Gameplay producer through `Gameplay::PerceptionEventSource` | Producer-admitted attenuation/occlusion evidence and exact source/recipient generations; no Audio-renderer queue authority | Acoustic detection of footsteps, gunshots, explosions, and environmental noise |
 | **Damage** | Event-driven (immediate on hit) | `HealthSystem` / `CombatSystem` | Direct gameplay event carrying instigator entity, damage amount, and hit direction | Detection of inflicted harm, alerting agent to attacker identity/direction |
 | **Touch** | Event-driven (fixed physics tick) | `PhysicsWorld` collision dispatcher | Contact manifolds and trigger overlap events | Immediate awareness of physical contact, collisions, and proximity penetration |
 | **Team** | Event-driven, after Gameplay authorizes one delivery | Gameplay/squad system | Exact recipient, sender and subject generations plus disclosure and perception-filter admission | Transient per-agent memory of an already delivered message |
@@ -1471,11 +1514,13 @@ window, which must close before replacement or teardown. Producer filters are
 frozen for that window; policy changes close it and capture a new producer batch.
 Durable squad knowledge never enters this adapter or its transient memories.
 
-Migration: `AIPerceptionMemory::Observe` remains available for sight, hearing and
-other sense kernels, but rejects the built-in Team sense or Team stimulus identity.
-Team producers use the captured Gameplay delivery path. The caller audit found
-only memory regression tests and the new route using `Observe`, with no existing
-production team producer to migrate. Health/combat and squad producer systems and
+Migration: `AIPerceptionMemory::Observe` remains available for sight and other
+sense kernels, including the custom spatial Scene adapter. It rejects
+the built-in Team/Team and Hearing/Sound identities. Committed Gameplay team and
+sound deliveries use `RouteGameplayPerceptionEvent`, which alone accesses the
+private `ObserveAdmitted` boundary after validating its captured delivery proof.
+A copied observation or an Audio playback event cannot supply that proof.
+Health/combat and squad producer systems and
 a complete PerceptionManager do not yet exist in this checkout; this integration
 consumes their typed committed output at the explicit host boundary, without
 implementing gameplay communication, topology or network transport.
@@ -1486,12 +1531,14 @@ Perception uses a hybrid execution model balancing immediate reactivity and
 bounded compute cost:
 
 1. **Hybrid Execution Model**:
-   - **Event-Driven Inputs (`Damage`, `Touch`, team affiliation/distress)**:
-     Dispatched immediately when gameplay events occur or collected during the
-     fixed simulation tick. Work is $O(E)$ where $E$ is the emitted event count.
-   - **Continuous Periodic Inputs (`Sight`, `Hearing`, team awareness relay)**:
-     Evaluated at scheduled intervals across fixed simulation ticks and distributed evenly via
-     time-slicing.
+   - **Event-Driven Inputs (`Damage`, `Touch`, committed hearing and team messages)**:
+     Gameplay producers commit typed facts and recipient/filter decisions during
+     their fixed-tick work. The admitted sensing window drains a bounded captured
+     batch; Audio rendering and AI memory cannot mint producer authority.
+   - **Continuous Periodic Inputs (`Sight`, custom spatial senses)**:
+     Evaluated at scheduled intervals across fixed simulation ticks and distributed
+     through time-slicing. Gameplay/squad systems own any periodic team relay and
+     communication topology; AI consumes only their explicitly delivered facts.
 2. **Time-Sliced Raycast Budgets**:
    - The engine enforces hard limits per fixed simulation tick:
      - `maxSightRaycastsPerTick`: Maximum physics LOS raycasts allowed across all
@@ -2121,10 +2168,10 @@ ADR-021 coarse group               ADR-022 fine phase
 3. SystemPhase::AiDecision      -> AiDecisionEvaluate
 4. SystemPhase::AiIntentDispatch-> NavIntentCommit
                                    + typed combat/animation intent enqueue
-5. SystemPhase::Gameplay        -> CharacterControllerLocomotion
-                                   + IBehaviorInstance::OnFixedUpdate
-                               then AnimationRigUpdate
-                               then variable-rate RenderExtraction (not a fixed phase)
+5. SystemPhase::Gameplay        -> IBehaviorInstance::OnFixedUpdate
+                                   + Gameplay command staging
+Host continues the canonical Animation/Character/Physics fixed tick below,
+then publishes committed state for variable-rate RenderExtraction.
 ```
 
 ### Phase Contracts
@@ -2407,6 +2454,41 @@ without pinning the retired module.
    - Asset compilation produces a new `CookedDecisionPlan`.
    - Running instances migrate at tick boundaries: compatible active paths retain state; incompatible edits trigger `OnAbort()` on active tasks and restart evaluation from the root node.
    - Stale or invalid plans never replace the active runtime plan and log typed compiler diagnostics.
+
+`BehaviorTreeInstance::Replace` is the existing standalone tree safe-point seam.
+Its task-slot reservation is captured at `Create`: an absent
+`BehaviorTreeInstanceBinding::availableTaskSlots` means exactly the initial plan's
+requirement; an explicit capacity is an exclusive range already reserved by the
+host. Replacement revalidates that capacity, integer range and subplan support.
+A growing tree cannot claim adjacent identities by resizing an internal array.
+Within an admitted range, incompatible replacement prepares node, service,
+traversal and async-mailbox storage before cancelling the old generation. Allocation
+failure preserves the prior plan, running tasks and continuations. Success retires
+removed callbacks/continuations and requires a strictly later evaluation tick;
+an event in the old tick cannot execute the replacement. Compatible replacement
+retains live task state and its mailbox but obeys the same tick fence.
+Executor-reuse checks include exact provider/key bindings and the callback-role
+set, so changed node/type bindings cannot execute through the old frozen adapter.
+The prepared-executor `Replace` overload installs freshly bound callbacks in the
+same storage transaction; it always restarts opaque provider state. These tree
+invariants do not establish composed BT/HSM/Utility state or schema migration;
+the complete closure replacement transaction remains required by GAI-003.11.
+
+Scene-owned graph composition acquires its exclusive physical task range through
+`AiSceneRuntime::ReserveDecisionTaskSlotsAtSafePoint`. Compiler occurrence offsets
+are relative to that range; they cannot establish ownership of live Scene task
+indices. The move-only reservation captures the actual agent's schema publication
+and cancellation ancestry. Failed admission consumes no indices; issued indices
+are never recycled, even after a failed graph creation. Zero-task ranges are valid.
+`CaptureDecisionSnapshotAtSafePoint` obtains the frozen observation from that same
+owner after blackboard synchronization. Both APIs require its actual owner lane.
+The reservation overload of `DecisionGraphInstance::Create` checks schema and range
+before provider factories, retains the scope, and propagates its independent owner
+cancellation to all families and detached continuations. Owner cancellation retires
+existing graph tasks without trying to read an already-revoked snapshot. Workers
+remain cooperative: they check both operation ancestors and the Foundation job
+token at bounded intervals, while image leases pin running callbacks to completion.
+This seam does not by itself implement composed active-path/schema migration.
 
 1. **Save And Restore**:
    - Under ADR-114, the AI subsystem contributes one owned canonical state adapter to `RuntimeSaveService` and captures state only at the aggregate save snapshot safe point. Component reflection and Scene serialization are not alternate authorities.
@@ -2765,9 +2847,13 @@ direct widget writes. Provider UI remains inert metadata/host-rendered schema.
 
 AI simulation executes as a fixed-timestep pipeline within the engine's fixed
 update loop, defined by [Runtime Lifecycle Architecture](./runtime-lifecycle.md).
-Six ordered phases execute in each simulation tick; they implement the ADR-021
-coarse groups. A variable-rate presentation
-bridge runs afterward and consumes the committed snapshots:
+The four AI/navigation stages below implement the corresponding ADR-021 coarse
+groups; they are not a complete engine tick or a second scheduler. Gameplay
+command staging and the Animation/Character/Physics owners continue in the
+canonical Runtime Lifecycle order. Authoritative Animation pose/root motion is
+prepared before Character movement and the single Physics step; post-Physics
+Animation overrides follow Character finalization. A variable-rate presentation
+bridge consumes only the subsequent committed publication:
 
 ```text
 PerceptionSensePoll
@@ -2782,11 +2868,19 @@ AiDecisionEvaluate
  NavIntentCommit
         |  (Pathfinding queries, steering & avoidance velocity)
         v
-CharacterControllerLocomotion  (Physics Integration)
-        |  (Committed world transforms & collision contacts)
+ Gameplay command staging
         v
- AnimationRigUpdate
-        |  (Skeletal pose evaluation)
+Authoritative Animation pose/root motion + frozen Character query evidence
+        v
+CharacterControllerLocomotion: bounded query movement + staged commands
+        v
+ Physics: apply commands and step once
+        v
+ Character support/root finalization (no second movement)
+        v
+ Typed post-Physics Animation overrides
+        v
+ Deferred structural commit + atomic subsystem/transform/event publication
         v
   RenderExtraction  (variable-rate presentation bridge; not a numbered phase)
         |  (Immutable presentation snapshot)
@@ -2794,13 +2888,16 @@ CharacterControllerLocomotion  (Physics Integration)
 
 ### Phase Contracts And Invariants
 
-Phases 1-6 run inside the fixed simulation tick and may mutate simulation state
-under the phase contracts below. `RenderExtraction` is the following
-variable-rate presentation bridge, not a seventh fixed-tick phase.
+The first four contracts describe AI/navigation work inside the host's fixed
+tick. The fifth describes the Character owner boundary, not an immediately
+adjacent scheduler phase: authoritative Animation preparation precedes Character
+movement, and Physics completion precedes finalization. The numbering below is
+explanatory, not a new engine phase enumeration. `RenderExtraction` is the
+following variable-rate presentation bridge.
 
 1. **`PerceptionSensePoll`**:
-   - Gathers all ADR-024 sensory stimuli (Sight line-of-sight candidates, Hearing events, Damage dispatches, Touch/Proximity overlaps, and Team/Affiliation events or bounded relays) into staged per-agent stimulus buffers.
-   - Operates as a read-only pass over physics spatial structures and audio event queues.
+   - Gathers bounded spatial candidates and admitted Gameplay hearing, damage, touch/proximity and team deliveries into staged per-agent stimulus buffers. Team topology and relay selection remain Gameplay-owned.
+   - Operates as a read-only pass over current spatial/Physics evidence and captured Gameplay event batches; Audio-renderer queues do not authorize hearing or team observations.
    - Invariant: Does NOT mutate agent blackboard state, behavior tree node states, or world transforms.
 2. **`BlackboardSync`**:
    - Ingests staged stimulus buffers into each agent's `BlackboardState`.
@@ -2815,13 +2912,20 @@ variable-rate presentation bridge, not a seventh fixed-tick phase.
    - Computes desired kinematic horizontal/vertical velocity vectors for character locomotion.
    - Invariant: Submits desired velocity to character controllers without stepping the physics world directly.
 5. **`CharacterControllerLocomotion`**:
-   - Executes character controller updates within the physics tick step. Resolves collisions, ground support, slope limits, stepping, and external forces.
-   - Commits authoritative entity world positions, orientations, and velocities.
-   - Invariant: Transforms and velocities committed in this phase represent the authoritative simulation state for the tick.
-6. **`AnimationRigUpdate`**:
-   - Evaluates animation blend trees, locomotion state machines, and procedural IK based on committed locomotion velocity and active action tags.
-   - Computes skeletal bone transform matrices.
-   - Invariant: Evaluates presentation pose from committed simulation data; animation updates do not retroactively alter physics locomotion within the same tick.
+   - Consumes admitted movement intent and pre-Physics Animation/root-motion evidence. The Character owner performs bounded query movement and stages its root/Physics commands.
+   - The Physics owner applies commands and steps once. Character support, attachment and authoritative collision-root transforms are finalized from the completed results without a second move.
+   - Invariant: AI and Navigation neither step Physics nor publish partial Character transforms. The host publishes committed subsystem state after post-Physics Animation overrides and deferred structural changes.
+
+### Animation And Physics Owner Boundaries
+
+Animation is not a single AI-owned phase after locomotion. The canonical
+[Runtime Lifecycle simulation tick](./runtime-lifecycle.md#simulation-tick)
+prepares authoritative pose/root motion before Character movement and composes
+typed Animation overrides after Physics and Character finalization. Variable-rate
+pose interpolation cannot emit authoritative root motion or step Physics.
+AI emits typed intent/parameters; the composed host retains these owner boundaries.
+This mapping does not change an ADR's acceptance status or qualify a product AI
+dispatcher merely because the stage names appear in documentation.
 
 ### Variable-Rate Presentation Bridge — `RenderExtraction`
 
@@ -2841,14 +2945,16 @@ The execution of AI simulation phases is strictly governed by the host process's
   ├── Phase 2: BlackboardSync (SERVER-PRIVATE)
   ├── Phase 3: AiDecisionEvaluate (SERVER-PRIVATE)
   ├── Phase 4: NavIntentCommit & Avoidance
-  └── Phase 5: CharacterControllerLocomotion (Physics Authority)
+  └── Canonical host tick: Animation preparation, Character movement,
+      one Physics step, Character finalization, post-Physics overrides,
+      deferred changes and atomic publication
            │
            │ (Replicated Public Transforms, Velocities, Action Tags)
            ▼ [ Network Transport Layer ]
 [ Client Host (Presentation-Only Peer) ]
   ├── Network Jitter Buffer & Snapshot Ingestion
   ├── Transform Interpolation (alpha)
-  ├── Client AnimationRigUpdate (Visual Blending)
+  ├── Client Animation presentation from committed replicated state
   └── RenderExtraction Bridge -> Viewport Presentation
   (NO perception queries, NO blackboards, NO decision trees)
 ```
@@ -2857,8 +2963,8 @@ The execution of AI simulation phases is strictly governed by the host process's
 
 | Host Role | Authority Scope | Executed Phases | Network Replication Output |
 |---|---|---|---|
-| **Standalone** | Full local simulation and presentation authority. | Fixed phases 1–6, then the variable-rate extraction bridge. | None (local single process). |
-| **Dedicated Server** | Authoritative simulation owner for all AI agents. | Fixed phases 1–5; phase 6 only when authoritative skeletal hitboxes require it; no presentation bridge. | Replicates entity `NetworkId`, transform, velocity, and public animation tags. |
+| **Standalone** | Full local simulation and presentation authority. | AI/navigation stages within the canonical host fixed tick, then variable-rate extraction of committed state. | None (local single process). |
+| **Dedicated Server** | Authoritative simulation owner for all AI agents. | AI/navigation stages and the host's admitted canonical Animation/Character/Physics pipeline; no presentation extraction. | Replicates entity `NetworkId`, transform, velocity, and public animation tags. |
 | **Client** | Presentation-only consumer for server-replicated AI. | Client animation update plus the variable-rate extraction bridge; no authoritative AI phases for server-owned agents. | Receives replication; submits no AI authority. |
 
 ### Authority, Privacy, And Security Boundaries

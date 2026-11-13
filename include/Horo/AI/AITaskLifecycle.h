@@ -84,8 +84,8 @@ namespace Horo::AI {
 
     /**
      * @brief Immutable task inputs captured at admission without exposing mutable Scene state.
-     * @details The task and agent handles must belong to one SceneRuntime incarnation. The two explicit cancellation tokens
-     * retain scene/task and module-grant lifetime independently; diagnostics retain values only.
+     * @details The task and agent handles must belong to one SceneRuntime incarnation. Explicit cancellation tokens
+     * retain operation, module grant and owner-issued reservation lifetimes independently; diagnostics retain values only.
      */
     struct AiTaskOperationContext final {
         TaskId taskDefinition;                    /**< Persistent native, script, or graph task definition. */
@@ -94,11 +94,13 @@ namespace Horo::AI {
         CancellationToken cancellation;           /**< Cooperative cancellation tied to owner lifetime. */
         CancellationToken capabilityCancellation; /**< Independent module/script grant lifetime; empty for internal tasks. */
         std::shared_ptr<const Telemetry::OperationContext>
-            diagnostics; /**< Immutable host-owned admission capture; empty for internal graph tasks. */
+            diagnostics;                     /**< Immutable host-owned admission capture; empty for internal graph tasks. */
+        CancellationToken ownerCancellation; /**< Actual owner reservation; independent of operation and module ancestors. */
 
-        /** @brief Observe both task/scene ownership and caller capability revocation. @return True if either owner cancelled. */
+        /** @brief Observes operation, capability and reservation revocation. @return True if any admitted ancestor cancelled. */
         [[nodiscard]] bool IsCancellationRequested() const noexcept {
-            return cancellation.IsCancellationRequested() || capabilityCancellation.IsCancellationRequested();
+            return cancellation.IsCancellationRequested() || capabilityCancellation.IsCancellationRequested() ||
+                   ownerCancellation.IsCancellationRequested();
         }
     };
 

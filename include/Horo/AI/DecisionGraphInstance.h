@@ -1,8 +1,10 @@
 #pragma once
 /** @file DecisionGraphInstance.h
- * @brief Host-driven BT/HSM composition with independently allocated call occurrences and no scheduler ownership.
+ * @brief Host-driven BT/HSM/Utility composition with independently allocated call occurrences and no scheduler ownership.
  */
+#include "Horo/AI/AiDecisionTaskReservation.h"
 #include "Horo/AI/DecisionGraphCompiler.h"
+#include "Horo/AI/DecisionStepTrace.h"
 
 namespace Horo::AI {
     /** @brief Actual owner-issued range and operation identity; compilation never invents task/provider identities. */
@@ -23,21 +25,49 @@ namespace Horo::AI {
         BlackboardInstanceBinding current;
         const BlackboardSnapshot &blackboard;
         std::span<const StateMachineEventId> events;
+        AiWorkBudget *utilityAgentBudget{};  /**< Required for closures containing Utility. Borrowed for this Step only. */
+        AiWorkBudget *utilityGlobalBudget{}; /**< Host-issued global allowance, shared across all evaluated occurrences. */
     };
 
-    /** @brief One complete executable allocation; actual BT/HSM kernels own their existing traversal/task semantics.
+    /** @brief One complete executable allocation; actual decision kernels own their existing traversal/task semantics.
      * @details Create preallocates every possible call occurrence, including mutually exclusive HSM states and
      * parallel repeated references. Only selected occurrences enter execution. The host calls Step at its existing
      * AI decision boundary; this object creates no jobs, frame callbacks, Scene authority or task manager.
      */
     class DecisionGraphInstance final {
     public:
+        /** @brief Creates a graph with an explicit non-Scene host's exclusive logical namespace.
+         * @param plan Complete compiled closure. @param providers Exact compiler-captured executable generation.
+         * @param binding Host-owned schema, parent operation and exclusive task range.
+         * @return Owned graph or typed admission/storage failure before execution.
+         * @details Scene hosts use the owner-issued reservation overload. This metadata does not acquire Scene authority.
+         */
         [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> Create(std::shared_ptr<const CookedDecisionPlan> plan,
                                                                                    std::shared_ptr<const DecisionNodeGeneration> providers,
                                                                                    DecisionGraphInstanceBinding binding);
+        /** @brief Creates a graph using the actual Scene AI allocator's exclusive reservation and schema publication.
+         * @param plan Complete current closure. @param providers Exact executable generation captured by the compiler.
+         * @param reservation Move-only actual owner scope; consumed on success or failure without reclaiming indices.
+         * @param operation Admitted parent operation; its cancellation and capability ancestors are preserved.
+         * Its ownerCancellation is replaced by the reservation's actual agent-parented scope.
+         * @return Owned graph retaining the reservation or typed schema/capacity/lifetime/storage failure.
+         * @details Provider factories run only after owner/schema/range admission. Children use the real range with fresh
+         * slot generations; the graph's destruction cancels the reservation. The raw binding overload remains for
+         * explicit non-Scene composition/test owners; raw metadata is never a substitute for this actual Scene reservation.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> Create(std::shared_ptr<const CookedDecisionPlan> plan,
+                                                                                   std::shared_ptr<const DecisionNodeGeneration> providers,
+                                                                                   AiDecisionTaskReservation reservation,
+                                                                                   AiTaskOperationContext operation);
         /** @brief Logical composition-adapter allocation per occurrence; family kernels report their own extents. */
         [[nodiscard]] static std::uint64_t CoreStorageBytes(const DecisionCompiledGraph &graph) noexcept;
         [[nodiscard]] Result<AiTaskState> Step(const DecisionGraphStepInput &input);
+        /** @brief Advances the same runtime with opt-in bounded, redacted decision evidence.
+         * @param input The committed tick and immutable blackboard snapshot used by every occurrence.
+         * @param trace Caller-owned destination. Invalid, off-owner or reentrant admission leaves it untouched.
+         * @return The same lifecycle outcome or original typed failure as Step.
+         */
+        [[nodiscard]] Result<AiTaskState> StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace);
         [[nodiscard]] Result<void> Cancel(AiTaskCancellationReason reason);
         ~DecisionGraphInstance();
 
@@ -45,13 +75,32 @@ namespace Horo::AI {
         struct OccurrenceState;
         struct CallAdapter;
         struct ActionAdapter;
+        struct UtilityAdapter;
+        /** @brief Shares the exact evaluation path for traced and untraced steps. */
+        [[nodiscard]] Result<AiTaskState> StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
+        /** @brief Runs one admitted step using the existing evaluation and cancellation boundaries. */
+        [[nodiscard]] Result<AiTaskState> StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
+        /** @brief Correlates a record to the exact compiled call and its stable caller. */
+        [[nodiscard]] DecisionTraceOccurrence TraceOccurrence(std::size_t index) const noexcept;
+        /** @brief Copies the state and last transition reported by the actual HSM kernel. */
+        void TraceMachine(std::size_t index, const StateMachineStepResult &step) const noexcept;
+        /** @brief Copies the complete bounded committed transition chain, including before a later failure. */
+        void TraceMachineTransitions(std::size_t index) const noexcept;
         [[nodiscard]] static Result<void> Admit(const std::shared_ptr<const CookedDecisionPlan> &plan,
                                                 const std::shared_ptr<const DecisionNodeGeneration> &providers,
                                                 const DecisionGraphInstanceBinding &binding);
+        /** @brief Requires host allowances only for closures that contain Utility. */
+        [[nodiscard]] bool UtilityBudgetsAvailable(const DecisionGraphStepInput &input) const noexcept;
         [[nodiscard]] Result<void> ValidateStep(const DecisionGraphStepInput &input) const;
         [[nodiscard]] Result<void> BuildOccurrence(std::size_t index);
         [[nodiscard]] Result<void> ResetOccurrence(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Advance(std::size_t index);
+        /** @brief Advances one Utility occurrence using its canonical task kernel and host allowances. */
+        [[nodiscard]] Result<AiTaskState> AdvanceUtility(std::size_t index);
+        /** @brief Prepares Utility action runners with disjoint owner-issued task slots. */
+        [[nodiscard]] Result<void> BuildUtility(std::size_t index);
+        /** @brief Advances one admitted state-machine occurrence and captures its optional step evidence. */
+        [[nodiscard]] Result<AiTaskState> AdvanceMachine(std::size_t index);
         [[nodiscard]] Result<AiTaskState> Call(std::size_t parent, DecisionNodeId node, bool entering);
         [[nodiscard]] Result<void> BeginCall(std::size_t parent, DecisionNodeId node);
         void EndCall(std::size_t parent, DecisionNodeId node, AiTaskCancellationReason reason) noexcept;
@@ -65,10 +114,13 @@ namespace Horo::AI {
         DecisionGraphInstanceBinding binding_;
         std::vector<std::unique_ptr<OccurrenceState>> occurrences_;
         std::thread::id owner_;
+        bool usesUtility_{};
         bool evaluating_{};
         bool shutdown_{};
         std::uint64_t lastTick_{};
         const DecisionGraphStepInput *input_{};
+        DecisionStepTrace *trace_{};
+        std::optional<AiDecisionTaskReservation> reservation_;
     };
 
     /** @brief Planned canonical HSM additions, to be placed on the existing source/runner types, not a parallel runner.
