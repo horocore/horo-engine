@@ -84,6 +84,19 @@ CTest execution.
 
 ## Current local verification
 
+The first admitted native Input batch used clean
+`b9d39cc6b715337489d7d8ca1cf0a79635250b4a`, native MSVC 19.44, headless Debug,
+the verified canonical physical lock and one worker. Configure completed, including
+public-header ownership and dependency-direction checks. All `HoroInput`
+implementation objects compiled and `HoroInput.lib` linked. The build stopped at
+step 157/174 because the newly added host-cutoff test used `REQUIRE(a && b)`,
+which Catch2 cannot decompose. Commit `20a19f6` splits those assertions; its
+incremental retry was refused by the now-busy physical lock before any child.
+**No CTest case ran.** This is partial compilation evidence, not an Input,
+editor-host, public-consumer or overall accessibility pass. Other C++ feature
+families remain uncompiled. The graphical editor now drains ended-context
+withdrawals at its input cutoff; that application TU still requires its GUI build.
+
 The contrast tool now exposes eleven explicit live theme pairs: primary text on
 the four token surfaces, muted text on root/panel, dim text on raised, native
 text on window/popup/frame, and native disabled text on window. The custom opaque
