@@ -68,11 +68,19 @@ evidence, strict optional profile source fields and stale-handle rejection.
 Its three new regressions and the direct public consumer executed at `ec59e05`.
 The later `Gamepad` source spelling, zero-threshold neutrality and fixed-tick
 capture regression executed in the 104-case refresh at `74b798c`.
-SDL opt-in/window-focus collection, seven SDL virtual-device regression sources,
+SDL opt-in/window-focus collection, eight SDL virtual-device regression sources,
 editor source/device controls, shared combo keyboard interaction and affected
 direct consumers still need native execution at the final snapshot.
 The old GUI/direct-consumer rows do not qualify the changed Input layouts or
 controller adapter. Physical controller and native interaction checks remain.
+
+Controller teardown now retires native sensor interest through one close path for
+gamepad removal, joystick removal and backend destruction. The new removal-order
+regression retains a real extra SDL joystick reference: closing the backend's
+gamepad reference alone does not guarantee native sensor retirement. Both event
+orders, duplicate removal and a late sensor event are exercised in the source;
+native execution is pending. Current SDL discovery is expected to contain 18
+cases, and the combined presentation/SDL family 108.
 
 The direct-consumer batch refreshed callers after the public binding layout
 change: Character **16**, Runtime UI input **19**, input debugger **15**, portable
