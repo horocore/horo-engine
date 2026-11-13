@@ -227,6 +227,7 @@ namespace {
         REQUIRE_FALSE(fixture.gui.input.IsContextActive(fixture.workspace));
         const auto profile = fixture.gui.input.Profile();
         fixture.collector.BeginFrame(2);
+        ImGui::GetIO().AddMousePosEvent(950, 780);
         SECTION("Pointer button") {
             fixture.collector.SetPointerButton(Input::PointerButton::Primary, true);
             ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
@@ -236,7 +237,6 @@ namespace {
             ImGui::GetIO().AddMouseWheelEvent(0.0F, 1.0F);
         }
         fixture.gui.input.BeginFrame(fixture.collector.Commit());
-        ImGui::GetIO().AddMousePosEvent(950, 780);
         fixture.Draw(900);
         CHECK(fixture.gui.input.IsContextActive(fixture.workspace));
         CHECK(fixture.gui.input.Profile() == profile);
