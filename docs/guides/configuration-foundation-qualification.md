@@ -72,6 +72,25 @@ source entry describes intended coverage and does not by itself establish a pass
 
 ## Execution evidence
 
+### Published-base integration and local native attempt
+
+The delivery branch incorporates published target
+`139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d` through an ordinary integration
+merge, preserving the already-published delivery history. CI membership combines
+the target's additions with configuration, security and settings qualification.
+After integration, the Python CI-grouping, build-cache and two localization
+suites reported **70 passed, two skipped**. The skips concern optional native
+compiler/cache prerequisites; this result does not establish C++ qualification.
+
+The first admitted native batch verified the canonical physical Windows lock,
+configured this worktree and compiled 280 selected build steps. MSVC then found
+an unparenthesized conditional expression in the concurrent-reader test's Catch
+`INFO` macro. The diagnostic expression is corrected without changing the test's
+assertions. CTest did not start. The batch released its lock; the next
+nonblocking attempt found another owner using it and returned without starting
+work. Native confirmation of the Windows reader and complete local quality
+analysis remain pending. No local Sonar IDE, secrets or Codacy pass is claimed.
+
 ### CI follow-up on the first delivery head
 
 All three workflows for `e7b809b3326f493d6642aa4e5e4600fe4d003b2a` reached
