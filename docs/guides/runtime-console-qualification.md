@@ -27,8 +27,8 @@ at `139f8a5ed63c`; the local branch of the same name may contain unpublished wor
 and is not this validation base. Final preflight requires fresh worktree-specific
 compile commands and C++ sensor evidence.
 GitHub #1812 / Jira HORO-1768 and all seven children were read on 2026-11-11.
-The GitHub parent and all seven children were reread live during the final source
-integration pass on that date: policy remains closed/completed and the other six
+All seven GitHub children were reread live on 2026-11-13 during delivery
+integration: policy remains closed/completed and the other six
 children remain open, with unchanged acceptance scope. This does not change any
 issue or narrow the required packaged/runtime/profile/downstream evidence.
 The policy child #1842 / HORO-1798 is closed/Done. ADR-018 still says Proposed;
@@ -40,7 +40,7 @@ this work follows the normative runtime document without changing ADR status.
 | #1843 / HORO-1799 | Source added: owned immutable registry, inert metadata, typed schema conversion, redacted bounded history, filtered discovery, startup allowlist, no-follow exact-path script capture and optional external SDK component | Native and SDK regressions have not run to completion |
 | #1844 / HORO-1800 | Source added: actual thread identity checks, cutoff owner/render queues, JobSystem dispatch, existing OperationStore projection, cancellation and nonblocking shutdown; Editor core bootstrap is wired into actual owner/render phases | Native race/lifecycle and graphical-host qualification; remaining catalog/thread-capability integration; general JobSystem main-thread continuation remains unavailable |
 | #1845 / HORO-1801 | Source added: help/find/version/clear, real public Scene inspection bindings, real Telemetry availability query and queue-admission audit adapter, approved Foundation support ZIP binding, typed variable inventory, profile-compiled default variable schemas, unified permission-filtered help/find, common executor text-to-variable dispatch, canonical ConfigurationService reads/commits, actual Editor history/visibility variable consumers, five apply policies and durable configuration-owner interface | Remaining three standard command handlers, host consent workflow, actual durable host adapter, remaining variable inventory/consumer host composition; native regressions |
-| #1846 / HORO-1802 | Source added: terminal input controller, central modal routing, bounded layout/focus registry, logs/jobs source projections, 4 Hz refresh and virtual row windows; Editor development terminal and real log/operation panels use the same process authorities with localized shared controls and gallery regressions | Native/graphical qualification, packaged game-runtime surface, eight unavailable source panels, full style/IME/localization interaction states and measurements |
+| #1846 / HORO-1802 | Source added: terminal input controller, central modal routing, bounded layout/focus registry, logs/jobs source projections, 4 Hz refresh and virtual row windows; Editor development terminal and real log/operation panels use the same process authorities with localized shared controls and gallery regressions | Native/graphical qualification, packaged game-runtime surface, six unavailable source panels, full style/IME/localization interaction states and measurements |
 | #1847 / HORO-1803 | Source added: six-profile compile-selected command/variable catalogs, separate availability translation units, exact compiled-profile registry factory, canonical snapshot-backed configuration/Invocation capture, typed panel requests, Shipping local-UI opt-in, denied Shipping/Server overlay surfaces and fail-closed unsupported remote requests | Native six-profile builds and binary inspection; complete product artifact/config/launch wiring in a graphical host |
 | #1848 / HORO-1804 | Native regression sources, optional SDK fixture and linked profile artifact/core fixture with bounded binary/manifest verifier added; Python verifier and CI grouping checks pass | Native fixture/results, final quality preflight, packaged development/shipping evidence, performance, platform and downstream integration evidence |
 
@@ -791,10 +791,12 @@ absence; source guards and synthetic verifier tests do not establish that result
 - Linux/macOS, packaged development UI, Shipping binary inspection and GPU smoke:
   not run. No cross-platform or GPU success is implied.
 - Sonar IDE, CLI secrets and Codacy: not yet run on final edits.
-- `analyze.py doctor --offline` on 2026-11-13: incomplete; the Sonar extension is
-  available but IDE settings were unavailable in this invocation. CMake, Ninja,
-  VS Code, Sonar CLI and Codacy CLI were detected from the initialized native
-  environment. This establishes neither IDE authentication nor C++ execution.
+- `analyze.py doctor --offline` on 2026-11-13: ready for local check after selecting
+  the existing portable VS Code source profile explicitly. The default installed
+  Code profile lacked settings. The selected source profile is read-only;
+  authentication and Workspace Trust are not weakened. CMake, Ninja, VS Code,
+  Sonar CLI and Codacy CLI were detected from the initialized native environment.
+  Prerequisite readiness establishes neither IDE authentication nor C++ execution.
 - Cloud-enabled doctor: local prerequisites ready, Codacy cloud configuration
   drift check incomplete (`cloud read exit 2`; authentication must be reviewed).
   No source or results were uploaded and no quality/security settings changed.
