@@ -294,62 +294,8 @@ namespace Horo::Editor {
         ImGui::TextUnformatted(selectedAction.id.Value().c_str());
         const auto &bindings = BindingsFor(selectedAction, router_->Profile());
         for (std::size_t bindingIndex = 0; bindingIndex < bindings.size(); ++bindingIndex) {
-            const Input::InputBinding &binding = bindings[bindingIndex];
-            if (binding.kind == Input::BindingControlKind::Key)
-                ImGui::BulletText("%s%s%s%s%s", binding.requiredModifiers.control ? "Ctrl+" : "",
-                                  binding.requiredModifiers.command ? "Cmd+" : "", binding.requiredModifiers.shift ? "Shift+" : "",
-                                  binding.requiredModifiers.alt ? "Alt+" : "", KeyName(binding.key));
-            else if (binding.kind == Input::BindingControlKind::GyroscopeAxis) {
-                const std::array axisKeys{"gyro.axis_x", "gyro.axis_y", "gyro.axis_z"};
-                const auto axis = static_cast<std::size_t>(binding.gyroscope.axis);
-                ImGui::TextWrapped("%s: %s", LocalizedText(context.localization, "gyro.source").c_str(),
-                                   LocalizedText(context.localization, binding.gyroscope.source == Input::GyroscopeSource::Gamepad
-                                                                           ? "gyro.source_gamepad"
-                                                                           : "gyro.source_platform")
-                                       .c_str());
-                ImGui::BulletText("%s: %s", LocalizedText(context.localization, "gyro.binding").c_str(),
-                                  LocalizedText(context.localization, axis < axisKeys.size() ? axisKeys[axis] : "gyro.axis_unknown")
-                                      .c_str());
-                ImGui::PushID(static_cast<int>(bindingIndex));
-                const bool edit = Ui::Button({.label = LocalizedText(context.localization, "gyro.edit").c_str(),
-                                              .variant = Ui::ButtonVariant::Secondary,
-                                              .font = context.theme.fonts.sans});
-                ImGui::PopID();
-                if (edit) {
-                    listeningAction_.reset();
-                    bindingCaptureContext_.Reset();
-                    command.command = EditorWorkspaceViewCommand::OpenGyroscopeBinding;
-                    command.gyroscopeBinding =
-                        GyroscopeBindingEditRequest{selectedAction.id, router_->RoutingState({}).configurationRevision,
-                                                    GyroscopeBindingReplacement{bindingIndex, binding}};
-                    return;
-                }
-            } else
-                ImGui::BulletText("%s %d", InputMappingPanel::kTextScope.Text(context.localization, "binding").c_str(),
-                                  static_cast<int>(binding.kind));
-            if (binding.kind == Input::BindingControlKind::GamepadAxis || binding.kind == Input::BindingControlKind::RawGamepadAxis) {
-                float deadzone = binding.deadzone;
-                ImGui::PushID(static_cast<int>(bindingIndex));
-                if (ImGui::SliderFloat(InputMappingPanel::kTextScope.Text(context.localization, "deadzone").c_str(), &deadzone, 0.0F, 0.95F,
-                                       "%.2f")) {
-                    UpdateBindingDeadzone(*router_, selectedAction, bindings, bindingIndex, deadzone, statusMessage_);
-                    ImGui::PopID();
-                    return;
-                }
-                ImGui::PopID();
-            }
-            if (selectedAction.valueType == Input::ActionValueType::Digital) {
-                ImGui::PushID(static_cast<int>(bindingIndex));
-                const auto &label = LocalizedText(context.localization, "accessibility.edit");
-                if (Ui::Button({.label = label.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
-                    accessibilityAction_ = selectedAction.id;
-                    accessibilityBinding_ = bindingIndex;
-                    accessibilityConfigurationRevision_ = router_->RoutingState({}).configurationRevision;
-                    accessibilityBaseline_ = binding;
-                    accessibilityDraft_ = BindingAccessibilityEditorDraft::FromPolicy(binding.accessibility);
-                }
-                ImGui::PopID();
-            }
+            if (DrawSelectedBinding(selectedAction, bindings, bindingIndex, context, command))
+                return;
         }
         DrawAccessibilityControls(selectedAction, context);
         if (selectedAction.valueType != Input::ActionValueType::Digital &&
@@ -370,6 +316,75 @@ namespace Horo::Editor {
                 router_->PushContext(Input::InputContextId{"editor.input_binding_capture"}, Input::InputContextKind::FocusedGuiWidget);
             statusMessage_ = InputMappingPanel::kTextScope.Text(context.localization, "press_key");
         }
+    }
+
+    /** @copydoc InputMappingPanel::DrawSelectedBinding */
+    bool InputMappingPanel::DrawSelectedBinding(const Input::ActionDescriptor &selectedAction,
+                                                const std::span<const Input::InputBinding> bindings, const std::size_t bindingIndex,
+                                                const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
+        const auto &binding = bindings[bindingIndex];
+        if (binding.kind == Input::BindingControlKind::Key)
+            ImGui::BulletText("%s%s%s%s%s", binding.requiredModifiers.control ? "Ctrl+" : "",
+                              binding.requiredModifiers.command ? "Cmd+" : "", binding.requiredModifiers.shift ? "Shift+" : "",
+                              binding.requiredModifiers.alt ? "Alt+" : "", KeyName(binding.key));
+        else if (binding.kind == Input::BindingControlKind::GyroscopeAxis) {
+            if (DrawGyroscopeBinding(selectedAction, binding, bindingIndex, context, command))
+                return true;
+        } else
+            ImGui::BulletText("%s %d", InputMappingPanel::kTextScope.Text(context.localization, "binding").c_str(),
+                              static_cast<int>(binding.kind));
+        if (binding.kind == Input::BindingControlKind::GamepadAxis || binding.kind == Input::BindingControlKind::RawGamepadAxis) {
+            float deadzone = binding.deadzone;
+            ImGui::PushID(static_cast<int>(bindingIndex));
+            if (ImGui::SliderFloat(InputMappingPanel::kTextScope.Text(context.localization, "deadzone").c_str(), &deadzone, 0.0F, 0.95F,
+                                   "%.2f")) {
+                UpdateBindingDeadzone(*router_, selectedAction, bindings, bindingIndex, deadzone, statusMessage_);
+                ImGui::PopID();
+                return true;
+            }
+            ImGui::PopID();
+        }
+        if (selectedAction.valueType == Input::ActionValueType::Digital) {
+            ImGui::PushID(static_cast<int>(bindingIndex));
+            const auto &label = LocalizedText(context.localization, "accessibility.edit");
+            if (Ui::Button({.label = label.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
+                accessibilityAction_ = selectedAction.id;
+                accessibilityBinding_ = bindingIndex;
+                accessibilityConfigurationRevision_ = router_->RoutingState({}).configurationRevision;
+                accessibilityBaseline_ = binding;
+                accessibilityDraft_ = BindingAccessibilityEditorDraft::FromPolicy(binding.accessibility);
+            }
+            ImGui::PopID();
+        }
+        return false;
+    }
+
+    /** @copydoc InputMappingPanel::DrawGyroscopeBinding */
+    bool InputMappingPanel::DrawGyroscopeBinding(const Input::ActionDescriptor &action, const Input::InputBinding &binding,
+                                                 const std::size_t index, const EditorGuiContext &context,
+                                                 EditorWorkspaceViewCommandData &command) {
+        const std::array axisKeys{"gyro.axis_x", "gyro.axis_y", "gyro.axis_z"};
+        const auto axis = static_cast<std::size_t>(binding.gyroscope.axis);
+        ImGui::TextWrapped("%s: %s", LocalizedText(context.localization, "gyro.source").c_str(),
+                           LocalizedText(context.localization, binding.gyroscope.source == Input::GyroscopeSource::Gamepad
+                                                                   ? "gyro.source_gamepad"
+                                                                   : "gyro.source_platform")
+                               .c_str());
+        ImGui::BulletText("%s: %s", LocalizedText(context.localization, "gyro.binding").c_str(),
+                          LocalizedText(context.localization, axis < axisKeys.size() ? axisKeys[axis] : "gyro.axis_unknown").c_str());
+        ImGui::PushID(static_cast<int>(index));
+        const bool edit = Ui::Button({.label = LocalizedText(context.localization, "gyro.edit").c_str(),
+                                      .variant = Ui::ButtonVariant::Secondary,
+                                      .font = context.theme.fonts.sans});
+        ImGui::PopID();
+        if (edit) {
+            listeningAction_.reset();
+            bindingCaptureContext_.Reset();
+            command.command = EditorWorkspaceViewCommand::OpenGyroscopeBinding;
+            command.gyroscopeBinding = GyroscopeBindingEditRequest{action.id, router_->RoutingState({}).configurationRevision,
+                                                                   GyroscopeBindingReplacement{index, binding}};
+        }
+        return edit;
     }
 
     /** @copydoc DrawInputDeviceCard */

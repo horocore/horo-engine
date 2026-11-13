@@ -133,7 +133,33 @@ namespace Horo::Editor {
                                            fonts);
                 if (!shell.IsOpen())
                     return ModalFrameResult::None();
-                ImGui::BeginChild("##GyroscopeBody", {0, shell.BodyHeight()});
+                const bool valid = DrawBody(shell.BodyHeight());
+                shell.BeginFooter({Theme::Layout::CardPad, Theme::Layout::CardPad});
+                const auto intent = DrawFooter(valid);
+                shell.EndFooter();
+                if (intent == FooterIntent::Cancel || shell.CloseRequested())
+                    return ModalFrameResult::RequestClose(ModalCloseReason::Cancelled);
+                if (intent == FooterIntent::Apply) {
+                    const auto applied = ApplyGyroscopeBindingDraft(router_, request_, draft_);
+                    if (applied.HasValue())
+                        return ModalFrameResult::RequestClose(ModalCloseReason::Completed);
+                    failure_ = applied.ErrorValue();
+                }
+                return ModalFrameResult::None();
+            }
+
+        private:
+            /** @brief Explicit footer gesture; profile publication occurs after the footer scope closes. */
+            enum class FooterIntent {
+                None,
+                Cancel,
+                Apply
+            };
+
+            /** @brief Edits the owned draft and reports validity without publishing any profile change. */
+            bool DrawBody(const float height) {
+                const auto &fonts = context_.theme.fonts;
+                ImGui::BeginChild("##GyroscopeBody", {0, height});
                 ImGui::TextWrapped("%s", request_.action.Value().c_str());
                 Ui::Hint(Text("gyro.hint").c_str(), fonts);
                 const std::array axis{Text("gyro.axis_x").c_str(), Text("gyro.axis_y").c_str(), Text("gyro.axis_z").c_str()};
@@ -161,7 +187,12 @@ namespace Horo::Editor {
                 if (failure_)
                     Ui::ErrorText(Text("gyro.apply_failed").c_str(), fonts);
                 ImGui::EndChild();
-                shell.BeginFooter({Theme::Layout::CardPad, Theme::Layout::CardPad});
+                return valid;
+            }
+
+            /** @brief Collects explicit cancel/apply intent without mutating the profile. */
+            FooterIntent DrawFooter(const bool valid) {
+                const auto &fonts = context_.theme.fonts;
                 const bool cancel = Ui::Button({.label = Text("accessibility.cancel").c_str(),
                                                 .variant = Ui::ButtonVariant::Secondary,
                                                 .font = fonts.sans,
@@ -170,19 +201,11 @@ namespace Horo::Editor {
                                                .enabled = valid,
                                                .font = fonts.sans,
                                                .style = {.width = Ui::StyleWidth::FillAvailable}});
-                shell.EndFooter();
-                if (cancel || shell.CloseRequested())
-                    return ModalFrameResult::RequestClose(ModalCloseReason::Cancelled);
-                if (apply) {
-                    const auto applied = ApplyGyroscopeBindingDraft(router_, request_, draft_);
-                    if (applied.HasValue())
-                        return ModalFrameResult::RequestClose(ModalCloseReason::Completed);
-                    failure_ = applied.ErrorValue();
-                }
-                return ModalFrameResult::None();
+                if (cancel)
+                    return FooterIntent::Cancel;
+                return apply ? FooterIntent::Apply : FooterIntent::None;
             }
 
-        private:
             const std::string &Text(const std::string_view key) const {
                 return LocalizedText(context_.localization, key);
             }

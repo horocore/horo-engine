@@ -101,6 +101,13 @@ namespace Horo::Editor {
         void DrawActionTable(std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context);
         void DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context,
                                 EditorWorkspaceViewCommandData &command);
+        /** @brief Draws one binding; true requires the caller to stop using the borrowed binding span after an edit. */
+        [[nodiscard]] bool DrawSelectedBinding(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
+                                               std::size_t index, const EditorGuiContext &context, EditorWorkspaceViewCommandData &command);
+        /** @brief Draws source/axis evidence and captures an owned revision-fenced gyro edit intent. */
+        [[nodiscard]] bool DrawGyroscopeBinding(const Input::ActionDescriptor &action, const Input::InputBinding &binding,
+                                                std::size_t index, const EditorGuiContext &context,
+                                                EditorWorkspaceViewCommandData &command);
         /** @brief Draws an explicitly selected binding's draft and commits only through the canonical profile owner. */
         void DrawAccessibilityControls(const Input::ActionDescriptor &action, const EditorGuiContext &context);
         void DrawDevices(const EditorGuiContext &context);
