@@ -79,6 +79,36 @@ provider-only ABI profile; the tests do not broaden that profile.
 
 ## Required validation
 
+### Host platform bundle migration
+
+The first native CI on PR #3552 exposed a public name collision: Foundation's
+`Horo::PlatformServices` class and the online-services `Horo::PlatformServices`
+namespace cannot be declared in the same translation unit. Windows, Linux and
+macOS compilation all failed at `Foundation/Platform.h`; the Sonar coverage
+producer failed at the same compilation, leaving the scanner without inputs.
+Changing include order cannot make the declarations compatible.
+
+The baseline operating-system service bundle is renamed to
+`Horo::HostPlatformServices`. Its header, owning target, borrowed service
+references, constructor parameters, capability derivation and layout are
+unchanged. The online-services namespace retains its established name. No alias
+for the old class is provided, because such an alias recreates the collision.
+The two concrete in-tree callers in `PlatformTests.cpp` and the out-of-line
+constructor/accessor definitions in `src/platform/Platform.cpp` migrate together;
+external callers must rename the class and rebuild against the new library.
+The platform-abstraction contract and persistence composition example use the
+new name. This is a deliberate source/symbol migration in the active-development
+API, not a new dependency or a second service bundle.
+
+The existing platform injection/capability regressions retain their assertions.
+Two staged-public-header consumer translation units include the baseline and
+provider contracts in both orders and require the bundle to remain constructible
+from its four baseline references. The package tests exercise their actual joint
+use. Build `HoroPlatformTests`, `HoroFoundationPublicHeaderConsumer`,
+`HoroPlatformPublicHeaderConsumer`,
+`HoroPlatformServicesExtensionPublicHeaderConsumer` and the package targets below
+to validate the migration. These new revisions are not yet executed.
+
 Build and run these targets with GUI, interactive renderer and proprietary SDKs
 absent:
 
@@ -115,6 +145,17 @@ Native configure/build/tests and final local quality preflight remain pending;
 this ledger must not be interpreted as completed parent acceptance.
 
 The draft delivery is [PR #3552](https://github.com/horocore/horo-engine/pull/3552).
+On the later resume, all three workflows on head `30f524d` were verified terminal:
+CI and Sonar failed at the name collision documented above; all Android package
+variants passed. The current published target is `139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`.
+The delivery branch preserves its already-published history; its common base is
+still `3df476ff4`. Local analysis targets the actual remote target reference and
+uses its merge base to determine this PR's changes. No force push or merge is
+performed. A fresh resumed configure admission passed CPU/RAM thresholds (17.31%
+CPU, 34.09% available RAM) but the canonical physical OS lock was busy, so CMake
+did not start. Native and analyzer execution remain pending; old busy observations
+are not treated as a permanent scheduling veto.
+
 At head `30f524d86092ab13e11efd010b006b1918164ce3`, the remote format/tooling,
 Android storage and Android debug APK checks passed; the native platform matrix
 and Sonar coverage were still running or queued when reviewed. These checks do
