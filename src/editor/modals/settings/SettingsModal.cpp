@@ -70,7 +70,8 @@ namespace Horo::Editor {
     ModalFrameResult DrawSettingsModalPresentation(SettingsState &state, EditorSettingsService &settings, const EditorGuiContext &ctx,
                                                    const ImTextureID logo) {
         const auto result = DrawSettingsModalPresentationImpl(state, settings, ctx, logo);
-        if (state.configurationFailure && state.configurationFailure->code.Value() == "configuration.draft_stale" && state.configuration &&
+        if (static_cast<SettingsModalInternal::SettingsTab>(state.activeTab) != SettingsModalInternal::SettingsTab::ProjectConfiguration &&
+            state.configurationFailure && state.configurationFailure->code.Value() == "configuration.draft_stale" && state.configuration &&
             state.configuration->Draft().baseRevision != state.configurationRevision) {
             const auto error = *state.configurationFailure;
             const bool previewed = state.configurationPreviewed || CollectDraftSettings(state) != state.committed;

@@ -89,12 +89,14 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
         AttachWorkspacePanels();
         UpdateStatusItems();
+        const auto platformSources = activation.Candidate().platformServices;
         if (auto committed = activation.Commit(); committed.HasError()) {
             contributions_.panels.DetachAll();
             viewportSceneState_.Clear();
             controller_.reset();
             return committed;
         }
+        platformSources_ = platformSources;
         return Result<void>::Success();
     }
 

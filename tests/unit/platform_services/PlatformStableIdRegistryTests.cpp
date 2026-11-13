@@ -236,7 +236,7 @@ namespace Horo::PlatformServices {
         CheckError(BuildPlatformStableIdRegistry(candidate), StableIdErrors::InvalidLedger);
     }
 
-    TEST_CASE("Ordinary ledger replacements preserve identity history and reject stale editors", "[platform-services][stable-id]") {
+    TEST_CASE("Validated ledger edits append aliases and retain explicit tombstones", "[platform-services][stable-id]") {
         auto candidate = Candidate({Declaration(TestSalt(), PlatformServiceIdKind::Achievement, "campaign.first_win", {"campaign.victory"}),
                                     Declaration(TestSalt(), PlatformServiceIdKind::Stat, "player.retired", {"player.legacy"})});
         candidate.entries.back().state = PlatformStableIdState::Tombstoned;
@@ -263,6 +263,19 @@ namespace Horo::PlatformServices {
             CheckError(removed.Value().ResolveAchievement("campaign.victory"), StableIdErrors::Tombstoned);
             REQUIRE(previous.Value().ResolveAchievement("campaign.victory").HasValue());
         }
+    }
+
+    TEST_CASE("Ordinary ledger replacements preserve identity history and reject stale editors", "[platform-services][stable-id]") {
+        auto candidate = Candidate({Declaration(TestSalt(), PlatformServiceIdKind::Achievement, "campaign.first_win", {"campaign.victory"}),
+                                    Declaration(TestSalt(), PlatformServiceIdKind::Stat, "player.retired", {"player.legacy"})});
+        candidate.entries.back().state = PlatformStableIdState::Tombstoned;
+        candidate.entries.back().removalProvenance = "removed:qualification";
+        const auto previous = BuildPlatformStableIdRegistry(candidate);
+        REQUIRE(previous.HasValue());
+        const auto fingerprint = previous.Value().Fingerprint();
+        const auto replace = [&](const auto &next) {
+            return BuildPlatformStableIdRegistryReplacement(previous.Value(), fingerprint, next);
+        };
         SECTION("Neither active entries nor tombstones may disappear") {
             for (std::size_t index = 0; index < candidate.entries.size(); ++index) {
                 auto erased = candidate;

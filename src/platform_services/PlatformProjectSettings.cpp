@@ -7,17 +7,24 @@ namespace Horo::PlatformServices {
         constexpr std::array RequirementKeys{"platform.services.achievements", "platform.services.leaderboards_and_stats",
                                              "platform.services.cloud",        "platform.services.presence",
                                              "platform.services.friends",      "platform.services.session"};
+        constexpr std::array RequirementLabels{"settings.platform_services.achievements", "settings.platform_services.leaderboards",
+                                               "settings.platform_services.cloud",        "settings.platform_services.presence",
+                                               "settings.platform_services.friends",      "settings.platform_services.session"};
         static_assert(RequirementKeys.size() == static_cast<std::size_t>(PlatformServiceKind::Count));
+        static_assert(RequirementKeys.size() == RequirementLabels.size());
 
         /** @brief Declares one inert portable setting with no ambient source or lifecycle authority. */
-        SettingDescriptor Descriptor(const char *key, const SettingValueType type, SettingValue value) {
+        SettingDescriptor Descriptor(const char *key, const SettingValueType type, SettingValue value, const char *label,
+                                     SettingValidation validation) {
             return {.key = SettingKey{key},
                     .type = type,
                     .defaultValue = std::move(value),
                     .scope = SettingScope::Project,
                     .reloadPolicy = ReloadPolicy::ProjectReopen,
                     .sensitivity = SettingSensitivity::Public,
-                    .sourcePolicy = ConfigurationSourcePolicy{.allowedSources = ConfigurationSourceMask::Project}};
+                    .sourcePolicy = ConfigurationSourcePolicy{.allowedSources = ConfigurationSourceMask::Project},
+                    .validation = std::move(validation),
+                    .label = SettingLabelKey{"editor", label}};
         }
 
         /** @brief Reports an exact contributed key rather than echoing untrusted values. */
@@ -46,10 +53,15 @@ namespace Horo::PlatformServices {
     ModuleConfigurationContribution MakePlatformProjectSettingsContribution() {
         ModuleConfigurationContribution contribution{.module = ModuleId{"horo.platform.services"},
                                                      .ownerPrefix = "platform.services",
-                                                     .settings = {Descriptor(ProviderModeKey, SettingValueType::Integer, std::int64_t{0}),
-                                                                  Descriptor(ProviderKey, SettingValueType::String, std::string{})}};
-        for (const auto *key : RequirementKeys)
-            contribution.settings.push_back(Descriptor(key, SettingValueType::Integer, std::int64_t{0}));
+                                                     .settings = {Descriptor(ProviderModeKey, SettingValueType::Integer, std::int64_t{0},
+                                                                             "settings.platform_services.provider_mode",
+                                                                             SettingIntegerRange{0, 1}),
+                                                                  Descriptor(ProviderKey, SettingValueType::String, std::string{},
+                                                                             "settings.platform_services.provider_key",
+                                                                             SettingStringRules{.maximumBytes = 1024})}};
+        for (std::size_t index = 0; index < RequirementKeys.size(); ++index)
+            contribution.settings.push_back(Descriptor(RequirementKeys[index], SettingValueType::Integer, std::int64_t{0},
+                                                       RequirementLabels[index], SettingIntegerRange{0, 2}));
         return contribution;
     }
 

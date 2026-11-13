@@ -26,7 +26,8 @@ namespace Horo::Editor::SettingsModalInternal {
 
     void DrawFooterStatus(const SettingsState &st, const EditorGuiContext &ctx, const float footerPaddingX, const float actionsStartX) {
         ImGui::SetCursorPos({footerPaddingX, (ImGui::GetWindowHeight() - ImGui::GetTextLineHeight()) * 0.5F});
-        if (st.dirty || (st.configuration && !st.configuration->Draft().proposedValues.empty())) {
+        if (st.dirty || (st.configuration && !st.configuration->Draft().proposedValues.empty()) ||
+            (st.projectConfiguration && !st.projectConfiguration->Draft().proposedValues.empty())) {
             ScopedTextStyle badge(ctx.theme.fonts.sansCompact, TextPx::Caption(), FontPx::SansCompact);
             ImGui::PushStyleColor(ImGuiCol_Text, Warn());
             ImGui::TextUnformatted(SettingsModal::kTextScope.Text(ctx.localization, "configuration.unsaved").c_str());
@@ -42,7 +43,9 @@ namespace Horo::Editor::SettingsModalInternal {
             textColor = Err();
         ImGui::PushStyleColor(ImGuiCol_Text, textColor);
         const auto navigationHint = SettingsModal::kTextScope.Text(ctx.localization, "navigation.save_policy_first");
-        const char *statusKey = "configuration.persist_hint";
+        const char *statusKey = static_cast<SettingsTab>(st.activeTab) == SettingsTab::ProjectConfiguration
+                                    ? "configuration.project_persist_hint"
+                                    : "configuration.persist_hint";
         switch (st.status) {
             case SettingsModalStatus::Loaded:
                 statusKey = "configuration.loaded";
@@ -67,8 +70,9 @@ namespace Horo::Editor::SettingsModalInternal {
         if (hasFeedback)
             message = st.modalFeedback.c_str();
         const auto prefab = st.prefab.owner.lock();
+        const bool project = static_cast<SettingsTab>(st.activeTab) == SettingsTab::ProjectConfiguration;
         const auto &prefabHint = SettingsModal::kTextScope.Text(ctx.localization, "prefab.save_first");
-        if (prefab && prefab->IsDirty())
+        if (!project && prefab && prefab->IsDirty())
             message = prefabHint.c_str();
         const auto origin = ImGui::GetWindowPos();
         ImGui::PushClipRect(origin, {origin.x + actionsStartX - 12.0F, origin.y + ImGui::GetWindowHeight()}, true);
@@ -82,6 +86,7 @@ namespace Horo::Editor::SettingsModalInternal {
     [[nodiscard]] bool DrawFooterActions(SettingsState &st, EditorSettingsService &settings, const EditorGuiContext &ctx,
                                          const float centeredActionY, float &actionsStartX) {
         const auto prefab = st.prefab.owner.lock();
+        const bool project = static_cast<SettingsTab>(st.activeTab) == SettingsTab::ProjectConfiguration;
         constexpr float actionH = 32.0F;
         const auto restoreDefaults = SettingsModal::kTextScope.Text(ctx.localization, "restore_defaults");
         const auto cancelLabel = SettingsModal::kTextScope.Text(ctx.localization, "cancel") + "###settings_cancel";
@@ -105,22 +110,31 @@ namespace Horo::Editor::SettingsModalInternal {
         if (Button({.label = restoreDefaults.c_str(),
                     .size = {restoreW, actionH},
                     .variant = ButtonVariant::Secondary,
+                    .enabled = !project || static_cast<bool>(st.projectConfiguration),
                     .font = ctx.theme.fonts.sansCompact,
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {
             LOG_INFO("editor.settings", "Restore Defaults clicked — draft reset to factory defaults.");
-            LoadSettingsForModal(st, settings);
-            const auto restored = st.configuration->RestoreDefaults();
-            if (restored.HasError()) {
-                st.configurationFailure = restored.ErrorValue();
-                st.status = SettingsModalStatus::Failure;
+            if (project) {
+                if (st.projectConfiguration) {
+                    const auto restored = st.projectConfiguration->RestoreDefaults();
+                    st.configurationFailure = restored.HasError() ? std::optional<Error>{restored.ErrorValue()} : std::nullopt;
+                    st.status = restored.HasError() ? SettingsModalStatus::Failure : SettingsModalStatus::Defaults;
+                }
             } else {
-                auto defaults = DefaultEditorSettings();
-                ApplyEditorConfigurationSnapshot(*st.configuration->Preview(), defaults);
-                ApplySettingsToDraft(st, defaults);
-                st.appearance.pendingThemeIndex = st.appearance.themeIndex;
-                st.configurationPreviewed = true;
-                st.status = SettingsModalStatus::Defaults;
+                LoadSettingsForModal(st, settings);
+                const auto restored = st.configuration->RestoreDefaults();
+                if (restored.HasError()) {
+                    st.configurationFailure = restored.ErrorValue();
+                    st.status = SettingsModalStatus::Failure;
+                } else {
+                    auto defaults = DefaultEditorSettings();
+                    ApplyEditorConfigurationSnapshot(*st.configuration->Preview(), defaults);
+                    ApplySettingsToDraft(st, defaults);
+                    st.appearance.pendingThemeIndex = st.appearance.themeIndex;
+                    st.configurationPreviewed = true;
+                    st.status = SettingsModalStatus::Defaults;
+                }
             }
         }
         ImGui::SameLine(0.0F, gap);
@@ -137,7 +151,7 @@ namespace Horo::Editor::SettingsModalInternal {
         if (Button({.label = applyLabel.c_str(),
                     .size = {applyW, actionH},
                     .variant = ButtonVariant::Primary,
-                    .enabled = !prefab || !prefab->IsDirty(),
+                    .enabled = project ? static_cast<bool>(st.projectConfiguration) : (!prefab || !prefab->IsDirty()),
                     .font = ctx.theme.fonts.sansCompact,
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {

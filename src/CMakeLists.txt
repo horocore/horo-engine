@@ -4223,6 +4223,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceScreenXr.cpp
             editor/screens/workspace/EditorWorkspaceScreenActions.cpp
             editor/screens/workspace/EditorWorkspaceScreenComposition.cpp
+            editor/screens/workspace/EditorWorkspaceScreenProjectSettings.cpp
+            editor/screens/workspace/PlatformProjectSettingsOwner.cpp
             editor/screens/workspace/EditorWorkspaceScreenLifecycle.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp

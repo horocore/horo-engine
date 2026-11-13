@@ -29,7 +29,7 @@ against this rebased worktree.
 | PLS-003.4 | #1893 / HORO-1849 | `PlatformDefinitionRegistries.cpp`, `PlatformDefinitionRegistriesTests.cpp`; #2698 merged |
 | PLS-003.5 | #1894 / HORO-1850 | `PlatformProjectConfiguration.cpp`, `PlatformProjectConfigurationTests.cpp`; #2701 merged |
 | PLS-003.6 | #1900 / HORO-1856 | `PlatformProviderManifestCook.cpp`, `PlatformProviderManifestCookTests.cpp`; #3025 merged |
-| PLS-003.7 | #1897 / HORO-1853 | Open; shared Project Settings integration and localized presentation remain required |
+| PLS-003.7 | #1897 / HORO-1853 | Open; shared Project Settings source integration prepared, executable/localized presentation evidence remains required |
 | PLS-003.8 | #1898 / HORO-1854 | Open; integrated host, migration and clean/incremental publication evidence remains required |
 
 All seven PLS merge commits supplied by those PRs were verified as ancestors of
@@ -545,10 +545,10 @@ eligible descriptors without bespoke modal wiring, typed inline diagnostics,
 preview rollback, stale-revision rejection and localized layouts in both theme
 layers. Both issues remain open at this audit. Existing specialized prefab,
 navigation and collision drafts are implementation evidence, not the released
-generic contract required by these issues. This PLS checkout's SettingDescriptor
-has no validation/presentation metadata seam. The published CFG draft described
-below adds that metadata, but its editing session still targets User values;
-inventing another PLS module session would not satisfy the stated acceptance criterion.
+generic contract required by these issues. At the initial restart this PLS
+checkout's SettingDescriptor had no validation/presentation metadata seam. The
+published CFG draft described below supplied that metadata; the resumed source
+integration now extends its existing session for Project values, as recorded below.
 
 | Requirement | Current authoritative source/evidence | Remaining proof or dependency |
 | --- | --- | --- |
@@ -558,8 +558,8 @@ inventing another PLS module session would not satisfy the stated acceptance cri
 | PLS-003.4 stats/boards/presence | Existing typed builders plus strict source codecs and cross-reference validation | Execute current semantic/source and clean/incremental publication regressions |
 | PLS-003.5 portable policy | Existing typed validator, inert eight-key Project-only contribution, explicit host profiles/trusted metadata | Current native tests; actual shared-modal apply/cancel integration and genuine provider qualification where available |
 | PLS-003.6 cook | Existing cooker retained; unchanged fingerprint preimage paired codec, synchronous application publisher and production CLI wiring | Execute actual current cook/CLI/public-consumer tests; source implementation is not a published-pair runtime pass |
-| PLS-003.7 authoring surface | Inert typed contribution exists; no PLS-specific modal/session added | Released CFG-001.5 contract from owner, common transaction integration, localized controls and actual UI/lifecycle verification |
-| PLS-003.8 integrated qualification | Shared six-source capture, ordinary-open fences, creation, recoverable 0.4.0 adoption, paired publication and regression sources | Execute all affected native/consumer scopes and actual routes; complete Settings dependency and final Sonar IDE/secrets/Codacy preflight |
+| PLS-003.7 authoring surface | Same shared draft/renderer extended for exact Project keys; private source publication operations and localized labels prepared | Execute common transaction, publisher, modal/lifecycle and public consumer regressions; verify actual UI states |
+| PLS-003.8 integrated qualification | Shared six-source capture, ordinary-open fences, creation, recoverable 0.4.0 adoption, paired publication and shared Settings regression sources | Execute all affected native/consumer scopes and actual routes; final Sonar IDE/secrets/Codacy preflight and matching CI |
 
 On 13 November the CFG owner published [draft PR #3556](https://github.com/horocore/horo-engine/pull/3556),
 commit `e7b809b3326f493d6642aa4e5e4600fe4d003b2a`. Inspection of that published commit,
@@ -569,9 +569,10 @@ ConfigurationSettingsSession::Reload fixes the draft source and candidate select
 to User, filters editability through AllowsSource(User), and Apply persists through
 EditorSettingsService::CommitConfiguration. The eight PLS descriptors explicitly
 admit only Project, so this draft alone cannot edit or durably publish PLS policy.
-The remaining dependency is a common source-aware project transaction and lifecycle
-boundary; weakening PLS source policy to User would violate the portable authority.
-The CFG draft's new native contracts are themselves still unqualified.
+The upstream draft alone therefore needs a common source-aware project transaction
+and lifecycle boundary. The resumed PLS integration below supplies that extension
+in this worktree while retaining Project-only policy. Both the imported native
+contracts and the extension still require executable qualification.
 
 Under the 13 November authorization a missing named grant is not a blocker.
 Current physical lock contention defers the bounded native and analysis attempts,
@@ -587,6 +588,66 @@ state before committing cancellation. Missing/evicted records are not guessed to
 cancelled, and a durable existing terminal snapshot cannot be overwritten. The new
 zero-worker Shutdown(Cancel) regression requires no entropy, files or created event,
 and exactly one queued revision notice after repeated queries. It remains unexecuted.
+
+## Resumed shared Project Settings integration (execution pending)
+
+The published CFG implementation `fd8aff61b4800b3a9c3984d5498486ab4601e154`
+was imported as forward commit `ceecd77a0` without rewriting the published PLS
+branch or copying dirty sibling files. The PLS worktree now extends its existing
+ConfigurationSettingsSession with exact source-owned keys, revocable availability,
+typed validation and persistence callbacks. Incomplete bindings fail closed.
+Prepare retains the one configuration writer reservation across persistence;
+cross-field-invalid typed drafts remain editable but cannot be applied.
+
+The actual editor composition registers the eight inert Project-only descriptors,
+including validation bounds and English/Turkish label identities. Workspace
+composition retains the admitted source snapshot and borrows the same immutable
+provider/trust context from ProjectOpenService. A private publication owner
+supplies weak operations to the generic session; it contains no second UI draft.
+The common descriptor renderer exposes a Project destination. Its Apply affects
+only that source, preserving a pending User draft for the ordinary stale-review
+path. Cancel discards modal drafts without publishing. Workspace leave revokes
+old callbacks before source owners retire.
+
+The shared Application publisher retains the existing asset-source transaction,
+exact root lease and all six source fences. It prepares preserving root JSON and
+the next immutable source generation before replacement. Postcommit uncertainty
+retains the new root and its original receipt and blocks another write; no source
+rollback, identity regeneration, provider activation or fallback is introduced.
+The cook and policy writer share a private precommit filesystem decorator.
+
+New regression sources exercise generic Project cancel/apply, cross-field repair,
+source-key isolation, stale/revoked writers, failed persistence, all-six-source
+post-staging drift, cancellation and native postcommit uncertainty. Actual modal
+regressions cover cancel and Project-only apply through both locales, narrow and
+normal widths, both theme layers and increased font scale. These new C++/GUI tests
+are **not executed** yet. Public-header consumers and the GUI bootstrap also need
+rebuilding for the additive contracts and virtual-table change.
+
+## Resumed CI and analyzer findings
+
+At pushed `cc6c2aad4`, Android Package Qualification passed; CI and Sonar coverage
+were terminal failures. Native/coverage configure logs identify the exact missing
+0.4.0 CHANGELOG entry in GenerateBuildInfo. Windows additionally encountered a Lua
+download TLS/HTTP 500 failure. The version-notes entry and an actual repository
+CMake-to-notes regression were added in `873de155f`; the exact freeze command
+passed and its Python suite completed with 11 passed, 1 skipped. No C++ compiler
+had run in those failed native jobs, and SonarCloud had no completed coverage/
+analysis evidence.
+
+The hosted Codacy check on `873de155f` reported 22 findings (including two buffer
+access checks, constant false-return helpers and oversized functions/test files).
+Its raw GitHub annotations are retained in ignored
+`build/pls-codacy-873-annotations.json`. Source fixes now make bounds explicit,
+separate preparation/lease ownership from publication, and organize independent
+test workflows around shared fixtures while retaining their assertions. A fresh
+Codacy result is required; this source work is not a clean analyzer result.
+
+The actual published target advanced to `139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`
+and was fetched. Published PLS history is retained; no force push or merge was
+performed. Full preflight must compare this actual target, and remote integrated
+CI evidence must match the delivered head. New source work has not been qualified
+against the target's complete native matrix.
 
 ## Outstanding integrated evidence
 

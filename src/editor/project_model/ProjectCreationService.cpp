@@ -127,16 +127,17 @@ namespace Horo::Editor {
             CreationWriter(DurableFileSystem &files, std::filesystem::path root)
                 : files_(files), root_(std::move(root)), directories_{root_} {}
 
-            bool Fail(Error error) {
+            void Fail(Error error) {
                 if (!failure_)
                     failure_ = std::move(error);
-                return false;
             }
 
             bool Directory(const std::filesystem::path &path) {
                 const auto relative = path.lexically_relative(root_);
-                if (relative.is_absolute() || relative.empty() || *relative.begin() == "..")
-                    return Fail(MakeError(ProjectCreationErrors::InvalidRequest, "Staging directory escapes its owned root."));
+                if (relative.is_absolute() || relative.empty() || *relative.begin() == "..") {
+                    Fail(MakeError(ProjectCreationErrors::InvalidRequest, "Staging directory escapes its owned root."));
+                    return false;
+                }
                 auto current = root_;
                 for (const auto &component : relative) {
                     if (component == ".")
@@ -144,14 +145,19 @@ namespace Horo::Editor {
                     current /= component;
                     if (std::ranges::find(directories_, current) != directories_.end())
                         continue;
-                    if (directories_.size() >= 256)
-                        return Fail(
-                            MakeError(ProjectCreationErrors::InvalidRequest, "Project scaffolding exceeds its 256-directory bound."));
+                    if (directories_.size() >= 256) {
+                        Fail(MakeError(ProjectCreationErrors::InvalidRequest, "Project scaffolding exceeds its 256-directory bound."));
+                        return false;
+                    }
                     auto created = files_.CreateDirectoryPath(current, DirectoryCreationMode::Single);
-                    if (created.HasError())
-                        return Fail(std::move(created).ErrorValue());
-                    if (!created.Value())
-                        return Fail(MakeError(ProjectCreationErrors::DestinationOccupied, "An unowned staging entry already exists."));
+                    if (created.HasError()) {
+                        Fail(std::move(created).ErrorValue());
+                        return false;
+                    }
+                    if (!created.Value()) {
+                        Fail(MakeError(ProjectCreationErrors::DestinationOccupied, "An unowned staging entry already exists."));
+                        return false;
+                    }
                     directories_.push_back(current);
                 }
                 return true;
@@ -161,14 +167,20 @@ namespace Horo::Editor {
                 if (failure_ || !Directory(path.parent_path()))
                     return false;
                 auto written = files_.WriteDurable(path, std::as_bytes(std::span{text.data(), text.size()}));
-                return written.HasValue() || Fail(std::move(written).ErrorValue());
+                if (written.HasError()) {
+                    Fail(std::move(written).ErrorValue());
+                    return false;
+                }
+                return true;
             }
 
             bool Sync() {
                 for (auto path = directories_.rbegin(); path != directories_.rend(); ++path) {
                     auto synced = files_.SyncDirectory(*path);
-                    if (synced.HasError())
-                        return Fail(std::move(synced).ErrorValue());
+                    if (synced.HasError()) {
+                        Fail(std::move(synced).ErrorValue());
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -467,11 +479,15 @@ namespace Horo::Editor {
         [[nodiscard]] bool WriteCollisionScaffolding(CreationWriter &writer, const std::filesystem::path &staging,
                                                      const std::string &projectId) {
             auto collision = CreateProjectCollisionTemplate(projectId);
-            if (collision.HasError())
-                return writer.Fail(std::move(collision).ErrorValue());
+            if (collision.HasError()) {
+                writer.Fail(std::move(collision).ErrorValue());
+                return false;
+            }
             auto source = Application::EncodeProjectCollisionSettings(collision.Value());
-            if (source.HasError())
-                return writer.Fail(std::move(source).ErrorValue());
+            if (source.HasError()) {
+                writer.Fail(std::move(source).ErrorValue());
+                return false;
+            }
             return writer.Write(staging / ".horo/collision.json", source.Value());
         }
 
@@ -479,19 +495,25 @@ namespace Horo::Editor {
         [[nodiscard]] bool WriteSurfaceScaffolding(CreationWriter &writer, const std::filesystem::path &staging,
                                                    const std::string &projectId) {
             auto bytes = AllocateCollisionIdentityBytes(nullptr);
-            if (bytes.HasError())
-                return writer.Fail(std::move(bytes).ErrorValue());
+            if (bytes.HasError()) {
+                writer.Fail(std::move(bytes).ErrorValue());
+                return false;
+            }
             const auto id = Physics::SurfaceMaterialId::FromBytes(bytes.Value());
             Application::ProjectSurfaceSettingsInput input;
             input.projectId = projectId;
             input.defaultSurfaceId = id;
             input.surfaces.push_back({id, "Default"});
             auto settings = Application::ProjectSurfaceSettings::Create(std::move(input));
-            if (settings.HasError())
-                return writer.Fail(std::move(settings).ErrorValue());
+            if (settings.HasError()) {
+                writer.Fail(std::move(settings).ErrorValue());
+                return false;
+            }
             auto source = Application::EncodeProjectSurfaceSettings(settings.Value());
-            if (source.HasError())
-                return writer.Fail(std::move(source).ErrorValue());
+            if (source.HasError()) {
+                writer.Fail(std::move(source).ErrorValue());
+                return false;
+            }
             return writer.Write(staging / ".horo/surfaces.json", source.Value());
         }
 

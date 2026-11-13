@@ -67,6 +67,53 @@ namespace {
         });
     }
 
+    TEST_CASE("Cancelling the actual settings modal discards its shared Project draft without persistence",
+              "[unit][editor][configuration][project]") {
+        ConfigurationSchema schema;
+        const SettingKey key{"project.policy"};
+        REQUIRE(schema
+                    .Register({.key = key,
+                               .type = SettingValueType::Integer,
+                               .defaultValue = std::int64_t{2},
+                               .scope = SettingScope::Project,
+                               .reloadPolicy = ReloadPolicy::ProjectReopen,
+                               .sensitivity = SettingSensitivity::Public,
+                               .sourcePolicy = ConfigurationSourcePolicy{.allowedSources = ConfigurationSourceMask::Project}})
+                    .HasValue());
+        SettingsFixture fixture{std::move(schema)};
+        int writes = 0;
+        auto project =
+            std::make_shared<ConfigurationSettingsSession>(fixture.configuration,
+                                                           ConfigurationSettingsPersistence{.source = ConfigurationSource::Project,
+                                                                                            .keys = {key},
+                                                                                            .checkAvailable =
+                                                                                                [] {
+            return Result<void>::Success();
+        },
+                                                                                            .validate =
+                                                                                                [](const ConfigurationSnapshot &) {
+            return Result<void>::Success();
+        },
+                                                                                            .persist = [&](const ConfigurationSnapshot &) {
+            ++writes;
+            return Result<void>::Success();
+        }});
+        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr,
+                                                     SettingsModalProjectOpening{.configuration = project});
+        REQUIRE(fixture.host.OpenRoot(std::move(modal)).HasValue());
+        fixture.host.OnUpdate(0.0F);
+        REQUIRE(project->Edit(key, "7").HasValue());
+        REQUIRE(project->Preview());
+        CHECK(writes == 0);
+        CHECK(std::get<std::int64_t>(fixture.configuration.Snapshot().Get(key)) == 2);
+        REQUIRE(fixture.host.RequestClose(ModalId{SettingsModal::kModalId}, ModalCloseReason::Cancelled).HasValue());
+        fixture.host.OnUpdate(0.0F);
+        CHECK(writes == 0);
+        CHECK_FALSE(project->Preview());
+        CHECK(project->Draft().proposedValues.empty());
+        CHECK(fixture.configuration.Snapshot().Revision() == 0);
+    }
+
     TEST_CASE("Shared descriptors commit with legacy controls through one durable modal operation", "[unit][editor][configuration]") {
         const Horo::TestSupport::ScopedTestHome home{"horo-settings-shared-descriptors"};
         const SettingKey key{"module.custom_limit"};

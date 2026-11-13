@@ -159,6 +159,10 @@ namespace Horo::Editor {
         ProjectOpenService(const ProjectOpenService &) = delete;
         ProjectOpenService &operator=(const ProjectOpenService &) = delete;
 
+        /** @brief Borrows the immutable host policy used by this service's project-source admission.
+         * @return Actual profile, linked provider metadata, trust and limits for the service lifetime; no activation grant. */
+        [[nodiscard]] const Application::PlatformServicesProjectValidationContext &PlatformPolicy() const noexcept;
+
         /** @brief Starts the only active operation. @param request Valid project root and limits. @return Move-only handle
          * or typed busy error. */
         [[nodiscard]] Result<ProjectOpenOperationHandle> Start(ProjectOpenRequest request);

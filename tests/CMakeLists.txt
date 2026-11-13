@@ -3020,6 +3020,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/PrefabSettingsPresentationTests.cpp
             unit/editor/CollisionSettingsPresentationTests.cpp
             unit/editor/SettingsModalPresentationTests.cpp
+            unit/editor/ProjectConfigurationPresentationTests.cpp
             unit/editor/NavigationDefinitionPresentationTests.cpp
             unit/editor/NavigationPolicyPresentationTests.cpp
             unit/editor/ProjectCreationViewPresentationTests.cpp
@@ -3343,6 +3344,7 @@ target_link_libraries(HoroProjectMigrationTransactionTests PRIVATE
         HoroEngine::ProjectSurfaceSettings HoroEngine::Security nlohmann_json::nlohmann_json)
 add_executable(HoroProjectOpenServiceTests
         unit/editor/ProjectOpenServiceTests.cpp
+        unit/editor/ProjectOpenPlatformServicesTests.cpp
 )
 target_compile_features(HoroProjectOpenServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroProjectOpenServiceTests PRIVATE
@@ -3375,6 +3377,7 @@ target_link_libraries(HoroRecentProjectInspectionServiceTests PRIVATE
         HoroEngine::EditorServices HoroEngine::ProjectMigrations)
 add_executable(HoroProjectCreationServiceTests
         unit/editor/ProjectCreationServiceTests.cpp
+        unit/editor/ProjectCreationPublicationTests.cpp
 )
 
 target_compile_features(HoroProjectCreationServiceTests PRIVATE cxx_std_20)
@@ -4136,6 +4139,7 @@ target_include_directories(HoroPlatformRequestTests PRIVATE ${CMAKE_CURRENT_SOUR
 target_link_libraries(HoroPlatformRequestTests PRIVATE HoroEngine::PlatformServices Threads::Threads)
 add_executable(HoroPlatformServicesAuthoringTests
         unit/application/PlatformServicesAuthoringTests.cpp
+        unit/application/PlatformServicesPolicyCodecTests.cpp
         unit/application/PlatformServicesProjectSourcesTests.cpp
         unit/application/PlatformServicesProjectCookTests.cpp
 )
@@ -4148,6 +4152,10 @@ target_sources(HoroPlatformServicesPublicHeaderConsumer PRIVATE support/Platform
 target_sources(HoroPlatformServicesAuthoringPublicHeaderConsumer PRIVATE support/PlatformServicesDefinitionCodecPublicContract.cpp)
 target_sources(HoroApplicationPublicHeaderConsumer PRIVATE support/ProjectMigrationEntropyPublicContract.cpp)
 target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/ProjectCreationPublicationPublicContract.cpp)
+target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/ConfigurationSettingsPersistencePublicContract.cpp)
+if(TARGET HoroGuiPublicHeaderConsumer)
+    target_sources(HoroGuiPublicHeaderConsumer PRIVATE support/ProjectConfigurationModalPublicContract.cpp)
+endif()
 
 add_executable(HoroPlatformServicesCompositionTests unit/platform_services/PlatformServicesCompositionTests.cpp)
 target_compile_features(HoroPlatformServicesCompositionTests PRIVATE cxx_std_20)

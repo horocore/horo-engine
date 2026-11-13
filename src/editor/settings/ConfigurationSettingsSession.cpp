@@ -49,6 +49,34 @@ namespace Horo::Editor {
         Reload();
     }
 
+    /** @copydoc ConfigurationSettingsSession::ConfigurationSettingsSession */
+    ConfigurationSettingsSession::ConfigurationSettingsSession(ConfigurationService &configuration,
+                                                               ConfigurationSettingsPersistence persistence)
+        : configuration_(configuration), persistence_(std::move(persistence)) {
+        Reload();
+    }
+
+    /** @copydoc ConfigurationSettingsSession::CheckAvailable */
+    Result<void> ConfigurationSettingsSession::CheckAvailable() const {
+        if (!persistence_)
+            return Result<void>::Success();
+        if (!persistence_->checkAvailable || !persistence_->validate || !persistence_->persist || persistence_->keys.empty() ||
+            persistence_->keys.size() > ConfigurationLimits{}.maximumKeysPerSource ||
+            std::ranges::any_of(persistence_->keys, [this](const SettingKey &key) {
+            return configuration_.Schema().FindDescriptor(key) == nullptr;
+        }))
+            return Result<void>::Failure(MakeError(SettingsErrors::ValidationFailed));
+        return persistence_->checkAvailable();
+    }
+
+    /** @copydoc ConfigurationSettingsSession::ValidateSource */
+    Result<void> ConfigurationSettingsSession::ValidateSource(const ConfigurationSnapshot &snapshot) const {
+        auto available = CheckAvailable();
+        if (available.HasError())
+            return available;
+        return persistence_ ? persistence_->validate(snapshot) : Result<void>::Success();
+    }
+
     /** @copydoc ConfigurationSettingsSession::EditBuffer */
     std::string *ConfigurationSettingsSession::EditBuffer(const SettingKey &key) noexcept {
         const auto field = std::ranges::find(fields_, key, [](const ConfigurationSettingField &value) -> const SettingKey & {
@@ -79,16 +107,26 @@ namespace Horo::Editor {
 
     /** @copydoc ConfigurationSettingsSession::Reload */
     void ConfigurationSettingsSession::Reload() {
+        auto available = CheckAvailable();
+        if (available.HasError()) {
+            fields_.clear();
+            draft_ = {};
+            preview_.reset();
+            failure_ = std::move(available).ErrorValue();
+            return;
+        }
         const auto snapshot = configuration_.Snapshot();
-        draft_ = {.baseRevision = snapshot.Revision(), .source = ConfigurationSource::User};
+        const auto source = persistence_ ? persistence_->source : ConfigurationSource::User;
+        draft_ = {.baseRevision = snapshot.Revision(), .source = source};
         fields_.clear();
         for (const auto &descriptor : configuration_.Schema().Descriptors()) {
+            if (persistence_ && std::ranges::find(persistence_->keys, descriptor.key) == persistence_->keys.end())
+                continue;
             const auto *resolved = snapshot.FindResolved(descriptor.key);
             const bool editable = !descriptor.readOnly && descriptor.sensitivity == SettingSensitivity::Public &&
-                                  descriptor.scope != SettingScope::Invocation &&
-                                  ConfigurationSchema::AllowsSource(descriptor, ConfigurationSource::User);
-            const auto user = std::ranges::find(resolved->candidates, ConfigurationSource::User, &ConfigurationCandidate::Source);
-            const SettingValue &value = user == resolved->candidates.end() ? resolved->value : user->Value();
+                                  descriptor.scope != SettingScope::Invocation && ConfigurationSchema::AllowsSource(descriptor, source);
+            const auto authored = std::ranges::find(resolved->candidates, source, &ConfigurationCandidate::Source);
+            const SettingValue &value = authored == resolved->candidates.end() ? resolved->value : authored->Value();
             fields_.push_back({.descriptor = descriptor,
                                .resolved = *resolved,
                                .editable = editable,
@@ -100,6 +138,12 @@ namespace Horo::Editor {
 
     /** @copydoc ConfigurationSettingsSession::Edit */
     Result<void> ConfigurationSettingsSession::Edit(const SettingKey &key, std::string text) {
+        auto available = CheckAvailable();
+        if (available.HasError()) {
+            preview_.reset();
+            failure_ = available.ErrorValue();
+            return available;
+        }
         const auto field = std::ranges::find(fields_, key, [](const ConfigurationSettingField &value) -> const SettingKey & {
             return value.descriptor.key;
         });
@@ -132,6 +176,11 @@ namespace Horo::Editor {
             return Result<void>::Failure(error);
         }
         draft_ = std::move(candidate);
+        auto validated = ValidateSource(preview.Value());
+        if (validated.HasError()) {
+            failure_ = validated.ErrorValue();
+            return validated;
+        }
         if (std::ranges::none_of(fields_, [](const ConfigurationSettingField &value) {
             return value.error.has_value();
         }))
@@ -141,6 +190,12 @@ namespace Horo::Editor {
 
     /** @copydoc ConfigurationSettingsSession::Apply */
     Result<void> ConfigurationSettingsSession::Apply() {
+        auto available = CheckAvailable();
+        if (available.HasError()) {
+            preview_.reset();
+            failure_ = available.ErrorValue();
+            return available;
+        }
         for (const auto &field : fields_) {
             if (field.error)
                 return Result<void>::Failure(*field.error);
@@ -148,7 +203,19 @@ namespace Horo::Editor {
         if (draft_.proposedValues.empty())
             return Result<void>::Success();
         Result<void> result = Result<void>::Success();
-        if (settings_) {
+        if (persistence_) {
+            auto prepared = configuration_.Prepare(draft_);
+            if (prepared.HasError()) {
+                result = Result<void>::Failure(std::move(prepared).ErrorValue());
+            } else {
+                const auto candidate = prepared.Value().Candidate();
+                result = ValidateSource(candidate);
+                if (result.HasValue())
+                    result = persistence_->persist(candidate);
+                if (result.HasValue())
+                    result = std::move(prepared).Value().Commit();
+            }
+        } else if (settings_) {
             const auto committed = settings_->CommitConfiguration(draft_);
             if (committed.HasError())
                 result = Result<void>::Failure(committed.ErrorValue());
@@ -169,6 +236,8 @@ namespace Horo::Editor {
     /** @copydoc ConfigurationSettingsSession::RestoreDefaults */
     Result<void> ConfigurationSettingsSession::RestoreDefaults() {
         Reload();
+        if (failure_)
+            return Result<void>::Failure(*failure_);
         for (auto &field : fields_) {
             if (!field.editable)
                 continue;
@@ -181,6 +250,11 @@ namespace Horo::Editor {
             Reload();
             failure_ = error;
             return Result<void>::Failure(error);
+        }
+        auto validated = ValidateSource(preview.Value());
+        if (validated.HasError()) {
+            failure_ = validated.ErrorValue();
+            return validated;
         }
         preview_ = std::move(preview).Value();
         return Result<void>::Success();

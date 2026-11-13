@@ -1,160 +1,8 @@
-#include "Horo/Application/PlatformServicesAuthoring.h"
-#include "Horo/Application/PlatformServicesDefinitionCodec.h"
-#include "Horo/PlatformServices/PlatformProviderManifestCook.h"
-
-#include <algorithm>
-#include <catch2/catch_test_macros.hpp>
-#include <nlohmann/json.hpp>
+#include "../../support/project/PlatformServicesAuthoringFixture.h"
 
 namespace Horo::Application {
     using namespace PlatformServices;
-
-    namespace {
-        /** @brief Builds a portable fixture with live identity and retained history of every kind. */
-        PlatformStableIdRegistryCandidate Candidate() {
-            PlatformStableIdRegistryCandidate candidate{.projectId = "project.portable"};
-            candidate.salt.bytes.front() = std::byte{1};
-            for (const auto kind : {PlatformServiceIdKind::Achievement, PlatformServiceIdKind::Leaderboard, PlatformServiceIdKind::Stat,
-                                    PlatformServiceIdKind::PresenceStatus}) {
-                for (const bool tombstone : {false, true}) {
-                    const std::string key = tombstone ? "retired.key" : "active.key";
-                    candidate.entries.push_back({.kind = kind,
-                                                 .canonicalKey = key,
-                                                 .storedId = DerivePlatformServiceStableId(candidate.salt, kind, key).Value(),
-                                                 .aliases = {key + ".z", key + ".a"},
-                                                 .state = tombstone ? PlatformStableIdState::Tombstoned : PlatformStableIdState::Active,
-                                                 .removalProvenance = tombstone ? "removed:reviewed-history" : ""});
-                }
-            }
-            return candidate;
-        }
-
-        /** @brief Encodes a fixture only after requiring the typed result. */
-        std::string Encode(const PlatformStableIdRegistry &registry) {
-            auto encoded = EncodePlatformServicesLedger(registry);
-            REQUIRE(encoded.HasValue());
-            return std::move(encoded).Value();
-        }
-
-        /** @brief Requires the exact stable machine-readable failure identity. */
-        void CheckError(const auto &result, const ErrorCodeDescriptor &descriptor) {
-            REQUIRE(result.HasError());
-            CHECK(result.ErrorValue().code.Value() == descriptor.code.Value());
-        }
-
-        /** @brief Requires an initialized policy before producing persisted project bytes. */
-        std::string EncodePolicy(const PlatformProjectConfiguration &configuration) {
-            auto encoded = EncodeProjectPlatformServicesConfiguration(configuration);
-            REQUIRE(encoded.HasValue());
-            return std::move(encoded).Value();
-        }
-
-        /** @brief Constructs a real project root using the registered current contract and explicit Null policy. */
-        nlohmann::json Root() {
-            const auto release = CurrentEngineReleaseVersion();
-            const auto *decision = BuiltInReleaseCompatibilityRegistry().Find(release);
-            REQUIRE(decision != nullptr);
-            const auto salt = Candidate().salt;
-            const auto configuration = BuildPlatformProjectConfiguration({.projectId = "project.portable"}, {}, {});
-            REQUIRE(configuration.HasValue());
-            return {{"horoVersion", FormatHoroVersion(release.value)},
-                    {"persistentContract", FormatPersistentContractHash(decision->persistentContract)},
-                    {"projectId", "project.portable"},
-                    {"name", "Platform authoring"},
-                    {"projectVersion", "1.0.0"},
-                    {"createdAt", "2026-11-11T00:00:00Z"},
-                    {"platformServicesIdSalt", FormatPlatformServicesIdSalt(salt)},
-                    {"settings",
-                     {{"renderBackend", "null"}, {"platformServices", nlohmann::json::parse(EncodePolicy(configuration.Value()))}}}};
-        }
-
-        /** @brief Complete semantic source fixture used by codec and cook regressions. */
-        struct Definitions {
-            AchievementDefinitionRegistry achievements;
-            StatDefinitionRegistry stats;
-            LeaderboardDefinitionRegistry leaderboards;
-            PresenceDefinitionRegistry presence;
-        };
-
-        /** @brief Builds semantic fixtures once through their existing owning validators. */
-        Definitions Define(const PlatformStableIdRegistry &ids) {
-            const auto stat = ids.ResolveStat("active.key").Value();
-            const auto stats = BuildStatDefinitionRegistry(ids, {.stableIdRegistryFingerprint = ids.Fingerprint(),
-                                                                 .definitions = {{.id = stat,
-                                                                                  .authority = ProgressionAuthorityMode::LocalProduct,
-                                                                                  .valueKind = ProgressionValueKind::SignedInteger64,
-                                                                                  .range = {0, 100},
-                                                                                  .mutation = StatMutationPolicy::SetMaximum,
-                                                                                  .localizationKey = "stat.active"}}});
-            REQUIRE(stats.HasValue());
-            const auto achievements =
-                BuildAchievementDefinitionRegistry(ids,
-                                                   {.stableIdRegistryFingerprint = ids.Fingerprint(),
-                                                    .definitions = {{.id = ids.ResolveAchievement("active.key").Value(),
-                                                                     .authority = ProgressionAuthorityMode::LocalProduct,
-                                                                     .progress = {.kind = AchievementProgressKind::UnlockOnce, .total = 1},
-                                                                     .presentation = {.titleLocalizationKey = "achievement.active.title",
-                                                                                      .descriptionLocalizationKey =
-                                                                                          "achievement.active.description"}}}});
-            REQUIRE(achievements.HasValue());
-            const auto leaderboards =
-                BuildLeaderboardDefinitionRegistry(ids, stats.Value(),
-                                                   {.stableIdRegistryFingerprint = ids.Fingerprint(),
-                                                    .definitions = {{.id = ids.ResolveLeaderboard("active.key").Value(),
-                                                                     .authority = ProgressionAuthorityMode::LocalProduct,
-                                                                     .valueKind = ProgressionValueKind::SignedInteger64,
-                                                                     .range = {0, 100},
-                                                                     .ordering = LeaderboardOrdering::HighestFirst,
-                                                                     .sourceStat = stat,
-                                                                     .localizationKey = "leaderboard.active"}}});
-            REQUIRE(leaderboards.HasValue());
-            const auto presence =
-                BuildPresenceDefinitionRegistry(ids, {.stableIdRegistryFingerprint = ids.Fingerprint(),
-                                                      .definitions = {{.id = ids.ResolvePresenceStatus("active.key").Value(),
-                                                                       .detailPolicy = PresenceDetailPolicy::Forbidden,
-                                                                       .maximumDetailUtf8Bytes = 0,
-                                                                       .localizationKey = "presence.active"}}});
-            REQUIRE(presence.HasValue());
-            return {achievements.Value(), stats.Value(), leaderboards.Value(), presence.Value()};
-        }
-
-        /** @brief Reloads all semantic source documents before cooking, retaining exact semantic fingerprints. */
-        PlatformProviderManifestCookOutput Cook(const PlatformStableIdRegistry &ids, const PlatformProjectConfiguration &configuration) {
-            const auto original = Define(ids);
-            const auto achievementBytes = EncodePlatformAchievementDefinitions(original.achievements);
-            const auto statBytes = EncodePlatformStatDefinitions(original.stats);
-            const auto leaderboardBytes = EncodePlatformLeaderboardDefinitions(original.leaderboards);
-            const auto presenceBytes = EncodePlatformPresenceDefinitions(original.presence);
-            REQUIRE(achievementBytes.HasValue());
-            REQUIRE(statBytes.HasValue());
-            REQUIRE(leaderboardBytes.HasValue());
-            REQUIRE(presenceBytes.HasValue());
-            const auto achievements = DecodePlatformAchievementDefinitions(achievementBytes.Value(), ids);
-            const auto stats = DecodePlatformStatDefinitions(statBytes.Value(), ids);
-            REQUIRE(achievements.HasValue());
-            REQUIRE(stats.HasValue());
-            const auto leaderboards = DecodePlatformLeaderboardDefinitions(leaderboardBytes.Value(), ids, stats.Value());
-            const auto presence = DecodePlatformPresenceDefinitions(presenceBytes.Value(), ids);
-            REQUIRE(leaderboards.HasValue());
-            REQUIRE(presence.HasValue());
-            CHECK(achievements.Value().Fingerprint() == original.achievements.Fingerprint());
-            CHECK(stats.Value().Fingerprint() == original.stats.Fingerprint());
-            CHECK(leaderboards.Value().Fingerprint() == original.leaderboards.Fingerprint());
-            CHECK(presence.Value().Fingerprint() == original.presence.Fingerprint());
-            CHECK(EncodePlatformAchievementDefinitions(achievements.Value()).Value() == achievementBytes.Value());
-            CHECK(EncodePlatformStatDefinitions(stats.Value()).Value() == statBytes.Value());
-            CHECK(EncodePlatformLeaderboardDefinitions(leaderboards.Value()).Value() == leaderboardBytes.Value());
-            CHECK(EncodePlatformPresenceDefinitions(presence.Value()).Value() == presenceBytes.Value());
-            auto cooked = CookPlatformProviderManifest({.stableIds = ids,
-                                                        .achievements = achievements.Value(),
-                                                        .leaderboards = leaderboards.Value(),
-                                                        .stats = stats.Value(),
-                                                        .presence = presence.Value(),
-                                                        .configuration = configuration});
-            REQUIRE(cooked.HasValue());
-            return std::move(cooked).Value();
-        }
-    }  // namespace
+    using namespace Horo::Tests::PlatformAuthoring;
 
     TEST_CASE("Canonical root capture fingerprints exact bytes rather than authored fingerprint fields", "[platform-authoring]") {
         auto root = Root();
@@ -192,7 +40,7 @@ namespace Horo::Application {
         CHECK(bytes.find("platformServicesIdSalt") == std::string::npos);
     }
 
-    TEST_CASE("Project ledger codec rejects hostile documents before publication", "[platform-authoring]") {
+    TEST_CASE("Project ledger codec rejects hostile envelope documents before publication", "[platform-authoring]") {
         const auto candidate = Candidate();
         const auto registry = BuildPlatformStableIdRegistry(candidate).Value();
         const auto valid = Encode(registry);
@@ -218,6 +66,15 @@ namespace Horo::Application {
         SECTION("Second salt authority") {
             root["salt"] = FormatPlatformServicesIdSalt(candidate.salt);
         }
+        CheckError(DecodePlatformServicesLedger(root.dump(), candidate.projectId, candidate.salt), StableIdErrors::InvalidLedger);
+        CHECK(Encode(registry) == valid);
+    }
+
+    TEST_CASE("Project ledger codec rejects invalid entry documents before publication", "[platform-authoring]") {
+        const auto candidate = Candidate();
+        const auto registry = BuildPlatformStableIdRegistry(candidate).Value();
+        const auto valid = Encode(registry);
+        auto root = nlohmann::json::parse(valid);
         SECTION("Missing entry field") {
             root["entries"][0].erase("state");
         }
@@ -312,139 +169,6 @@ namespace Horo::Application {
         CHECK(Encode(decoded.Value()) == bytes);
     }
 
-    TEST_CASE("Canonical project capture resolves portable policy for every host profile", "[platform-authoring]") {
-        const auto root = Root();
-        const auto capture = DecodeProjectSourceDocument(root.dump());
-        REQUIRE(capture.HasValue());
-        const auto salt = ResolveProjectPlatformServicesSalt(capture.Value());
-        REQUIRE(salt.HasValue());
-        CHECK(salt.Value() == Candidate().salt);
-        for (const auto profile : {PlatformServicesHostProfile::InteractiveDevelopment, PlatformServicesHostProfile::HeadlessServer,
-                                   PlatformServicesHostProfile::Cook, PlatformServicesHostProfile::Certification}) {
-            const auto configuration = ResolveProjectPlatformServicesConfiguration(capture.Value(), profile, {}, {});
-            REQUIRE(configuration.HasValue());
-            CHECK(configuration.Value().UsesNullProvider());
-            CHECK(configuration.Value().Profile() == profile);
-            CHECK(configuration.Value().ProjectId() == capture.Value().metadata.projectId);
-            CHECK(nlohmann::json::parse(EncodePolicy(configuration.Value())) == root["settings"]["platformServices"]);
-        }
-    }
-
-    TEST_CASE("Root salt absence and malformed authority never trigger read-only repair", "[platform-authoring]") {
-        auto root = Root();
-        SECTION("Missing salt") {
-            root.erase("platformServicesIdSalt");
-        }
-        SECTION("Zero salt") {
-            root["platformServicesIdSalt"] = "psid1:00000000000000000000000000000000";
-        }
-        SECTION("Numeric salt") {
-            root["platformServicesIdSalt"] = 1;
-        }
-        SECTION("Wrong type") {
-            root["platformServicesIdSalt"] = nlohmann::json::object();
-        }
-        SECTION("Noncanonical salt") {
-            root["platformServicesIdSalt"] = "psid1:0102030405060708090A0b0c0d0e0f10";
-        }
-        const auto original = root.dump();
-        const auto captured = DecodeProjectSourceDocument(original);
-        REQUIRE(captured.HasValue());
-        const auto diagnostic = ResolveProjectPlatformServicesSalt(captured.Value());
-        CheckError(diagnostic, StableIdErrors::InvalidSalt);
-        REQUIRE_FALSE(diagnostic.ErrorValue().diagnostics.empty());
-        CHECK(diagnostic.ErrorValue().diagnostics.front().location.source == ".horo/project.json");
-        CHECK(diagnostic.ErrorValue().diagnostics.front().path == "platformServicesIdSalt");
-        CheckError(ResolveProjectPlatformServicesConfiguration(captured.Value(), PlatformServicesHostProfile::Cook, {}, {}),
-                   StableIdErrors::InvalidSalt);
-        CHECK(root.dump() == original);
-    }
-
-    TEST_CASE("All host profiles reject the same malformed portable project policy", "[platform-authoring]") {
-        auto root = Root();
-        auto &policy = root["settings"]["platformServices"];
-        const ErrorCodeDescriptor *expected = &PlatformProjectConfigurationErrors::InvalidConfiguration;
-        SECTION("Missing policy") {
-            root["settings"].erase("platformServices");
-        }
-        SECTION("Unsupported schema") {
-            policy["schemaVersion"] = 2;
-            expected = &PlatformProjectConfigurationErrors::UnsupportedVersion;
-        }
-        SECTION("Deprecated field") {
-            policy["steamAppId"] = 480;
-        }
-        SECTION("Host profile override") {
-            policy["profile"] = "certification";
-        }
-        SECTION("Wrong service count") {
-            policy["services"] = {0, 0};
-        }
-        SECTION("Unknown service requirement") {
-            policy["services"][0] = 3;
-        }
-        SECTION("Fractional requirement") {
-            policy["services"][0] = 1.0;
-        }
-        SECTION("Negative requirement") {
-            policy["services"][0] = -1;
-        }
-        SECTION("Provider fallback request") {
-            policy["provider"]["fallback"] = "null";
-        }
-        SECTION("Unknown provider selection") {
-            policy["provider"]["mode"] = "auto";
-        }
-        const auto captured = DecodeProjectSourceDocument(root.dump());
-        REQUIRE(captured.HasValue());
-        for (const auto profile : {PlatformServicesHostProfile::InteractiveDevelopment, PlatformServicesHostProfile::HeadlessServer,
-                                   PlatformServicesHostProfile::Cook, PlatformServicesHostProfile::Certification})
-            CheckError(ResolveProjectPlatformServicesConfiguration(captured.Value(), profile, {}, {}), *expected);
-    }
-
-    TEST_CASE("Project policy codec honors the common validator's explicit identity limits", "[platform-authoring]") {
-        auto root = Root();
-        const std::string key = "platform." + std::string(192, 'a');
-        root["settings"]["platformServices"]["provider"] = {{"mode", "exact"}, {"key", key}};
-        const auto captured = DecodeProjectSourceDocument(root.dump());
-        REQUIRE(captured.HasValue());
-        PlatformProviderModuleContribution contribution{.module = ModuleId{"horo.platform.test"},
-                                                        .providerKey = key,
-                                                        .provider = PlatformProviderId{41},
-                                                        .interfaceVersion = {PlatformServicesBackendInterfaceMajor,
-                                                                             PlatformServicesBackendInterfaceMinor},
-                                                        .allowedProfiles = PlatformServicesHostProfileMask::Cook};
-        contribution.supportedServices.fill(true);
-        const std::array contributions{contribution};
-        const std::array trusted{contribution.module};
-        const auto policy = ResolveProjectPlatformServicesConfiguration(captured.Value(), PlatformServicesHostProfile::Cook, contributions,
-                                                                        trusted, {.maximumProviderKeyBytes = 256});
-        REQUIRE(policy.HasValue());
-        CHECK(policy.Value().SelectedProviderKey() == key);
-        CheckError(ResolveProjectPlatformServicesConfiguration(captured.Value(), PlatformServicesHostProfile::Cook, contributions, trusted),
-                   PlatformProjectConfigurationErrors::InvalidConfiguration);
-    }
-
-    TEST_CASE("Project policy preserves exact provider and required-capability failures", "[platform-authoring]") {
-        auto root = Root();
-        root["settings"]["platformServices"]["services"][0] = 2;
-        auto captured = DecodeProjectSourceDocument(root.dump());
-        REQUIRE(captured.HasValue());
-        CheckError(ResolveProjectPlatformServicesConfiguration(captured.Value(), PlatformServicesHostProfile::Cook, {}, {}),
-                   PlatformProjectConfigurationErrors::RequiredCapabilityUnsupported);
-        root["settings"]["platformServices"]["provider"] = {{"mode", "exact"}, {"key", "platform.missing"}};
-        captured = DecodeProjectSourceDocument(root.dump());
-        REQUIRE(captured.HasValue());
-        CheckError(ResolveProjectPlatformServicesConfiguration(captured.Value(), PlatformServicesHostProfile::Cook, {}, {}),
-                   PlatformProjectConfigurationErrors::ProviderNotFound);
-        CheckError(ResolveProjectPlatformServicesConfiguration(captured.Value(), PlatformServicesHostProfile::Cook, {}, {},
-                                                               {.maximumProviderKeyBytes = 0}),
-                   PlatformProjectConfigurationErrors::CapacityExceeded);
-        auto duplicate = root.dump();
-        duplicate.insert(duplicate.find("\"platformServicesIdSalt\""), "\"platformServicesIdSalt\":\"bad\",");
-        REQUIRE(DecodeProjectSourceDocument(duplicate).HasError());
-    }
-
     TEST_CASE("Incremental ledger edits converge with clean source reload through the real semantic cook", "[platform-authoring]") {
         auto candidate = Candidate();
         const auto originalIds = BuildPlatformStableIdRegistry(candidate);
@@ -473,7 +197,7 @@ namespace Horo::Application {
         CheckError(cleanIds.Value().ResolveAchievement("retired.key"), StableIdErrors::Tombstoned);
     }
 
-    TEST_CASE("Definition documents reject coercion and preserve typed semantic failures", "[platform-authoring]") {
+    TEST_CASE("Definition documents reject coercion and unsafe syntax", "[platform-authoring]") {
         const auto ids = BuildPlatformStableIdRegistry(Candidate()).Value();
         const auto definitions = Define(ids);
         auto root = nlohmann::json::parse(EncodePlatformStatDefinitions(definitions.stats).Value());
@@ -525,6 +249,12 @@ namespace Horo::Application {
             root["definitions"][0]["range"]["minimum"] = nlohmann::json::parse("[[[[[[[[[[0]]]]]]]]]]");
             CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::InvalidDefinition);
         }
+    }
+
+    TEST_CASE("Definition documents preserve typed identity version and limit failures", "[platform-authoring]") {
+        const auto ids = BuildPlatformStableIdRegistry(Candidate()).Value();
+        const auto definitions = Define(ids);
+        auto root = nlohmann::json::parse(EncodePlatformStatDefinitions(definitions.stats).Value());
         SECTION("Capacity limits retain typed failure") {
             CheckError(DecodePlatformStatDefinitions(root.dump(), ids, {.maximumDefinitions = 0}),
                        PlatformDefinitionErrors::CapacityExceeded);

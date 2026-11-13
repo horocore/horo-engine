@@ -473,6 +473,11 @@ namespace Horo::Editor {
         Shutdown();
     }
 
+    /** @copydoc ProjectOpenService::PlatformPolicy */
+    const Application::PlatformServicesProjectValidationContext &ProjectOpenService::PlatformPolicy() const noexcept {
+        return state_->platformPolicy;
+    }
+
     /** @copydoc ProjectOpenService::Start */
     Result<ProjectOpenOperationHandle> ProjectOpenService::Start(ProjectOpenRequest request) {
         if (state_->shutdown || (state_->operation.has_value() && state_->operation->snapshot.outcome == ProjectOpenOutcome::Running))

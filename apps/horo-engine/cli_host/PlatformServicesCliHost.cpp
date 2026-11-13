@@ -104,23 +104,12 @@ namespace Horo::Application::Internal {
                     return Return::Failure(std::move(source).ErrorValue());
                 if (!source.Value().Configuration().UsesNullProvider())
                     return Return::Failure(MakeError(PlatformServices::PlatformProviderManifestCookErrors::MissingMapping));
-                const auto &root = source.Value().ProjectRoot();
-                const auto destination = root / PlatformServicesProjectCookPath;
-                auto lockPath = Assets::AssetSourcePublicationLockPath(root, destination);
-                if (lockPath.HasError())
-                    return Return::Failure(std::move(lockPath).ErrorValue());
-                auto lease = files_->TryAcquireExclusive(lockPath.Value(), "platform-services-cli-cook");
+                auto lease = AcquireCookLease(source.Value(), *files_);
                 if (lease.HasError())
                     return Return::Failure(std::move(lease).ErrorValue());
-                Assets::AssetSourceIdentity expected;
-                {
-                    auto previous =
-                        Assets::CaptureAssetSource(root, destination, PlatformServices::PlatformProviderManifestCookGenerationMaximumBytes,
-                                                   execution.Cancellation());
-                    if (previous.HasError())
-                        return Return::Failure(std::move(previous).ErrorValue());
-                    expected = previous.Value().identity;
-                }
+                auto expected = CaptureCookIdentity(source.Value(), execution.Cancellation());
+                if (expected.HasError())
+                    return Return::Failure(std::move(expected).ErrorValue());
                 auto result = PreparedResult(source.Value());
                 auto published = CookAndPublishPlatformServicesProject({.sources = source.Value(),
                                                                         .validateMappingRevision =
@@ -128,7 +117,7 @@ namespace Horo::Application::Internal {
                     return execution.IsStopRequested() ? Result<void>::Failure(MakeError(Cli::CliErrors::ExecutionCancelled))
                                                        : Result<void>::Success();
                 }},
-                                                                       expected, lease.Value(), *files_, execution.Cancellation());
+                                                                       expected.Value(), lease.Value(), *files_, execution.Cancellation());
                 if (published.HasError())
                     return Return::Failure(std::move(published).ErrorValue());
                 auto receipt = std::move(published).Value();
@@ -143,6 +132,28 @@ namespace Horo::Application::Internal {
             }
 
         private:
+            /** @brief Acquires the exact cook destination lease, retained explicitly by Execute through publication. */
+            static Result<ExclusiveFileLock> AcquireCookLease(const PlatformServicesProjectSourceSnapshot &source,
+                                                              DurableFileSystem &files) {
+                const auto &root = source.ProjectRoot();
+                auto path = Assets::AssetSourcePublicationLockPath(root, root / PlatformServicesProjectCookPath);
+                if (path.HasError())
+                    return Result<ExclusiveFileLock>::Failure(std::move(path).ErrorValue());
+                return files.TryAcquireExclusive(path.Value(), "platform-services-cli-cook");
+            }
+
+            /** @brief Captures the exact previous pair under its lease and releases the temporary bytes before cooking. */
+            static Result<Assets::AssetSourceIdentity> CaptureCookIdentity(const PlatformServicesProjectSourceSnapshot &source,
+                                                                           const CancellationToken cancellation) {
+                const auto &root = source.ProjectRoot();
+                auto previous =
+                    Assets::CaptureAssetSource(root, root / PlatformServicesProjectCookPath,
+                                               PlatformServices::PlatformProviderManifestCookGenerationMaximumBytes, cancellation);
+                if (previous.HasError())
+                    return Result<Assets::AssetSourceIdentity>::Failure(std::move(previous).ErrorValue());
+                return Result<Assets::AssetSourceIdentity>::Success(previous.Value().identity);
+            }
+
             /** @brief Allocates owned protocol and fallback-error storage before irreversible publication. */
             static Cli::CliCommandResult PreparedResult(const PlatformServicesProjectSourceSnapshot &source) {
                 static_assert(std::is_nothrow_move_assignable_v<Error>);

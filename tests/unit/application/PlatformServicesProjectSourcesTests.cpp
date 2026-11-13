@@ -1,3 +1,4 @@
+#include "../../support/project/PlatformServicesAuthoringFixture.h"
 #include "../../support/project/PlatformServicesMigrationFixture.h"
 #include "Horo/Application/PlatformServicesProjectCook.h"
 #include "Horo/Application/PlatformServicesProjectSources.h"
@@ -34,40 +35,14 @@ namespace Horo::Tests::PlatformMigration {
             }
             const auto ids = BuildPlatformStableIdRegistryReplacement(previous.Value(), previous.Value().Fingerprint(), candidate);
             REQUIRE(ids.HasValue());
-            const auto stat = ids.Value().ResolveStat("active.key").Value();
-            const auto stats = BuildStatDefinitionRegistry(ids.Value(), {.stableIdRegistryFingerprint = ids.Value().Fingerprint(),
-                                                                         .definitions = {{.id = stat,
-                                                                                          .range = {0, 100},
-                                                                                          .mutation = StatMutationPolicy::SetMaximum,
-                                                                                          .localizationKey = "stat.active"}}});
-            REQUIRE(stats.HasValue());
-            const auto achievements =
-                BuildAchievementDefinitionRegistry(ids.Value(),
-                                                   {.stableIdRegistryFingerprint = ids.Value().Fingerprint(),
-                                                    .definitions = {{.id = ids.Value().ResolveAchievement("active.key").Value(),
-                                                                     .presentation = {.titleLocalizationKey = "achievement.active.title",
-                                                                                      .descriptionLocalizationKey =
-                                                                                          "achievement.active.description"}}}});
-            REQUIRE(achievements.HasValue());
-            const auto leaderboards =
-                BuildLeaderboardDefinitionRegistry(ids.Value(), stats.Value(),
-                                                   {.stableIdRegistryFingerprint = ids.Value().Fingerprint(),
-                                                    .definitions = {{.id = ids.Value().ResolveLeaderboard("active.key").Value(),
-                                                                     .range = {0, 100},
-                                                                     .sourceStat = stat,
-                                                                     .localizationKey = "leaderboard.active"}}});
-            REQUIRE(leaderboards.HasValue());
-            const auto presence =
-                BuildPresenceDefinitionRegistry(ids.Value(),
-                                                {.stableIdRegistryFingerprint = ids.Value().Fingerprint(),
-                                                 .definitions = {{.id = ids.Value().ResolvePresenceStatus("active.key").Value(),
-                                                                  .localizationKey = "presence.active"}}});
-            REQUIRE(presence.HasValue());
+            const auto definitions = Tests::PlatformAuthoring::Define(ids.Value());
             project.Write(PlatformServicesDocumentPaths::Ledger, EncodePlatformServicesLedger(ids.Value()).Value());
-            project.Write(PlatformServicesDocumentPaths::Achievements, EncodePlatformAchievementDefinitions(achievements.Value()).Value());
-            project.Write(PlatformServicesDocumentPaths::Stats, EncodePlatformStatDefinitions(stats.Value()).Value());
-            project.Write(PlatformServicesDocumentPaths::Leaderboards, EncodePlatformLeaderboardDefinitions(leaderboards.Value()).Value());
-            project.Write(PlatformServicesDocumentPaths::Presence, EncodePlatformPresenceDefinitions(presence.Value()).Value());
+            project.Write(PlatformServicesDocumentPaths::Achievements,
+                          EncodePlatformAchievementDefinitions(definitions.achievements).Value());
+            project.Write(PlatformServicesDocumentPaths::Stats, EncodePlatformStatDefinitions(definitions.stats).Value());
+            project.Write(PlatformServicesDocumentPaths::Leaderboards,
+                          EncodePlatformLeaderboardDefinitions(definitions.leaderboards).Value());
+            project.Write(PlatformServicesDocumentPaths::Presence, EncodePlatformPresenceDefinitions(definitions.presence).Value());
         }
 
         /** @brief Cooks the actual captured immutable generation, not reconstructed fixture models. */

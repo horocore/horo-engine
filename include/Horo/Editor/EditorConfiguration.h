@@ -4,10 +4,25 @@
 #include "Horo/Foundation/Configuration.h"
 #include "Horo/Foundation/ModuleHost.h"
 
+#include <functional>
 #include <string_view>
 
 namespace Horo::Editor {
     class EditorSettingsService;
+
+    /** @brief Explicit source-owned persistence for the shared descriptor editing session.
+     * @details Tooling-only callbacks run synchronously on the owner thread without reentering configuration writers.
+     * They capture revocable owner borrows, not a project lifetime. Persist receives a fully validated candidate while
+     * ConfigurationService::Prepare reserves the writer gate. Failure leaves active configuration unchanged; a host
+     * encountering irreversible filesystem publication must retain its receipt and require reconciliation before retry.
+     */
+    struct ConfigurationSettingsPersistence final {
+        ConfigurationSource source{ConfigurationSource::Project};
+        std::vector<SettingKey> keys; /**< Required finite exact owner keys, taken from its inert contribution rather than UI wiring. */
+        std::function<Result<void>()> checkAvailable; /**< Required revocation check before every edit, preview and apply. */
+        std::function<Result<void>(const ConfigurationSnapshot &)> validate; /**< Required typed domain/capability validation. */
+        std::function<Result<void>(const ConfigurationSnapshot &)> persist;  /**< Required bounded durable source transaction. */
+    };
 
     /** @brief One descriptor-driven settings field with safe provenance and typed inline failure. */
     struct ConfigurationSettingField {
@@ -26,6 +41,13 @@ namespace Horo::Editor {
         explicit ConfigurationSettingsSession(ConfigurationService &configuration);
         /** @brief Captures the editor's durable settings operation. @param settings Borrowed owner outliving this modal session. */
         explicit ConfigurationSettingsSession(EditorSettingsService &settings);
+        /** @brief Captures an explicit source transaction without introducing another draft model.
+         * @param configuration Borrowed authority outliving this session and every synchronous callback.
+         * @param persistence Complete source policy, revocable availability, validation and persistence callbacks.
+         * @details Missing callbacks fail closed. Fields admit edits only when their descriptor allows the exact source.
+         * Cancel never invokes persistence; Apply reserves one validated configuration generation across persistence.
+         */
+        ConfigurationSettingsSession(ConfigurationService &configuration, ConfigurationSettingsPersistence persistence);
         /** @brief Returns stable field order until Reload or Cancel. @return Session-owned fields and safe provenance. */
         [[nodiscard]] std::span<const ConfigurationSettingField> Fields() const noexcept;
         /** @brief Returns the active draft. @return Borrowed source transaction with captured base revision. */
@@ -51,8 +73,14 @@ namespace Horo::Editor {
         void Cancel();
 
     private:
+        /** @brief Checks source-owner revocation without touching durable state. @return Original host error or success. */
+        [[nodiscard]] Result<void> CheckAvailable() const;
+        /** @brief Validates source semantics after Foundation resolution. @param snapshot Complete preview.
+         * @return Original typed domain error or success. */
+        [[nodiscard]] Result<void> ValidateSource(const ConfigurationSnapshot &snapshot) const;
         ConfigurationService &configuration_;
         EditorSettingsService *settings_ = nullptr;
+        std::optional<ConfigurationSettingsPersistence> persistence_;
         ConfigurationDraft draft_;
         std::vector<ConfigurationSettingField> fields_;
         std::optional<ConfigurationSnapshot> preview_;

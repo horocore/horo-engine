@@ -1,5 +1,6 @@
 #include "EditorWorkspaceScreen.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "PlatformProjectSettingsOwner.h"
 #include "editor/screens/NavigationErrors.h"
 
 namespace Horo::Editor::WorkspaceScreenDetail {
@@ -127,6 +128,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::OnLeave */
     void EditorWorkspaceScreen::OnLeave() {
+        if (platformSettings_)
+            platformSettings_->Close();
+        platformSettings_.reset();
+        platformSources_.reset();
         RevokeSimulatorArtifacts();
         DetachXrInput();
         workspaceControllerLifetime_.reset();

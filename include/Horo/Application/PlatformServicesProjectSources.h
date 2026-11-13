@@ -10,9 +10,13 @@
 
 #include <array>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <vector>
 
 namespace Horo::Application {
+    struct PlatformServicesProjectPolicyPublication;
+
     /** @brief Immutable-for-an-operation host policy inputs; source text never chooses these values. */
     struct PlatformServicesProjectValidationContext final {
         PlatformServices::PlatformServicesHostProfile profile{PlatformServices::PlatformServicesHostProfile::InteractiveDevelopment};
@@ -82,6 +86,9 @@ namespace Horo::Application {
             const std::filesystem::path &, const ProjectCompatibilitySnapshot &, const PlatformServicesProjectValidationContext &,
             CancellationToken);
         friend Result<void> RevalidatePlatformServicesProjectSources(const PlatformServicesProjectSourceSnapshot &, CancellationToken);
+        friend Result<PlatformServicesProjectPolicyPublication> PublishPlatformServicesProjectPolicy(
+            const PlatformServicesProjectSourceSnapshot &, const PlatformServices::PlatformProjectConfiguration &,
+            const ExclusiveFileLock &, DurableFileSystem &, std::function<Result<void>()>, CancellationToken);
         /** @brief Owns already validated models and exact source witnesses; no source buffer or ambient authority is retained. */
         PlatformServicesProjectSourceSnapshot(std::filesystem::path root, std::array<Assets::AssetSourceIdentity, 6> sources,
                                               PlatformServices::PlatformStableIdRegistry ids,
@@ -100,6 +107,31 @@ namespace Horo::Application {
         PlatformServices::PresenceDefinitionRegistry presence_;
         PlatformServices::PlatformProjectConfiguration configuration_;
     };
+
+    /** @brief Complete accepted source generation and tracked root-policy publication, including durability uncertainty. */
+    struct PlatformServicesProjectPolicyPublication final {
+        std::shared_ptr<const PlatformServicesProjectSourceSnapshot> sources;
+        Assets::AssetSourcePublication publication;
+    };
+
+    /** @brief Publishes one typed portable policy edit without changing identity or service definitions.
+     * @param sources Complete accepted six-source generation from this exact opening.
+     * @param configuration Replacement validated against this host's actual provider/trust context, with the same project and profile.
+     * @param lease Exact native asset-source publication lease for the existing `.horo/project.json`.
+     * @param files Borrowed durable filesystem authority retained through return.
+     * @param checkAvailable Required bounded nonreentrant host revocation check; never inferred from retained CPU models.
+     * @param cancellation Cooperative operation/shutdown cancellation.
+     * @return Preallocated complete source generation and durable/reconciliation receipt, or typed precommit failure.
+     * @pre The caller retains the shared project mutation lease and excludes noncooperating namespace writers.
+     * @details All six source identities and host availability are checked again after staging immediately before replacement.
+     * Identity, salt and unrelated root values are preserved. Live operations keep their old captures; ProjectReopen policy
+     * does not activate providers. Failure before replacement preserves the old root; reconciliation retains the new root.
+     * Every next-generation model and result owner is prepared before the irreversible boundary.
+     */
+    [[nodiscard]] Result<PlatformServicesProjectPolicyPublication> PublishPlatformServicesProjectPolicy(
+        const PlatformServicesProjectSourceSnapshot &sources, const PlatformServices::PlatformProjectConfiguration &configuration,
+        const ExclusiveFileLock &lease, DurableFileSystem &files, std::function<Result<void>()> checkAvailable,
+        CancellationToken cancellation = {});
 
     /**
      * @brief Captures and validates root, ledger and four service documents through the shared typed validators.

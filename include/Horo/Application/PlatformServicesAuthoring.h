@@ -106,4 +106,14 @@ namespace Horo::Application {
      */
     [[nodiscard]] Result<std::string> EncodeProjectPlatformServicesConfiguration(
         const PlatformServices::PlatformProjectConfiguration &configuration);
+
+    /** @brief Replaces only portable Platform Services policy in an existing strictly admitted project source.
+     * @param projectSource Complete existing root bytes; salt and policy must already be present and valid.
+     * @param configuration Complete validated replacement belonging to the exact existing project identity.
+     * @return Bounded canonical root preserving salt, identity and every unrelated authored value, or typed failure.
+     * @details This pure preparation never repairs legacy/partial sources, changes identity, writes files or activates a provider.
+     * The caller must retain source/mutation authority and publish against the exact accepted byte identity.
+     */
+    [[nodiscard]] Result<std::string> PreparePlatformServicesProjectPolicyEdit(
+        std::string_view projectSource, const PlatformServices::PlatformProjectConfiguration &configuration);
 }  // namespace Horo::Application

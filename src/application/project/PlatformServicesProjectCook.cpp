@@ -1,10 +1,26 @@
 #include "Horo/Application/PlatformServicesProjectCook.h"
 
+#include "PlatformServicesPublicationFiles.h"
+
 #include <type_traits>
 #include <utility>
 
 namespace Horo::Application {
     namespace {
+        /** @brief Prepares and synchronizes the contained derived-directory chain before staging a paired output. */
+        Result<void> PrepareDestination(DurableFileSystem &files, const std::filesystem::path &root,
+                                        const std::filesystem::path &destination) {
+            auto created = files.CreateDirectoryPath(destination.parent_path(), DirectoryCreationMode::Parents);
+            if (created.HasError())
+                return Result<void>::Failure(std::move(created).ErrorValue());
+            for (auto directory = destination.parent_path(); directory != root; directory = directory.parent_path()) {
+                auto synced = files.SyncDirectory(directory);
+                if (synced.HasError())
+                    return synced;
+            }
+            return files.SyncDirectory(root);
+        }
+
         /** @brief Rechecks actual source, private mapping and lifecycle ownership without selecting or activating a provider. */
         Result<void> CheckCurrent(const PlatformServicesProjectCookRequest &request, const CancellationToken cancellation) {
             if (cancellation.IsCancellationRequested())
@@ -24,62 +40,6 @@ namespace Horo::Application {
             return Result<void>::Success();
         }
 
-        /** @brief Adds the domain freshness fence to the existing tracked single-file publication; all authority remains injected. */
-        class CookCommitFiles final : public DurableFileSystem {
-        public:
-            CookCommitFiles(DurableFileSystem &files, const PlatformServicesProjectCookRequest &request, CancellationToken cancellation)
-                : files_(files), request_(request), cancellation_(std::move(cancellation)) {}
-
-            Result<bool> CreateDirectoryPath(const std::filesystem::path &path, DirectoryCreationMode mode) override {
-                return files_.CreateDirectoryPath(path, mode);
-            }
-
-            Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
-                return files_.TryAcquireExclusive(path, owner);
-            }
-
-            Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
-                return files_.AvailableBytes(path);
-            }
-
-            Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
-                return files_.WriteDurable(path, bytes);
-            }
-
-            Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
-                                             std::filesystem::perms permissions) override {
-                return files_.WritePrivateDurable(path, bytes, created, permissions);
-            }
-
-            Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
-                return files_.CopyDurable(source, destination);
-            }
-
-            Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
-                return files_.AtomicReplace(prepared, destination);
-            }
-
-            Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
-                                              AtomicFileReplacementReceipt &receipt) override {
-                auto current = CheckCurrent(request_, cancellation_);
-                if (current.HasError())
-                    return current;
-                return files_.AtomicReplaceTracked(prepared, destination, receipt);
-            }
-
-            Result<void> RemoveDurable(const std::filesystem::path &path) override {
-                return files_.RemoveDurable(path);
-            }
-
-            Result<void> SyncDirectory(const std::filesystem::path &path) override {
-                return files_.SyncDirectory(path);
-            }
-
-        private:
-            DurableFileSystem &files_;
-            const PlatformServicesProjectCookRequest &request_;
-            CancellationToken cancellation_;
-        };
     }  // namespace
 
     /** @copydoc CookAndPublishPlatformServicesProject */
@@ -115,18 +75,11 @@ namespace Horo::Application {
         auto bytes = PlatformServices::EncodePlatformProviderManifestCookGeneration(cooked.Value());
         if (bytes.HasError())
             return Return::Failure(std::move(bytes).ErrorValue());
-        auto created = files.CreateDirectoryPath(destination.parent_path(), DirectoryCreationMode::Parents);
-        if (created.HasError())
-            return Return::Failure(std::move(created).ErrorValue());
-        for (auto directory = destination.parent_path(); directory != sources.ProjectRoot(); directory = directory.parent_path()) {
-            auto synced = files.SyncDirectory(directory);
-            if (synced.HasError())
-                return Return::Failure(std::move(synced).ErrorValue());
-        }
-        auto syncedRoot = files.SyncDirectory(sources.ProjectRoot());
-        if (syncedRoot.HasError())
-            return Return::Failure(std::move(syncedRoot).ErrorValue());
-        CookCommitFiles fenced{files, request, cancellation};
+        if (auto prepared = PrepareDestination(files, sources.ProjectRoot(), destination); prepared.HasError())
+            return Return::Failure(std::move(prepared).ErrorValue());
+        PlatformServicesDetail::PublicationFiles fenced{files, [&request, cancellation] {
+            return CheckCurrent(request, cancellation);
+        }};
         auto published =
             Assets::PublishAssetSource(sources.ProjectRoot(), destination, expected, bytes.Value(), lease, fenced, cancellation);
         if (published.HasError())

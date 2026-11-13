@@ -175,160 +175,229 @@ namespace {
         Require(failure.front().at("type") == "result", "JSONL admission failure lacks its summary");
     }
 
-    /** @brief Exercises the actual CLI registration and shared validation with on-disk sources, not an adapter-only fake. */
-    void PlatformServicesCases(ProcessFixture &process) {
+    namespace PlatformProtocol {
         using namespace Horo;
         using namespace Horo::Application;
         using namespace Horo::PlatformServices;
-        TemporaryDirectory directory;
-        const auto root = std::filesystem::canonical(directory.Path());
-        Envelope(Json::parse(process.Run({"platform-services", "validate", "--output", "json"}, 2)));
-        Envelope(Json::parse(process.Run({"platform-services", "validate", "--project", "relative-project", "--output", "json"}, 2)));
-        const auto *release = BuiltInReleaseCompatibilityRegistry().Find(CurrentEngineReleaseVersion());
-        Require(release != nullptr, "current release contract is missing");
-        Json metadata{{"horoVersion", FormatHoroVersion(release->release.value)},
-                      {"persistentContract", FormatPersistentContractHash(release->persistentContract)},
-                      {"projectId", "platform-cli-contract"},
-                      {"name", "Platform CLI"},
-                      {"projectVersion", "1.0.0"},
-                      {"createdAt", "2026-11-11T00:00:00Z"},
-                      {"settings", {{"renderBackend", "null"}}}};
-        PlatformServicesIdSalt salt;
-        salt.bytes.front() = std::byte{1};
-        auto initial = PreparePlatformServicesInitialDocuments(metadata.dump(), salt);
-        Require(initial.HasValue(), "initial platform documents failed");
-        const auto writeAt = [&](const std::filesystem::path &base, const std::string_view relative, const std::string_view text) {
-            const auto path = base / relative;
-            std::filesystem::create_directories(path.parent_path());
-            std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-            stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-            stream.close();
-            Require(!stream.fail(), "platform fixture write failed");
+
+        /** @brief Owns real project bytes and observed publication receipts across production-process scenarios. */
+        struct Fixture final {
+            explicit Fixture(ProcessFixture &value) : process(value), root(std::filesystem::canonical(directory.Path())), docs(Initial()) {
+                Materialize(root);
+            }
+
+            ProcessFixture &process;
+            TemporaryDirectory directory;
+            std::filesystem::path root;
+            PlatformServicesInitialDocuments docs;
+            Json valid;
+            Json firstCook;
+            Assets::AssetSourceCapture firstPair;
+            Assets::AssetSourceCapture incrementalPair;
+
+            /** @brief Constructs explicit current-version authority without exercising the command under test. */
+            static PlatformServicesInitialDocuments Initial() {
+                const auto *release = BuiltInReleaseCompatibilityRegistry().Find(CurrentEngineReleaseVersion());
+                Require(release != nullptr, "current release contract is missing");
+                Json metadata{{"horoVersion", FormatHoroVersion(release->release.value)},
+                              {"persistentContract", FormatPersistentContractHash(release->persistentContract)},
+                              {"projectId", "platform-cli-contract"},
+                              {"name", "Platform CLI"},
+                              {"projectVersion", "1.0.0"},
+                              {"createdAt", "2026-11-11T00:00:00Z"},
+                              {"settings", {{"renderBackend", "null"}}}};
+                PlatformServicesIdSalt salt;
+                salt.bytes.front() = std::byte{1};
+                auto initial = PreparePlatformServicesInitialDocuments(metadata.dump(), salt);
+                Require(initial.HasValue(), "initial platform documents failed");
+                return std::move(initial).Value();
+            }
+
+            /** @brief Writes fixture input only, preserving literal Unicode project paths. */
+            static void WriteAt(const std::filesystem::path &base, std::string_view relative, std::string_view text) {
+                const auto path = base / relative;
+                std::filesystem::create_directories(path.parent_path());
+                std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+                stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+                stream.close();
+                Require(!stream.fail(), "platform fixture write failed");
+            }
+
+            /** @brief Replaces one authored fixture source in the primary root. */
+            void Write(std::string_view path, std::string_view text) {
+                WriteAt(root, path, text);
+            }
+
+            /** @brief Materializes all six initial documents in an independent clean root. */
+            void Materialize(const std::filesystem::path &base) const {
+                WriteAt(base, ".horo/project.json", docs.projectSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Ledger, docs.ledgerSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Achievements, docs.achievementSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Stats, docs.statSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Leaderboards, docs.leaderboardSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Presence, docs.presenceSource);
+            }
+
+            /** @brief Invokes the actual read-only CLI protocol against the primary project. */
+            Json Validate(int exit) {
+                auto result =
+                    Json::parse(process.Run({"platform-services", "validate", "--project", Utf8Path(root), "--output", "json"}, exit));
+                Envelope(result);
+                return result;
+            }
+
+            /** @brief Invokes actual command registration, authority admission, cooking and publication. */
+            Json Cook(const std::filesystem::path &base, int exit) {
+                auto result =
+                    Json::parse(process.Run({"platform-services", "cook", "--project", Utf8Path(base), "--output", "json"}, exit));
+                Envelope(result);
+                return result;
+            }
+
+            /** @brief Reads and validates the complete committed pair without consulting staging files. */
+            static Assets::AssetSourceCapture Pair(const std::filesystem::path &base) {
+                auto pair = Assets::CaptureAssetSource(base, base / PlatformServicesProjectCookPath,
+                                                       PlatformProviderManifestCookGenerationMaximumBytes);
+                Require(pair.HasValue() && pair.Value().identity.exists, "committed paired output is missing");
+                Require(DecodePlatformProviderManifestCookGeneration(pair.Value().bytes, pair.Value().identity.digest).HasValue(),
+                        "published pair is malformed");
+                return std::move(pair).Value();
+            }
         };
-        const auto write = [&](const std::string_view relative, const std::string_view text) {
-            writeAt(root, relative, text);
-        };
-        const auto &docs = initial.Value();
-        const auto materialize = [&](const std::filesystem::path &base) {
-            writeAt(base, ".horo/project.json", docs.projectSource);
-            writeAt(base, PlatformServicesDocumentPaths::Ledger, docs.ledgerSource);
-            writeAt(base, PlatformServicesDocumentPaths::Achievements, docs.achievementSource);
-            writeAt(base, PlatformServicesDocumentPaths::Stats, docs.statSource);
-            writeAt(base, PlatformServicesDocumentPaths::Leaderboards, docs.leaderboardSource);
-            writeAt(base, PlatformServicesDocumentPaths::Presence, docs.presenceSource);
-        };
-        materialize(root);
-        const auto admission = InspectProjectCompatibility(root);
-        const auto expected =
-            CapturePlatformServicesProjectSources(root, admission, {.profile = PlatformServicesHostProfile::HeadlessServer});
-        Require(expected.HasValue(), "shared headless validation failed");
-        const auto run = [&](const int exit) {
-            auto result =
-                Json::parse(process.Run({"platform-services", "validate", "--project", Utf8Path(root), "--output", "json"}, exit));
-            Envelope(result);
-            return result;
-        };
-        const auto valid = run(0);
-        Require(valid.at("outputSchema").at("id") == "horo.platform-services.validation", "platform command was not registered");
-        Require(valid.at("result").at("validated") == true, "platform validation was not executed");
-        Require(valid.at("result").at("sourceFingerprint") == FormatSha256(expected.Value().SourceFingerprint()),
-                "CLI captured a different source generation");
-        Require(!std::filesystem::exists(root / ".horo/local"), "read-only validation created local state");
-        const auto runCook = [&](const std::filesystem::path &base, const int exit) {
-            auto result = Json::parse(process.Run({"platform-services", "cook", "--project", Utf8Path(base), "--output", "json"}, exit));
-            Envelope(result);
-            return result;
-        };
-        const auto readPair = [&](const std::filesystem::path &base) {
-            auto pair = Assets::CaptureAssetSource(base, base / PlatformServicesProjectCookPath,
-                                                   PlatformProviderManifestCookGenerationMaximumBytes);
-            Require(pair.HasValue() && pair.Value().identity.exists, "committed paired output is missing");
-            Require(DecodePlatformProviderManifestCookGeneration(pair.Value().bytes, pair.Value().identity.digest).HasValue(),
-                    "published pair is malformed");
-            return std::move(pair).Value();
-        };
-        const auto firstCook = runCook(root, 0);
-        Require(firstCook.at("outputSchema").at("id") == "horo.platform-services.cook", "production cook command was not registered");
-        Require(firstCook.at("result").at("committed") == true && firstCook.at("result").at("durabilityConfirmed") == true,
-                "cook did not confirm durable publication");
-        const auto firstPair = readPair(root);
-        Require(firstCook.at("result").at("generationFingerprint") == FormatSha256(firstPair.identity.digest),
-                "CLI cook receipt disagrees with the paired file");
-        auto changedPolicy = Json::parse(docs.projectSource);
-        changedPolicy["settings"]["platformServices"]["services"][0] = 1;
-        write(".horo/project.json", changedPolicy.dump());
-        const auto incrementalCook = runCook(root, 0);
-        const auto incrementalPair = readPair(root);
-        Require(incrementalPair.bytes != firstPair.bytes, "semantic policy edit did not invalidate the published pair");
-        TemporaryDirectory clean;
-        const auto cleanRoot = std::filesystem::canonical(clean.Path());
-        materialize(cleanRoot);
-        writeAt(cleanRoot, ".horo/project.json", changedPolicy.dump());
-        const auto cleanCook = runCook(cleanRoot, 0);
-        Require(readPair(cleanRoot).bytes == incrementalPair.bytes, "clean and incremental production cooks diverged");
-        Require(cleanCook.at("result").at("generationFingerprint") == incrementalCook.at("result").at("generationFingerprint"),
-                "clean and incremental cook receipts diverged");
-        write(".horo/project.json", docs.projectSource);
-        auto skewedStats = Json::parse(docs.statSource);
-        skewedStats["schemaVersion"] = 99;
-        for (const auto &text : {std::string{"{"}, std::string{"{\"schemaVersion\":1,\"schemaVersion\":1}"}, skewedStats.dump(),
-                                 std::string(4U * 1024U * 1024U + 1, ' ')}) {
-            write(PlatformServicesDocumentPaths::Stats, text);
-            const auto failure = run(3);
-            const auto shared = CapturePlatformServicesProjectSources(root, InspectProjectCompatibility(root),
-                                                                      {.profile = PlatformServicesHostProfile::HeadlessServer});
-            Require(shared.HasError(), "hostile stats source was accepted by shared validation");
-            Require(failure.at("error").at("code") == shared.ErrorValue().code.Value(), "CLI changed the original validator identity");
-            const auto cookFailure = runCook(root, 3);
-            Require(cookFailure.at("error").at("code") == shared.ErrorValue().code.Value(), "cook changed the shared validator identity");
-            Require(readPair(root).bytes == incrementalPair.bytes, "failed cook replaced the previous pair");
+
+        /** @brief Compares production registration and capture with the shared immutable headless validator. */
+        void Validation(Fixture &fixture) {
+            Envelope(Json::parse(fixture.process.Run({"platform-services", "validate", "--output", "json"}, 2)));
+            Envelope(Json::parse(
+                fixture.process.Run({"platform-services", "validate", "--project", "relative-project", "--output", "json"}, 2)));
+            const auto expected = CapturePlatformServicesProjectSources(fixture.root, InspectProjectCompatibility(fixture.root),
+                                                                        {.profile = PlatformServicesHostProfile::HeadlessServer});
+            Require(expected.HasValue(), "shared headless validation failed");
+            fixture.valid = fixture.Validate(0);
+            Require(fixture.valid.at("outputSchema").at("id") == "horo.platform-services.validation",
+                    "platform command was not registered");
+            Require(fixture.valid.at("result").at("validated") == true, "platform validation was not executed");
+            Require(fixture.valid.at("result").at("sourceFingerprint") == FormatSha256(expected.Value().SourceFingerprint()),
+                    "CLI captured a different source generation");
+            Require(!std::filesystem::exists(fixture.root / ".horo/local"), "read-only validation created local state");
         }
-        write(PlatformServicesDocumentPaths::Stats, docs.statSource);
-        Require(std::filesystem::remove(root / PlatformServicesDocumentPaths::Presence), "presence fixture was not removed");
-        const auto missing = run(5);
-        Require(missing.at("error").at("code") == Assets::AssetSourceErrors::ReadFailed.code.Value(),
-                "missing authority was not preserved");
-        Require(!std::filesystem::exists(root / PlatformServicesDocumentPaths::Presence), "CLI repaired missing source");
-        Require(runCook(root, 5).at("error").at("code") == Assets::AssetSourceErrors::ReadFailed.code.Value(),
-                "cook repaired missing authority");
-        Require(readPair(root).bytes == incrementalPair.bytes, "missing-source cook changed the published pair");
-        write(PlatformServicesDocumentPaths::Presence, docs.presenceSource);
-        auto exact = Json::parse(docs.projectSource);
-        exact["settings"]["platformServices"]["provider"] = {{"mode", "exact"}, {"key", "unavailable.fixture"}};
-        write(".horo/project.json", exact.dump());
-        const auto unsupported = run(4);
-        Require(unsupported.at("error").at("code") == PlatformProjectConfigurationErrors::ProviderNotFound.code.Value(),
-                "exact provider selection fell back");
-        Require(runCook(root, 4).at("error").at("code") == PlatformProjectConfigurationErrors::ProviderNotFound.code.Value(),
-                "cook selected an implicit provider fallback");
-        Require(readPair(root).bytes == incrementalPair.bytes, "unavailable-provider cook changed the published pair");
-        auto legacy = Json::parse(docs.projectSource);
-        const auto *legacyRelease = BuiltInReleaseCompatibilityRegistry().Find({ParseHoroVersion("0.3.0").Value()});
-        Require(legacyRelease != nullptr, "legacy release fixture is missing");
-        legacy["horoVersion"] = "0.3.0";
-        legacy["persistentContract"] = FormatPersistentContractHash(legacyRelease->persistentContract);
-        write(".horo/project.json", legacy.dump());
-        const auto migrationRequired = run(6);
-        Require(migrationRequired.at("status") == "failed", "CLI activated an unmigrated root");
-        Require(migrationRequired.at("error").at("code") == Assets::AssetSourceErrors::Authority.code.Value(),
-                "unmigrated input bypassed shared admission");
-        Require(runCook(root, 6).at("status") == "failed", "cook bypassed required migration");
-        write(".horo/project.json", docs.projectSource);
-        Require(run(0).at("result").at("sourceFingerprint") == valid.at("result").at("sourceFingerprint"),
-                "reload changed source generation");
-        {
-            NativeDurableFileSystem files;
-            Editor::ProjectMutationCoordinator mutations{files};
-            auto held = mutations.TryAcquire({root, Editor::ProjectMutationOwner::Migration, "production-cook-busy-regression"});
-            Require(held.HasValue(), "test could not hold the real project mutation lease");
-            const auto busy = runCook(root, 5);
-            const auto domain = Editor::ProjectMutationErrorDomain();
-            Require(busy.at("error").at("domain") == domain.id.Value(), "cook bypassed the shared project writer lease");
-            Require(readPair(root).bytes == incrementalPair.bytes, "busy cook modified the previous publication");
+
+        /** @brief Requires semantic edits and independent clean roots to converge through real command processes. */
+        void Convergence(Fixture &fixture) {
+            fixture.firstCook = fixture.Cook(fixture.root, 0);
+            Require(fixture.firstCook.at("outputSchema").at("id") == "horo.platform-services.cook",
+                    "production cook command was not registered");
+            Require(fixture.firstCook.at("result").at("committed") == true &&
+                        fixture.firstCook.at("result").at("durabilityConfirmed") == true,
+                    "cook did not confirm durable publication");
+            fixture.firstPair = Fixture::Pair(fixture.root);
+            Require(fixture.firstCook.at("result").at("generationFingerprint") == FormatSha256(fixture.firstPair.identity.digest),
+                    "CLI cook receipt disagrees with the paired file");
+            auto changedPolicy = Json::parse(fixture.docs.projectSource);
+            changedPolicy["settings"]["platformServices"]["services"][0] = 1;
+            fixture.Write(".horo/project.json", changedPolicy.dump());
+            const auto incrementalCook = fixture.Cook(fixture.root, 0);
+            fixture.incrementalPair = Fixture::Pair(fixture.root);
+            Require(fixture.incrementalPair.bytes != fixture.firstPair.bytes, "semantic policy edit did not invalidate the published pair");
+            TemporaryDirectory clean;
+            const auto cleanRoot = std::filesystem::canonical(clean.Path());
+            fixture.Materialize(cleanRoot);
+            Fixture::WriteAt(cleanRoot, ".horo/project.json", changedPolicy.dump());
+            const auto cleanCook = fixture.Cook(cleanRoot, 0);
+            Require(Fixture::Pair(cleanRoot).bytes == fixture.incrementalPair.bytes, "clean and incremental production cooks diverged");
+            Require(cleanCook.at("result").at("generationFingerprint") == incrementalCook.at("result").at("generationFingerprint"),
+                    "clean and incremental cook receipts diverged");
+            fixture.Write(".horo/project.json", fixture.docs.projectSource);
         }
-        Require(runCook(root, 0).at("result").at("generationFingerprint") == firstCook.at("result").at("generationFingerprint"),
-                "restored authored policy did not reproduce the first cook");
-        Require(readPair(root).bytes == firstPair.bytes, "restored policy produced different paired bytes");
+
+        /** @brief Requires malformed, duplicate, oversized and version-skewed inputs to preserve the previous pair. */
+        void Malformed(Fixture &fixture) {
+            auto skewedStats = Json::parse(fixture.docs.statSource);
+            skewedStats["schemaVersion"] = 99;
+            for (const auto &text : {std::string{"{"}, std::string{"{\"schemaVersion\":1,\"schemaVersion\":1}"}, skewedStats.dump(),
+                                     std::string(4U * 1024U * 1024U + 1, ' ')}) {
+                fixture.Write(PlatformServicesDocumentPaths::Stats, text);
+                const auto failure = fixture.Validate(3);
+                const auto shared = CapturePlatformServicesProjectSources(fixture.root, InspectProjectCompatibility(fixture.root),
+                                                                          {.profile = PlatformServicesHostProfile::HeadlessServer});
+                Require(shared.HasError(), "hostile stats source was accepted by shared validation");
+                Require(failure.at("error").at("code") == shared.ErrorValue().code.Value(), "CLI changed the original validator identity");
+                Require(fixture.Cook(fixture.root, 3).at("error").at("code") == shared.ErrorValue().code.Value(),
+                        "cook changed the shared validator identity");
+                Require(Fixture::Pair(fixture.root).bytes == fixture.incrementalPair.bytes, "failed cook replaced the previous pair");
+            }
+            fixture.Write(PlatformServicesDocumentPaths::Stats, fixture.docs.statSource);
+        }
+
+        /** @brief Refuses missing authority and unavailable exact providers without repair or implicit fallback. */
+        void Unavailable(Fixture &fixture) {
+            Require(std::filesystem::remove(fixture.root / PlatformServicesDocumentPaths::Presence), "presence fixture was not removed");
+            Require(fixture.Validate(5).at("error").at("code") == Assets::AssetSourceErrors::ReadFailed.code.Value(),
+                    "missing authority was not preserved");
+            Require(!std::filesystem::exists(fixture.root / PlatformServicesDocumentPaths::Presence), "CLI repaired missing source");
+            Require(fixture.Cook(fixture.root, 5).at("error").at("code") == Assets::AssetSourceErrors::ReadFailed.code.Value(),
+                    "cook repaired missing authority");
+            Require(Fixture::Pair(fixture.root).bytes == fixture.incrementalPair.bytes, "missing-source cook changed the published pair");
+            fixture.Write(PlatformServicesDocumentPaths::Presence, fixture.docs.presenceSource);
+            auto exact = Json::parse(fixture.docs.projectSource);
+            exact["settings"]["platformServices"]["provider"] = {{"mode", "exact"}, {"key", "unavailable.fixture"}};
+            fixture.Write(".horo/project.json", exact.dump());
+            Require(fixture.Validate(4).at("error").at("code") == PlatformProjectConfigurationErrors::ProviderNotFound.code.Value(),
+                    "exact provider selection fell back");
+            Require(fixture.Cook(fixture.root, 4).at("error").at("code") ==
+                        PlatformProjectConfigurationErrors::ProviderNotFound.code.Value(),
+                    "cook selected an implicit provider fallback");
+            Require(Fixture::Pair(fixture.root).bytes == fixture.incrementalPair.bytes,
+                    "unavailable-provider cook changed the published pair");
+        }
+
+        /** @brief Prevents ordinary commands from activating an unmigrated root and checks restoration of source identity. */
+        void Migration(Fixture &fixture) {
+            auto legacy = Json::parse(fixture.docs.projectSource);
+            const auto *release = BuiltInReleaseCompatibilityRegistry().Find({ParseHoroVersion("0.3.0").Value()});
+            Require(release != nullptr, "legacy release fixture is missing");
+            legacy["horoVersion"] = "0.3.0";
+            legacy["persistentContract"] = FormatPersistentContractHash(release->persistentContract);
+            fixture.Write(".horo/project.json", legacy.dump());
+            const auto required = fixture.Validate(6);
+            Require(required.at("status") == "failed", "CLI activated an unmigrated root");
+            Require(required.at("error").at("code") == Assets::AssetSourceErrors::Authority.code.Value(),
+                    "unmigrated input bypassed shared admission");
+            Require(fixture.Cook(fixture.root, 6).at("status") == "failed", "cook bypassed required migration");
+            fixture.Write(".horo/project.json", fixture.docs.projectSource);
+            Require(fixture.Validate(0).at("result").at("sourceFingerprint") == fixture.valid.at("result").at("sourceFingerprint"),
+                    "reload changed source generation");
+        }
+
+        /** @brief Holds the genuine shared mutation lease in the parent process, then proves deterministic retry. */
+        void LeaseAndRetry(Fixture &fixture) {
+            {
+                NativeDurableFileSystem files;
+                Editor::ProjectMutationCoordinator mutations{files};
+                auto held =
+                    mutations.TryAcquire({fixture.root, Editor::ProjectMutationOwner::Migration, "production-cook-busy-regression"});
+                Require(held.HasValue(), "test could not hold the real project mutation lease");
+                const auto busy = fixture.Cook(fixture.root, 5);
+                const auto domain = Editor::ProjectMutationErrorDomain();
+                Require(busy.at("error").at("domain") == domain.id.Value(), "cook bypassed the shared project writer lease");
+                Require(Fixture::Pair(fixture.root).bytes == fixture.incrementalPair.bytes, "busy cook modified the previous publication");
+            }
+            Require(fixture.Cook(fixture.root, 0).at("result").at("generationFingerprint") ==
+                        fixture.firstCook.at("result").at("generationFingerprint"),
+                    "restored authored policy did not reproduce the first cook");
+            Require(Fixture::Pair(fixture.root).bytes == fixture.firstPair.bytes, "restored policy produced different paired bytes");
+        }
+    }  // namespace PlatformProtocol
+
+    /** @brief Exercises actual registration, validation, publication, hostile input and writer lifecycle in protocol order. */
+    void PlatformServicesCases(ProcessFixture &process) {
+        PlatformProtocol::Fixture fixture{process};
+        PlatformProtocol::Validation(fixture);
+        PlatformProtocol::Convergence(fixture);
+        PlatformProtocol::Malformed(fixture);
+        PlatformProtocol::Unavailable(fixture);
+        PlatformProtocol::Migration(fixture);
+        PlatformProtocol::LeaseAndRetry(fixture);
     }
 }  // namespace
 

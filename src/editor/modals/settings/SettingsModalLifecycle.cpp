@@ -23,6 +23,8 @@ namespace Horo::Editor {
         m_draft.collision.owner = std::move(projects.collision);
         m_draft.collision.error = std::move(projects.collisionError);
         m_draft.prefab.owner = std::move(projects.prefab);
+        m_draft.projectConfiguration = std::move(projects.configuration);
+        m_draft.projectConfigurationError = std::move(projects.configurationError);
         m_pagesUnsupported = pages.host && !pages.theme;
         if (pages.host && pages.theme)
             m_extensionPages = std::make_shared<EditorPageView>(context, std::move(pages.host), std::move(pages.theme));
@@ -80,14 +82,19 @@ namespace Horo::Editor {
     CloseDecision SettingsModal::CanClose(const ModalCloseReason reason) {
         m_draft.dirty = CollectDraftSettings(m_draft) != m_draft.committed;
         const bool configurationDirty = m_draft.configuration && !m_draft.configuration->Draft().proposedValues.empty();
+        const bool projectDirty = m_draft.projectConfiguration && !m_draft.projectConfiguration->Draft().proposedValues.empty();
         const auto prefab = m_draft.prefab.owner.lock();
-        if (reason == ModalCloseReason::Cancelled ||
-            (!m_draft.dirty && !configurationDirty && !m_draft.navigationProjectDraftDirty && (!prefab || !prefab->IsDirty())))
+        if (reason == ModalCloseReason::Cancelled || (!m_draft.dirty && !configurationDirty && !projectDirty &&
+                                                      !m_draft.navigationProjectDraftDirty && (!prefab || !prefab->IsDirty())))
             return CloseDecision::Allow;
         return CloseDecision::Deny;
     }
 
     void SettingsModal::OnClose(const ModalCloseReason reason) {
+        if (m_draft.projectConfiguration)
+            m_draft.projectConfiguration->Cancel();
+        m_draft.projectConfiguration.reset();
+        m_draft.projectConfigurationError.reset();
         if (m_draft.configuration)
             m_draft.configuration->Cancel();
         if (reason == ModalCloseReason::Cancelled) {

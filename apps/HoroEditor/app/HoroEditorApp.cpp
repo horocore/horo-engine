@@ -90,6 +90,7 @@
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Platform/SecureRandom.h"
+#include "Horo/PlatformServices/PlatformProjectSettings.h"
 #include "Horo/Runtime/Input.h"
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
@@ -3281,6 +3282,12 @@ namespace Horo::Editor {
             return std::nullopt;
         }
         auto configurationSchema = std::move(moduleSchema).Value();
+        for (const auto &descriptor : PlatformServices::MakePlatformProjectSettingsContribution().settings) {
+            if (const auto registered = configurationSchema.Register(descriptor); registered.HasError()) {
+                LOG_CRITICAL("editor.startup", "Platform project schema rejected: code=%s.", registered.ErrorValue().code.Value().c_str());
+                return std::nullopt;
+            }
+        }
 #if defined(HORO_HAS_OPENXR_HOST)
         // Explicit application composition; descriptor registration performs no native discovery or activation.
         for (const auto &descriptor : XR::XRProjectSettingDescriptors()) {

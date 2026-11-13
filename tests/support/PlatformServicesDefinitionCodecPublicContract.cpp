@@ -38,4 +38,12 @@ namespace {
         { EncodePlatformLeaderboardDefinitions(leaderboards) } -> std::same_as<Result<std::string>>;
         { EncodePlatformPresenceDefinitions(presence) } -> std::same_as<Result<std::string>>;
     });
+    static_assert(requires(std::string_view root, const PlatformProjectConfiguration &configuration,
+                           const PlatformServicesProjectSourceSnapshot &sources, const ExclusiveFileLock &lease, DurableFileSystem &files,
+                           std::function<Result<void>()> available) {
+        { PreparePlatformServicesProjectPolicyEdit(root, configuration) } -> std::same_as<Result<std::string>>;
+        {
+            PublishPlatformServicesProjectPolicy(sources, configuration, lease, files, available)
+        } -> std::same_as<Result<PlatformServicesProjectPolicyPublication>>;
+    });
 }  // namespace

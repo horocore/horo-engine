@@ -73,13 +73,21 @@ namespace Horo::Editor::SettingsModalInternal {
     }  // namespace
 
     /** @copydoc DrawConfiguration */
-    void DrawConfiguration(SettingsState &state, const EditorGuiContext &context) {
+    void DrawConfiguration(SettingsState &state, const EditorGuiContext &context, const ConfigurationSource source) {
         using namespace Theme;
         using namespace Ui;
-        if (!state.configuration)
+        const auto &binding = source == ConfigurationSource::Project ? state.projectConfiguration : state.configuration;
+        if (!binding) {
+            if (source == ConfigurationSource::Project && state.projectConfigurationError) {
+                const auto &message = SettingsModal::kTextScope.Text(context.localization, "configuration.project_unavailable");
+                ImGui::TextWrapped("%s", message.c_str());
+            }
             return;
-        auto &session = *state.configuration;
-        const auto &title = SettingsModal::kTextScope.Text(context.localization, "configuration.title");
+        }
+        auto &session = *binding;
+        const auto &title =
+            SettingsModal::kTextScope.Text(context.localization,
+                                           source == ConfigurationSource::Project ? "configuration.project_title" : "configuration.title");
         SectionTitle(title.c_str(), context.theme.fonts);
         for (const auto &field : session.Fields()) {
             const auto &key = field.descriptor.key;
@@ -94,11 +102,15 @@ namespace Horo::Editor::SettingsModalInternal {
                 ImGui::TextWrapped("%s", policy.c_str());
                 continue;
             }
-            const auto &publicPolicy = SettingsModal::kTextScope.Text(context.localization, "configuration.public");
+            const auto &publicPolicy =
+                SettingsModal::kTextScope.Text(context.localization, source == ConfigurationSource::Project ? "configuration.project_public"
+                                                                                                            : "configuration.public");
             ImGui::TextWrapped("%s", publicPolicy.c_str());
             bool changed = false;
             auto *buffer = session.EditBuffer(key);
-            const auto &label = SettingsModal::kTextScope.Text(context.localization, "configuration.user_value");
+            const auto &label =
+                SettingsModal::kTextScope.Text(context.localization, source == ConfigurationSource::Project ? "configuration.project_value"
+                                                                                                            : "configuration.user_value");
             SettingRow(label.c_str(), nullptr, context.theme.fonts, [&] {
                 if (field.descriptor.type == SettingValueType::Boolean) {
                     bool value = *buffer == "true";
@@ -120,7 +132,8 @@ namespace Horo::Editor::SettingsModalInternal {
                     state.configurationFailure.reset();
                     state.status = SettingsModalStatus::None;
                 }
-                if (edited.HasValue() && editedKey.Value() == "editor.theme.active" && session.Preview()) {
+                if (source == ConfigurationSource::User && edited.HasValue() && editedKey.Value() == "editor.theme.active" &&
+                    session.Preview()) {
                     const auto &theme = std::get<std::string>(session.Preview()->Get(editedKey));
                     state.appearance.pendingThemeIndex = static_cast<int>(ThemePresetFromConfigurationValue(theme));
                     state.configurationPreviewed = true;
@@ -138,6 +151,12 @@ namespace Horo::Editor::SettingsModalInternal {
                 ImGui::TextWrapped("%s", preview.c_str());
                 DrawValue(session.Preview()->Get(key));
             }
+        }
+        if (session.Failure()) {
+            const auto &invalid = SettingsModal::kTextScope.Text(context.localization, "configuration.invalid");
+            ImGui::PushStyleColor(ImGuiCol_Text, Err());
+            ImGui::TextWrapped("%s\n%s", invalid.c_str(), session.Failure()->code.Value().c_str());
+            ImGui::PopStyleColor();
         }
     }
 }  // namespace Horo::Editor::SettingsModalInternal

@@ -27,6 +27,26 @@ namespace Horo::Application::Internal {
                 return replaced;
             }
         };
+
+        /** @brief Composes a real typed cook dispatcher with explicit filesystem and write capability authority. */
+        Cli::CliDispatcher CookDispatcher(std::shared_ptr<DurableFileSystem> files) {
+            using namespace Cli;
+            auto adapter = MakePlatformServicesCookCommandAdapter({.profile = PlatformServices::PlatformServicesHostProfile::Cook}, files);
+            const auto descriptor = adapter.adapter->GetDescriptor();
+            const std::vector<CliCapabilityId> grants{{"horo.platform-services.cook"}};
+            auto registry = CliCommandRegistry::Create(std::span{&descriptor, 1}, {.activeHost = CliHostKind::HoroEngine,
+                                                                                   .supportedContractVersion = {1, 0, 0},
+                                                                                   .grantedCapabilities = grants});
+            REQUIRE(registry.HasValue());
+            std::vector<CliCommandAdapterRegistration> registrations;
+            registrations.push_back(std::move(adapter));
+            auto dispatcher = CliDispatcher::Create(std::move(registry).Value(), std::move(registrations),
+                                                    {.activeHost = CliHostKind::HoroEngine,
+                                                     .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
+                                                     .grantedCapabilities = grants});
+            REQUIRE(dispatcher.HasValue());
+            return std::move(dispatcher).Value();
+        }
     }  // namespace
 
     TEST_CASE("Cook CLI reports committed partial failure and releases both native leases after durability uncertainty", "[platform-cli]") {
@@ -34,20 +54,8 @@ namespace Horo::Application::Internal {
         Tests::PlatformMigration::Project project;
         project.InitializeCurrent();
         auto files = std::make_shared<CookDurabilityFiles>();
-        auto adapter = MakePlatformServicesCookCommandAdapter({.profile = PlatformServices::PlatformServicesHostProfile::Cook}, files);
-        const auto descriptor = adapter.adapter->GetDescriptor();
-        const std::vector<CliCapabilityId> grants{{"horo.platform-services.cook"}};
-        auto registry = CliCommandRegistry::Create(std::span{&descriptor, 1}, {.activeHost = CliHostKind::HoroEngine,
-                                                                               .supportedContractVersion = {1, 0, 0},
-                                                                               .grantedCapabilities = grants});
-        REQUIRE(registry.HasValue());
-        std::vector<CliCommandAdapterRegistration> registrations;
-        registrations.push_back(std::move(adapter));
-        auto dispatcher = CliDispatcher::Create(std::move(registry).Value(), std::move(registrations),
-                                                {.activeHost = CliHostKind::HoroEngine,
-                                                 .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
-                                                 .grantedCapabilities = grants});
-        REQUIRE(dispatcher.HasValue());
+        auto admitted = CookDispatcher(files);
+        const auto descriptor = DescribePlatformServicesCookCommand();
         ConfigurationSchema schema;
         REQUIRE(schema.Seal().HasValue());
         auto configuration = ConfigurationResolver::Resolve(schema, {}, 1);
@@ -56,7 +64,6 @@ namespace Horo::Application::Internal {
         CliCommandRequest request{.command = descriptor.path,
                                   .options = {{.name = "project",
                                                .values = {{.value = CliPathValue{std::string{spelling.begin(), spelling.end()}}}}}}};
-        auto admitted = std::move(dispatcher).Value();
         const auto terminal = admitted.Dispatch(request, {.invocation = {1}, .configuration = &configuration.Value()});
         REQUIRE(terminal.Outcome().HasValue());
         const auto &result = terminal.Outcome().Value();

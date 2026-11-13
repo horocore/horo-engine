@@ -74,8 +74,34 @@ namespace Horo::PlatformServices {
         }
     }
 
-    TEST_CASE("Typed projection rejects invalid enum representations and cross-field policy before activation",
+    TEST_CASE("Portable descriptors declare shared validation and localized labels without changing source authority",
               "[platform-services][project-settings]") {
+        const auto contribution = MakePlatformProjectSettingsContribution();
+        REQUIRE(contribution.settings.size() == 8);
+        for (const auto &descriptor : contribution.settings) {
+            REQUIRE(descriptor.label);
+            CHECK(descriptor.label->namespaceId == "editor");
+            CHECK(descriptor.label->key.starts_with("settings.platform_services."));
+            REQUIRE(descriptor.sourcePolicy);
+            CHECK(descriptor.sourcePolicy->allowedSources == ConfigurationSourceMask::Project);
+            CHECK(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
+            CHECK_FALSE(std::holds_alternative<std::monostate>(descriptor.validation));
+        }
+        const auto schema = Schema();
+        for (const auto value : {std::int64_t{-1}, std::int64_t{2}}) {
+            ConfigurationResolutionRequest request;
+            request.project.emplace(SettingKey{"platform.services.provider.mode"}, ConfigurationInputValue{.value = value});
+            const auto invalid = ConfigurationResolver::Resolve(schema, request);
+            REQUIRE(invalid.HasError());
+            REQUIRE_FALSE(invalid.ErrorValue().diagnostics.empty());
+            CHECK(invalid.ErrorValue().diagnostics.front().path == "platform.services.provider.mode");
+        }
+        ConfigurationResolutionRequest request;
+        request.project.emplace(SettingKey{"platform.services.provider.key"}, ConfigurationInputValue{.value = std::string(1025, 'x')});
+        REQUIRE(ConfigurationResolver::Resolve(schema, request).HasError());
+    }
+
+    TEST_CASE("Contributed schema rejects invalid enum representations before projection", "[platform-services][project-settings]") {
         const auto schema = Schema();
         ConfigurationResolutionRequest request;
         SECTION("Unknown requirement representation") {
@@ -85,12 +111,9 @@ namespace Horo::PlatformServices {
             request.project.emplace(SettingKey{"platform.services.achievements"}, ConfigurationInputValue{.value = std::int64_t{-1}});
         }
         const auto snapshot = ConfigurationResolver::Resolve(schema, request);
-        REQUIRE(snapshot.HasValue());
-        const auto policy = ResolvePlatformProjectSettings(snapshot.Value(), "project.settings", PlatformServicesHostProfile::Cook, {}, {});
-        REQUIRE(policy.HasError());
-        CHECK(policy.ErrorValue().code.Value() == PlatformProjectConfigurationErrors::InvalidConfiguration.code.Value());
-        REQUIRE_FALSE(policy.ErrorValue().diagnostics.empty());
-        CHECK(policy.ErrorValue().diagnostics.front().path == "platform.services.achievements");
+        REQUIRE(snapshot.HasError());
+        REQUIRE_FALSE(snapshot.ErrorValue().diagnostics.empty());
+        CHECK(snapshot.ErrorValue().diagnostics.front().path == "platform.services.achievements");
     }
 
     TEST_CASE("Contributed settings never turn explicit Null into a provider fallback", "[platform-services][project-settings]") {

@@ -88,6 +88,136 @@ namespace Horo::Tests::PlatformMigration {
         }
     }  // namespace
 
+    TEST_CASE("Policy publication returns a coherent next generation and retains uncertain committed output",
+              "[platform-policy-publication]") {
+        Project project;
+        project.InitializeCurrent();
+        CookFiles files;
+        const auto source = Source(project);
+        PlatformProjectConfigurationCandidate candidate{.projectId = std::string{source.Configuration().ProjectId()},
+                                                        .profile = source.Configuration().Profile()};
+        candidate.services[static_cast<std::size_t>(PlatformServiceKind::Cloud)] = PlatformServiceRequirement::Optional;
+        const auto policy = BuildPlatformProjectConfiguration(candidate, {}, {});
+        REQUIRE(policy.HasValue());
+        SECTION("Durable") {}
+        SECTION("Typed failure after native commit") {
+            files.failAfterCommit = true;
+        }
+        SECTION("Exception after native commit") {
+            files.throwAfterCommit = true;
+        }
+        const auto lockPath = Assets::AssetSourcePublicationLockPath(project.root, project.root / ".horo/project.json");
+        REQUIRE(lockPath.HasValue());
+        auto lease = files.TryAcquireExclusive(lockPath.Value(), "policy-publication-test");
+        REQUIRE(lease.HasValue());
+        const auto published = PublishPlatformServicesProjectPolicy(source, policy.Value(), lease.Value(), files, [] {
+            return Result<void>::Success();
+        });
+        REQUIRE(published.HasValue());
+        CHECK(files.commits == 1);
+        REQUIRE(published.Value().sources);
+        CHECK(published.Value().sources->Configuration().Fingerprint() == policy.Value().Fingerprint());
+        CHECK(published.Value().sources->StableIds().Fingerprint() == source.StableIds().Fingerprint());
+        CHECK(published.Value().sources->SourceFingerprint() != source.SourceFingerprint());
+        REQUIRE(RevalidatePlatformServicesProjectSources(*published.Value().sources).HasValue());
+        CHECK(RevalidatePlatformServicesProjectSources(source).HasError());
+        const auto root = Assets::CaptureAssetSource(project.root, project.root / ".horo/project.json", 1024U * 1024U);
+        REQUIRE(root.HasValue());
+        CHECK(root.Value().identity == published.Value().sources->RootIdentity());
+        CHECK(root.Value().identity == published.Value().publication.identity);
+        CHECK(published.Value().publication.status == ((files.failAfterCommit || files.throwAfterCommit)
+                                                           ? Assets::AssetSourcePublicationStatus::ReconciliationRequired
+                                                           : Assets::AssetSourcePublicationStatus::Durable));
+        CHECK(published.Value().publication.durabilityError.has_value() == (files.failAfterCommit || files.throwAfterCommit));
+    }
+
+    TEST_CASE("Policy publication fences all six sources after staging", "[platform-policy-publication]") {
+        const std::array paths{std::string_view{".horo/project.json"},      PlatformServicesDocumentPaths::Ledger,
+                               PlatformServicesDocumentPaths::Achievements, PlatformServicesDocumentPaths::Stats,
+                               PlatformServicesDocumentPaths::Leaderboards, PlatformServicesDocumentPaths::Presence};
+        for (const auto path : paths) {
+            DYNAMIC_SECTION(path) {
+                Project project;
+                project.InitializeCurrent();
+                CookFiles files;
+                const auto source = Source(project);
+                const auto original = project.Read(".horo/project.json");
+                files.staged = [&] {
+                    project.Write(path, project.Read(path) + " ");
+                };
+                const auto lockPath = Assets::AssetSourcePublicationLockPath(project.root, project.root / ".horo/project.json");
+                REQUIRE(lockPath.HasValue());
+                auto lease = files.TryAcquireExclusive(lockPath.Value(), "policy-source-fence-test");
+                REQUIRE(lease.HasValue());
+                const auto published = PublishPlatformServicesProjectPolicy(source, source.Configuration(), lease.Value(), files, [] {
+                    return Result<void>::Success();
+                });
+                REQUIRE(published.HasError());
+                CHECK(files.commits == 0);
+                CHECK(project.Read(".horo/project.json") == (path == ".horo/project.json" ? original + " " : original));
+            }
+        }
+    }
+
+    TEST_CASE("Policy publication preserves the original root on revocation cancellation or preparation failure",
+              "[platform-policy-publication]") {
+        Project project;
+        project.InitializeCurrent();
+        CookFiles files;
+        const auto source = Source(project);
+        const auto original = project.Read(".horo/project.json");
+        CancellationSource cancellation;
+        bool active = true;
+        SECTION("Revoked after staging") {
+            files.staged = [&] {
+                active = false;
+            };
+        }
+        SECTION("Cancelled after staging") {
+            files.staged = [&] {
+                cancellation.RequestCancellation();
+            };
+        }
+        SECTION("Preparation failure") {
+            files.failPreparation = true;
+        }
+        SECTION("Native replacement failure") {
+            files.failCommit = true;
+        }
+        const auto lockPath = Assets::AssetSourcePublicationLockPath(project.root, project.root / ".horo/project.json");
+        REQUIRE(lockPath.HasValue());
+        auto lease = files.TryAcquireExclusive(lockPath.Value(), "policy-failure-test");
+        REQUIRE(lease.HasValue());
+        const auto published = PublishPlatformServicesProjectPolicy(source, source.Configuration(), lease.Value(), files, [&] {
+            return active ? Result<void>::Success() : Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+        }, cancellation.Token());
+        REQUIRE(published.HasError());
+        CHECK(files.commits == 0);
+        CHECK(project.Read(".horo/project.json") == original);
+    }
+
+    TEST_CASE("Cook preserves its previous pair when any captured source changes after staging", "[platform-cook-publication]") {
+        const std::array paths{std::string_view{".horo/project.json"},      PlatformServicesDocumentPaths::Ledger,
+                               PlatformServicesDocumentPaths::Achievements, PlatformServicesDocumentPaths::Stats,
+                               PlatformServicesDocumentPaths::Leaderboards, PlatformServicesDocumentPaths::Presence};
+        for (const auto path : paths) {
+            DYNAMIC_SECTION(path) {
+                Project project;
+                project.InitializeCurrent();
+                CookFiles files;
+                const auto source = Source(project);
+                REQUIRE(Publish(project, source, files, {}).HasValue());
+                const auto previous = Output(project);
+                files.staged = [&] {
+                    project.Write(path, project.Read(path) + " ");
+                };
+                REQUIRE(Publish(project, source, files, previous.identity).HasError());
+                CHECK(Output(project).bytes == previous.bytes);
+                CHECK(files.commits == 1);
+            }
+        }
+    }
+
     TEST_CASE("Cook preserves the previous pair across preparation, stale source, cancellation and precommit failures",
               "[platform-cook-publication]") {
         Project project;
@@ -106,36 +236,6 @@ namespace Horo::Tests::PlatformMigration {
         }
         SECTION("Native replacement failure") {
             files.failCommit = true;
-        }
-        SECTION("Root changed after staging") {
-            files.staged = [&] {
-                project.Write(".horo/project.json", project.Read(".horo/project.json") + " ");
-            };
-        }
-        SECTION("Ledger changed after staging") {
-            files.staged = [&] {
-                project.Write(PlatformServicesDocumentPaths::Ledger, project.Read(PlatformServicesDocumentPaths::Ledger) + " ");
-            };
-        }
-        SECTION("Definitions changed after staging") {
-            files.staged = [&] {
-                project.Write(PlatformServicesDocumentPaths::Presence, project.Read(PlatformServicesDocumentPaths::Presence) + " ");
-            };
-        }
-        SECTION("Achievements changed after staging") {
-            files.staged = [&] {
-                project.Write(PlatformServicesDocumentPaths::Achievements, project.Read(PlatformServicesDocumentPaths::Achievements) + " ");
-            };
-        }
-        SECTION("Stats changed after staging") {
-            files.staged = [&] {
-                project.Write(PlatformServicesDocumentPaths::Stats, project.Read(PlatformServicesDocumentPaths::Stats) + " ");
-            };
-        }
-        SECTION("Leaderboards changed after staging") {
-            files.staged = [&] {
-                project.Write(PlatformServicesDocumentPaths::Leaderboards, project.Read(PlatformServicesDocumentPaths::Leaderboards) + " ");
-            };
         }
         SECTION("Cancellation after staging") {
             files.staged = [&] {
