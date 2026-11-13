@@ -126,6 +126,14 @@ Persistent owners must commit transitions before provider submit or durable outc
 publication. Attempts and deadlines must be persisted by that owner; copying the
 diagnostic snapshot is not a persistence protocol.
 
+Terminal compaction prepares the retained operation snapshot and the complete ordered
+receipt-ID result before swapping queue state. Its commit guard also covers fallible
+checked-library moves during result construction. Allocation failure therefore leaves
+all original receipts, terminal outcomes, unresolved ambiguity and capacity accounting
+intact; the owner can retry without losing the disposition publication. The allocation
+fault sweep interleaves removable aggregates with pending presence, reconciling work
+and a terminal receipt still inside retention. Native execution remains pending.
+
 Once dispatch begins, later admission cannot coalesce into that aggregate. Partial
 receipt expiry does not rewrite its attempted payload. If the remaining live receipts
 would require a different reduction, redispatch fails closed while independent lanes

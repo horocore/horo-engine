@@ -444,6 +444,7 @@ namespace Horo::PlatformServices {
          * @brief Removes only fully terminal operations older than terminalRetention.
          * @param now Monotonic time supplied by the queue owner.
          * @return Every compacted receipt ID in stable sequence order; later queries return Expired.
+         * @throws std::bad_alloc If preparing retained operations or returned IDs fails; all receipts and operations remain unchanged.
          */
         [[nodiscard]] Result<std::vector<PlatformOfflineIntentId>> Compact(TimePoint now);
 
