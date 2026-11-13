@@ -681,6 +681,16 @@ callers cannot turn a read completion into an unconditional write.
 Presence updates are coalesced. If `SetPresence` is called many times before
 the backend finishes the previous update, only the most recent state is sent.
 
+Frontend-issued request handles additionally carry a weak cancellation-issuance
+capability. Numeric request ID/generation equality alone does not authorize a
+cancellation through another frontend. Moving a frontend transfers this authority;
+closing or retaining an old frontend cannot retarget an old handle to a new backend
+that reuses numeric request identities. This is provenance, not a second request
+store or session authority. Backend/store-only handles must be cancelled through
+their owning backend/store, while public consumers use the issuing frontend.
+See [session lifecycle migration](../../guides/platform-session-lifecycle-migration.md)
+for the private C++ layout and cancellation-contract migration.
+
 ## Service Categories
 
 ### Achievements
@@ -1115,6 +1125,25 @@ ephemeral, scoped to the requesting session/access revision and distinct from th
 local subject capability. Display/avatar fields are bounded consent-scoped
 presentation, never account, gameplay or durable storage identity.
 
+The read-only `PlatformFriendsCoordinator` owns the bounded in-memory page and
+validates every complete result before presentation. Composition supplies the
+policy-projected capability snapshot and matching published session authority;
+provider replacement requires a new coordinator. The owner forwards session/access
+updates before admitting or exposing work. Updates discard pending query authority
+and retained personal data. Cancellation invalidates its query token before native
+cancellation is requested; late evidence cannot republish it. `ReadPage` revalidates
+the caller's subject/access revision and expires retained data by monotonic time.
+There is no durable cache or implicit retry/prompt loop.
+
+`FriendPresentation::subject` uses `PlatformSocialSubjectHandle`, which cannot be
+converted into the local subject capability. The broker supplies random social
+nonces, never account IDs or display-derived hashes. Page offset, count, total name
+bytes, per-name UTF-8 and duplicate social handles are validated atomically.
+See [friends API migration](../../guides/platform-friends-migration.md) for affected
+callers and presentation-owner obligations. These public contracts and scripted
+tests do not qualify native account, consent or restriction callbacks in private
+provider packages.
+
 ## Stable ID Registries
 
 Runtime and gameplay never pass strings for achievement, leaderboard, stat or
@@ -1519,6 +1548,25 @@ provider work may retire privately but cannot publish into a new account.
 Durable intent stores a protected pseudonymous subject-binding partition and policy
 requirements, never a live handle. Replay first verifies the same binding under a new
 active session and reauthorizes the operation. “Current account” cannot retarget it.
+
+The private broker hands off this association as immutable
+`PlatformSessionBindingEvidence`, built from a protected `ProviderAccountBindingId`,
+the exact selected provider capabilities and the already published Active snapshot.
+`ValidatePlatformSessionBindingAccess` checks current provider availability, exact
+subject/session/access generations and the durable owner's explicit expected binding
+before replay or commit. Product/environment scope participates in opaque binding
+equality. Old evidence is stale after session/access replacement; verified same-binding
+reauthentication requires fresh evidence. These inert builders/validators retain no
+mutable current account, storage, scheduler or independent session authority. Native
+authentication and stable-subject mapping remain private broker preconditions and
+require provider conformance evidence. The semantic owner still reauthorizes its own
+profile/policy/intent and keeps durable partition ownership.
+The private broker alone owns `PlatformSessionBindingIssuer`; both binding builders
+require it. Weak issuer provenance prevents ordinary consumers or another issuer
+from minting an association for an expected binding. Issuer revocation invalidates
+captured bindings/evidence without extending native lifetimes. The public binding
+is a process-local issuer-bound view; the protected store retains canonical durable
+inputs and re-resolves expected partitions under a new issuer after broker restart.
 
 ### Sign-in, sign-out and account switch
 

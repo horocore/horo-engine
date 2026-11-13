@@ -94,6 +94,7 @@ namespace Horo::PlatformServices {
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryFriends({subject, 1, std::numeric_limits<std::uint32_t>::max()}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 5}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, std::numeric_limits<std::uint32_t>::max(), 1}),
@@ -299,6 +300,35 @@ namespace Horo::PlatformServices {
         CHECK(backend->inspectCalls == 2);
         CHECK(backend->TotalCalls() == 0);
         CHECK(backend->requests.RecordCount() == 0);
+    }
+
+    TEST_CASE("A retired frontend handle cannot cancel a new account request with reused numeric identity",
+              "[platform-services][frontend][session][cancellation]") {
+        auto oldBackend = std::make_shared<RoutingBackend>();
+        const auto oldSession = Session();
+        auto oldFrontend = Frontend(oldBackend, oldSession);
+        auto oldRequest = oldFrontend.UnlockAchievement({*oldSession.Subject(), {1}});
+        REQUIRE(oldRequest.HasValue());
+        REQUIRE(oldFrontend.Close().HasValue());
+        auto currentBackend = std::make_shared<RoutingBackend>();
+        const auto currentSession = Session({8}, {6});
+        auto currentFrontend = Frontend(currentBackend, currentSession);
+        auto currentRequest = currentFrontend.UnlockAchievement({*currentSession.Subject(), {1}});
+        REQUIRE(currentRequest.HasValue());
+        CHECK(oldRequest.Value().Id() == currentRequest.Value().Id());
+        CHECK(oldRequest.Value().Generation() == currentRequest.Value().Generation());
+        RequireError(currentFrontend.RequestCancel(oldRequest.Value()), RequestErrors::Stale);
+        CHECK(currentBackend->cancelCalls == 0);
+        CHECK_FALSE(currentBackend->requests.Query(currentRequest.Value()).Value().cancellationRequested);
+        auto movedFrontend = std::move(currentFrontend);
+        PlatformRequestHandle<void> movedRequest;
+        movedRequest = std::move(currentRequest).Value();
+        REQUIRE(movedFrontend.RequestCancel(movedRequest).HasValue());
+        CHECK(currentBackend->cancelCalls == 1);
+        auto backendOnly = currentBackend->requests.Admit<void>();
+        REQUIRE(backendOnly.HasValue());
+        RequireError(movedFrontend.RequestCancel(backendOnly.Value()), RequestErrors::Stale);
+        CHECK(currentBackend->cancelCalls == 1);
     }
 
     TEST_CASE("Platform Services frontend exposes only bounded public service limits", "[platform-services][frontend][capability]") {

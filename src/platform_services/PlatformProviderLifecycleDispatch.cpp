@@ -42,14 +42,11 @@ namespace Horo::PlatformServices {
         void ApplyCompletion(PlatformProviderLifecycleState &state, const PlatformProviderLifecycleState::Completion &completion,
                              const PlatformProviderLifecycleState::InFlight &entry,
                              const PlatformProviderLifecycleHost::RequestHandle &handle) {
-            std::uint64_t currentSessionRevision{};
-            {
-                std::scoped_lock lock{state.mutex};
-                currentSessionRevision = state.session.revision;
-            }
+            // Session ingress and terminal publication share one fence. No provider or observer runs under this lock.
+            std::scoped_lock lock{state.mutex};
             if (completion.receivedAt > entry.deadline)
                 static_cast<void>(state.requests.CompleteTimedOut(handle, MakeError(RequestErrors::TimedOut)));
-            else if (completion.sessionRevision != entry.sessionRevision || currentSessionRevision != entry.sessionRevision)
+            else if (completion.sessionRevision != entry.sessionRevision || state.session.revision != entry.sessionRevision)
                 static_cast<void>(state.requests.CompleteFailure(handle, MakeError(PlatformSessionErrors::StaleSession)));
             else if (completion.resultCode == HORO_PLATFORM_PROVIDER_SUCCESS)
                 static_cast<void>(state.requests.CompleteSuccess(handle));
@@ -121,6 +118,14 @@ namespace Horo::PlatformServices {
             return true;
         }
 
+        /** @brief Sends cancellation intent once, retaining the native lease even when the provider rejects it. */
+        void CancelNativeOnce(PlatformProviderLifecycleState &state, PlatformProviderLifecycleState::InFlight &entry) {
+            if (!entry.lease || entry.cancellationSent)
+                return;
+            entry.cancellationSent = true;
+            static_cast<void>(Detail::InvokeProvider(state.operations.cancel, state.candidate, entry.id.value, entry.generation.value));
+        }
+
         /** @brief Returns whether an in-flight record still needs native retirement. */
         [[nodiscard]] bool AdvanceRequest(PlatformProviderLifecycleState &state, PlatformProviderLifecycleState::InFlight &entry,
                                           const PlatformProviderLifecycleHost::RequestHandle &handle,
@@ -129,17 +134,24 @@ namespace Horo::PlatformServices {
             if (const bool eligibleIngress = entry.lease && now >= entry.deadline && HasEligibleIngress(state, entry);
                 now >= entry.deadline && !eligibleIngress) {
                 static_cast<void>(state.requests.CompleteTimedOut(handle, MakeError(RequestErrors::TimedOut)));
-                if (entry.lease && !entry.cancellationSent) {
-                    entry.cancellationSent = true;
-                    static_cast<void>(
-                        Detail::InvokeProvider(state.operations.cancel, state.candidate, entry.id.value, entry.generation.value));
-                }
+                CancelNativeOnce(state, entry);
                 return entry.lease.has_value();
             }
-            if (entry.lease && snapshot.HasValue() && snapshot.Value().cancellationRequested && !entry.cancellationSent) {
-                entry.cancellationSent = true;
-                static_cast<void>(Detail::InvokeProvider(state.operations.cancel, state.candidate, entry.id.value, entry.generation.value));
-            } else if (!entry.lease && !state.stages.closing)
+            bool stale{};
+            {
+                std::scoped_lock lock{state.mutex};
+                stale = state.session.revision != entry.sessionRevision;
+                if (stale && snapshot.HasValue() && !IsTerminal(snapshot.Value().state))
+                    static_cast<void>(state.requests.CompleteFailure(handle, MakeError(PlatformSessionErrors::StaleSession)));
+            }
+            if (stale) {
+                CancelNativeOnce(state, entry);
+                // Keep native ownership until callback retirement or a successful drain, even when cancellation fails.
+                return entry.lease.has_value();
+            }
+            if (entry.lease && snapshot.HasValue() && snapshot.Value().cancellationRequested)
+                CancelNativeOnce(state, entry);
+            else if (!entry.lease && !state.stages.closing)
                 return StartQueued(state, entry, handle);
             return true;
         }

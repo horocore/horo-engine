@@ -316,7 +316,8 @@ namespace Horo::PlatformServices::TestSupport {
     }
 
     Result<PlatformRequestHandle<FriendsPage>> MockPlatformServicesBackend::QueryFriends(FriendsQuery query) {
-        const bool validPageSize = query.pageSize > 0 && query.pageSize <= MaximumPageEntries;
+        const bool validPageSize = query.pageSize > 0 && query.pageSize <= MaximumPageEntries &&
+                                   query.startIndex <= std::numeric_limits<std::uint32_t>::max() - query.pageSize;
         return impl_->Submit<FriendsPage>(MockPlatformServicesOperation::QueryFriends, validPageSize);
     }
 

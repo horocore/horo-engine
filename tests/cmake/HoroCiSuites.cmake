@@ -164,6 +164,12 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCliProductionOutputContract
     HoroCliMcpServeTests
     HoroPlatformTests
+    HoroPlatformRequestTests
+    HoroPlatformProviderAdmissionTests
+    HoroPlatformServicesCompositionTests
+    HoroPlatformFriendsPublicConsumer
+    HoroPlatformServicesPublicHeaderConsumer
+    HoroPlatformServicesExtensionPublicHeaderConsumer
     HoroImmutableFileStorageTests
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests
@@ -478,6 +484,9 @@ function(horo_finalize_ci_suites)
         HoroPrefabSceneExpansionContractConsumer
         HoroRuntimeUiScreenTransitionPublicHeaderConsumer
         HoroExtensionManagerTests
+        HoroPlatformProviderAdmissionTests
+        HoroPlatformServicesCompositionTests
+        HoroPlatformFriendsPublicConsumer
         HoroNavigationCoordinatorPublicConsumer
         HoroGameplayPhysicsPublicHeaderConsumer
         HoroGameplayPhysicsSdkContract
