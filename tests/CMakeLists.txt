@@ -217,12 +217,13 @@ function(horo_register_catch_test target)
     horo_ci_catch_properties(${target})
 endfunction()
 
-add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp)
+add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp support/AllocationProbe.cpp)
 target_compile_features(HoroModelProviderTests PRIVATE cxx_std_20)
+target_include_directories(HoroModelProviderTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAdapters Catch2::Catch2WithMain)
 add_test(NAME HoroModelProviderContractTests
     COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/python/model_provider_http_fixture.py"
-            "$<TARGET_FILE:HoroModelProviderTests>")
+            "$<TARGET_FILE:HoroModelProviderTests>" "$<TARGET_FILE_DIR:HoroModelProviderTests>")
 set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 60)
 
 add_executable(HoroPackageValidationTests
