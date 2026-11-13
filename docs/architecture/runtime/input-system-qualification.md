@@ -1,7 +1,7 @@
 # Input System Qualification
 
 This matrix tracks all eight INP-001 children against the integrated capability.
-The delivery base is `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`.
+The delivery base is `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`.
 Source/test coverage and executed qualification are recorded independently.
 
 ## Full Capability Audit
@@ -60,11 +60,27 @@ The subsequent waiting helper was stopped before starting a compiler. Further
 heavy work uses the repository's shared lock with one build/test worker and
 verifies the physical lock handle before starting child build processes.
 
-The focused Python grouping/preflight suites passed: 91 tests.
+The initial focused Python grouping/preflight suites passed: 91 tests.
 English and Turkish catalog key structures were compared locally and match.
 `git diff --check` passed during implementation. Final post-edit results belong
 in the delivery validation summary together with the Sonar IDE, CLI secrets and
 Codacy report paths and completion states.
+
+On 2026-11-13 the delivery commits were rebased onto the published base above.
+The local cache, developer runner/process, quality-preflight and CI grouping
+Python suites passed with 214 tests and 13 platform/capability skips. The command
+was `python -m pytest -q --tb=short tests/python/test_local_build_cache.py
+tests/python/test_dev_runner.py tests/python/test_dev_process.py
+tests/python/test_quality_preflight.py tests/python/test_ci_workflow_grouping.py`.
+Two tests explicitly cover exclusive lock release and nonblocking admission.
+`heavy_build_lock(repo, blocking=False)` preserves the same physical OS lock and
+cleanup checks while allowing a busy batch to return immediately; existing
+callers retain blocking behavior by default.
+
+The first resumed C++ batch returned Windows lock contention (error 33) without
+starting a child build or creating a background waiter. Named scheduling grants
+are no longer a prerequisite; the physical repository lock and resource guards
+remain mandatory. This contention result provides no C++ test or quality result.
 
 ## Reproducible Targeted Qualification
 

@@ -675,11 +675,11 @@ def _initialize(root: Path, repo: Path) -> None:
 
 
 @contextlib.contextmanager
-def heavy_build_lock(repo: Path) -> Iterator[None]:
-    """Serialize dev.py configure/compilation across all repository worktrees."""
+def heavy_build_lock(repo: Path, *, blocking: bool = True) -> Iterator[None]:
+    """Serialize builds; nonblocking admission raises BlockingIOError when busy."""
     root = cache_directory(repo)
     _initialize(root, repo)
-    with _FileLock(root / "heavy-build.lock"):
+    with _FileLock(root / "heavy-build.lock", blocking=blocking):
         if (root / _CLEANUP_MARKER).exists():
             raise CacheError(f"An earlier build has unverified descendants; inspect {root / _CLEANUP_MARKER} before further builds")
         yield

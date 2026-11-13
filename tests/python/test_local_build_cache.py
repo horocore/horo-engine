@@ -308,6 +308,15 @@ def test_heavy_lock_is_exclusive_and_releases_after_exception(repository: tuple[
 
 
 
+def test_heavy_lock_supports_nonblocking_admission(repository: tuple[Path, Path, str]) -> None:
+    repo, _, _ = repository
+    with cache.heavy_build_lock(repo, blocking=False):
+        with pytest.raises(BlockingIOError):
+            enter_blocked_context(cache.heavy_build_lock(repo, blocking=False))
+    with cache.heavy_build_lock(repo, blocking=False):
+        pass
+
+
 def test_reader_lock_releases_when_build_raises(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository
     assert cache.prepare_cache(repo, successful_build) == 0
