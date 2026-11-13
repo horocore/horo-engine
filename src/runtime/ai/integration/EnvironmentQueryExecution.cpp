@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <exception>
+#include <new>
 #include <numeric>
 #include <string>
 #include <string_view>
@@ -12,14 +13,31 @@
 
 namespace Horo::AI {
     namespace {
-        /** @brief Translates the currently handled provider exception without changing typed Result errors. */
-        [[nodiscard]] Error ProviderFailure() {
+        /** @brief Bounds native diagnostic reads before constructing their owned representation. */
+        std::string_view ExceptionText(const std::exception &error) noexcept {
+            const char *text = error.what();
+            if (!text)
+                return {};
+            std::size_t length{};
+            while (length < 512 && text[length] != '\0')
+                ++length;
+            return {text, length};
+        }
+
+        /** @brief Contains diagnostic allocation failure within the original query-local provider failure. */
+        [[nodiscard]] Error ProviderFailure() noexcept {
+            const auto &descriptor = AIErrors::EnvironmentQueryProviderFailed;
             try {
-                throw;
-            } catch (const std::exception &error) {
-                return MakeError(AIErrors::EnvironmentQueryProviderFailed, std::string{std::string_view{error.what()}.substr(0, 512)});
-            } catch (...) {
-                return MakeError(AIErrors::EnvironmentQueryProviderFailed);
+                try {
+                    throw;
+                } catch (const std::exception &error) {
+                    return MakeError(descriptor, std::string{ExceptionText(error)});
+                } catch (...) {
+                    return MakeError(descriptor);
+                }
+            } catch (const std::bad_alloc &) {
+                // Filling MakeError's default summary here would attempt another allocation.
+                return {.code = descriptor.code, .domain = descriptor.domain, .severity = descriptor.defaultSeverity};
             }
         }
 
@@ -179,8 +197,8 @@ namespace Horo::AI {
             if (generated_)
                 AdvanceCandidates(budget);
         } catch (...) {
-            result_.error = ProviderFailure();
             StopTest();
+            result_.error = ProviderFailure();
         }
     }
 
@@ -233,8 +251,8 @@ namespace Horo::AI {
             if (++nextTest_ == testOrder_.size())
                 ScoreCandidate();
         } catch (...) {
-            result_.error = ProviderFailure();
             StopTest();
+            result_.error = ProviderFailure();
         }
     }
 

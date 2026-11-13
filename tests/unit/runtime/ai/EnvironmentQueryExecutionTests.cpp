@@ -1,3 +1,4 @@
+#include "AllocationProbe.h"
 #include "EnvironmentQueryTestSupport.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
@@ -26,6 +27,7 @@ namespace Horo::AI {
             Admission,
             Poll,
             UnknownPoll,
+            DiagnosticPoll,
             TypedAdmission
         };
 
@@ -77,6 +79,16 @@ namespace Horo::AI {
                 ++probe_.polls;
                 if (probe_.failure == SourceFailure::Poll)
                     throw std::runtime_error("poll failed");
+                if (probe_.failure == SourceFailure::DiagnosticPoll) {
+                    struct DiagnosticFailure final : std::exception {
+                        const char *what() const noexcept override {
+                            return "Provider polling failed with a native diagnostic that requires owned string allocation at the query "
+                                   "boundary.";
+                        }
+                    };
+
+                    throw DiagnosticFailure{};
+                }
                 if (probe_.failure == SourceFailure::UnknownPoll)
                     throw 42;
                 return Result<std::optional<QueryTestSample>>::Success(probe_.ready ? std::exchange(sample_, std::nullopt) : std::nullopt);
@@ -406,6 +418,35 @@ namespace Horo::AI {
                 CHECK(accepted->Published()->status == QueryExecutionStatus::Completed);
                 CHECK(accepted->Published()->winners.size() == 2);
                 CHECK_FALSE(rejected->Sync(7));
+            }
+        }
+
+        TEST_CASE("EQS diagnostic allocation failure closes pending work and publishes one typed terminal", "[unit][ai][eqs][execution]") {
+            auto scene = MakeScene();
+            for (const auto point : {SourceFailure::DiagnosticPoll, SourceFailure::UnknownPoll}) {
+                ExecutionProbe probe{.failure = point};
+                auto query = MakeExecution(probe, *scene);
+                AiWorkBudget first{9};
+                REQUIRE_FALSE(query->Sync(5));
+                query->Advance(5, {first, first, first});
+                REQUIRE(probe.attempts == 1);
+                const bool published = [&] {
+                    Tests::AllocationProbe::ScopedFailure allocation;
+                    return query->Sync(6);
+                }();
+                REQUIRE(published);
+                const auto *result = query->Published();
+                REQUIRE(result);
+                CHECK(result->status == QueryExecutionStatus::Failed);
+                CHECK(result->winners.empty());
+                REQUIRE(result->error);
+                CHECK(result->error->code.Value() == AIErrors::EnvironmentQueryProviderFailed.code.Value());
+                CHECK(result->error->message.empty());
+                CHECK(probe.cancelled == 1);
+                query->Cancel();
+                CHECK_FALSE(query->Sync(7));
+                query.reset();
+                CHECK(probe.cancelled == 1);
             }
         }
 
