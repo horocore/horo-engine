@@ -89,8 +89,8 @@ namespace Horo::Application::Internal {
         options.refreshReference = ReferenceUpdate(options, request);
         if (auto runtime = RuntimeSelection(options, request); runtime.HasError())
             return Result<ExtensionScriptOptions>::Failure(runtime.ErrorValue());
-        const auto extension = options.runtime == Extensions::ScriptModuleRuntimeKind::Lua54 ? ".lua" : ".js";
-        if (options.script.extension() != extension)
+        if (const auto extension = options.runtime == Extensions::ScriptModuleRuntimeKind::Lua54 ? ".lua" : ".js";
+            options.script.extension() != extension)
             return Invalid<ExtensionScriptOptions>();
         if (auto ids = Identities(options, request); ids.HasError())
             return Result<ExtensionScriptOptions>::Failure(ids.ErrorValue());

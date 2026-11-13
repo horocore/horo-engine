@@ -77,8 +77,7 @@ namespace Horo::Application::Internal {
                 owner->Cancel();
                 return Output::Failure(MakeError(Cli::CliErrors::ExecutionCancelled));
             }
-            auto advanced = owner->Poll();
-            if (advanced.HasError())
+            if (auto advanced = owner->Poll(); advanced.HasError())
                 return Output::Failure(advanced.ErrorValue());
             std::this_thread::yield();
         }

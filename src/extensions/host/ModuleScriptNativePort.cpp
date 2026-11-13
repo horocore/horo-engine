@@ -108,10 +108,10 @@ namespace Horo::Extensions {
     }
 
     Result<void> ModuleScriptNativePort::Probe() const {
-        auto actual = impl_->Resolve();
-        if (actual.HasError())
+        if (auto actual = impl_->Resolve(); actual.HasError())
             return Result<void>::Failure(actual.ErrorValue());
-        return Result<void>::Success();
+        else
+            return Result<void>::Success();
     }
 
     Result<ScriptCallResult> ModuleScriptNativePort::Invoke(const ScriptInvocationRequest &request, const CancellationToken &cancel) const {
