@@ -309,6 +309,49 @@ namespace Horo::Editor {
         CHECK_FALSE(fixture.document->Snapshot().canUndo);
     }
 
+    TEST_CASE("Prefab sessions preserve the losing edit when another workspace publishes the same source",
+              "[editor][prefab][session][qualification][conflict]") {
+        Fixture fixture;
+        DocumentIdentityRegistry otherIdentities;
+        const auto identity = otherIdentities.Open(fixture.document->Snapshot().identity.key);
+        REQUIRE(identity.HasValue());
+        auto other = PrefabDocumentSession::Open(fixture.project.directory.path, fixture.project.source, fixture.project.asset,
+                                                 identity.Value().identity, PrefabAsset(10).Asset(), fixture.limits);
+        REQUIRE(other.HasValue());
+        fixture.Rename("First workspace intent");
+        REQUIRE(other.Value()->Execute(other.Value()->Snapshot().fence, RenamePrefabObject{{0}, "Second workspace intent"}).HasValue());
+        auto *winner = fixture.document.get();
+        auto *loser = other.Value().get();
+        SECTION("first workspace publishes first") {}
+        SECTION("second workspace publishes first") {
+            std::swap(winner, loser);
+        }
+        const auto pending = loser->Snapshot();
+        const auto published = winner->Save(winner->Snapshot().fence, fixture.project.mutations, fixture.project.files);
+        REQUIRE(published.HasValue());
+        REQUIRE(published.Value().status == Assets::AssetSourcePublicationStatus::Durable);
+        const auto rejected = loser->Save(pending.fence, fixture.project.mutations, fixture.project.files);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+        const auto retained = loser->Snapshot();
+        CHECK(retained.externalConflict);
+        CHECK(retained.dirty);
+        CHECK(retained.canUndo);
+        CHECK(retained.fence.revision == pending.fence.revision);
+        CHECK(retained.sourceRevision == pending.sourceRevision);
+        CHECK(retained.acceptedSource == pending.acceptedSource);
+        CHECK(retained.source == pending.source);
+        const auto native = Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source,
+                                                       Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(native.HasValue());
+        CHECK(native.Value().identity == published.Value().identity);
+        CHECK(loser->Reload(retained.fence, false).HasError());
+        REQUIRE(loser->Reload(retained.fence, true).HasValue());
+        CHECK(loser->Snapshot().sourceRevision == winner->Snapshot().sourceRevision);
+        CHECK_FALSE(loser->Snapshot().dirty);
+        CHECK(loser->Execute(pending.fence, RenamePrefabObject{{0}, "Stale completion"}).HasError());
+    }
+
     TEST_CASE("Prefab recovery is separate durable intent and cannot overwrite an external source", "[editor][prefab][session]") {
         Fixture fixture;
         const auto original = fixture.document->Snapshot();

@@ -104,6 +104,40 @@ release-stage tests alone cannot establish that full distribution matrix.
 
 ## Local validation record
 
+The evening 13 November restart rechecked the delivery rather than reusing old
+queue observations. All workflows on `6fa0ec27dea67489535050fce9dc683da8d9a2ba`
+had terminated. Linux, MSVC, macOS and Sonar coverage logs confirmed the invalid
+`DiagnosticCode == ErrorCode` test comparison; the prepared `.Value()` comparison
+addresses that compilation failure. The Windows shader job separately failed
+to download Lua with HTTP 500. Android package qualification completed successfully.
+The four local follow-ups were then normally pushed as
+`776ee7fc8c6764e3f844042af504b89e186b1610`, starting new workflows
+`43506015493`, `43506015482` and `43506015496`. No current-run outcome is inferred
+from those previous-head results.
+
+The newly published target ref resolved to
+`139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`; PR metadata still reported the
+original `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc` base snapshot at inspection.
+Published branch ancestry was preserved without force push or merge. A fresh
+full-preflight admission using the published target, and a separate core-test
+admission, both returned physical `LOCK_BUSY` before creating children. The
+runner checks the canonical open handle, CPU, RAM and free disk, then uses one
+compiler/CTest worker. It leaves no background waiter.
+
+The old managed IDE processes for this worktree were no longer present. The
+default Code profile still had no SonarCloud or SonarQube connections, so the
+missing `horocore` binding remains a concrete prerequisite rather than an assumed
+stale process problem. No credential, trust or connection settings were changed.
+
+Additional session qualification opens the same canonical source in two distinct
+workspace owners. Both publication orders must preserve the losing session's
+source lease, revision, accepted base, dirty state and undo intent after the real
+native save conflict. The winner's durable source remains unchanged. Explicit
+reload accepts the winner and rejects the old completion fence. This qualifies
+optimistic save collision handling when executed; it does not implement ADR-093's
+separate multi-document apply-to-source transaction. This new regression is pending
+native execution and the final same-scope full preflight.
+
 The 13 November full preflight ran against the actual PR base
 `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`, with the verified worktree-owned
 Windows Release compilation database. All nine changed C++ object targets
