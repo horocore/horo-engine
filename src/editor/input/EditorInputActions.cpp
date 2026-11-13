@@ -123,6 +123,15 @@ namespace Horo::Editor {
         return filtered;
     }
 
+    /** @copydoc ActivateEditorInputProfile */
+    Result<void> ActivateEditorInputProfile(Input::InputRouter &router, Input::InputBindingProfile profile,
+                                            const std::span<const Input::ActionDescriptor> contributions) {
+        auto actions = EditorKeymapActions(profile, contributions);
+        if (profile == router.Profile() && std::ranges::equal(actions, router.Actions()))
+            return Result<void>::Success();
+        return router.SetActionMap(std::move(actions), std::move(profile));
+    }
+
     /** @copydoc ParseEditorShortcut */
     std::optional<Input::InputBinding> ParseEditorShortcut(const std::string_view shortcut) {
         if (shortcut.empty() || shortcut.size() > 64)

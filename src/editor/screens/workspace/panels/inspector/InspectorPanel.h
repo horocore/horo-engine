@@ -50,6 +50,10 @@ namespace Horo::Editor {
 
         void OnAttach(PanelContext &ctx) override;
         void OnDetach() override;
+        /** @brief Releases hidden name-field focus while preserving persistent property drafts.
+         * @param command Current frame intent, preserved without publishing a name edit.
+         */
+        void OnPresentationHidden(EditorWorkspaceViewCommandData &command) override;
 
         void DrawIcon(ImDrawList *dl, const ImVec2 &pos, const ImVec2 &size, ImU32 color) override;
 

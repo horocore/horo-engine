@@ -624,9 +624,88 @@ profile and emits a diagnostic; profiles are never partially applied. New
 projects create a valid `.horo/input.json` during atomic project staging.
 
 The editor registers real action descriptors and exposes them through the
-`Input Mapping` workspace panel. Settings retains viewport sensitivity and
-inversion only, and directs binding edits to this panel so there is no second
-string-based shortcut authority.
+`Input Mapping` workspace panel. INP-001.6 retains the existing Settings input
+workflow as the editor-global profile editor. Input Mapping edits project-user
+overrides. Both use Input's typed profile representation, validation and atomic
+serializer. The active router supplies effective bindings to workspace/source
+interaction and module commands. Settings drafts represent the global layer;
+they are composed with the active project's layers before routing activation.
+
+`ResolveBindingProfilePaths` resolves project and user paths beneath their
+admitted roots. Project IDs are single portable UTF-8 filename components;
+separators, reserved Windows names and escaping redirects are rejected before
+profile I/O. The host protects the admitted parent namespace through access.
+`LoadBindingProfileLayers` loads a complete ordered candidate. Runtime pause
+menus use `InputRouter::ReloadProfile` to project the authored layers onto their
+existing action registry. Inactive editor/module overrides remain on disk.
+`CommitBindingProfileChange` validates the effective candidate before publishing
+one per-action change to the selected user scope and activating the same router.
+An edit does not copy project defaults into the global user file.
+
+Editor and runtime rebinding use `InputBindingCapture`. Creation snapshots
+gamepad baselines on the owner thread. Polling uses committed frames, exact
+context/configuration/assignment/device generations and the router's existing
+weak lifecycle anchor. It retains no snapshot references and allocates no normal
+poll storage. Focus loss, preemption, Escape, retired owners and changed device
+generations cancel capture. Resting raw trigger axes require deliberate motion.
+Terminal delivery neutralizes routing in the capture frame and blocks lower
+contexts through the following close frame. The host retains its context through
+terminal delivery; hidden editor presentation withdraws its own capture.
+The Input Mapping panel replaces a selected binding while preserving the other
+controls and the selected binding's output component/scale. Adding, removing and
+selecting axis component/direction publish complete per-action overrides through
+the same validated scope. Capture completion cannot activate another panel control.
+
+The former embedded `editor_settings.json` `input.bindingProfile` is imported
+when the canonical editor-user file is absent. Settings save or project-entry
+migration establishes the prior valid user profile before retiring that field.
+New Settings writes omit it. A corrupt canonical file emits an error and cannot
+revive a stale embedded profile.
+
+Keyboard/pointer player ownership is explicit through `AssignKeyboardMouse`.
+Player zero owns those controls initially. Player-filtered reads exclude other
+owners; aggregate reads retain editor/global delivery. Gamepad bindings without
+keyboard chords remain eligible while another player holds keyboard modifiers.
+Pointer-device loss retires pointing controls while keyboard/gamepad ownership
+continues. Focus loss retires every control and rejects later unfocused events.
+Gamepad incarnations remain distinct across collector replacement. Disconnect
+release evidence belongs to the old player for one frame and does not erase a
+held keyboard binding. Digital bindings contribute thresholded zero/one pulses
+before their configured scale and action aggregation, including a press/release
+pair committed in one frame; analog bindings retain continuous signed values.
+
+Raw gamepad controls have stable numbered text glyphs and participate in Runtime
+UI navigation. `IInputGlyphProvider` is an optional host-pinned package adapter;
+`ResolveInputGlyph` requires the same canonical identity and falls back to core
+text for missing or unsupported package presentation. Runtime UI retains the
+provider through its descriptor/presentation lifetime. The SDL adapter accepts
+host-admitted mapping records. Raw-to-canonical upgrades and mapping changes
+publish a fresh device generation through ordinary event collection, requiring
+explicit reassignment. Rumble checks native capability, validates finite
+amplitudes and stops on focus/window/mapping retirement and adapter shutdown.
+
+### INP-001.6/7 consumer migration
+
+The new profile/capture/player/glyph APIs are additive in the existing `HoroInput`
+public header. Header ownership and target dependencies retain their existing
+registrations. Input, Runtime UI, editor Services/GUI, application hosts, XR
+consumers and staged public-header consumers rebuild together. Explicit
+player-filtered reads now receive keyboard/pointer values only from their owner;
+hosts assigning those controls to another player call `AssignKeyboardMouse`.
+Existing aggregate reads retain their signature. The appended optional glyph
+provider in `UiNavigationInputDescriptor` and borrowed router in
+`EditorGuiContext` preserve omitted aggregate defaults while requiring consumer
+rebuilds. Package retirement recreates adapters after releasing old borrowed
+presentations. InputCollection's existing registration invalidation and neutral
+commit contract also applies after profile or assignment changes.
+Digital consumers that previously inspected a continuous axis through a Digital
+descriptor must declare Axis1D instead. Digital consumers use the descriptor's
+threshold and retain independent down/pressed/released flags. Editor Settings
+validates global binding edits against admitted project layers before saving;
+unchanged action/profile activation preserves routing and collection generations.
+
+The [qualification matrix](input-system-qualification.md) records executable
+coverage and outstanding platform/device evidence.
 
 ## Testing
 

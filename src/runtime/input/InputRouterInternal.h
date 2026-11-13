@@ -81,12 +81,16 @@ namespace Horo::Input {
 
         ConsumptionState consumed;
         InputDeviceAssignments assignments;
+        // Exact pre-disconnect owners survive current-assignment pruning for one release frame.
+        std::array<std::optional<GamepadDeviceId>, 256> previousPlayerDevices{};
+        std::optional<PlayerId> keyboardMousePlayer{0};
         std::uint64_t configurationRevision{1};
         std::uint64_t assignmentRevision{1};
         ActionReadStatus lastActionStatus{ActionReadStatus::Unavailable};
         std::uint64_t nextToken{1};
         bool modalBarrier{false};
         bool blockNextFrame{false};
+        bool bindingCaptureTerminal{false};
         TextFocusState textFocus;
     };
 

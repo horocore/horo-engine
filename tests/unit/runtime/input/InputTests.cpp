@@ -1,10 +1,12 @@
 #include "Horo/Runtime/Input.h"
+#include "support/OwnedTestDirectory.h"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 
 namespace {
@@ -268,16 +270,135 @@ namespace {
     }
 
     TEST_CASE("Profiles Write Atomically To Non Ascii Paths", "[unit][runtime][input]") {
-        const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
-        const std::filesystem::path directory = std::filesystem::temp_directory_path() / ("horo-input-ü-" + std::to_string(suffix));
-        const std::filesystem::path path = directory / "profil.json";
+        const Horo::Tests::OwnedTestDirectory directory{"horo-input-ü with spaces"};
+        const std::filesystem::path path = directory.Path() / std::filesystem::path{u8"profil-é.json"};
         const InputBindingProfile profile{.profileId = "user", .overrides = {BindingOverride{ActionId{"jump"}, {KeyBinding(Key::Space)}}}};
         REQUIRE((SaveBindingProfileAtomically(path, profile).HasValue()));
         const Horo::Result<InputBindingProfile> loaded = LoadBindingProfile(path);
         REQUIRE((loaded.HasValue() && loaded.Value().profileId == "user"));
-        std::error_code error;
-        std::filesystem::remove_all(directory, error);
-        REQUIRE((!error));
+    }
+
+    TEST_CASE("Profile numbers and chords cannot change identity during parsing", "[unit][runtime][input]") {
+        const std::array invalidBindings{R"({"kind":256,"key":1})",
+                                         R"({"kind":0.5,"key":1})",
+                                         R"({"kind":0,"key":65537})",
+                                         R"({"kind":6,"rawControl":65536})",
+                                         R"({"kind":0,"key":1,"component":256})",
+                                         R"({"kind":0,"key":1,"deadzoneKind":256})",
+                                         R"({"kind":0,"key":1,"chord":[1,2,3,4,5]})",
+                                         R"({"kind":0,"key":1,"chord":false})",
+                                         R"({"kind":0,"key":1,"chord":[1],"chordSize":0})",
+                                         R"({"kind":0,"key":-1})",
+                                         R"({"kind":true,"key":1})"};
+        for (const std::string_view binding : invalidBindings) {
+            const std::string document =
+                std::string{R"({"schemaVersion":1,"profileId":"user","overrides":[{"action":"jump","bindings":[)"} + std::string{binding} +
+                "]}]}";
+            INFO(document);
+            REQUIRE(ParseBindingProfile(document).HasError());
+        }
+        REQUIRE(ParseBindingProfile(R"({"schemaVersion":4294967297,"profileId":"user","overrides":[]})").HasError());
+        REQUIRE(ParseBindingProfile(R"({"schemaVersion":1.5,"profileId":"user","overrides":[]})").HasError());
+    }
+
+    TEST_CASE("Typed profile activation enforces the same storage bounds as persistence", "[unit][runtime][input]") {
+        InputRouter router;
+        const ActionId action{"action"};
+        REQUIRE(
+            router.SetActionMap({{action, ActionValueType::Digital, InputContextId{"workspace"}, false, {KeyBinding(Key::A)}}}).HasValue());
+        const auto previous = router.Profile();
+        InputBindingProfile invalid;
+        invalid.profileId.clear();
+        REQUIRE(router.SetProfile(invalid).HasError());
+        REQUIRE(router.Profile() == previous);
+        invalid.profileId.assign(257, 'a');
+        REQUIRE(router.SetProfile(invalid).HasError());
+        REQUIRE(router.Profile() == previous);
+        invalid.profileId = "oversized";
+        BindingOverride replacement{action, {}};
+        for (std::size_t key = 1; key <= 65; ++key)
+            replacement.bindings.push_back(KeyBinding(static_cast<Key>(key)));
+        invalid.overrides.push_back(std::move(replacement));
+        const std::array actions{
+            ActionDescriptor{action, ActionValueType::Digital, InputContextId{"workspace"}, false, {KeyBinding(Key::A)}}};
+        const auto validation = ValidateBindingProfile(actions, invalid);
+        REQUIRE(std::ranges::any_of(validation.diagnostics, [](const BindingDiagnostic &diagnostic) {
+            return diagnostic.code == BindingDiagnosticCode::MalformedProfile;
+        }));
+        REQUIRE(router.SetProfile(invalid).HasError());
+        REQUIRE(router.Profile() == previous);
+    }
+
+    TEST_CASE("Invalid in-memory bindings cannot replace a persisted profile", "[unit][runtime][input]") {
+        const Horo::Tests::OwnedTestDirectory directory{"horo-input-recovery"};
+        const auto path = directory.Path() / "input.json";
+        InputBindingProfile profile{.profileId = "valid", .overrides = {{ActionId{"jump"}, {KeyBinding(Key::Space)}}}};
+        REQUIRE(SaveBindingProfileAtomically(path, profile).HasValue());
+        profile.profileId = "invalid";
+        profile.overrides.front().bindings.front().chordSize = 255;
+        REQUIRE(SaveBindingProfileAtomically(path, profile).HasError());
+        const auto retained = LoadBindingProfile(path);
+        REQUIRE(retained.HasValue());
+        REQUIRE(retained.Value().profileId == "valid");
+        REQUIRE(retained.Value().overrides.front().bindings.front().key == Key::Space);
+    }
+
+    TEST_CASE("Runtime and editor binding commits preserve scope and survive a new router session", "[unit][runtime][input]") {
+        const Horo::Tests::OwnedTestDirectory directory{"horo-input-layers"};
+        const BindingProfilePaths paths{directory.Path() / "project/.horo/input.json", directory.Path() / "user/.horo/input/editor.json",
+                                        directory.Path() / "user/.horo/input/projects/project-id.json"};
+        const InputContextId contextId{"gameplay"};
+        const ActionId jump{"jump"};
+        const std::vector<ActionDescriptor> actions{{jump, ActionValueType::Digital, contextId, true, {KeyBinding(Key::Space)}}};
+        REQUIRE(SaveBindingProfileAtomically(paths.projectDefaults, {.profileId = "project", .overrides = {{jump, {KeyBinding(Key::A)}}}})
+                    .HasValue());
+        InputRouter router;
+        REQUIRE(router.SetActionMap(actions).HasValue());
+        REQUIRE(CommitBindingProfileChange(router, paths, BindingProfileScope::EditorUser, {jump, {KeyBinding(Key::B)}}).HasValue());
+        REQUIRE(router.Profile().overrides.front().bindings.front().key == Key::B);
+        const InputBinding pointer{.kind = BindingControlKind::PointerButton};
+        REQUIRE(CommitBindingProfileChange(router, paths, BindingProfileScope::ProjectUser, {jump, {pointer}}).HasValue());
+        REQUIRE(LoadBindingProfile(paths.editorUser).Value().overrides.front().bindings.front().key == Key::B);
+        REQUIRE(LoadBindingProfile(paths.projectDefaults).Value().overrides.front().bindings.front().key == Key::A);
+        const std::array ordered{paths.projectDefaults, paths.editorUser, paths.projectUser};
+        auto loaded = LoadBindingProfileLayers(ordered);
+        REQUIRE(loaded.HasValue());
+        InputRouter nextSession;
+        REQUIRE(nextSession.SetActionMap(actions, std::move(loaded).Value()).HasValue());
+        auto context = nextSession.PushContext(contextId, InputContextKind::Gameplay);
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        collector.SetPointerButton(PointerButton::Primary, true);
+        nextSession.BeginFrame(collector.Commit());
+        REQUIRE(nextSession.ReadAction(context, jump).pressed);
+        const InputBinding gamepad{.kind = BindingControlKind::GamepadButton};
+        REQUIRE(CommitBindingProfileChange(nextSession, paths, BindingProfileScope::ProjectUser, {jump, {gamepad}}).HasValue());
+        REQUIRE(LoadBindingProfile(paths.projectUser).Value().overrides.front().bindings.front().kind == BindingControlKind::GamepadButton);
+    }
+
+    TEST_CASE("Profile conflicts corruption and failed promotion retain the last active bindings", "[unit][runtime][input]") {
+        const Horo::Tests::OwnedTestDirectory directory{"horo-input-rollback"};
+        const BindingProfilePaths paths{{}, directory.Path() / "editor.json", directory.Path() / "project.json"};
+        const InputContextId contextId{"menu"};
+        const ActionId first{"first"};
+        InputRouter router;
+        REQUIRE(router
+                    .SetActionMap({{first, ActionValueType::Digital, contextId, true, {KeyBinding(Key::A)}},
+                                   {ActionId{"second"}, ActionValueType::Digital, contextId, false, {KeyBinding(Key::B)}}})
+                    .HasValue());
+        REQUIRE(CommitBindingProfileChange(router, paths, BindingProfileScope::ProjectUser, {first, {KeyBinding(Key::C)}}).HasValue());
+        REQUIRE(CommitBindingProfileChange(router, paths, BindingProfileScope::ProjectUser, {first, {KeyBinding(Key::B)}}).HasError());
+        REQUIRE(LoadBindingProfile(paths.projectUser).Value().overrides.front().bindings.front().key == Key::C);
+        REQUIRE(router.Profile().overrides.front().bindings.front().key == Key::C);
+        std::ofstream(paths.editorUser) << "{broken";
+        REQUIRE(CommitBindingProfileChange(router, paths, BindingProfileScope::ProjectUser, {first, {KeyBinding(Key::D)}}).HasError());
+        REQUIRE(router.Profile().overrides.front().bindings.front().key == Key::C);
+        std::filesystem::remove(paths.editorUser);
+        const auto occupied = directory.Path() / "occupied";
+        REQUIRE(std::filesystem::create_directory(occupied));
+        REQUIRE(SaveBindingProfileAtomically(occupied, router.Profile()).HasError());
+        REQUIRE(router.Profile().overrides.front().bindings.front().key == Key::C);
+        REQUIRE(LoadBindingProfile(paths.projectUser).Value().overrides.front().bindings.front().key == Key::C);
     }
 
     TEST_CASE("Profile Conflicts Reservations And Layering Are Typed", "[unit][runtime][input]") {
@@ -302,6 +423,11 @@ namespace {
         const auto merged = MergeBindingProfiles(lower, higher);
         REQUIRE((merged.HasValue() && merged.Value().profileId == "user" && merged.Value().overrides.size() == 2));
         REQUIRE((merged.Value().overrides.front().bindings.front().key == Key::D));
+        auto inheritedIdentity = higher;
+        inheritedIdentity.profileId.clear();
+        const auto inherited = MergeBindingProfiles(lower, inheritedIdentity);
+        REQUIRE(inherited.HasValue());
+        REQUIRE(inherited.Value().profileId == "project");
     }
 
     TEST_CASE("Conflict Validation Allows Same Trigger Across Contexts", "[unit][runtime][input]") {
@@ -556,5 +682,368 @@ namespace {
         REQUIRE((!recording.Next().has_value()));
         recording.ResetReplay();
         REQUIRE((recording.Next() == recording.Frames()[0]));
+    }
+
+    TEST_CASE("Subframe gamepad taps retain both edges through production routing", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        InputRouter router;
+        const InputContextId contextId{"gameplay"};
+        const ActionId action{"jump"};
+        REQUIRE(router.SetActionMap({{action, ActionValueType::Digital, contextId, false, {{.kind = BindingControlKind::GamepadButton}}}})
+                    .HasValue());
+        auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+        collector.BeginFrame(1);
+        VirtualGamepad pad{collector};
+        const auto id = pad.Connect();
+        REQUIRE(pad.Press(GamepadButton::South));
+        REQUIRE(pad.Release(GamepadButton::South));
+        router.BeginFrame(collector.Commit());
+        REQUIRE(router.AssignGamepad(0, id));
+        const auto tap = router.ReadAction(context, action, 0);
+        REQUIRE_FALSE(tap.down);
+        REQUIRE(tap.pressed);
+        REQUIRE(tap.released);
+        REQUIRE_FALSE(router.ReadAction(context, action, 0).pressed);
+        collector.BeginFrame(2);
+        router.BeginFrame(collector.Commit());
+        const auto next = router.ReadAction(context, action, 0);
+        REQUIRE_FALSE(next.down);
+        REQUIRE_FALSE(next.pressed);
+        REQUIRE_FALSE(next.released);
+    }
+
+    TEST_CASE("Unfocused gamepad events cannot reactivate held controls on resume", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        const auto pad = collector.ConnectGamepad("canonical");
+        const auto raw = collector.ConnectGamepad("unknown", false, 1, 1);
+        REQUIRE(collector.SetGamepadButton(pad, GamepadButton::South, true));
+        REQUIRE(collector.SetGamepadAxis(pad, GamepadAxis::LeftX, 0.8F));
+        collector.AddPointerWheel(0.0F, 1.0F);
+        collector.SetWindowState({.focused = false});
+        REQUIRE_FALSE(collector.SetGamepadButton(pad, GamepadButton::South, true));
+        REQUIRE_FALSE(collector.SetGamepadAxis(pad, GamepadAxis::LeftX, 0.9F));
+        REQUIRE_FALSE(collector.SetRawGamepadButton(raw, 0, true));
+        REQUIRE_FALSE(collector.SetRawGamepadAxis(raw, 0, 0.9F));
+        (void)collector.Commit();
+        collector.BeginFrame(2);
+        collector.SetWindowState({.focused = true});
+        const auto &snapshot = collector.Commit();
+        REQUIRE_FALSE(snapshot.FindGamepad(pad)->buttons[0].down);
+        REQUIRE(snapshot.FindGamepad(pad)->axes[0] == 0.0F);
+        REQUIRE_FALSE(snapshot.FindGamepad(raw)->rawButtons[0].down);
+        REQUIRE(snapshot.FindGamepad(raw)->rawAxes[0] == 0.0F);
+        REQUIRE(snapshot.pointer.wheelY == 0.0F);
+    }
+
+    TEST_CASE("Gamepad trigger normalization preserves the canonical unsigned range", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        const auto pad = collector.ConnectGamepad("canonical");
+        REQUIRE(collector.SetGamepadAxis(pad, GamepadAxis::LeftTrigger, -1.0F));
+        REQUIRE(collector.SetGamepadAxis(pad, GamepadAxis::RightTrigger, 2.0F));
+        REQUIRE(collector.SetGamepadAxis(pad, GamepadAxis::LeftX, -2.0F));
+        const auto &snapshot = collector.Commit();
+        const auto &axes = snapshot.FindGamepad(pad)->axes;
+        REQUIRE(axes[static_cast<std::size_t>(GamepadAxis::LeftTrigger)] == 0.0F);
+        REQUIRE(axes[static_cast<std::size_t>(GamepadAxis::RightTrigger)] == 1.0F);
+        REQUIRE(axes[static_cast<std::size_t>(GamepadAxis::LeftX)] == -1.0F);
+    }
+
+    TEST_CASE("Pointer device loss preserves keyboard and gamepad ownership", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        collector.SetKey(Key::A, true);
+        collector.SetPointerButton(PointerButton::Primary, true);
+        const auto pad = collector.ConnectGamepad("held gamepad");
+        REQUIRE(collector.SetGamepadButton(pad, GamepadButton::South, true));
+        collector.SetWindowState({.pointerDeviceAvailable = false});
+        collector.SetPointerButton(PointerButton::Primary, true);
+        const auto &snapshot = collector.Commit();
+        REQUIRE(snapshot.State(Key::A).down);
+        REQUIRE(snapshot.FindGamepad(pad)->buttons[0].down);
+        REQUIRE_FALSE(snapshot.State(PointerButton::Primary).down);
+        REQUIRE_FALSE(snapshot.State(PointerButton::Primary).pressed);
+        REQUIRE(snapshot.State(PointerButton::Primary).released);
+    }
+
+    TEST_CASE("Focus loss cannot turn a cancelled same-frame press into an activation on resume", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        collector.SetKey(Key::A, true);
+        const auto pad = collector.ConnectGamepad("pad");
+        REQUIRE(collector.SetGamepadButton(pad, GamepadButton::South, true));
+        collector.SetWindowState({.focused = false});
+        collector.SetPointerPosition(100.0F, 200.0F);
+        collector.SetWindowState({.focused = true});
+        const auto &snapshot = collector.Commit();
+        REQUIRE_FALSE(snapshot.State(Key::A).pressed);
+        REQUIRE_FALSE(snapshot.State(Key::A).down);
+        REQUIRE_FALSE(snapshot.FindGamepad(pad)->buttons[0].pressed);
+        REQUIRE_FALSE(snapshot.FindGamepad(pad)->buttons[0].down);
+        REQUIRE(snapshot.pointer.deltaX == 0.0F);
+        REQUIRE(snapshot.pointer.deltaY == 0.0F);
+    }
+
+    TEST_CASE("Profile composition retains its storage bound while allowing replacements at capacity", "[unit][runtime][input]") {
+        InputBindingProfile lower{.profileId = "lower"};
+        for (std::size_t index = 0; index < 4096; ++index)
+            lower.overrides.push_back({ActionId{"action." + std::to_string(index)}, {}});
+        const InputBindingProfile replacement{.profileId = "replacement", .overrides = {{ActionId{"action.0"}, {KeyBinding(Key::A)}}}};
+        const auto replaced = MergeBindingProfiles(lower, replacement);
+        REQUIRE(replaced.HasValue());
+        CHECK(replaced.Value().overrides.size() == 4096);
+        CHECK(replaced.Value().overrides.front().bindings.front().key == Key::A);
+        const InputBindingProfile overflow{.profileId = "overflow", .overrides = {{ActionId{"one.too.many"}, {}}}};
+        CHECK(MergeBindingProfiles(lower, overflow).HasError());
+        CHECK(lower.overrides.size() == 4096);
+        CHECK(lower.overrides.front().bindings.empty());
+    }
+
+    TEST_CASE("Mixed keyboard and gamepad players own distinct controls and modifiers", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        InputRouter router;
+        const ActionId action{"jump"};
+        const InputContextId contextId{"gameplay"};
+        REQUIRE(router
+                    .SetActionMap({{action,
+                                    ActionValueType::Digital,
+                                    contextId,
+                                    true,
+                                    {KeyBinding(Key::A), {.kind = BindingControlKind::GamepadButton}}}})
+                    .HasValue());
+        auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+        collector.BeginFrame(1);
+        collector.SetKey(Key::A, true);
+        const auto pad = collector.ConnectGamepad("player two");
+        router.BeginFrame(collector.Commit());
+        REQUIRE(router.AssignGamepad(1, pad));
+        REQUIRE(router.PlayerForKeyboardMouse() == 0);
+        REQUIRE_FALSE(router.ReadAction(context, action, 1).down);
+        REQUIRE(router.ReadAction(context, action, 0).pressed);
+        collector.BeginFrame(2);
+        collector.SetModifiers({.control = true});
+        REQUIRE(collector.SetGamepadButton(pad, GamepadButton::South, true));
+        router.BeginFrame(collector.Commit());
+        REQUIRE(router.ReadAction(context, action, 1).pressed);
+        REQUIRE_FALSE(router.ReadAction(context, action, 0).down);
+        const auto before = router.RoutingState(context).assignmentRevision;
+        router.AssignKeyboardMouse(2);
+        REQUIRE(router.PlayerForKeyboardMouse() == 2);
+        REQUIRE(router.RoutingState(context).assignmentRevision != before);
+        collector.BeginFrame(3);
+        collector.SetModifiers({});
+        router.BeginFrame(collector.Commit());
+        REQUIRE_FALSE(router.ReadAction(context, action, 0).down);
+        REQUIRE(router.ReadAction(context, action, 2).down);
+        router.AssignKeyboardMouse(std::nullopt);
+        REQUIRE_FALSE(router.ReadAction(context, action, 2).down);
+        REQUIRE(router.ReadAction(context, action).down);
+    }
+
+    TEST_CASE("Gamepad chords retain exact modifier policy and keyboard ownership", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        InputRouter router;
+        const ActionId action{"chord"};
+        const InputContextId contextId{"gameplay"};
+        REQUIRE(router
+                    .SetActionMap({{action,
+                                    ActionValueType::Digital,
+                                    contextId,
+                                    false,
+                                    {{.kind = BindingControlKind::GamepadButton, .chord = {Key::A}, .chordSize = 1}}}})
+                    .HasValue());
+        auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+        collector.BeginFrame(1);
+        const auto pad = collector.ConnectGamepad("chord controller");
+        collector.SetKey(Key::A, true);
+        collector.SetModifiers({.control = true});
+        REQUIRE(collector.SetGamepadButton(pad, GamepadButton::South, true));
+        router.BeginFrame(collector.Commit());
+        REQUIRE(router.AssignGamepad(1, pad));
+        router.AssignKeyboardMouse(1);
+        CHECK_FALSE(router.ReadAction(context, action, 1).down);
+        collector.BeginFrame(2);
+        collector.SetModifiers({});
+        router.BeginFrame(collector.Commit());
+        CHECK(router.ReadAction(context, action, 1).down);
+        router.AssignKeyboardMouse(0);
+        CHECK_FALSE(router.ReadAction(context, action, 1).down);
+        CHECK(router.ReadAction(context, action).down);
+    }
+
+    TEST_CASE("Hot plug storms never transfer assignment to a reused gamepad slot", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        InputRouter router;
+        const ActionId action{"jump"};
+        const InputContextId contextId{"gameplay"};
+        REQUIRE(router.SetActionMap({{action, ActionValueType::Digital, contextId, true, {{.kind = BindingControlKind::GamepadButton}}}})
+                    .HasValue());
+        auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+        GamepadDeviceId previous{};
+        for (FrameNumber cycle = 0; cycle < 32; ++cycle) {
+            collector.BeginFrame(cycle * 2 + 1);
+            const auto pad = collector.ConnectGamepad("reconnected");
+            REQUIRE(pad.IsValid());
+            REQUIRE(pad != previous);
+            REQUIRE_FALSE(collector.SetGamepadButton(previous, GamepadButton::South, true));
+            REQUIRE(collector.SetGamepadButton(pad, GamepadButton::South, true));
+            router.BeginFrame(collector.Commit());
+            REQUIRE_FALSE(router.ReadAction(context, action, 1).down);
+            REQUIRE(router.AssignGamepad(1, pad));
+            REQUIRE(router.ReadAction(context, action, 1).pressed);
+            collector.BeginFrame(cycle * 2 + 2);
+            REQUIRE(collector.DisconnectGamepad(pad));
+            router.BeginFrame(collector.Commit());
+            REQUIRE_FALSE(router.PlayerForGamepad(pad));
+            REQUIRE_FALSE(router.ReadAction(context, action, 1).down);
+            previous = pad;
+        }
+    }
+
+    TEST_CASE("Replacing a collector cannot alias the previous backend's gamepad handle", "[unit][runtime][input]") {
+        RawInputCollector oldBackend;
+        oldBackend.BeginFrame(1);
+        const auto old = oldBackend.ConnectGamepad("old backend");
+        InputRouter router;
+        router.BeginFrame(oldBackend.Commit());
+        REQUIRE(router.AssignGamepad(1, old));
+        RawInputCollector replacement;
+        replacement.BeginFrame(2);
+        const auto fresh = replacement.ConnectGamepad("replacement backend");
+        REQUIRE(fresh.slot == old.slot);
+        REQUIRE(fresh.sessionGeneration != old.sessionGeneration);
+        REQUIRE_FALSE(replacement.SetGamepadButton(old, GamepadButton::South, true));
+        router.BeginFrame(replacement.Commit());
+        REQUIRE_FALSE(router.PlayerForGamepad(old));
+        REQUIRE_FALSE(router.AssignGamepad(1, old));
+        REQUIRE(router.AssignGamepad(1, fresh));
+    }
+
+    TEST_CASE("Disconnect releases the old player's action while preserving held keyboard input", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        InputRouter router;
+        const ActionId action{"hold"};
+        const InputContextId contextId{"gameplay"};
+        REQUIRE(router
+                    .SetActionMap({{action,
+                                    ActionValueType::Digital,
+                                    contextId,
+                                    true,
+                                    {KeyBinding(Key::A), {.kind = BindingControlKind::GamepadButton}}}})
+                    .HasValue());
+        auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+        collector.BeginFrame(1);
+        collector.SetKey(Key::A, true);
+        const auto pad = collector.ConnectGamepad("player two");
+        REQUIRE(collector.SetGamepadButton(pad, GamepadButton::South, true));
+        router.BeginFrame(collector.Commit());
+        REQUIRE(router.AssignGamepad(1, pad));
+        REQUIRE(router.ReadAction(context, action, 1).down);
+        collector.BeginFrame(2);
+        REQUIRE(collector.DisconnectGamepad(pad));
+        router.BeginFrame(collector.Commit());
+        REQUIRE_FALSE(router.PlayerForGamepad(pad));
+        const auto lost = router.ReadAction(context, action, 1);
+        REQUIRE_FALSE(lost.down);
+        REQUIRE(lost.released);
+        const auto aggregate = router.ReadAction(context, action);
+        REQUIRE(aggregate.down);
+        REQUIRE(aggregate.released);
+        collector.BeginFrame(3);
+        router.BeginFrame(collector.Commit());
+        REQUIRE_FALSE(router.ReadAction(context, action, 1).released);
+    }
+
+    TEST_CASE("Digital actions expose thresholded values and preserve subframe taps", "[unit][runtime][input]") {
+        RawInputCollector collector;
+        InputRouter router;
+        const InputContextId contextId{"gameplay"};
+        const ActionId trigger{"trigger"};
+        const ActionId tap{"tap"};
+        REQUIRE(router
+                    .SetActionMap(
+                        {{trigger,
+                          ActionValueType::Digital,
+                          contextId,
+                          false,
+                          {{.kind = BindingControlKind::GamepadAxis, .gamepadAxis = GamepadAxis::LeftTrigger, .digitalThreshold = 0.5F}}},
+                         {tap, ActionValueType::Digital, contextId, false, {KeyBinding(Key::A)}}})
+                    .HasValue());
+        auto context = router.PushContext(contextId, InputContextKind::Gameplay);
+        collector.BeginFrame(1);
+        const auto pad = collector.ConnectGamepad("trigger controller");
+        REQUIRE(collector.SetGamepadAxis(pad, GamepadAxis::LeftTrigger, 0.25F));
+        router.BeginFrame(collector.Commit());
+        CHECK(router.ReadAction(context, trigger).x == 0.0F);
+        collector.BeginFrame(2);
+        REQUIRE(collector.SetGamepadAxis(pad, GamepadAxis::LeftTrigger, 0.75F));
+        collector.SetKey(Key::A, true);
+        collector.SetKey(Key::A, false);
+        router.BeginFrame(collector.Commit());
+        const auto thresholded = router.ReadAction(context, trigger);
+        CHECK(thresholded.x == 1.0F);
+        CHECK(thresholded.pressed);
+        const auto pulse = router.ReadAction(context, tap);
+        CHECK(pulse.x == 1.0F);
+        CHECK(pulse.pressed);
+        CHECK(pulse.released);
+        CHECK_FALSE(pulse.down);
+        collector.BeginFrame(3);
+        REQUIRE(collector.SetGamepadAxis(pad, GamepadAxis::LeftTrigger, 0.0F));
+        router.BeginFrame(collector.Commit());
+        const auto released = router.ReadAction(context, trigger);
+        CHECK(released.x == 0.0F);
+        CHECK(released.released);
+        CHECK(router.ReadAction(context, tap).x == 0.0F);
+    }
+
+    TEST_CASE("Project profile identity cannot escape the user root", "[unit][runtime][input]") {
+        const Horo::Tests::OwnedTestDirectory directory{"horo-input-containment"};
+        for (const auto identity : {"../escape", "a/b", "a\\b", "C:escape", ".", "..", "CON", "nul.extra", "com1", "trailing.", "a:b"}) {
+            INFO(identity);
+            REQUIRE(ResolveProjectBindingProfilePath(directory.Path(), identity).HasError());
+        }
+        const auto resolved = ResolveProjectBindingProfilePath(directory.Path(), "stable-project_1");
+        REQUIRE(resolved.HasValue());
+        REQUIRE(resolved.Value() == directory.Path() / ".horo/input/projects/stable-project_1.json");
+        REQUIRE(ResolveProjectBindingProfilePath({}, "project").HasError());
+        const auto unicode = ResolveProjectBindingProfilePath(directory.Path(), "proje-ç");
+        REQUIRE(unicode.HasValue());
+        REQUIRE(unicode.Value().filename() == std::filesystem::path{u8"proje-ç.json"});
+    }
+
+    TEST_CASE("Profile layer resolution rejects symlinks escaping admitted roots", "[unit][runtime][input]") {
+        const Horo::Tests::OwnedTestDirectory directory{"horo-input-redirect"};
+        const auto root = directory.Path() / "root";
+        const auto outside = directory.Path() / "outside";
+        std::filesystem::create_directories(root / ".horo");
+        std::filesystem::create_directory(outside);
+        std::error_code error;
+        std::filesystem::create_directory_symlink(outside, root / ".horo/input", error);
+        if (error)
+            SKIP("Host does not permit directory symlink creation");
+        REQUIRE(ResolveBindingProfilePaths({}, root).HasError());
+        REQUIRE(ResolveProjectBindingProfilePath(root, "project").HasError());
+        REQUIRE_FALSE(std::filesystem::exists(outside / "editor.json"));
+    }
+
+    TEST_CASE("Runtime profile reload retains inactive editor overrides on disk", "[unit][runtime][input]") {
+        const Horo::Tests::OwnedTestDirectory directory{"horo-input-inactive"};
+        const BindingProfilePaths paths{{}, directory.Path() / "editor.json", directory.Path() / "project.json"};
+        REQUIRE(SaveBindingProfileAtomically(paths.editorUser,
+                                             {.profileId = "global",
+                                              .overrides = {{ActionId{"editor.save"}, {{.kind = BindingControlKind::Key, .key = Key::S}}}}})
+                    .HasValue());
+        InputRouter router;
+        const InputContextId context{"gameplay"};
+        REQUIRE(router.SetActionMap({{ActionId{"jump"}, ActionValueType::Digital, context, true, {KeyBinding(Key::Space)}}}).HasValue());
+        REQUIRE(router.ReloadProfile(paths).HasValue());
+        REQUIRE(router.Profile().overrides.empty());
+        REQUIRE(CommitBindingProfileChange(router, paths, BindingProfileScope::ProjectUser, {ActionId{"jump"}, {KeyBinding(Key::J)}})
+                    .HasValue());
+        REQUIRE(LoadBindingProfile(paths.editorUser).Value().overrides.front().action == ActionId{"editor.save"});
+        REQUIRE(router.Profile().overrides.size() == 1);
+        REQUIRE(router.Profile().overrides.front().action == ActionId{"jump"});
     }
 }  // namespace

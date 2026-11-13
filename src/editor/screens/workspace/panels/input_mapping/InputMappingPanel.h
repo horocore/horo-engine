@@ -33,6 +33,7 @@ namespace Horo::Editor {
 
         void OnAttach(PanelContext &context) override;
         void OnDetach() override;
+        void OnPresentationHidden(EditorWorkspaceViewCommandData &command) override;
         void DrawIcon(ImDrawList *drawList, const ImVec2 &position, const ImVec2 &size, ImU32 color) override;
         void DrawPanel(const ImVec2 &position, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) override;
@@ -45,20 +46,29 @@ namespace Horo::Editor {
         };
 
         void DrawActions(const EditorGuiContext &context);
-        void DrawActionValidation(std::span<const Input::ActionDescriptor> actions) const;
         void DrawActionTable(std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context);
         void DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context);
+        [[nodiscard]] bool DrawBindingDirection(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
+                                                std::size_t index, const EditorGuiContext &context);
+        [[nodiscard]] bool DrawBindingActions(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
+                                              std::size_t index, const EditorGuiContext &context);
+        [[nodiscard]] bool DrawBindingDeadzone(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
+                                               std::size_t index, const EditorGuiContext &context);
         void DrawDevices(const EditorGuiContext &context);
         void DrawProfiles(const EditorGuiContext &context);
         void PollBindingCapture(const EditorGuiContext &context);
-        [[nodiscard]] Result<Input::InputBindingProfile> LoadComposedProfile() const;
-        [[nodiscard]] std::filesystem::path EditorProfilePath() const;
-        [[nodiscard]] std::optional<std::filesystem::path> ProjectUserProfilePath() const;
+        void StartBindingCapture(const Input::ActionId &action, std::optional<std::size_t> bindingIndex, const EditorGuiContext &context);
+        [[nodiscard]] Result<Input::BindingProfilePaths> ProfilePaths() const;
+        [[nodiscard]] Result<void> CommitBindingChange(Input::BindingOverride change) const;
 
         Input::InputRouter *router_{nullptr};
         Page page_{Page::Actions};
         std::size_t selectedAction_{0};
+        std::optional<std::pair<std::size_t, float>> deadzoneDraft_;
         std::optional<Input::ActionId> listeningAction_;
+        std::optional<std::size_t> listeningBinding_;
+        std::optional<Input::ActionId> displayedAction_;
+        std::optional<Input::InputBindingCapture> bindingCapture_;
         Input::InputContextToken bindingCaptureContext_;
         std::string statusMessage_;
         std::string projectRootText_;

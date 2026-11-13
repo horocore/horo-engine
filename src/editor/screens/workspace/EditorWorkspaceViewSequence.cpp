@@ -233,7 +233,7 @@ namespace Horo::Editor {
         const bool focus = m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();
         auto intent = widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent,
-                                   &m_context.settings.settings.keymap.profile,
+                                   m_context.inputRouter ? &m_context.inputRouter->Profile() : &m_context.settings.settings.keymap.profile,
                                    static_cast<float>(m_context.settings.settings.codeFontSizePx), presentation->tools.HandledShortcut(),
                                    &m_context.settings.settings.codeEditor, m_context.settings.settings.codeFontFamily},
                                   &m_context.theme.fonts);

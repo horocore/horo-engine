@@ -232,6 +232,8 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Audio Middleware Integration Model](../adr/072-audio-middleware-integration-model.md):
   event-bridge versus backend-replacement ownership, stable frontend identities,
   native coexistence, budgets, bank activation, profiling, and distribution.
+- [Input System Qualification](./runtime/input-system-qualification.md): persistence,
+  device, remapping and platform/device evidence matrix.
 - [Input Architecture](./runtime/input-architecture.md): input snapshots, action
   maps, focus, capture, modal routing, and simulation input frames.
 - [Game UI And HUD](./runtime/game-ui-and-hud.md): runtime game menus, HUDs,
