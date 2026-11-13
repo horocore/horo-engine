@@ -25,7 +25,10 @@ namespace Horo::PlatformServices {
                config_.terminalRetention <= PlatformOfflineQueueMaximumTerminalRetention && config_.producerRedeliveryHorizon.count() > 0 &&
                config_.producerRedeliveryHorizon <= config_.terminalRetention &&
                config_.producerRedeliveryHorizon <= PlatformOfflineQueueMaximumTerminalRetention &&
-               config_.maximumPresenceDetailBytes <= PlatformOfflineQueueMaximumPresenceDetailBytes && config_.generation.IsValid();
+               config_.maximumPresenceDetailBytes <= PlatformOfflineQueueMaximumPresenceDetailBytes && config_.generation.IsValid() &&
+               config_.maximumAttempts > 0 && config_.maximumAttempts <= PlatformOfflineQueueMaximumAttempts &&
+               config_.initialRetryDelay.count() > 0 && config_.initialRetryDelay <= config_.maximumRetryDelay &&
+               config_.maximumRetryDelay <= PlatformOfflineQueueMaximumRetryDelay;
     }
 
     /** @copydoc PlatformOfflineQueue::ObserveTime */
@@ -54,7 +57,7 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformOfflineQueue::AddAge */
     std::optional<PlatformOfflineQueue::TimePoint> PlatformOfflineQueue::AddAge(const TimePoint time,
-                                                                                const std::chrono::seconds age) noexcept {
+                                                                                const std::chrono::milliseconds age) noexcept {
         const auto delta = std::chrono::duration_cast<Clock::duration>(age);
         if (time.time_since_epoch() > Clock::duration::max() - delta)
             return std::nullopt;
@@ -66,7 +69,9 @@ namespace Horo::PlatformServices {
         PlatformOfflineOperationSnapshot snapshot{.handle = state.handle,
                                                   .lane = state.lane,
                                                   .operation = state.operation,
-                                                  .state = state.state};
+                                                  .state = state.state,
+                                                  .attempts = state.attempts,
+                                                  .nextEligibleAt = state.nextEligibleAt};
         snapshot.receipts.reserve(state.receipts.size());
         for (const auto &receipt : state.receipts)
             snapshot.receipts.push_back(PlatformOfflineReceiptSnapshot{.id = receipt.intent.id,
@@ -125,5 +130,33 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformOfflineQueue::OperationCount */
     std::size_t PlatformOfflineQueue::OperationCount() const noexcept {
         return operations_.size();
+    }
+
+    /** @copydoc PlatformOfflineQueue::Diagnostics */
+    PlatformOfflineQueueDiagnostics PlatformOfflineQueue::Diagnostics() const noexcept {
+        PlatformOfflineQueueDiagnostics result{.active = activeIntentCount_,
+                                               .retained = retainedIntentCount_,
+                                               .activeCapacity = config_.activeCapacity,
+                                               .retainedCapacity = config_.retainedCapacity,
+                                               .closed = closed_};
+        for (const auto &operation : operations_)
+            for (const auto &receipt : operation.receipts)
+                ++result.receiptsByState[static_cast<std::size_t>(receipt.state)];
+        return result;
+    }
+
+    /** @copydoc PlatformOfflineQueue::SuspendAllPending */
+    std::size_t PlatformOfflineQueue::SuspendAllPending() noexcept {
+        std::size_t changed{};
+        for (auto &operation : operations_) {
+            if (operation.state != PlatformOfflineOperationState::Pending)
+                continue;
+            operation.state = PlatformOfflineOperationState::Suspended;
+            for (auto &receipt : operation.receipts)
+                if (receipt.state == PlatformOfflineIntentState::Pending)
+                    receipt.state = PlatformOfflineIntentState::Suspended;
+            ++changed;
+        }
+        return changed;
     }
 }  // namespace Horo::PlatformServices

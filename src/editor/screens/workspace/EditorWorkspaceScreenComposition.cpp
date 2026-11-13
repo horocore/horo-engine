@@ -123,6 +123,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
             .xrSimulatorArtifacts = simulatorArtifacts_,
             .xrSimulator = panelServices_.xrSimulator,
+            .platformDiagnostics = panelServices_.platformDiagnostics,
         };
         contributions_.panels.AttachAll(panelContext);
     }

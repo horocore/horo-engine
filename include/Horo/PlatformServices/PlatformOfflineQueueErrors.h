@@ -9,13 +9,13 @@
 
 namespace Horo::PlatformServices::OfflineQueueErrors {
     /** @brief Queue limits are invalid or exceed engine hard maxima. */
-    extern const ErrorCodeDescriptor InvalidConfiguration;
+    extern const ErrorCodeDescriptor &InvalidConfiguration;
     /** @brief An intent, lane, or operation payload is malformed. */
     extern const ErrorCodeDescriptor InvalidIntent;
     /** @brief Active or retained intent capacity is exhausted. */
-    extern const ErrorCodeDescriptor CapacityExceeded;
+    extern const ErrorCodeDescriptor &CapacityExceeded;
     /** @brief A caller reused an intent identity with different canonical content. */
-    extern const ErrorCodeDescriptor IdentityConflict;
+    extern const ErrorCodeDescriptor &IdentityConflict;
     /** @brief The handle belongs to another queue generation or is malformed. */
     extern const ErrorCodeDescriptor Stale;
     /** @brief The intent expired or its terminal observation was compacted. */

@@ -17,8 +17,8 @@ namespace Horo::PlatformOfflineQueue::PlatformOfflineQueueErrors {
     }  // namespace
 
     const ErrorCodeDescriptor InvalidConfiguration =
-        Descriptor("platform.offline.invalid_configuration", "Offline queue storage configuration is invalid.",
-                   "Use finite nonzero bounds and an explicit product state root.");
+        Descriptor("platform.offline.invalid_configuration", "Offline queue configuration is invalid.",
+                   "Use finite validated queue and storage limits with an explicit product context.");
     const ErrorCodeDescriptor InvalidPartition =
         Descriptor("platform.offline.invalid_partition", "Offline queue partition identity is invalid.",
                    "Use the protected nonzero same-binding partition assigned by the identity owner.");
@@ -44,4 +44,7 @@ namespace Horo::PlatformOfflineQueue::PlatformOfflineQueueErrors {
     const ErrorCodeDescriptor IdentityConflict =
         Descriptor("platform.offline.identity_conflict", "Offline queue identity is reused with conflicting data.",
                    "Preserve one canonical payload for each durable intent identity.");
+    const ErrorCodeDescriptor RevisionConflict =
+        Descriptor("platform.offline.storage_changed", "The protected offline queue changed or its publication token is stale.",
+                   "Reload the latest partition snapshot and revalidate the mutation before publication.");
 }  // namespace Horo::PlatformOfflineQueue::PlatformOfflineQueueErrors
