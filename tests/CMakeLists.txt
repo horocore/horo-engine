@@ -3861,6 +3861,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroExtensionActivityViewTests PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroThirdParty::ImGui)
     add_executable(HoroEditorUiComponentsRenderTests
             unit/editor/EditorUiComponentsRenderTests.cpp
+            support/AllocationProbe.cpp
             unit/editor/GamePanelXrProjectionTests.cpp
             unit/editor/ActivityButtonIdentityTests.cpp
             unit/editor/SequenceTimelineRenderTests.cpp
@@ -3869,6 +3870,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
 
     target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE
+            "${PROJECT_SOURCE_DIR}/tests"
             "${PROJECT_SOURCE_DIR}/src/editor/pcg"
             "${PROJECT_SOURCE_DIR}/src/editor/screens/workspace")
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
@@ -3876,6 +3878,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditorUiComponentsRenderTests
             PRIVATE
             HoroEngine::Gui
+            HoroEditorControlMetadataInternal
             HoroThirdParty::ImGui
     )
     add_executable(HoroViewportPanelRenderTests

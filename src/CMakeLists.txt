@@ -4032,7 +4032,12 @@ if (HORO_BUILD_INPUT_SDL3)
 endif ()
 
 if (HORO_BUILD_EDITOR_GUI)
+    # Non-installed, narrow observation seam; source IDs and framework hooks stay inside GUI composition/tests.
+    add_library(HoroEditorControlMetadataInternal INTERFACE)
+    target_include_directories(HoroEditorControlMetadataInternal INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/editor/accessibility")
+    target_link_libraries(HoroEditorControlMetadataInternal INTERFACE HoroEngine::RuntimeUi)
     add_library(HoroGui STATIC
+            editor/accessibility/EditorControlMetadata.cpp
             editor/xr/EditorXRSimulatorPanel.cpp
             editor/design_system/components/EditorUiComponents.cpp
             editor/design_system/components/EditorUiCustomResources.cpp
@@ -4258,6 +4263,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroGui PUBLIC HoroEngine::Runtime)
     target_link_libraries(HoroGui PUBLIC HoroEngine::EditorXRSimulatorModel)
     target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
+    target_link_libraries(HoroGui PRIVATE HoroEditorControlMetadataInternal)
 
     target_compile_features(HoroGui PUBLIC cxx_std_20)
     target_include_directories(HoroGui

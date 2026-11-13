@@ -99,6 +99,14 @@ drawn arrow rather than duplicating a reserved-width constant. The full 43-case
 rerun at `c76538c` passed, including those keyboard and geometry assertions.
 The editor executable and 108-case presentation/SDL batch remain separate checks.
 
+Subsequent source integrates context-bound shared-control observations into the
+actual `GuiScreenHost` and initial primitives. See
+[Editor shared-control metadata](editor-control-metadata.md) for bounded ownership,
+redaction, the host-layout rebuild requirement and remaining coverage. Six new
+actual-widget/lifecycle regressions raise the expected shared-control family to
+49; they require fresh native execution. These observations supply baseline
+editor metadata, not Runtime UI focus/audience publication or native support.
+
 The direct-consumer batch refreshed callers after the public binding layout
 change: Character **16**, Runtime UI input **19**, input debugger **15**, portable
 Android input **9**, and three direct consumer executables. All four staged

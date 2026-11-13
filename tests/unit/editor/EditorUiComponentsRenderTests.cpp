@@ -1,7 +1,9 @@
+#include "EditorControlMetadata.h"
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "support/AllocationProbe.h"
 
 #include <algorithm>
 #include <array>
@@ -16,6 +18,8 @@
 #include <string>
 #include <string_view>
 
+namespace Metadata = Horo::Editor::Detail;
+
 namespace {
     std::string gClipboardText;
 
@@ -27,7 +31,9 @@ namespace {
     struct ImGuiTestContext {
         explicit ImGuiTestContext(const ImVec2 displaySize) {
             IMGUI_CHECKVERSION();
-            ImGui::CreateContext();
+            previous = ImGui::GetCurrentContext();
+            context = ImGui::CreateContext();
+            ImGui::SetCurrentContext(context);
             io = &ImGui::GetIO();
             io->DisplaySize = displaySize;
             io->DeltaTime = 1.0F / 60.0F;
@@ -38,9 +44,14 @@ namespace {
         }
 
         ~ImGuiTestContext() {
-            ImGui::DestroyContext();
+            ImGui::DestroyContext(context);
+            ImGui::SetCurrentContext(previous);
         }
 
+        ImGuiTestContext(const ImGuiTestContext &) = delete;
+        ImGuiTestContext &operator=(const ImGuiTestContext &) = delete;
+
+        ImGuiContext *context{}, *previous{};
         ImGuiIO *io{nullptr};
         Horo::Editor::Theme::Fonts fonts;
     };
@@ -102,6 +113,17 @@ namespace {
         ImGui::NewFrame();
         drawFrame();
         ImGui::Render();
+    }
+
+    /** @brief Runs actual shared controls inside one fixed test window and the framework's normal frame lifecycle. */
+    template <typename DrawFrame> void RenderMetadataFrame(DrawFrame &&drawFrame) {
+        RenderImGuiFrame([&] {
+            ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({600, 450}, ImGuiCond_Always);
+            ImGui::Begin("Metadata observations");
+            drawFrame();
+            ImGui::End();
+        });
     }
 
     /** @brief Checks actual rendered glyphs against the arrow geometry and field bounds, including inherited disablement. */
@@ -1361,4 +1383,172 @@ TEST_CASE("Shared combo selected text stays inside the label area for long local
             CHECK(selected == 0);
         }
     }
+}
+
+TEST_CASE("Shared controls produce owned versioned observations without retaining editable content",
+          "[unit][editor][gui][accessibility][metadata]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    std::string label{"Save###stable-save"}, secret{"private-value"};
+    bool checked = true;
+    int selected = 1;
+    const std::array choices{"One", "Two"};
+    RenderMetadataFrame([&] {
+        static_cast<void>(Ui::Button({.label = label.c_str()}));
+        label.assign("Changed after submission");
+        static_cast<void>(Ui::CheckboxControl("Enabled", &checked, gui.fonts));
+        static_cast<void>(Ui::InputTextControl("Password", secret, 64, gui.fonts));
+        static_cast<void>(Ui::ComboControl("##Choice", &selected, choices.data(), static_cast<int>(choices.size()), gui.fonts));
+        ImGui::BeginDisabled();
+        static_cast<void>(Ui::Button({.label = "Disabled"}));
+        ImGui::EndDisabled();
+        static_cast<void>(Ui::IconButton({.id = "literal-label", .tooltip = "Literal##help"}));
+    });
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 6);
+    CHECK(frame.schemaVersion == CurrentUiAccessibilitySchemaVersion);
+    CHECK(frame.Text(frame.controls[0].name) == "Save");
+    CHECK(frame.controls[1].role == UiAccessibilityRole::Checkbox);
+    CHECK(frame.controls[1].state.Has(UiAccessibilityStateFlag::Checked));
+    CHECK(frame.controls[1].value.boolean);
+    CHECK(frame.controls[2].valueRedacted);
+    CHECK(frame.controls[2].value.kind == UiAccessibilityValueKind::None);
+    CHECK(std::string_view(frame.text.data(), frame.text.size()).find("private-value") == std::string_view::npos);
+    CHECK(frame.controls[3].value.integer == 1);
+    CHECK(frame.missingNames == 1);
+    CHECK(frame.controls[4].state.Has(UiAccessibilityStateFlag::Disabled));
+    CHECK_FALSE(frame.controls[4].state.Has(UiAccessibilityStateFlag::Focusable));
+    CHECK(frame.Text(frame.controls[5].name) == "Literal##help");
+    CHECK(frame.Text({.offset = 128'000, .size = 2}).empty());
+}
+
+TEST_CASE("Metadata redaction and focus observation cannot be overridden by caller supplied facts and allocate no storage",
+          "[unit][editor][gui][accessibility][metadata][allocation]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    Horo::Tests::AllocationProbe::Measurement allocation;
+    bool focused = false;
+    RenderMetadataFrame([&] {
+        static_cast<void>(ImGui::Button("Actual control"));
+        focused = ImGui::IsItemFocused();
+        Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+        Metadata::ObserveEditorControl(UiAccessibilityRole::Button, "Probe",
+                                       UiAccessibilityState{UiAccessibilityStateFlag::Disabled | UiAccessibilityStateFlag::Focused},
+                                       {.kind = UiAccessibilityValueKind::Text,
+                                        .text = {"sensitive", UiAccessibilityTextSource::UserContent}},
+                                       true);
+        allocation = probe.Snapshot();
+    });
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 1);
+    CHECK(allocation.requests == 0);
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Focused) == focused);
+    CHECK_FALSE(frame.controls[0].state.Has(UiAccessibilityStateFlag::Disabled));
+    CHECK(frame.controls[0].valueRedacted);
+    CHECK(frame.controls[0].value.kind == UiAccessibilityValueKind::None);
+    CHECK(std::string_view(frame.text.data(), frame.text.size()).find("sensitive") == std::string_view::npos);
+}
+
+TEST_CASE("Metadata contexts isolate foreign user data and rebind without reviving destroyed context observations",
+          "[unit][editor][gui][accessibility][metadata][lifetime]") {
+    using namespace Horo::Editor;
+    Metadata::EditorControlMetadataCapture capture;
+    ImGuiTestContext first{{800, 500}};
+    REQUIRE(capture.Bind(first.context));
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "First"}));
+    });
+    const auto sequence = capture.Frame().sequence;
+    {
+        ImGuiTestContext second{{800, 500}};
+        second.io->UserData = reinterpret_cast<void *>(static_cast<std::uintptr_t>(1));
+        RenderMetadataFrame([] {
+            static_cast<void>(Ui::Button({.label = "Foreign"}));
+        });
+        CHECK(Metadata::CurrentEditorControlMetadata().status == Metadata::EditorControlMetadataStatus::NoFrame);
+        REQUIRE(capture.Frame().controls.size() == 1);
+        CHECK(capture.Frame().Text(capture.Frame().controls[0].name) == "First");
+        REQUIRE(capture.Bind(second.context));
+        RenderMetadataFrame([] {
+            static_cast<void>(Ui::Button({.label = "Second"}));
+        });
+        REQUIRE(capture.Frame().controls.size() == 1);
+        CHECK(capture.Frame().Text(capture.Frame().controls[0].name) == "Second");
+    }
+    CHECK(capture.Frame().status == Metadata::EditorControlMetadataStatus::Retired);
+    CHECK(ImGui::GetCurrentContext() == first.context);
+    REQUIRE(capture.Bind(first.context));
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "Restored"}));
+    });
+    CHECK(capture.Frame().sequence > sequence);
+    REQUIRE(capture.Frame().controls.size() == 1);
+    CHECK(capture.Frame().Text(capture.Frame().controls[0].name) == "Restored");
+}
+
+TEST_CASE("Destroying a metadata capture revokes its hooks without replacing another owner or leaving callbacks",
+          "[unit][editor][gui][accessibility][metadata][lifetime]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext gui{{800, 500}};
+    {
+        Metadata::EditorControlMetadataCapture capture, other;
+        REQUIRE(capture.Bind(gui.context));
+        CHECK_FALSE(other.Bind(gui.context));
+        RenderMetadataFrame([] {
+            static_cast<void>(Ui::Button({.label = "Owned"}));
+        });
+        REQUIRE(capture.Frame().controls.size() == 1);
+    }
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "After owner destruction"}));
+    });
+    CHECK(Metadata::CurrentEditorControlMetadata().status == Metadata::EditorControlMetadataStatus::NoFrame);
+}
+
+TEST_CASE("Metadata capacity refusal exposes no partial frame and recovers at the next real frame boundary",
+          "[unit][editor][gui][accessibility][metadata][capacity]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    RenderMetadataFrame([] {
+        for (std::size_t item = 0; item <= Metadata::EditorControlMetadataCapture::MaximumControls; ++item) {
+            ImGui::PushID(static_cast<int>(item));
+            static_cast<void>(Ui::Button({.label = "Entry"}));
+            ImGui::PopID();
+        }
+    });
+    CHECK(capture.Frame().status == Metadata::EditorControlMetadataStatus::CapacityExceeded);
+    CHECK(capture.Frame().controls.empty());
+    CHECK(capture.Frame().text.empty());
+    const auto rejected = capture.Frame().sequence;
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "Recovered"}));
+    });
+    CHECK(capture.Frame().status == Metadata::EditorControlMetadataStatus::Complete);
+    CHECK(capture.Frame().sequence > rejected);
+    REQUIRE(capture.Frame().controls.size() == 1);
+}
+
+TEST_CASE("Duplicate actual widget identities reject the complete metadata attempt rather than overwriting observations",
+          "[unit][editor][gui][accessibility][metadata][identity]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "Duplicate"}));
+        static_cast<void>(Ui::Button({.label = "Duplicate"}));
+    });
+    CHECK(capture.Frame().status == Metadata::EditorControlMetadataStatus::InvalidInput);
+    CHECK(capture.Frame().controls.empty());
+    CHECK(capture.Frame().text.empty());
 }

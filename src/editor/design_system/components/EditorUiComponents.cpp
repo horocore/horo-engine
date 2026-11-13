@@ -2,7 +2,9 @@
 
 #include "Horo/Editor/EditorUiComponents.h"
 
+#include "EditorControlMetadata.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Runtime/Input.h"
 
 #include <algorithm>
@@ -19,6 +21,22 @@
 #include <vector>
 
 namespace Horo::Editor::Ui {
+    using Runtime::Ui::UiAccessibilityRole;
+    using Runtime::Ui::UiAccessibilityState;
+    using Runtime::Ui::UiAccessibilityStateFlag;
+    using Runtime::Ui::UiAccessibilityValueInput;
+    using Runtime::Ui::UiAccessibilityValueKind;
+
+    namespace {
+        /** @brief Sends call-duration facts to the actual host's context-bound metadata owner, including during live reload. */
+        void RecordControlMetadata(
+            const UiAccessibilityRole role, const char *label, const UiAccessibilityState state = {},
+            const UiAccessibilityValueInput value = {}, const bool redacted = false,
+            const Detail::EditorControlLabelKind labelKind = Detail::EditorControlLabelKind::FrameworkLabel) noexcept {
+            GuiLive::HostSymbol<&Detail::ObserveEditorControl>()(role, label, state, value, redacted, labelKind);
+        }
+    }  // namespace
+
     /** @copydoc ActivityButton */
     bool ActivityButton(const ActivityButtonProps &props, const Theme::Fonts &fonts) {
         ImGui::BeginDisabled(!props.enabled);
@@ -26,6 +44,9 @@ namespace Horo::Editor::Ui {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::Hover());
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::AccentSoft());
         const bool pressed = ImGui::Button(props.id, props.size);
+        RecordControlMetadata(UiAccessibilityRole::TabItem, props.tooltip,
+                              props.active ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None, {}, false,
+                              Detail::EditorControlLabelKind::ResolvedText);
         // Own the identity: Badge/tooltip submission overwrites the mutable global LastItemData.
         const ImGuiLastItemData buttonItem{GImGui->LastItemData};
         ImGui::PopStyleColor(3);
@@ -566,6 +587,7 @@ namespace Horo::Editor::Ui {
         {
             ScopedTextStyle textStyle(props.font, resolvedStyle.metrics.fontSize, props.baseFontSize);
             clicked = ImGui::Button(props.label, actualSize);
+            RecordControlMetadata(UiAccessibilityRole::Button, props.label);
         }
 
         ImGui::PopStyleColor(4);
@@ -720,6 +742,9 @@ namespace Horo::Editor::Ui {
         const ImVec2 position = ImGui::GetCursorScreenPos();
         ImGui::BeginDisabled(!props.enabled);
         const bool clicked = ImGui::InvisibleButton("##icon-button", size, ImGuiButtonFlags_EnableNav);
+        RecordControlMetadata(UiAccessibilityRole::Button, props.tooltip,
+                              props.selected ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None, {}, false,
+                              Detail::EditorControlLabelKind::ResolvedText);
         const bool hovered = props.enabled && ImGui::IsItemHovered();
         const bool active = props.enabled && ImGui::IsItemActive();
         const bool focused = props.enabled && ImGui::IsItemFocused();
@@ -1184,6 +1209,9 @@ namespace Horo::Editor::Ui {
             ImGui::InvisibleButton(rowId.c_str(), {rowW, rowH}, ImGuiButtonFlags_EnableNav | ImGuiButtonFlags_PressedOnClick);
         const bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
         const bool rowFocused = ImGui::IsItemFocused();
+        RecordControlMetadata(UiAccessibilityRole::ListItem, label,
+                              isSelected ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None, {}, false,
+                              Detail::EditorControlLabelKind::ResolvedText);
         if (isSelected && (GImGui->LastItemData.ItemFlags & ImGuiItemFlags_Disabled) == 0)
             ImGui::SetItemDefaultFocus();
         ImGui::EndDisabled();
@@ -1244,6 +1272,11 @@ namespace Horo::Editor::Ui {
 
         const std::string popupId = std::string("##popup_") + id;
         const bool popupOpen = ImGui::IsPopupOpen(popupId.c_str());
+        const auto popupState = popupOpen || fieldActivated
+                                    ? UiAccessibilityStateFlag::HasPopup | UiAccessibilityStateFlag::Expanded
+                                    : static_cast<Runtime::Ui::UiAccessibilityStateMask>(UiAccessibilityStateFlag::HasPopup);
+        RecordControlMetadata(UiAccessibilityRole::List, id, UiAccessibilityState{popupState},
+                              {.kind = UiAccessibilityValueKind::Integer, .integer = *value});
 
         auto *dl = ImGui::GetWindowDrawList();
         const ImVec4 controlSurface =
@@ -1358,6 +1391,10 @@ namespace Horo::Editor::Ui {
                 changed = ImGui::InputTextWithHint(id, options.hint, buffer, bufferSize);
             else
                 changed = ImGui::InputText(id, buffer, bufferSize);
+            auto flags = static_cast<Runtime::Ui::UiAccessibilityStateMask>(UiAccessibilityStateFlag::Editable);
+            if (options.error)
+                flags |= static_cast<Runtime::Ui::UiAccessibilityStateMask>(UiAccessibilityStateFlag::Invalid);
+            RecordControlMetadata(UiAccessibilityRole::TextField, id, UiAccessibilityState{flags}, {}, true);
         }
         ImGui::PopItemWidth();
 
@@ -1711,6 +1748,8 @@ namespace Horo::Editor::Ui {
         if (clicked) {
             *value = !*value;
         }
+        RecordControlMetadata(UiAccessibilityRole::Toggle, id, *value ? UiAccessibilityStateFlag::Checked : UiAccessibilityStateFlag::None,
+                              {.kind = UiAccessibilityValueKind::Boolean, .boolean = *value});
 
         const bool hovered = ImGui::IsItemHovered();
         auto *dl = ImGui::GetWindowDrawList();
@@ -1801,6 +1840,9 @@ namespace Horo::Editor::Ui {
         {
             Theme::ScopedTextStyle ts(fonts.sansCompact, Theme::TextPx::Label(), Theme::FontPx::SansCompact);
             clicked = ImGui::Checkbox(label, value);
+            RecordControlMetadata(UiAccessibilityRole::Checkbox, label,
+                                  *value ? UiAccessibilityStateFlag::Checked : UiAccessibilityStateFlag::None,
+                                  {.kind = UiAccessibilityValueKind::Boolean, .boolean = *value});
         }
 
         ImGui::PopStyleColor(6);

@@ -2,6 +2,7 @@
 
 #include "../modals/extension_pages/EditorPageModal.h"
 #include "../modals/extension_pages/EditorPageThemeCapture.h"
+#include "EditorControlMetadata.h"
 #include "EditorPageFileStore.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Editor/AssetImportModal.h"
@@ -183,12 +184,13 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::GuiScreenHost */
     GuiScreenHost::GuiScreenHost(const EditorGuiContext &context, GuiScreenHostComposition composition)
-        : context_(context), modalHost_(&composition.modalHost), inputRouter_(&composition.inputRouter),
-          settingsService_(&composition.settingsService), localization_(&composition.localization),
+        : context_(context), controlMetadata_(std::make_unique<Detail::EditorControlMetadataCapture>()), modalHost_(&composition.modalHost),
+          inputRouter_(&composition.inputRouter), settingsService_(&composition.settingsService), localization_(&composition.localization),
           engineEvents_(&composition.engineEvents), logoTexture_(composition.logoTexture),
           extensionInventory_(composition.extensionInventory), extensionMarketplace_(composition.extensionMarketplace),
           nativeDialogs_(composition.nativeDialogs), screenRegistry_(std::move(composition.screenRegistry)),
           workspacePanelRegistry_(std::move(composition.workspacePanelRegistry)), dispatchSource_(std::move(composition.dispatchSource)) {
+        static_cast<void>(controlMetadata_->Bind(ImGui::GetCurrentContext()));
         gameplayRetirements_ = composition.gameplayRetirements ? std::move(composition.gameplayRetirements)
                                                                : std::make_shared<Gameplay::GameModuleRetirementQueue>();
         RegisterApplicationServices(composition);
@@ -438,6 +440,7 @@ namespace Horo::Editor {
             return;
         }
         shutdown_ = true;
+        controlMetadata_->Unbind();
         if (activeScreen_) {
             activeScreen_->OnLeave();
             activeScreen_.reset();
@@ -841,6 +844,8 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::Draw() {
+        if (!shutdown_)
+            static_cast<void>(controlMetadata_->Bind(ImGui::GetCurrentContext()));
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
         const bool showStatusBar = activeRoute_.kind != GuiRouteKind::ProjectCreation;
         const float contentHeight = std::max(0.0F, viewport->WorkSize.y - (showStatusBar ? EditorStatusBar::Height : 0.0F));
