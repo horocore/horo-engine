@@ -122,6 +122,9 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroPlatformServicesExtensionPublicHeaderConsumer PRIVATE
+        support/PlatformHostServicesPublicContract.cpp
+        support/PlatformHostServicesReversePublicContract.cpp)
 target_sources(HoroWorldBakeApplicationPublicHeaderConsumer PRIVATE support/WorldBakePublicContract.cpp)
 target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp
         support/AssetReimportDestinationPublicContract.cpp)
@@ -5992,6 +5995,23 @@ target_compile_definitions(HoroPlatformProviderAdmissionTests PRIVATE
         HORO_PLATFORM_PROVIDER_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture10>"
         HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture11>")
 add_test(NAME HoroPlatformProviderAdmissionTests COMMAND HoroPlatformProviderAdmissionTests)
+
+add_library(HoroPlatformPackageFixture MODULE fixtures/extensions/PlatformPackageFixture.c)
+target_compile_features(HoroPlatformPackageFixture PRIVATE c_std_11)
+set_target_properties(HoroPlatformPackageFixture PROPERTIES C_EXTENSIONS OFF)
+target_link_libraries(HoroPlatformPackageFixture PRIVATE HoroEngine::Extensions)
+
+add_executable(HoroPlatformProviderPackageTests unit/packages/PackagePlatformProviderLifecycleTests.cpp)
+target_compile_features(HoroPlatformProviderPackageTests PRIVATE cxx_std_20)
+target_include_directories(HoroPlatformProviderPackageTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests/helpers)
+target_link_libraries(HoroPlatformProviderPackageTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::PlatformServicesExtension
+    HoroEngine::Platform nlohmann_json::nlohmann_json miniz Catch2::Catch2WithMain)
+add_dependencies(HoroPlatformProviderPackageTests HoroPlatformPackageFixture HoroExtensionAbiFixture0 HoroExtensionAbiFixture4)
+target_compile_definitions(HoroPlatformProviderPackageTests PRIVATE
+    HORO_PACKAGE_PROVIDER_FIXTURE="$<TARGET_FILE:HoroPlatformPackageFixture>"
+    HORO_PACKAGE_NATIVE_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture4>"
+    HORO_PACKAGE_EMPTY_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture0>")
+horo_register_catch_test(HoroPlatformProviderPackageTests LABELS "packages;platform-services;extensions;headless")
 
 add_executable(HoroBackendOperationRegistryTests
         unit/extensions/BackendOperationRegistryTests.cpp

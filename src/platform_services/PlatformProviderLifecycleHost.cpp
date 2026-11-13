@@ -341,10 +341,12 @@ namespace Horo::PlatformServices {
         if (state.stages.closed)
             return Result<void>::Success();
         state.stages.closing = true;
+        // Caller delivery closes independently of native retirement, including failed or BUSY close stages.
+        state.requests.Shutdown();
+        CloseCallbackIngress(state);
         if (auto closed = CloseNativeAdmission(state_); closed.HasError())
             return closed;
         if (!state.stages.ingressClosed) {
-            CloseCallbackIngress(state);
             if (state.stages.ingressAttempted &&
                 Detail::InvokeProvider(state.operations.closeIngress, state.candidate) != HORO_EXTENSION_SUCCESS) {
                 state.quarantine = state_;
@@ -352,11 +354,12 @@ namespace Horo::PlatformServices {
             }
             state.stages.ingressClosed = true;
         }
-        for (const auto &request : state.inFlight) {
-            static_cast<void>(state.requests.RequestCancel(request.id, request.generation));
-            if (request.lease && !request.cancellationSent)
+        for (auto &request : state.inFlight) {
+            if (request.lease && !request.cancellationSent) {
+                request.cancellationSent = true;
                 static_cast<void>(
                     Detail::InvokeProvider(state.operations.cancel, state.candidate, request.id.value, request.generation.value));
+            }
         }
         if (!state.stages.drained && (state.stages.sessionAttempted || state.stages.ingressAttempted)) {
             if (const auto status = Detail::InvokeProvider(state.operations.drain, state.candidate); status != HORO_EXTENSION_SUCCESS) {
@@ -368,7 +371,6 @@ namespace Horo::PlatformServices {
             state.stages.drained = true;
         }
         state.inFlight.clear();
-        state.requests.Shutdown();
         if (auto stopped = StopNativeSession(state_); stopped.HasError())
             return stopped;
         if (!state.stages.servicesStopped && state.stages.servicesAttempted) {
