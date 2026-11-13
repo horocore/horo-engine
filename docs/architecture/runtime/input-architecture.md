@@ -670,9 +670,9 @@ Pointer-device loss retires pointing controls while keyboard/gamepad ownership
 continues. Focus loss retires every control and rejects later unfocused events.
 Gamepad incarnations remain distinct across collector replacement. Disconnect
 release evidence belongs to the old player for one frame and does not erase a
-held keyboard binding. Digital action values use thresholded zero/one pulses,
-including a press/release pair committed in one frame; analog actions retain
-their continuous signed values.
+held keyboard binding. Digital bindings contribute thresholded zero/one pulses
+before their configured scale and action aggregation, including a press/release
+pair committed in one frame; analog bindings retain continuous signed values.
 
 Raw gamepad controls have stable numbered text glyphs and participate in Runtime
 UI navigation. `IInputGlyphProvider` is an optional host-pinned package adapter;
