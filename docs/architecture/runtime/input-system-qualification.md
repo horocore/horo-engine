@@ -87,6 +87,29 @@ incomplete: no submitted-file list, C++ sensor execution or current provider
 diagnostics exist yet. A draft review may expose this work to remote CI while
 these local requirements remain open; it cannot count them as successful.
 
+The hosted Codacy check passed for draft PR #3550 at head
+`8b0f9ed44d30de787af67efff6aaed180dcf97d5`. A separate branch-specific v3 API
+audit matched 46 changed files to that exact analyzed commit and retained 26
+file issues, including contextual length/complexity warnings and a subprocess
+audit error in the real-compiler cache fixture. That fixture invokes only
+PATH-resolved compiler/cache tools with a fixed argv and owned temporary files;
+the audit finding is retained without suppression or server disposition.
+Six paths were not mapped: `apps/HoroEditor/app/HoroEditorApp.cpp`, both editor
+localization JSON catalogs, `scripts/dev.py`, `src/CMakeLists.txt`, and
+`tests/CMakeLists.txt`. Their metrics are unknown, not zero. Null metrics on
+mapped files remain unknown as well. Duplication occurrences and unchanged
+partners were retained in the local API report; 8 occurrences in the Input
+header belong to 2 returned clone groups, not 8 groups. No review threads were
+present at that head.
+
+The changed Input Mapping, Settings save, canonical glyph and SDL gamepad
+dispatch functions received length warnings. Their responsibilities were split
+into focused helpers in the subsequent local candidate; compilation and fresh
+local/server analysis of that candidate remain required. A successful hosted
+check is separate from an issue-free file audit and from the pending full local
+preflight. The raw API evidence is retained at
+`build/input-delivery/codacy-cloud13.json` outside Git.
+
 ## Reproducible Targeted Qualification
 
 These commands describe the required runs, not successful execution. On the

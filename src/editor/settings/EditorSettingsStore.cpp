@@ -590,52 +590,25 @@ namespace Horo::Editor {
         return out;
     }
 
-    /** @copydoc SaveEditorSettingsDocument */
-    bool SaveEditorSettingsDocument(EditorSettingsDocument *doc, std::string *outError) {
-        if (outError) {
-            outError->clear();
-        }
-        if (!doc) {
-            if (outError) {
-                *outError = "Editor settings document is null.";
+    namespace {
+        /** @brief Establishes the prior canonical input authority before retiring an embedded legacy field. */
+        bool PrepareProfileAuthority(const std::filesystem::path &settingsPath, const std::filesystem::path &profilePath,
+                                     std::string *outError) {
+            std::error_code error;
+            std::filesystem::create_directories(settingsPath.parent_path(), error);
+            if (error) {
+                if (outError)
+                    *outError = error.message();
+                return false;
             }
-            return false;
-        }
-
-        doc->path = ResolveEditorSettingsPath();
-        if (std::string validationError; !ValidateEditorSettings(doc->settings, &validationError)) {
-            if (outError) {
-                *outError = validationError;
+            const bool exists = std::filesystem::exists(profilePath, error);
+            if (error) {
+                if (outError)
+                    *outError = error.message();
+                return false;
             }
-            return false;
-        }
-
-        const auto paths = Input::ResolveBindingProfilePaths({}, ResolveEditorSettingsHomeDirectory());
-        if (paths.HasError()) {
-            if (outError)
-                *outError = paths.ErrorValue().message;
-            return false;
-        }
-        const auto &profilePath = paths.Value().editorUser;
-        const std::filesystem::path dir = doc->path.parent_path();
-        std::error_code ec;
-        std::filesystem::create_directories(dir, ec);
-        if (ec) {
-            if (outError) {
-                *outError = ec.message();
-            }
-            return false;
-        }
-
-        const bool profileExists = std::filesystem::exists(profilePath, ec);
-        if (ec) {
-            if (outError)
-                *outError = ec.message();
-            return false;
-        }
-        // Establish the prior profile before retiring an embedded legacy field. A
-        // later settings or profile write failure still leaves this authority intact.
-        if (!profileExists) {
+            if (exists)
+                return true;
             const auto previous = LoadEditorSettingsDocument();
             if (previous.parseError) {
                 if (outError)
@@ -648,40 +621,64 @@ namespace Horo::Editor {
                     *outError = seeded.ErrorValue().message;
                 return false;
             }
+            return true;
         }
 
-        std::ofstream out(doc->path, std::ios::binary | std::ios::trunc);
-        if (!out.is_open()) {
-            if (outError) {
-                *outError = "Failed to open editor settings file for writing.";
+        /** @brief Writes appearance settings completely before publishing the replacement input profile. */
+        bool WriteSettingsFile(const std::filesystem::path &path, const EditorSettings &settings, std::string *outError) {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            if (!out.is_open()) {
+                if (outError)
+                    *outError = "Failed to open editor settings file for writing.";
+                return false;
             }
-            return false;
-        }
-
-        const auto &s = doc->settings;
-        SettingsStoreInternal::WriteSettings(out, s);
-
-        if (!out.good()) {
-            LOG_ERROR("editor.settings", "I/O error while writing editor_settings.json to '%s'.", doc->path.string().c_str());
-            if (outError) {
-                *outError = "Failed while writing editor settings file.";
+            SettingsStoreInternal::WriteSettings(out, settings);
+            if (!out.good()) {
+                LOG_ERROR("editor.settings", "I/O error while writing editor_settings.json to '%s'.", path.string().c_str());
+                if (outError)
+                    *outError = "Failed while writing editor settings file.";
+                return false;
             }
-            return false;
+            out.close();
+            if (!out) {
+                if (outError)
+                    *outError = "Failed while closing editor settings file.";
+                return false;
+            }
+            return true;
         }
+    }  // namespace
 
-        out.close();
-        if (!out) {
+    /** @copydoc SaveEditorSettingsDocument */
+    bool SaveEditorSettingsDocument(EditorSettingsDocument *doc, std::string *outError) {
+        if (outError)
+            outError->clear();
+        if (!doc) {
             if (outError)
-                *outError = "Failed while closing editor settings file.";
+                *outError = "Editor settings document is null.";
             return false;
         }
+        doc->path = ResolveEditorSettingsPath();
+        if (std::string validationError; !ValidateEditorSettings(doc->settings, &validationError)) {
+            if (outError)
+                *outError = validationError;
+            return false;
+        }
+        const auto paths = Input::ResolveBindingProfilePaths({}, ResolveEditorSettingsHomeDirectory());
+        if (paths.HasError()) {
+            if (outError)
+                *outError = paths.ErrorValue().message;
+            return false;
+        }
+        const auto &profilePath = paths.Value().editorUser;
+        if (!PrepareProfileAuthority(doc->path, profilePath, outError) || !WriteSettingsFile(doc->path, doc->settings, outError))
+            return false;
         const auto saved = Input::SaveBindingProfileAtomically(profilePath, doc->settings.keymap.profile);
         if (saved.HasError()) {
             if (outError)
                 *outError = saved.ErrorValue().message;
             return false;
         }
-
         doc->loadedFromDisk = true;
         doc->parseError = false;
         doc->error.clear();

@@ -175,81 +175,93 @@ namespace Horo::Editor {
         }
     }
 
-    void InputMappingPanel::DrawSelectedAction(const Input::ActionDescriptor &selectedAction, const EditorGuiContext &context) {
-        if (displayedAction_ != selectedAction.id) {
+    void InputMappingPanel::DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context) {
+        if (displayedAction_ != action.id) {
             deadzoneDraft_.reset();
-            displayedAction_ = selectedAction.id;
+            displayedAction_ = action.id;
         }
         ImGui::Separator();
-        ImGui::TextWrapped("%s", selectedAction.id.Value().c_str());
-        const auto &bindings = BindingsFor(selectedAction, router_->Profile());
-        for (std::size_t bindingIndex = 0; bindingIndex < bindings.size(); ++bindingIndex) {
-            const Input::InputBinding &binding = bindings[bindingIndex];
-            const auto label = Ui::ShortcutLabel(binding);
+        ImGui::TextWrapped("%s", action.id.Value().c_str());
+        const auto &bindings = BindingsFor(action, router_->Profile());
+        for (std::size_t index = 0; index < bindings.size(); ++index) {
+            const auto label = Ui::ShortcutLabel(bindings[index]);
             ImGui::BulletText("%s", label.c_str());
-            ImGui::PushID(static_cast<int>(bindingIndex));
-            if (selectedAction.valueType != Input::ActionValueType::Digital) {
-                int component = binding.component;
-                int direction = binding.scale < 0.0F ? 1 : 0;
-                const std::array<const char *, 2> components{"X", "Y"};
-                const std::array directions{kTextScope.Text(context.localization, "positive").c_str(),
-                                            kTextScope.Text(context.localization, "negative").c_str()};
-                const bool changedComponent = selectedAction.valueType == Input::ActionValueType::Axis2D &&
-                                              Ui::DrawComboPropRow(kTextScope.Text(context.localization, "component").c_str(),
-                                                                   "##Component", component, components, context.theme.fonts);
-                const bool changedDirection = Ui::DrawComboPropRow(kTextScope.Text(context.localization, "direction").c_str(),
-                                                                   "##Direction", direction, directions, context.theme.fonts);
-                if (changedComponent || changedDirection) {
-                    Input::BindingOverride change{selectedAction.id, {bindings.begin(), bindings.end()}};
-                    auto &updated = change.bindings[bindingIndex];
-                    updated.component = static_cast<std::uint8_t>(component);
-                    updated.scale = direction == 1 ? -std::abs(binding.scale) : std::abs(binding.scale);
-                    const auto applied = CommitBindingChange(std::move(change));
-                    statusMessage_ =
-                        applied.HasError() ? applied.ErrorValue().message : kTextScope.Text(context.localization, "binding_updated");
-                    ImGui::PopID();
-                    return;
-                }
-            }
-            if (Ui::Button({.label = kTextScope.Text(context.localization, "rebind").c_str(),
-                            .variant = Ui::ButtonVariant::Secondary,
-                            .font = context.theme.fonts.sans}))
-                StartBindingCapture(selectedAction.id, bindingIndex, context);
-            if (Ui::Button({.label = kTextScope.Text(context.localization, "remove_binding").c_str(),
-                            .variant = Ui::ButtonVariant::Secondary,
-                            .font = context.theme.fonts.sans})) {
-                Input::BindingOverride change{selectedAction.id, {bindings.begin(), bindings.end()}};
-                change.bindings.erase(change.bindings.begin() + static_cast<std::ptrdiff_t>(bindingIndex));
-                const auto applied = CommitBindingChange(std::move(change));
-                statusMessage_ =
-                    applied.HasError() ? applied.ErrorValue().message : kTextScope.Text(context.localization, "binding_updated");
-                deadzoneDraft_.reset();
-                ImGui::PopID();
-                return;
-            }
-            if (binding.kind == Input::BindingControlKind::GamepadAxis || binding.kind == Input::BindingControlKind::RawGamepadAxis) {
-                float deadzone = deadzoneDraft_ && deadzoneDraft_->first == bindingIndex ? deadzoneDraft_->second : binding.deadzone;
-                const auto edit = Ui::DrawFloatPropRow(kTextScope.Text(context.localization, "deadzone").c_str(), "##Deadzone", deadzone,
-                                                       context.theme.fonts, {.speed = 0.01F, .minimum = 0.0F, .maximum = 0.95F});
-                if (edit.changed) {
-                    deadzoneDraft_ = std::pair{bindingIndex, deadzone};
-                }
-                if (edit.committed && deadzoneDraft_ && deadzoneDraft_->first == bindingIndex) {
-                    Input::BindingOverride change{selectedAction.id, {bindings.begin(), bindings.end()}};
-                    change.bindings[bindingIndex].deadzone = deadzoneDraft_->second;
-                    const auto applied = CommitBindingChange(std::move(change));
-                    statusMessage_ = applied.HasError() ? applied.ErrorValue().message : std::string{};
-                    deadzoneDraft_.reset();
-                    ImGui::PopID();
-                    return;
-                }
-            }
+            ImGui::PushID(static_cast<int>(index));
+            const bool changed = DrawBindingDirection(action, bindings, index, context) ||
+                                 DrawBindingActions(action, bindings, index, context) ||
+                                 DrawBindingDeadzone(action, bindings, index, context);
             ImGui::PopID();
+            // Publishing a profile may retire the borrowed bindings storage.
+            if (changed)
+                return;
         }
-        const std::string &rebind = InputMappingPanel::kTextScope.Text(context.localization, "add_binding");
-        if (Ui::Button({.label = rebind.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans})) {
-            StartBindingCapture(selectedAction.id, std::nullopt, context);
-        }
+        const auto &add = kTextScope.Text(context.localization, "add_binding");
+        if (Ui::Button({.label = add.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = context.theme.fonts.sans}))
+            StartBindingCapture(action.id, std::nullopt, context);
+    }
+
+    bool InputMappingPanel::DrawBindingDirection(const Input::ActionDescriptor &action, const std::span<const Input::InputBinding> bindings,
+                                                 const std::size_t index, const EditorGuiContext &context) {
+        if (action.valueType == Input::ActionValueType::Digital)
+            return false;
+        const auto &binding = bindings[index];
+        int component = binding.component;
+        int direction = binding.scale < 0.0F ? 1 : 0;
+        const std::array<const char *, 2> components{"X", "Y"};
+        const std::array directions{kTextScope.Text(context.localization, "positive").c_str(),
+                                    kTextScope.Text(context.localization, "negative").c_str()};
+        const bool changedComponent = action.valueType == Input::ActionValueType::Axis2D &&
+                                      Ui::DrawComboPropRow(kTextScope.Text(context.localization, "component").c_str(), "##Component",
+                                                           component, components, context.theme.fonts);
+        const bool changedDirection = Ui::DrawComboPropRow(kTextScope.Text(context.localization, "direction").c_str(), "##Direction",
+                                                           direction, directions, context.theme.fonts);
+        if (!changedComponent && !changedDirection)
+            return false;
+        Input::BindingOverride change{action.id, {bindings.begin(), bindings.end()}};
+        auto &updated = change.bindings[index];
+        updated.component = static_cast<std::uint8_t>(component);
+        updated.scale = direction == 1 ? -std::abs(binding.scale) : std::abs(binding.scale);
+        const auto applied = CommitBindingChange(std::move(change));
+        statusMessage_ = applied.HasError() ? applied.ErrorValue().message : kTextScope.Text(context.localization, "binding_updated");
+        return true;
+    }
+
+    bool InputMappingPanel::DrawBindingActions(const Input::ActionDescriptor &action, const std::span<const Input::InputBinding> bindings,
+                                               const std::size_t index, const EditorGuiContext &context) {
+        if (Ui::Button({.label = kTextScope.Text(context.localization, "rebind").c_str(),
+                        .variant = Ui::ButtonVariant::Secondary,
+                        .font = context.theme.fonts.sans}))
+            StartBindingCapture(action.id, index, context);
+        if (!Ui::Button({.label = kTextScope.Text(context.localization, "remove_binding").c_str(),
+                         .variant = Ui::ButtonVariant::Secondary,
+                         .font = context.theme.fonts.sans}))
+            return false;
+        Input::BindingOverride change{action.id, {bindings.begin(), bindings.end()}};
+        change.bindings.erase(change.bindings.begin() + static_cast<std::ptrdiff_t>(index));
+        const auto applied = CommitBindingChange(std::move(change));
+        statusMessage_ = applied.HasError() ? applied.ErrorValue().message : kTextScope.Text(context.localization, "binding_updated");
+        deadzoneDraft_.reset();
+        return true;
+    }
+
+    bool InputMappingPanel::DrawBindingDeadzone(const Input::ActionDescriptor &action, const std::span<const Input::InputBinding> bindings,
+                                                const std::size_t index, const EditorGuiContext &context) {
+        const auto &binding = bindings[index];
+        if (binding.kind != Input::BindingControlKind::GamepadAxis && binding.kind != Input::BindingControlKind::RawGamepadAxis)
+            return false;
+        float deadzone = deadzoneDraft_ && deadzoneDraft_->first == index ? deadzoneDraft_->second : binding.deadzone;
+        const auto edit = Ui::DrawFloatPropRow(kTextScope.Text(context.localization, "deadzone").c_str(), "##Deadzone", deadzone,
+                                               context.theme.fonts, {.speed = 0.01F, .minimum = 0.0F, .maximum = 0.95F});
+        if (edit.changed)
+            deadzoneDraft_ = std::pair{index, deadzone};
+        if (!edit.committed || !deadzoneDraft_ || deadzoneDraft_->first != index)
+            return false;
+        Input::BindingOverride change{action.id, {bindings.begin(), bindings.end()}};
+        change.bindings[index].deadzone = deadzoneDraft_->second;
+        const auto applied = CommitBindingChange(std::move(change));
+        statusMessage_ = applied.HasError() ? applied.ErrorValue().message : std::string{};
+        deadzoneDraft_.reset();
+        return true;
     }
 
     void InputMappingPanel::StartBindingCapture(const Input::ActionId &action, const std::optional<std::size_t> bindingIndex,

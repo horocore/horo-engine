@@ -24,6 +24,24 @@ namespace Horo::Input {
         std::string_view LabelAt(const std::array<std::string_view, Size> &labels, const std::uint16_t control) noexcept {
             return control < Size ? labels[control] : std::string_view{};
         }
+
+        constexpr std::array<std::string_view, static_cast<std::size_t>(GamepadButton::Count)>
+            kButtonLabels{"South",       "East",  "West",   "North",    "Left shoulder", "Right shoulder", "Left stick",
+                          "Right stick", "Start", "Select", "D-pad up", "D-pad down",    "D-pad left",     "D-pad right"};
+        constexpr std::array<std::string_view, static_cast<std::size_t>(GamepadAxis::Count)> kAxisLabels{"Left stick X",  "Left stick Y",
+                                                                                                         "Right stick X", "Right stick Y",
+                                                                                                         "Left trigger",  "Right trigger"};
+        constexpr std::array<std::string_view, static_cast<std::size_t>(PointerButton::Count)> kPointerLabels{"Primary", "Secondary",
+                                                                                                              "Middle", "Auxiliary 1",
+                                                                                                              "Auxiliary 2"};
+        constexpr std::array<std::string_view, static_cast<std::size_t>(Key::Count)>
+            kKeyLabels{"",    "A",     "B",         "C",      "D",    "E",     "F",  "G",    "H",    "I",   "J",       "K",         "L",
+                       "M",   "N",     "O",         "P",      "Q",    "R",     "S",  "T",    "U",    "V",   "W",       "X",         "Y",
+                       "Z",   "0",     "1",         "2",      "3",    "4",     "5",  "6",    "7",    "8",   "9",       "Escape",    "Enter",
+                       "Tab", "Space", "Backspace", "Delete", "Left", "Right", "Up", "Down", "Home", "End", "Page up", "Page down", "F1",
+                       "F2",  "F3",    "F4",        "F5",     "F6",   "F7",    "F8", "F9",   "F10",  "F11", "F12",     "=",         "-"};
+        constexpr auto kRawButtonLabels = RawControlLabels("Raw button ");
+        constexpr auto kRawAxisLabels = RawControlLabels("Raw axis ");
     }  // namespace
 
     /** @copydoc CanonicalActionSource */
@@ -67,45 +85,28 @@ namespace Horo::Input {
 
     /** @copydoc CanonicalGlyph */
     InputGlyphPresentation CanonicalGlyph(const InputGlyphId id) noexcept {
-        static constexpr std::array<std::string_view, static_cast<std::size_t>(GamepadButton::Count)>
-            buttons{"South",       "East",  "West",   "North",    "Left shoulder", "Right shoulder", "Left stick",
-                    "Right stick", "Start", "Select", "D-pad up", "D-pad down",    "D-pad left",     "D-pad right"};
-        static constexpr std::array<std::string_view, static_cast<std::size_t>(GamepadAxis::Count)> axes{"Left stick X",  "Left stick Y",
-                                                                                                         "Right stick X", "Right stick Y",
-                                                                                                         "Left trigger",  "Right trigger"};
-        static constexpr std::array<std::string_view, static_cast<std::size_t>(PointerButton::Count)> pointer{"Primary", "Secondary",
-                                                                                                              "Middle", "Auxiliary 1",
-                                                                                                              "Auxiliary 2"};
-        static constexpr std::array<std::string_view, static_cast<std::size_t>(Key::Count)>
-            keys{"",    "A",     "B",         "C",      "D",    "E",     "F",  "G",    "H",    "I",   "J",       "K",         "L",
-                 "M",   "N",     "O",         "P",      "Q",    "R",     "S",  "T",    "U",    "V",   "W",       "X",         "Y",
-                 "Z",   "0",     "1",         "2",      "3",    "4",     "5",  "6",    "7",    "8",   "9",       "Escape",    "Enter",
-                 "Tab", "Space", "Backspace", "Delete", "Left", "Right", "Up", "Down", "Home", "End", "Page up", "Page down", "F1",
-                 "F2",  "F3",    "F4",        "F5",     "F6",   "F7",    "F8", "F9",   "F10",  "F11", "F12",     "=",         "-"};
         std::string_view label;
-        static constexpr auto rawButtons = RawControlLabels("Raw button ");
-        static constexpr auto rawAxes = RawControlLabels("Raw axis ");
         using enum BindingControlKind;
         switch (id.kind) {
             case Key:
-                label = LabelAt(keys, id.control);
+                label = LabelAt(kKeyLabels, id.control);
                 break;
             case PointerButton:
-                label = LabelAt(pointer, id.control);
+                label = LabelAt(kPointerLabels, id.control);
                 break;
             case GamepadButton:
-                label = LabelAt(buttons, id.control);
+                label = LabelAt(kButtonLabels, id.control);
                 break;
             case GamepadAxis:
-                label = LabelAt(axes, id.control);
+                label = LabelAt(kAxisLabels, id.control);
                 break;
             case RawGamepadButton:
-                if (id.control < rawButtons.size())
-                    label = rawButtons[id.control].data();
+                if (id.control < kRawButtonLabels.size())
+                    label = kRawButtonLabels[id.control].data();
                 break;
             case RawGamepadAxis:
-                if (id.control < rawAxes.size())
-                    label = rawAxes[id.control].data();
+                if (id.control < kRawAxisLabels.size())
+                    label = kRawAxisLabels[id.control].data();
                 break;
             case PointerWheelX:
                 if (id.control == 0)

@@ -262,6 +262,9 @@ namespace Horo::Input {
         void HandlePointerEvent(const SDL_Event &event);
         void HandleWindowEvent(const SDL_Event &event);
         void HandleGamepadEvent(const SDL_Event &event);
+        void OpenGamepad(SDL_JoystickID native);
+        void RemapGamepad(SDL_JoystickID native);
+        void CloseDevice(SDL_JoystickID native);
         void HandleJoystickEvent(const SDL_Event &event);
         void HandleTouchEvent(const SDL_TouchFingerEvent &event);
         void CancelTouches(TouchCancellationReason reason) noexcept;
@@ -428,56 +431,68 @@ namespace Horo::Input {
         }
     }
 
-    /** @brief Opens and closes gamepads and forwards their button and axis state. */
+    /** @brief Opens a canonical device, replacing a raw fallback only after native admission succeeds. */
+    void SdlInputBackend::Impl::OpenGamepad(const SDL_JoystickID native) {
+        const auto existing = devices.find(native);
+        if (existing != devices.end() && existing->second.gamepad)
+            return;
+        SDL_Gamepad *gamepad = SDL_OpenGamepad(native);
+        if (!gamepad)
+            return;
+        if (existing != devices.end()) {
+            (void)collector.DisconnectGamepad(existing->second.id);
+            SDL_CloseJoystick(existing->second.joystick);
+            devices.erase(existing);
+        }
+        const char *name = SDL_GetGamepadName(gamepad);
+        const GamepadDeviceId id = collector.ConnectGamepad(name ? name : "SDL Gamepad", true);
+        if (!id.IsValid()) {
+            SDL_CloseGamepad(gamepad);
+            return;
+        }
+        devices.try_emplace(native, id, gamepad, nullptr);
+    }
+
+    /** @brief Retires old mapping ownership and effects before issuing a fresh canonical incarnation. */
+    void SdlInputBackend::Impl::RemapGamepad(const SDL_JoystickID native) {
+        const auto found = devices.find(native);
+        if (found == devices.end() || !found->second.gamepad)
+            return;
+        (void)SDL_RumbleGamepad(found->second.gamepad, 0, 0, 0);
+        (void)collector.DisconnectGamepad(found->second.id);
+        const char *name = SDL_GetGamepadName(found->second.gamepad);
+        found->second.id = collector.ConnectGamepad(name ? name : "SDL Gamepad", true);
+        if (!found->second.id.IsValid()) {
+            SDL_CloseGamepad(found->second.gamepad);
+            devices.erase(found);
+        }
+    }
+
+    /** @brief Removes exactly one native incarnation, regardless of which removal event arrives first. */
+    void SdlInputBackend::Impl::CloseDevice(const SDL_JoystickID native) {
+        const auto found = devices.find(native);
+        if (found == devices.end())
+            return;
+        (void)collector.DisconnectGamepad(found->second.id);
+        if (found->second.gamepad)
+            SDL_CloseGamepad(found->second.gamepad);
+        else if (found->second.joystick)
+            SDL_CloseJoystick(found->second.joystick);
+        devices.erase(found);
+    }
+
+    /** @brief Applies native lifecycle events and forwards canonical button/axis state. */
     void SdlInputBackend::Impl::HandleGamepadEvent(const SDL_Event &event) {
         switch (event.type) {
-            case SDL_EVENT_GAMEPAD_ADDED: {
-                const auto existing = devices.find(event.gdevice.which);
-                if (existing != devices.end() && existing->second.gamepad)
-                    break;
-                SDL_Gamepad *gamepad = SDL_OpenGamepad(event.gdevice.which);
-                if (!gamepad)
-                    break;
-                if (existing != devices.end()) {
-                    (void)collector.DisconnectGamepad(existing->second.id);
-                    SDL_CloseJoystick(existing->second.joystick);
-                    devices.erase(existing);
-                }
-                const char *name = SDL_GetGamepadName(gamepad);
-                const GamepadDeviceId id = collector.ConnectGamepad(name ? name : "SDL Gamepad", true);
-                if (!id.IsValid()) {
-                    SDL_CloseGamepad(gamepad);
-                    break;
-                }
-                devices.try_emplace(event.gdevice.which, id, gamepad, nullptr);
+            case SDL_EVENT_GAMEPAD_ADDED:
+                OpenGamepad(event.gdevice.which);
                 break;
-            }
-            case SDL_EVENT_GAMEPAD_REMAPPED: {
-                const auto found = devices.find(event.gdevice.which);
-                if (found == devices.end() || !found->second.gamepad)
-                    break;
-                (void)SDL_RumbleGamepad(found->second.gamepad, 0, 0, 0);
-                (void)collector.DisconnectGamepad(found->second.id);
-                const char *name = SDL_GetGamepadName(found->second.gamepad);
-                found->second.id = collector.ConnectGamepad(name ? name : "SDL Gamepad", true);
-                if (!found->second.id.IsValid()) {
-                    SDL_CloseGamepad(found->second.gamepad);
-                    devices.erase(found);
-                }
+            case SDL_EVENT_GAMEPAD_REMAPPED:
+                RemapGamepad(event.gdevice.which);
                 break;
-            }
-            case SDL_EVENT_GAMEPAD_REMOVED: {
-                const auto found = devices.find(event.gdevice.which);
-                if (found == devices.end())
-                    break;
-                (void)collector.DisconnectGamepad(found->second.id);
-                if (found->second.gamepad)
-                    SDL_CloseGamepad(found->second.gamepad);
-                else if (found->second.joystick)
-                    SDL_CloseJoystick(found->second.joystick);
-                devices.erase(found);
+            case SDL_EVENT_GAMEPAD_REMOVED:
+                CloseDevice(event.gdevice.which);
                 break;
-            }
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
             case SDL_EVENT_GAMEPAD_BUTTON_UP:
                 if (const auto found = devices.find(event.gbutton.which); found != devices.end())
@@ -517,18 +532,9 @@ namespace Horo::Input {
                 devices.try_emplace(event.jdevice.which, id, nullptr, joystick);
                 break;
             }
-            case SDL_EVENT_JOYSTICK_REMOVED: {
-                const auto found = devices.find(event.jdevice.which);
-                if (found == devices.end())
-                    break;
-                (void)collector.DisconnectGamepad(found->second.id);
-                if (found->second.gamepad)
-                    SDL_CloseGamepad(found->second.gamepad);
-                else if (found->second.joystick)
-                    SDL_CloseJoystick(found->second.joystick);
-                devices.erase(found);
+            case SDL_EVENT_JOYSTICK_REMOVED:
+                CloseDevice(event.jdevice.which);
                 break;
-            }
             case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
             case SDL_EVENT_JOYSTICK_BUTTON_UP:
                 if (const auto found = devices.find(event.jbutton.which); found != devices.end() && found->second.joystick)

@@ -48,6 +48,12 @@ namespace Horo::Editor {
         void DrawActions(const EditorGuiContext &context);
         void DrawActionTable(std::span<const Input::ActionDescriptor> actions, const EditorGuiContext &context);
         void DrawSelectedAction(const Input::ActionDescriptor &action, const EditorGuiContext &context);
+        [[nodiscard]] bool DrawBindingDirection(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
+                                                std::size_t index, const EditorGuiContext &context);
+        [[nodiscard]] bool DrawBindingActions(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
+                                              std::size_t index, const EditorGuiContext &context);
+        [[nodiscard]] bool DrawBindingDeadzone(const Input::ActionDescriptor &action, std::span<const Input::InputBinding> bindings,
+                                               std::size_t index, const EditorGuiContext &context);
         void DrawDevices(const EditorGuiContext &context);
         void DrawProfiles(const EditorGuiContext &context);
         void PollBindingCapture(const EditorGuiContext &context);
