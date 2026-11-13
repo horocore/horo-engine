@@ -122,6 +122,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroSecurityPublicHeaderConsumer PRIVATE support/ConfigurationCredentialPublicContract.cpp)
 target_sources(HoroWorldBakeApplicationPublicHeaderConsumer PRIVATE support/WorldBakePublicContract.cpp)
 target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp
         support/AssetReimportDestinationPublicContract.cpp)
@@ -3477,6 +3478,7 @@ set_tests_properties(HoroNavigationProjectSettingsPublicConsumer PROPERTIES LABE
 
 add_executable(HoroEditorSettingsStoreTests
         unit/editor/EditorSettingsStoreTests.cpp
+        unit/editor/ConfigurationSettingsSessionTests.cpp
 )
 
 target_compile_features(HoroEditorSettingsStoreTests PRIVATE cxx_std_20)

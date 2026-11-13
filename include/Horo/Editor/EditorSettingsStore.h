@@ -8,6 +8,10 @@
 #include <span>
 #include <string>
 
+namespace Horo {
+    class ConfigurationSnapshot;
+}
+
 namespace Horo::Editor {
 
     /** @brief Startup surface shown when the editor process opens without a project route. */
@@ -160,11 +164,12 @@ namespace Horo::Editor {
 
     /** @brief Load/save document for user-level editor settings. */
     struct EditorSettingsDocument {
-        EditorSettings settings{};   /**< Parsed settings with defaults for missing keys. */
-        bool loadedFromDisk = false; /**< True when a settings file existed and was read. */
-        bool parseError = false;     /**< True when the file was unreadable or malformed. */
-        std::string error;           /**< Human-readable load/save diagnostic. */
-        std::filesystem::path path;  /**< Absolute settings path used by the store. */
+        EditorSettings settings{};     /**< Parsed settings with defaults for missing keys. */
+        bool loadedFromDisk = false;   /**< True when a settings file existed and was read. */
+        bool parseError = false;       /**< True when the file was unreadable or malformed. */
+        std::string error;             /**< Human-readable load/save diagnostic. */
+        std::filesystem::path path;    /**< Absolute settings path used by the store. */
+        std::string configurationJson; /**< Untrusted versioned user-source ingress, validated by the composed resolver before use. */
     };
 
     /** @brief Returns the user home directory used by the settings store. */
@@ -212,8 +217,11 @@ namespace Horo::Editor {
      * settings domain. Secrets are not stored here.
      * @param doc In/out document to save.
      * @param outError Optional save diagnostic.
+     * @param configuration Optional validated snapshot supplying canonical user-source values. Required when the loaded document has
+     * configuration data.
      * @return True on success, false on validation or I/O failure.
      */
-    bool SaveEditorSettingsDocument(EditorSettingsDocument *doc, std::string *outError = nullptr);
+    bool SaveEditorSettingsDocument(EditorSettingsDocument *doc, std::string *outError = nullptr,
+                                    const ConfigurationSnapshot *configuration = nullptr);
 
 }  // namespace Horo::Editor

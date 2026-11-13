@@ -215,10 +215,12 @@ namespace Horo::Cli {
                     auto result = ParseConfiguredInteger(option, configured);
                     const bool incompatible = !result.has_value();
                     return {.value = std::move(result), .incompatible = incompatible};
-                } else {
+                } else if constexpr (std::is_same_v<Value, std::string>) {
                     const bool incompatible = option.valueKind == Flag;
                     return {.value = incompatible ? std::nullopt : ParseConfiguredString(option, configured, normalizer, diagnostics),
                             .incompatible = incompatible};
+                } else {
+                    return {.incompatible = true};
                 }
             }, value);
             if (parsed.incompatible)

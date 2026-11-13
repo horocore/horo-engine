@@ -1,8 +1,10 @@
+#include "../../support/OwnedTestDirectory.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Platform/ConfigurationFileStore.h"
 #include "Horo/Platform/ExternalProcess.h"
 
 #include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
@@ -10,6 +12,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -88,12 +91,12 @@ namespace {
         }
     };
 
-    [[nodiscard]] Horo::ConfigurationSnapshot BuildConfigurationSnapshot() {
+    [[nodiscard]] Horo::ConfigurationSnapshot BuildConfigurationSnapshot(const std::int64_t workerCount = 4) {
         Horo::ConfigurationSchema schema;
         REQUIRE(schema
                     .Register({.key = Horo::SettingKey{"runtime.worker_count"},
                                .type = Horo::SettingValueType::Integer,
-                               .defaultValue = std::int64_t{4},
+                               .defaultValue = workerCount,
                                .scope = Horo::SettingScope::Engine,
                                .reloadPolicy = Horo::ReloadPolicy::ProcessRestart,
                                .sensitivity = Horo::SettingSensitivity::Public})
@@ -127,6 +130,12 @@ namespace {
             if (failWrite)
                 return Horo::Result<void>::Failure(Horo::MakeError(kInjectedStoreFailure));
             return Horo::Result<void>::Success();
+        }
+
+        [[nodiscard]] Horo::Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes,
+                                                             bool &created, std::filesystem::perms) override {
+            created = true;
+            return WriteDurable(path, bytes);
         }
 
         [[nodiscard]] Horo::Result<void> CopyDurable(const std::filesystem::path &, const std::filesystem::path &) override {
@@ -390,6 +399,17 @@ namespace {
         REQUIRE(files.RemoveDurable(published).HasValue());
         REQUIRE(files.RemoveDurable(privateFile).HasValue());
         REQUIRE(files.RemoveDurable(lockFile).HasValue());
+        Horo::ConfigurationFileStore configurationFiles{files};
+        const auto configurationPath = directories.back() / std::filesystem::path{u8"ayarlar \u00FC.json"};
+        const auto configuration = BuildConfigurationSnapshot();
+        REQUIRE(configurationFiles.Write(configurationPath, configuration).HasValue());
+        const auto configurationRead = configurationFiles.Read(configurationPath);
+        REQUIRE(configurationRead.HasValue());
+        CHECK(configurationRead.Value() == configuration.ToJson());
+        REQUIRE(files.RemoveDurable(configurationPath).HasValue());
+        auto configurationLock = configurationPath;
+        configurationLock += ".lock";
+        REQUIRE(files.RemoveDurable(configurationLock).HasValue());
         for (auto directory = directories.rbegin(); directory != directories.rend(); ++directory)
             REQUIRE(files.RemoveDurable(*directory).HasValue());
     }
@@ -547,10 +567,9 @@ namespace {
     }
 
     TEST_CASE("Configuration File Store Publishes Deterministic Versioned Documents", "[unit][foundation][configuration]") {
-        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        const auto temporary = std::filesystem::temp_directory_path() / ("horo-configuration-store-" + std::to_string(stamp));
-        std::filesystem::create_directories(temporary);
-        const auto root = std::filesystem::canonical(temporary);
+        const Horo::Tests::OwnedTestDirectory directory{"horo-configuration-store"};
+        const auto root = std::filesystem::canonical(directory.Path()) / std::filesystem::path{u8"ayarlar boşluk 日本語"};
+        std::filesystem::create_directory(root);
         Horo::NativeDurableFileSystem files;
         Horo::ConfigurationFileStore store{files};
         const Horo::ConfigurationSnapshot snapshot = BuildConfigurationSnapshot();
@@ -562,17 +581,90 @@ namespace {
         REQUIRE(first.Value() == snapshot.ToJson());
         REQUIRE(store.Write(path, snapshot).HasValue());
         REQUIRE(store.Read(path).Value() == first.Value());
+        const auto relative = path.lexically_relative(std::filesystem::current_path());
+        REQUIRE_FALSE(relative.empty());
+        REQUIRE(store.Write(relative, snapshot).HasValue());
+        CHECK(store.Read(relative).Value() == first.Value());
 
-        auto held = files.TryAcquireExclusive(root / "settings.json.lock", "competing-writer");
-        REQUIRE(held.HasValue());
-        REQUIRE(store.Write(path, snapshot).HasError());
-        REQUIRE(store.Read(path).Value() == first.Value());
+        {
+            auto held = files.TryAcquireExclusive(root / "settings.json.lock", "competing-writer");
+            REQUIRE(held.HasValue());
+            REQUIRE(store.Write(path, snapshot).HasError());
+            REQUIRE(store.Read(path).Value() == first.Value());
+        }
+        const auto missing = store.Read(root / std::filesystem::path{u8"eksik dosya 日本語.json"});
+        REQUIRE(missing.HasError());
+        CHECK(missing.ErrorValue().code.Value() == "configuration_read_failed");
 
         Horo::ConfigurationLimits tiny;
         tiny.maximumDocumentBytes = 8;
         REQUIRE(store.Read(path, tiny).HasError());
-        std::error_code ignored;
-        std::filesystem::remove_all(root, ignored);
+    }
+
+    TEST_CASE("Configuration Preparation Recovers Orphans Without Following A Redirect", "[unit][foundation][configuration]") {
+        const Horo::Tests::OwnedTestDirectory directory{"horo-configuration-recovery"};
+        const auto path = directory.Path() / "settings.json";
+        const auto prepared = directory.Path() / "settings.json.tmp";
+        const auto unrelated = directory.Path() / "unrelated.txt";
+        {
+            std::ofstream stream{unrelated};
+            stream << "unrelated-last-valid";
+        }
+        std::error_code error;
+        std::filesystem::create_symlink(unrelated, prepared, error);
+        if (error)
+            SKIP("This host cannot create the redirect fixture: " << error.message());
+        Horo::NativeDurableFileSystem files;
+        Horo::ConfigurationFileStore store{files};
+        const auto snapshot = BuildConfigurationSnapshot();
+        REQUIRE(store.Write(path, snapshot).HasValue());
+        REQUIRE(store.Read(unrelated).HasValue());
+        CHECK(store.Read(unrelated).Value() == "unrelated-last-valid");
+        CHECK(store.Read(path).Value() == snapshot.ToJson());
+        {
+            std::ofstream stream{prepared};
+            stream << "interrupted-invalid-preparation";
+        }
+        REQUIRE(store.Write(path, snapshot).HasValue());
+        CHECK(store.Read(path).Value() == snapshot.ToJson());
+        CHECK_FALSE(std::filesystem::exists(prepared));
+    }
+
+    TEST_CASE("Concurrent Configuration Writers Publish Only Complete Documents", "[unit][foundation][configuration]") {
+        const Horo::Tests::OwnedTestDirectory directory{"horo-configuration-concurrent"};
+        const auto path = directory.Path() / "settings.json";
+        Horo::NativeDurableFileSystem files;
+        Horo::ConfigurationFileStore store{files};
+        const auto first = BuildConfigurationSnapshot(4);
+        const auto second = BuildConfigurationSnapshot(9);
+        const auto firstDocument = first.ToJson();
+        const auto secondDocument = second.ToJson();
+        REQUIRE(store.Write(path, first).HasValue());
+        std::atomic<int> completed{0};
+        std::atomic<bool> unexpectedFailure{false};
+        const auto write = [&](const Horo::ConfigurationSnapshot &snapshot) {
+            for (int attempt = 0; attempt < 16; ++attempt) {
+                const auto result = store.Write(path, snapshot);
+                if (result.HasError() && result.ErrorValue().code.Value() != "filesystem.lock_busy" &&
+                    result.ErrorValue().code.Value() != "filesystem.io_failed")
+                    unexpectedFailure = true;
+            }
+            ++completed;
+        };
+        std::jthread firstWriter{write, std::cref(first)};
+        std::jthread secondWriter{write, std::cref(second)};
+        while (completed.load() != 2) {
+            const auto read = store.Read(path);
+            REQUIRE(read.HasValue());
+            CHECK((read.Value() == firstDocument || read.Value() == secondDocument));
+        }
+        firstWriter.join();
+        secondWriter.join();
+        CHECK_FALSE(unexpectedFailure.load());
+        const auto finalDocument = store.Read(path);
+        REQUIRE(finalDocument.HasValue());
+        CHECK((finalDocument.Value() == firstDocument || finalDocument.Value() == secondDocument));
+        CHECK_FALSE(std::filesystem::exists(directory.Path() / "settings.json.tmp"));
     }
 
     TEST_CASE("Configuration File Store Never Publishes Partial Or Failed Writes", "[unit][foundation][configuration]") {
@@ -587,15 +679,15 @@ namespace {
 
         files.failWrite = true;
         RequireRejectedWritePreservesPublishedDocument(store, snapshot, files,
-                                                       {"lock:settings.json.lock:horo.configuration", "write:settings.json.tmp",
-                                                        "remove:settings.json.tmp"});
+                                                       {"lock:settings.json.lock:horo.configuration", "remove:settings.json.tmp",
+                                                        "write:settings.json.tmp", "remove:settings.json.tmp"});
 
         files.operations.clear();
         files.failWrite = false;
         files.failReplace = true;
         RequireRejectedWritePreservesPublishedDocument(store, snapshot, files,
-                                                       {"lock:settings.json.lock:horo.configuration", "write:settings.json.tmp",
-                                                        "replace:settings.json", "remove:settings.json.tmp"});
+                                                       {"lock:settings.json.lock:horo.configuration", "remove:settings.json.tmp",
+                                                        "write:settings.json.tmp", "replace:settings.json", "remove:settings.json.tmp"});
     }
 
 #if !defined(_WIN32)

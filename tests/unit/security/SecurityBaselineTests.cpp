@@ -1,3 +1,7 @@
+#include "../../support/OwnedTestDirectory.h"
+#include "Horo/Foundation/Configuration.h"
+#include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Platform/ConfigurationFileStore.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "Horo/Security/ArtifactSignature.h"
 #include "Horo/Security/CredentialStore.h"
@@ -46,6 +50,8 @@ namespace Horo::Security::Tests {
         public:
             bool available{true};
             std::size_t removals{};
+            std::size_t resolutions{};
+            std::optional<Error> resolutionError;
 
             [[nodiscard]] bool Available() const noexcept override {
                 return available;
@@ -59,6 +65,9 @@ namespace Horo::Security::Tests {
             }
 
             [[nodiscard]] Result<SecureBytes> Resolve(const CredentialReference &reference) override {
+                ++resolutions;
+                if (resolutionError)
+                    return Result<SecureBytes>::Failure(*resolutionError);
                 if (!available)
                     return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialBackendUnavailable));
                 const auto value = values.find(std::string{reference.Value()});
@@ -139,6 +148,136 @@ namespace Horo::Security::Tests {
     }  // namespace
 
     static_assert(!std::is_copy_constructible_v<SecureBytes>);
+    static_assert(std::is_same_v<CredentialReference, Horo::CredentialReference>);
+
+    TEST_CASE("Configuration credentials resolve only through the operation provider", "[Security][Configuration]") {
+        const Horo::Tests::OwnedTestDirectory directory{"configuration-credential-redaction"};
+
+        struct ShutdownLogger {
+            ~ShutdownLogger() {
+                Log::Logger::Shutdown();
+            }
+        } shutdownLogger;
+
+        REQUIRE(Log::Logger::Init(Log::LoggerConfiguration{.logDirectory = directory.Path() / "logs",
+                                                           .baseName = "credential-operation",
+                                                           .echoToStderr = false}));
+        auto provider = std::make_shared<MemoryCredentialBackend>();
+        auto random = std::make_shared<DeterministicRandom>();
+        CredentialVault vault{provider, random};
+        auto reference = vault.Put(Secret("operation-secret"));
+        REQUIRE(reference.HasValue());
+        const SettingKey key{"release.signing.reference"};
+        ConfigurationSchema schema;
+        REQUIRE(schema
+                    .Register({.key = key,
+                               .type = SettingValueType::CredentialReference,
+                               .defaultValue = CredentialReference{},
+                               .scope = SettingScope::User,
+                               .reloadPolicy = ReloadPolicy::NextOperation,
+                               .sensitivity = SettingSensitivity::SecretReference})
+                    .HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationResolutionRequest inputs;
+        inputs.user.emplace(key, ConfigurationInputValue{.value = reference.Value()});
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationService authority{schema, &events};
+        const auto unset = ResolveConfigurationCredential(authority.Snapshot(), key, &vault, 0);
+        REQUIRE(unset.HasError());
+        CHECK(unset.ErrorValue().code.Value() == "security.credential_not_found");
+        const auto unknownReference = CredentialReference::Parse("cred:v1:" + std::string(48, 'f'));
+        REQUIRE(unknownReference.HasValue());
+        ConfigurationResolutionRequest unknownInputs;
+        unknownInputs.user.emplace(key, ConfigurationInputValue{.value = unknownReference.Value()});
+        const auto unknownSnapshot = ConfigurationResolver::Resolve(schema, unknownInputs);
+        REQUIRE(unknownSnapshot.HasValue());
+        const auto unknown = ResolveConfigurationCredential(unknownSnapshot.Value(), key, &vault, 0);
+        REQUIRE(unknown.HasError());
+        CHECK(unknown.ErrorValue().code.Value() == "security.credential_not_found");
+        CHECK(provider->resolutions == 0);
+        int changes = 0;
+        const auto subscription = events.Subscribe<ConfigurationChangedEvent>([&](const ConfigurationChangedEvent &event) {
+            ++changes;
+            REQUIRE(event.changedKeys.size() == 1);
+            CHECK(event.changedKeys.front() == key);
+            CHECK(authority.Snapshot().ToJson().find("operation-secret") == std::string::npos);
+        });
+        REQUIRE(authority.ResolveAndCommit(inputs).HasValue());
+        CHECK(changes == 1);
+        NativeDurableFileSystem files;
+        ConfigurationFileStore store{files};
+        const auto path = directory.Path() / "configuration.json";
+        REQUIRE(store.Write(path, authority.Snapshot()).HasValue());
+        const auto persisted = store.Read(path);
+        REQUIRE(persisted.HasValue());
+        CHECK(persisted.Value().find("operation-secret") == std::string::npos);
+        auto parsed = ConfigurationResolver::ParseDocument(schema, persisted.Value(), "user.json");
+        REQUIRE(parsed.HasValue());
+        ConfigurationResolutionRequest captured;
+        captured.user = std::move(parsed).Value();
+        auto snapshot = ConfigurationResolver::Resolve(schema, captured);
+        REQUIRE(snapshot.HasValue());
+        CHECK(provider->resolutions == 0);
+        CHECK(snapshot.Value().ToJson().find("operation-secret") == std::string::npos);
+        auto missingProvider = ResolveConfigurationCredential(snapshot.Value(), key, nullptr, 0);
+        REQUIRE(missingProvider.HasError());
+        CHECK(missingProvider.ErrorValue().code.Value() == "security.credential_backend_unavailable");
+        {
+            auto secret = ResolveConfigurationCredential(snapshot.Value(), key, &vault, 0);
+            REQUIRE(secret.HasValue());
+            CHECK(SecretText(secret.Value()) == "operation-secret");
+        }
+        CHECK(provider->resolutions == 1);
+        provider->available = false;
+        REQUIRE(ResolveConfigurationCredential(snapshot.Value(), key, &vault, 0).HasError());
+        provider->available = true;
+        auto expiringReference = vault.Put(Secret("expiring-secret"), 100);
+        REQUIRE(expiringReference.HasValue());
+        inputs.user.at(key).value = expiringReference.Value();
+        auto expiringSnapshot = ConfigurationResolver::Resolve(schema, inputs);
+        REQUIRE(expiringSnapshot.HasValue());
+        auto expired = ResolveConfigurationCredential(expiringSnapshot.Value(), key, &vault, 100);
+        REQUIRE(expired.HasError());
+        CHECK(expired.ErrorValue().code.Value() == "security.credential_expired");
+        provider->resolutionError = MakeError(SecurityErrors::CredentialNotFound, "provider-secret-value");
+        provider->resolutionError->diagnostics.push_back(
+            {.code = DiagnosticCode{"provider.failure"}, .severity = DiagnosticSeverity::Error, .message = "provider-secret-value"});
+        provider->resolutionError =
+            WithCause(std::move(*provider->resolutionError), MakeError(SecurityErrors::InvalidInput, "provider-secret-value"));
+        auto providerFailure = ResolveConfigurationCredential(snapshot.Value(), key, &vault, 0);
+        REQUIRE(providerFailure.HasError());
+        CHECK(providerFailure.ErrorValue().code.Value() == "security.credential_not_found");
+        CHECK(providerFailure.ErrorValue().message.find("provider-secret-value") == std::string::npos);
+        CHECK(providerFailure.ErrorValue().diagnostics.empty());
+        CHECK(providerFailure.ErrorValue().cause.Get() == nullptr);
+        LOG_ERROR("configuration.credential", "code=%s message=%s", providerFailure.ErrorValue().code.Value().c_str(),
+                  providerFailure.ErrorValue().message.c_str());
+        provider->resolutionError = MakeError(SecurityErrors::InvalidInput, "provider-secret-value");
+        const auto unknownFailure = ResolveConfigurationCredential(snapshot.Value(), key, &vault, 0);
+        REQUIRE(unknownFailure.HasError());
+        CHECK(unknownFailure.ErrorValue().code.Value() == "security.credential_backend_unavailable");
+        CHECK(unknownFailure.ErrorValue().message.find("provider-secret-value") == std::string::npos);
+        provider->resolutionError.reset();
+        REQUIRE(vault.Revoke(reference.Value()).HasValue());
+        auto revoked = ResolveConfigurationCredential(snapshot.Value(), key, &vault, 0);
+        REQUIRE(revoked.HasError());
+        CHECK(revoked.ErrorValue().code.Value() == "security.credential_revoked");
+        CHECK(snapshot.Value().ToJson().find("operation-secret") == std::string::npos);
+        REQUIRE(Log::Logger::Flush());
+        Log::Logger::Shutdown();
+        bool sawOutcome = false;
+        for (const auto &entry : std::filesystem::directory_iterator(directory.Path() / "logs")) {
+            if (!entry.is_regular_file())
+                continue;
+            std::ifstream stream{entry.path(), std::ios::binary};
+            const std::string contents{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+            CHECK(contents.find("operation-secret") == std::string::npos);
+            CHECK(contents.find("provider-secret-value") == std::string::npos);
+            sawOutcome = sawOutcome || contents.find("security.credential_not_found") != std::string::npos;
+        }
+        CHECK(sawOutcome);
+    }
+
     static_assert(!std::is_copy_assignable_v<SecureBytes>);
     static_assert(std::is_nothrow_move_constructible_v<SecureBytes>);
 
