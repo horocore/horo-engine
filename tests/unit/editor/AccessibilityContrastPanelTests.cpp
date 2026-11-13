@@ -5,10 +5,12 @@
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <limits>
+#include <utility>
 
 namespace Horo::Editor {
     TEST_CASE("Contrast tool rejects intermediate drafts and never reports a previous valid result", "[editor][accessibility][contrast]") {
@@ -45,6 +47,45 @@ namespace Horo::Editor {
         auto invalid = text;
         invalid.x = std::numeric_limits<float>::quiet_NaN();
         REQUIRE(EvaluateOpaqueContrastPair(invalid, background, Accessibility::ContrastTextSize::Standard).HasError());
+    }
+
+    TEST_CASE("Theme contrast selections read both active layers and reject unknown or uncomposed pairs",
+              "[editor][accessibility][contrast][headless][theme]") {
+        Tests::HeadlessEditorGuiFixture fixture;
+        const auto category = Accessibility::ContrastTextSize::Standard;
+        const std::array pairs{std::pair{Theme::Text(), Theme::Bg0()},
+                               std::pair{Theme::Text(), Theme::Bg1()},
+                               std::pair{Theme::Text(), Theme::Bg2()},
+                               std::pair{Theme::Text(), Theme::Bg3()},
+                               std::pair{Theme::Muted(), Theme::Bg0()},
+                               std::pair{Theme::Muted(), Theme::Bg2()},
+                               std::pair{Theme::Dim(), Theme::Bg3()},
+                               std::pair{ImGui::GetStyleColorVec4(ImGuiCol_Text), ImGui::GetStyleColorVec4(ImGuiCol_WindowBg)},
+                               std::pair{ImGui::GetStyleColorVec4(ImGuiCol_Text), ImGui::GetStyleColorVec4(ImGuiCol_PopupBg)},
+                               std::pair{ImGui::GetStyleColorVec4(ImGuiCol_Text), ImGui::GetStyleColorVec4(ImGuiCol_FrameBg)},
+                               std::pair{ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled), ImGui::GetStyleColorVec4(ImGuiCol_WindowBg)}};
+        static_assert(pairs.size() == static_cast<std::size_t>(ThemeContrastPair::Count));
+        for (std::size_t index = 0; index < pairs.size(); ++index) {
+            INFO(index);
+            const auto expected = EvaluateOpaqueContrastPair(pairs[index].first, pairs[index].second, category);
+            const auto actual = EvaluateThemeContrastPair(static_cast<ThemeContrastPair>(index), category);
+            REQUIRE(actual.HasValue() == expected.HasValue());
+            if (expected.HasValue()) {
+                CHECK(actual.Value().ratio == expected.Value().ratio);
+                CHECK(actual.Value().meetsAA == expected.Value().meetsAA);
+                CHECK(actual.Value().meetsAAA == expected.Value().meetsAAA);
+            }
+        }
+        REQUIRE(EvaluateThemeContrastPair(ThemeContrastPair::Count, category).HasError());
+        REQUIRE(EvaluateThemeContrastPair(static_cast<ThemeContrastPair>(255), category).HasError());
+        auto &colors = ImGui::GetStyle().Colors;
+        colors[ImGuiCol_Text] = {0, 0, 0, 1};
+        colors[ImGuiCol_WindowBg] = {1, 1, 1, 1};
+        REQUIRE(EvaluateThemeContrastPair(ThemeContrastPair::NativeTextWindow, category).Value().ratio == Catch::Approx(21));
+        colors[ImGuiCol_WindowBg] = {0, 0, 0, 1};
+        REQUIRE(EvaluateThemeContrastPair(ThemeContrastPair::NativeTextWindow, category).Value().ratio == Catch::Approx(1));
+        colors[ImGuiCol_WindowBg].w = 0.5F;
+        REQUIRE(EvaluateThemeContrastPair(ThemeContrastPair::NativeTextWindow, category).HasError());
     }
 
     TEST_CASE("Contrast workspace tool renders paired locales at narrow and wide bounds without a display",

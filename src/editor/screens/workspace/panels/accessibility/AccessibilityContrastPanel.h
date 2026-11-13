@@ -7,6 +7,7 @@
 #include "Horo/Editor/IWorkspacePanel.h"
 
 #include <array>
+#include <cstdint>
 
 struct ImVec4;
 
@@ -32,7 +33,31 @@ namespace Horo::Editor {
     [[nodiscard]] Result<Accessibility::TextContrast> EvaluateOpaqueContrastPair(const ImVec4 &text, const ImVec4 &surface,
                                                                                  Accessibility::ContrastTextSize size);
 
-    /** @brief Persistent developer tool for user-selected composed sRGB colors and active-theme text/window inspection. */
+    /** @brief Explicit inspection pairs from the independent token and native style layers. */
+    enum class ThemeContrastPair : std::uint8_t {
+        PrimaryRoot,
+        PrimaryWindow,
+        PrimaryPanel,
+        PrimaryRaised,
+        MutedRoot,
+        MutedPanel,
+        DimRaised,
+        NativeTextWindow,
+        NativeTextPopup,
+        NativeTextFrame,
+        NativeDisabledWindow,
+        Count
+    };
+
+    /** @brief Evaluates a selected pair from the active theme at call time without caching colors across theme changes.
+     * @param pair Explicit token or native style pair; unknown values fail closed.
+     * @param size Category selected from actual font metrics.
+     * @return Unrounded assessment or InvalidColor when the pair requires unknown composition or is invalid.
+     */
+    [[nodiscard]] Result<Accessibility::TextContrast> EvaluateThemeContrastPair(ThemeContrastPair pair,
+                                                                                Accessibility::ContrastTextSize size);
+
+    /** @brief Persistent developer tool for composed sRGB drafts and explicit token/native style pair inspection. */
     class AccessibilityContrastPanel final : public IWorkspacePanel {
     public:
         static constexpr GuiLocalizationScope kTextScope{"workspace.accessibility_contrast"};
@@ -61,5 +86,6 @@ namespace Horo::Editor {
     private:
         ContrastInspectionDraft draft_;
         bool inspectTheme_{};
+        ThemeContrastPair themePair_{ThemeContrastPair::PrimaryRoot};
     };
 }  // namespace Horo::Editor

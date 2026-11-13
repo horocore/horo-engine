@@ -17,6 +17,9 @@ def test_contrast_tool_copy_is_paired_and_covers_rendered_states() -> None:
     direct_keys = set(re.findall(r'LocalizedText\(context\.localization, "([a-z_]+)"\)', source))
     assert direct_keys <= keys
     assert {"title", "invalid", "needs_composition", "pass", "fail", "custom", "theme", "large_hint"} <= keys
+    assert {"pair_primary_root", "pair_primary_window", "pair_primary_panel", "pair_primary_raised",
+            "pair_muted_root", "pair_muted_panel", "pair_dim_raised", "pair_native_window",
+            "pair_native_popup", "pair_native_frame", "pair_native_disabled"} <= keys
     assert all(catalog[prefix + key]["text"] for catalog in catalogs for key in keys)
 
 

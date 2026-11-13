@@ -43,6 +43,41 @@ namespace Horo::Editor {
         return Accessibility::EvaluateTextContrast({text.x, text.y, text.z}, {surface.x, surface.y, surface.z}, size);
     }
 
+    /** @copydoc EvaluateThemeContrastPair */
+    Result<Accessibility::TextContrast> EvaluateThemeContrastPair(const ThemeContrastPair pair,
+                                                                  const Accessibility::ContrastTextSize size) {
+        switch (pair) {
+            case ThemeContrastPair::PrimaryRoot:
+                return EvaluateOpaqueContrastPair(Theme::Text(), Theme::Bg0(), size);
+            case ThemeContrastPair::PrimaryWindow:
+                return EvaluateOpaqueContrastPair(Theme::Text(), Theme::Bg1(), size);
+            case ThemeContrastPair::PrimaryPanel:
+                return EvaluateOpaqueContrastPair(Theme::Text(), Theme::Bg2(), size);
+            case ThemeContrastPair::PrimaryRaised:
+                return EvaluateOpaqueContrastPair(Theme::Text(), Theme::Bg3(), size);
+            case ThemeContrastPair::MutedRoot:
+                return EvaluateOpaqueContrastPair(Theme::Muted(), Theme::Bg0(), size);
+            case ThemeContrastPair::MutedPanel:
+                return EvaluateOpaqueContrastPair(Theme::Muted(), Theme::Bg2(), size);
+            case ThemeContrastPair::DimRaised:
+                return EvaluateOpaqueContrastPair(Theme::Dim(), Theme::Bg3(), size);
+            case ThemeContrastPair::NativeTextWindow:
+                return EvaluateOpaqueContrastPair(ImGui::GetStyleColorVec4(ImGuiCol_Text), ImGui::GetStyleColorVec4(ImGuiCol_WindowBg),
+                                                  size);
+            case ThemeContrastPair::NativeTextPopup:
+                return EvaluateOpaqueContrastPair(ImGui::GetStyleColorVec4(ImGuiCol_Text), ImGui::GetStyleColorVec4(ImGuiCol_PopupBg),
+                                                  size);
+            case ThemeContrastPair::NativeTextFrame:
+                return EvaluateOpaqueContrastPair(ImGui::GetStyleColorVec4(ImGuiCol_Text), ImGui::GetStyleColorVec4(ImGuiCol_FrameBg),
+                                                  size);
+            case ThemeContrastPair::NativeDisabledWindow:
+                return EvaluateOpaqueContrastPair(ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+                                                  ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), size);
+            default:
+                return Result<Accessibility::TextContrast>::Failure(MakeError(Accessibility::ContrastErrors::InvalidColor));
+        }
+    }
+
     /** @copydoc AccessibilityContrastPanel::GetId */
     std::string AccessibilityContrastPanel::GetId() const {
         return "horo.accessibility_contrast";
@@ -95,6 +130,21 @@ namespace Horo::Editor {
                 Ui::ColorHexControl("##ContrastBackground", draft_.background.data(), draft_.background.size(), context.theme.fonts));
         } else {
             ImGui::TextWrapped("%s", LocalizedText(context.localization, "theme_hint").c_str());
+            const std::array pairLabels{LocalizedText(context.localization, "pair_primary_root").c_str(),
+                                        LocalizedText(context.localization, "pair_primary_window").c_str(),
+                                        LocalizedText(context.localization, "pair_primary_panel").c_str(),
+                                        LocalizedText(context.localization, "pair_primary_raised").c_str(),
+                                        LocalizedText(context.localization, "pair_muted_root").c_str(),
+                                        LocalizedText(context.localization, "pair_muted_panel").c_str(),
+                                        LocalizedText(context.localization, "pair_dim_raised").c_str(),
+                                        LocalizedText(context.localization, "pair_native_window").c_str(),
+                                        LocalizedText(context.localization, "pair_native_popup").c_str(),
+                                        LocalizedText(context.localization, "pair_native_frame").c_str(),
+                                        LocalizedText(context.localization, "pair_native_disabled").c_str()};
+            static_assert(pairLabels.size() == static_cast<std::size_t>(ThemeContrastPair::Count));
+            int pair = static_cast<int>(themePair_);
+            if (Ui::ComboControl("##ContrastThemePair", &pair, pairLabels.data(), static_cast<int>(pairLabels.size()), context.theme.fonts))
+                themePair_ = static_cast<ThemeContrastPair>(pair);
         }
         const std::array labels{LocalizedText(context.localization, "standard").c_str(),
                                 LocalizedText(context.localization, "large").c_str()};
@@ -102,7 +152,7 @@ namespace Horo::Editor {
         if (Ui::ComboControl("##ContrastTextCategory", &category, labels.data(), static_cast<int>(labels.size()), context.theme.fonts))
             draft_.size = static_cast<Accessibility::ContrastTextSize>(category);
         ImGui::TextWrapped("%s", LocalizedText(context.localization, "large_hint").c_str());
-        const auto result = inspectTheme_ ? EvaluateOpaqueContrastPair(Theme::Text(), Theme::Bg0(), draft_.size) : draft_.Evaluate();
+        const auto result = inspectTheme_ ? EvaluateThemeContrastPair(themePair_, draft_.size) : draft_.Evaluate();
         if (result.HasError()) {
             ImGui::TextWrapped("%s", LocalizedText(context.localization, inspectTheme_ ? "needs_composition" : "invalid").c_str());
         } else {

@@ -57,6 +57,18 @@ CTest execution.
 
 ## Current local verification
 
+The contrast tool now exposes eleven explicit live theme pairs: primary text on
+the four token surfaces, muted text on root/panel, dim text on raised, native
+text on window/popup/frame, and native disabled text on window. The custom opaque
+color draft remains available. The selected pair is read on each evaluation;
+unknown selectors or non-opaque colors cannot produce a cached success. New
+regression sources check pair selection, live native style changes, and rejection
+of unknown composition. These C++ cases remain uncompiled/unexecuted. The paired
+catalog and CI selection Python pass after this change is **42 passed**.
+Disabled-text results are diagnostic; [WCAG 2.2 contrast criteria](https://www.w3.org/TR/WCAG22/#contrast-minimum)
+exempt text in inactive components. The inspector does not infer applicability
+from a color role or certify the complete editor.
+
 `git diff --check` passes after current edits. A lightweight static registration
 check also verified each new public header has exactly one registry entry, every
 new implementation unit is listed once, and new UI error references are declared.
