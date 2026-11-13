@@ -86,16 +86,7 @@ namespace Horo::Editor {
                 availability = "service.available";
             Ui::WrappedText(width, std::format("{}: {}", text(serviceKeys[index]), text(availability)), Theme::Text(), fonts);
         }
-        Ui::WrappedText(width, std::format("{}: {}/{}", text("active"), snapshot.offline.active, snapshot.offline.activeCapacity),
-                        Theme::Text(), fonts);
-        Ui::WrappedText(width, std::format("{}: {}/{}", text("retained"), snapshot.offline.retained, snapshot.offline.retainedCapacity),
-                        Theme::Text(), fonts);
-        constexpr std::array keys{"pending", "dispatching", "reconciling", "suspended", "succeeded",
-                                  "failed",  "expired",     "superseded",  "abandoned"};
-        static_assert(keys.size() == static_cast<std::size_t>(PlatformServices::PlatformOfflineIntentState::Abandoned) + 1);
-        for (std::size_t index = 0; index < keys.size(); ++index)
-            Ui::WrappedText(width, std::format("{}: {}", text(keys[index]), snapshot.offline.receiptsByState[index]), Theme::Text(), fonts);
-        Ui::WrappedText(width, text("queued_notice"), Theme::Muted(), fonts);
+        DrawQueue(context, snapshot.offline, width);
         if (Ui::Button({.label = text("suspend").c_str(),
                         .size = {width / Theme::GetActiveTokens().sizes.uiScale, 0},
                         .enabled = snapshot.canSuspendPending,
@@ -105,5 +96,22 @@ namespace Horo::Editor {
         }
         if (commandFailed_)
             Ui::WrappedText(width, text("command_failed"), Theme::Muted(), fonts);
+    }
+
+    /** @copydoc PlatformDiagnosticsPane::DrawQueue */
+    void PlatformDiagnosticsPane::DrawQueue(const GlobalDockPaneDrawContext &context,
+                                            const PlatformServices::PlatformOfflineQueueDiagnostics &queue, const float width) const {
+        const auto &fonts = context.gui.theme.fonts;
+        const auto text = [&](const char *key) -> const std::string & {
+            return kTextScope.Text(context.gui.localization, key);
+        };
+        Ui::WrappedText(width, std::format("{}: {}/{}", text("active"), queue.active, queue.activeCapacity), Theme::Text(), fonts);
+        Ui::WrappedText(width, std::format("{}: {}/{}", text("retained"), queue.retained, queue.retainedCapacity), Theme::Text(), fonts);
+        constexpr std::array keys{"pending", "dispatching", "reconciling", "suspended", "succeeded",
+                                  "failed",  "expired",     "superseded",  "abandoned"};
+        static_assert(keys.size() == static_cast<std::size_t>(PlatformServices::PlatformOfflineIntentState::Abandoned) + 1);
+        for (std::size_t index = 0; index < keys.size(); ++index)
+            Ui::WrappedText(width, std::format("{}: {}", text(keys[index]), queue.receiptsByState[index]), Theme::Text(), fonts);
+        Ui::WrappedText(width, text("queued_notice"), Theme::Muted(), fonts);
     }
 }  // namespace Horo::Editor

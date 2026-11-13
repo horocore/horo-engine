@@ -44,6 +44,13 @@ namespace Horo::Editor {
         void Draw(const GlobalDockPaneDrawContext &context) override;
 
     private:
+        /** @brief Draws detached queue evidence without invoking service commands.
+         * @param context Theme and localization for this draw.
+         * @param queue Fixed privacy-safe aggregate.
+         * @param width Available content width. */
+        void DrawQueue(const GlobalDockPaneDrawContext &context, const PlatformServices::PlatformOfflineQueueDiagnostics &queue,
+                       float width) const;
+
         PlatformServices::IPlatformDiagnostics *diagnostics_{};
         bool commandFailed_{};
         PlatformServices::PlatformProviderGeneration observedProvider_;

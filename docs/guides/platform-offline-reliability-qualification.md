@@ -306,3 +306,49 @@ HEAD `f4bc46fe2`. Its seven-patch range comparison was reported unchanged; earli
 83-case results remain evidence from the previous base. Rebased native execution,
 reconfiguration and quality are not yet reported. These local identities have not
 been fetched/pushed or integrated into this worktree.
+
+## Hosted Codacy review of checkpoint 376c612
+
+The read-only PR review resolved 39 of 46 changed paths at head `376c612`;
+seven JSON/CMake/Python paths were not mapped by the branch-specific file list
+and remain unknown rather than clean. Raw file/issue/clone evidence is retained
+in the local `build/codacy-pr3564-head376c612.json` report. This server review is
+separate from the still-unexecuted full local preflight.
+
+The current check reports two new method-length warnings. Local source now
+separates detached queue rendering from control/lifetime handling and places the
+metric privacy allowlists beside the validator. The oversized storage test file
+is also split into native storage and revision-conflict cases with shared private
+fixtures. All 20 storage test names are preserved, including six revision cases.
+These edits are not yet remotely analyzed or natively executed; current-head CI
+must become terminal before the next normal push.
+
+All returned findings are retained below; changed-line position is not used to
+dismiss contextual findings. Severity and rule are the server's values.
+
+| File | Line | Severity | Rule | Finding |
+| --- | --- | --- | --- | --- |
+| `src/editor/screens/workspace/panels/global_dock/panes/platform/PlatformDiagnosticsPane.cpp` | 53 | Warning | `Lizard_nloc-medium` | Method Horo::Editor::PlatformDiagnosticsPane::Draw has 56 lines of code (limit is 50) |
+| `tests/python/test_local_build_cache.py` | 440 | Warning | `Bandit_B603` | subprocess call - check for execution of untrusted input. |
+| `tests/python/test_local_build_cache.py` | 440 | Error | `Semgrep_python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit` | Detected subprocess function 'run' without a static string. |
+| `tests/unit/editor/GlobalDockPanelRenderTests.cpp` | 1 | Warning | `Lizard_file-nloc-medium` | File tests/unit/editor/GlobalDockPanelRenderTests.cpp has 785 non-comment lines of code |
+| `tests/unit/editor/GlobalDockPanelRenderTests.cpp` | 523 | Warning | `Lizard_nloc-medium` | Method TEST_CASE has 220 lines of code (limit is 50) |
+| `tests/unit/editor/GlobalDockPanelRenderTests.cpp` | 241 | Warning | `Lizard_nloc-medium` | Method TEST_CASE has 87 lines of code (limit is 50) |
+| `tests/unit/editor/LocalizationServiceTests.cpp` | 1 | Warning | `Lizard_file-nloc-medium` | File tests/unit/editor/LocalizationServiceTests.cpp has 629 non-comment lines of code |
+| `tests/unit/foundation/PlatformTests.cpp` | 1 | Warning | `Lizard_file-nloc-medium` | File tests/unit/foundation/PlatformTests.cpp has 799 non-comment lines of code |
+| `tests/unit/foundation/PlatformTests.cpp` | 340 | Warning | `Lizard_nloc-medium` | Method TEST_CASE has 56 lines of code (limit is 50) |
+| `tests/unit/platform_services/PlatformOfflineQueueLifecycleTests.cpp` | 180 | Warning | `Lizard_nloc-medium` | Method TEST_CASE has 55 lines of code (limit is 50) |
+| `tests/unit/platform_services/PlatformOfflineQueueLifecycleTests.cpp` | 162 | High | `cppcheck_knownConditionTrueFalse` | Condition 'replacement==original' is always true |
+| `tests/unit/platform_services/PlatformOfflineQueueStorageTests.cpp` | 1 | Warning | `Lizard_file-nloc-medium` | File tests/unit/platform_services/PlatformOfflineQueueStorageTests.cpp has 671 non-comment lines of code |
+| `tests/unit/platform_services/PlatformServicesMetricsTests.cpp` | 138 | Warning | `Lizard_nloc-medium` | Method Horo::PlatformServices::CheckPlatformMetricDescriptors has 61 lines of code (limit is 50) |
+
+Clone occurrences were inspected as well. The authoritative file endpoint gives
+`duplication=2` for each of `Foundation/Platform.h` and `PlatformOfflineQueue.h`,
+with `duplicatedLinesOfCode` of 22 and 18 respectively; these raw fields are not
+presented as percentages. The Foundation report has two groups/four occurrences
+pairing native filesystem declarations with the scene-persistence fake's required
+overrides. The offline report has one group/two occurrences pairing the distinct
+subject-partition and intent-identity value types. Their separate contracts remain
+necessary; the combined public consumer explicitly rejects identity-type aliasing.
+No clone occurrence, missing mapping, issue or rule was removed from the report,
+and no server issue status or repository rule configuration was changed.

@@ -134,48 +134,49 @@ namespace Horo::PlatformServices {
             }
         };
 
+        constexpr std::array<std::string_view, 7> MetricNames{"horo.platform_services.request.lifecycle",
+                                                              "horo.platform_services.request.queue_admission",
+                                                              "horo.platform_services.request.retry_scheduled",
+                                                              "horo.platform_services.request.throttled",
+                                                              "horo.platform_services.capability.checks",
+                                                              "horo.platform_services.session.checks",
+                                                              "horo.platform_services.frontend.shutdown"};
+        constexpr std::array<std::string_view, 7> MetricServices{"achievements", "leaderboards_and_stats",
+                                                                 "cloud",        "presence",
+                                                                 "friends",      "session",
+                                                                 "unknown"};
+        constexpr std::array<std::string_view, 25> MetricOutcomes{"accepted",
+                                                                  "rejected",
+                                                                  "succeeded",
+                                                                  "failed",
+                                                                  "cancelled",
+                                                                  "timed_out",
+                                                                  "shutdown",
+                                                                  "capacity_rejected",
+                                                                  "shutdown_rejected",
+                                                                  "invalid_configuration",
+                                                                  "available",
+                                                                  "unavailable",
+                                                                  "null_provider",
+                                                                  "policy_denied",
+                                                                  "frontend_closed",
+                                                                  "invalid_service",
+                                                                  "allowed",
+                                                                  "stale_session",
+                                                                  "stale_access_policy",
+                                                                  "consent_required",
+                                                                  "access_denied",
+                                                                  "access_restricted",
+                                                                  "access_revoked",
+                                                                  "access_unavailable",
+                                                                  "inactive"};
+
         /** @brief Checks the exported privacy allowlist and finite series budget independently of recorded values. */
         void CheckPlatformMetricDescriptors(const MetricCaptureSink &sink) {
-            constexpr std::array<std::string_view, 7> names{"horo.platform_services.request.lifecycle",
-                                                            "horo.platform_services.request.queue_admission",
-                                                            "horo.platform_services.request.retry_scheduled",
-                                                            "horo.platform_services.request.throttled",
-                                                            "horo.platform_services.capability.checks",
-                                                            "horo.platform_services.session.checks",
-                                                            "horo.platform_services.frontend.shutdown"};
-            constexpr std::array<std::string_view, 7> services{"achievements", "leaderboards_and_stats",
-                                                               "cloud",        "presence",
-                                                               "friends",      "session",
-                                                               "unknown"};
-            constexpr std::array<std::string_view, 25> outcomes{"accepted",
-                                                                "rejected",
-                                                                "succeeded",
-                                                                "failed",
-                                                                "cancelled",
-                                                                "timed_out",
-                                                                "shutdown",
-                                                                "capacity_rejected",
-                                                                "shutdown_rejected",
-                                                                "invalid_configuration",
-                                                                "available",
-                                                                "unavailable",
-                                                                "null_provider",
-                                                                "policy_denied",
-                                                                "frontend_closed",
-                                                                "invalid_service",
-                                                                "allowed",
-                                                                "stale_session",
-                                                                "stale_access_policy",
-                                                                "consent_required",
-                                                                "access_denied",
-                                                                "access_restricted",
-                                                                "access_revoked",
-                                                                "access_unavailable",
-                                                                "inactive"};
             const auto descriptors = sink.Descriptors();
-            REQUIRE(descriptors.size() == names.size());
+            REQUIRE(descriptors.size() == MetricNames.size());
             for (const auto &descriptor : descriptors) {
-                CHECK(std::ranges::find(names, descriptor.name) != names.end());
+                CHECK(std::ranges::find(MetricNames, descriptor.name) != MetricNames.end());
                 CHECK(descriptor.subsystem == "platform_services");
                 CHECK(descriptor.kind == Telemetry::InstrumentKind::Counter);
                 CHECK(descriptor.unit == Telemetry::MetricUnit::Count);
@@ -186,9 +187,9 @@ namespace Horo::PlatformServices {
                     REQUIRE_FALSE(dimension.allowedValues.empty());
                     for (const auto &value : dimension.allowedValues) {
                         if (dimension.key == "service")
-                            CHECK(std::ranges::find(services, value) != services.end());
+                            CHECK(std::ranges::find(MetricServices, value) != MetricServices.end());
                         else
-                            CHECK(std::ranges::find(outcomes, value) != outcomes.end());
+                            CHECK(std::ranges::find(MetricOutcomes, value) != MetricOutcomes.end());
                     }
                     cardinality *= dimension.allowedValues.size();
                 }
