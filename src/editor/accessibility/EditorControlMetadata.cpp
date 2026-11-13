@@ -193,7 +193,8 @@ namespace Horo::Editor::Detail {
 
     /** @copydoc EditorControlMetadataFrame::Text */
     std::string_view EditorControlMetadataFrame::Text(const UiAccessibilityTextRef reference) const noexcept {
-        if (!reference.IsPresent() || reference.offset > text.size() || reference.size > text.size() - reference.offset)
+        if (!reference.IsPresent() || reference.size == 0 || reference.offset > text.size() ||
+            reference.size > text.size() - reference.offset)
             return {};
         return {text.data() + reference.offset, reference.size};
     }

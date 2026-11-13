@@ -1424,6 +1424,7 @@ TEST_CASE("Shared controls produce owned versioned observations without retainin
     CHECK_FALSE(frame.controls[4].state.Has(UiAccessibilityStateFlag::Focusable));
     CHECK(frame.Text(frame.controls[5].name) == "Literal##help");
     CHECK(frame.Text({.offset = 128'000, .size = 2}).empty());
+    CHECK(Metadata::EditorControlMetadataFrame{}.Text({.offset = 0, .size = 0}).empty());
 }
 
 TEST_CASE("Metadata redaction and focus observation cannot be overridden by caller supplied facts and allocate no storage",
