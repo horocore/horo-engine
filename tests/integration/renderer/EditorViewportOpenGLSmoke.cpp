@@ -9,6 +9,7 @@
 
 #include <SDL3/SDL.h>
 #include <array>
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <cmath>
@@ -513,7 +514,8 @@ namespace Horo::Render::OpenGLSmokeTests {
         auto scene = fixture.View();
         Tests::CameraCuts::NativeCameraPlayback cinematic{curve};
         const auto cinematicCamera = cinematic.Advance(0);
-        CHECK(cinematicCamera.position.z == 4.0F);
+        const float expectedInitialZ = curve == Cinematic::CameraBlendCurve::Linear ? 3.6666667F : 3.5185185F;
+        CHECK(cinematicCamera.position.z == Catch::Approx(expectedInitialZ));
         scene.camera.position = cinematicCamera.position;
         scene.camera.target = cinematicCamera.target;
         scene.camera.up = cinematicCamera.up;
@@ -532,12 +534,13 @@ namespace Horo::Render::OpenGLSmokeTests {
         CheckViewportPixels(textureView, extent.width, extent.height);
         CheckGuiComposition(gui, frame, textureView, callerState);
         Check(frame.Present().HasValue());
-        const auto resizedCamera = cinematic.Advance(1);
-        CHECK(resizedCamera.position.z == 5.0F);
-        CHECK(cinematic.Position() == 7);
         const auto outputExtent = ChangeNativeOutput(*window, *frontend, outputChange);
+        CHECK(cinematic.Position() == 6);
+        const auto resizedCamera = cinematic.Advance(2);
+        CHECK(resizedCamera.position.z == 5.0F);
+        CHECK(cinematic.Position() == 8);
         CheckSeamlessResourceTransition(viewport, *frontend, scene, target, textureView, resizedCamera, outputExtent);
-        CHECK(cinematicCamera.position.z == 4.0F);
+        CHECK(cinematicCamera.position.z == Catch::Approx(expectedInitialZ));
 
         frontend->DetachStaticMeshPassExecutor(viewport);
         // Keep the owner and current context alive until the actual closing fence drains.

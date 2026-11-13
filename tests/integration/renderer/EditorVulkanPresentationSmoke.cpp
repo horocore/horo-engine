@@ -11,6 +11,7 @@
 
 #include <SDL3/SDL.h>
 #include <bit>
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
@@ -267,8 +268,11 @@ namespace Horo::Tests::VulkanEditor {
                               .lights = lights,
                               .lightSceneDomain = 1,
                               .lightSnapshotRevision = 1};
-        if (cinematic)
+        if (cinematic) {
             scene.camera = cinematic->Advance(0);
+            const float expectedInitialZ = *curve == Cinematic::CameraBlendCurve::Linear ? 3.6666667F : 3.5185185F;
+            CHECK(scene.camera.position.z == Catch::Approx(expectedInitialZ));
+        }
         REQUIRE(scene.IsValid());
         Host host;
         host.RecordCapabilities();
@@ -277,7 +281,7 @@ namespace Horo::Tests::VulkanEditor {
         host.viewport->RequestLightVisualizer({lights[1]});
         for (std::uint64_t number = 1; number <= 6; ++number) {
             if (number == 2 && cinematic)
-                scene.camera = cinematic->Advance(1);
+                scene.camera = cinematic->Advance(2);
             auto frame = host.Frame(number);
             host.ExecuteSceneAndGui(frame, scene);
             if (number % 2 == 0)
@@ -286,7 +290,7 @@ namespace Horo::Tests::VulkanEditor {
                 Check(frame.Present());
         }
         if (cinematic)
-            CHECK(cinematic->Position() == 7);
+            CHECK(cinematic->Position() == 8);
         REQUIRE(host.Drain());
         CHECK_FALSE(host.viewport->IsReady());
         CHECK(host.frontend->MemorySnapshot().allocationCount == 0);

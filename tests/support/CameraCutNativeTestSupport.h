@@ -3,6 +3,15 @@
 #include "CameraCutTestSupport.h"
 
 namespace Horo::Tests::CameraCuts {
+    /** @brief Authors a three-tick native blend whose sampled Linear and SmoothStep poses differ. */
+    inline Cinematic::SequencePlaybackActivation NativeCameraActivation(const Cinematic::CameraBlendCurve curve) {
+        auto activation = TransitionActivation(CameraTransitionTier::SingleViewBlend, curve);
+        std::array keys{activation.plan.CameraKeys()[0], activation.plan.CameraKeys()[1]};
+        keys[1].transitionDuration = 3;
+        activation.plan = Take(Cinematic::SequenceFrameEvaluationPlan::Create(10, Cinematic::SequenceLoopMode::Once, 4, {}, {}, keys));
+        return activation;
+    }
+
     /** @brief Builds the exact scene retained through native camera playback qualification. */
     inline std::unique_ptr<Runtime::RuntimeScene> NativeCameraScene() {
         Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
@@ -20,8 +29,7 @@ namespace Horo::Tests::CameraCuts {
     class NativeCameraPlayback final {
     public:
         explicit NativeCameraPlayback(const Cinematic::CameraBlendCurve curve)
-            : playback_(Take(CinematicCameraPlayback::Activate(runtime_, camera_,
-                                                               TransitionActivation(CameraTransitionTier::SingleViewBlend, curve),
+            : playback_(Take(CinematicCameraPlayback::Activate(runtime_, camera_, NativeCameraActivation(curve),
                                                                {bindings_, 8, CameraCutEndPolicy::HoldLastUntilPlayerEnd, 1, {1, 1}},
                                                                scene_->View()))) {
             REQUIRE(runtime_.Play(playback_.Player()).HasValue());

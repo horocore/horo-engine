@@ -48,6 +48,13 @@ generation and native realization transaction. These source checks establish
 the intended seams. Native resize, display and fullscreen execution remains
 required for CIN-003.4 and CIN-003.5 acceptance.
 
+The native camera fixture authors a three-tick blend starting at tick 5. At
+tick 6, Linear and SmoothStep produce distinct expected Z positions
+(approximately 3.666667 and 3.518519). The retained player then advances to
+tick 8 and the destination Z position 5. The OpenGL host observes the actual
+native output transition before publishing this next camera. These are source
+assertions awaiting execution, not recorded native passes.
+
 ## Local validation
 
 ### Outstanding acceptance and required owners
