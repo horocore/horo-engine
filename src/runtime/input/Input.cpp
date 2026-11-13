@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "InputAccessibilityProfile.h"
 #include "InputErrors.h"
+#include "InputGyroscope.h"
 #include "InputRouterInternal.h"
 
 #include <algorithm>
@@ -70,6 +71,8 @@ namespace Horo::Input {
                 case RawGamepadButton:
                 case RawGamepadAxis:
                     return binding.rawControl < 256;
+                case GyroscopeAxis:
+                    return binding.gyroscope.IsValid();
             }
             return false;
         }
@@ -109,8 +112,8 @@ namespace Horo::Input {
                 return false;
             return left.kind == right.kind && left.key == right.key && left.pointerButton == right.pointerButton &&
                    left.gamepadButton == right.gamepadButton && left.gamepadAxis == right.gamepadAxis &&
-                   left.rawControl == right.rawControl && left.requiredModifiers == right.requiredModifiers &&
-                   left.chordSize == right.chordSize &&
+                   left.rawControl == right.rawControl && left.gyroscope.axis == right.gyroscope.axis &&
+                   left.requiredModifiers == right.requiredModifiers && left.chordSize == right.chordSize &&
                    std::equal(left.chord.begin(), left.chord.begin() + left.chordSize, right.chord.begin());
         }
 
@@ -119,7 +122,7 @@ namespace Horo::Input {
                 return false;
             if (left.kind != right.kind || left.key != right.key || left.pointerButton != right.pointerButton ||
                 left.gamepadButton != right.gamepadButton || left.gamepadAxis != right.gamepadAxis || left.rawControl != right.rawControl ||
-                !RequiredModifiersOverlap(left, right))
+                left.gyroscope.axis != right.gyroscope.axis || !RequiredModifiersOverlap(left, right))
                 return false;
             const auto contains = [](const InputBinding &larger, const InputBinding &smaller) {
                 return std::all_of(smaller.chord.begin(), smaller.chord.begin() + smaller.chordSize, [&](const Key key) {
@@ -138,6 +141,8 @@ namespace Horo::Input {
                 return left.gamepadAxis == right.gamepadAxis;
             if (left.kind == RawGamepadAxis)
                 return left.rawControl == right.rawControl;
+            if (left.kind == GyroscopeAxis)
+                return left.gyroscope.axis == right.gyroscope.axis;
             if (left.kind == PointerWheelX || left.kind == PointerWheelY)
                 return true;
             return false;
@@ -149,7 +154,8 @@ namespace Horo::Input {
             std::optional<GamepadDeviceId> device;
         };
 
-        float ResolveGamepadAxis(const float rawAxis, const InputBinding &binding) noexcept {
+        /** @brief Applies scalar filtering to a normalized physical rate/axis; radial filtering waits for the assembled vector. */
+        float ResolveAnalogAxis(const float rawAxis, const InputBinding &binding) noexcept {
             return binding.deadzoneKind == DeadzoneKind::Radial ? std::clamp(rawAxis, -1.0F, 1.0F) : ApplyDeadzone(rawAxis, binding);
         }
 
@@ -170,8 +176,8 @@ namespace Horo::Input {
             if (previous == nullptr)
                 return 0.0F;
             if (raw)
-                return controlIndex < previous->rawAxes.size() ? ResolveGamepadAxis(previous->rawAxes[controlIndex], binding) : 0.0F;
-            return controlIndex < previous->axes.size() ? ResolveGamepadAxis(previous->axes[controlIndex], binding) : 0.0F;
+                return controlIndex < previous->rawAxes.size() ? ResolveAnalogAxis(previous->rawAxes[controlIndex], binding) : 0.0F;
+            return controlIndex < previous->axes.size() ? ResolveAnalogAxis(previous->axes[controlIndex], binding) : 0.0F;
         }
 
         BindingEvaluationResult EvaluateBindingOnPad(const InputBinding &binding, const GamepadState &pad,
@@ -183,7 +189,7 @@ namespace Horo::Input {
                     return {state.down ? 1.0F : 0.0F, state};
                 }
                 case GamepadAxis: {
-                    const float axis = ResolveGamepadAxis(pad.axes[Index(binding.gamepadAxis)], binding);
+                    const float axis = ResolveAnalogAxis(pad.axes[Index(binding.gamepadAxis)], binding);
                     const float previous = PreviousAxisValue(previousSnapshot, pad.id, Index(binding.gamepadAxis), binding, false);
                     return {axis, DigitalStateFromAxis(axis, previous, binding.digitalThreshold)};
                 }
@@ -196,7 +202,7 @@ namespace Horo::Input {
                 case RawGamepadAxis: {
                     if (binding.rawControl >= pad.rawAxes.size())
                         break;
-                    const float axis = ResolveGamepadAxis(pad.rawAxes[binding.rawControl], binding);
+                    const float axis = ResolveAnalogAxis(pad.rawAxes[binding.rawControl], binding);
                     const float previous = PreviousAxisValue(previousSnapshot, pad.id, binding.rawControl, binding, true);
                     return {axis, DigitalStateFromAxis(axis, previous, binding.digitalThreshold)};
                 }
@@ -264,6 +270,9 @@ namespace Horo::Input {
             if (!binding.accessibility.IsValid())
                 report.diagnostics.emplace_back(InvalidAccessibility, action,
                                                 "Binding accessibility policy has invalid bounded durations.");
+            if (!binding.gyroscope.IsValid() ||
+                (binding.kind != BindingControlKind::GyroscopeAxis && binding.gyroscope != GyroscopeBindingPolicy{}))
+                report.diagnostics.emplace_back(UnsupportedControl, action, "Gyroscope calibration is invalid for this binding.");
             if (!std::isfinite(binding.deadzone) || binding.deadzone < 0.0F || binding.deadzone >= 1.0F)
                 report.diagnostics.emplace_back(InvalidDeadzone, action, std::string(invalidDeadzoneMessage));
             if (binding.chordSize > binding.chord.size())
@@ -341,6 +350,8 @@ namespace Horo::Input {
                                                 std::format("Required action '{}' has no binding in context '{}'.", action.id.Value(),
                                                             action.context.Value()));
             for (const InputBinding &binding : bindings) {
+                if (binding.kind == BindingControlKind::GyroscopeAxis && action.valueType == ActionValueType::Digital)
+                    report.diagnostics.emplace_back(UnsupportedControl, action.id, "Gyroscope bindings require an analog rate action.");
                 if (binding.accessibility.IsEnabled() && action.valueType != ActionValueType::Digital)
                     report.diagnostics.emplace_back(InvalidAccessibility, action.id,
                                                     "Accessibility toggle, hold, repeat and sticky policies require a digital action.");
@@ -367,7 +378,8 @@ namespace Horo::Input {
 
             const BindingControlKind kind = left.binding->kind;
             if (const bool analog = kind == BindingControlKind::GamepadAxis || kind == BindingControlKind::RawGamepadAxis ||
-                                    kind == BindingControlKind::PointerWheelX || kind == BindingControlKind::PointerWheelY;
+                                    kind == BindingControlKind::PointerWheelX || kind == BindingControlKind::PointerWheelY ||
+                                    kind == BindingControlKind::GyroscopeAxis;
                 analog) {
                 if (!SameAnalogAxis(*left.binding, *right.binding))
                     return;
@@ -453,6 +465,15 @@ namespace Horo::Input {
     namespace {
         InputBinding BindingFromJson(const nlohmann::json &json);
 
+        /** @brief Rejects unknown/coerced control kinds before the byte-sized enum can narrow them. */
+        bool HasCanonicalBindingKind(const nlohmann::json &binding) {
+            if (!binding.is_object())
+                return false;
+            const auto kind = binding.find("kind");
+            return kind != binding.end() && kind->is_number_integer() && *kind >= 0 &&
+                   *kind <= static_cast<unsigned>(BindingControlKind::GyroscopeAxis);
+        }
+
         /** @brief Parses the overrides array of a profile document, enforcing per-entry shape limits. */
         Result<std::vector<BindingOverride>> ParseOverrides(const nlohmann::json &json, const std::uint32_t sourceSchema) {
             constexpr std::size_t maximumOverrides = 4096;
@@ -470,10 +491,17 @@ namespace Horo::Input {
                     return Result<std::vector<BindingOverride>>::Failure(
                         MakeError(Errors::ProfileMalformed, "Input profile binding count is invalid."));
                 for (const auto &binding : bindings) {
+                    if (!HasCanonicalBindingKind(binding))
+                        return Result<std::vector<BindingOverride>>::Failure(
+                            MakeError(Errors::ProfileMalformed, "Input binding control kind is malformed or unsupported."));
                     auto accessibility = Detail::DecodeBindingAccessibility(binding, sourceSchema);
                     if (accessibility.HasError())
                         return Result<std::vector<BindingOverride>>::Failure(accessibility.ErrorValue());
                     auto parsedBinding = BindingFromJson(binding);
+                    auto gyroscope = Detail::DecodeGyroscopeBinding(binding, parsedBinding.kind, sourceSchema);
+                    if (gyroscope.HasError())
+                        return Result<std::vector<BindingOverride>>::Failure(gyroscope.ErrorValue());
+                    parsedBinding.gyroscope = std::move(gyroscope).Value();
                     parsedBinding.accessibility = std::move(accessibility).Value();
                     overrideValue.bindings.push_back(std::move(parsedBinding));
                 }
@@ -508,6 +536,8 @@ namespace Horo::Input {
             for (std::size_t i = 0; i < binding.chordSize; ++i)
                 chord.push_back(static_cast<int>(binding.chord[i]));
             json["chord"] = chord;
+            if (binding.kind == BindingControlKind::GyroscopeAxis)
+                json["gyroscope"] = Detail::EncodeGyroscopeBinding(binding.gyroscope);
         }
 
         InputBinding BindingFromJson(const nlohmann::json &json) {
@@ -594,6 +624,10 @@ namespace Horo::Input {
                 if (!binding.accessibility.IsValid())
                     return Result<std::string>::Failure(
                         MakeError(Errors::ProfileValidationFailed, "Input accessibility policy is invalid."));
+                if (!binding.gyroscope.IsValid() ||
+                    (binding.kind != BindingControlKind::GyroscopeAxis && binding.gyroscope != GyroscopeBindingPolicy{}))
+                    return Result<std::string>::Failure(
+                        MakeError(Errors::ProfileValidationFailed, "Input gyroscope calibration is invalid for this binding."));
                 nlohmann::json bindingJson;
                 to_json(bindingJson, binding);
                 entry["bindings"].push_back(std::move(bindingJson));
@@ -740,6 +774,7 @@ namespace Horo::Input {
         }
         impl_->consumed.keys.reset();
         impl_->consumed.pointerButtons.reset();
+        impl_->consumed.gyroTransitions.reset();
         impl_->consumed.touchContacts.reset();
         impl_->consumed.pointerMotion = false;
         impl_->consumed.gamepadTransitions.clear();
@@ -981,6 +1016,17 @@ namespace Horo::Input {
                     if (!consume)
                         return {snapshot.pointer.wheelY, {snapshot.pointer.wheelY != 0, snapshot.pointer.wheelY != 0, false}};
                     return EvaluateWheel(snapshot.pointer.wheelY, impl.consumed.wheelY);
+                case GyroscopeAxis: {
+                    const float axis = ResolveAnalogAxis(Detail::ReadGyroscopeAxis(snapshot, binding.gyroscope), binding);
+                    const float previous =
+                        impl.previousSnapshot
+                            ? ResolveAnalogAxis(Detail::ReadGyroscopeAxis(*impl.previousSnapshot, binding.gyroscope), binding)
+                            : 0.0F;
+                    auto state = DigitalStateFromAxis(axis, previous, binding.digitalThreshold);
+                    if (consume && state.pressed && !ConsumeControl(impl.consumed.gyroTransitions, Index(binding.gyroscope.axis)))
+                        state.pressed = false;
+                    return {axis, state};
+                }
                 default: {
                     return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, player,
                                                   impl.consumed.gamepadTransitions, consume, preferred);
@@ -1134,6 +1180,7 @@ namespace Horo::Input {
         const auto sticky = contextEntry->sticky.Effective();
         const auto keysBefore = impl_->consumed.keys;
         const auto pointerBefore = impl_->consumed.pointerButtons;
+        const auto gyroBefore = impl_->consumed.gyroTransitions;
         const auto gamepadCountBefore = impl_->consumed.gamepadTransitions.count;
         const bool wheelXBefore = impl_->consumed.wheelX;
         const bool wheelYBefore = impl_->consumed.wheelY;
@@ -1147,6 +1194,7 @@ namespace Horo::Input {
         if (impl_->consumed.gamepadTransitions.capacityExceeded || (transaction && transaction->CapacityFailed())) {
             impl_->consumed.keys = keysBefore;
             impl_->consumed.pointerButtons = pointerBefore;
+            impl_->consumed.gyroTransitions = gyroBefore;
             impl_->consumed.gamepadTransitions.count = gamepadCountBefore;
             impl_->consumed.wheelX = wheelXBefore;
             impl_->consumed.wheelY = wheelYBefore;

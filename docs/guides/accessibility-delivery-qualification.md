@@ -209,6 +209,14 @@ API/layout changes, limits and rebuild requirements. Integration with
 both scoped persistence/capture and the accessibility policy; it is not delivered
 by these independent passing tests. Gyro still needs interpretation and hardware.
 
+Subsequent source work adds platform GyroscopeAxis rate bindings through the same
+router/profile owner, with typed SI calibration, ordinary sensitivity/deadzone,
+availability/focus neutralization and physical-axis conflict validation. The
+migration guide records its public layout/wire additions. Six new regression
+cases and the extended public consumer are pending execution; none is covered by
+the earlier 88-case Input result. Editor gyro editing/capture, SDL controller
+motion collection and real device qualification remain open.
+
 ### Native bridge, editor semantics and gameplay
 
 `HoroPlatformAccessibility` consumes existing Runtime UI semantics without making

@@ -438,6 +438,7 @@ namespace Horo::Input {
         GamepadAxis,
         RawGamepadButton,
         RawGamepadAxis,
+        GyroscopeAxis, /**< Platform motion sensor, independent of gamepad assignment. */
     };
     /** @brief Deadzone transformation applied before action aggregation. */
     enum class DeadzoneKind : std::uint8_t {
@@ -470,6 +471,28 @@ namespace Horo::Input {
         [[nodiscard]] bool operator==(const BindingAccessibilityPolicy &) const noexcept = default;
     };
 
+    /** @brief Native device-coordinate component; no camera/screen orientation is inferred. */
+    enum class SensorAxis : std::uint8_t {
+        X,
+        Y,
+        Z,
+        Count
+    };
+
+    /** @brief Gyroscope normalization before the ordinary binding deadzone, scale and component projection.
+     * @details The platform supplies radians/second in its documented device coordinates. A magnitude equal
+     * to radiansPerSecondAtFullScale produces a unit axis; scale supplies sensitivity/inversion. This is a
+     * rate control like a stick, never an integrated angle or frame-dependent mouse delta. The gameplay
+     * owner applies its normal tick duration. Unavailable samples contribute zero without enabling sensors.
+     */
+    struct GyroscopeBindingPolicy final {
+        SensorAxis axis{SensorAxis::X};
+        float radiansPerSecondAtFullScale{1.0F};
+        /** @brief Checks the axis and finite inclusive [0.001, 1000] rad/s calibration. @return Whether admitted. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] bool operator==(const GyroscopeBindingPolicy &) const noexcept = default;
+    };
+
     /** @brief Typed binding from one control, modifiers, or chord into an action component. */
     struct InputBinding {
         BindingControlKind kind{BindingControlKind::Key};
@@ -487,6 +510,7 @@ namespace Horo::Input {
         float deadzone{0.0F};
         float digitalThreshold{0.5F};
         BindingAccessibilityPolicy accessibility; /**< Digital-action semantic interpretation, persisted by the canonical profile codec. */
+        GyroscopeBindingPolicy gyroscope;         /**< Used only by GyroscopeAxis; other controls retain its neutral default. */
         [[nodiscard]] friend bool operator==(const InputBinding &, const InputBinding &) noexcept = default;
     };
 
@@ -516,7 +540,8 @@ namespace Horo::Input {
         Gamepad,
         Touch,
         Pen,
-        Accessibility
+        Accessibility,
+        Motion /**< Platform motion sensor, without implied gamepad or player assignment. */
     };
 
     /** @brief Stable canonical control identity; glyph packages may realize it without owning input. */
@@ -642,10 +667,11 @@ namespace Horo::Input {
      */
     [[nodiscard]] Result<InputBindingProfile> MergeBindingProfiles(const InputBindingProfile &lower, const InputBindingProfile &higher);
     /** @brief Parses one complete profile and returns the single canonical version-two model without partial recovery.
-     * @param json Bounded complete JSON document; legacy version one must not contain accessibility policy fields.
+     * @param json Bounded complete JSON document; legacy version one must not contain accessibility or gyroscope policy fields.
      * @return Canonical profile or typed malformed/version failure. No file is rewritten and no router state changes.
      * @details Legacy neutral bindings migrate on read; new accessibility fields require exact booleans and bounded integer
      * microseconds. Floating versions, unknown policy fields and unsupported versions are rejected before numeric narrowing.
+     * Gyroscope controls require a typed axis and bounded SI calibration; control kinds never wrap through a byte-sized enum.
      * @throws std::bad_alloc When owned parse/model storage cannot be allocated.
      */
     [[nodiscard]] Result<InputBindingProfile> ParseBindingProfile(std::string_view json);

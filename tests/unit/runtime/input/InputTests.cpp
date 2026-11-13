@@ -269,12 +269,16 @@ namespace {
 
     TEST_CASE("Profiles Write Atomically To Non Ascii Paths", "[unit][runtime][input]") {
         const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
-        const std::filesystem::path directory = std::filesystem::temp_directory_path() / ("horo-input-ü-" + std::to_string(suffix));
+        const std::filesystem::path directory = std::filesystem::temp_directory_path() / ("horo input-ü-" + std::to_string(suffix));
         const std::filesystem::path path = directory / "profil.json";
-        const InputBindingProfile profile{.profileId = "user", .overrides = {BindingOverride{ActionId{"jump"}, {KeyBinding(Key::Space)}}}};
+        const InputBinding gyroscope{.kind = BindingControlKind::GyroscopeAxis, .scale = -0.5F, .gyroscope = {SensorAxis::Y, 2.5F}};
+        const InputBindingProfile profile{.profileId = "user",
+                                          .overrides = {BindingOverride{ActionId{"jump"}, {KeyBinding(Key::Space)}},
+                                                        BindingOverride{ActionId{"look"}, {gyroscope}}}};
         REQUIRE((SaveBindingProfileAtomically(path, profile).HasValue()));
         const Horo::Result<InputBindingProfile> loaded = LoadBindingProfile(path);
         REQUIRE((loaded.HasValue() && loaded.Value().profileId == "user"));
+        REQUIRE(loaded.Value().overrides[1].bindings[0] == gyroscope);
         std::error_code error;
         std::filesystem::remove_all(directory, error);
         REQUIRE((!error));

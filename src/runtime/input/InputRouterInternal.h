@@ -80,6 +80,7 @@ namespace Horo::Input {
         struct ConsumptionState final {
             std::bitset<static_cast<std::size_t>(Key::Count)> keys;
             std::bitset<static_cast<std::size_t>(PointerButton::Count)> pointerButtons;
+            std::bitset<static_cast<std::size_t>(SensorAxis::Count)> gyroTransitions;
             std::bitset<MaximumTouchContacts> touchContacts;
             bool pointerMotion{};
             GamepadTransitions gamepadTransitions;

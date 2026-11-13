@@ -8,6 +8,56 @@ declared by `Input.h`; including `InputAccessibility.h` still exposes it through
 the existing include relationship. Raw physical snapshots are unchanged by this
 binding-model change.
 
+### Gyroscope rate bindings
+
+The same Input-owned model also appends `BindingControlKind::GyroscopeAxis`,
+`GyroscopeBindingPolicy` and the `InputBinding::gyroscope` field. Existing control
+and modality numeric identities are preserved; `InputModality::Motion` is appended.
+Rebuild callers because `InputBinding` layout changes. `Input.h` remains owned
+exclusively by HoroInput; no native/backend dependency or alternate profile store
+is introduced. The staged header and explicit accessibility consumer cover the
+new type. Existing neutral bindings require no source edits.
+
+A gyro binding projects the existing platform `SensorKind::Gyroscope` sample into
+an analog action. `SensorAxis` selects native device X/Y/Z without guessing a
+camera, display rotation or gamepad/player assignment. The native platform owns
+sensor enablement, permission and lifecycle. Only Available, finite SI samples
+with a positive native timestamp contribute. Unsupported, disabled, pending,
+suspended and failed samples contribute zero. This change does not create native
+sensor availability; the existing Android sensor collector is a producer, while
+SDL controller motion collection and hardware qualification remain separate work.
+
+`radiansPerSecondAtFullScale` is finite in inclusive [0.001, 1000]. Values at or
+beyond that magnitude saturate to a signed unit rate, followed by the ordinary
+deadzone, `scale` sensitivity/inversion and action component. For example 1 rad/s
+with full scale 2 and scale 0.5 produces 0.25 before final action aggregation.
+This is a stick-like rate, not a mouse delta or integrated angle. Gameplay retains
+tick-time integration; neither frame numbers nor unrelated native clock epochs
+become durations. Reads allocate no storage and activation edges share the
+frame-local consumption/rollback rules.
+
+The unreleased canonical version-two vocabulary adds a gyro-only object:
+
+```json
+"gyroscope": {"axis": 1, "radiansPerSecondAtFullScale": 2.0}
+```
+
+It is required for GyroscopeAxis, forbidden for other kinds and rejected in
+version one. Its two fields are exact: axis is an integer 0..2, calibration is a
+finite bounded number, and unknown/missing fields fail. Control kind is checked
+before byte-enum narrowing, rejecting negative, wrapped, boolean or floating
+aliases. The ordinary serializer, atomic save, parser, merge and live SetProfile
+remain the persistence/install path. Older version-two readers lacking this new
+control must reject it rather than silently drop it. Digital actions and enabled
+digital affordances cannot use a gyro binding. Duplicate or conflicting physical
+gyro axes remain conflicts despite different calibration, scale or output component.
+
+The added gyro/router/profile regression sources and the extended atomic
+save/load case with spaces and a non-ASCII path are pending native execution;
+the earlier 88-case Input pass predates this extension. Editor gyro capture and
+sensitivity controls, SDL controller collection and actual device evidence are
+not established by this contract change.
+
 ## Wire and source migration
 
 `CurrentInputBindingProfileSchema` is 2. A newly constructed profile and every
