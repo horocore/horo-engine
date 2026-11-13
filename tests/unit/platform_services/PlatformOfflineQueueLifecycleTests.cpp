@@ -16,6 +16,11 @@ namespace {
     using namespace Horo::PlatformServices;
     using namespace std::chrono_literals;
 
+    // Borrowed input must reach the allocation guard without a fallible parameter copy.
+    using AdmissionMember = Result<PlatformOfflineAdmission> (PlatformOfflineQueue::*)(const PlatformOfflineIntent &,
+                                                                                       PlatformOfflineQueue::TimePoint);
+    static_assert(std::is_same_v<decltype(&PlatformOfflineQueue::Admit), AdmissionMember>);
+
     /** @brief Creates a nonzero test-only protected subject partition. */
     [[nodiscard]] PlatformOfflineSubjectPartition Subject(const std::uint8_t value) {
         PlatformOfflineSubjectPartition subject;
@@ -115,6 +120,18 @@ namespace {
         CHECK(queue.OperationCount() == 1);
     }
 
+    /** @brief Confirms the original maximum aggregate and its capacity accounting survived a failed coalescing allocation. */
+    void CheckCoalescedAdmissionUnchanged(const PlatformOfflineQueue &queue) {
+        const auto snapshot = queue.Query(IntentId(96));
+        REQUIRE(snapshot.HasValue());
+        CHECK(std::get<PlatformOfflineSetStatMaximum>(snapshot.Value().operation).value == 3);
+        CHECK(snapshot.Value().receipts.size() == 1);
+        CHECK(queue.Query(IntentId(97)).HasError());
+        CHECK(queue.ActiveIntentCount() == 1);
+        CHECK(queue.RetainedIntentCount() == 1);
+        CHECK(queue.OperationCount() == 1);
+    }
+
     /** @brief Confirms the fully prepared replacement reports and commits supersession. */
     void CheckPresenceAdmissionCommitted(const PlatformOfflineQueue &queue, const PlatformOfflineOperationHandle prior,
                                          const PlatformOfflineAdmission &admission) {
@@ -154,12 +171,10 @@ TEST_CASE("Fresh presence admission leaves prior receipts unchanged on allocatio
         PlatformOfflineQueue queue(Config());
         const auto prior = AdmitPriorPresence(queue);
         const auto replacement = PresenceReplacement();
-        const auto original = replacement;
         auto result = [&] {
             Horo::Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
             return queue.Admit(replacement, At(1s));
         }();
-        CHECK(replacement == original);
         if (result.HasError()) {
             CHECK(result.ErrorValue().code.Value() == OfflineQueueErrors::CapacityExceeded.code.Value());
             ++allocationFailures;
@@ -203,14 +218,7 @@ TEST_CASE("Coalesced admission leaves prior receipts unchanged on allocation fai
         if (result.HasError()) {
             CHECK(result.ErrorValue().code.Value() == OfflineQueueErrors::CapacityExceeded.code.Value());
             ++allocationFailures;
-            const auto snapshot = queue.Query(IntentId(96));
-            REQUIRE(snapshot.HasValue());
-            CHECK(std::get<PlatformOfflineSetStatMaximum>(snapshot.Value().operation).value == 3);
-            CHECK(snapshot.Value().receipts.size() == 1);
-            CHECK(queue.Query(IntentId(97)).HasError());
-            CHECK(queue.ActiveIntentCount() == 1);
-            CHECK(queue.RetainedIntentCount() == 1);
-            CHECK(queue.OperationCount() == 1);
+            CheckCoalescedAdmissionUnchanged(queue);
             const auto retry = queue.Admit(replacement, At(1s));
             REQUIRE(retry.HasValue());
             CHECK(retry.Value().operation == prior.operation);

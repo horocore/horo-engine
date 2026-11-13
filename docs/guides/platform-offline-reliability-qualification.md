@@ -330,6 +330,19 @@ fixtures. All 20 storage test names are preserved, including six revision cases.
 These edits are not yet remotely analyzed or natively executed; current-head CI
 must become terminal before the next normal push.
 
+Further source review replaces the always-true comparison of a const caller
+value with its own copy by a compile-time guard on the borrowed const-reference
+admission signature. All allocation sweeps, queue rollback, retry and sequence
+assertions remain. The coalescing rollback postconditions now have a focused
+helper, keeping failure-path verification separate from retry sequencing.
+Native execution and a fresh analyzer result for these changes remain pending.
+
+The subprocess audit findings point to the real-compiler cache fixture: its argv
+contains PATH-resolved `ccache`/`cc`, fixed compiler switches and test-owned paths;
+`subprocess.run` uses no shell. The source is a fixed fixture written by the test.
+These findings remain in the report as reviewed audit context; no suppression,
+rule change or server status mutation was used.
+
 All returned findings are retained below; changed-line position is not used to
 dismiss contextual findings. Severity and rule are the server's values.
 
