@@ -145,8 +145,10 @@ namespace Horo::PlatformServices {
             !SameSnapshot(capabilities, inspected.Value()))
             return Failure<PlatformServicesFrontend>(FrontendErrors::InvalidComposition);
         Detail::RegisterPlatformServicesMetricDescriptors();
-        return Result<PlatformServicesFrontend>::Success(
-            PlatformServicesFrontend(std::move(backend), std::move(capabilities), std::move(session), std::move(policy)));
+        auto requestAuthority = std::make_shared<const RequestAuthority>();
+        return Result<PlatformServicesFrontend>::Success(PlatformServicesFrontend(std::move(backend), std::move(capabilities),
+                                                                                  std::move(session), std::move(policy),
+                                                                                  std::move(requestAuthority)));
     }
 
     PlatformServicesFrontend::~PlatformServicesFrontend() {
@@ -161,8 +163,8 @@ namespace Horo::PlatformServices {
 
     PlatformServicesFrontend::PlatformServicesFrontend(PlatformServicesFrontend &&other) noexcept
         : backend_(std::move(other.backend_)), capabilities_(std::move(other.capabilities_)), session_(std::move(other.session_)),
-          policy_(std::move(other.policy_)), open_(std::exchange(other.open_, false)), shutdownInvoked_(other.shutdownInvoked_),
-          closeError_(std::move(other.closeError_)) {
+          requestAuthority_(std::move(other.requestAuthority_)), policy_(std::move(other.policy_)),
+          open_(std::exchange(other.open_, false)), shutdownInvoked_(other.shutdownInvoked_), closeError_(std::move(other.closeError_)) {
         other.shutdownInvoked_ = true;
     }
 
@@ -172,14 +174,14 @@ namespace Horo::PlatformServices {
             return RejectRequest<void>(MakeError(FrontendErrors::InvalidRequest));
         if (const auto valid = ValidateSubjectService(PlatformServiceKind::Achievements, request.subject); valid.HasError())
             return RejectRequest<void>(valid.ErrorValue());
-        return RecordDispatch(backend_->UnlockAchievement(std::move(request)));
+        return RecordDispatch(BindDispatch(backend_->UnlockAchievement(std::move(request))));
     }
 
     /** @copydoc PlatformServicesFrontend::SubmitScore */
     Result<PlatformRequestHandle<void>> PlatformServicesFrontend::SubmitScore(LeaderboardScoreRequest request) const {
         if (const auto valid = ValidateLeaderboardOrStat(request.leaderboard.IsValid(), request.subject); valid.HasError())
             return RejectRequest<void>(valid.ErrorValue());
-        return RecordDispatch(backend_->SubmitScore(std::move(request)));
+        return RecordDispatch(BindDispatch(backend_->SubmitScore(std::move(request))));
     }
 
     /** @copydoc PlatformServicesFrontend::QueryRankedLeaderboard */
@@ -195,7 +197,7 @@ namespace Horo::PlatformServices {
         if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries ||
             query.startIndex > std::numeric_limits<std::uint32_t>::max() - query.pageSize)
             return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
-        return ValidatedDispatch(backend_->QueryRankedLeaderboard(query));
+        return ValidatedDispatch(BindDispatch(backend_->QueryRankedLeaderboard(query)));
     }
 
     /** @copydoc PlatformServicesFrontend::QueryLeaderboardAroundSubject */
@@ -211,7 +213,7 @@ namespace Horo::PlatformServices {
         if (const auto entryLimit = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U;
             entryLimit > valid.Value()->limits.maxPageEntries)
             return Failure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>(FrontendErrors::InvalidRequest);
-        return ValidatedDispatch(backend_->QueryLeaderboardAroundSubject(query));
+        return ValidatedDispatch(BindDispatch(backend_->QueryLeaderboardAroundSubject(query)));
     }
 
     /** @copydoc PlatformServicesFrontend::QueryFriendsLeaderboard */
@@ -233,14 +235,14 @@ namespace Horo::PlatformServices {
         if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries ||
             query.startIndex > std::numeric_limits<std::uint32_t>::max() - query.pageSize)
             return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
-        return ValidatedDispatch(backend_->QueryFriendsLeaderboard(query));
+        return ValidatedDispatch(BindDispatch(backend_->QueryFriendsLeaderboard(query)));
     }
 
     /** @copydoc PlatformServicesFrontend::WriteStat */
     Result<PlatformRequestHandle<void>> PlatformServicesFrontend::WriteStat(StatWriteRequest request) const {
         if (const auto valid = ValidateLeaderboardOrStat(request.stat.IsValid(), request.subject); valid.HasError())
             return RejectRequest<void>(valid.ErrorValue());
-        return RecordDispatch(backend_->WriteStat(std::move(request)));
+        return RecordDispatch(BindDispatch(backend_->WriteStat(std::move(request))));
     }
 
     /** @copydoc PlatformServicesFrontend::ReadCloudObject */
@@ -249,7 +251,7 @@ namespace Horo::PlatformServices {
             return RejectRequest<CloudReadResult>(MakeError(FrontendErrors::InvalidRequest));
         if (const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, request.subject); valid.HasError())
             return RejectRequest<CloudReadResult>(valid.ErrorValue());
-        return RecordDispatch(backend_->ReadCloudObject(std::move(request)));
+        return RecordDispatch(BindDispatch(backend_->ReadCloudObject(std::move(request))));
     }
 
     /** @copydoc PlatformServicesFrontend::ListCloudObjects */
@@ -261,7 +263,7 @@ namespace Horo::PlatformServices {
                                                    .maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
             ValidateCloudListRequest(request, limits).HasError())
             return Failure<PlatformRequestHandle<CloudObjectPage>>(FrontendErrors::InvalidRequest);
-        return ValidatedDispatch(backend_->ListCloudObjects(std::move(request)));
+        return ValidatedDispatch(BindDispatch(backend_->ListCloudObjects(std::move(request))));
     }
 
     /** @copydoc PlatformServicesFrontend::ReadCloudObject */
@@ -272,7 +274,7 @@ namespace Horo::PlatformServices {
         if (const CloudObjectContractLimits limits{.maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
             ValidateCloudBlobReadRequest(request, limits).HasError())
             return Failure<PlatformRequestHandle<CloudBlobReadResult>>(FrontendErrors::InvalidRequest);
-        return ValidatedDispatch(backend_->ReadCloudObject(std::move(request)));
+        return ValidatedDispatch(BindDispatch(backend_->ReadCloudObject(std::move(request))));
     }
 
     /** @copydoc PlatformServicesFrontend::WriteCloudObject */
@@ -287,7 +289,7 @@ namespace Horo::PlatformServices {
         if (const auto requestValid = ValidateCloudBlobWriteRequest(request, *valid.Value()->cloudMutation, limits);
             requestValid.HasError())
             return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(requestValid.ErrorValue());
-        return ValidatedDispatch(backend_->WriteCloudObject(std::move(request)));
+        return ValidatedDispatch(BindDispatch(backend_->WriteCloudObject(std::move(request))));
     }
 
     /** @copydoc PlatformServicesFrontend::DeleteCloudObject */
@@ -302,7 +304,7 @@ namespace Horo::PlatformServices {
         if (const auto requestValid = ValidateCloudBlobDeleteRequest(request, *valid.Value()->cloudMutation, limits);
             requestValid.HasError())
             return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(requestValid.ErrorValue());
-        return ValidatedDispatch(backend_->DeleteCloudObject(std::move(request)));
+        return ValidatedDispatch(BindDispatch(backend_->DeleteCloudObject(std::move(request))));
     }
 
     /** @copydoc PlatformServicesFrontend::QueryCloudQuota */
@@ -312,7 +314,7 @@ namespace Horo::PlatformServices {
             return Result<PlatformRequestHandle<CloudQuotaObservation>>::Failure(valid.ErrorValue());
         if (!valid.Value()->cloudMutation)
             return Failure<PlatformRequestHandle<CloudQuotaObservation>>(CloudObjectErrors::UnsupportedCapability);
-        return ValidatedDispatch(backend_->QueryCloudQuota(std::move(subject)));
+        return ValidatedDispatch(BindDispatch(backend_->QueryCloudQuota(std::move(subject))));
     }
 
     /** @copydoc PlatformServicesFrontend::SetPresence */
@@ -324,14 +326,14 @@ namespace Horo::PlatformServices {
             return RejectRequest<void>(valid.ErrorValue());
         if (std::cmp_greater(request.detail.size(), valid.Value()->limits.maxPayloadBytes))
             return RejectRequest<void>(MakeError(FrontendErrors::InvalidRequest));
-        return RecordDispatch(backend_->SetPresence(std::move(request)));
+        return RecordDispatch(BindDispatch(backend_->SetPresence(std::move(request))));
     }
 
     /** @copydoc PlatformServicesFrontend::ClearPresence */
     Result<PlatformRequestHandle<void>> PlatformServicesFrontend::ClearPresence(PlatformSubjectHandle subject) const {
         if (const auto valid = ValidateSubjectService(PlatformServiceKind::Presence, subject); valid.HasError())
             return RejectRequest<void>(valid.ErrorValue());
-        return RecordDispatch(backend_->ClearPresence(std::move(subject)));
+        return RecordDispatch(BindDispatch(backend_->ClearPresence(std::move(subject))));
     }
 
     /** @copydoc PlatformServicesFrontend::QueryFriends */
@@ -339,16 +341,17 @@ namespace Horo::PlatformServices {
         const auto valid = ValidateSubjectService(PlatformServiceKind::Friends, query.subject);
         if (valid.HasError())
             return RejectRequest<FriendsPage>(valid.ErrorValue());
-        if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries)
+        if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries ||
+            query.startIndex > std::numeric_limits<std::uint32_t>::max() - query.pageSize)
             return RejectRequest<FriendsPage>(MakeError(FrontendErrors::InvalidRequest));
-        return RecordDispatch(backend_->QueryFriends(std::move(query)));
+        return RecordDispatch(BindDispatch(backend_->QueryFriends(std::move(query))));
     }
 
     /** @copydoc PlatformServicesFrontend::QueryCurrentSession */
     Result<PlatformRequestHandle<PlatformSessionSnapshot>> PlatformServicesFrontend::QueryCurrentSession() const {
         if (const auto valid = ValidateService(PlatformServiceKind::Session); valid.HasError())
             return RejectRequest<PlatformSessionSnapshot>(valid.ErrorValue());
-        return RecordDispatch(backend_->QueryCurrentSession());
+        return RecordDispatch(BindDispatch(backend_->QueryCurrentSession()));
     }
 
     /** @copydoc PlatformServicesFrontend::ServiceLimits */
@@ -384,10 +387,17 @@ namespace Horo::PlatformServices {
         return open_;
     }
 
+    /** @copydoc PlatformServicesFrontend::OwnsRequest */
+    bool PlatformServicesFrontend::OwnsRequest(const std::weak_ptr<const void> &authority) const noexcept {
+        return !authority.owner_before(requestAuthority_) && !requestAuthority_.owner_before(authority);
+    }
+
     PlatformServicesFrontend::PlatformServicesFrontend(std::shared_ptr<IPlatformServicesBackend> backend,
                                                        PlatformServiceCapabilitySnapshot capabilities, PlatformSessionSnapshot session,
-                                                       PlatformServicesOperationPolicy policy) noexcept
-        : backend_(std::move(backend)), capabilities_(std::move(capabilities)), session_(std::move(session)), policy_(std::move(policy)) {}
+                                                       PlatformServicesOperationPolicy policy,
+                                                       std::shared_ptr<const RequestAuthority> requestAuthority) noexcept
+        : backend_(std::move(backend)), capabilities_(std::move(capabilities)), session_(std::move(session)),
+          requestAuthority_(std::move(requestAuthority)), policy_(std::move(policy)) {}
 
     Result<const PlatformServiceCapability *> PlatformServicesFrontend::ValidateService(const PlatformServiceKind service) const {
         if (!open_) {

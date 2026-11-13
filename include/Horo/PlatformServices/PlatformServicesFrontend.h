@@ -10,6 +10,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace Horo::PlatformServices {
     /** @brief Frozen product policy that may deny otherwise available service operations. */
@@ -37,7 +38,9 @@ namespace Horo::PlatformServices {
      * @brief Sole backend-neutral request surface for one active provider and session generation.
      * @details The frontend owns a strong backend lease and copied immutable capability/session snapshots. Rejected requests never
      *          invoke the backend. Close stops admission before invoking backend shutdown and is idempotent. Routing and Close are
-     *          serialized by the composition owner's lane; concurrent entry is not supported by this slice.
+     *          serialized by the composition owner's lane; concurrent entry is not supported by this slice. One small issuance
+     *          authority is allocated per frontend; weak capabilities on returned handles prevent cross-frontend cancellation
+     *          when backend numeric IDs/generations coincide, without retaining request or provider resources.
      */
     class PlatformServicesFrontend final {
     public:
@@ -116,13 +119,17 @@ namespace Horo::PlatformServices {
          * @tparam T Request result type.
          * @param request Frontend-issued request handle.
          * @return Cancellation acknowledgement or a typed lifecycle/stale failure.
-         * @details Cancellation is intent only; the request retains its ADR-130 terminal semantics.
+         * @details Cancellation is intent only; the request retains its ADR-130 terminal semantics. Handles issued by another
+         * frontend or obtained directly from a backend/store fail stale before the backend is called. Moving this frontend
+         * transfers its issuance authority and preserves its admitted handles.
          */
         template <typename T> [[nodiscard]] Result<void> RequestCancel(const PlatformRequestHandle<T> &request) const {
             if (!open_)
                 return Result<void>::Failure(MakeError(FrontendErrors::Unavailable));
             if (!request.IsValid())
                 return Result<void>::Failure(MakeError(FrontendErrors::InvalidRequest));
+            if (!OwnsRequest(request.frontendAuthority_))
+                return Result<void>::Failure(MakeError(RequestErrors::Stale));
             try {
                 return backend_->RequestCancel(request.Id(), request.Generation());
             } catch (...) {  // NOSONAR: backend adapters are an extension boundary and may throw non-standard exceptions.
@@ -146,8 +153,24 @@ namespace Horo::PlatformServices {
         [[nodiscard]] bool IsOpen() const noexcept;
 
     private:
+        struct RequestAuthority final {};
+
+        /** @brief Checks cancellation provenance without retaining the request or provider.
+         * @param authority Weak issuance capability captured by a returned handle. @return True for this exact frontend lifetime. */
+        [[nodiscard]] bool OwnsRequest(const std::weak_ptr<const void> &authority) const noexcept;
+
+        /** @brief Binds a successful backend handle to this frontend's cancellation lifetime without duplicating request state. */
+        template <typename T> [[nodiscard]] Result<PlatformRequestHandle<T>> BindDispatch(Result<PlatformRequestHandle<T>> result) const {
+            if (result.HasError() || !result.Value().IsValid())
+                return result;
+            auto handle = std::move(result).Value();
+            handle.frontendAuthority_ = requestAuthority_;
+            return Result<PlatformRequestHandle<T>>::Success(std::move(handle));
+        }
+
         PlatformServicesFrontend(std::shared_ptr<IPlatformServicesBackend> backend, PlatformServiceCapabilitySnapshot capabilities,
-                                 PlatformSessionSnapshot session, PlatformServicesOperationPolicy policy) noexcept;
+                                 PlatformSessionSnapshot session, PlatformServicesOperationPolicy policy,
+                                 std::shared_ptr<const RequestAuthority> requestAuthority) noexcept;
 
         [[nodiscard]] Result<const PlatformServiceCapability *> ValidateService(PlatformServiceKind service) const;
         [[nodiscard]] Result<const PlatformServiceCapability *> ValidateSubjectService(PlatformServiceKind service,
@@ -158,6 +181,7 @@ namespace Horo::PlatformServices {
         std::shared_ptr<IPlatformServicesBackend> backend_;
         PlatformServiceCapabilitySnapshot capabilities_;
         PlatformSessionSnapshot session_;
+        std::shared_ptr<const RequestAuthority> requestAuthority_;
         PlatformServicesOperationPolicy policy_;
         bool open_{true};
         bool shutdownInvoked_{};

@@ -120,6 +120,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroInspectorBehaviorBindingTests", "HoroInspectorBehaviorPublicHeaderConsumer",
     "HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer",
     "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
+    "HoroPlatformRequestTests", "HoroPlatformProviderAdmissionTests", "HoroPlatformServicesCompositionTests",
+    "HoroPlatformFriendsPublicConsumer", "HoroPlatformServicesPublicHeaderConsumer",
+    "HoroPlatformServicesExtensionPublicHeaderConsumer",
     "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
     "HoroCliMcpServeTests", "HoroImmutableFileStorageTests",
     "HoroVfxApiTests", "HoroVfxRenderExtractionTests",
@@ -213,6 +216,22 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_platform_identity_windows_build_and_test_membership_match() -> None:
+    required = {"HoroPlatformRequestTests", "HoroPlatformProviderAdmissionTests", "HoroPlatformServicesCompositionTests",
+                "HoroPlatformFriendsPublicConsumer", "HoroPlatformServicesPublicHeaderConsumer",
+                "HoroPlatformServicesExtensionPublicHeaderConsumer"}
+    assert required <= targets("HORO_CI_WINDOWS_TARGETS")
+    direct = re.search(r"set_property\(TEST\s+(.+?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
+    assert direct is not None
+    assert {"HoroPlatformProviderAdmissionTests", "HoroPlatformServicesCompositionTests",
+            "HoroPlatformFriendsPublicConsumer"} <= set(direct.group(1).split())
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    discovered = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
+    assert discovered is not None
+    assert "HoroPlatformRequestTests" in discovered.group(1).split()
+    assert "unit/platform_services/PlatformProviderSessionLifecycleTests.cpp" in tests_cmake
 
 
 def test_windows_checked_stl_regressions_have_headless_build_and_discovery_closure() -> None:
