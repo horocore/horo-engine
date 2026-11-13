@@ -177,7 +177,7 @@ namespace Horo::PlatformServices {
          * @brief Registers one deferred observer in the request's exact native host/session scope.
          * @param request Handle admitted by this host, retaining its immutable admission revision.
          * @param observer Nonempty owner-lane completion callback, never invoked under the host lock.
-         * @return Subscription, typed foreign/stale/closed failure, or request-store admission failure.
+         * @return Subscription, typed invalid/foreign/stale/closed failure, or request-store admission failure.
          * @throws std::bad_alloc If observer or subscription storage cannot be allocated.
          * @details Session replacement withdraws old observer delivery, including retained terminal successes and callbacks
          * queued behind a callback that changes session. Query retains the original immutable terminal result. The semantic

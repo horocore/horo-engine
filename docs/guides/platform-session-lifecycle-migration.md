@@ -43,7 +43,9 @@ existing host state control block supplies provenance without a new allocation.
 `PlatformProviderLifecycleHost::OnComplete` now rejects foreign store/host handles
 with `platform.request.stale` and an old admission revision with
 `platform.session.stale`. It checks revision again immediately before each deferred
-user callback, outside request-store locking. An earlier callback that advances the
+user callback. An empty callback is rejected as `platform.frontend.invalid_request`
+before allocating a wrapper or consuming observer capacity. Delivery checks execute
+outside request-store locking. An earlier callback that advances the
 session therefore withdraws the remaining old-scope callbacks in that turn. User
 callbacks run outside the host lock and still revalidate their semantic owner's
 profile/access authority before committing user state.

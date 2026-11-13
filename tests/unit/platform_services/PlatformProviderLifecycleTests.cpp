@@ -399,6 +399,9 @@ TEST_CASE("Native session observers preserve moved admission evidence and reject
     });
     REQUIRE(rejected.HasError());
     CHECK(rejected.ErrorValue().code.Value() == RequestErrors::Stale.code.Value());
+    auto empty = host->OnComplete(current, {});
+    REQUIRE(empty.HasError());
+    CHECK(empty.ErrorValue().code.Value() == FrontendErrors::InvalidRequest.code.Value());
     unsigned observed{};
     auto subscription = host->OnComplete(current, [&](const auto &) {
         ++observed;

@@ -342,9 +342,9 @@ namespace Horo::PlatformServices {
                 return SubscriptionResult::Failure(MakeError(PlatformSessionErrors::StaleSession));
         }
         if (!observer)
-            return state_->requests.OnComplete(request, std::move(observer));
+            return SubscriptionResult::Failure(MakeError(FrontendErrors::InvalidRequest));
         const std::weak_ptr<PlatformProviderLifecycleState> weakState = state_;
-        return state_->requests.OnComplete(request, [weakState, revision, observer = std::move(observer)](const auto &snapshot) {
+        return state_->requests.OnComplete<void>(request, [weakState, revision, observer = std::move(observer)](const auto &snapshot) {
             const auto state = weakState.lock();
             if (!state)
                 return;
