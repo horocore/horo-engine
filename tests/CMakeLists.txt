@@ -122,6 +122,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroPlatformServicesPublicHeaderConsumer PRIVATE support/PlatformOfflinePublicContract.cpp)
 target_sources(HoroWorldBakeApplicationPublicHeaderConsumer PRIVATE support/WorldBakePublicContract.cpp)
 target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp
         support/AssetReimportDestinationPublicContract.cpp)
@@ -3794,7 +3795,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/NavigationBakeRenderTests.cpp
     )
 
-    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform)
+    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform HoroEngine::PlatformServices)
     target_compile_features(HoroGlobalDockPanelRenderTests PRIVATE cxx_std_20)
     target_sources(HoroGlobalDockPanelRenderTests PRIVATE unit/editor/RenderGraphInspectionPaneTests.cpp
         ../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)

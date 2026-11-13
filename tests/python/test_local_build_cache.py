@@ -307,6 +307,16 @@ def test_heavy_lock_is_exclusive_and_releases_after_exception(repository: tuple[
         pass
 
 
+def test_nonblocking_heavy_admission_defers_and_can_retry_after_release(repository: tuple[Path, Path, str]) -> None:
+    repo, _, _ = repository
+    with cache.heavy_build_lock(repo):
+        with pytest.raises(BlockingIOError):
+            with cache.heavy_build_lock(repo, blocking=False):
+                pytest.fail("Busy admission entered the protected batch")
+    with cache.heavy_build_lock(repo, blocking=False):
+        pass
+
+
 
 def test_reader_lock_releases_when_build_raises(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository

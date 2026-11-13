@@ -34,6 +34,11 @@ namespace Horo::PlatformServices {
         if (record->state != PlatformOfflineOperationState::Pending)
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
 
+        if (record->attempts >= config_.maximumAttempts || (record->nextEligibleAt.has_value() && now < *record->nextEligibleAt))
+            return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
+        if (record->attempts != 0 && !LiveReceiptsMatchOperation(*record))
+            return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
+
         for (const auto &candidate : operations_)
             if (candidate.lane == record->lane && candidate.handle.sequence <= record->handle.sequence &&
                 (candidate.state == PlatformOfflineOperationState::Pending ||
@@ -51,6 +56,8 @@ namespace Horo::PlatformServices {
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
 
         record->state = PlatformOfflineOperationState::Dispatching;
+        ++record->attempts;
+        record->nextEligibleAt.reset();
         for (auto &receipt : record->receipts)
             if (receipt.state == PlatformOfflineIntentState::Pending)
                 receipt.state = PlatformOfflineIntentState::Dispatching;

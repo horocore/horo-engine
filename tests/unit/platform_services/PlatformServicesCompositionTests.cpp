@@ -1,5 +1,8 @@
+#include "Horo/PlatformServices/PlatformDiagnostics.h"
 #include "Horo/PlatformServices/PlatformServicesComposition.h"
 #include "PlatformServicesFrontendTestSupport.h"
+
+#include <thread>
 
 namespace Horo::PlatformServices {
     namespace {
@@ -68,6 +71,97 @@ namespace Horo::PlatformServices {
         }
     }  // namespace
 
+    TEST_CASE("Platform diagnostics rejects developer mutations for shipping Null and stale generations",
+              "[platform-services][composition][diagnostics][qualification]") {
+        for (const auto profile : {PlatformServicesProductProfile::Editor, PlatformServicesProductProfile::DevelopmentGame,
+                                   PlatformServicesProductProfile::ShippingGame, PlatformServicesProductProfile::Headless,
+                                   PlatformServicesProductProfile::DedicatedServer, PlatformServicesProductProfile::Test}) {
+            const auto config = Configuration(profile);
+            unsigned calls{};
+            RoutingBackend *backend{};
+            auto started = PlatformServicesComposition::Start(Request(config, profile), Factory(calls, backend));
+            REQUIRE(started.HasValue());
+            auto host = std::move(started).Value();
+            PlatformOfflineQueue queue;
+            unsigned commands{};
+            PlatformDiagnostics diagnostics(*host, queue, [&] {
+                ++commands;
+                return Result<std::size_t>::Success(queue.SuspendAllPending());
+            });
+            const bool allowed = profile == PlatformServicesProductProfile::Editor ||
+                                 profile == PlatformServicesProductProfile::DevelopmentGame ||
+                                 profile == PlatformServicesProductProfile::Test;
+            const auto snapshot = diagnostics.Query();
+            REQUIRE(snapshot.HasValue());
+            CHECK(snapshot.Value().canSuspendPending == allowed);
+            CHECK(diagnostics.SuspendPending({99}, queue.Generation()).HasError());
+            CHECK(diagnostics.SuspendPending({7}, {99}).HasError());
+            CHECK(commands == 0);
+            CHECK(diagnostics.SuspendPending({7}, queue.Generation()).HasValue() == allowed);
+            CHECK(commands == (allowed ? 1 : 0));
+            bool foreignQueryRejected{};
+            bool foreignCommandRejected{};
+            const auto generation = queue.Generation();
+            std::thread foreign([&] {
+                foreignQueryRejected = diagnostics.Query().HasError();
+                foreignCommandRejected = diagnostics.SuspendPending({7}, generation).HasError();
+            });
+            foreign.join();
+            CHECK(foreignQueryRejected);
+            CHECK(foreignCommandRejected);
+            REQUIRE(host->Close().HasValue());
+            CHECK_FALSE(diagnostics.Query().Value().canSuspendPending);
+            CHECK(diagnostics.SuspendPending({7}, queue.Generation()).HasError());
+        }
+    }
+
+    TEST_CASE("A retained diagnostics capability cannot mutate after a shipping profile transition",
+              "[platform-services][composition][diagnostics][qualification]") {
+        const auto editor = Configuration(PlatformServicesProductProfile::Editor);
+        const auto shipping = Configuration(PlatformServicesProductProfile::ShippingGame);
+        unsigned factories{};
+        RoutingBackend *backend{};
+        auto started =
+            PlatformServicesComposition::Start(Request(editor, PlatformServicesProductProfile::Editor), Factory(factories, backend));
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        PlatformOfflineQueue queue;
+        unsigned commands{};
+        PlatformDiagnostics diagnostics(*host, queue, [&] {
+            ++commands;
+            return Result<std::size_t>::Success(0);
+        });
+        REQUIRE(diagnostics.Query().Value().canSuspendPending);
+        REQUIRE(
+            host->Transition(Request(shipping, PlatformServicesProductProfile::ShippingGame, 8), Factory(factories, backend)).HasValue());
+        CHECK_FALSE(diagnostics.Query().Value().canSuspendPending);
+        CHECK(diagnostics.SuspendPending({7}, queue.Generation()).HasError());
+        CHECK(diagnostics.SuspendPending({8}, queue.Generation()).HasError());
+        CHECK(commands == 0);
+    }
+
+    TEST_CASE("Diagnostics preserves durable-owner command failure without claiming suspension",
+              "[platform-services][composition][diagnostics][qualification]") {
+        const auto config = Configuration(PlatformServicesProductProfile::Test);
+        unsigned factories{};
+        RoutingBackend *backend{};
+        auto started =
+            PlatformServicesComposition::Start(Request(config, PlatformServicesProductProfile::Test), Factory(factories, backend));
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        PlatformOfflineQueue queue;
+        PlatformDiagnostics diagnostics(*host, queue, [] {
+            return Result<std::size_t>::Failure(MakeError(BackendErrors::ServiceUnavailable));
+        });
+        const auto failed = diagnostics.SuspendPending({7}, queue.Generation());
+        REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().code.Value() == BackendErrors::ServiceUnavailable.code.Value());
+        CHECK(queue.ActiveIntentCount() == 0);
+        PlatformDiagnostics readonly(*host, queue);
+        CHECK_FALSE(readonly.Query().Value().canSuspendPending);
+        CHECK(readonly.SuspendPending({7}, queue.Generation()).HasError());
+    }
+
     TEST_CASE("Every product supports explicit fail-closed Null without invoking a factory", "[platform-services][composition]") {
         for (unsigned index = 0; index < static_cast<unsigned>(PlatformServicesProductProfile::Count); ++index) {
             const auto profile = static_cast<PlatformServicesProductProfile>(index);
@@ -77,6 +171,16 @@ namespace Horo::PlatformServices {
             auto started = PlatformServicesComposition::Start(Request(config, profile), Factory(calls, backend));
             REQUIRE(started.HasValue());
             auto host = std::move(started).Value();
+            PlatformOfflineQueue offline;
+            unsigned commands{};
+            PlatformDiagnostics diagnostics(*host, offline, [&] {
+                ++commands;
+                return Result<std::size_t>::Success(0);
+            });
+            CHECK_FALSE(diagnostics.Query().Value().canSuspendPending);
+            CHECK(diagnostics.SuspendPending(host->Diagnostics().generation, offline.Generation()).HasError());
+            CHECK(commands == 0);
+            CHECK(offline.RetainedIntentCount() == 0);
             CHECK(calls == 0);
             RequireError(host->Frontend(), FrontendErrors::NullProvider);
             CHECK_FALSE(host->Diagnostics().provider.has_value());
