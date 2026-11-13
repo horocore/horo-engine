@@ -2,6 +2,7 @@
 #include "Horo/Debug/ConsoleProduct.h"
 
 namespace Horo::Debug::Detail {
+#if !defined(HORO_PROFILE_SERVER)
     /** @copydoc ScreenshotDescriptor */
     DebugCommandDescriptor ScreenshotDescriptor() noexcept {
         return {ScreenshotCommandId,
@@ -13,14 +14,12 @@ namespace Horo::Debug::Detail {
                 CommandThreadPolicy::RenderSafePoint,
                 CommandAvailability::ShippingAllowlist};
     }
+#endif
 
     /** @copydoc AppendPublicVariables */
     void AppendPublicVariables(std::vector<ConsoleVariableDescriptor> &descriptors) {
 #if !defined(HORO_PROFILE_SERVER)
-        ConsoleVariableDescriptor visible{ConsoleVisibleVariableId, "console.visible", false};
-        visible.permission = CommandPermission::Public;
-        visible.availability = CommandAvailability::ShippingAllowlist;
-        descriptors.push_back(std::move(visible));
+        descriptors.push_back(ConsoleVisibilityVariableDescriptor());
 #else
         (void)descriptors;
 #endif

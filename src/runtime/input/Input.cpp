@@ -662,8 +662,18 @@ namespace Horo::Input {
             CancelCapture(CaptureCancellationReason::Released);
     }
 
+    /** @copydoc InputRouter::PushContext(InputContextId, InputContextKind) */
     InputContextToken InputRouter::PushContext(InputContextId id, const InputContextKind kind) {
+        return PushContext(std::move(id), kind, InputContextPropagation::Exclusive);
+    }
+
+    /** @copydoc InputRouter::PushContext(InputContextId, InputContextKind, InputContextPropagation) */
+    InputContextToken InputRouter::PushContext(InputContextId id, const InputContextKind kind, const InputContextPropagation propagation) {
         using enum InputContextKind;
+        if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(NativeDialog) ||
+            (propagation != InputContextPropagation::Exclusive && propagation != InputContextPropagation::GameplayPassThrough) ||
+            (propagation == InputContextPropagation::GameplayPassThrough && kind != FocusedGuiWidget))
+            return {};
         const std::uint64_t token = impl_->nextToken++;
         if (impl_->textFocus.focusToken != 0) {
             const auto focused = std::ranges::find(impl_->contexts, impl_->textFocus.focusToken, &Impl::Context::token);
@@ -683,10 +693,12 @@ namespace Horo::Input {
                 impl_->blockNextFrame = true;
         } else if (impl_->capture) {
             const auto capturedContext = std::ranges::find(impl_->contexts, impl_->capture->context, &Impl::Context::token);
-            if (capturedContext != impl_->contexts.end() && Priority(kind) >= Priority(capturedContext->kind))
+            const bool retainsGameplayCapture = capturedContext != impl_->contexts.end() && capturedContext->kind == Gameplay &&
+                                                propagation == InputContextPropagation::GameplayPassThrough;
+            if (!retainsGameplayCapture && capturedContext != impl_->contexts.end() && Priority(kind) >= Priority(capturedContext->kind))
                 CancelCapture(CaptureCancellationReason::ContextPreempted);
         }
-        impl_->contexts.emplace_back(token, std::move(id), kind);
+        impl_->contexts.emplace_back(token, std::move(id), kind, propagation);
         return InputContextToken(this, token);
     }
 
@@ -776,6 +788,9 @@ namespace Horo::Input {
             (found != impl_->contexts.end() && impl_->modalBarrier && Priority(found->kind) < Priority(InputContextKind::ModalRoot)))
             return false;
         return found != impl_->contexts.end() && std::ranges::none_of(impl_->contexts, [&](const Impl::Context &candidate) {
+            if (found->kind == InputContextKind::Gameplay && candidate.kind == InputContextKind::FocusedGuiWidget &&
+                candidate.propagation == InputContextPropagation::GameplayPassThrough)
+                return false;
             return Priority(candidate.kind) > Priority(found->kind) || (candidate.kind == found->kind && candidate.token > found->token);
         });
     }
@@ -968,8 +983,13 @@ namespace Horo::Input {
         bool radial2D = false;
         float radialDeadzone = 0.0F;
         BindingAccumulationTarget target{value, radial2D, radialDeadzone, evidence};
-        for (const InputBinding &binding : *bindings)
+        const bool routePointer = impl_->MayRoutePointer(context.token_);
+        for (const InputBinding &binding : *bindings) {
+            if (!routePointer && (binding.kind == BindingControlKind::PointerButton || binding.kind == BindingControlKind::PointerWheelX ||
+                                  binding.kind == BindingControlKind::PointerWheelY))
+                continue;
             AccumulateBinding(binding, *descriptor, snapshot, player, *impl_, target);
+        }
         if (impl_->consumed.gamepadTransitions.capacityExceeded) {
             impl_->consumed.keys = keysBefore;
             impl_->consumed.pointerButtons = pointerBefore;
@@ -1017,7 +1037,7 @@ namespace Horo::Input {
     }
 
     bool InputRouter::ConsumePointerButton(const InputContextToken &context, const PointerButton button) {
-        if (!IsContextActive(context) || !Snapshot().State(button).pressed)
+        if (!IsContextActive(context) || !impl_->MayRoutePointer(context.token_) || !Snapshot().State(button).pressed)
             return false;
         return ConsumeControl(impl_->consumed.pointerButtons, Index(button));
     }
@@ -1035,7 +1055,7 @@ namespace Horo::Input {
 
     /** @copydoc InputRouter::ConsumePointerMotion */
     bool InputRouter::ConsumePointerMotion(const InputContextToken &context) {
-        if (!IsContextActive(context) || impl_->consumed.pointerMotion)
+        if (!IsContextActive(context) || !impl_->MayRoutePointer(context.token_) || impl_->consumed.pointerMotion)
             return false;
         impl_->consumed.pointerMotion = true;
         return true;

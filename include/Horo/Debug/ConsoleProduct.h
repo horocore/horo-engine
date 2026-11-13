@@ -2,6 +2,7 @@
 
 /** @file ConsoleProduct.h @brief Compile-selected default console metadata; one product profile per artifact. */
 #include "Horo/Debug/ConsoleBuiltins.h"
+#include "Horo/Debug/ConsoleConfiguration.h"
 #include "Horo/Debug/ConsoleVariable.h"
 
 #if (defined(HORO_PROFILE_EDITOR) + defined(HORO_PROFILE_DEVELOPMENT) + defined(HORO_PROFILE_PROFILE) + defined(HORO_PROFILE_SHIPPING) +   \
@@ -13,14 +14,8 @@ namespace Horo::Debug {
     /** @brief Stable minimum-set command identities for explicit owning-capability bindings. */
     inline constexpr DebugCommandId ScreenshotCommandId = 0xDB600005;
     inline constexpr DebugCommandId LogLevelCommandId = 0xDB600006;
-    inline constexpr DebugCommandId MetricsCommandId = 0xDB600007;
     inline constexpr DebugCommandId ProfileCaptureCommandId = 0xDB600008;
-    inline constexpr DebugCommandId SceneTreeCommandId = 0xDB600009;
-    inline constexpr DebugCommandId InspectCommandId = 0xDB60000A;
     inline constexpr DebugCommandId SupportBundleCommandId = 0xDB60000B;
-    /** @brief Stable IDs for the core variable schema; remaining catalog IDs share the 0xDB620000 prefix. */
-    inline constexpr std::uint64_t ConsoleVisibleVariableId = 0xDB620001;
-    inline constexpr std::uint64_t ConsoleHistoryLimitVariableId = 0xDB620002;
     /** @brief Returns this separate build artifact's fixed identity. @return Selected product profile. */
     [[nodiscard]] ProductProfile CompiledConsoleProfile() noexcept;
     /** @brief Returns only the selected artifact's compiled default metadata, without activating any capability.

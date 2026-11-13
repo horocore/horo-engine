@@ -2,25 +2,12 @@
 
 /** @file OverlayLayout.h @brief Inert development-panel registration and bounded presentation layout/focus state. */
 #include "Horo/Debug/CommandRegistry.h"
+#include "Horo/Debug/OverlaySource.h"
 
 #include <array>
 #include <thread>
 
 namespace Horo::Debug {
-    /** @brief The owning snapshot family; registration does not start a sampler or query a service. */
-    enum class OverlaySource : std::uint8_t {
-        Logs,
-        Frame,
-        Cpu,
-        Memory,
-        Jobs,
-        Renderer,
-        Assets,
-        Scene,
-        Input,
-        Network
-    };
-
     /** @brief Finite logical-viewport fractions; typography/style remain runtime UI responsibilities. */
     struct OverlayBounds final {
         float x{}, y{}, width{0.3F}, height{0.3F};
@@ -62,6 +49,11 @@ namespace Horo::Debug {
          * @return Success or typed bounds/permission/identity failure without mutation.
          */
         [[nodiscard]] Result<void> Configure(std::uint64_t id, OverlayBounds bounds, bool visible, const DebugCommandContext &principal);
+        /** @brief Changes visibility without replacing the one stored layout.
+         * @param id Registered identity. @param visible Requested visibility. @param principal Current host grants.
+         * @return Success or typed thread/permission/identity failure without mutation.
+         */
+        [[nodiscard]] Result<void> SetVisible(std::uint64_t id, bool visible, const DebugCommandContext &principal);
         /** @brief Brings a visible allowed panel to the front with stable relative order for peers.
          * @param id Registered identity. @param principal Current host principal. @return Success or typed failure.
          */

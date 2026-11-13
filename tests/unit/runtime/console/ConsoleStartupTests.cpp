@@ -7,6 +7,24 @@ using namespace Horo;
 using namespace Horo::Debug;
 
 namespace {
+    Result<ConsoleLaunchConfiguration> Launch(std::span<const std::string_view> arguments, ProductProfile profile,
+                                              bool shippingUi = false) {
+        auto captured = ConsoleLaunchArguments::Parse(arguments);
+        if (captured.HasError())
+            return Result<ConsoleLaunchConfiguration>::Failure(captured.ErrorValue());
+        auto descriptors = ConsoleConfigurationDescriptors(profile);
+        REQUIRE(descriptors.HasValue());
+        ConfigurationSchema schema;
+        for (const auto &descriptor : descriptors.Value())
+            REQUIRE(schema.Register(descriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService configuration(std::move(schema));
+        ConfigurationResolutionRequest sources;
+        sources.invocation = captured.Value().ConfigurationInputs();
+        REQUIRE(configuration.ResolveAndCommit(sources).HasValue());
+        return ResolveConsoleLaunch(captured.Value(), configuration.Snapshot(), profile, shippingUi);
+    }
+
     class ScriptFiles final : public Platform::IProjectReadFiles {
     public:
         mutable int reads{};
@@ -34,24 +52,22 @@ TEST_CASE("Console launch parsing enforces surfaces across artifact profiles", "
     const std::array<std::string_view, 1> remote{"--remote-console=localhost:9000"};
     for (auto profile : {ProductProfile::Editor, ProductProfile::Development, ProductProfile::Profile, ProductProfile::Shipping,
                          ProductProfile::Diagnostics, ProductProfile::Server}) {
-        auto defaults = ParseConsoleLaunch(empty, profile);
+        auto defaults = Launch(empty, profile);
         REQUIRE(defaults.HasValue());
         CHECK(defaults.Value().console == (profile == ProductProfile::Development));
-        CHECK(ParseConsoleLaunch(console, profile).HasValue() ==
-              (profile != ProductProfile::Shipping && profile != ProductProfile::Server));
-        CHECK(ParseConsoleLaunch(overlays, profile).HasValue() ==
-              (profile != ProductProfile::Shipping && profile != ProductProfile::Server));
-        CHECK(ParseConsoleLaunch(remote, profile).HasError());
+        CHECK(Launch(console, profile).HasValue() == (profile != ProductProfile::Shipping && profile != ProductProfile::Server));
+        CHECK(Launch(overlays, profile).HasValue() == (profile != ProductProfile::Shipping && profile != ProductProfile::Server));
+        CHECK(Launch(remote, profile).HasError());
     }
-    CHECK(ParseConsoleLaunch(console, ProductProfile::Shipping, true).HasValue());
+    CHECK(Launch(console, ProductProfile::Shipping, true).HasValue());
     const std::array<std::string_view, 1> unknown{"--arbitrary"};
-    CHECK(ParseConsoleLaunch(unknown, ProductProfile::Development).HasError());
+    CHECK(Launch(unknown, ProductProfile::Development).HasError());
     const std::array<std::string_view, 1> missing{"--exec"};
-    CHECK(ParseConsoleLaunch(missing, ProductProfile::Development).HasError());
+    CHECK(Launch(missing, ProductProfile::Development).HasError());
     const std::array<std::string_view, 2> unsafe{"--console-script", "../escape"};
-    CHECK(ParseConsoleLaunch(unsafe, ProductProfile::Development).HasError());
+    CHECK(Launch(unsafe, ProductProfile::Development).HasError());
     const std::array<std::string_view, 2> duplicate{"--dev-overlay=logs", "--dev-overlay=logs"};
-    CHECK(ParseConsoleLaunch(duplicate, ProductProfile::Development).HasError());
+    CHECK(Launch(duplicate, ProductProfile::Development).HasError());
 }
 
 TEST_CASE("Console scripts validate complete rooted allowlisted captures before dispatch", "[console]") {

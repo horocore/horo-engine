@@ -552,7 +552,24 @@ namespace Horo::Editor::Ui {
         BottomDockToolbar,
     };
 
-    /** @brief Optional visual configuration shared by text inputs. */
+    /** @brief Semantic line-editor requests; native key handling remains inside the shared text primitive. */
+    enum class InputTextNavigationAction {
+        Complete,
+        Previous,
+        Next
+    };
+
+    /** @brief Synchronous optional whole-line replacement for completion/history, never retained or invoked outside the control call.
+     * The callback must not draw UI. Its returned UTF-8 bytes must remain valid through this control call and fit its buffer.
+     * The primitive copies replacements before editing native storage, including when the returned view aliases current text.
+     */
+    struct InputTextNavigation {
+        void *context{}; /**< Borrowed caller state, alive throughout the control call. */
+        std::optional<std::string_view> (*replace)(void *, InputTextNavigationAction, std::string_view, std::size_t){};
+        /**< Receives caller state, action, current UTF-8 bytes and cursor byte offset; returns a replacement or no change. */
+    };
+
+    /** @brief Optional visual and keyboard configuration shared by text inputs. */
     struct InputTextOptions {
         bool error{false};                                   /**< Whether to render validation-error styling. */
         float width{-1.0F};                                  /**< Logical width; negative fills available content. */
@@ -561,6 +578,8 @@ namespace Horo::Editor::Ui {
         float prefixIconWidth{0.0F};                         /**< Left padding reserved for a caller-drawn icon. */
         ComponentSize componentSize{ComponentSize::Small};   /**< Shared theme-backed size preset. */
         InputTextSurface surface{InputTextSurface::Default}; /**< Semantic background surface. */
+        bool submitOnEnter{false}; /**< Return Enter submission rather than ordinary edit intent; stored text still updates normally. */
+        InputTextNavigation *navigation{}; /**< Optional synchronous Tab/Up/Down replacement; null preserves normal text behavior. */
     };
 
     /**
@@ -584,7 +603,7 @@ namespace Horo::Editor::Ui {
      * @param bufferSize Capacity of @p buffer, including the null terminator.
      * @param fonts Editor typography handles.
      * @param options Optional validation and presentation configuration.
-     * @return True when the text changed.
+     * @return True when the text changed, or on Enter submission when submitOnEnter is enabled.
      */
     [[nodiscard]] bool InputTextControl(const char *id, char *buffer, size_t bufferSize, const Theme::Fonts &fonts,
                                         const InputTextOptions &options = {});
@@ -596,7 +615,7 @@ namespace Horo::Editor::Ui {
      * @param maxSize Maximum storage size, including the null terminator.
      * @param fonts Editor typography handles.
      * @param options Optional validation and presentation configuration.
-     * @return True when the text changed.
+     * @return True when the text changed, or on Enter submission when submitOnEnter is enabled.
      */
     [[nodiscard]] bool InputTextControl(const char *id, std::string &value, size_t maxSize, const Theme::Fonts &fonts,
                                         const InputTextOptions &options = {});

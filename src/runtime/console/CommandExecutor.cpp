@@ -194,15 +194,19 @@ namespace Horo::Debug {
         std::shared_ptr<ConsoleVariableSet> variables;
         std::thread::id owner, render;
         std::size_t capacity{};
-        // Protects admission, the cutoff queue and worker leases. Never held across feature callbacks.
+        // Protects admission/boundary checks, cutoff queue, active drain credits and worker leases on submitting/draining threads.
+        // Stop cancels active drains through shutdown; their guards retain/release credits without waiting.
+        // Never held across feature callbacks.
         std::mutex mutex;
         std::deque<PendingCommand> pending;
         std::vector<WorkerCommand> workers;
+        std::size_t inFlight{};
         CancellationSource shutdown;
         bool stopped{};
         bool drainingOwner{}, drainingRender{};
     };
 
+    /** @copydoc CommandExecutor::CommandExecutor */
     CommandExecutor::CommandExecutor(std::shared_ptr<State> state) : state_(std::move(state)) {}
 
     /** @copydoc CommandExecutor::Create */
@@ -262,8 +266,31 @@ namespace Horo::Debug {
         return Result<std::unique_ptr<CommandExecutor>>::Success(std::unique_ptr<CommandExecutor>(new CommandExecutor(std::move(state))));
     }
 
+    /** @copydoc CommandExecutor::~CommandExecutor */
     CommandExecutor::~CommandExecutor() {
         Stop();
+    }
+
+    /** @copydoc CommandExecutor::UsesRegistry */
+    bool CommandExecutor::UsesRegistry(const CommandRegistry &registry) const noexcept {
+        return state_->registry.get() == &registry;
+    }
+
+    /** @copydoc CommandExecutor::IsOwnerThread */
+    bool CommandExecutor::IsOwnerThread() const noexcept {
+        return state_->owner == std::this_thread::get_id();
+    }
+
+    /** @copydoc CommandExecutor::ValidateOwnerBoundary */
+    Result<void> CommandExecutor::ValidateOwnerBoundary() const {
+        if (!IsOwnerThread())
+            return Result<void>::Failure(MakeCommandError(CommandError::WrongThread));
+        std::lock_guard lock(state_->mutex);
+        if (state_->stopped)
+            return Result<void>::Failure(MakeCommandError(CommandError::ShuttingDown));
+        if (state_->drainingOwner || (state_->drainingRender && state_->render == state_->owner))
+            return Result<void>::Failure(MakeCommandError(CommandError::ReentrantDispatch));
+        return Result<void>::Success();
     }
 
     /** @copydoc CommandExecutor::Submit */
@@ -325,7 +352,7 @@ namespace Horo::Debug {
                 return Result<CommandReceipt>::Failure(result.ErrorValue());
             return Result<CommandReceipt>::Success({{}, {}, std::move(result).Value(), redactedText});
         }
-        if (state_->pending.size() + state_->workers.size() >= state_->capacity)
+        if (state_->pending.size() + state_->workers.size() + state_->inFlight >= state_->capacity)
             return Result<CommandReceipt>::Failure(MakeCommandError(CommandError::LimitExceeded));
         const auto cancellation = std::make_shared<CommandCancellation>(pending.cancellation);
         auto operation = state_->operations->Begin({OperationKind::Other, std::string(descriptor.name), {}, {}, {}, true, [cancellation] {
@@ -392,15 +419,18 @@ namespace Horo::Debug {
             return Result<std::size_t>::Failure(MakeCommandError(CommandError::WrongThread));
         std::vector<PendingCommand> batch;
         std::vector<std::pair<OperationId, JobSnapshot>> workerSnapshots;
+        budget = std::min(budget, state_->capacity);
 
         struct DrainGuard final {
             std::shared_ptr<State> state;
             bool render{}, armed{};
+            std::size_t outstanding{};
 
             ~DrainGuard() {
                 if (!armed)
                     return;
                 std::lock_guard lock(state->mutex);
+                state->inFlight -= outstanding;
                 (render ? state->drainingRender : state->drainingOwner) = false;
             }
         } guard{state_, policy == CommandThreadPolicy::RenderSafePoint, false};
@@ -412,12 +442,15 @@ namespace Horo::Debug {
             auto &draining = guard.render ? state_->drainingRender : state_->drainingOwner;
             if (draining)
                 return Result<std::size_t>::Failure(MakeCommandError(CommandError::ReentrantDispatch));
+            batch.reserve(std::min(budget, state_->pending.size()));
+            workerSnapshots.reserve(state_->workers.size());
             draining = true;
             guard.armed = true;
-            budget = std::min(budget, state_->capacity);
             for (auto it = state_->pending.begin(); it != state_->pending.end() && batch.size() < budget;) {
                 if (it->policy == policy) {
                     batch.push_back(std::move(*it));
+                    ++state_->inFlight;
+                    ++guard.outstanding;
                     it = state_->pending.erase(it);
                 } else
                     ++it;
@@ -443,6 +476,11 @@ namespace Horo::Debug {
             (void)state_->operations->Update(pending.operation, {OperationState::Running, {}, {}, {}, {}});
             auto result = Invoke(pending, state_->registry->Limits().outputBytes);
             Finish(*state_->operations, pending, result);
+            {
+                std::lock_guard lock(state_->mutex);
+                --state_->inFlight;
+                --guard.outstanding;
+            }
         }
         return Result<std::size_t>::Success(batch.size());
     }

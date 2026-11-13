@@ -6,26 +6,9 @@
 #endif
 
 namespace Horo::Debug::Detail {
-    namespace {
-        constexpr DebugArgumentDescriptor InspectArguments[]{
-            {"entity", "Generation-checked runtime entity identity", DebugArgumentType::EntityId}};
-        constexpr DebugCommandDescriptor Descriptors[]{{SceneTreeCommandId,
-                                                        "game.scene_tree",
-                                                        "Inspect the runtime scene hierarchy",
-                                                        "game.scene_tree",
-                                                        {},
-                                                        CommandPermission::Developer,
-                                                        CommandThreadPolicy::OwnerThreadNextFrame,
-                                                        CommandAvailability::DevelopmentOnly},
-                                                       {InspectCommandId, "game.inspect", "Inspect safe public entity state",
-                                                        "game.inspect <scene:index:generation>", InspectArguments,
-                                                        CommandPermission::Developer, CommandThreadPolicy::OwnerThreadNextFrame,
-                                                        CommandAvailability::DevelopmentOnly}};
-    }  // namespace
-
     /** @copydoc DevelopmentDescriptors */
     std::span<const DebugCommandDescriptor> DevelopmentDescriptors() noexcept {
-        return Descriptors;
+        return ConsoleSceneDescriptors();
     }
 
     /** @copydoc AppendDevelopmentVariables */
@@ -36,7 +19,7 @@ namespace Horo::Debug::Detail {
             variable.applyPolicy = ConsoleVariableApplyPolicy::NextFrame;
             descriptors.push_back(std::move(variable));
         };
-        append(0xDB62000D, "overlay.scene.visible");
+        descriptors.push_back(ConsoleSceneOverlayVariableDescriptor());
         append(0xDB62000E, "debug.draw.physics");
         append(0xDB62000F, "renderer.debug.wireframe");
     }

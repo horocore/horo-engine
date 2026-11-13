@@ -621,7 +621,7 @@ namespace Horo::Debug {
     }
 
     /** @copydoc ConsoleHistory::Append */
-    void ConsoleHistory::Append(const CommandInvocation &invocation, const std::string_view output) {
+    void ConsoleHistory::Append(const CommandInvocation &invocation, const std::string_view output, std::optional<OperationId> operation) {
         if (limits_.historyEntries == 0 || limits_.totalHistoryBytes == 0)
             return;
         const auto commandBytes =
@@ -631,21 +631,60 @@ namespace Horo::Debug {
         const auto bytes = commandBytes + outputBytes;
         while (!entries_.empty() && (entries_.size() == limits_.historyEntries || retainedBytes_ > limits_.totalHistoryBytes - bytes)) {
             retainedBytes_ -= entries_.front().command.size() + entries_.front().output.size();
+            if (entries_.front().HasPendingResult())
+                --pendingResults_;
             entries_.erase(entries_.begin());
         }
-        entries_.push_back({invocation.redactedText.substr(0, commandBytes), std::string(output.substr(0, outputBytes))});
+        if (operation == 0)
+            operation.reset();
+        entries_.push_back({invocation.redactedText.substr(0, commandBytes), std::string(output.substr(0, outputBytes)), operation});
         retainedBytes_ += bytes;
+        if (entries_.back().HasPendingResult())
+            ++pendingResults_;
+        ++revision_;
+    }
+
+    /** @copydoc ConsoleHistory::SetEntryLimit */
+    Result<std::size_t> ConsoleHistory::SetEntryLimit(const std::size_t limit) {
+        if (limit == 0 || limit > 10000)
+            return Result<std::size_t>::Failure(MakeCommandError(CommandError::Usage));
+        entries_.reserve(limit);
+        const auto removed = entries_.size() > limit ? entries_.size() - limit : 0;
+        for (const auto &entry : std::span(entries_).first(removed)) {
+            retainedBytes_ -= entry.command.size() + entry.output.size();
+            if (entry.HasPendingResult())
+                --pendingResults_;
+        }
+        if (removed != 0) {
+            entries_.erase(entries_.begin(), entries_.begin() + static_cast<std::ptrdiff_t>(removed));
+            ++revision_;
+        }
+        limits_.historyEntries = limit;
+        return Result<std::size_t>::Success(removed);
     }
 
     /** @copydoc ConsoleHistory::Clear */
     void ConsoleHistory::Clear() noexcept {
+        if (!entries_.empty())
+            ++revision_;
         entries_.clear();
         retainedBytes_ = 0;
+        pendingResults_ = 0;
+    }
+
+    /** @copydoc ConsoleHistory::PendingResults */
+    std::size_t ConsoleHistory::PendingResults() const noexcept {
+        return pendingResults_;
     }
 
     /** @copydoc ConsoleHistory::Entries */
     std::span<const HistoryEntry> ConsoleHistory::Entries() const noexcept {
         return entries_;
+    }
+
+    /** @copydoc ConsoleHistory::Revision */
+    std::uint64_t ConsoleHistory::Revision() const noexcept {
+        return revision_;
     }
 
     /** @copydoc ConsoleHistory::ReverseSearch */

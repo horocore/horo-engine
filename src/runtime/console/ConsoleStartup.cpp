@@ -3,57 +3,104 @@
 #include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
+#include <array>
 
 namespace Horo::Debug {
-    namespace {
-        /** @brief Finite canonical panel IDs; absent services are a later host composition error. */
-        constexpr std::string_view Panels[]{"logs", "frame", "cpu", "memory", "jobs", "renderer", "assets", "scene", "input", "network"};
-    }  // namespace
-
-    /** @copydoc ParseConsoleLaunch */
-    Result<ConsoleLaunchConfiguration> ParseConsoleLaunch(const std::span<const std::string_view> arguments, const ProductProfile profile,
-                                                          const bool shippingUi) {
-        if (arguments.size() > 256 || static_cast<unsigned>(profile) > 5)
-            return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::LimitExceeded));
-        ConsoleLaunchConfiguration configuration;
-        configuration.console = profile == ProductProfile::Development;
+    /** @copydoc ConsoleLaunchArguments::Parse */
+    Result<ConsoleLaunchArguments> ConsoleLaunchArguments::Parse(const std::span<const std::string_view> arguments) {
+        if (arguments.size() > 256)
+            return Result<ConsoleLaunchArguments>::Failure(MakeCommandError(CommandError::LimitExceeded));
+        ConsoleLaunchArguments captured;
+        std::array<bool, static_cast<std::size_t>(OverlaySource::Count)> panels{};
+        bool allDefaults{};
+        bool specificPanels{};
         std::size_t totalBytes{};
         for (std::size_t i = 0; i < arguments.size(); ++i) {
             const auto argument = arguments[i];
             if (argument.size() > 4096 || totalBytes > 65536 - argument.size())
-                return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::LimitExceeded));
+                return Result<ConsoleLaunchArguments>::Failure(MakeCommandError(CommandError::LimitExceeded));
+            if (!IsValidUtf8ScalarSequence(argument) || argument.find('\0') != std::string_view::npos)
+                return Result<ConsoleLaunchArguments>::Failure(MakeCommandError(CommandError::Usage));
             totalBytes += argument.size();
             if (argument == "--console")
-                configuration.console = true;
-            else if (argument == "--dev-overlays")
-                configuration.overlays = true;
-            else if (argument.starts_with("--dev-overlay=")) {
-                const auto panel = argument.substr(14);
-                if (std::ranges::find(Panels, panel) == std::end(Panels) ||
-                    std::ranges::find(configuration.panels, panel) != configuration.panels.end())
-                    return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::Usage));
-                configuration.overlays = true;
-                configuration.panels.emplace_back(panel);
+                captured.inputs_.insert_or_assign(SettingKey(std::string(ConsoleEnabledSettingName)), ConfigurationInputValue{true, {}});
+            else if (argument == "--dev-overlays") {
+                allDefaults = true;
+                captured.inputs_.insert_or_assign(SettingKey(std::string(OverlaysEnabledSettingName)), ConfigurationInputValue{true, {}});
+            } else if (argument.starts_with("--dev-overlay=")) {
+                const auto panel = ParseOverlaySource(argument.substr(14));
+                if (!panel || panels[static_cast<std::size_t>(*panel)])
+                    return Result<ConsoleLaunchArguments>::Failure(MakeCommandError(CommandError::Usage));
+                panels[static_cast<std::size_t>(*panel)] = true;
+                specificPanels = true;
+                captured.inputs_.insert_or_assign(SettingKey(std::string(OverlaysEnabledSettingName)), ConfigurationInputValue{true, {}});
             } else if (argument == "--exec" || argument == "--console-script") {
                 if (++i == arguments.size() || arguments[i].empty() || arguments[i].size() > 4096 ||
                     totalBytes > 65536 - arguments[i].size())
-                    return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::Usage));
+                    return Result<ConsoleLaunchArguments>::Failure(MakeCommandError(CommandError::Usage));
+                if (!IsValidUtf8ScalarSequence(arguments[i]) || arguments[i].find('\0') != std::string_view::npos)
+                    return Result<ConsoleLaunchArguments>::Failure(MakeCommandError(CommandError::Usage));
                 totalBytes += arguments[i].size();
                 if (argument == "--exec")
-                    configuration.startupCommands.emplace_back(arguments[i]);
+                    captured.startup_.push_back({ConsoleStartupKind::Command, std::string(arguments[i])});
                 else {
                     if (!Platform::IsSafeProjectReadPath(arguments[i]))
-                        return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::StartupDenied));
-                    configuration.scripts.emplace_back(arguments[i]);
+                        return Result<ConsoleLaunchArguments>::Failure(MakeCommandError(CommandError::StartupDenied));
+                    captured.startup_.push_back({ConsoleStartupKind::Script, std::string(arguments[i])});
                 }
             } else if (argument == "--remote-console" || argument.starts_with("--remote-console=")) {
-                return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::MissingCapability));
+                return Result<ConsoleLaunchArguments>::Failure(MakeCommandError(CommandError::MissingCapability));
             } else
-                return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::Usage));
+                return Result<ConsoleLaunchArguments>::Failure(MakeCommandError(CommandError::Usage));
         }
+        if (specificPanels)
+            for (std::size_t i = 0; i < panels.size(); ++i)
+                if (panels[i] || !allDefaults)
+                    captured.inputs_.insert_or_assign(*ConsoleOverlayVisibilityKey(static_cast<OverlaySource>(i)),
+                                                      ConfigurationInputValue{panels[i], {}});
+        return Result<ConsoleLaunchArguments>::Success(std::move(captured));
+    }
+
+    /** @copydoc ConsoleLaunchArguments::ConfigurationInputs */
+    const ConfigurationSourceMap &ConsoleLaunchArguments::ConfigurationInputs() const noexcept {
+        return inputs_;
+    }
+
+    /** @copydoc ConsoleLaunchArguments::Startup */
+    std::span<const ConsoleStartupRequest> ConsoleLaunchArguments::Startup() const noexcept {
+        return startup_;
+    }
+
+    /** @copydoc ResolveConsoleLaunch */
+    Result<ConsoleLaunchConfiguration> ResolveConsoleLaunch(const ConsoleLaunchArguments &arguments,
+                                                            const ConfigurationSnapshotRef &snapshot, const ProductProfile profile,
+                                                            const bool shippingUi) {
+        if (static_cast<unsigned>(profile) > static_cast<unsigned>(ProductProfile::Server))
+            return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::InvalidDescriptor));
+        auto defaults = ReadConsoleConfiguration(snapshot);
+        if (defaults.HasError())
+            return Result<ConsoleLaunchConfiguration>::Failure(defaults.ErrorValue());
+        for (const auto &[key, input] : arguments.ConfigurationInputs()) {
+            const auto *entry = snapshot.FindResolved(key);
+            if (!entry || entry->source != ConfigurationSource::Invocation || entry->value != input.value)
+                return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::InvalidDescriptor));
+        }
+        if (!defaults.Value().startupAllowed && !arguments.Startup().empty())
+            return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::StartupDenied));
+        ConsoleLaunchConfiguration configuration;
+        configuration.console = defaults.Value().console;
+        configuration.overlays = defaults.Value().overlays;
+        configuration.historyLimit = defaults.Value().historyLimit;
+        configuration.configurationRevision = defaults.Value().revision;
+        if (configuration.overlays)
+            configuration.panels = defaults.Value().panels;
+        if (profile != ProductProfile::Editor && profile != ProductProfile::Development &&
+            std::ranges::find(configuration.panels, OverlaySource::Scene) != configuration.panels.end())
+            return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::PermissionDenied));
         if ((profile == ProductProfile::Shipping && (configuration.overlays || (configuration.console && !shippingUi))) ||
             (profile == ProductProfile::Server && (configuration.console || configuration.overlays)))
             return Result<ConsoleLaunchConfiguration>::Failure(MakeCommandError(CommandError::PermissionDenied));
+        configuration.startup.assign(arguments.Startup().begin(), arguments.Startup().end());
         return Result<ConsoleLaunchConfiguration>::Success(std::move(configuration));
     }
 

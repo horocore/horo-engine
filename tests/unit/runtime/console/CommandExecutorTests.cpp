@@ -4,6 +4,8 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <future>
+#include <stdexcept>
 #include <thread>
 
 using namespace Horo;
@@ -77,14 +79,22 @@ TEST_CASE("Console owner and render execution reject wrong threads and honor saf
         REQUIRE(receipt.HasValue());
         REQUIRE(receipt.Value().operation);
         CHECK(handler->calls == 0);
+        REQUIRE(executor->ValidateOwnerBoundary().HasValue());
+        CHECK(handler->calls == 0);
         std::optional<Error> wrongThread;
+        std::optional<Error> wrongBoundary;
         std::thread other([&] {
+            const auto boundary = executor->ValidateOwnerBoundary();
+            if (boundary.HasError())
+                wrongBoundary = boundary.ErrorValue();
             const auto result = policy == CommandThreadPolicy::RenderSafePoint ? executor->DrainRender(2) : executor->DrainOwner(2);
             if (result.HasError())
                 wrongThread = result.ErrorValue();
         });
         other.join();
         REQUIRE(wrongThread);
+        REQUIRE(wrongBoundary);
+        CHECK(wrongBoundary->code.Value() == "console.wrong_thread");
         CHECK(wrongThread->code.Value() == "console.wrong_thread");
         CHECK(handler->calls == 0);
         REQUIRE(executor->DrainOwner(0).HasValue());
@@ -120,6 +130,121 @@ TEST_CASE("Console denial malformed input overload and shutdown invoke no pendin
     REQUIRE(snapshot);
     for (const auto &operation : snapshot->operations)
         CHECK(operation.state == OperationState::Cancelled);
+}
+
+TEST_CASE("Console owner validation permits an independent active render thread", "[console][threads]") {
+    /** @brief Test-only publication flags park the render callback under a finite deadline; owners outlive its joined drain. */
+    class ParkedRender final : public ICommandHandler {
+    public:
+        std::atomic<bool> entered{}, release{};
+
+        Result<DebugCommandOutput> Execute(const DebugCommandContext &, std::span<const ArgumentValue>, const CancellationToken &,
+                                           const JobExecutionContext *) override {
+            entered.store(true);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (!release.load() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            return release.load() ? Result<DebugCommandOutput>::Success({"done"})
+                                  : Result<DebugCommandOutput>::Failure(MakeCommandError(CommandError::HandlerFailed));
+        }
+    };
+
+    JobSystem jobs(JobSystemConfig{.workerCount = 0});
+    auto operations = std::make_shared<OperationStore>(8, 8);
+    auto handler = std::make_shared<ParkedRender>();
+    std::unique_ptr<CommandExecutor> executor;
+    std::promise<std::thread::id> identity;
+    auto renderIdentity = identity.get_future();
+    std::promise<CommandExecutor *> start;
+    auto incoming = start.get_future();
+    bool drained{};
+    std::jthread render([&, ready = std::move(incoming)]() mutable {
+        identity.set_value(std::this_thread::get_id());
+        if (ready.wait_for(std::chrono::seconds{5}) != std::future_status::ready)
+            return;
+        auto *target = ready.get();
+        if (target)
+            drained = target->DrainRender(1).HasValue();
+    });
+    REQUIRE(renderIdentity.wait_for(std::chrono::seconds{5}) == std::future_status::ready);
+    const std::array bindings{CommandBinding{1, handler}};
+    auto created = CommandExecutor::Create(Registry(CommandThreadPolicy::RenderSafePoint), bindings, jobs, operations,
+                                           std::this_thread::get_id(), renderIdentity.get());
+    REQUIRE(created.HasValue());
+    executor = std::move(created).Value();
+    REQUIRE(executor->Submit("game.test", {}).HasValue());
+    start.set_value(executor.get());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (!handler->entered.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    const bool entered = handler->entered.load();
+    const auto checked = executor->ValidateOwnerBoundary();
+    handler->release.store(true);
+    render.join();
+    REQUIRE(entered);
+    CHECK(checked.HasValue());
+    CHECK(drained);
+    const auto completed = operations->SnapshotIfChanged(0);
+    REQUIRE(completed);
+    REQUIRE(completed->operations.size() == 1);
+    CHECK(completed->operations[0].state == OperationState::Succeeded);
+}
+
+TEST_CASE("Console active safe-point commands retain admission capacity until terminal publication", "[console]") {
+    class ResubmittingHandler final : public ICommandHandler {
+    public:
+        CommandExecutor *executor{};
+        std::optional<Error> admissionError;
+        std::optional<Error> boundaryError;
+        bool admitted{};
+        bool throws{};
+
+        Result<DebugCommandOutput> Execute(const DebugCommandContext &, std::span<const ArgumentValue>, const CancellationToken &,
+                                           const JobExecutionContext *) override {
+            const auto boundary = executor->ValidateOwnerBoundary();
+            if (boundary.HasError())
+                boundaryError = boundary.ErrorValue();
+            const auto result = executor->Submit("game.test", {});
+            admitted = result.HasValue();
+            if (result.HasError())
+                admissionError = result.ErrorValue();
+            if (throws)
+                throw std::runtime_error("private handler failure");
+            return Result<DebugCommandOutput>::Success({"done"});
+        }
+    };
+
+    JobSystem jobs(JobSystemConfig{.workerCount = 0});
+    for (const auto policy : {CommandThreadPolicy::OwnerThreadNextFrame, CommandThreadPolicy::RenderSafePoint}) {
+        for (const bool throws : {false, true}) {
+            auto operations = std::make_shared<OperationStore>(8, 8);
+            auto handler = std::make_shared<ResubmittingHandler>();
+            handler->throws = throws;
+            const std::array bindings{CommandBinding{1, handler}};
+            auto created = CommandExecutor::Create(Registry(policy), bindings, jobs, operations, std::this_thread::get_id(),
+                                                   std::this_thread::get_id(), 1);
+            REQUIRE(created.HasValue());
+            auto executor = std::move(created).Value();
+            handler->executor = executor.get();
+            const auto first = executor->Submit("game.test", {});
+            REQUIRE(first.HasValue());
+            REQUIRE(first.Value().operation);
+            const auto drained = policy == CommandThreadPolicy::RenderSafePoint ? executor->DrainRender(1) : executor->DrainOwner(1);
+            REQUIRE(drained.HasValue());
+            CHECK(drained.Value() == 1);
+            CHECK_FALSE(handler->admitted);
+            REQUIRE(handler->admissionError);
+            CHECK(handler->admissionError->code.Value() == "console.limit_exceeded");
+            REQUIRE(handler->boundaryError);
+            CHECK(handler->boundaryError->code.Value() == "console.reentrant_dispatch");
+            REQUIRE(executor->ValidateOwnerBoundary().HasValue());
+            const auto snapshot = operations->SnapshotIfChanged(0);
+            REQUIRE(snapshot);
+            REQUIRE(snapshot->operations.size() == 1);
+            CHECK(snapshot->operations.front().state == (throws ? OperationState::Failed : OperationState::Succeeded));
+            CHECK(executor->Submit("game.test", {}).HasValue());
+        }
+    }
 }
 
 TEST_CASE("Console worker jobs expose authoritative handles and queued cancellation survives executor destruction", "[console]") {

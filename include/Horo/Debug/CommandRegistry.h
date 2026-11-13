@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Foundation/ModuleDescriptor.h"
+#include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Result.h"
 
 #include <cstdint>
@@ -232,6 +233,15 @@ namespace Horo::Debug {
     struct HistoryEntry final {
         std::string command;
         std::string output;
+        std::optional<OperationId> operation;         /**< Correlates an accepted asynchronous request; does not own its lifecycle. */
+        OperationState state{OperationState::Queued}; /**< Last authoritative projection, meaningful only with operation. */
+        bool operationUnavailable{};                  /**< The authority no longer retains this result; no terminal state is invented. */
+
+        /** @brief Reports whether this retained row still needs an authoritative result. @return Pending projection state. */
+        [[nodiscard]] bool HasPendingResult() const noexcept {
+            return operation && !operationUnavailable && state != OperationState::Succeeded && state != OperationState::Failed &&
+                   state != OperationState::Cancelled;
+        }
     };
 
     /** @brief Adapter-owned history with bounded entries and bytes; owner-thread only. */
@@ -241,12 +251,33 @@ namespace Horo::Debug {
         explicit ConsoleHistory(ConsoleLimits limits = {});
         /** @brief Appends a prepared redacted command and safe bounded output.
          * @param invocation Successfully prepared request. @param output Safe handler output.
+         * @param operation Optional accepted operation identity from the same process authority.
          */
-        void Append(const CommandInvocation &invocation, std::string_view output);
+        void Append(const CommandInvocation &invocation, std::string_view output, std::optional<OperationId> operation = {});
+        /** @brief Projects retained asynchronous results without creating rows, evicting peers or exceeding history budgets.
+         * @param snapshot Complete snapshot of the same authority used by the executor, with at most 4096 records/capacity.
+         * @return Number of updated rows or typed invalid-source failure. Successful rows retain independent budgets.
+         * Malformed source identity/capacity or visible UTF-8 is rejected before changing rows, counters or Revision.
+         * A bounded allocation-free preflight simulates the same history-order byte budget used for publication.
+         * Missing retained IDs become explicitly unavailable; already terminal/evicted/cleared rows are never resurrected.
+         * Success text must be the executor's safe presentation value; failures expose only their stable error code.
+         */
+        [[nodiscard]] Result<std::size_t> ProjectOperations(const OperationStoreSnapshot &snapshot);
+        /** @brief Counts retained rows awaiting results without scanning or allocating. @return Bounded pending row count. */
+        [[nodiscard]] std::size_t PendingResults() const noexcept;
+        /** @brief Applies a host-validated retained-entry preference at the history owner's lifecycle boundary.
+         * @param limit New entry budget, from 1 through 10000; other byte/input/output budgets remain unchanged.
+         * @return Number of oldest rows evicted, or typed invalid-limit failure without changing history.
+         * Growth reserves bounded storage and can invalidate borrowed rows. Eviction also advances Revision.
+         * Removed pending operations stay owned by their process store and cannot reappear through result projection.
+         */
+        [[nodiscard]] Result<std::size_t> SetEntryLimit(std::size_t limit);
         /** @brief Drops visible records without touching logging stores. */
         void Clear() noexcept;
         /** @brief Returns oldest-to-newest bounded records. @return Borrowed records. */
         [[nodiscard]] std::span<const HistoryEntry> Entries() const noexcept;
+        /** @brief Identifies visible-history mutations for invalidating borrowed presentation selections. @return Owner-local revision. */
+        [[nodiscard]] std::uint64_t Revision() const noexcept;
         /** @brief Searches newest-first without copying history.
          * @param text Safe query. @param skip Number of newest records to skip. @return Borrowed match or null.
          */
@@ -256,5 +287,7 @@ namespace Horo::Debug {
         ConsoleLimits limits_;
         std::vector<HistoryEntry> entries_;
         std::size_t retainedBytes_{};
+        std::size_t pendingResults_{};
+        std::uint64_t revision_{};
     };
 }  // namespace Horo::Debug

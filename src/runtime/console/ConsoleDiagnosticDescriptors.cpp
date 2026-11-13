@@ -1,6 +1,8 @@
 #include "ConsoleProductInternal.h"
+#include "Horo/Debug/ConsoleConfiguration.h"
 #include "Horo/Debug/ConsoleProduct.h"
 
+#include <array>
 #include <iterator>
 
 #if !defined(HORO_DEBUG_COMMANDS_ENABLED) || defined(HORO_PROFILE_SHIPPING)
@@ -17,39 +19,43 @@ namespace Horo::Debug::Detail {
         constexpr DebugArgumentDescriptor
             CaptureArguments[]{{"action", "Bounded capture control", DebugArgumentType::Enum, true, {}, false, false, CaptureActions},
                                {"seconds", "Bounded capture duration", DebugArgumentType::Int32, false, "20", false, true, {}, 1.0, 120.0}};
-        constexpr DebugCommandDescriptor Descriptors[]{
-            {LogLevelCommandId, "log.level", "Change a category's session log threshold", "log.level <category> <level>", LogArguments,
-             CommandPermission::Developer, CommandThreadPolicy::OwnerThreadNextFrame, CommandAvailability::NonShipping},
-            {MetricsCommandId,
-             "sys.metrics",
-             "List authoritative metric channels",
-             "sys.metrics",
-             {},
-             CommandPermission::Developer,
-             CommandThreadPolicy::OwnerThreadNextFrame,
-             CommandAvailability::NonShipping},
-            {ProfileCaptureCommandId, "sys.profile_capture", "Control a bounded profiler capture",
-             "sys.profile_capture <start|stop> [--seconds value]", CaptureArguments, CommandPermission::Developer,
-             CommandThreadPolicy::WorkerJob, CommandAvailability::NonShipping},
-        };
     }  // namespace
 
     /** @copydoc DiagnosticDescriptors */
     std::span<const DebugCommandDescriptor> DiagnosticDescriptors() noexcept {
-        return Descriptors;
+        static const std::array descriptors{DebugCommandDescriptor{LogLevelCommandId, "log.level",
+                                                                   "Change a category's session log threshold",
+                                                                   "log.level <category> <level>", LogArguments,
+                                                                   CommandPermission::Developer, CommandThreadPolicy::OwnerThreadNextFrame,
+                                                                   CommandAvailability::NonShipping},
+                                            ConsoleMetricDescriptor(),
+                                            DebugCommandDescriptor{ProfileCaptureCommandId, "sys.profile_capture",
+                                                                   "Control a bounded profiler capture",
+                                                                   "sys.profile_capture <start|stop> [--seconds value]", CaptureArguments,
+                                                                   CommandPermission::Developer, CommandThreadPolicy::WorkerJob,
+                                                                   CommandAvailability::NonShipping}};
+        return descriptors;
     }
 
     /** @copydoc AppendDiagnosticVariables */
     void AppendDiagnosticVariables(std::vector<ConsoleVariableDescriptor> &descriptors) {
-        ConsoleVariableDescriptor history{ConsoleHistoryLimitVariableId, "console.history.limit", std::int64_t{500}, 1.0, 10000.0};
-        history.applyPolicy = ConsoleVariableApplyPolicy::NextFrame;
-        descriptors.push_back(std::move(history));
+        descriptors.push_back(ConsoleHistoryVariableDescriptor());
 #if !defined(HORO_PROFILE_SERVER)
-        constexpr std::string_view names[]{"overlay.logs.visible",   "overlay.frame.visible", "overlay.cpu.visible",
-                                           "overlay.memory.visible", "overlay.jobs.visible",  "overlay.renderer.visible",
-                                           "overlay.assets.visible", "overlay.input.visible", "overlay.network.visible"};
-        for (std::size_t i = 0; i < std::size(names); ++i)
-            descriptors.push_back({0xDB620003 + i, std::string(names[i]), false});
+        descriptors.push_back(ConsoleLogOverlayVariableDescriptor());
+        descriptors.push_back(ConsoleJobsOverlayVariableDescriptor());
+        descriptors.push_back(ConsoleNetworkOverlayVariableDescriptor());
+
+        /** @brief Stable catalog identity for the remaining unbound session controls. */
+        struct VariableName final {
+            std::uint64_t id;
+            std::string_view name;
+        };
+
+        constexpr VariableName remaining[]{{0xDB620004, "overlay.frame.visible"},  {0xDB620005, "overlay.cpu.visible"},
+                                           {0xDB620006, "overlay.memory.visible"}, {0xDB620008, "overlay.renderer.visible"},
+                                           {0xDB620009, "overlay.assets.visible"}, {0xDB62000A, "overlay.input.visible"}};
+        for (const auto &variable : remaining)
+            descriptors.push_back({variable.id, std::string(variable.name), false});
 #endif
         descriptors.push_back({0xDB62000C, "asset.streaming.debug", false});
     }

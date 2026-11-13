@@ -1,19 +1,13 @@
 #pragma once
 
 /** @file ConsoleSceneBindings.h @brief Explicit read-only console bindings over the existing Scene service authority. */
-#include "Horo/Debug/CommandExecutor.h"
+#include "Horo/Debug/ConsoleBuiltins.h"
 
 namespace Horo::Runtime {
     class RuntimeSceneService;
 }
 
 namespace Horo::Debug {
-    /** @brief Finite inspection work; a huge/sparse world cannot turn one command into an unbounded owner-frame scan. */
-    struct ConsoleSceneInspectionLimits final {
-        std::size_t maximumVisitedSlots{4096};
-        std::size_t maximumReportedEntities{256};
-    };
-
     /** @brief Binds only admitted canonical scene inspection commands to an explicitly supplied owning service.
      * @param registry Immutable composed command inventory.
      * @param scene Existing process/application Scene service; shared lifetime is retained through pending requests.

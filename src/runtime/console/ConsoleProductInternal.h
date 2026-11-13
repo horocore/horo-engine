@@ -4,8 +4,10 @@
 #include "Horo/Debug/ConsoleVariable.h"
 
 namespace Horo::Debug::Detail {
-    /** @brief Public screenshot metadata, compiled independently of diagnostic translation units. */
+#if !defined(HORO_PROFILE_SERVER)
+    /** @brief Public screenshot metadata, omitted from Server and compiled independently of diagnostic translation units. */
     [[nodiscard]] DebugCommandDescriptor ScreenshotDescriptor() noexcept;
+#endif
     /** @brief Public local-terminal variable metadata, independent of diagnostic translation units. */
     void AppendPublicVariables(std::vector<ConsoleVariableDescriptor> &descriptors);
 #if defined(HORO_DEBUG_COMMANDS_ENABLED)

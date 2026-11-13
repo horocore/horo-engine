@@ -126,6 +126,24 @@ consumption.
 | 7 (highest) | `NativeDialog` | Caller wrapping a native OS dialog | Duration of native dialog |
 
 Only one context token is active per level in the standard editor composition.
+
+Explicit inspection is the narrow exception to cross-level exclusion:
+`PushContext(id, FocusedGuiWidget, GameplayPassThrough)` allows the existing
+Gameplay context below that widget only. Other registered contexts still impose
+their normal exclusion, including ordinary focused widgets and editor workspace
+contexts. Modal/native-dialog/window-focus barriers always win. Inspection does
+not consume or duplicate transitions, share text ownership, or create gameplay
+authority. An existing Gameplay pointer capture remains exclusive until its
+ordinary release/cancellation; opening a modal still cancels it. Invalid kinds,
+policies and pass-through/non-widget combinations return an empty token before
+touching focus, capture or modal barriers. Default registration stays Exclusive.
+
+When inspection propagation admits both contexts, capture ownership also gates
+mouse-button and wheel action bindings and direct pointer-button/motion
+consumption. A non-owner receives neutral mouse action state and cannot consume
+the captured delivery. Keyboard/gamepad actions retain their normal eligibility;
+touch contacts retain independent contact ownership. Releasing capture restores
+ordinary mouse routing without changing either context's propagation policy.
 If two distinct logical contexts ever hold the same `InputContextKind`
 simultaneously (for example, two viewports each pushing an `EditorToolCapture`
 token), `IsContextActive()` returns `true` only for the most-recently pushed
@@ -477,7 +495,8 @@ preserve them:
 - context priority and consumption: lower-priority contexts cannot consume
   inputs consumed by higher-priority contexts
 - `IsContextActive()` returns `true` only for the highest-priority,
-  most-recent token at each level
+  most-recent eligible token, plus Gameplay beneath explicit passing inspection;
+  ordinary GUI/editor and modal/focus barriers remain enforced
 - modal blocking: `EditorWorkspace` actions are not readable while a
   `ModalRoot` context is active
 - `FocusedGuiWidget` outranks `EditorWorkspace` actions during text focus

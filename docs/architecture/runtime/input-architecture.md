@@ -137,6 +137,16 @@ available only where policy allows it.
 Contexts are pushed and removed through RAII tokens. A destroyed tab, modal,
 tool, or play session cannot leave an active context behind.
 
+The host can explicitly register a `FocusedGuiWidget` with
+`InputContextPropagation::GameplayPassThrough` for non-mutating inspection.
+This widget retains its normal priority and exclusive text focus, but its presence
+alone does not exclude the existing Gameplay context. All other contexts,
+modal/native-dialog barriers, window focus and per-transition consumption still
+apply. It cannot admit workspace/tool contexts or grant any gameplay capability.
+The ordinary two-argument registration remains Exclusive. This is the central
+policy used by the runtime console's explicit pass-through option; adapters must
+not bypass `IsContextActive` or read raw input to emulate it.
+
 [ADR-078](../../adr/078-runtime-ui-input-context-and-player-routing.md) specializes
 the ADR-073 UI ownership boundary with generation-checked
 `RuntimeUiInputContextId` values. Device, input user, local player, logical viewport

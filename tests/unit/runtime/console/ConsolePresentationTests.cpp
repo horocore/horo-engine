@@ -1,13 +1,36 @@
 #include "Horo/Debug/ConsoleBuiltins.h"
 #include "Horo/Debug/ConsolePresentation.h"
 
+#include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <iostream>
 
 using namespace Horo;
 using namespace Horo::Debug;
 
+namespace {
+    const SettingKey SampleSetting{"runtime.console_sample"};
+
+    /** @brief Uses the real canonical resolver while keeping this presentation fixture independent of product configuration. */
+    ConfigurationSchema PresentationSchema() {
+        ConfigurationSchema schema;
+        REQUIRE(schema
+                    .Register({SampleSetting,
+                               SettingValueType::Integer,
+                               std::int64_t{0},
+                               SettingScope::Session,
+                               ReloadPolicy::Immediate,
+                               SettingSensitivity::Public,
+                               {}})
+                    .HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        return schema;
+    }
+}  // namespace
+
 TEST_CASE("Runtime terminal owns central input focus and submits without an editor", "[console]") {
+    ConfigurationService configuration(PresentationSchema());
     auto created = CommandRegistry::Create(CoreConsoleDescriptors(), {});
     REQUIRE(created.HasValue());
     auto registry = std::make_shared<CommandRegistry>(std::move(created).Value());
@@ -25,7 +48,7 @@ TEST_CASE("Runtime terminal owns central input focus and submits without an edit
     auto gameplay = input.Router().PushContext(Input::InputContextId("gameplay"), Input::InputContextKind::Gameplay);
     CHECK(input.Router().IsContextActive(gameplay));
     {
-        ConsoleTerminal terminal(input.Router(), *dispatcher.Value(), *history, true);
+        ConsoleTerminal terminal(input.Router(), *dispatcher.Value(), *history, *operations, true, configuration);
         REQUIRE(terminal.Open().HasValue());
         CHECK(terminal.IsOpen());
         CHECK_FALSE(input.Router().IsContextActive(gameplay));
@@ -52,14 +75,114 @@ TEST_CASE("Runtime terminal owns central input focus and submits without an edit
         CHECK(terminal.Submit("version", {}).HasError());
         CHECK_FALSE(terminal.TakeText().Value());
         dialog.Reset();
+        CHECK_FALSE(terminal.TakeText().Value());
+        input.BeginFrame(3);
+        input.Collector().AppendText("resumed");
+        (void)input.CommitFrame();
+        const auto resumed = terminal.TakeText();
+        REQUIRE(resumed.HasValue());
+        REQUIRE(resumed.Value());
+        CHECK(resumed.Value()->committed == "resumed");
         terminal.Close();
         CHECK_FALSE(terminal.IsOpen());
     }
-    input.BeginFrame(3);
+    input.BeginFrame(4);
     (void)input.CommitFrame();
     CHECK(input.Router().IsContextActive(gameplay));
-    ConsoleTerminal denied(input.Router(), *dispatcher.Value(), *history, false);
+    ConsoleTerminal denied(input.Router(), *dispatcher.Value(), *history, *operations, false, configuration);
     CHECK(denied.Open().HasError());
+    ConsoleTerminal inspection(input.Router(), *dispatcher.Value(), *history, *operations, true, configuration);
+    REQUIRE(inspection.Open(true).HasValue());
+    CHECK(inspection.IsOpen());
+    CHECK(input.Router().IsContextActive(gameplay));
+    CHECK(inspection.Submit("version", {}).HasValue());
+    auto modal = input.Router().PushContext(Input::InputContextId("game.modal"), Input::InputContextKind::ModalRoot);
+    CHECK_FALSE(inspection.IsOpen());
+    CHECK_FALSE(input.Router().IsContextActive(gameplay));
+    CHECK(inspection.Submit("version", {}).HasError());
+    modal.Reset();
+    inspection.Close();
+}
+
+TEST_CASE("Runtime terminal captures current canonical configuration per submission before queued worker execution", "[console]") {
+    class SnapshotHandler final : public ICommandHandler {
+    public:
+        std::atomic<ConfigurationRevision> revision{999};
+        std::atomic<std::int64_t> value{-1};
+
+        Result<DebugCommandOutput> Execute(const DebugCommandContext &, std::span<const ArgumentValue>, const CancellationToken &,
+                                           const JobExecutionContext *job) override {
+            if (!job || !job->Configuration())
+                return Result<DebugCommandOutput>::Failure(MakeCommandError(CommandError::MissingCapability));
+            const auto setting = job->Configuration()->Find(SampleSetting);
+            if (!setting || !std::holds_alternative<std::int64_t>(*setting))
+                return Result<DebugCommandOutput>::Failure(MakeCommandError(CommandError::HandlerFailed));
+            revision = job->Configuration()->Revision();
+            value = std::get<std::int64_t>(*setting);
+            return Result<DebugCommandOutput>::Success({"captured"});
+        }
+    };
+
+    ConfigurationService configuration(PresentationSchema());
+    const std::array commands{DebugCommandDescriptor{1,
+                                                     "sys.sample",
+                                                     {},
+                                                     {},
+                                                     {},
+                                                     CommandPermission::Public,
+                                                     CommandThreadPolicy::WorkerJob,
+                                                     CommandAvailability::NonShipping}};
+    auto created = CommandRegistry::Create(commands, {});
+    REQUIRE(created.HasValue());
+    auto registry = std::make_shared<CommandRegistry>(std::move(created).Value());
+    auto handler = std::make_shared<SnapshotHandler>();
+    const std::array bindings{CommandBinding{1, handler}};
+    std::atomic<bool> entered{}, release{};
+    JobSystem jobs(JobSystemConfig{.workerCount = 1});
+    auto blocker = jobs.Submit({}, [&](const CancellationToken &cancellation) {
+        entered = true;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (!release.load() && !cancellation.IsCancellationRequested() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+    });
+    REQUIRE(blocker.HasValue());
+    const auto enteredDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (!entered.load() && std::chrono::steady_clock::now() < enteredDeadline)
+        std::this_thread::yield();
+    REQUIRE(entered.load());
+    auto operations = std::make_shared<OperationStore>(8, 8);
+    auto executor = CommandExecutor::Create(registry, bindings, jobs, operations, std::this_thread::get_id(), std::this_thread::get_id());
+    REQUIRE(executor.HasValue());
+    ConsoleHistory history;
+    Input::InputService input;
+    ConsoleTerminal terminal(input.Router(), *executor.Value(), history, *operations, true, configuration);
+    REQUIRE(terminal.Open().HasValue());
+    REQUIRE(configuration.Commit({configuration.Snapshot().Revision(), {{SampleSetting, std::int64_t{42}}}}).HasValue());
+    const auto admittedRevision = configuration.Snapshot().Revision();
+    auto submitted = terminal.Submit("sys.sample", {});
+    REQUIRE(submitted.HasValue());
+    REQUIRE(submitted.Value().job);
+    CHECK(jobs.Query(*submitted.Value().job).state == JobState::Queued);
+    REQUIRE(configuration.Commit({admittedRevision, {{SampleSetting, std::int64_t{99}}}}).HasValue());
+    release = true;
+    const auto id = *submitted.Value().job;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (!jobs.Query(id).terminalResult && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    REQUIRE(jobs.Query(id).state == JobState::Succeeded);
+    CHECK(handler->revision == admittedRevision);
+    CHECK(handler->revision != configuration.Snapshot().Revision());
+    CHECK(handler->value == 42);
+    const auto nextRevision = configuration.Snapshot().Revision();
+    auto next = terminal.Submit("sys.sample", {});
+    REQUIRE(next.HasValue());
+    REQUIRE(next.Value().job);
+    const auto nextDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (!jobs.Query(*next.Value().job).terminalResult && std::chrono::steady_clock::now() < nextDeadline)
+        std::this_thread::yield();
+    REQUIRE(jobs.Query(*next.Value().job).state == JobState::Succeeded);
+    CHECK(handler->revision == nextRevision);
+    CHECK(handler->value == 99);
 }
 
 namespace {
@@ -82,7 +205,77 @@ namespace {
             return store.SnapshotIfChanged(revision);
         }
     };
+
+    class OwnerResult final : public ICommandHandler {
+    public:
+        Result<DebugCommandOutput> Execute(const DebugCommandContext &, std::span<const ArgumentValue>, const CancellationToken &,
+                                           const JobExecutionContext *) override {
+            return Result<DebugCommandOutput>::Success({"owner result"});
+        }
+    };
 }  // namespace
+
+TEST_CASE("Runtime terminal projects asynchronous results at bounded cadence without recreating cleared rows", "[console][history]") {
+    ConfigurationService configuration(PresentationSchema());
+    const std::array descriptors{DebugCommandDescriptor{1,
+                                                        "game.delayed",
+                                                        {},
+                                                        {},
+                                                        {},
+                                                        CommandPermission::Public,
+                                                        CommandThreadPolicy::OwnerThreadNextFrame,
+                                                        CommandAvailability::NonShipping}};
+    auto created = CommandRegistry::Create(descriptors, {});
+    REQUIRE(created.HasValue());
+    auto registry = std::make_shared<CommandRegistry>(std::move(created).Value());
+    const std::array bindings{CommandBinding{1, std::make_shared<OwnerResult>()}};
+    auto query = std::make_shared<OperationQuery>();
+    auto operations = std::shared_ptr<OperationStore>(query, &query->store);
+    JobSystem jobs(JobSystemConfig{.workerCount = 0});
+    auto dispatcher = CommandExecutor::Create(registry, bindings, jobs, operations, std::this_thread::get_id(), std::this_thread::get_id());
+    REQUIRE(dispatcher.HasValue());
+    ConsoleHistory history;
+    Input::InputService input;
+    ConsoleTerminal terminal(input.Router(), *dispatcher.Value(), history, *query, true, configuration);
+    const auto now = std::chrono::steady_clock::now();
+    CHECK(terminal.RefreshResults(now).Value() == 0);
+    CHECK(query->queries == 0);
+    REQUIRE(terminal.Open().HasValue());
+    REQUIRE(terminal.Submit("game.delayed", {}).HasValue());
+    REQUIRE(history.PendingResults() == 1);
+    CHECK(terminal.RefreshResults(now).Value() == 0);
+    CHECK(query->queries == 1);
+    REQUIRE(dispatcher.Value()->DrainOwner(1).HasValue());
+    terminal.Close();
+    CHECK(terminal.RefreshResults(now + std::chrono::milliseconds{249}).Value() == 0);
+    CHECK(query->queries == 1);
+    CHECK(terminal.RefreshResults(now + std::chrono::milliseconds{250}).Value() == 1);
+    CHECK(query->queries == 2);
+    REQUIRE(history.Entries().size() == 1);
+    CHECK(history.Entries()[0].output == "owner result");
+    CHECK(history.Entries()[0].state == OperationState::Succeeded);
+    CHECK(history.PendingResults() == 0);
+    CHECK(terminal.RefreshResults(now + std::chrono::seconds{1}).Value() == 0);
+    CHECK(query->queries == 2);
+    REQUIRE(terminal.Open().HasValue());
+    REQUIRE(terminal.Submit("game.delayed", {}).HasValue());
+    history.Clear();
+    REQUIRE(dispatcher.Value()->DrainOwner(1).HasValue());
+    CHECK(terminal.RefreshResults(now + std::chrono::seconds{2}).Value() == 0);
+    CHECK(history.Entries().empty());
+    CHECK(query->queries == 2);
+    history.Append({1, {}, "external pending"}, {}, OperationId{999});
+    ConsoleTerminal disabled(input.Router(), *dispatcher.Value(), history, *query, false, configuration);
+    CHECK(disabled.RefreshResults(now + std::chrono::seconds{3}).Value() == 0);
+    CHECK(query->queries == 2);
+    bool wrongThread{};
+    std::thread other([&] {
+        wrongThread = terminal.RefreshResults(now + std::chrono::seconds{3}).HasError();
+    });
+    other.join();
+    CHECK(wrongThread);
+    CHECK(query->queries == 2);
+}
 
 TEST_CASE("Console store overlays query authoritative bounded snapshots only at visible refresh cutoffs", "[console]") {
     LogQuery logs;

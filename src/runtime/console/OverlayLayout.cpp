@@ -24,9 +24,11 @@ namespace Horo::Debug {
             const auto &descriptor = descriptors[i];
             const auto permission = static_cast<unsigned>(descriptor.permission);
             if (!descriptor.id || !IsValidConsoleIdentifier(descriptor.name) || descriptor.name.size() > 128 ||
-                static_cast<unsigned>(descriptor.source) > 9 || static_cast<unsigned>(descriptor.availability) > 3 ||
+                static_cast<unsigned>(descriptor.source) >= static_cast<unsigned>(OverlaySource::Count) ||
+                static_cast<unsigned>(descriptor.availability) > 3 ||
                 (permission != 1 && permission != 2 && permission != 4 && permission != 8) ||
                 (descriptor.availability == CommandAvailability::ShippingAllowlist && permission != 1) ||
+                (descriptor.source == OverlaySource::Scene && descriptor.availability != CommandAvailability::DevelopmentOnly) ||
                 (descriptor.permission == CommandPermission::AdminCheat && descriptor.availability != CommandAvailability::DevelopmentOnly))
                 return Result<OverlayLayout>::Failure(MakeCommandError(CommandError::InvalidDescriptor));
             for (const auto &earlier : descriptors.first(i))
@@ -57,6 +59,21 @@ namespace Horo::Debug {
             if (!IsConsolePermissionGranted(panel.permission, principal, profile_))
                 return Result<void>::Failure(MakeCommandError(CommandError::PermissionDenied));
             panel.bounds = bounds;
+            panel.visible = visible;
+            return Result<void>::Success();
+        }
+        return Result<void>::Failure(MakeCommandError(CommandError::UnknownCommand));
+    }
+
+    /** @copydoc OverlayLayout::SetVisible */
+    Result<void> OverlayLayout::SetVisible(const std::uint64_t id, const bool visible, const DebugCommandContext &principal) {
+        if (std::this_thread::get_id() != owner_)
+            return Result<void>::Failure(MakeCommandError(CommandError::WrongThread));
+        for (auto &panel : std::span(panels_).first(count_)) {
+            if (panel.id != id)
+                continue;
+            if (!IsConsolePermissionGranted(panel.permission, principal, profile_))
+                return Result<void>::Failure(MakeCommandError(CommandError::PermissionDenied));
             panel.visible = visible;
             return Result<void>::Success();
         }

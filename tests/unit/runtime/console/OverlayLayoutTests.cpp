@@ -14,10 +14,14 @@ TEST_CASE("Console overlay registration layout visibility and focus remain bound
     CHECK(layout.Configure(1, bounds, true, {}).HasError());
     REQUIRE(layout.Configure(1, bounds, true, {3}).HasValue());
     REQUIRE(layout.Configure(2, bounds, true, {3}).HasValue());
+    REQUIRE(layout.SetVisible(1, false, {3}).HasValue());
+    REQUIRE(layout.SetVisible(1, true, {3}).HasValue());
     std::array<OverlayPanelSnapshot, 32> snapshot{};
     auto visible = layout.Snapshot({3}, snapshot);
     REQUIRE(visible.HasValue());
     CHECK(visible.Value() == 2);
+    CHECK(snapshot[0].bounds.x == bounds.x);
+    CHECK(snapshot[0].bounds.width == bounds.width);
     CHECK(layout.Snapshot({}, snapshot).Value() == 0);
     REQUIRE(layout.Focus(1, {3}).HasValue());
     REQUIRE(layout.Snapshot({3}, snapshot).HasValue());
@@ -36,5 +40,22 @@ TEST_CASE("Console overlay registration layout visibility and focus remain bound
         RegistryPolicy policy;
         policy.profile = profile;
         CHECK(OverlayLayout::Create(descriptors, policy).HasError());
+    }
+}
+
+TEST_CASE("Scene overlay metadata cannot broaden its development-only availability", "[console][profile]") {
+    std::array descriptors{OverlayDescriptor{3, "scene", OverlaySource::Scene}};
+    CHECK(OverlayLayout::Create(descriptors, {}).HasError());
+    descriptors[0].availability = CommandAvailability::DevelopmentOnly;
+    for (const auto profile : {ProductProfile::Editor, ProductProfile::Development, ProductProfile::Profile, ProductProfile::Diagnostics}) {
+        RegistryPolicy policy;
+        policy.profile = profile;
+        auto created = OverlayLayout::Create(descriptors, policy);
+        REQUIRE(created.HasValue());
+        auto layout = std::move(created).Value();
+        const bool development = profile == ProductProfile::Editor || profile == ProductProfile::Development;
+        CHECK(layout.Configure(3, {}, true, {3}).HasValue() == development);
+        std::array<OverlayPanelSnapshot, 1> snapshot{};
+        CHECK(layout.Snapshot({3}, snapshot).Value() == (development ? 1U : 0U));
     }
 }

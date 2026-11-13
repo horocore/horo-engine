@@ -4264,6 +4264,7 @@ target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
         target_link_libraries(HoroGui PRIVATE "-framework AppKit")
     endif ()
     target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformDesktop)
+    include("${PROJECT_SOURCE_DIR}/cmake/HoroEditorRuntimeConsole.cmake")
 endif ()
 
 add_library(HoroExtensions STATIC

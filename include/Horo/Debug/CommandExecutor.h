@@ -62,7 +62,7 @@ namespace Horo::Debug {
     };
 
     /** @brief Thread-safe bounded dispatcher. Hosts drain at canonical lifecycle boundaries.
-     * The mutex protects admission, pending requests and shutdown; handlers and store callbacks
+     * The mutex protects admission, pending and actively draining requests and shutdown; handlers and store callbacks
      * never run under it. Actual owner identities are fixed at construction. Stop rejects new
      * work and requests cancellation without waiting. Worker callbacks capture owned capabilities
      * and the shared operation authority, never this executor. Jobs must outlive Submit calls.
@@ -74,7 +74,7 @@ namespace Horo::Debug {
          * @param jobs Process scheduler; must outlive this executor.
          * @param operations Existing process authority; no private operation store is created.
          * @param owner Fixed owner thread. @param render Fixed render thread.
-         * @param capacity Maximum queued or outstanding commands, including workers.
+         * @param capacity Maximum queued or outstanding asynchronous commands, including active safe-point handlers and workers.
          * @param audit Existing process logging adapter; required for AuditLogged descriptors.
          * @param variables Optional same-profile inventory owned by owner; submitted through this same dispatcher.
          * @return Inactive-side-effect-free executor or typed composition failure.
@@ -83,6 +83,7 @@ namespace Horo::Debug {
             std::shared_ptr<const CommandRegistry> registry, std::span<const CommandBinding> bindings, JobSystem &jobs,
             std::shared_ptr<OperationStore> operations, std::thread::id owner, std::thread::id render, std::size_t capacity = 128,
             std::shared_ptr<ICommandAudit> audit = {}, std::shared_ptr<ConsoleVariableSet> variables = {});
+        /** @brief Rejects new work and requests cancellation without joining the borrowed scheduler. */
         ~CommandExecutor();
         CommandExecutor(const CommandExecutor &) = delete;
         CommandExecutor &operator=(const CommandExecutor &) = delete;
@@ -103,9 +104,23 @@ namespace Horo::Debug {
         [[nodiscard]] Result<std::size_t> DrainRender(std::size_t budget);
         /** @brief Idempotently rejects new submissions and cancels pending/running work without joining. */
         void Stop();
+        /** @brief Checks exact immutable-registry affinity without querying services or mutable admission state.
+         * @param registry Candidate host inventory. @return True only for the identical registry retained at composition.
+         */
+        [[nodiscard]] bool UsesRegistry(const CommandRegistry &registry) const noexcept;
+        /** @brief Tests the fixed owner identity without draining or touching feature state. @return Whether this is the owner thread. */
+        [[nodiscard]] bool IsOwnerThread() const noexcept;
+        /** @brief Checks the shared owner admission state before host-owned deferred activation, without draining or reserving work.
+         * @return Success or typed wrong-thread, shutdown or nested owner/render-drain failure.
+         * Uses the existing admission mutex and invokes no callback/store. This is an observation, not a lease:
+         * a concurrent Stop may still cancel already admitted work after the check. Hosts retain lifecycle ownership.
+         * A render drain on a distinct fixed thread does not prevent the independent owner boundary.
+         */
+        [[nodiscard]] Result<void> ValidateOwnerBoundary() const;
 
     private:
         struct State;
+        /** @brief Retains validated private composition state. @param state Owned dispatcher state; activates no feature. */
         explicit CommandExecutor(std::shared_ptr<State> state);
         [[nodiscard]] Result<std::size_t> Drain(CommandThreadPolicy policy, std::size_t budget);
         std::shared_ptr<State> state_;

@@ -1,6 +1,8 @@
 include_guard(GLOBAL)
 
 horo_configure_target_header_boundary(HoroRuntimeConsole PUBLIC_HEADERS
+    Horo/Debug/ConsoleConfiguration.h
+    Horo/Debug/OverlaySource.h
     Horo/Debug/CommandRegistry.h
     Horo/Debug/CommandExecutor.h
     Horo/Debug/ConsoleVariable.h
@@ -9,6 +11,7 @@ horo_configure_target_header_boundary(HoroRuntimeConsole PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRuntimeConsoleStartup PUBLIC_HEADERS
     Horo/Debug/ConsoleStartup.h
+    Horo/Debug/ConsoleStartupExecution.h
 )
 horo_configure_target_header_boundary(HoroRuntimeConsoleUi PUBLIC_HEADERS
     Horo/Debug/ConsolePresentation.h

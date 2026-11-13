@@ -1,3 +1,4 @@
+#include "Horo/Debug/ConsoleConfiguration.h"
 #include "Horo/Debug/ConsoleProduct.h"
 #include "Horo/Debug/ConsoleVariableSet.h"
 
@@ -56,7 +57,16 @@ TEST_CASE("Console variable catalog follows the compiled profile and separate sh
     if (policy.profile != ProductProfile::Server)
         policy.shippingVariableAllowlist = {ConsoleVisibleVariableId};
     const auto commands = ProductConsoleDescriptors();
-    auto created = ConsoleVariableSet::Create(variables, commands, policy);
+    auto settings = ConsoleConfigurationDescriptors(policy.profile);
+    REQUIRE(settings.HasValue());
+    ConfigurationSchema schema;
+    for (const auto &descriptor : settings.Value())
+        REQUIRE(schema.Register(descriptor).HasValue());
+    REQUIRE(schema.Seal().HasValue());
+    auto configuration = std::make_shared<ConfigurationService>(std::move(schema));
+    const SettingKey historyKey{std::string(ConsoleHistorySettingName)};
+    REQUIRE(configuration->Commit({configuration->Snapshot().Revision(), {{historyKey, std::int64_t{900}}}}).HasValue());
+    auto created = ConsoleVariableSet::Create(variables, commands, policy, configuration);
     REQUIRE(created.HasValue());
     const auto allowed = created.Value().Discover({}, {15, true, true});
     if (policy.profile == ProductProfile::Shipping) {
@@ -64,11 +74,13 @@ TEST_CASE("Console variable catalog follows the compiled profile and separate sh
         CHECK(allowed.front().id == ConsoleVisibleVariableId);
         CHECK(created.Value().Read("console.history.limit", {15, true, true}).HasError());
     } else {
+        CHECK(std::get<std::int64_t>(created.Value().Read("console.history.limit", {3}).Value().active) == 900);
         auto changed = created.Value().Set("console.history.limit", std::int64_t{1}, {3});
         CHECK(changed.HasValue());
         CHECK(created.Value().Set("console.history.limit", std::int64_t{0}, {3}).HasError());
         REQUIRE(created.Value().Apply(ConsoleVariableApplyPolicy::NextFrame).HasValue());
         CHECK(std::get<std::int64_t>(created.Value().Read("console.history.limit", {3}).Value().active) == 1);
+        CHECK(std::get<std::int64_t>(configuration->Snapshot().Get(SettingKey(std::string(ConsoleHistorySettingName)))) == 1);
     }
     if (policy.profile == ProductProfile::Server) {
         CHECK(created.Value().Read("console.visible", {15, true, true}).HasError());

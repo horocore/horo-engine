@@ -1,4 +1,4 @@
-#include "Horo/Debug/ConsoleTelemetryBindings.h"
+#include "Horo/Debug/ConsoleBuiltins.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
 #include "Horo/Foundation/Utf8.h"
 
