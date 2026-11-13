@@ -73,7 +73,8 @@ The old private validation helper had a check-then-block race: it released a pro
 lock before entering the actual blocking context. The supported dev helper now has
 an additive `blocking=False` keyword (default behavior is unchanged), allowing one
 atomic nonblocking context through the existing cleanup-marker checks. A real
-native-lock exclusion/retry regression was added; it has not executed yet. Local
+native-lock exclusion/retry regression was added and later passed in the Python
+regression command recorded below. Local
 validation/quality helpers use that context and the existing managed process runner.
 The first registry and quality admission attempts both found the physical lock busy;
 no compiler, analyzer or waiter was started. The quality admission JSON under ignored
@@ -648,6 +649,44 @@ and was fetched. Published PLS history is retained; no force push or merge was
 performed. Full preflight must compare this actual target, and remote integrated
 CI evidence must match the delivered head. New source work has not been qualified
 against the target's complete native matrix.
+
+## Latest local checks and source review
+
+The first resumed Debug headless CMake configure completed successfully on
+`e0ec814ec` plus the seven focused C++ edits later committed as `a71e76794`.
+Public-header ownership and dependency-direction checks passed. The bounded
+runner verified the canonical Windows lock handle, sampled CPU for 30 seconds
+(3.09% mean), observed 31.31% available RAM and 9.60 GiB free disk, and retained
+identical fingerprints for all 8,616 source inputs before and after the batch.
+The evidence is `build/pls-native-configure-1794608555213823400.json`. This is
+configure evidence; no new C++ executable has been built or run yet.
+
+The combined Python command passed **95 tests, with 3 skipped**:
+
+```text
+python -m pytest -q --tb=short tests/python/test_local_build_cache.py tests/python/test_configuration_settings_localization.py tests/python/test_navigation_settings_localization.py tests/python/test_release_notes.py tests/python/test_project_migration_generator.py tests/python/test_project_compatibility_generator.py tests/python/test_project_python310_compatibility.py tests/python/test_ci_workflow_grouping.py
+```
+
+Hosted Codacy on pushed `e0ec814ec` reported nine findings. Eight concern long
+C++ functions or test cases; `a71e76794` separates their responsibilities while
+retaining assertions and publication ordering. Those fixes require a fresh
+analyzer run. The remaining CHANGELOG duplicate-heading finding concerns the
+standard repeated release subsection names required by the release-notes
+contract. No lint rule, historical release data or release parser was weakened
+to suppress it. Raw annotations are in `build/pls-codacy-e0ec-annotations.json`.
+
+The configured offline doctor is `ready_for_local_check` using the actual
+portable Code user profile and installed Sonar extension directory. This only
+checks prerequisites, not connected authentication, trust or C++ execution.
+The online doctor could not read Codacy cloud configuration (exit 2); cloud
+configuration drift remains unverified. Full-scope Sonar IDE, CLI secrets and
+Codacy analysis have not started because resource admission was busy; the
+admission record is not an analyzer report.
+
+The published target is still `139f8a5e`. A review-only integration tree resolves
+four source/test-list conflicts while retaining both branches' test membership
+and the bounded, non-shadowing JSON parser. It has not been applied. The local
+branch retains published history; its current draft PR remains unqualified.
 
 ## Outstanding integrated evidence
 
