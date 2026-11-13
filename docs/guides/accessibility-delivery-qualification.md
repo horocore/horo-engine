@@ -6,10 +6,19 @@ and required platform evidence exist. Existing Runtime UI semantic tests do not
 qualify native assistive technology.
 
 Original baseline: `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`.
-Current local parent: `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08` (C11 admission
-fixture correction), supplied by the main coordinator before its origin push. GitHub and Jira bodies
+Current published parent: `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc` on
+`origin/codex/editor-improvements`, verified from the remote on 2026-11-13.
+The earlier local parent was `5d0aff9d63b03b3370f0f09fab49893ec0e4ae08` (C11 admission
+fixture correction). GitHub and Jira bodies
 were read on 2026-11-11; all seven implementation children were Open / To Do.
 ACC-001.1 / HORO-1805 is already delivered and is not reimplemented.
+
+The 2026-11-13 user restart supersedes the historical named-grant and global
+source-freeze restrictions described in older evidence below. Own-worktree
+changes and authorized normal push/draft delivery may proceed independently.
+Heavy work still requires atomic nonblocking admission through the real shared
+OS lock, verified physical handle, resource guards and one worker; a busy lock
+does not permit a background waiter or interrupting another job.
 
 | Child | Jira / GitHub | Implementation and evidence | Remaining acceptance / dependencies |
 |---|---|---|---|
@@ -392,3 +401,33 @@ tree beyond the new desired-preference model. Native SDK boundary migration,
 an explicitly owned tick-start acquisition path satisfying the non-blocking
 contract, and game-owned supported/authorized behavior consumers remain required.
 No ambient settings lookup, bus-state cache or silent authority grant was added.
+
+## 2026-11-13 restart and published-base integration
+
+The six preserved CI/qualification paths were committed as `366451048` after the
+paired-copy/SDK/CI Python suites repeated with **65 passed**. The remote parent
+was verified with `git ls-remote` and fetched. Authorized rebase then replayed
+all 19 ACC commits onto `3df476ff` without conflicts. Range-diff recorded 18
+unchanged patches and one context-only change around the parent's expanded CI
+inventory; the new parent entries remain intact. The pre-rebase stack is retained
+by a local backup ref. This evidence concerns patch integration, not native behavior.
+
+The known CharacterInput missing-clock diagnostic now retains the typed Input
+cause and clears pending intent; its focused native regression is authored.
+`heavy_build_lock(repo, blocking=False)` now forwards nonblocking admission to
+the existing OS lock. Default callers retain their blocking behavior. A regression
+checks refusal under a live owner, preservation of that owner's lock, and admission
+after release, using isolated temporary fixture caches. No fallback execution lock
+is introduced. The first cache/runner Python pass recorded **107 passed, 4 skipped**.
+Three skips require Windows symlink privileges and one requires a real
+compiler/ccache fixture. A same-scope repeat hit host disk exhaustion:
+**100 passed, 4 skipped, 2 failed, 5 setup errors**, with ENOSPC in Git fixture/temp
+writes. That repeat is incomplete infrastructure evidence. The system drive was
+verified at zero free bytes; this worktree's build outputs were only about 1 MiB.
+No shared cache, sibling files or live job was removed. A fresh cache/runner run
+and native/quality execution remain pending adequate actual storage and resources.
+After published-base integration, the paired-copy/SDK/CI grouping suites passed
+again with **66 passed**, recorded in the local ignored JUnit report
+`build/acc-current-python.xml`; they do not exercise the new C++ behavior.
+The local ACC batch helper must use this nonblocking API and the current resource
+and physical-handle guards; it no longer requires a named main-chat grant.
