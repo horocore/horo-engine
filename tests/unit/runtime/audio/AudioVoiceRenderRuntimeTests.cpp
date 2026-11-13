@@ -1,6 +1,43 @@
 #include "AudioVoiceRenderTestFixture.h"
 
 namespace Horo::Tests::VoiceRenderFixture {
+    namespace {
+        /** @brief Reach each lifecycle input through legal canonical state transitions. */
+        void PrepareLifecycleState(Rig &rig, const AudioVoiceState state) {
+            const auto handle = rig.voice->Voice();
+            if (state != AudioVoiceState::Ready) {
+                REQUIRE(rig.registry->Transition(handle, AudioVoiceState::Scheduled).HasValue());
+                if (state != AudioVoiceState::Scheduled)
+                    REQUIRE(rig.registry->Transition(handle, AudioVoiceState::Playing).HasValue());
+                if (state == AudioVoiceState::Cancelled)
+                    REQUIRE(rig.registry->Cancel(handle).HasValue());
+                else if (state != AudioVoiceState::Playing) {
+                    if (state == AudioVoiceState::Stopped)
+                        REQUIRE(rig.registry->Transition(handle, AudioVoiceState::Stopping).HasValue());
+                    if (state != AudioVoiceState::Scheduled)
+                        REQUIRE(rig.registry->Transition(handle, state).HasValue());
+                }
+            }
+        }
+
+        /** @brief Verify native detachment gates release and preserves the exact terminal identity. */
+        void CheckDetachedOutcome(Rig &rig, const AudioVoiceHandle handle, const AudioVoiceState expected) {
+            CHECK_FALSE(rig.voice->TerminalSnapshot().has_value());
+            rig.voice->Close();
+            CHECK_FALSE(rig.voice->CompleteShutdown(false));
+            CHECK_FALSE(rig.voice->TerminalSnapshot().has_value());
+            REQUIRE(rig.voice->CompleteShutdown(true));
+            CHECK(rig.registry->State(handle).HasError());
+            const auto terminal = rig.voice->TerminalSnapshot();
+            REQUIRE(terminal.has_value());
+            CHECK(terminal->voice == handle);
+            CHECK(terminal->state == expected);
+            CHECK(terminal->terminalReason == AudioVoiceTerminalReasonForState(terminal->state));
+            REQUIRE(rig.voice->CompleteShutdown(true));
+            CHECK(rig.voice->TerminalSnapshot()->state == terminal->state);
+        }
+    }  // namespace
+
     TEST_CASE("Lifecycle barriers preserve every existing terminal outcome and cancel active resident voices",
               "[audio][voice_render][lifecycle][qualification]") {
         for (const bool reset : {false, true}) {
@@ -11,19 +48,7 @@ namespace Horo::Tests::VoiceRenderFixture {
                 Rig rig;
                 REQUIRE(rig.voice->Apply(rig.Publish()) == nullptr);
                 const auto handle = rig.voice->Voice();
-                if (state != AudioVoiceState::Ready) {
-                    REQUIRE(rig.registry->Transition(handle, AudioVoiceState::Scheduled).HasValue());
-                    if (state != AudioVoiceState::Scheduled)
-                        REQUIRE(rig.registry->Transition(handle, AudioVoiceState::Playing).HasValue());
-                    if (state == AudioVoiceState::Cancelled)
-                        REQUIRE(rig.registry->Cancel(handle).HasValue());
-                    else if (state != AudioVoiceState::Playing) {
-                        if (state == AudioVoiceState::Stopped)
-                            REQUIRE(rig.registry->Transition(handle, AudioVoiceState::Stopping).HasValue());
-                        if (state != AudioVoiceState::Scheduled)
-                            REQUIRE(rig.registry->Transition(handle, state).HasValue());
-                    }
-                }
+                PrepareLifecycleState(rig, state);
                 const auto prior = rig.registry->State(handle).Value();
                 if (IsTerminalAudioVoiceState(prior)) {
                     REQUIRE(rig.voice->Render(16).terminal);
@@ -53,19 +78,7 @@ namespace Horo::Tests::VoiceRenderFixture {
                 CHECK(silent);
                 CHECK_FALSE(rig.voice->Render(16).terminal);
                 CHECK(rig.voice->Apply(record) == &AudioErrors::CommandBufferInvalid);
-                CHECK_FALSE(rig.voice->TerminalSnapshot().has_value());
-                rig.voice->Close();
-                CHECK_FALSE(rig.voice->CompleteShutdown(false));
-                CHECK_FALSE(rig.voice->TerminalSnapshot().has_value());
-                REQUIRE(rig.voice->CompleteShutdown(true));
-                CHECK(rig.registry->State(handle).HasError());
-                const auto terminal = rig.voice->TerminalSnapshot();
-                REQUIRE(terminal.has_value());
-                CHECK(terminal->voice == handle);
-                CHECK(terminal->state == (IsTerminalAudioVoiceState(prior) ? prior : AudioVoiceState::Cancelled));
-                CHECK(terminal->terminalReason == AudioVoiceTerminalReasonForState(terminal->state));
-                REQUIRE(rig.voice->CompleteShutdown(true));
-                CHECK(rig.voice->TerminalSnapshot()->state == terminal->state);
+                CheckDetachedOutcome(rig, handle, IsTerminalAudioVoiceState(prior) ? prior : AudioVoiceState::Cancelled);
             }
         }
     }

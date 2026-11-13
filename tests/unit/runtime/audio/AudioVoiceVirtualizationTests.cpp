@@ -12,6 +12,38 @@ namespace Horo::Audio {
         using enum AudioVoiceControl;
         using enum AudioResamplerQuality;
 
+        /** @brief Exercise one owned voice without assertions or allocation inside the measured processing interval. */
+        bool ChurnVoice(AudioVoicePlayback &voice, Samples &samples, const bool physical, std::uint32_t &terminals) {
+            bool valid = true;
+            const auto render = [&](const std::uint32_t frames) {
+                const auto result = voice.Render(samples.Destination(frames));
+                valid = valid && result.error == nullptr && !result.terminal;
+            };
+            const auto control = [&](const AudioVoiceControl operation) {
+                const auto *error = voice.Apply({voice.Voice(), operation});
+                valid = valid && error == nullptr;
+            };
+            render(13);
+            render(27);
+            valid = valid && voice.Cursor().frame == 4 && voice.Cursor().fraction == 0.0;
+            control(physical ? Virtualize : Realize);
+            render(9);
+            valid = valid && voice.Cursor().frame == 4 && voice.Cursor().fraction == 0.5;
+            control(Pause);
+            render(16);
+            valid = valid && voice.Cursor().frame == 4 && voice.Cursor().fraction == 0.5;
+            control(Resume);
+            render(3);
+            valid = valid && voice.Cursor().frame == 6 && voice.Cursor().fraction == 0.0;
+            control(Cancel);
+            const auto terminal = voice.Render(samples.Destination(1));
+            terminals += terminal.terminal ? 1U : 0U;
+            valid = valid && terminal.error == nullptr;
+            const auto repeated = voice.Render(samples.Destination(1));
+            valid = valid && repeated.error == nullptr && !repeated.terminal;
+            return valid;
+        }
+
         TEST_CASE("Full resident registries preserve loop cursors and terminal once through physical virtual churn",
                   "[audio][virtualization][qualification]") {
             for (const std::uint32_t capacity : {1U, 64U, 256U, 1024U}) {
@@ -31,32 +63,7 @@ namespace Horo::Audio {
                 const auto frees = Horo::Tests::AllocationProbe::FreeCount();
                 for (std::uint32_t index = 0; index < capacity; ++index) {
                     auto &voice = voices[index];
-                    const auto render = [&](const std::uint32_t frames) {
-                        const auto result = voice.Render(samples.Destination(frames));
-                        valid = valid && result.error == nullptr && !result.terminal;
-                    };
-                    const auto control = [&](const AudioVoiceControl operation) {
-                        const auto *error = voice.Apply({voice.Voice(), operation});
-                        valid = valid && error == nullptr;
-                    };
-                    render(13);
-                    render(27);
-                    valid = valid && voice.Cursor().frame == 4 && voice.Cursor().fraction == 0.0;
-                    control(index % 2 == 0 ? Virtualize : Realize);
-                    render(9);
-                    valid = valid && voice.Cursor().frame == 4 && voice.Cursor().fraction == 0.5;
-                    control(Pause);
-                    render(16);
-                    valid = valid && voice.Cursor().frame == 4 && voice.Cursor().fraction == 0.5;
-                    control(Resume);
-                    render(3);
-                    valid = valid && voice.Cursor().frame == 6 && voice.Cursor().fraction == 0.0;
-                    control(Cancel);
-                    const auto terminal = voice.Render(samples.Destination(1));
-                    terminals += terminal.terminal ? 1U : 0U;
-                    valid = valid && terminal.error == nullptr;
-                    const auto repeated = voice.Render(samples.Destination(1));
-                    valid = valid && repeated.error == nullptr && !repeated.terminal;
+                    valid = ChurnVoice(voice, samples, index % 2 == 0, terminals) && valid;
                 }
                 const auto allocationEnd = Horo::Tests::AllocationProbe::Count();
                 const auto freeEnd = Horo::Tests::AllocationProbe::FreeCount();
