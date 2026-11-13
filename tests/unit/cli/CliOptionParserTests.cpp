@@ -182,6 +182,34 @@ namespace Horo::Cli {
         REQUIRE(FindOption(invocation.Value(), "output")->values[0].source == CliValueSource::Invocation);
     }
 
+    TEST_CASE("CLI primitive options reject credential references without exposing their identities",
+              "[unit][cli][parser][configuration]") {
+        const std::string identity = "cred:v1:" + std::string(48, 'a');
+        const auto reference = CredentialReference::Parse(identity);
+        REQUIRE(reference.HasValue());
+        ConfigurationSchema schema;
+        REQUIRE(schema
+                    .Register({.key = SettingKey{"cli.output.format"},
+                               .type = SettingValueType::CredentialReference,
+                               .defaultValue = reference.Value(),
+                               .scope = SettingScope::User,
+                               .reloadPolicy = ReloadPolicy::NextOperation,
+                               .sensitivity = SettingSensitivity::SecretReference})
+                    .HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService configuration{schema};
+        const auto snapshot = configuration.Snapshot();
+        const auto registry = Registry();
+        const auto arguments = std::to_array<std::string_view>({"project", "validate", "--count", "2"});
+        const auto parsed = CliOptionParser::Parse(arguments, registry, {.configuration = &snapshot});
+        RequireError(parsed, CliErrors::ParseFailed);
+        REQUIRE(std::ranges::any_of(parsed.ErrorValue().diagnostics, [](const auto &diagnostic) {
+            return diagnostic.code.Value() == "cli.configuration_value_incompatible";
+        }));
+        for (const auto &diagnostic : parsed.ErrorValue().diagnostics)
+            CHECK(diagnostic.message.find(identity) == std::string::npos);
+    }
+
     TEST_CASE("CLI parser normalizes option configuration and positional paths through one adapter", "[unit][cli][parser]") {
         CliCommandDescriptor descriptor = Descriptor();
         descriptor.positionals = {{.name = "input", .summary = "Input path.", .valueKind = CliOptionValueKind::Path, .required = true}};

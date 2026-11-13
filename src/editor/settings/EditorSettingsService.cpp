@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
+#include "Horo/Foundation/Assertions.h"
 #include "Horo/Foundation/Configuration.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/EditorServiceErrors.h"
@@ -29,15 +30,24 @@ namespace Horo::Editor {
                                                  LocalizationService &localization)
         : m_committed(std::move(initialSettings)), m_configuration(configuration), m_events(events), m_localization(localization) {
         (void)ValidateEditorSettings(m_committed, nullptr);
+        m_configurationRevision = configuration.Snapshot().Revision();
+        ApplyEditorConfigurationSnapshot(configuration.Snapshot(), m_committed);
     }
 
     /** @copydoc EditorSettingsService::Snapshot */
     EditorSettingsSnapshot EditorSettingsService::Snapshot() const noexcept {
-        return EditorSettingsSnapshot{.settings = m_committed, .revision = m_revision};
+        const auto configuration = m_configuration.Snapshot();
+        EditorSettings settings = m_committed;
+        if (configuration.Revision() != m_configurationRevision)
+            ApplyEditorConfigurationSnapshot(configuration, settings);
+        return EditorSettingsSnapshot{.settings = std::move(settings),
+                                      .revision = m_revision,
+                                      .configurationRevision = configuration.Revision()};
     }
 
     /** @copydoc EditorSettingsService::Commit */
-    Result<EditorSettingsSnapshot> EditorSettingsService::Commit(const EditorSettingsDraft &draft) {
+    Result<EditorSettingsSnapshot> EditorSettingsService::Commit(const EditorSettingsDraft &draft,
+                                                                 const ConfigurationDraft *configurationDraft) {
         if (draft.baseRevision != m_revision) {
             Error error = SettingsError(SettingsErrors::DraftStale, "Editor settings draft is stale.");
             LOG_WARN("editor.settings", "Settings commit rejected as stale: draft_revision=%llu current_revision=%llu",
@@ -57,6 +67,60 @@ namespace Horo::Editor {
             return Result<EditorSettingsSnapshot>::Failure(
                 SettingsError(SettingsErrors::ValidationFailed, "Editor keymap conflicts with a live module command."));
 
+        auto appearanceDraft = MakeEditorAppearanceConfigurationDraft(m_configuration.Snapshot(), candidate);
+        appearanceDraft.baseRevision = draft.baseConfigurationRevision.value_or(m_configurationRevision);
+        const auto previousAppearance = MakeEditorAppearanceConfigurationDraft(m_configuration.Snapshot(), Snapshot().settings);
+        std::erase_if(appearanceDraft.proposedValues, [&](const auto &entry) {
+            return previousAppearance.proposedValues.at(entry.first) == entry.second;
+        });
+        if (configurationDraft) {
+            if (configurationDraft->source != ConfigurationSource::User)
+                return Result<EditorSettingsSnapshot>::Failure(MakeError(SettingsErrors::ValidationFailed));
+            if (configurationDraft->baseRevision != appearanceDraft.baseRevision) {
+                const auto legacy = m_configuration.Validate(appearanceDraft);
+                if (legacy.HasError())
+                    return Result<EditorSettingsSnapshot>::Failure(legacy.ErrorValue());
+                const auto generic = m_configuration.Validate(*configurationDraft);
+                if (generic.HasError())
+                    return Result<EditorSettingsSnapshot>::Failure(generic.ErrorValue());
+            }
+            for (const auto &[key, value] : configurationDraft->proposedValues) {
+                const auto [entry, inserted] = appearanceDraft.proposedValues.emplace(key, value);
+                if (!inserted && entry->second != value)
+                    return Result<EditorSettingsSnapshot>::Failure(MakeError(SettingsErrors::ValidationFailed));
+            }
+        }
+        auto prepared = m_configuration.Prepare(appearanceDraft);
+        if (prepared.HasError())
+            return Result<EditorSettingsSnapshot>::Failure(prepared.ErrorValue());
+        auto transaction = std::move(prepared).Value();
+        ApplyEditorConfigurationSnapshot(transaction.Candidate(), candidate);
+        return PersistAndActivate(std::move(candidate), std::move(transaction));
+    }
+
+    /** @copydoc EditorSettingsService::Configuration */
+    ConfigurationService &EditorSettingsService::Configuration() noexcept {
+        return m_configuration;
+    }
+
+    /** @copydoc EditorSettingsService::CommitConfiguration */
+    Result<EditorSettingsSnapshot> EditorSettingsService::CommitConfiguration(const ConfigurationDraft &draft) {
+        if (draft.source != ConfigurationSource::User)
+            return Result<EditorSettingsSnapshot>::Failure(MakeError(SettingsErrors::ValidationFailed));
+        auto prepared = m_configuration.Prepare(draft);
+        if (prepared.HasError())
+            return Result<EditorSettingsSnapshot>::Failure(prepared.ErrorValue());
+        auto transaction = std::move(prepared).Value();
+        EditorSettings candidate = m_committed;
+        ApplyEditorConfigurationSnapshot(transaction.Candidate(), candidate);
+        return PersistAndActivate(std::move(candidate), std::move(transaction));
+    }
+
+    /** @copydoc EditorSettingsService::PersistAndActivate */
+    Result<EditorSettingsSnapshot> EditorSettingsService::PersistAndActivate(EditorSettings candidate,
+                                                                             ConfigurationService::PreparedCommit transaction) {
+        if (!ValidateEditorSettings(candidate))
+            return Result<EditorSettingsSnapshot>::Failure(MakeError(SettingsErrors::ValidationFailed));
         const bool languageChanged = candidate.languageTag != m_committed.languageTag;
         if (languageChanged) {
             const auto locale = LocaleTag::Parse(candidate.languageTag);
@@ -68,37 +132,29 @@ namespace Horo::Editor {
             }
         }
 
-        const ConfigurationSnapshot configurationSnapshot = m_configuration.Snapshot();
-        const ConfigurationDraft appearanceDraft = MakeEditorAppearanceConfigurationDraft(configurationSnapshot, candidate);
-        if (const Result<void> result = m_configuration.Validate(appearanceDraft); result.HasError()) {
-            LogCommitFailure("configuration validation", result.ErrorValue());
-            return Result<EditorSettingsSnapshot>::Failure(result.ErrorValue());
-        }
-
+        const auto configuration = transaction.Candidate();
         EditorSettingsDocument document{.settings = candidate};
-        if (std::string persistenceError; !SaveEditorSettingsDocument(&document, &persistenceError)) {
+        if (std::string persistenceError; !SaveEditorSettingsDocument(&document, &persistenceError, &configuration)) {
             Error error = SettingsError(SettingsErrors::PersistenceFailed, std::move(persistenceError));
             LogCommitFailure("persistence", error);
             return Result<EditorSettingsSnapshot>::Failure(std::move(error));
         }
 
-        if (languageChanged) {
-            LocalizationError localizationError;
-            if (!m_localization.ActivatePrepared(&localizationError)) {
-                Error error = SettingsError(SettingsErrors::ValidationFailed, std::move(localizationError.message));
-                LogCommitFailure("localization activation", error);
-                return Result<EditorSettingsSnapshot>::Failure(std::move(error));
-            }
-        }
-
-        if (const Result<void> result = m_configuration.Commit(appearanceDraft); result.HasError()) {
-            LogCommitFailure("configuration activation", result.ErrorValue());
-            return Result<EditorSettingsSnapshot>::Failure(result.ErrorValue());
-        }
+        // This owner-thread operation invokes no localization callbacks between Prepare and this shared-pointer transfer.
+        if (languageChanged)
+            HORO_INVARIANT_MSG(m_localization.ActivatePrepared(),
+                               "Prepared localization must survive the synchronous settings publication.");
 
         m_committed = std::move(document.settings);
+        m_configurationRevision = configuration.Revision();
         ++m_revision;
-        const EditorSettingsSnapshot activated = Snapshot();
+        const EditorSettingsSnapshot activated{.settings = m_committed,
+                                               .revision = m_revision,
+                                               .configurationRevision = m_configurationRevision};
+        // Publish the editor projection before configuration callbacks can reenter either authority.
+        // This fresh, privately owned transaction cannot lose its writer reservation before Commit.
+        const auto result = transaction.Commit();
+        HORO_INVARIANT_MSG(result.HasValue(), "A prepared editor configuration transaction must activate after durable publication.");
         m_events.Publish(EditorSettingsChangedEvent{
             .revision = activated.revision,
             .phase = SettingsChangePhase::Committed,

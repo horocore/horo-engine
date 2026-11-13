@@ -1,5 +1,6 @@
 #include "Horo/Editor/SettingsModal.h"
 
+#include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "SettingsModalInternal.h"
@@ -68,7 +69,20 @@ namespace Horo::Editor {
 
     ModalFrameResult DrawSettingsModalPresentation(SettingsState &state, EditorSettingsService &settings, const EditorGuiContext &ctx,
                                                    const ImTextureID logo) {
-        return DrawSettingsModalPresentationImpl(state, settings, ctx, logo);
+        const auto result = DrawSettingsModalPresentationImpl(state, settings, ctx, logo);
+        if (state.configurationFailure && state.configurationFailure->code.Value() == "configuration.draft_stale" && state.configuration &&
+            state.configuration->Draft().baseRevision != state.configurationRevision) {
+            const auto error = *state.configurationFailure;
+            const bool previewed = state.configurationPreviewed || CollectDraftSettings(state) != state.committed;
+            LoadSettingsForModal(state, settings);
+            state.configurationFailure = error;
+            state.status = SettingsModalStatus::Failure;
+            if (previewed) {
+                state.appearance.pendingThemeIndex = state.appearance.themeIndex;
+                state.configurationPreviewed = true;
+            }
+        }
+        return result;
     }
 
     ModalFrameResult SettingsModal::Draw() {
