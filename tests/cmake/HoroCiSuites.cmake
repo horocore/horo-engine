@@ -244,6 +244,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroEditorActivityBoundaryTests
 
     HoroPackageLifecycleTests
+    HoroPlatformProviderPackageTests
+    HoroPackageHostSurfacePublicHeaderConsumer
     HoroPackageApplicationTests
     HoroPackageApplicationPublicHeaderConsumer
     HoroCliPackageAdaptersPublicHeaderConsumer

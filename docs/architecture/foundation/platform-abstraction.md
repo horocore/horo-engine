@@ -25,7 +25,7 @@ meaningful operating system differences or force every host to create a window.
 ## Capability Model
 
 ```cpp
-struct PlatformServices {
+struct HostPlatformServices {
     FileSystem& files;
     Clock& clock;
     ProcessService& processes;
@@ -35,6 +35,11 @@ struct PlatformServices {
     CrashService* crash;
 };
 ```
+
+The baseline bundle is `Horo::HostPlatformServices`. The distinct
+`Horo::PlatformServices` namespace owns online provider services. Both public
+contracts must be usable in the same translation unit. See the
+[composition migration](../../guides/platform-provider-package-qualification.md#host-platform-bundle-migration).
 
 `FileSystem`, `Clock`, `ProcessService`, and `UserDirectories` form the baseline
 service set for supported engine hosts. Headless and test hosts provide suitable

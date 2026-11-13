@@ -351,7 +351,7 @@ class RuntimeSaveService final {
 public:
     RuntimeSaveService(IRuntimeSessionHost&, CanonicalStateParticipantRegistry&,
                        SaveStorageAdapter&, SaveNamespaceBinding&,
-                       PlatformServices&, JobSystem&, OperationStore&);
+                       HostPlatformServices&, JobSystem&, OperationStore&);
     Result<SaveOperationHandle> SaveSlotAsync(
         SaveAddress, SaveRequest, CancellationToken);
     Result<RestoreOperationHandle> LoadSlotAsync(

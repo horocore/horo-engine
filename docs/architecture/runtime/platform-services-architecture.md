@@ -1801,6 +1801,10 @@ by Horo UI. Horo only authors the configuration and observes the state.
 
 ## Testing
 
+The [provider package qualification ledger](../../guides/platform-provider-package-qualification.md)
+maps all PLS-002 child outcomes to source and regression evidence, including
+unexecuted platform/vendor matrices and the credential integration dependency.
+
 Required tests cover:
 
 - admission failure creates no request/provider call/callback, while dropping every
