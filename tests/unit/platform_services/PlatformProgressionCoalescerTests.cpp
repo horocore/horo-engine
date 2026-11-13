@@ -194,7 +194,7 @@ TEST_CASE("Progression allocation failure cannot publish a partially initialized
         const Horo::Tests::AllocationProbe::ScopedFailure fail(successfulAllocations);
         const auto result = PlatformProgressionCoalescer::Create();
         REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().code == PlatformProgressionErrors::CapacityExceeded.code);
+        CHECK(result.ErrorValue().code.Value() == PlatformProgressionErrors::CapacityExceeded.code.Value());
     }
 }
 
@@ -269,7 +269,7 @@ TEST_CASE("Progression late reconciliation never rewrites an ADR-130 timeout",
     CHECK(snapshot.Value().state == PlatformRequestState::TimedOut);
     REQUIRE(snapshot.Value().terminal.has_value());
     REQUIRE(snapshot.Value().terminal->ErrorValue() != nullptr);
-    CHECK(snapshot.Value().terminal->ErrorValue()->code == RequestErrors::TimedOut.code);
+    CHECK(snapshot.Value().terminal->ErrorValue()->code.Value() == RequestErrors::TimedOut.code.Value());
     CHECK(owner->Observe(first.mutation) == PlatformProgressionOutcome::Succeeded);
     CHECK(owner->Observe(second.mutation) == PlatformProgressionOutcome::Succeeded);
     CHECK(owner->Admit(first, Highest, 5).Value().disposition == PlatformProgressionAdmissionDisposition::JoinedExisting);

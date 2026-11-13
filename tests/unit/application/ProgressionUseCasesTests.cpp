@@ -179,7 +179,7 @@ TEST_CASE("Progression rejects unknown IDs invalid values and Null before logica
     gate.error = MakeError(BackendErrors::NullProvider);
     const auto rejected = useCases.Submit(Fact(id), 0);
     REQUIRE(rejected.HasError());
-    CHECK(rejected.ErrorValue().code == gate.error->code);
+    CHECK(rejected.ErrorValue().code.Value() == gate.error->code.Value());
     CHECK_FALSE(owner.Value()->TakeReady(1).Value().has_value());
 }
 
@@ -200,7 +200,7 @@ TEST_CASE("Progression authority revocation and session rejection preserve struc
     authority.error = MakeError(PlatformProgressionErrors::Closed);
     const auto revoked = useCases.Submit(fact, 0);
     REQUIRE(revoked.HasError());
-    CHECK(revoked.ErrorValue().code == authority.error->code);
+    CHECK(revoked.ErrorValue().code.Value() == authority.error->code.Value());
     CHECK(gate.calls == 1);
     owner.Value()->Close();
     authority.error.reset();
@@ -280,7 +280,7 @@ TEST_CASE("Progression real Null and scripted frontend profiles preserve availab
         const auto admitted = useCases.Submit(fact, 0);
         if (nullProfile) {
             REQUIRE(admitted.HasError());
-            CHECK(admitted.ErrorValue().code == BackendErrors::NullProvider.code);
+            CHECK(admitted.ErrorValue().code.Value() == BackendErrors::NullProvider.code.Value());
             CHECK(semantics.calls == 0);
             CHECK_FALSE(owner.Value()->TakeReady(1).Value().has_value());
         } else {
@@ -291,13 +291,13 @@ TEST_CASE("Progression real Null and scripted frontend profiles preserve availab
             fact.occurrence.bytes.back() = std::byte{2};
             const auto unsupported = useCases.Submit(fact, 0);
             REQUIRE(unsupported.HasError());
-            CHECK(unsupported.ErrorValue().code == semantics.error->code);
+            CHECK(unsupported.ErrorValue().code.Value() == semantics.error->code.Value());
         }
         CHECK(mock->Calls().empty());
         REQUIRE(frontend.Close().HasValue());
         const auto closed = useCases.Submit(fact, 1);
         REQUIRE(closed.HasError());
-        CHECK(closed.ErrorValue().code == FrontendErrors::Unavailable.code);
+        CHECK(closed.ErrorValue().code.Value() == FrontendErrors::Unavailable.code.Value());
         CHECK(semantics.calls == (nullProfile ? 0u : 2u));
         CHECK(mock->Calls().empty());
     }
@@ -361,7 +361,7 @@ TEST_CASE("Progression durable preparation preserves exact evidence and never fa
     qualifier.failure = MakeError(BackendErrors::UnsupportedOperation);
     const auto unsupported = useCases.PrepareDurableIntent(fact, requirements, qualifier);
     REQUIRE(unsupported.HasError());
-    CHECK(unsupported.ErrorValue().code == qualifier.failure->code);
+    CHECK(unsupported.ErrorValue().code.Value() == qualifier.failure->code.Value());
     CHECK_FALSE(owner.Value()->TakeReady(1).Value().has_value());
     qualifier.failure.reset();
     qualifier.corruptEnvelope = true;
@@ -390,7 +390,7 @@ TEST_CASE("Progression committed occurrence replay cannot allocate another inten
     changed.value = std::int64_t{29};
     const auto conflict = useCases.Submit(changed, 0);
     REQUIRE(conflict.HasError());
-    CHECK(conflict.ErrorValue().code == PlatformProgressionErrors::IdempotencyConflict.code);
+    CHECK(conflict.ErrorValue().code.Value() == PlatformProgressionErrors::IdempotencyConflict.code.Value());
     const auto dispatch = owner.Value()->TakeReady(1).Value();
     REQUIRE(dispatch.has_value());
     CHECK(dispatch->envelope.value == original.value);
@@ -423,17 +423,17 @@ TEST_CASE("Progression selected durable owner and evidence survive failed prepar
     gate.error = MakeError(BackendErrors::UnsupportedOperation);
     const auto unavailable = useCases.PrepareDurableIntent(fact, requirements, qualifier);
     REQUIRE(unavailable.HasError());
-    CHECK(unavailable.ErrorValue().code == BackendErrors::UnsupportedOperation.code);
+    CHECK(unavailable.ErrorValue().code.Value() == BackendErrors::UnsupportedOperation.code.Value());
     CHECK(qualifier.calls == 0);
     gate.error.reset();
     const auto unavailableFallback = useCases.Submit(fact, 0);
     REQUIRE(unavailableFallback.HasError());
-    CHECK(unavailableFallback.ErrorValue().code == PlatformProgressionErrors::IdempotencyConflict.code);
+    CHECK(unavailableFallback.ErrorValue().code.Value() == PlatformProgressionErrors::IdempotencyConflict.code.Value());
     qualifier.failure = MakeError(BackendErrors::UnsupportedOperation);
     REQUIRE(useCases.PrepareDurableIntent(fact, requirements, qualifier).HasError());
     const auto fallback = useCases.Submit(fact, 0);
     REQUIRE(fallback.HasError());
-    CHECK(fallback.ErrorValue().code == PlatformProgressionErrors::IdempotencyConflict.code);
+    CHECK(fallback.ErrorValue().code.Value() == PlatformProgressionErrors::IdempotencyConflict.code.Value());
     qualifier.failure.reset();
     REQUIRE(useCases.PrepareDurableIntent(fact, requirements, qualifier).HasValue());
     auto changed = fact;
@@ -490,7 +490,7 @@ TEST_CASE("Progression fact ledger allocation failure leaves delivery owners unt
     const Horo::Tests::AllocationProbe::ScopedFailure fail;
     const auto created = ProgressionUseCases::Create(definitions, Scope(), {1}, authority, gate, *owner.Value());
     REQUIRE(created.HasError());
-    CHECK(created.ErrorValue().code == PlatformProgressionErrors::CapacityExceeded.code);
+    CHECK(created.ErrorValue().code.Value() == PlatformProgressionErrors::CapacityExceeded.code.Value());
     CHECK(authority.calls == 0);
     CHECK(gate.calls == 0);
     CHECK_FALSE(owner.Value()->TakeReady(1).Value().has_value());
