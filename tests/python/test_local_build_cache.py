@@ -48,6 +48,24 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, P
     return repo, root, commit
 
 
+def test_nonblocking_heavy_build_lock_rejects_contention_and_can_retry(repository):
+    repo, _, _ = repository
+    with cache.heavy_build_lock(repo):
+        with pytest.raises(BlockingIOError):
+            with cache.heavy_build_lock(repo, blocking=False):
+                pytest.fail("A second heavy worker acquired an already owned physical lock")
+    with cache.heavy_build_lock(repo, blocking=False):
+        pass
+
+
+def test_nonblocking_heavy_build_lock_preserves_unverified_cleanup_guard(repository):
+    repo, _, _ = repository
+    cache.record_cleanup_failure(repo)
+    with pytest.raises(cache.CacheError, match="unverified descendants"):
+        with cache.heavy_build_lock(repo, blocking=False):
+            pytest.fail("Unverified cleanup must prevent a new heavy worker")
+
+
 def successful_build(source: Path, build: Path, binding: cache.CacheBinding) -> int:
     build.mkdir(parents=True)
     (build / "artifact.o").touch()

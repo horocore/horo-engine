@@ -1,7 +1,7 @@
 # Prefab production qualification
 
 This ledger tracks HORO-1007 / #1007 / [PFB-008] against stacked base
-`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08` on
+`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc` on
 `feat/HORO-1007_prefab_production_qualification`. Source inspection and newly
 written assertions below are implementation evidence. Execution results must be
 recorded separately before an acceptance criterion is considered qualified.
@@ -94,12 +94,36 @@ release-stage tests alone cannot establish that full distribution matrix.
 ## Local validation record
 
 A persistent goal was created on 11 November 2026 for the complete HORO-1007
-parent and all ten children. It remains active. GitHub and Jira status/identity
+parent and all ten children. Its complete objective remains in scope. GitHub and Jira status/identity
 reads were repeated, and no remote delivery branch or pull request was found.
 The previously idle state came from the main CI heavy-work reservation. An
 independent follow-up found and fixed the overlong deep-failure message path and
 added in-flight cancellation qualification. Those C++ changes are also pending
 native execution and final preflight.
+
+On 13 November the user resumed the complete scope and authorized normal branch
+push and draft PR delivery. Policy V2 replaces the earlier named-grant hold with
+nonblocking admission through the same canonical physical heavy-build lock.
+The current worktree was rebased onto published parent
+`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`. One analysis-worker conflict was
+resolved by preserving the parent's existing `--parallel 1` implementation and
+updating the regression to require one worker even when the environment requests
+two. No sibling checkout was edited.
+
+The local helper now uses `heavy_build_lock(..., blocking=False)`. That additive
+option preserves the default blocking behavior and the unverified-descendant
+cleanup guard. Real OS-lock regression tests prove contention rejects immediately
+and permits retry after release. The foreground batch checks its actual lock
+handle, restricts itself to one allowed logical processor, requires 4 GiB available
+memory and uses the existing owned process-tree runner. Two nonblocking admission
+attempts returned `LOCK_BUSY` before any heavy child was created. No waiter was
+left running.
+
+Current-parent Python validation passed 65 quality-preflight, Prefab CI and
+migration-generator cases. The local-cache suite passed 27 tests with one
+host-permission skip for directory symlink creation. Its real compiler/ccache
+consumer case was deselected because that workload also needs physical heavy-lock
+admission. The two new nonblocking lock regressions passed independently.
 
 Initial worktree was clean and detached at
 `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`. The dedicated branch was created
@@ -117,7 +141,7 @@ started to release the heavy-build queue for main Windows CI.
 `python -m pytest -q --tb=short tests/python/test_prefab_hierarchy_ci.py
 tests/python/test_project_migration_generator.py
 -o cache_dir=build/prefab-qualification/pytest-cache` passed all nine tests.
-Native regression execution is pending the main CI heavy-work release. Newly
+Native regression execution is pending successful nonblocking physical lock admission. Newly
 written C++ assertions are unverified.
 
 The offline quality doctor reported Sonar CLI 1.10.0, Codacy CLI 0.25.0 and VS Code
@@ -134,5 +158,6 @@ The published parent already enforces a single compiler worker during analysis
 context preparation. The rebase preserves that implementation. Mocked compiler
 command cases cover Ninja/Make with absent, single-worker and higher inherited
 environment caps, while requiring the actual build command to remain single
-worker. The earlier preflight suite passed 54 tests before rebase. The adjusted
-suite must be rerun on the published parent before delivery.
+worker. The adjusted regression passed on the published parent as part of the
+65-case Python run. Native Sonar, secrets and Codacy preflight remain pending
+physical admission. Their completion has not been inferred from Python results.
