@@ -48,6 +48,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 
 | Scope | Source commit | Built targets | Executed evidence |
 |---|---|---|---|
+| Shared-control render attempt | `eb355d7d22aed95bcb6072b57b380de430ed04af` | HoroEditorUiComponentsRenderTests, HoroGuiPublicHeaderConsumer; all 233 native build steps passed | **42/43 passed, one failed**, 2.78s. Keyboard test did not open the popup after programmatic focus; `build/acc-controls-eb355d7-red-results.xml`, matching discovery JSON and `build/acc-controls-preview-native.log` retain the failure. This is not a passing qualification. |
 | SDL controller lifecycle | `bd1dd6d3a6480c12276a6178481ce4d6c74a1c06` | HoroInputSdlTests and its Input/SDL dependencies | **18/18 passed, zero skipped**, 1.32s; `build/acc-controller-sdl-bd1dd6d-results.xml`, matching discovery JSON and native log. Includes eight controller gyro cases using real SDL virtual-device APIs. |
 | Input controller core refresh | `74b798cee9f2e878f493386188d343dd65298fab` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **104/104 passed, zero skipped**, 1.59s; `build/acc-controller-core-74b798c-results.xml`, matching discovery JSON and native log. Includes later source spelling, zero-threshold and fixed-tick changes. |
 | Input controller core | `ec59e05e9` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **102/102 passed, zero skipped**, 1.57s; `build/acc-controller-core-ec59e05-results.xml` and corresponding discovery JSON. Later source changes require a fresh run. |
@@ -84,6 +85,17 @@ gamepad reference alone does not guarantee native sensor retirement. Both event
 orders, duplicate removal and a late sensor event passed in the native SDL batch.
 The combined presentation/SDL family is expected to contain 108 cases and still
 needs execution. Virtual-device evidence is not physical controller qualification.
+
+The shared-control attempt compiled the actual GUI library, including current
+Input Mapping modal/device changes, plus its staged public-header consumer.
+Disabled interaction and long localized preview bounds passed. The new keyboard
+test used `SetKeyboardFocusHere`, whose Dear ImGui focus path deliberately retains
+hidden navigation; activation requires ordinary keyboard navigation. The fixture
+now enters through actual Tab input and checks field focus and navigation state
+before Enter. Preview geometry assertions now compare glyphs against the actual
+drawn arrow rather than duplicating a reserved-width constant. The full 43-case
+rerun is pending; these test edits do not establish a passing keyboard result.
+The editor executable and 108-case presentation/SDL batch remain separate checks.
 
 The direct-consumer batch refreshed callers after the public binding layout
 change: Character **16**, Runtime UI input **19**, input debugger **15**, portable
