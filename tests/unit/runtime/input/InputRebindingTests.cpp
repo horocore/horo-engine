@@ -14,13 +14,14 @@ namespace {
         InputContextId gameplayId{"gameplay"};
         InputContextId pauseId{"pause.rebind"};
         InputContextToken gameplay{input.Router().PushContext(gameplayId, InputContextKind::Gameplay)};
-        InputContextToken owner{input.Router().PushContext(pauseId, InputContextKind::ModalRoot)};
+        InputContextToken owner;
         std::optional<InputBindingCapture> capture;
         GamepadDeviceId pad;
         GamepadDeviceId raw;
         FrameNumber frame{1};
 
-        CaptureFixture() {
+        explicit CaptureFixture(const InputContextKind ownerKind = InputContextKind::ModalRoot)
+            : owner(input.Router().PushContext(pauseId, ownerKind)) {
             REQUIRE(input.Router()
                         .SetActionMap({{ActionId{"jump"},
                                         ActionValueType::Digital,
@@ -193,6 +194,20 @@ namespace {
         REQUIRE(result.status == BindingCaptureStatus::Cancelled);
         REQUIRE_FALSE(result.binding);
         REQUIRE(fixture.capture->Poll(fixture.input.Router(), fixture.owner).status == BindingCaptureStatus::Cancelled);
+    }
+
+    TEST_CASE("A newer focused widget preempts binding capture without losing its own context", "[input][rebinding]") {
+        CaptureFixture fixture{InputContextKind::FocusedGuiWidget};
+        auto peer = fixture.input.Router().PushContext(InputContextId{"other.widget"}, InputContextKind::FocusedGuiWidget);
+        fixture.Begin().SetKey(Key::J, true);
+        REQUIRE(fixture.Poll().status == BindingCaptureStatus::Cancelled);
+        fixture.owner.Reset();
+        fixture.Begin();
+        (void)fixture.input.CommitFrame();
+        fixture.Begin();
+        (void)fixture.input.CommitFrame();
+        CHECK(fixture.input.Router().IsContextActive(peer));
+        CHECK_FALSE(fixture.input.Router().IsContextActive(fixture.gameplay));
     }
 
     TEST_CASE("Moved and off-thread rebinding captures cannot mutate router ownership", "[input][rebinding]") {
