@@ -1,7 +1,7 @@
 # Cinematic camera qualification
 
 Evidence scope is the CIN-003 delivery branch based on
-`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`, verified against the published
+`139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`, verified against the published
 `codex/editor-improvements` remote on 2026-11-13. The delivery commits rebased
 without conflicts. The complete tracker audit ran on 2026-11-11; the open
 implementation tickets and delivery identity were rechecked on 2026-11-13.
