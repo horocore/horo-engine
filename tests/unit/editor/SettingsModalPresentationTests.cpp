@@ -1,4 +1,5 @@
 #include "Horo/Editor/EditorConfiguration.h"
+#include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/SettingsModal.h"
@@ -9,6 +10,7 @@
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>
@@ -16,8 +18,10 @@
 
 namespace {
     struct SettingsPresentationFixture {
-        explicit SettingsPresentationFixture(const ImVec2 displaySize = {1280.0F, 800.0F})
-            : gui{displaySize}, settings{Horo::Editor::DefaultEditorSettings(), configuration, gui.editorEvents, gui.localization},
+        explicit SettingsPresentationFixture(const ImVec2 displaySize = {1280.0F, 800.0F}, Horo::ConfigurationSchema schema = {})
+            : gui{displaySize}, configuration{Horo::Editor::CreateEditorConfigurationService(Horo::Editor::DefaultEditorSettings(), nullptr,
+                                                                                             std::move(schema))},
+              settings{Horo::Editor::DefaultEditorSettings(), configuration, gui.editorEvents, gui.localization},
               modal{gui.context, settings, 0} {
             if (const auto refreshed = extensions.Refresh(); refreshed.HasError())
                 throw std::runtime_error(refreshed.ErrorValue().message);
@@ -153,6 +157,133 @@ TEST_CASE("Settings presentation consumes a deferred theme selection before rend
     fixture.gui.imgui.EndFrame();
 
     REQUIRE(fixture.modal.Draft().appearance.pendingThemeIndex == -1);
+}
+
+TEST_CASE("Cancelling a shared theme preview restores both committed theme layers", "[unit][editor][gui][configuration][cancel]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    const bool externalChange = GENERATE(false, true);
+    SettingsPresentationFixture fixture;
+    EditorModalHost host{fixture.gui.editorEvents, fixture.gui.input};
+    EditorModalContext lifecycle{fixture.gui.editorEvents, host};
+    REQUIRE(fixture.modal.OnOpen(lifecycle).HasValue());
+    Theme::RefreshThemeList();
+    const int expectedTheme = externalChange ? 1 : 0;
+    Theme::SelectThemeByIndex(expectedTheme);
+    const auto expectedNative = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+    const auto expectedTokens = Theme::GetActiveTokens().colors.surfaceRoot;
+    Theme::SelectThemeByIndex(0);
+
+    struct RestoreTheme {
+        ~RestoreTheme() {
+            Theme::SelectThemeByIndex(0);
+        }
+    } restoreTheme;
+
+    const SettingKey key{"editor.theme.active"};
+    auto &state = fixture.modal.Draft();
+    REQUIRE(state.configuration->Edit(key, "light").HasValue());
+    state.appearance.pendingThemeIndex = 2;
+    state.configurationPreviewed = true;
+    fixture.gui.imgui.BeginFrame();
+    static_cast<void>(fixture.modal.Draw());
+    fixture.gui.imgui.EndFrame();
+    REQUIRE(Theme::GetActiveThemeIndex() == 2);
+    CHECK(fixture.configuration.Snapshot().Revision() == 0);
+    CHECK(Theme::GetActiveTokens().colors.surfaceRoot.x != expectedTokens.x);
+    if (externalChange) {
+        ConfigurationDraft external{.baseRevision = 0, .source = ConfigurationSource::User};
+        external.proposedValues.emplace(key, std::string{"midnight"});
+        REQUIRE(fixture.configuration.Commit(external).HasValue());
+    }
+    const auto committedRevision = fixture.configuration.Snapshot().Revision();
+    int reverted = 0;
+    const auto subscription = fixture.gui.editorEvents.Subscribe<EditorSettingsChangedEvent>([&](const auto &event) {
+        if (event.phase != SettingsChangePhase::Reverted)
+            return;
+        ++reverted;
+        CHECK(Theme::GetActiveThemeIndex() == expectedTheme);
+        CHECK(ImGui::GetStyle().Colors[ImGuiCol_WindowBg].x == expectedNative.x);
+        CHECK(Theme::GetActiveTokens().colors.surfaceRoot.x == expectedTokens.x);
+        CHECK_FALSE(state.configurationPreviewed);
+        fixture.modal.OnClose(ModalCloseReason::Cancelled);
+    });
+    fixture.modal.OnClose(ModalCloseReason::Cancelled);
+    CHECK(reverted == 1);
+    CHECK(Theme::GetActiveThemeIndex() == expectedTheme);
+    const auto native = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+    const auto tokens = Theme::GetActiveTokens().colors.surfaceRoot;
+    CHECK(native.x == expectedNative.x);
+    CHECK(native.y == expectedNative.y);
+    CHECK(native.z == expectedNative.z);
+    CHECK(native.w == expectedNative.w);
+    CHECK(tokens.x == expectedTokens.x);
+    CHECK(tokens.y == expectedTokens.y);
+    CHECK(tokens.z == expectedTokens.z);
+    CHECK(tokens.w == expectedTokens.w);
+    CHECK_FALSE(state.configurationPreviewed);
+    CHECK_FALSE(state.configuration->Preview());
+    CHECK(state.configuration->Draft().proposedValues.empty());
+    CHECK(fixture.configuration.Snapshot().Revision() == committedRevision);
+    CHECK(std::get<std::string>(fixture.configuration.Snapshot().Get(key)) == (externalChange ? "midnight" : "horo_dark"));
+}
+
+TEST_CASE("Shared configuration fields render long provenance and typed errors across localized theme layouts",
+          "[unit][editor][gui][configuration]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    const bool light = GENERATE(false, true);
+    const float width = GENERATE(720.0F, 1280.0F);
+    const auto locale = GENERATE(std::string{"en-US"}, std::string{"tr-TR"});
+    ConfigurationSchema schema;
+    const SettingKey longKey{"module." + std::string(180, 'x')};
+    REQUIRE(schema
+                .Register({.key = longKey,
+                           .type = SettingValueType::String,
+                           .defaultValue = std::string(180, 'y'),
+                           .scope = SettingScope::User,
+                           .reloadPolicy = ReloadPolicy::ProcessRestart,
+                           .sensitivity = SettingSensitivity::Public})
+                .HasValue());
+    REQUIRE(schema
+                .Register({.key = SettingKey{"module.token"},
+                           .type = SettingValueType::CredentialReference,
+                           .defaultValue = CredentialReference{},
+                           .scope = SettingScope::User,
+                           .reloadPolicy = ReloadPolicy::NextOperation,
+                           .sensitivity = SettingSensitivity::SecretReference})
+                .HasValue());
+    SettingsPresentationFixture fixture{{width, 640.0F}, std::move(schema)};
+    LocalizationError error;
+    const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
+    REQUIRE(fixture.gui.localization.LoadCatalogFile(catalog, &error));
+    REQUIRE(fixture.gui.localization.Prepare(LocaleTag{locale}, &error));
+    REQUIRE(fixture.gui.localization.ActivatePrepared(&error));
+    Theme::RefreshThemeList();
+
+    struct RestoreTheme {
+        ~RestoreTheme() {
+            Theme::SelectThemeByIndex(0);
+        }
+    } restoreTheme;
+
+    Theme::SelectThemeByIndex(light ? 2 : 0);
+    ConfigurationResolutionRequest request;
+    request.user.emplace(longKey,
+                         ConfigurationInputValue{.value = std::string(180, 'y'), .location = SourceLocation{.source = "editor-user"}});
+    request.environment.emplace(longKey, ConfigurationInputValue{.value = std::string{"environment choice"},
+                                                                 .location = SourceLocation{
+                                                                     .source = "HORO_LONG_CONFIGURATION_BINDING_WITH_LOCALIZED_ORIGIN"}});
+    REQUIRE(fixture.configuration.ResolveAndCommit(request).HasValue());
+    LoadSettingsForModal(fixture.modal.Draft(), fixture.settings);
+    REQUIRE(fixture.modal.Draft().configuration->Edit(SettingKey{"editor.appearance.ui_scale_percent"}, "invalid-number").HasError());
+    fixture.modal.Draft().activeTab = static_cast<int>(SettingsModalInternal::SettingsTab::Configuration);
+    fixture.gui.imgui.BeginFrame();
+    static_cast<void>(fixture.modal.Draw());
+    fixture.gui.imgui.EndFrame();
+    REQUIRE(ImGui::GetDrawData() != nullptr);
+    CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
+    CHECK(std::get<std::int64_t>(fixture.configuration.Snapshot().Get(SettingKey{"editor.appearance.ui_scale_percent"})) == 100);
 }
 
 TEST_CASE("Settings presentation renders extension and plugin detail surfaces", "[unit][editor][gui][settings]") {

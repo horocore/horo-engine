@@ -31,6 +31,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/BuildOutputStore.h
     Horo/Foundation/CancellationToken.h
     Horo/Foundation/Configuration.h
+    Horo/Foundation/CredentialReference.h
     Horo/Foundation/DataBus.h
     Horo/Foundation/EditorEventTypes.h
     Horo/Foundation/Diagnostics.h

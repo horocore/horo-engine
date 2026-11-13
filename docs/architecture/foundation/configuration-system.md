@@ -202,6 +202,9 @@ Resolver inputs are bounded before publication. The default limits admit at most
 1,024 keys per source, 256 bytes per key, 64 KiB per string value, 1,024 bytes of
 safe source-location text, a 4 MiB document and 256 environment bindings. Hosts
 may lower these limits but may not bypass them with an alternate resolver.
+JSON nesting is checked before DOM construction and capped at 16 container
+levels. Hosts may lower `maximumNestingDepth`. Brackets inside escaped strings
+do not contribute to container depth.
 
 ## Environment Variables
 
@@ -416,6 +419,25 @@ Theme settings follow the component and token rules in
 Configuration may contain a credential reference such as a keychain entry ID or
 CI secret name. It must not contain the credential value.
 
+The current typed reference is `Horo::CredentialReference`, also exposed through
+the existing `Horo::Security::CredentialReference` alias. Its canonical identity
+is `cred:v1:` followed by 48 lowercase hexadecimal digits. A
+`SettingValueType::CredentialReference` descriptor requires
+`SettingSensitivity::SecretReference`. An unset default represents an absent
+credential. External typed maps carry the reference itself, JSON carries an
+explicit `{"credentialReference":"cred:v1:..."}` object, and explicit environment
+bindings validate the same canonical identity. Ordinary strings cannot populate
+reference settings. Reference parsing never queries providers.
+
+The consuming operation supplies a `Security::CredentialProvider` to
+`Horo::Security::ResolveConfigurationCredential`. That provider retains credential
+existence, expiry and revocation authority; `CredentialVault` is one implementation.
+The raw storage backend does not substitute for this lifecycle boundary. Resolution returns an owning,
+move-only `SecureBytes`, which the operation releases when it finishes. Provider
+failure text is replaced with safe typed security errors. An unknown identity,
+unset reference or unavailable provider fails closed. Snapshots and persisted
+documents retain only opaque identities, and events retain only keys/revisions.
+
 Secret resolution:
 
 - occurs only inside the operation that needs the secret
@@ -454,6 +476,20 @@ host composition migrates by reading with `ConfigurationFileStore`, parsing with
 `ConfigurationResolver::ParseDocument()`, and resolving the returned source map.
 
 ## Threading
+
+`ConfigurationService::Prepare` reserves the writer gate while a host persists a
+validated candidate. The move-only prepared transaction belongs to its creating
+thread and must be committed or destroyed before that thread attempts another
+write. The service outlives every transaction. Snapshot reads continue through
+the separate registry lock; reload activation defers when a prepared writer owns
+the gate. Writer and registry locks are released before notifications run.
+
+Snapshots retain all admitted source candidates using owning immutable views.
+Copies of resolved provenance keep those inputs alive independently of the
+service. A shadowed-source change advances the revision; an unchanged complete
+resolution does not. Hosts persist the authored source with `SourceToJson`,
+because persisting effective values would accidentally retain invocation and
+environment overrides.
 
 Configuration resolution and file watching may occur on workers. Snapshot
 activation occurs on the owning synchronization point. Callbacks never execute

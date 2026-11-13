@@ -7,6 +7,7 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "support/OwnedTestDirectory.h"
+#include "support/editor/ScopedTestHome.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -29,6 +30,57 @@ namespace {
 #else
         setenv("HOME", home.string().c_str(), 1);
 #endif
+    }
+
+    TEST_CASE("Editor settings migration reads bounded typed JSON and preserves Unicode escapes",
+              "[unit][editor][configuration][migration]") {
+        using namespace Horo::Editor;
+        const Horo::TestSupport::ScopedTestHome home{"configuration-editor-parser"};
+        const auto path = ResolveEditorSettingsPath();
+        std::filesystem::create_directories(path.parent_path());
+        const auto load = [&](const std::string &text) {
+            {
+                std::ofstream stream{path, std::ios::binary};
+                stream << text;
+            }
+            return LoadEditorSettingsDocument();
+        };
+        const auto unicode = load(R"({"appearance":{"codeFontFamily":"\u0130stanbul"}})");
+        REQUIRE_FALSE(unicode.parseError);
+        CHECK(unicode.settings.codeFontFamily == "İstanbul");
+        const auto owned = load(R"({"unrelated":{"uiScalePercent":175},"appearance":{"uiScalePercent":125}})");
+        REQUIRE_FALSE(owned.parseError);
+        CHECK(owned.settings.uiScalePercent == 125);
+        for (const std::string &text :
+             {std::string{R"({"appearance":{"codeFontFamily":")"} + std::string(64 * 1024 + 1, 'x') + "\"}}",
+              std::string{R"({"appearance":{"uiScalePercent":125.5}})"}, std::string{R"({"rendering":{"gridOverlay":"false"}})"},
+              std::string{R"({"appearance":{"codeFontFamily":"safe\u0000secret"}})"},
+              std::string{R"({"uiScalePercent":150,"appearance":{"uiScalePercent":125}})"},
+              std::string(10000, '[') + std::string(10000, ']'), std::string{"{} trailing"}}) {
+            const auto rejected = load(text);
+            REQUIRE(rejected.parseError);
+            CHECK_FALSE(rejected.error.empty());
+            CHECK(rejected.error.find("secret") == std::string::npos);
+        }
+        EditorSettingsDocument valid{.settings = DefaultEditorSettings()};
+        valid.settings.defaultSceneOnProjectOpen = "Assets/Scenes/quoted\"\\\b\f\x01";
+        REQUIRE(SaveEditorSettingsDocument(&valid));
+        const auto roundTrip = LoadEditorSettingsDocument();
+        REQUIRE_FALSE(roundTrip.parseError);
+        CHECK(roundTrip.settings.defaultSceneOnProjectOpen == valid.settings.defaultSceneOnProjectOpen);
+        const auto saved = [&] {
+            std::ifstream stream{path, std::ios::binary};
+            return std::string{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+        };
+        const auto before = saved();
+        valid.settings.codeFontFamily = std::string(1, char(0xff));
+        CHECK_FALSE(SaveEditorSettingsDocument(&valid));
+        CHECK(saved() == before);
+        valid.configurationJson = R"({"schemaVersion":1,"values":{"release.token":"raw-secret"}})";
+        std::string error;
+        CHECK_FALSE(SaveEditorSettingsDocument(&valid, &error));
+        CHECK_FALSE(error.empty());
+        CHECK(saved() == before);
     }
 
     TEST_CASE("Editor appearance settings use the composed module schema", "[unit][editor][configuration]") {
@@ -577,4 +629,23 @@ TEST_CASE("Code preferences share typed descriptors across persistence and valid
     invalid.codeEditor.autoSaveDelaySeconds = -1;
     REQUIRE_FALSE(ValidateEditorSettings(invalid));
     CHECK(invalid.codeEditor.autoSaveDelaySeconds == 0);
+}
+
+TEST_CASE("Shared Editor Descriptor Labels Resolve In Both Locales", "[editor][settings][configuration][localization]") {
+    using namespace Horo::Editor;
+    const auto contribution = MakeEditorSettingsContribution(DefaultEditorSettings());
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        LocalizationService localization{LocaleTag{locale}};
+        REQUIRE(localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                             (std::string{locale} + ".json")));
+        REQUIRE(localization.Prepare(LocaleTag{locale}));
+        REQUIRE(localization.ActivatePrepared());
+        for (const auto &descriptor : contribution.settings) {
+            INFO(descriptor.key.Value());
+            REQUIRE(descriptor.label);
+            const auto &label = localization.Get(descriptor.label->namespaceId, descriptor.label->key);
+            CHECK_FALSE(label.empty());
+            CHECK_FALSE(label.starts_with("[missing:"));
+        }
+    }
 }

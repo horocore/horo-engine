@@ -2,9 +2,11 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Platform.h"
 
+#include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <locale>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -73,11 +75,13 @@ namespace {
         }
 
         [[nodiscard]] std::optional<std::string> EnvironmentValue(const std::string_view name) const override {
+            ++lookups;
             const auto found = values.find(std::string{name});
             return found == values.end() ? std::nullopt : std::optional<std::string>{found->second};
         }
 
         std::unordered_map<std::string, std::string> values;
+        mutable int lookups = 0;
     };
 
     TEST_CASE("Schema Rejects Duplicate And Invalid Descriptors", "[unit][foundation][configuration]") {
@@ -197,12 +201,35 @@ namespace {
         REQUIRE(ConfigurationResolver::CaptureEnvironment(schema, invalid, processes).HasError());
     }
 
+    TEST_CASE("Environment Capture Rejects Missing Aliases And Forbidden Sources Before Reading", "[unit][foundation][configuration]") {
+        const auto schema = BuildSchema();
+        FixedProcessService process;
+        const SettingKey key{"runtime.worker_count"};
+        const std::array aliases{EnvironmentVariableBinding{.key = key, .variable = "HORO_A"},
+                                 EnvironmentVariableBinding{.key = key, .variable = "HORO_B"}};
+        REQUIRE(ConfigurationResolver::CaptureEnvironment(schema, aliases, process).HasError());
+        CHECK(process.lookups == 1);
+        process.lookups = 0;
+        auto descriptor = kThemeDescriptor;
+        descriptor.sourcePolicy = ConfigurationSourcePolicy{.allowedSources = ConfigurationSourceMask::User};
+        ConfigurationSchema forbidden;
+        REQUIRE(forbidden.Register(descriptor).HasValue());
+        REQUIRE(forbidden.Seal().HasValue());
+        const std::array binding{EnvironmentVariableBinding{.key = descriptor.key, .variable = "HORO_THEME"}};
+        REQUIRE(ConfigurationResolver::CaptureEnvironment(forbidden, binding, process).HasError());
+        CHECK(process.lookups == 0);
+        process.values["HORO_A"] = std::string(64 * 1024 + 1, 'x');
+        auto oversized = ConfigurationResolver::CaptureEnvironment(schema, std::span{aliases}.first(1), process);
+        REQUIRE(oversized.HasError());
+        CHECK(oversized.ErrorValue().diagnostics.front().code.Value() == "configuration.input_limit_exceeded");
+    }
+
     TEST_CASE("Secret Markers Reject External Values And Never Serialize Defaults", "[unit][foundation][configuration]") {
         ConfigurationSchema schema;
         REQUIRE(schema
                     .Register({.key = SettingKey{"release.signing.reference"},
-                               .type = SettingValueType::String,
-                               .defaultValue = std::string{"provider-reference"},
+                               .type = SettingValueType::CredentialReference,
+                               .defaultValue = CredentialReference{},
                                .scope = SettingScope::User,
                                .reloadPolicy = ReloadPolicy::NextOperation,
                                .sensitivity = SettingSensitivity::SecretReference})
@@ -218,6 +245,265 @@ namespace {
         REQUIRE(rejected.HasError());
         REQUIRE(rejected.ErrorValue().diagnostics.front().code.Value() == "configuration.secret_value_forbidden");
         REQUIRE(rejected.ErrorValue().diagnostics.front().message.find("raw-secret") == std::string::npos);
+    }
+
+    TEST_CASE("Credential References Round Trip Without Admitting Plain Strings", "[unit][foundation][configuration]") {
+        const std::string opaque = "cred:v1:" + std::string(48, 'a');
+        auto reference = CredentialReference::Parse(opaque);
+        REQUIRE(reference.HasValue());
+        for (const std::string &invalid : {std::string{}, std::string{"raw-password"}, opaque + "a", "cred:v1:" + std::string(48, 'A'),
+                                           "cred:v1:" + std::string(48, 'g'), "cred:v2:" + std::string(48, 'a')}) {
+            const auto rejected = CredentialReference::Parse(invalid);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().message.find("raw-password") == std::string::npos);
+        }
+        const SettingKey key{"release.signing.reference"};
+        SettingDescriptor descriptor{.key = key,
+                                     .type = SettingValueType::CredentialReference,
+                                     .defaultValue = CredentialReference{},
+                                     .scope = SettingScope::User,
+                                     .reloadPolicy = ReloadPolicy::NextOperation,
+                                     .sensitivity = SettingSensitivity::SecretReference};
+        ConfigurationSchema schema;
+        auto malformed = descriptor;
+        malformed.sensitivity = SettingSensitivity::Public;
+        REQUIRE(schema.Register(malformed).HasError());
+        malformed = descriptor;
+        malformed.type = SettingValueType::String;
+        malformed.defaultValue = std::string{"raw-password"};
+        REQUIRE(schema.Register(malformed).HasError());
+        REQUIRE(schema.Register(descriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationResolutionRequest request;
+        request.user.try_emplace(key, Input(reference.Value(), "user.json"));
+        auto snapshot = ConfigurationResolver::Resolve(schema, request);
+        REQUIRE(snapshot.HasValue());
+        const std::string document = snapshot.Value().ToJson();
+        REQUIRE(document.find(opaque) != std::string::npos);
+        auto parsed = ConfigurationResolver::ParseDocument(schema, document, "user.json");
+        REQUIRE(parsed.HasValue());
+        CHECK(std::get<CredentialReference>(parsed.Value().at(key).value) == reference.Value());
+        FixedProcessService processes;
+        processes.values["HORO_SIGNING_REFERENCE"] = opaque;
+        const std::array bindings{EnvironmentVariableBinding{.key = key, .variable = "HORO_SIGNING_REFERENCE"}};
+        REQUIRE(ConfigurationResolver::CaptureEnvironment(schema, bindings, processes).HasValue());
+        processes.values["HORO_SIGNING_REFERENCE"] = "raw-password";
+        auto invalidEnvironment = ConfigurationResolver::CaptureEnvironment(schema, bindings, processes);
+        REQUIRE(invalidEnvironment.HasError());
+        CHECK(invalidEnvironment.ErrorValue().diagnostics.front().message.find("raw-password") == std::string::npos);
+        request.user.at(key).value = opaque;
+        REQUIRE(ConfigurationResolver::Resolve(schema, request).HasError());
+        ConfigurationService service{schema};
+        ConfigurationDraft draft{.baseRevision = 0};
+        draft.proposedValues.emplace(key, reference.Value());
+        REQUIRE(service.Commit(draft).HasError());
+    }
+
+    TEST_CASE("Draft Previews Retain Precedence And Reject External Revision Conflicts", "[unit][foundation][configuration]") {
+        ConfigurationService service{BuildSchema()};
+        ConfigurationResolutionRequest inputs;
+        const SettingKey key{"runtime.worker_count"};
+        inputs.invocation.emplace(key, Input(std::int64_t{9}, "invocation"));
+        inputs.user.emplace(key, Input(std::int64_t{2}, "user.json"));
+        REQUIRE(service.ResolveAndCommit(inputs).HasValue());
+        const auto before = service.Snapshot();
+        ConfigurationDraft draft{.baseRevision = before.Revision(), .source = ConfigurationSource::User};
+        draft.proposedValues.emplace(key, std::int64_t{3});
+        {
+            auto preview = service.Preview(draft);
+            REQUIRE(preview.HasValue());
+            CHECK(std::get<std::int64_t>(preview.Value().Get(key)) == 9);
+            const auto *resolved = preview.Value().FindResolved(key);
+            REQUIRE(resolved->candidates.size() == 3);
+            CHECK(std::get<std::int64_t>(resolved->candidates[1].Value()) == 3);
+        }
+        CHECK(service.Snapshot().Revision() == before.Revision());
+        CHECK(std::get<std::int64_t>(service.Snapshot().FindResolved(key)->candidates[1].Value()) == 2);
+        inputs.user.at(key).value = std::int64_t{7};
+        REQUIRE(service.ResolveAndCommit(inputs).HasValue());
+        auto stale = service.Commit(draft);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == "configuration.draft_stale");
+        CHECK(std::get<std::int64_t>(service.Snapshot().FindResolved(key)->candidates[1].Value()) == 7);
+        draft.baseRevision = service.Snapshot().Revision();
+        REQUIRE(service.Commit(draft).HasValue());
+        CHECK(std::get<std::int64_t>(service.Snapshot().Get(key)) == 9);
+        CHECK(std::get<std::int64_t>(service.Snapshot().FindResolved(key)->candidates[1].Value()) == 3);
+    }
+
+    TEST_CASE("Copied Configuration Provenance Owns Its Captured Inputs", "[unit][foundation][configuration]") {
+        const SettingKey key{"runtime.worker_count"};
+        std::optional<ResolvedSetting> retained;
+        {
+            ConfigurationService service{BuildSchema()};
+            ConfigurationResolutionRequest inputs;
+            inputs.user.emplace(key, Input(std::int64_t{5}, "user.json"));
+            REQUIRE(service.ResolveAndCommit(inputs).HasValue());
+            retained = *service.Snapshot().FindResolved(key);
+        }
+        REQUIRE(retained->candidates.size() == 2);
+        CHECK(retained->candidates.front().Source() == ConfigurationSource::User);
+        CHECK(std::get<std::int64_t>(retained->candidates.front().Value()) == 5);
+        REQUIRE(retained->candidates.front().Location());
+        CHECK(retained->candidates.front().Location()->source == "user.json");
+        CHECK(retained->candidates.back().Source() == ConfigurationSource::SchemaDefault);
+        CHECK(std::get<std::int64_t>(retained->candidates.back().Value()) == 1);
+    }
+
+    TEST_CASE("Read Only And Invocation Only Descriptors Reject Ordinary Drafts", "[unit][foundation][configuration]") {
+        ConfigurationSchema schema;
+        auto descriptor = kThemeDescriptor;
+        descriptor.readOnly = true;
+        REQUIRE(schema.Register(descriptor).HasValue());
+        auto invocationOnly = ResolutionDescriptor();
+        invocationOnly.sourcePolicy->allowedSources = ConfigurationSourceMask::Invocation;
+        REQUIRE(schema.Register(invocationOnly).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{schema};
+        ConfigurationDraft draft{.baseRevision = 0};
+        draft.proposedValues.emplace(descriptor.key, std::string{"light"});
+        REQUIRE(service.Preview(draft).HasError());
+        REQUIRE(service.Commit(draft).HasError());
+        draft.proposedValues.clear();
+        draft.proposedValues.emplace(invocationOnly.key, std::int64_t{2});
+        REQUIRE(service.Commit(draft).HasError());
+        CHECK(service.Snapshot().Revision() == 0);
+    }
+
+    TEST_CASE("Prepared Configuration Writes Cancel Cleanly And Notify Outside Writer Locks", "[unit][foundation][configuration]") {
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationService service{BuildSchema(), &events};
+        const SettingKey key{"runtime.worker_count"};
+        int notifications = 0;
+        const auto subscription = events.Subscribe<ConfigurationChangedEvent>([&](const ConfigurationChangedEvent &event) {
+            ++notifications;
+            CHECK(service.Snapshot().Revision() == event.revision);
+            if (event.revision == 1) {
+                ConfigurationDraft followup{.baseRevision = 1};
+                followup.proposedValues.emplace(key, std::int64_t{4});
+                REQUIRE(service.Commit(followup).HasValue());
+            }
+        });
+        ConfigurationDraft draft{.baseRevision = 0};
+        draft.proposedValues.emplace(key, std::int64_t{3});
+        {
+            auto prepared = service.Prepare(draft);
+            REQUIRE(prepared.HasValue());
+            auto transaction = std::move(prepared).Value();
+            CHECK(std::get<std::int64_t>(transaction.Candidate().Get(key)) == 3);
+            CHECK(service.Snapshot().Revision() == 0);
+        }
+        CHECK(service.Snapshot().Revision() == 0);
+        CHECK(notifications == 0);
+        REQUIRE(service.Commit(draft).HasValue());
+        CHECK(notifications == 2);
+        CHECK(service.Snapshot().Revision() == 2);
+        CHECK(std::get<std::int64_t>(service.Snapshot().Get(key)) == 4);
+        draft.baseRevision = 2;
+        draft.proposedValues.at(key) = std::int64_t{4};
+        REQUIRE(service.Commit(draft).HasValue());
+        CHECK(service.Snapshot().Revision() == 2);
+        CHECK(notifications == 2);
+    }
+
+    TEST_CASE("Descriptor Rules Reject Invalid Shadowed Values And Malformed Metadata", "[unit][foundation][configuration]") {
+        auto descriptor = ResolutionDescriptor();
+        descriptor.validation = SettingIntegerRange{1, 4};
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(descriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationResolutionRequest inputs;
+        inputs.invocation.emplace(descriptor.key, Input(std::int64_t{3}, "invocation"));
+        inputs.user.emplace(descriptor.key, Input(std::int64_t{5}, "user.json"));
+        auto invalid = ConfigurationResolver::Resolve(schema, inputs);
+        REQUIRE(invalid.HasError());
+        CHECK(invalid.ErrorValue().diagnostics.front().code.Value() == "configuration.value_invalid");
+        for (const auto mutate : {0, 1, 2, 3}) {
+            ConfigurationSchema malformed;
+            auto bad = descriptor;
+            if (mutate == 0)
+                bad.scope = static_cast<SettingScope>(255);
+            if (mutate == 1)
+                bad.reloadPolicy = static_cast<ReloadPolicy>(255);
+            if (mutate == 2)
+                bad.sensitivity = static_cast<SettingSensitivity>(255);
+            if (mutate == 3)
+                bad.sourcePolicy->allowedSources = static_cast<ConfigurationSourceMask>(0x8000);
+            REQUIRE(malformed.Register(bad).HasError());
+        }
+    }
+
+    TEST_CASE("Hostile Documents Reject Nesting Encoding And Trailing Data Safely", "[unit][foundation][configuration]") {
+        const auto schema = BuildSchema();
+        const std::string valid = R"({"schemaVersion":1,"values":{"runtime.worker_count":2}})";
+        for (const std::string &document :
+             {std::string(50000, '[') + std::string(50000, ']'), valid + "false", valid + std::string(1, '\0'),
+              std::string{R"({"schemaVersion":1,"values":{"unknown":")"} + char(0xff) + "\"}}",
+              std::string{R"({"schemaVersion":1,"values":{"unknown":"\uD800"}})"},
+              std::string{R"({"schemaVersion":1,"values":{"unknown":"safe","unknown":"secret"}})"}}) {
+            auto rejected = ConfigurationResolver::ParseDocument(schema, document, "hostile.json");
+            REQUIRE(rejected.HasError());
+            CHECK_FALSE(rejected.ErrorValue().diagnostics.empty());
+            CHECK(rejected.ErrorValue().message.find("secret") == std::string::npos);
+        }
+        ConfigurationLimits shallow;
+        shallow.maximumNestingDepth = 1;
+        REQUIRE(ConfigurationResolver::ParseDocument(schema, valid, "user.json", shallow).HasError());
+        shallow.maximumNestingDepth = 3;
+        REQUIRE(ConfigurationResolver::ParseDocument(schema, valid, "user.json", shallow).HasValue());
+        shallow.maximumNestingDepth = 50000;
+        REQUIRE(ConfigurationResolver::ParseDocument(schema, std::string(50000, '['), "user.json", shallow).HasError());
+        shallow.maximumNestingDepth = 3;
+        const std::string bracesInString = R"({"schemaVersion":1,"values":{"unknown":"[[[\\\"{{{"}})";
+        REQUIRE(ConfigurationResolver::ParseDocument(schema, bracesInString, "user.json", shallow).HasValue());
+    }
+
+    TEST_CASE("Invalid UTF8 Cannot Enter Snapshots Through Typed Or Environment Sources", "[unit][foundation][configuration]") {
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationResolutionRequest inputs;
+        inputs.user.emplace(kThemeDescriptor.key, Input(std::string(1, char(0xff)), "user.json"));
+        REQUIRE(ConfigurationResolver::Resolve(schema, inputs).HasError());
+        FixedProcessService process;
+        process.values["HORO_THEME"] = std::string(1, char(0xff));
+        const std::array bindings{EnvironmentVariableBinding{.key = kThemeDescriptor.key, .variable = "HORO_THEME"}};
+        REQUIRE(ConfigurationResolver::CaptureEnvironment(schema, bindings, process).HasError());
+        ConfigurationSchema invalidSchema;
+        auto invalid = kThemeDescriptor;
+        invalid.defaultValue = std::string(1, char(0xff));
+        REQUIRE(invalidSchema.Register(invalid).HasError());
+    }
+
+    TEST_CASE("Configuration Serialization Is Independent Of The Host Numeric Locale", "[unit][foundation][configuration]") {
+        class Grouping final : public std::numpunct<char> {
+            char do_thousands_sep() const override {
+                return ',';
+            }
+
+            std::string do_grouping() const override {
+                return "\3";
+            }
+        };
+
+        struct RestoreLocale {
+            std::locale previous = std::locale();
+
+            ~RestoreLocale() {
+                std::locale::global(previous);
+            }
+        } restore;
+
+        const auto schema = BuildSchema();
+        ConfigurationResolutionRequest request;
+        request.invocation.emplace(SettingKey{"runtime.worker_count"}, Input(std::int64_t{1234}, "invocation"));
+        auto snapshot = ConfigurationResolver::Resolve(schema, request);
+        REQUIRE(snapshot.HasValue());
+        const auto expected = snapshot.Value().ToJson();
+        std::locale::global(std::locale(std::locale::classic(), new Grouping));
+        const auto groupedHost = snapshot.Value().ToJson();
+        CHECK(groupedHost == expected);
+        REQUIRE(ConfigurationResolver::ParseDocument(schema, groupedHost, "user.json").HasValue());
     }
 
     TEST_CASE("Versioned Documents Are Strict Bounded And Deterministic", "[unit][foundation][configuration]") {

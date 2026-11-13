@@ -171,6 +171,7 @@
 #include <string_view>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -943,22 +944,19 @@ namespace Horo::Editor {
             return true;
         }
 
-        void ApplySavedThemePreference() {
-            const char *overridePath = std::getenv("HORO_THEME_OVERRIDE");
+        void ApplySavedThemePreference(const ConfigurationSnapshot &configuration, const EditorSettings &settings) {
+            const auto &overridePath = std::get<std::string>(configuration.Get(SettingKey{"editor.theme.override_path"}));
             const int active = Theme::GetActiveThemeIndex();
-            if (overridePath && active >= 0 && static_cast<std::size_t>(active) < Theme::GetThemeList().size() &&
+            if (!overridePath.empty() && active >= 0 && static_cast<std::size_t>(active) < Theme::GetThemeList().size() &&
                 Theme::GetThemeList()[static_cast<std::size_t>(active)].sourcePath == overridePath)
                 return;
-            auto doc = LoadEditorSettingsDocument();
-            if (doc.loadedFromDisk && !doc.parseError) {
-                const auto savedIndex = static_cast<int>(doc.settings.themePreset);
-                Theme::SelectThemeByIndex(savedIndex);
-                LOG_DEBUG("editor.settings", "Restored theme preset index %d from disk.", savedIndex);
-            } else if (doc.loadedFromDisk && doc.parseError) {
-                LOG_WARN("editor.settings", "editor_settings.json exists but failed to parse — using defaults.");
-            } else {
-                LOG_DEBUG("editor.settings", "No editor_settings.json on disk — using defaults.");
+            int selected = static_cast<int>(settings.themePreset);
+            const auto &themes = Theme::GetThemeList();
+            for (std::size_t index = 0; index < themes.size(); ++index) {
+                if (!settings.themeId.empty() && themes[index].id == settings.themeId)
+                    selected = static_cast<int>(index);
             }
+            Theme::SelectThemeByIndex(selected);
         }
 
         void ActivateInitialLocale(const EditorSettings &initialSettings, LocalizationService &localization) {
@@ -3160,6 +3158,7 @@ namespace Horo::Editor {
         const Render::RenderBackendModuleInfo *moduleInfo;
         RendererAvailabilitySnapshot rendererAvailability;
         EditorSettings settings;
+        std::filesystem::path themesDirectory;
         std::unique_ptr<ModuleHost> modules;
         // Both canonical authorities are created before native presentation and survive the complete session/drain.
         std::unique_ptr<EngineDataBus> engineEvents;
@@ -3233,8 +3232,35 @@ namespace Horo::Editor {
         std::unique_ptr<ConfigurationService> service;
     };
 
+    /** @brief Captures only declared environment bindings once at the graphical composition boundary. */
+    class EditorStartupEnvironment final : public ProcessService {
+    public:
+        explicit EditorStartupEnvironment(const std::span<const EnvironmentVariableBinding> bindings) {
+            for (const auto &binding : bindings) {
+                if (const char *raw = std::getenv(binding.variable.c_str())) {
+                    std::size_t length = 0;
+                    while (length <= ConfigurationLimits{}.maximumStringValueBytes && raw[length] != '\0')
+                        ++length;
+                    values_.emplace(binding.variable, std::string{raw, length});
+                }
+            }
+        }
+
+        [[nodiscard]] ProcessMetadata CurrentProcess() const override {
+            return {.executableName = "HoroEditor"};
+        }
+
+        [[nodiscard]] std::optional<std::string> EnvironmentValue(const std::string_view name) const override {
+            const auto found = values_.find(std::string{name});
+            return found == values_.end() ? std::nullopt : std::optional<std::string>{found->second};
+        }
+
+    private:
+        std::unordered_map<std::string, std::string> values_;
+    };
+
     /** @brief Registers inert descriptors and resolves explicit captured inputs before any native presentation. */
-    [[nodiscard]] static std::optional<EditorStartupConfiguration> PrepareEditorConfiguration(const EditorSettings &settings,
+    [[nodiscard]] static std::optional<EditorStartupConfiguration> PrepareEditorConfiguration(const EditorSettingsDocument &document,
                                                                                               const ModuleHost &modules,
                                                                                               const EditorOpenXRHostServices *xrHost) {
         auto moduleSchema = modules.BuildConfigurationSchema();
@@ -3254,21 +3280,47 @@ namespace Horo::Editor {
 #endif
         auto engineEvents = std::make_unique<EngineDataBus>();
         auto configuration =
-            std::make_unique<ConfigurationService>(CreateEditorConfigurationSchema(settings, std::move(configurationSchema)),
+            std::make_unique<ConfigurationService>(CreateEditorConfigurationSchema(DefaultEditorSettings(), std::move(configurationSchema)),
                                                    engineEvents.get());
+        ConfigurationResolutionRequest captured;
 #if defined(HORO_HAS_OPENXR_HOST)
-        if (xrHost) {
-            if (const auto resolved = configuration->ResolveAndCommit(xrHost->configuration); resolved.HasError()) {
-                LOG_CRITICAL("editor.xr", "Project configuration rejected: %s", resolved.ErrorValue().message.c_str());
-                return std::nullopt;
-            }
-        }
+        if (xrHost)
+            captured = xrHost->configuration;
 #else
         if (xrHost) {
             LOG_CRITICAL("editor.xr", "This executable does not contain the selected XR host component.");
             return std::nullopt;
         }
 #endif
+        if (!document.configurationJson.empty()) {
+            auto parsed = ConfigurationResolver::ParseDocument(configuration->Schema(), document.configurationJson, "editor-user");
+            if (parsed.HasError()) {
+                LOG_CRITICAL("editor.startup", "User configuration could not be parsed: code=%s.",
+                             parsed.ErrorValue().code.Value().c_str());
+                return std::nullopt;
+            }
+            for (auto &[key, value] : std::move(parsed).Value())
+                captured.user.insert_or_assign(key, std::move(value));
+        } else {
+            const auto migrated = MakeEditorAppearanceConfigurationDraft(configuration->Snapshot(), document.settings);
+            for (const auto &[key, value] : migrated.proposedValues)
+                captured.user.insert_or_assign(key, ConfigurationInputValue{.value = value,
+                                                                            .location = SourceLocation{.source = "legacy-editor-user"}});
+        }
+        const auto bindings = modules.ConfigurationEnvironmentBindings();
+        const EditorStartupEnvironment environment{bindings};
+        auto capturedEnvironment = ConfigurationResolver::CaptureEnvironment(configuration->Schema(), bindings, environment);
+        if (capturedEnvironment.HasError()) {
+            LOG_CRITICAL("editor.startup", "Environment configuration rejected: code=%s.",
+                         capturedEnvironment.ErrorValue().code.Value().c_str());
+            return std::nullopt;
+        }
+        for (auto &[key, value] : std::move(capturedEnvironment).Value())
+            captured.environment.insert_or_assign(key, std::move(value));
+        if (const auto resolved = configuration->ResolveAndCommit(captured); resolved.HasError()) {
+            LOG_CRITICAL("editor.startup", "Captured configuration rejected: code=%s.", resolved.ErrorValue().code.Value().c_str());
+            return std::nullopt;
+        }
         return EditorStartupConfiguration{std::move(engineEvents), std::move(configuration)};
     }
 
@@ -3402,21 +3454,24 @@ namespace Horo::Editor {
             LOG_CRITICAL("editor.renderer", "%s", selectedRenderer.ErrorValue().message.c_str());
             return std::nullopt;
         }
-        EditorSettings settings = LoadEditorSettingsDocument().settings;
-        auto composedModules = ComposeEditorModules(selectedRenderer.Value(), settings);
+        const auto settingsDocument = LoadEditorSettingsDocument();
+        EditorSettings settings = settingsDocument.settings;
+        auto composedModules = ComposeEditorModules(selectedRenderer.Value(), DefaultEditorSettings());
         if (composedModules.HasError()) {
             LOG_CRITICAL("editor.startup", "Module composition failed: %s", composedModules.ErrorValue().message.c_str());
             return std::nullopt;
         }
         std::unique_ptr<ModuleHost> modules = std::move(composedModules).Value();
-        auto configuration = PrepareEditorConfiguration(settings, *modules, bootstrap->selected);
+        auto configuration = PrepareEditorConfiguration(settingsDocument, *modules, bootstrap->selected);
         if (!configuration)
             return std::nullopt;
+        ApplyEditorConfigurationSnapshot(configuration->service->Snapshot(), settings);
         PreparedEditorStartup startup{std::move(options),
                                       std::move(projectName),
                                       moduleInfo,
                                       rendererAvailability,
                                       std::move(settings),
+                                      settingsDocument.path.parent_path() / "themes",
                                       std::move(modules),
                                       std::move(configuration->events),
                                       std::move(configuration->service),
@@ -3798,8 +3853,12 @@ namespace Horo::Editor {
         auto &io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         auto fonts = LoadEditorFonts(io, QueryRasterizerDensity(window));
-        Theme::Apply(ImGui::GetStyle());
-        ApplySavedThemePreference();
+        const auto themeConfiguration = startup.configuration->Snapshot();
+        const auto &themeOverride = std::get<std::string>(themeConfiguration.Get(SettingKey{"editor.theme.override_path"}));
+        const auto encodedThemesDirectory = startup.themesDirectory.generic_u8string();
+        const std::string themesDirectory{encodedThemesDirectory.begin(), encodedThemesDirectory.end()};
+        Theme::Apply(ImGui::GetStyle(), themeOverride.empty() ? nullptr : themeOverride.c_str(), themesDirectory.c_str());
+        ApplySavedThemePreference(themeConfiguration, startup.settings);
         EditorRenderComposition composition;
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
         composition.xrSession = startup.xrNative.get();
