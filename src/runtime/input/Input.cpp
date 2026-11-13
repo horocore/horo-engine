@@ -133,12 +133,19 @@ namespace Horo::Input {
             return false;
         }
 
+        /** @brief Tests bounded chord membership, matching routing's order-independent held-key checks. */
+        bool ContainsChord(const InputBinding &larger, const InputBinding &smaller) noexcept {
+            return std::all_of(smaller.chord.begin(), smaller.chord.begin() + smaller.chordSize, [&](const Key key) {
+                return std::find(larger.chord.begin(), larger.chord.begin() + larger.chordSize, key) !=
+                       larger.chord.begin() + larger.chordSize;
+            });
+        }
+
         bool SameTransition(const InputBinding &left, const InputBinding &right) noexcept {
             if (!HasValidChordSize(left) || !HasValidChordSize(right))
                 return false;
-            return SameControlIdentity(left, right) && left.requiredModifiers == right.requiredModifiers &&
-                   left.chordSize == right.chordSize &&
-                   std::equal(left.chord.begin(), left.chord.begin() + left.chordSize, right.chord.begin());
+            return SameControlIdentity(left, right) && left.requiredModifiers == right.requiredModifiers && ContainsChord(left, right) &&
+                   ContainsChord(right, left);
         }
 
         bool ChordsOverlap(const InputBinding &left, const InputBinding &right) noexcept {
@@ -146,13 +153,7 @@ namespace Horo::Input {
                 return false;
             if (!SameControlIdentity(left, right) || !RequiredModifiersOverlap(left, right))
                 return false;
-            const auto contains = [](const InputBinding &larger, const InputBinding &smaller) {
-                return std::all_of(smaller.chord.begin(), smaller.chord.begin() + smaller.chordSize, [&](const Key key) {
-                    return std::find(larger.chord.begin(), larger.chord.begin() + larger.chordSize, key) !=
-                           larger.chord.begin() + larger.chordSize;
-                });
-            };
-            return contains(left, right) || contains(right, left);
+            return ContainsChord(left, right) || ContainsChord(right, left);
         }
 
         bool SameAnalogAxis(const InputBinding &left, const InputBinding &right) noexcept {

@@ -332,6 +332,46 @@ namespace {
         REQUIRE((dupDiag->message.find("workspace") != std::string::npos));
     }
 
+    TEST_CASE("Chord permutations and repeated members cannot disguise duplicate transitions", "[unit][runtime][input][accessibility]") {
+        const ActionId action{"play.chord"};
+        const InputContextId context{"play"};
+        for (const bool repeatedMember : {false, true}) {
+            auto first = KeyBinding(Key::K);
+            first.chord[0] = Key::L;
+            first.chord[1] = Key::M;
+            first.chordSize = 2;
+            auto alias = first;
+            alias.chord[0] = Key::M;
+            alias.chord[1] = Key::L;
+            if (repeatedMember) {
+                alias.chord[2] = Key::L;
+                alias.chordSize = 3;
+            } else {
+                // Storage beyond chordSize never participates in physical matching.
+                alias.chord[2] = Key::N;
+            }
+            InputRouter router;
+            REQUIRE(router.SetActionMap({{action, ActionValueType::Digital, context, true, {first}}}).HasValue());
+            const auto revision = router.RoutingState({}).configurationRevision;
+            const InputBindingProfile candidate{.overrides = {{action, {first, alias}}}};
+            const auto validation = ValidateBindingProfile(router.Actions(), candidate);
+            REQUIRE_FALSE(validation.IsValid());
+            REQUIRE(std::ranges::any_of(validation.diagnostics, [](const BindingDiagnostic &diagnostic) {
+                return diagnostic.code == BindingDiagnosticCode::DuplicateBinding;
+            }));
+            REQUIRE(router.SetProfile(candidate).HasError());
+            REQUIRE(router.SetActionMap({{action, ActionValueType::Digital, context, true, {first, alias}}}).HasError());
+            REQUIRE(router.RoutingState({}).configurationRevision == revision);
+            REQUIRE(router.Profile().overrides.empty());
+            REQUIRE(router.Actions().front().defaultBindings.size() == 1);
+            REQUIRE(router.Actions().front().defaultBindings.front() == first);
+
+            alias.chord[0] = Key::N;
+            alias.chordSize = 1;
+            REQUIRE(router.SetActionMap({{action, ActionValueType::Digital, context, true, {first, alias}}}).HasValue());
+        }
+    }
+
     TEST_CASE("Conflict Validation Reports AmbiguousChord Overlap", "[unit][runtime][input]") {
         const InputContextId workspace{"workspace"};
         InputBinding baseChord = KeyBinding(Key::K);

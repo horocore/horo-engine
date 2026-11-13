@@ -65,6 +65,14 @@ axis. Exact, mutually exclusive ordinary modifier states remain separate modes.
 The regression covers gyro, gamepad/raw axes and both wheel axes with chords,
 and checks that different modifier modes are still admitted.
 
+Chord identity now uses the same held-key set as routing. Reordering chord keys,
+repeating an existing key or changing storage beyond `chordSize` cannot disguise
+two bindings for the same transition. Such profiles are rejected atomically;
+remove the redundant binding instead of reordering its chord. This changes no
+wire fields or raw input state. The new regression checks map/profile rejection,
+unchanged revision and preservation of a genuinely different chord. It is not
+included in the historical 95-case pass below; its native rerun is pending.
+
 The native MSVC Debug batch at `2b2175ca9847ca97dd50d648563a3cafbc2f82bd`
 built both Input test executables and staged/explicit public consumers, then passed
 **95/95 cases with zero skips** in 1.47 seconds. This includes all six added
