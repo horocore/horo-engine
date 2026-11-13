@@ -308,7 +308,8 @@ namespace Horo::Input {
             RetiredInputActionRelease retired;
             REQUIRE(fixture.input.Router().TryDequeueRetiredActionRelease(retired));
             REQUIRE(retired.contextIdentity == oldIdentity);
-            REQUIRE(retired.action && *retired.action == fixture.action);
+            REQUIRE(retired.action);
+            REQUIRE(*retired.action == fixture.action);
             REQUIRE_FALSE(fixture.input.Router().TryDequeueRetiredActionRelease(retired));
             REQUIRE_FALSE(fixture.Read().value.released);
             REQUIRE_FALSE(fixture.Read().value.down);
