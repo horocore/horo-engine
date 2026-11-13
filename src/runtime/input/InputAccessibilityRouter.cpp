@@ -153,12 +153,11 @@ namespace Horo::Input::Detail {
         return false;
     }
 
-    /** @copydoc InputAccessibilityRouter::Transaction::Process */
-    DigitalAffordanceValue InputAccessibilityRouter::Transaction::Process(const AccessibilityMappingKey &key, const InputBinding &source,
-                                                                          const AccessibilityMappingSample &sample) noexcept {
+    /** @copydoc InputAccessibilityRouter::Transaction::Stage */
+    InputAccessibilityRouter::Cell *InputAccessibilityRouter::Transaction::Stage(const AccessibilityMappingKey &key,
+                                                                                 const InputBinding &source,
+                                                                                 const std::optional<GamepadDeviceId> device) noexcept {
         const auto &[context, action, binding, player] = key;
-        const auto &[device, physical, time, eligible, chordEligible, deviceHadNeutral] = sample;
-        const auto &policy = source.accessibility;
         if (failed_ || !action || count_ == candidates_.size() || owner_.serial_ == 0) {
             failed_ = true;
             return {};
@@ -188,11 +187,23 @@ namespace Horo::Input::Detail {
             cell.action = action;
             cell.binding = binding;
             cell.player = player;
-            cell.policy = policy;
+            cell.policy = source.accessibility;
             cell.source = source;
-            cell.processor.emplace(DigitalAffordance::Create(policy.digital).Value());
+            cell.processor.emplace(DigitalAffordance::Create(source.accessibility.digital).Value());
             cell.device = device;
         }
+        return &cell;
+    }
+
+    /** @copydoc InputAccessibilityRouter::Transaction::Process */
+    DigitalAffordanceValue InputAccessibilityRouter::Transaction::Process(const AccessibilityMappingKey &key, const InputBinding &source,
+                                                                          const AccessibilityMappingSample &sample) noexcept {
+        const auto &[device, physical, time, eligible, chordEligible, deviceHadNeutral] = sample;
+        const auto &policy = source.accessibility;
+        auto *const staged = Stage(key, source, device);
+        if (!staged)
+            return {};
+        auto &cell = *staged;
         if (cell.serial == owner_.serial_)
             return {{cell.cached.button.down, false, false}, false};
         DigitalAffordanceValue result;

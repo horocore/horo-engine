@@ -85,6 +85,13 @@ namespace Horo::Input::Detail {
             void Commit() noexcept;
 
         private:
+            /** @brief Reserves and initializes a transaction-local cell without publishing to the owner.
+             * @param key Exact mapping identity. @param source Validated immutable binding.
+             * @param device Current physical owner. @return Candidate or null after marking capacity failure.
+             */
+            [[nodiscard]] Cell *Stage(const AccessibilityMappingKey &key, const InputBinding &source,
+                                      std::optional<GamepadDeviceId> device) noexcept;
+
             struct Candidate final {
                 std::size_t slot{};
                 Cell cell;
