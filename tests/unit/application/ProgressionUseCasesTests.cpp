@@ -457,7 +457,10 @@ TEST_CASE("Progression semantic fact retention remains bounded and move preserve
     auto second = first;
     second.occurrence.bytes.back() = std::byte{2};
     CHECK(useCases.Submit(second, 0).HasError());
-    auto moved = std::move(useCases);
+    auto moved = [&useCases] {
+        const Horo::Tests::AllocationProbe::ScopedFailure fail;
+        return std::move(useCases);
+    }();
     CHECK(useCases.Submit(first, 0).HasError());
     CHECK(useCases.SubmitByKey(PlatformServiceIdKind::Stat, "progress.stat", first, 0).HasError());
     const auto original = moved.Submit(first, 0);

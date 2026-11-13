@@ -42,8 +42,8 @@ namespace Horo::Application {
                                              const IProgressionProjectionGate &gate, PlatformProgressionCoalescer &coalescer,
                                              const ProgressionUseCasesConfig config)
         : definitions_(std::move(definitions)), scope_(scope), policy_(policy), authority_(authority), gate_(gate), coalescer_(coalescer),
-          config_(config) {
-        facts_.reserve(config_.maximumAcceptedFacts);
+          config_(config), facts_(std::make_unique<std::vector<AcceptedFact>>()) {
+        facts_->reserve(config_.maximumAcceptedFacts);
     }
 
     /** @copydoc ProgressionUseCases::ProgressionUseCases */
@@ -157,7 +157,7 @@ namespace Horo::Application {
     Result<ProgressionUseCases::FactDisposition> ProgressionUseCases::CheckFact(
         const ProgressionFact &fact, const PreparedIntent &intent, const DeliveryOwner delivery,
         const std::optional<PlatformProgressionReplayRequirements> &requirements) const {
-        for (const auto &accepted : facts_) {
+        for (const auto &accepted : *facts_) {
             if (accepted.occurrence != fact.occurrence || accepted.intent.envelope.definitionKind != intent.envelope.definitionKind ||
                 accepted.intent.envelope.definition != intent.envelope.definition)
                 continue;
@@ -166,7 +166,7 @@ namespace Horo::Application {
                 return Result<FactDisposition>::Failure(MakeError(PlatformProgressionErrors::IdempotencyConflict));
             return Result<FactDisposition>::Success(FactDisposition::Existing);
         }
-        if (facts_.size() == config_.maximumAcceptedFacts)
+        if (facts_->size() == config_.maximumAcceptedFacts)
             return Result<FactDisposition>::Failure(MakeError(PlatformProgressionErrors::CapacityExceeded));
         return Result<FactDisposition>::Success(FactDisposition::New);
     }
@@ -180,7 +180,7 @@ namespace Horo::Application {
         if (factBinding.HasError())
             return Result<PlatformProgressionAdmission>::Failure(factBinding.ErrorValue());
         if (factBinding.Value() == FactDisposition::New)
-            facts_.push_back({fact.occurrence, prepared.Value(), DeliveryOwner::Volatile, std::nullopt});
+            facts_->push_back({fact.occurrence, prepared.Value(), DeliveryOwner::Volatile, std::nullopt});
         return coalescer_.Admit(prepared.Value().envelope, prepared.Value().ordering, tick);
     }
 
@@ -213,7 +213,7 @@ namespace Horo::Application {
         if (factBinding.HasError())
             return Result<PlatformProgressionQualifiedReplayIntent>::Failure(factBinding.ErrorValue());
         if (factBinding.Value() == FactDisposition::New)
-            facts_.push_back({fact.occurrence, prepared.Value(), DeliveryOwner::Durable, requirements});
+            facts_->push_back({fact.occurrence, prepared.Value(), DeliveryOwner::Durable, requirements});
         auto qualified = qualifier.Qualify(prepared.Value().envelope, requirements, prepared.Value().ordering);
         if (qualified.HasError())
             return qualified;

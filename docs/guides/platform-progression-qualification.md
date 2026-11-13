@@ -2,8 +2,10 @@
 
 ## Scope and delivery identity
 
-This work targets the published `origin/codex/editor-improvements` commit
-`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc` (verified on 2026-11-13).
+The PR target is `codex/editor-improvements`, currently published as
+`139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d` (verified on 2026-11-13).
+The topic fork point remains `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`;
+validation selects the full topic delta against the actual target ref.
 The empty archived worktree was recovered from its own Git snapshot
 `6172fdf379799c90be23b6913354ff0a9e2927ef`; all 17 task paths were verified,
 then preserved while rebasing onto the published base. Recovery evidence is in the
@@ -18,8 +20,8 @@ All-child acceptance audit (GitHub/Jira read directly on 2026-11-11):
 | #1899 / HORO-1855 / PLS-004.2 | Closed / To Do | Achievement coordinator `be483dacd` is an ancestor; existing tests cover registered IDs, authority/progress bounds, terminal duplicate retention, state-query fencing and session replacement. | Existing code/tests inspected, not rerun in this worktree. Actual async provider/application integration is not proven merely by these semantic coordinator tests. |
 | #1902 / HORO-1858 / PLS-004.3 | Closed / To Do | Bounded leaderboard implementation `b8a2d5acf` is an ancestor; typed ranked/around-subject/friends requests and explicit unsupported kinds exist in frontend/mock coverage. | Current native execution and real-provider ordering/tie/pagination qualification remain unproven here. |
 | #1904 / HORO-1860 / PLS-004.4 | Closed / To Do | Stat coordinator `caa3afe94` is an ancestor; cache/session partition, freshness, corrupt restore, authoritative writes and completion fences have existing regression coverage. | Current native execution and actual protected persistence/provider composition are not established by closed issue state. |
-| #1901 / HORO-1857 / PLS-004.5 | Open / To Do | New volatile coalescer, exact-envelope retention and safety/ordering/lifecycle regressions are written. | Uncommitted; native regression, final preflight and durable-owner integration evidence remain outstanding. |
-| #1903 / HORO-1859 / PLS-004.6 | Open / To Do | Shared typed/key application entry, real frontend gate, scoped receipt observations and explicit durable qualification handoff are written. | Uncommitted; native consumers, actual world-authority binding and queue-owner integration remain outstanding. |
+| #1901 / HORO-1857 / PLS-004.5 | Open / To Do | New volatile coalescer, exact-envelope retention and safety/ordering/lifecycle regressions are written. | Committed source; native regression, final preflight and durable-owner integration evidence remain outstanding. |
+| #1903 / HORO-1859 / PLS-004.6 | Open / To Do | Shared typed/key application entry, real frontend gate, scoped receipt observations and explicit durable qualification handoff are written. | Committed source; native consumers, actual world-authority binding and queue-owner integration remain outstanding. |
 | #1906 / HORO-1862 / PLS-004.7 | Open / To Do | Null/scripted, ambiguity/timeout, concurrent/reordered and normalized-failure fixtures plus evidence inventory are written. | Unexecuted here; provider/session/credential dependencies and SDK/certification evidence remain open. |
 
 Main #1870 / HORO-1826 remains Open / To Do. Its three integrated outcomes are still
@@ -99,7 +101,10 @@ that after its write commit. Fact retention is bounded and never silently evicte
 `ProgressionUseCases` is move-only; consume its successful `Result` once and give
 adapters borrowed references to that shared instance. Moving transfers fact bindings
 and closes the old view, preventing a copied empty ledger from becoming a second
-semantic authority. Constructor allocation failure returns typed CapacityExceeded.
+semantic authority. The ledger is heap-owned so moving its owner transfers a pointer
+without moving a checked MSVC vector or allocating an iterator proxy in a noexcept
+constructor. The lifetime regression injects allocation failure during that move.
+Constructor allocation failure returns typed CapacityExceeded.
 
 Cancel affects undispatched intent only. An in-flight cancellation/timeout must be
 classified by the request/semantic owner; it does not prove remote rollback. Unknown
@@ -249,3 +254,17 @@ pending. The earlier persistent goal was marked blocked under the old hold; the
 user explicitly resumed work, although the exposed goal tool has no resume setter.
 Provider qualification, queue-owner connection and private SDK/OS evidence also
 remain outstanding. Source preparation and closed issue state do not prove them.
+
+Resumed validation checkpoint (2026-11-13):
+
+- Own and remote topic head `53ebde25f65c8711776719b397727c1f6e501002` were
+  identical, the worktree clean, and no branch workflow runs or PR existed.
+- A fresh bounded configure attempt again returned physical-lock busy before any
+  native child: `build/pls-configure-1794603220585906600.json`. This observation
+  does not establish a permanent hold; independent source review continued.
+- That review found the checked-STL move allocation hazard described above. The
+  allocation-free ownership fix and its regression require native execution.
+- Final-input full preflight must use `origin/codex/editor-improvements`, including
+  committed and dirty topic changes. Incomplete results or physical admission
+  failures are recorded explicitly; a draft PR is reviewable source, not proof of
+  acceptance. Real qualification/queue/SDK evidence remains open for all seven children.

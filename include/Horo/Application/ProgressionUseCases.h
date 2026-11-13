@@ -9,6 +9,7 @@
 #include "Horo/PlatformServices/PlatformProgressionReplay.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
 
+#include <memory>
 #include <vector>
 
 namespace Horo::Application {
@@ -103,7 +104,8 @@ namespace Horo::Application {
 
         ProgressionUseCases(const ProgressionUseCases &) = delete;
         ProgressionUseCases &operator=(const ProgressionUseCases &) = delete;
-        /** @brief Transfers semantic fact ownership; the old view rejects admission after the move. @param other Previous owner. */
+        /** @brief Transfers semantic fact ownership without allocation; the old view rejects admission after the move.
+         * @param other Previous owner. */
         ProgressionUseCases(ProgressionUseCases &&other) noexcept;
         ProgressionUseCases &operator=(ProgressionUseCases &&) noexcept = delete;
 
@@ -182,7 +184,8 @@ namespace Horo::Application {
         const IProgressionProjectionGate &gate_;
         PlatformServices::PlatformProgressionCoalescer &coalescer_;
         ProgressionUseCasesConfig config_;
-        std::vector<AcceptedFact> facts_;
+        // Moving a checked MSVC vector can allocate its iterator proxy; transfer the entire ledger instead.
+        std::unique_ptr<std::vector<AcceptedFact>> facts_;
         bool closed_{};
     };
 }  // namespace Horo::Application
