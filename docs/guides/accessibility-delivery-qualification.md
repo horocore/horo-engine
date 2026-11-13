@@ -40,7 +40,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 | Input | `eac1e8f17caf4a24c442954145fe659c29cdb6ef` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **96/96 passed, zero skipped**, 1.44s; `build/acc-input-chord-eac1e8f-results.xml` and corresponding discovery JSON |
 | Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
 | Direct Input consumers | `d460d270be3a71c914c001d5302674c2f599672e` | Eleven targets: Character/Input UI/debugger/portable Android tests; staged Character/RuntimeUiInput/Android/XR consumers; direct navigation/pointer/debugger consumers | **62/62 passed, zero skipped**, 1.42s; `build/acc-input-consumers-d460d27-results.xml` and corresponding discovery JSON |
-| Captions / Runtime UI / optional bridge | `df38a89c2006ef57f0e33a7b91e2c37a4b05bd1b` | HoroRuntimeUiAccessibilityTests, RuntimeUi staged/accessibility consumers, CaptionTransport staged/direct consumers, PlatformAccessibility staged/direct consumers | **49/49 passed, zero skipped**, 0.72s; `build/acc-caption-results.xml` and discovery JSON |
+| Captions / Runtime UI / optional bridge | `0b1f6eb7e223b0ece0d6137bf85a617be066d9d0` | HoroRuntimeUiAccessibilityTests, RuntimeUi staged/accessibility consumers, CaptionTransport staged/direct consumers, PlatformAccessibility staged/direct consumers | **49/49 passed, zero skipped**, 0.72s; `build/acc-caption-completion-0b1f6eb-results.xml` and corresponding discovery JSON |
 | GUI / SDL / editor application | `2b2175ca9847ca97dd50d648563a3cafbc2f82bd` | HoroEditorPresentationTests, HoroGuiPublicHeaderConsumer, HoroInputSdlTests, **HoroEditor** | **98/98 passed, zero skipped**, 54.04s: 88 presentation and 10 SDL cases; `build/acc-gui-identity-2b2175c-results.xml` and corresponding discovery JSON |
 
 All batches configured successfully, including header ownership and dependency
@@ -310,7 +310,9 @@ The bridge now declares a separate announcement-completion cursor channel so
 queue admission cannot silently acknowledge the UI publisher. Null produces no
 completion, including after shutdown. The [transport migration](platform-accessibility-bridge-migration.md)
 records the vtable rebuild, exact publisher ownership and regression scope.
-Its native rerun and real asynchronous adapters/host draining remain pending.
+Its Null/base-interface regression and seven affected targets passed in the
+49-case native batch at `0b1f6eb`; real asynchronous adapters and host draining
+remain pending.
 
 `UiAccessibilityReviewLog` is an independent opt-in 64-record journal, not a speech
 queue or native adapter. Text recording requires separate consent, oversized text

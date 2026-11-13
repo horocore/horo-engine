@@ -71,8 +71,9 @@ namespace Horo::Platform {
          * @param changes Borrowed corresponding change/retained-announcement producer.
          * @param receipt Exact successful presentation evidence; native adapters reject stale/failed/skipped receipts.
          * @return Explicit admission result. No borrowed reference may survive this call.
-         * @note Accepted queues owned work; it does not acknowledge retained announcements. The UI owner releases
-         * their publisher prefix only after receiving its matching announcement completion cursor.
+         * @note Accepted queues owned work; it does not acknowledge retained announcements. For active native delivery,
+         * the UI owner acknowledges accepted prefixes through matching completion cursors. Owner-driven cancellation
+         * remains explicit through the existing publisher lifecycle.
          */
         [[nodiscard]] virtual AccessibilityEnqueueResult Submit(const Runtime::Ui::UiAccessibilitySnapshot &snapshot,
                                                                 const Runtime::Ui::UiAccessibilityChangePublisher &changes,

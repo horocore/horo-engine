@@ -23,6 +23,9 @@ instance, canvas, generation and sequence. Native callbacks never mutate the
 publisher or become another announcement authority. Completion is a transport
 handoff result; it does not prove speech synthesis, audible output or assistive
 technology qualification.
+Owner-driven retirement/cancellation continues through the existing publisher
+lifecycle. Unaccepted work does not acquire native ownership, and an Unsupported
+adapter cannot force the UI owner to wait for a completion it will never produce.
 
 ## Adapter migration
 
@@ -39,6 +42,8 @@ The current production implementation is `NullPlatformAccessibilityBridge`.
 It returns false before and after shutdown, changes no output, allocates no
 storage and remains Unsupported with zero native queues. The explicit public
 consumer and existing Null allocation/lifecycle regression cover the new method
-through the base interface. Their native rerun is pending. Native adapters,
+through the base interface. The seven-target native MSVC Debug batch at `0b1f6eb`
+passed **49/49 cases, zero skipped**, in 0.72 seconds; evidence is
+`build/acc-caption-completion-0b1f6eb-results.xml` and its discovery JSON. Native adapters,
 host draining, editor semantics and real assistive-technology checks remain
 implementation/qualification work; this contract does not qualify ACC-001.6.
