@@ -13,18 +13,16 @@ namespace Horo::Editor {
          * @param display Existing display-linear graph resource. @param displayView Exact display attachment.
          * @param after Existing lit-scene pass. @param extent Exact scene extent.
          * @return Actual analytic pass that must precede overlays, or original graph failure. */
-        [[nodiscard]] Result<Render::RenderGraphPassRef> AppendScene(Render::RenderGraphBuilder &builder,
-                                                                     EditorViewportColorPipeline &pipeline, Render::RenderQueueId queue,
-                                                                     std::vector<Render::RenderGraphImportedState> &initial,
-                                                                     Render::RenderGraphResourceId scene,
-                                                                     Render::RenderGraphResourceId display,
-                                                                     Render::RenderTextureViewHandle displayView,
-                                                                     Render::RenderGraphPassRef after, Render::FramebufferExtent extent);
+        [[nodiscard]] Result<Render::RenderGraphPassRef> AppendScene(
+            Render::RenderGraphBuilder &builder, const EditorViewportColorPipeline &pipeline, Render::RenderQueueId queue,
+            std::vector<Render::RenderGraphImportedState> &initial, Render::RenderGraphResourceId scene,
+            Render::RenderGraphResourceId display, Render::RenderTextureViewHandle displayView, Render::RenderGraphPassRef after,
+            Render::FramebufferExtent extent);
         /** @brief Appends SDR encode after all display-linear overlays. @param builder Same scene builder.
          * @param pipeline Same prepared owner. @param output Existing final graph attachment. @param outputView Exact final view.
          * @param after Final overlay pass. @return Actual final encode pass or original failure. */
         [[nodiscard]] Result<Render::RenderGraphPassRef> AppendEncode(Render::RenderGraphBuilder &builder,
-                                                                      EditorViewportColorPipeline &pipeline,
+                                                                      const EditorViewportColorPipeline &pipeline,
                                                                       Render::RenderGraphResourceId output,
                                                                       Render::RenderTextureViewHandle outputView,
                                                                       Render::RenderGraphPassRef after);
@@ -44,15 +42,15 @@ namespace Horo::Editor {
 
     private:
         [[nodiscard]] Render::RenderGraphResourceId Buffer(Render::RenderBufferHandle handle);
-        [[nodiscard]] Render::RenderGraphResourceId Table(EditorViewportColorPipeline &pipeline, std::size_t index);
+        [[nodiscard]] Render::RenderGraphResourceId Table(const EditorViewportColorPipeline &pipeline, std::size_t index);
         void Use(Render::RenderGraphPassRef pass, Render::RenderGraphResourceId resource, Render::RenderGraphAccess access,
                  Render::RenderGraphUsageKind kind);
-        void Raster(EditorViewportColorPipeline &pipeline, std::size_t role, Render::RenderGraphPassRef pass,
+        void Raster(const EditorViewportColorPipeline &pipeline, std::size_t role, Render::RenderGraphPassRef pass,
                     Render::RenderGraphResourceId color, Render::RenderTextureViewHandle view);
-        [[nodiscard]] Render::RenderGraphResourceId RasterTexture(EditorViewportColorPipeline &pipeline, std::size_t role,
+        [[nodiscard]] Render::RenderGraphResourceId RasterTexture(const EditorViewportColorPipeline &pipeline, std::size_t role,
                                                                   const Render::MaterialResourceBinding &binding);
-        void RasterInputs(EditorViewportColorPipeline &pipeline, std::size_t role, Render::RenderGraphPassRef pass);
-        EditorViewportColorPipeline *pipeline_{};
+        void RasterInputs(const EditorViewportColorPipeline &pipeline, std::size_t role, Render::RenderGraphPassRef pass);
+        const EditorViewportColorPipeline *pipeline_{};
         std::array<Render::RenderGraphLogicalState, 8> bufferInitial_;
         Render::RenderGraphLogicalState tableInitial_;
         Render::RenderGraphBuilder *builder_{};

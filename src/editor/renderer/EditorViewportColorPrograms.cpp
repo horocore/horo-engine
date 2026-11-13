@@ -11,7 +11,7 @@ namespace Horo::Editor {
 
     namespace {
         /** @brief Builds real target-cache compatibility from the selected device and immutable reflection. */
-        PipelineCacheCompatibility Compatibility(RenderFrontend &frontend, const ShaderTargetRequirement &target,
+        PipelineCacheCompatibility Compatibility(const RenderFrontend &frontend, const ShaderTargetRequirement &target,
                                                  const ReflectedShaderArtifact &artifact, const RenderGraphicsPipelineState &state) {
             const auto device = Take(frontend.QueryPipelineDeviceIdentity());
             return {1,

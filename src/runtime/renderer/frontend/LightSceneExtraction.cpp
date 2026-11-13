@@ -40,7 +40,7 @@ namespace Horo::Render {
         }
 
         /** @brief Resolves at most64 ancestors under the actual Scene owner and cancellation scope. */
-        Result<LightPose> ResolvePose(Runtime::RuntimeSceneView scene, Runtime::RuntimeEntityView entity,
+        Result<LightPose> ResolvePose(const Runtime::RuntimeSceneView &scene, Runtime::RuntimeEntityView entity,
                                       const CancellationToken &cancellation) {
             Math::Mat4 world = Math::Mat4::Identity();
             Math::Quaternion rotation;
@@ -66,7 +66,7 @@ namespace Horo::Render {
         }
 
         /** @brief Validates finite extraction reservations before touching reusable scratch. */
-        Result<void> ValidateExtraction(Runtime::RuntimeSceneView scene, std::uint32_t maximumLights, std::size_t scratch) {
+        Result<void> ValidateExtraction(const Runtime::RuntimeSceneView &scene, std::uint32_t maximumLights, std::size_t scratch) {
             if (!scene.IsCurrent() || maximumLights == 0 || maximumLights > LightCullingBudget::HardMaximumLights)
                 return Result<void>::Failure(MakeError(LightCullingErrors::InvalidInput));
             if (scene.SlotCount() > 65536 || scratch < maximumLights)
@@ -75,7 +75,7 @@ namespace Horo::Render {
         }
 
         /** @brief Appends one eligible canonical light and exact entity identity to unpublished scratch. */
-        Result<void> AppendLight(Runtime::RuntimeSceneView scene, std::size_t slot, std::uint32_t maximumLights,
+        Result<void> AppendLight(const Runtime::RuntimeSceneView &scene, std::size_t slot, std::uint32_t maximumLights,
                                  std::span<IdentifiedRenderLight> scratch, ExtractedLightTable &table,
                                  const CancellationToken &cancellation) {
             const auto entity = scene.EntityAt(slot);

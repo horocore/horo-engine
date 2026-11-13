@@ -56,7 +56,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             return ScriptValue{std::move(text)};
         }
 
-        ScriptValue ReadHandle(Values &values, JSValueConst value) {
+        ScriptValue ReadHandle(const Values &values, JSValueConst value) {
             if (JS_IsProxy(value) || JS_GetClassID(value) != values.handleClass)
                 InvalidValue("A host-issued opaque handle is required.");
             const auto *handle = static_cast<HandleBox *>(JS_GetOpaque(value, values.handleClass));
