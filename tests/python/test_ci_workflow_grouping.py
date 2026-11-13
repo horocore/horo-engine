@@ -70,6 +70,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroFoundationJobSystemTests", "HoroRuntimeSceneAssetDiscoveryTests", "HoroAssetLoadResultAllocationTests",
     "HoroFoundationJsonTests", "HoroAssetIdAllocationTests", "HoroOperationIdentityAllocationTests",
     "HoroSceneSourceTests", "HoroColorPipelineTests", "HoroColorCreativeLookPackageTests", "HoroPrefabMetricsTests",
+    "HoroVisualAccessibilityTests", "HoroVisualAccessibilityContractConsumer", "HoroContrastContractConsumer",
     "HoroWorkspaceLayoutPersistenceTests", "HoroWorkspaceRecoveryPublicHeaderConsumer",
     "HoroNavigationProjectSettingsTests", "HoroNavigationProjectSettingsPublicConsumer",
     "HoroPrefabSceneCookHostTests",

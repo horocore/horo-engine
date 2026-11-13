@@ -54,6 +54,9 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroSceneSourceTests
     HoroColorPipelineTests
     HoroColorCreativeLookPackageTests
+    HoroVisualAccessibilityTests
+    HoroVisualAccessibilityContractConsumer
+    HoroContrastContractConsumer
     HoroProjectCollisionSettingsTests
     HoroCollisionSettingsPublicConsumer
     HoroPublicationLockFoundationConsumer

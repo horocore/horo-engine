@@ -105,6 +105,46 @@ namespace Horo::Input {
         CHECK(retained.Validate().HasError());
     }
 
+    TEST_CASE("Collected axes join cancelling physical scales before saturation without allocations", "[unit][input][collection]") {
+        const float scale = std::numeric_limits<float>::max();
+        const std::array keys{Key::A, Key::B, Key::C, Key::D, Key::F, Key::G, Key::H, Key::I};
+        std::vector<InputBinding> bindings;
+        for (std::size_t index = 0; index < keys.size(); ++index)
+            bindings.push_back({.kind = BindingControlKind::Key,
+                                .key = keys[index],
+                                .scale = index % 4 < 2 ? scale : -scale,
+                                .component = static_cast<std::uint8_t>(index / 4),
+                                .deadzoneKind = DeadzoneKind::Radial,
+                                .deadzone = 0.0F});
+        const ActionDescriptor action{ActionId{"play.look"}, ActionValueType::Axis2D, InputContextId{"play"}, false, std::move(bindings)};
+        InputRouter router;
+        REQUIRE(router.SetActionMap({action}).HasValue());
+        auto context = router.PushContext(action.context, InputContextKind::Gameplay);
+        auto port = router.ActionCollection(context);
+        REQUIRE(port.HasValue());
+        auto source = port.Value().RegisterSource(std::span{&action, 1});
+        REQUIRE(source.HasValue());
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        for (const auto key : keys)
+            collector.SetKey(key, true);
+        auto begun = port.Value().Begin(collector.Commit());
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        const std::array collected{CollectedActionValue{0, 0.25F, -0.5F, true}};
+        REQUIRE(frame.Append(source.Value(), collected).HasValue());
+        REQUIRE(frame.Commit().HasValue());
+        const auto before = Tests::AllocationProbe::Count();
+        const auto evidence = router.ReadActionEvidence(context, action.id);
+        const auto after = Tests::AllocationProbe::Count();
+        CHECK(before == after);
+        CHECK(evidence.status == ActionReadStatus::Resolved);
+        CHECK(evidence.value.x == 0.25F);
+        CHECK(evidence.value.y == -0.5F);
+        CHECK(evidence.value.pressed);
+        CHECK(evidence.value.down);
+    }
+
     TEST_CASE("Input collection publishes only at commit and consumes an admitted edge once", "[unit][input][collection]") {
         Fixture fixture;
         auto port = fixture.Port();

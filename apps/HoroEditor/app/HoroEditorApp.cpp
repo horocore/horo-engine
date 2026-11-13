@@ -1547,6 +1547,7 @@ namespace Horo::Editor {
                         themeReload_.Update(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
 #endif
                         liveGui_.Update(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
+                        SyncControllerGyroscopeInterest();
                         p_->inputBackend.BeginFrame(frameState_.inputFrameNumber++);
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::PollPlatformEvents:
@@ -1746,6 +1747,29 @@ namespace Horo::Editor {
             }
 #endif
 
+            /** @brief Resolves desired physical collection only when canonical effective bindings change. */
+            void SyncControllerGyroscopeInterest() {
+                const auto revision = p_->inputRouter.RoutingState({}).configurationRevision;
+                if (revision == frameState_.inputGyroscopeRevision)
+                    return;
+                frameState_.inputGyroscopeRevision = revision;
+                bool enabled = false;
+                if (revision != 0) {
+                    for (const auto &action : p_->inputRouter.Actions()) {
+                        const auto &overrides = p_->inputRouter.Profile().overrides;
+                        const auto overrideValue = std::ranges::find(overrides, action.id, &Input::BindingOverride::action);
+                        const auto &bindings = overrideValue == overrides.end() ? action.defaultBindings : overrideValue->bindings;
+                        enabled = std::ranges::any_of(bindings, [](const auto &binding) {
+                            return binding.kind == Input::BindingControlKind::GyroscopeAxis &&
+                                   binding.gyroscope.source == Input::GyroscopeSource::Gamepad;
+                        });
+                        if (enabled)
+                            break;
+                    }
+                }
+                p_->inputBackend.SetGamepadGyroscopeEnabled(enabled);
+            }
+
             Result<void> BuildEditorInput(const Runtime::FrameContext &context) {
                 auto &composition = p_->presentation.composition;
                 // The router borrows this snapshot through the later GUI/update phases; a local copy would expire on return.
@@ -1762,6 +1786,13 @@ namespace Horo::Editor {
 #endif
                 else
                     p_->inputRouter.BeginFrame(raw);
+                // Removed contexts cannot receive actions. Retire their owned name leases here,
+                // before a replacement screen reads actions; live/preempted contexts drain their own releases.
+                for (std::size_t index = 0; index < Input::MaximumAccessibilityMappings; ++index) {
+                    Input::RetiredInputActionRelease retired;
+                    if (!p_->inputRouter.TryDequeueRetiredActionRelease(retired))
+                        break;
+                }
                 screenHost_->OnInputSnapshot();
                 return Result<void>::Success();
             }
@@ -2376,6 +2407,7 @@ namespace Horo::Editor {
                 bool xrFramePrepared{};     /**< Exact acquired-frame GUI notification debt; no separate native authority. */
                 bool extractedFrameReady{}; /**< Completed extraction eligible for one native admission. */
                 Input::FrameNumber inputFrameNumber{1};
+                std::uint64_t inputGyroscopeRevision{};
                 Input::InputContextToken focusedWidgetInputContext;
                 EditorPreparedPasses preparedPasses;
                 std::optional<Render::RenderFrameScope> frame;

@@ -311,6 +311,19 @@ clears a builder at player/session ownership changes. Recording stores the
 already assigned value frames; replay feeds those frames directly to simulation,
 without repeating action routing or OS events.
 
+For jump and interact, configured semantic repeat edges enter the same pending
+command latch as activation edges. Multiple edges before a fixed tick coalesce
+into one command. A repeat therefore survives a presentation frame with no tick,
+but does not fire again on later catch-up ticks. Movement transition bits retain
+their physical/semantic transition meaning and do not turn repeats into presses.
+
+If a routed binding cannot advance because its host sample clock is absent or
+mapping capacity is exhausted, capture clears the complete held/pending command
+projection. An earlier zero-tick frame cannot leave a stale command queued after
+that failure. `LastCaptureStatus()` retains the original `ClockUnavailable` or
+`CapacityExceeded` outcome, including duplicate captures of the same sample.
+Optional missing actions remain neutral; an eligible capture still resolves.
+
 The concrete frame also carries the move action's `down`, `pressed`, and
 `released` bits. These preserve existing semantic callbacks even when opposing
 movement bindings cancel the axis value; their edges follow the same once-per-
@@ -460,6 +473,24 @@ Player 3 -> Gamepad B
 Future local co-op flows such as "press any button to join" are built on top of
 device lifecycle and assignment primitives. They do not bypass the action-map or
 snapshot model.
+
+### Controller Motion Collection
+
+Controller gyroscopes use an explicit `GyroscopeSource::Gamepad` binding.
+The copied SI sample belongs to the exact `GamepadDeviceId` incarnation in the raw
+snapshot; ordinary player assignment and transition consumption apply before
+semantic publication. Platform motion remains a separate explicit source, never
+a fallback for an unavailable controller. Desired source/calibration live in the
+canonical binding profile, not in a second motion-preference authority.
+
+The host derives controller collection interest from validated effective bindings
+at configuration boundaries. SDL enables supported native sensors only for
+requested, bound-window, focused collection. Disablement, focus/window changes
+and disconnect neutralize old evidence. A native enable failure is unavailable,
+not support. Queued SDL events from a retired collection epoch are rejected using
+the SDL event-clock cutoff; sensor timestamps remain copied nanoseconds in their
+independent native clock domain. No rate integration, clock-epoch conversion,
+player assignment or profile discovery occurs in the platform adapter.
 
 ### Deadzone And Normalization
 
@@ -735,7 +766,6 @@ application sampling adapters accept the same handle by const reference; the hos
 retains the mutable handle for Commit/Cancel. Explicitly typed projection member
 pointers must also adopt that const-reference parameter. Const does not grant
 concurrent collection access.
-
 
 ### Reserved Source Admission Before Dependent Readiness
 

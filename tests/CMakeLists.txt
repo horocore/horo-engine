@@ -217,6 +217,48 @@ function(horo_register_catch_test target)
     horo_ci_catch_properties(${target})
 endfunction()
 
+add_executable(HoroCaptionTransportContractConsumer support/CaptionTransportPublicHeaderConsumer.cpp)
+target_link_libraries(HoroCaptionTransportContractConsumer PRIVATE HoroEngine::CaptionTransport)
+add_test(NAME HoroCaptionTransportContractConsumer COMMAND HoroCaptionTransportContractConsumer)
+set_tests_properties(HoroCaptionTransportContractConsumer PROPERTIES LABELS "unit;accessibility;headless;public_headers")
+add_executable(HoroPlatformAccessibilityContractConsumer support/PlatformAccessibilityPublicHeaderConsumer.cpp)
+target_link_libraries(HoroPlatformAccessibilityContractConsumer PRIVATE HoroEngine::PlatformAccessibility)
+add_test(NAME HoroPlatformAccessibilityContractConsumer COMMAND HoroPlatformAccessibilityContractConsumer)
+set_tests_properties(HoroPlatformAccessibilityContractConsumer PROPERTIES LABELS "unit;accessibility;headless;public_headers")
+add_executable(HoroGameplayAccessibilityTests unit/gameplay/GameplayAccessibilityTests.cpp support/AllocationProbe.cpp)
+target_include_directories(HoroGameplayAccessibilityTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroGameplayAccessibilityTests PRIVATE HoroEngine::GameplayAccessibility)
+horo_register_catch_test(HoroGameplayAccessibilityTests LABELS "unit;gameplay;accessibility;headless")
+add_executable(HoroGameplayAccessibilityContractConsumer support/GameplayAccessibilityPublicHeaderConsumer.cpp)
+target_link_libraries(HoroGameplayAccessibilityContractConsumer PRIVATE HoroEngine::GameplayAccessibility)
+add_test(NAME HoroGameplayAccessibilityContractConsumer COMMAND HoroGameplayAccessibilityContractConsumer)
+set_tests_properties(HoroGameplayAccessibilityContractConsumer PROPERTIES LABELS "unit;gameplay;accessibility;headless;public_headers")
+add_executable(HoroInputAccessibilityTests unit/runtime/InputAccessibilityTests.cpp
+        unit/runtime/InputGyroscopeTests.cpp
+        unit/runtime/InputAccessibilityRouterTests.cpp support/AllocationProbe.cpp)
+target_include_directories(HoroInputAccessibilityTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroInputAccessibilityTests PRIVATE HoroEngine::Input nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroInputAccessibilityTests LABELS "unit;input;accessibility;headless")
+add_executable(HoroInputAccessibilityPublicHeaderConsumer support/InputAccessibilityPublicHeaderConsumer.cpp)
+target_link_libraries(HoroInputAccessibilityPublicHeaderConsumer PRIVATE HoroEngine::Input)
+add_test(NAME HoroInputAccessibilityPublicHeaderConsumer COMMAND HoroInputAccessibilityPublicHeaderConsumer)
+set_tests_properties(HoroInputAccessibilityPublicHeaderConsumer PROPERTIES LABELS "unit;input;accessibility;headless;public_headers")
+add_executable(HoroVisualAccessibilityTests
+        unit/runtime/VisualAccessibilityTests.cpp
+        unit/runtime/VisualSafetyTests.cpp
+        unit/runtime/ContrastTests.cpp
+)
+target_link_libraries(HoroVisualAccessibilityTests PRIVATE HoroEngine::VisualAccessibility)
+horo_register_catch_test(HoroVisualAccessibilityTests LABELS "unit;accessibility;headless")
+add_executable(HoroVisualAccessibilityContractConsumer support/VisualAccessibilityPublicHeaderConsumer.cpp)
+target_link_libraries(HoroVisualAccessibilityContractConsumer PRIVATE HoroEngine::VisualAccessibility)
+add_test(NAME HoroVisualAccessibilityContractConsumer COMMAND HoroVisualAccessibilityContractConsumer)
+set_tests_properties(HoroVisualAccessibilityContractConsumer PROPERTIES LABELS "unit;accessibility;headless;public_headers;ci-windows")
+add_executable(HoroContrastContractConsumer support/ContrastContractConsumer.cpp)
+target_link_libraries(HoroContrastContractConsumer PRIVATE HoroEngine::VisualAccessibility)
+add_test(NAME HoroContrastContractConsumer COMMAND HoroContrastContractConsumer)
+set_tests_properties(HoroContrastContractConsumer PROPERTIES LABELS "unit;accessibility;headless;public_headers;ci-windows")
+
 add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp)
 target_compile_features(HoroModelProviderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAdapters Catch2::Catch2WithMain)
@@ -377,6 +419,7 @@ if (HORO_BUILD_INPUT_SDL3)
     add_executable(HoroInputSdlTests
             unit/runtime/input/SdlTextInputTests.cpp
             unit/runtime/input/SdlTouchInputTests.cpp
+            unit/runtime/input/SdlGyroscopeInputTests.cpp
     )
     target_compile_features(HoroInputSdlTests PRIVATE cxx_std_20)
     target_include_directories(HoroInputSdlTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/input/sdl)
@@ -3047,6 +3090,9 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/AssetImportSourcePreviewTests.cpp
             unit/editor/ScreenViewPresentationTests.cpp
             unit/editor/EditorThemeBehaviorTests.cpp
+            unit/editor/AccessibilityContrastPanelTests.cpp
+            unit/editor/InputMappingAccessibilityTests.cpp
+            unit/editor/InputGyroscopeEditorTests.cpp
             unit/editor/EditorGuiCompositionTests.cpp
     )
     target_compile_features(HoroEditorPresentationTests PRIVATE cxx_std_20)
@@ -3057,6 +3103,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditorPresentationTests
             PRIVATE
             HoroEngine::Gui
+            HoroEngine::VisualAccessibility
             HoroEngine::EditorServices
             HoroEngine::Extensions
             HoroThirdParty::ImGui
@@ -4951,12 +4998,18 @@ add_executable(HoroRuntimeUiDiagnosticsTests
 target_compile_features(HoroRuntimeUiDiagnosticsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiDiagnosticsTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiAccessibilityTests
+        unit/runtime/ui/UiVisualAccessibilityTests.cpp
+        unit/runtime/ui/UiNullAccessibilityBridgeTests.cpp
+        unit/runtime/ui/UiAccessibilityReviewTests.cpp
+        unit/runtime/ui/UiCaptionTests.cpp
+        unit/runtime/ui/UiCaptionRendererTests.cpp
         unit/runtime/ui/UiAccessibilityTests.cpp
         unit/runtime/ui/UiAccessibilityChangesTests.cpp
         unit/runtime/ui/UiAccessibilityDeliveryTests.cpp
 )
 target_compile_features(HoroRuntimeUiAccessibilityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiAccessibilityTests PRIVATE HoroEngine::RuntimeUi)
+target_link_libraries(HoroRuntimeUiAccessibilityTests PRIVATE HoroEngine::PlatformAccessibility)
 add_executable(HoroRuntimeUiAccessibilityPublicHeaderConsumer support/RuntimeUiAccessibilityPublicHeaderConsumer.cpp)
 target_compile_features(HoroRuntimeUiAccessibilityPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiAccessibilityPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)

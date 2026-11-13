@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <limits>
+#include <optional>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -102,7 +103,10 @@ namespace Horo::Application::Internal {
 
         Result<void> OnPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
             if (phase == Runtime::RuntimePhase::BeginFrame) {
-                owner.raw.BeginFrame(context.frameNumber);
+                const auto nanoseconds = context.presentationAdmittedDuration.ToNanoseconds();
+                const auto sampleTime =
+                    nanoseconds >= 0 ? std::optional{Input::InputSampleTime{static_cast<std::uint64_t>(nanoseconds) / 1000}} : std::nullopt;
+                owner.raw.BeginFrame(context.frameNumber, sampleTime);
                 if (auto ready = EnsureGameplay(); ready.HasError())
                     return ready;
             }
