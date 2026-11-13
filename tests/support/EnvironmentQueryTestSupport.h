@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AiTestSupport.h"
+#include "../unit/runtime/ai/AiTestSupport.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
