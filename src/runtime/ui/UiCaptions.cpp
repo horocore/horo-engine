@@ -29,6 +29,23 @@ namespace Horo::Runtime::Ui::UiErrors {
 namespace Horo::Runtime::Ui {
     static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 
+    namespace {
+        /** @brief Validates unique bounded cue identities and positive measured extents before arranging any placement. */
+        bool AreMeasuredCaptionsValid(const std::span<const CaptionMeasuredCue> measured) noexcept {
+            if (measured.size() > MaximumCaptionCues)
+                return false;
+            for (std::size_t i = 0; i < measured.size(); ++i) {
+                if (measured[i].cue.session == 0 || measured[i].cue.sequence == 0 || !measured[i].extent.IsValid() ||
+                    measured[i].extent.width == 0 || measured[i].extent.height == 0)
+                    return false;
+                for (std::size_t j = 0; j < i; ++j)
+                    if (measured[i].cue == measured[j].cue)
+                        return false;
+            }
+            return true;
+        }
+    }  // namespace
+
     /** @copydoc CaptionAppearance::IsValid */
     bool CaptionAppearance::IsValid() const noexcept {
         const auto normalized = [](const float value) {
@@ -46,17 +63,9 @@ namespace Horo::Runtime::Ui {
         const auto right = static_cast<std::int64_t>(viewport.origin.x) + viewport.extent.width;
         const auto bottom = static_cast<std::int64_t>(viewport.origin.y) + viewport.extent.height;
         if (!viewport.IsValid() || viewport.extent.width == 0 || viewport.extent.height == 0 || !appearance.IsValid() ||
-            measured.size() > MaximumCaptionCues || right > std::numeric_limits<std::int32_t>::max() ||
+            !AreMeasuredCaptionsValid(measured) || right > std::numeric_limits<std::int32_t>::max() ||
             bottom > std::numeric_limits<std::int32_t>::max())
             return Result<CaptionLayout>::Failure(MakeError(UiErrors::CaptionInvalid));
-        for (std::size_t i = 0; i < measured.size(); ++i) {
-            if (measured[i].cue.session == 0 || measured[i].cue.sequence == 0 || !measured[i].extent.IsValid() ||
-                measured[i].extent.width == 0 || measured[i].extent.height == 0)
-                return Result<CaptionLayout>::Failure(MakeError(UiErrors::CaptionInvalid));
-            for (std::size_t j = 0; j < i; ++j)
-                if (measured[i].cue == measured[j].cue)
-                    return Result<CaptionLayout>::Failure(MakeError(UiErrors::CaptionInvalid));
-        }
         CaptionLayout output;
         const auto marginX =
             static_cast<std::int32_t>(std::ceil(viewport.extent.width * static_cast<double>(appearance.safeAreaMarginPercent) / 100.0));
