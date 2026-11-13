@@ -63,6 +63,36 @@ namespace {
         return std::move(created).Value();
     }
 
+    TEST_CASE("Character jump repeats survive zero tick captures without repeating on catch up", "[character][input][accessibility]") {
+        auto active = SpawnedActiveWorldWithController();
+        InputFixture input;
+        Input::InputBinding jump{.key = Input::Key::Space};
+        jump.accessibility.digital = {.repeat = true, .repeatDelayMicroseconds = 50, .repeatIntervalMicroseconds = 20};
+        REQUIRE(input.router.SetProfile({.overrides = {{Input::ActionId{"jump"}, {jump}}}}).HasValue());
+        auto adapter = input.Adapter(active);
+        Input::FrameNumber frame{};
+        const auto capture = [&](const std::uint64_t time, const bool down, const bool focused = true) {
+            input.Frame(++frame, false, down, focused, Input::InputSampleTime{time});
+            REQUIRE(adapter.CaptureInput(input.router, input.context).HasValue());
+        };
+        capture(0, false);
+        capture(10, true);
+        REQUIRE(adapter.ConsumeInput(1, 1).Value().Intent().jumpRequested);
+        REQUIRE_FALSE(adapter.ConsumeInput(2, 2).Value().Intent().jumpRequested);
+        capture(60, true);
+        REQUIRE(adapter.CaptureInput(input.router, input.context).HasValue());
+        capture(61, true);
+        REQUIRE(adapter.ConsumeInput(3, 3).Value().Intent().jumpRequested);
+        REQUIRE_FALSE(adapter.ConsumeInput(4, 4).Value().Intent().jumpRequested);
+        capture(80, true);
+        capture(100, true);
+        REQUIRE(adapter.ConsumeInput(5, 5).Value().Intent().jumpRequested);
+        REQUIRE_FALSE(adapter.ConsumeInput(6, 6).Value().Intent().jumpRequested);
+        capture(120, true);
+        capture(121, true, false);
+        REQUIRE_FALSE(adapter.ConsumeInput(7, 7).Value().Intent().jumpRequested);
+    }
+
     TEST_CASE("Timed input clock failure preserves its cause and clears previously captured Character intent",
               "[character][input][accessibility]") {
         auto active = SpawnedActiveWorldWithController();

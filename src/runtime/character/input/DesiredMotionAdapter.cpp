@@ -156,7 +156,7 @@ namespace Horo::CharacterInput {
             heldVelocity = Math::Vec3{(binding.right.x * movement.value.x + binding.forward.x * movement.value.y) * scale,
                                       (binding.right.y * movement.value.x + binding.forward.y * movement.value.y) * scale,
                                       (binding.right.z * movement.value.x + binding.forward.z * movement.value.y) * scale};
-            pendingJump = pendingJump || jump.value.pressed;
+            pendingJump = pendingJump || jump.value.pressed || jump.value.repeated;
             return Result<void>::Success();
         }
     };

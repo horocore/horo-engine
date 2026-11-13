@@ -147,6 +147,8 @@ namespace Horo::CharacterInput {
 
         /**
          * @brief Captures owned held axes and pending jump edges once per committed presentation snapshot.
+         * @details Activation and configured semantic repeat edges coalesce into one pending jump. A fixed tick
+         * consumes that jump once; additional catch-up ticks do not recreate it.
          * @param router Live router borrowed only until return.
          * @param context Exact original context token borrowed only until return.
          * @return Success or typed routing/capacity failure; Input::InputAccessibilityErrors::ClockUnavailable preserves missing
