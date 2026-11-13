@@ -57,7 +57,11 @@ gyro axes remain conflicts despite different calibration, scale or output compon
 
 `GyroscopeBindingPolicy::source` is appended with the default `Platform` value;
 existing two-argument aggregate initialization retains its meaning. Select
-`AssignedGamepad` explicitly for per-device motion. `GamepadState::gyroscope`
+`Gamepad` explicitly for per-device motion. As with ordinary gamepad axes,
+reads with an explicit player accept only that player's assigned device; reads
+without a player retain the existing unfiltered controller selection. The source
+name therefore identifies the device class, not a new assignment authority.
+`GamepadState::gyroscope`
 owns the copied sample, and `RawInputCollector::SetGamepadGyroscopeSample` and
 `VirtualGamepad::SetGyroscopeSample` admit the exact connected incarnation.
 Invalid, regressing, stale-handle or unfocused available publications fail
@@ -92,8 +96,12 @@ burn queued event-clock evidence; native sensor timestamps are nanoseconds and
 are never multiplied by 1000 or compared with the host epoch.
 
 New core, editor and real SDL virtual-device regression sources cover this path.
-Their native execution is pending at this source edit; no physical controller or
-native interaction qualification is claimed by adding them.
+The initial controller core commit `ec59e05` passed **102/102 Input cases**, zero
+skipped, including staged/explicit public consumers and allocation-free reads.
+Later source naming, neutral-threshold and fixed-tick capture coverage require a
+fresh run; SDL/editor/other direct consumers remain pending at this source edit.
+No physical controller or native interaction qualification is claimed by these
+core results or the added virtual-device tests.
 
 Zero detection thresholds still require a nonzero filtered rate before reporting
 held/pressed state. Previously zero or unavailable gyro/stick evidence could be

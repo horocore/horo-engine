@@ -107,14 +107,14 @@ namespace {
         InputRouter router;
         const ActionId look{"look"};
         const InputContextId play{"play"};
-        REQUIRE(router
-                    .SetActionMap({{look,
-                                    ActionValueType::Axis1D,
-                                    play,
-                                    true,
-                                    {{.kind = BindingControlKind::GyroscopeAxis,
-                                      .gyroscope = {SensorAxis::Y, 4, GyroscopeSource::AssignedGamepad}}}}})
-                    .HasValue());
+        REQUIRE(
+            router
+                .SetActionMap({{look,
+                                ActionValueType::Axis1D,
+                                play,
+                                true,
+                                {{.kind = BindingControlKind::GyroscopeAxis, .gyroscope = {SensorAxis::Y, 4, GyroscopeSource::Gamepad}}}}})
+                .HasValue());
         router.BeginFrame(raw);
         REQUIRE(router.AssignGamepad(0, id));
         auto context = router.PushContext(play, InputContextKind::Gameplay);

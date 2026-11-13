@@ -12,7 +12,7 @@ namespace Horo::Input {
               "[input][accessibility][gyroscope][neutral]") {
         const std::array bindings{InputBinding{.kind = BindingControlKind::GyroscopeAxis},
                                   InputBinding{.kind = BindingControlKind::GyroscopeAxis,
-                                               .gyroscope = {SensorAxis::X, 1, GyroscopeSource::AssignedGamepad}},
+                                               .gyroscope = {SensorAxis::X, 1, GyroscopeSource::Gamepad}},
                                   InputBinding{.kind = BindingControlKind::GamepadAxis}};
         for (auto binding : bindings) {
             binding.digitalThreshold = 0;
@@ -60,7 +60,7 @@ namespace Horo::Input {
         REQUIRE(collector.SetSensorSample(SensorKind::Gyroscope, {SensorAvailability::Available, {0, -4, 0}, 0, 100}));
         InputBinding controller{.kind = BindingControlKind::GyroscopeAxis,
                                 .digitalThreshold = 0.1F,
-                                .gyroscope = {SensorAxis::Y, 4, GyroscopeSource::AssignedGamepad}};
+                                .gyroscope = {SensorAxis::Y, 4, GyroscopeSource::Gamepad}};
         auto platform = controller;
         platform.gyroscope.source = GyroscopeSource::Platform;
         const ActionId look{"look"}, phone{"phone"};
@@ -148,7 +148,7 @@ namespace Horo::Input {
         REQUIRE(original.HasValue());
         auto document = nlohmann::json::parse(original.Value());
         CHECK_FALSE(document["overrides"][0]["bindings"][0]["gyroscope"].contains("source"));
-        profile.overrides[0].bindings[0].gyroscope.source = GyroscopeSource::AssignedGamepad;
+        profile.overrides[0].bindings[0].gyroscope.source = GyroscopeSource::Gamepad;
         const auto encoded = SerializeBindingProfile(profile);
         REQUIRE(encoded.HasValue());
         const auto decoded = ParseBindingProfile(encoded.Value());

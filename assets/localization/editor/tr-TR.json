@@ -2147,7 +2147,7 @@
     "workspace.input_mapping.gyro.hint": {"text": "Platform sensörünü veya atanmış bir kontrolcüyü seçin. Kullanılamayan kaynaklar nötr kalır; başka bir sensöre geçilmez. X, Y ve Z cihaz eksenleridir. Fare hareketini değil, hızı denetler."},
     "workspace.input_mapping.gyro.source": {"text": "Hareket kaynağı"},
     "workspace.input_mapping.gyro.source_platform": {"text": "Platform hareket sensörü"},
-    "workspace.input_mapping.gyro.source_gamepad": {"text": "Atanmış kontrolcü jiroskopu"},
+    "workspace.input_mapping.gyro.source_gamepad": {"text": "Kontrolcü jiroskopu"},
     "workspace.input_mapping.gyro.axis": {"text": "Cihazın dönme ekseni"},
     "workspace.input_mapping.gyro.axis_x": {"text": "X ekseni"},
     "workspace.input_mapping.gyro.axis_y": {"text": "Y ekseni"},

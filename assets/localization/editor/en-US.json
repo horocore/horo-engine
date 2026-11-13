@@ -2147,7 +2147,7 @@
     "workspace.input_mapping.gyro.hint": {"text": "Select the platform sensor or an assigned controller. Unavailable sources remain neutral; they never fall back to another sensor. X, Y and Z are device axes. This controls a rate, not mouse movement."},
     "workspace.input_mapping.gyro.source": {"text": "Motion source"},
     "workspace.input_mapping.gyro.source_platform": {"text": "Platform motion sensor"},
-    "workspace.input_mapping.gyro.source_gamepad": {"text": "Assigned controller gyroscope"},
+    "workspace.input_mapping.gyro.source_gamepad": {"text": "Controller gyroscope"},
     "workspace.input_mapping.gyro.axis": {"text": "Device rotation axis"},
     "workspace.input_mapping.gyro.axis_x": {"text": "X axis"},
     "workspace.input_mapping.gyro.axis_y": {"text": "Y axis"},

@@ -44,9 +44,9 @@ namespace Horo::Input {
                 break;
             case GyroscopeAxis:
                 source.modality = Motion;
-                source.glyph.control = static_cast<std::uint16_t>(binding.gyroscope.axis) +
-                                       (binding.gyroscope.source == GyroscopeSource::AssignedGamepad ? 3 : 0);
-                if (binding.gyroscope.source == GyroscopeSource::AssignedGamepad)
+                source.glyph.control =
+                    static_cast<std::uint16_t>(binding.gyroscope.axis) + (binding.gyroscope.source == GyroscopeSource::Gamepad ? 3 : 0);
+                if (binding.gyroscope.source == GyroscopeSource::Gamepad)
                     source.gamepad = device;
                 break;
         }

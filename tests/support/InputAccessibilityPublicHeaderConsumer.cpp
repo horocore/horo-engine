@@ -13,8 +13,7 @@ int main() {
     Horo::Input::InputBinding binding;
     binding.accessibility.digital.toggle = true;
     const Horo::Input::GyroscopeBindingPolicy gyroscope{Horo::Input::SensorAxis::Y, 2.0F};
-    const Horo::Input::GyroscopeBindingPolicy controllerGyroscope{Horo::Input::SensorAxis::Y, 2.0F,
-                                                                  Horo::Input::GyroscopeSource::AssignedGamepad};
+    const Horo::Input::GyroscopeBindingPolicy controllerGyroscope{Horo::Input::SensorAxis::Y, 2.0F, Horo::Input::GyroscopeSource::Gamepad};
     Horo::Input::RawInputCollector motion;
     motion.BeginFrame(1);
     Horo::Input::VirtualGamepad controller{motion};

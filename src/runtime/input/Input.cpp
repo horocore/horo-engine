@@ -230,7 +230,7 @@ namespace Horo::Input {
                     return {axis, DigitalStateFromAxis(axis, previous, binding.digitalThreshold)};
                 }
                 case GyroscopeAxis: {
-                    if (binding.gyroscope.source != GyroscopeSource::AssignedGamepad)
+                    if (binding.gyroscope.source != GyroscopeSource::Gamepad)
                         break;
                     const float axis = ResolveAnalogAxis(Detail::ReadGyroscopeAxis(pad.gyroscope, binding.gyroscope), binding);
                     const auto *previousPad = previousSnapshot ? previousSnapshot->FindGamepad(pad.id) : nullptr;
@@ -1052,7 +1052,7 @@ namespace Horo::Input {
                         return {snapshot.pointer.wheelY, {snapshot.pointer.wheelY != 0, snapshot.pointer.wheelY != 0, false}};
                     return EvaluateWheel(snapshot.pointer.wheelY, impl.consumed.wheelY);
                 case GyroscopeAxis: {
-                    if (binding.gyroscope.source == GyroscopeSource::AssignedGamepad)
+                    if (binding.gyroscope.source == GyroscopeSource::Gamepad)
                         return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, player,
                                                       impl.consumed.gamepadTransitions, consume, preferred);
                     const float axis =

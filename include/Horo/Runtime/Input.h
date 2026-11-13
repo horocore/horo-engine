@@ -490,7 +490,7 @@ namespace Horo::Input {
     /** @brief Physical motion source; unavailable sources never fall back to another sensor. */
     enum class GyroscopeSource : std::uint8_t {
         Platform,
-        AssignedGamepad,
+        Gamepad,
         Count
     };
 
@@ -503,7 +503,7 @@ namespace Horo::Input {
     struct GyroscopeBindingPolicy final {
         SensorAxis axis{SensorAxis::X};
         float radiansPerSecondAtFullScale{1.0F};
-        GyroscopeSource source{GyroscopeSource::Platform}; /**< AssignedGamepad uses the ordinary exact player/device filter. */
+        GyroscopeSource source{GyroscopeSource::Platform}; /**< Gamepad uses the ordinary exact player/device filter. */
         /** @brief Checks the source, axis and finite inclusive [0.001, 1000] rad/s calibration. @return Whether admitted. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] bool operator==(const GyroscopeBindingPolicy &) const noexcept = default;

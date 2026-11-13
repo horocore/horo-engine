@@ -245,7 +245,7 @@ namespace Horo::Editor {
                 const std::array axisKeys{"gyro.axis_x", "gyro.axis_y", "gyro.axis_z"};
                 const auto axis = static_cast<std::size_t>(binding.gyroscope.axis);
                 ImGui::TextWrapped("%s: %s", LocalizedText(context.localization, "gyro.source").c_str(),
-                                   LocalizedText(context.localization, binding.gyroscope.source == Input::GyroscopeSource::AssignedGamepad
+                                   LocalizedText(context.localization, binding.gyroscope.source == Input::GyroscopeSource::Gamepad
                                                                            ? "gyro.source_gamepad"
                                                                            : "gyro.source_platform")
                                        .c_str());

@@ -474,9 +474,9 @@ Future local co-op flows such as "press any button to join" are built on top of
 device lifecycle and assignment primitives. They do not bypass the action-map or
 snapshot model.
 
-### Deadzone And Normalization
+### Controller Motion Collection
 
-Controller gyroscopes use an explicit `GyroscopeSource::AssignedGamepad` binding.
+Controller gyroscopes use an explicit `GyroscopeSource::Gamepad` binding.
 The copied SI sample belongs to the exact `GamepadDeviceId` incarnation in the raw
 snapshot; ordinary player assignment and transition consumption apply before
 semantic publication. Platform motion remains a separate explicit source, never
@@ -491,6 +491,8 @@ not support. Queued SDL events from a retired collection epoch are rejected usin
 the SDL event-clock cutoff; sensor timestamps remain copied nanoseconds in their
 independent native clock domain. No rate integration, clock-epoch conversion,
 player assignment or profile discovery occurs in the platform adapter.
+
+### Deadzone And Normalization
 
 Deadzone policy is binding/context-specific, not a single global constant:
 

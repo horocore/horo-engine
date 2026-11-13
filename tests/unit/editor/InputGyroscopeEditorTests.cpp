@@ -36,7 +36,7 @@ namespace Horo::Editor {
               "[editor][input][accessibility][gyroscope][model]") {
         for (const auto rate : {0.001F, 2.5F, 1000.0F}) {
             auto baseline = Gyroscope();
-            baseline.gyroscope.source = Input::GyroscopeSource::AssignedGamepad;
+            baseline.gyroscope.source = Input::GyroscopeSource::Gamepad;
             baseline.gyroscope.radiansPerSecondAtFullScale = rate;
             baseline.scale = -0.123456789F;
             baseline.component = 1;
@@ -85,13 +85,13 @@ namespace Horo::Editor {
         RegisterLook(router);
         const auto request = AppendRequest(router);
         auto draft = GyroscopeBindingEditorDraft::FromBinding(Gyroscope());
-        draft.source = static_cast<int>(Input::GyroscopeSource::AssignedGamepad);
+        draft.source = static_cast<int>(Input::GyroscopeSource::Gamepad);
         REQUIRE(ApplyGyroscopeBindingDraft(router, request, draft).HasValue());
         REQUIRE(router.Profile().overrides.size() == 1);
         const auto original = router.Profile().overrides[0].bindings;
         REQUIRE(original.size() == 2);
         REQUIRE(original[0].key == Input::Key::A);
-        REQUIRE(original[1].gyroscope.source == Input::GyroscopeSource::AssignedGamepad);
+        REQUIRE(original[1].gyroscope.source == Input::GyroscopeSource::Gamepad);
         REQUIRE(original[1].gyroscope.axis == Gyroscope().gyroscope.axis);
         const auto encoded = Input::SerializeBindingProfile(router.Profile());
         REQUIRE(encoded.HasValue());
@@ -105,7 +105,7 @@ namespace Horo::Editor {
         REQUIRE(ApplyGyroscopeBindingDraft(router, edit, draft).HasValue());
         REQUIRE(router.Profile().overrides[0].bindings[0] == original[0]);
         REQUIRE(router.Profile().overrides[0].bindings[1].scale == -0.75F);
-        REQUIRE(router.Profile().overrides[0].bindings[1].gyroscope.source == Input::GyroscopeSource::AssignedGamepad);
+        REQUIRE(router.Profile().overrides[0].bindings[1].gyroscope.source == Input::GyroscopeSource::Gamepad);
         REQUIRE(ApplyGyroscopeBindingDraft(router, edit, draft).HasError());
         const auto beforeRejected = router.Profile().overrides[0].bindings;
         auto wrongBaseline = AppendRequest(router);

@@ -15,12 +15,11 @@ namespace {
         InputRouter router;
         const ActionId look{"look"};
         const InputContextId play{"play"};
-        const InputBinding yaw{.kind = BindingControlKind::GyroscopeAxis,
-                               .gyroscope = {SensorAxis::Y, 2, GyroscopeSource::AssignedGamepad}};
+        const InputBinding yaw{.kind = BindingControlKind::GyroscopeAxis, .gyroscope = {SensorAxis::Y, 2, GyroscopeSource::Gamepad}};
         const InputBinding pitch{.kind = BindingControlKind::GyroscopeAxis,
                                  .scale = -1,
                                  .component = 1,
-                                 .gyroscope = {SensorAxis::X, 4, GyroscopeSource::AssignedGamepad}};
+                                 .gyroscope = {SensorAxis::X, 4, GyroscopeSource::Gamepad}};
         REQUIRE(router.SetActionMap({{look, ActionValueType::Axis2D, play, true, {yaw, pitch}}}).HasValue());
         auto context = router.PushContext(play, InputContextKind::Gameplay);
         RawInputCollector collector;

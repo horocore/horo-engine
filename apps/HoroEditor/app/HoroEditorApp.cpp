@@ -1761,7 +1761,7 @@ namespace Horo::Editor {
                         const auto &bindings = overrideValue == overrides.end() ? action.defaultBindings : overrideValue->bindings;
                         enabled = std::ranges::any_of(bindings, [](const auto &binding) {
                             return binding.kind == Input::BindingControlKind::GyroscopeAxis &&
-                                   binding.gyroscope.source == Input::GyroscopeSource::AssignedGamepad;
+                                   binding.gyroscope.source == Input::GyroscopeSource::Gamepad;
                         });
                         if (enabled)
                             break;
