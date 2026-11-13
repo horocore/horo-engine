@@ -59,6 +59,18 @@ namespace Horo::Prefab {
             REQUIRE(publication.status == Assets::AssetRegistryBuildStatus::Complete);
         }
 
+        /** @brief Builds canonical repeated placements while preserving each occurrence's distinct local scope. */
+        PrefabComposition ResolverFanoutComposition(const Assets::AssetId source, const PrefabSourceRevision revision,
+                                                    const std::uint32_t placements) {
+            PrefabComposition composition;
+            for (std::uint32_t index = 1; index <= placements; ++index) {
+                composition.nestedPlacements.push_back({.placementLocalId = {index},
+                                                        .sourcePrefab = PrefabAssetReference::Create(source).Value(),
+                                                        .authoredAgainst = revision});
+            }
+            return composition;
+        }
+
         /** @brief Builds the shared two-source nested resolver fixture with a caller-selected placement and inner hierarchy. */
         Result<PrefabSourceResolverSnapshot> BuildNestedResolverSnapshot(Assets::AssetRegistry &registry, const LocalObjectId placement,
                                                                          std::vector<PrefabObjectNode> nestedObjects) {
@@ -152,12 +164,7 @@ namespace Horo::Prefab {
             PublishResolverRegistry(registry, {ResolverRecord(outer, "assets/prefabs/outer.prefab"),
                                                ResolverRecord(leaf, "assets/prefabs/leaf.prefab")});
             constexpr std::uint32_t placements = 64;
-            PrefabComposition composition;
-            for (std::uint32_t index = 1; index <= placements; ++index) {
-                composition.nestedPlacements.push_back({.placementLocalId = {index},
-                                                        .sourcePrefab = PrefabAssetReference::Create(leaf).Value(),
-                                                        .authoredAgainst = ResolverRevision(2)});
-            }
+            auto composition = ResolverFanoutComposition(leaf, ResolverRevision(2), placements);
             const auto snapshot =
                 BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
                                                   {{ResolverDocument(outer, {ResolverObject(0)}, std::move(composition), {leaf}),

@@ -87,6 +87,23 @@ namespace Horo::Prefab::MetricTest {
             std::chrono::milliseconds maximumLatency;
         };
 
+        /** @brief Requests cancellation at a deterministic owner-thread allocation boundary. */
+        struct CancelAtAllocation final {
+            const CancellationSource *source;
+            std::size_t remaining;
+            bool fired{};
+            std::chrono::steady_clock::time_point requestedAt;
+
+            static void Observe(std::size_t, void *context) noexcept {
+                auto &state = *static_cast<CancelAtAllocation *>(context);
+                if (state.remaining > 0 && --state.remaining == 0) {
+                    state.fired = true;
+                    state.requestedAt = std::chrono::steady_clock::now();
+                    state.source->RequestCancellation();
+                }
+            }
+        };
+
         /** @brief Measures the owner-thread callback window and reports bounded samples outside its allocation scope. */
         void QualifyPipelinePhase(const QualificationWorkload &workload, const char *phase, const char *cache, const std::size_t inputBytes,
                                   const auto &operation) {
@@ -122,6 +139,47 @@ namespace Horo::Prefab::MetricTest {
                       << " maximum_cpp_requests=" << maximum.requests << " maximum_cpp_requested_bytes=" << maximum.requestedBytes
                       << " largest_cpp_request=" << maximum.largestRequest << " median_us=" << median.count()
                       << " maximum_us=" << samples.back().count() << '\n';
+        }
+
+        /** @brief Qualifies committed spawn and teardown against one owned scene and template cohort. */
+        void QualifyCommittedSpawn(const QualificationWorkload &workload) {
+            const auto limits = Limits();
+            SpawnTest::Fixture fixture;
+            auto runtimeTemplate = fixture.Data();
+            if (workload.objects == PrefabHardLimits::SourceObjectCount) {
+                const auto child = runtimeTemplate.entities.back();
+                runtimeTemplate.entities.resize(1);
+                for (std::uint32_t index = 1; index < workload.objects; ++index) {
+                    auto entity = child;
+                    const auto address = PrefabObjectAddress::Create({}, LocalObjectId{index});
+                    REQUIRE(address.HasValue());
+                    entity.provenance.sourceObject = address.Value();
+                    runtimeTemplate.entities.push_back(std::move(entity));
+                }
+            }
+            const auto templateBytes = CookedPrefab::Create(runtimeTemplate, limits);
+            REQUIRE(templateBytes.HasValue());
+            fixture.Put(std::move(runtimeTemplate));
+            fixture.Warm();
+            const auto request = fixture.Request();
+            QualifyPipelinePhase(workload, "spawn_commit", "warm-template", templateBytes.Value().Bytes().size(), [&] {
+                const auto spawned = fixture.context->Spawn(request);
+                if (spawned.HasError())
+                    return false;
+                if (fixture.service->Advance(fixture.tick).HasError())
+                    return false;
+                if (fixture.scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, fixture.Frame()).HasError())
+                    return false;
+                if (fixture.service->Advance(fixture.tick).HasError())
+                    return false;
+                return spawned.Value().State() == PrefabSpawnState::Committed;
+            });
+            const auto expectedEntities = 1 + workload.objects * workload.samples;
+            CHECK(fixture.Count() == expectedEntities);
+            fixture.service->Shutdown();
+            CHECK(fixture.context->Spawn(request).HasError());
+            fixture.runner->Shutdown();
+            CHECK(fixture.trace.destroys == expectedEntities);
         }
     }  // namespace
 
@@ -231,24 +289,12 @@ namespace Horo::Prefab::MetricTest {
         REQUIRE(baseline.requests > 1);
         CancellationSource cancellation;
 
-        struct CancelAtAllocation final {
-            const CancellationSource *source;
-            std::size_t remaining;
-            bool fired{};
-            std::chrono::steady_clock::time_point requestedAt;
-        } state{&cancellation, baseline.requests / 2};
+        CancelAtAllocation state{&cancellation, baseline.requests / 2};
 
         Tests::AllocationProbe::Measurement interrupted;
         const auto rejected = [&] {
             Tests::AllocationProbe::ScopedMeasurement measurement;
-            Tests::AllocationProbe::ScopedObserver observer{+[](std::size_t, void *context) noexcept {
-                auto &state = *static_cast<CancelAtAllocation *>(context);
-                if (state.remaining > 0 && --state.remaining == 0) {
-                    state.fired = true;
-                    state.requestedAt = std::chrono::steady_clock::now();
-                    state.source->RequestCancellation();
-                }
-            }, &state};
+            Tests::AllocationProbe::ScopedObserver observer{CancelAtAllocation::Observe, &state};
             auto result = resolver.Resolve(Test::Asset(2), instance, Limits(), cancellation.Token());
             interrupted = measurement.Snapshot();
             return result;
@@ -301,42 +347,7 @@ namespace Horo::Prefab::MetricTest {
                 const auto cooked = CookPrefabTemplate(resolver, sources.registry.Snapshot(), Test::Asset(2), {}, target, limits);
                 return cooked.HasValue() && cooked.Value().Data().entities.size() == workload.objects;
             });
-            SpawnTest::Fixture fixture;
-            auto runtimeTemplate = fixture.Data();
-            if (workload.objects == PrefabHardLimits::SourceObjectCount) {
-                const auto child = runtimeTemplate.entities.back();
-                runtimeTemplate.entities.resize(1);
-                for (std::uint32_t index = 1; index < workload.objects; ++index) {
-                    auto entity = child;
-                    const auto address = PrefabObjectAddress::Create({}, LocalObjectId{index});
-                    REQUIRE(address.HasValue());
-                    entity.provenance.sourceObject = address.Value();
-                    runtimeTemplate.entities.push_back(std::move(entity));
-                }
-            }
-            const auto templateBytes = CookedPrefab::Create(runtimeTemplate, limits);
-            REQUIRE(templateBytes.HasValue());
-            fixture.Put(std::move(runtimeTemplate));
-            fixture.Warm();
-            const auto request = fixture.Request();
-            QualifyPipelinePhase(workload, "spawn_commit", "warm-template", templateBytes.Value().Bytes().size(), [&] {
-                const auto spawned = fixture.context->Spawn(request);
-                if (spawned.HasError())
-                    return false;
-                if (fixture.service->Advance(fixture.tick).HasError())
-                    return false;
-                if (fixture.scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, fixture.Frame()).HasError())
-                    return false;
-                if (fixture.service->Advance(fixture.tick).HasError())
-                    return false;
-                return spawned.Value().State() == PrefabSpawnState::Committed;
-            });
-            const auto expectedEntities = 1 + workload.objects * workload.samples;
-            CHECK(fixture.Count() == expectedEntities);
-            fixture.service->Shutdown();
-            CHECK(fixture.context->Spawn(request).HasError());
-            fixture.runner->Shutdown();
-            CHECK(fixture.trace.destroys == expectedEntities);
+            QualifyCommittedSpawn(workload);
         }
     }
 

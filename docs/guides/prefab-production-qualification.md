@@ -104,6 +104,40 @@ release-stage tests alone cannot establish that full distribution matrix.
 
 ## Local validation record
 
+The 13 November full preflight ran against the actual PR base
+`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`, with the verified worktree-owned
+Windows Release compilation database. All nine changed C++ object targets
+compiled. This establishes compilation only; no native executable test result
+or measured performance pass follows from it. The fresh report at
+`bfc92f2a25d92345de305374e5c9e454400eb8dc` is
+`1794577211621296000-710865e7.json` and exited 2:
+
+- CLI secrets completed cleanly.
+- Sonar IDE remained incomplete and reported failure to terminate verified
+  quality processes. The managed IDE log also reported that the configured
+  `horocore` connection did not exist, preventing connected-mode binding.
+  C++ sensor execution was not established.
+- Codacy remained incomplete: a Semgrep rule timed out on
+  `tests/python/test_local_build_cache.py`; `scripts/dev.py` and
+  `tests/CMakeLists.txt` were skipped by analyzer size limits, and CMake had no
+  configured local analyzer. Complexity and duplication estimates completed,
+  with seven clone groups touching selected files.
+- Changed-test findings covered cancellation/pipeline test length and pipeline
+  complexity in `PrefabMetricsTests.cpp`, plus fanout test length in
+  `PrefabSourceResolverTests.cpp`. Follow-up helpers separate deterministic
+  cancellation, canonical repeated-placement construction, and committed
+  spawn/teardown qualification without dropping assertions.
+- Contextual findings remain recorded: Bandit B603 on the fixture subprocess
+  in `test_local_build_cache.py`, five PyLint W0404 imports in
+  `test_quality_preflight.py`, and a contextual metrics-test length finding.
+  Changed-line classification does not establish their age.
+
+The follow-up test edits passed clang-format and diff whitespace checks but have
+not been recompiled or reanalyzed. The previous report is not a current-input
+pass after those edits. The same full scope must run again once managed IDE
+binding and verified process cleanup are available; no PID-only termination,
+trust bypass, rule changes or unverified bridge ports were used.
+
 A persistent goal was created on 11 November 2026 for the complete HORO-1007
 parent and all ten children. Its complete objective remains in scope. GitHub and Jira status/identity
 reads were repeated, and no remote delivery branch or pull request was found.
