@@ -17,6 +17,11 @@ public:
         return Return::Success(std::move(participant));
     }
 
+    HeadlessFixedParticipant(const HeadlessFixedParticipant &) = delete;
+    HeadlessFixedParticipant &operator=(const HeadlessFixedParticipant &) = delete;
+    HeadlessFixedParticipant(HeadlessFixedParticipant &&) = delete;
+    HeadlessFixedParticipant &operator=(HeadlessFixedParticipant &&) = delete;
+
     ~HeadlessFixedParticipant() override {
         if (!OnOwner() || attempting_)
             std::terminate();

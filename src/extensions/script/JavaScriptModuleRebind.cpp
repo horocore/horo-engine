@@ -48,6 +48,11 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
                   publication_(std::make_shared<const ScriptModulePublishedContexts>(next_, state_->authority)),
                   activeOnly_(std::make_shared<const ScriptModulePublishedContexts>(next_, nullptr)) {}
 
+            Prepared(const Prepared &) = delete;
+            Prepared &operator=(const Prepared &) = delete;
+            Prepared(Prepared &&) = delete;
+            Prepared &operator=(Prepared &&) = delete;
+
             ~Prepared() override {
                 assert(state_->owner == std::this_thread::get_id());
                 for (auto value : namespaces_)

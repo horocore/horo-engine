@@ -10,6 +10,11 @@ namespace Horo::Physics::Detail {
     struct PhysicsStateResourceRecord final {
         explicit PhysicsStateResourceRecord(std::thread::id owner) noexcept : ownerThread(owner) {}
 
+        PhysicsStateResourceRecord(const PhysicsStateResourceRecord &) = delete;
+        PhysicsStateResourceRecord &operator=(const PhysicsStateResourceRecord &) = delete;
+        PhysicsStateResourceRecord(PhysicsStateResourceRecord &&) = delete;
+        PhysicsStateResourceRecord &operator=(PhysicsStateResourceRecord &&) = delete;
+
         ~PhysicsStateResourceRecord();
         const std::thread::id ownerThread;
         PhysicsStateBuildBinding build;
