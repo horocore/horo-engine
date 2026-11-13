@@ -5,6 +5,7 @@
  * @brief Deterministic provider-neutral Platform Services cook and private-adapter mapping handoff.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/ErrorCode.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Sha256.h"
@@ -40,7 +41,8 @@ namespace Horo::PlatformServices {
         PlatformProviderMappingPolicy mappingPolicy; /**< Explicit required-kind policy for selected target. */
         std::uint64_t mappingRevision{};             /**< Exact nonzero private mapping document revision. */
         std::span<const PlatformCookMapping> mappings;
-        std::stop_token cancellation; /**< Checked through final fingerprint; host fences cancellation after return. */
+        std::stop_token cancellation;       /**< Checked through final fingerprint; host fences cancellation after return. */
+        CancellationToken hostCancellation; /**< Optional application cancellation chain, checked at the same cook boundaries. */
     };
 
     /** @brief Owned canonical outputs; host publishes both or neither after rechecking source revisions. */
@@ -66,4 +68,27 @@ namespace Horo::PlatformServices {
      * output; caller rechecks cancellation and source revisions before atomic publication.
      */
     [[nodiscard]] Result<PlatformProviderManifestCookOutput> CookPlatformProviderManifest(const PlatformProviderManifestCookInput &input);
+
+    /** @brief Finite paired-publication byte ceiling including domain and all length fields. */
+    inline constexpr std::size_t PlatformProviderManifestCookGenerationMaximumBytes = 64U * 1024U * 1024U;
+
+    /** @brief Encodes the existing generation-fingerprint preimage as one bounded atomic publication unit.
+     * @param output Complete paired output from the shared cook, with its matching generation fingerprint.
+     * @return Domain-tagged length-prefixed pair, or InvalidInput/StaleGeneration; at most 64 MiB including framing.
+     * @details Uses the unchanged v1 fingerprint layout. SHA-256 of these exact bytes equals generationFingerprint.
+     * This framing adds no source authority, semantic validation or provider-native data.
+     * @throws std::bad_alloc While preparing owned derived bytes; no source or publication state changes.
+     */
+    [[nodiscard]] Result<std::vector<std::byte>> EncodePlatformProviderManifestCookGeneration(
+        const PlatformProviderManifestCookOutput &output);
+
+    /** @brief Recovers both streams from one exact admitted generation without accepting a mixed or partial pair.
+     * @param bytes Complete bounded generation-fingerprint preimage.
+     * @param expectedFingerprint Exact digest from the caller's trusted cook/publication/release authority.
+     * @return Owned paired streams after exact domain, framing, byte-consumption and digest checks, or typed failure.
+     * @details Does not interpret runtime semantics or grant provider trust. The caller retains those admission responsibilities.
+     * @throws std::bad_alloc While copying admitted streams; no source or publication state changes.
+     */
+    [[nodiscard]] Result<PlatformProviderManifestCookOutput> DecodePlatformProviderManifestCookGeneration(
+        std::span<const std::byte> bytes, const Sha256Digest &expectedFingerprint);
 }  // namespace Horo::PlatformServices

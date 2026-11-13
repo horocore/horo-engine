@@ -36,6 +36,8 @@
 #include <vector>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
+    class PlatformProjectSettingsOwner;
+
     struct WorkspacePanelServices {
         XRSimulatorModel *xrSimulator{};
         IEditorGuiRenderer *guiRenderer{nullptr};
@@ -156,6 +158,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         /** @brief Returns navigation settings from the current controller. */
         Result<NavigationProjectSettingsSession *> NavigationSettings() override;
         Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings() override;
+        /** @brief Opens the existing shared draft with this workspace's exact portable policy publication operations. */
+        Result<std::shared_ptr<ConfigurationSettingsSession>> ProjectConfiguration() override;
         /** @brief Updates canonical owners and derived presentation for the current frame. */
         void OnUpdate(float dt) override;
         /** @brief Captures gameplay input only while Play owns simulation. */
@@ -264,6 +268,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Runtime::RuntimeSceneService &runtimeScene_;
         EditorSettingsService &settings_;
         ProjectOpenService &projectOpenService_;
+        std::shared_ptr<const Application::PlatformServicesProjectSourceSnapshot> platformSources_;
+        std::shared_ptr<PlatformProjectSettingsOwner> platformSettings_;
         std::shared_ptr<IXRSimulatorArtifacts> simulatorArtifacts_;
         WorkspacePanelServices panelServices_{};
         WorkspaceProjectServices projectServices_{};

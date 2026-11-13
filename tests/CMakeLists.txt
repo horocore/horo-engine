@@ -1966,7 +1966,7 @@ add_dependencies(HoroXRSimulatorWorkflowTests HoroEditorDocumentInternalConsumer
 target_include_directories(HoroXRSimulatorWorkflowTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroXRSimulatorWorkflowTests PRIVATE HoroXRSimulatorProjectWorkflow
     HoroEngine::EditorServices HoroEngine::SceneSource HoroEngine::Application
-    HoroXRSimulatorPlayHost HoroEditorXrSceneInternal)
+    HoroEngine::Platform HoroEngine::Security HoroXRSimulatorPlayHost HoroEditorXrSceneInternal)
 # The materializer is invoked explicitly with a fresh owned output directory;
 # ordinary CTest discovery must never run it or require an output environment.
 horo_register_catch_test(HoroXRSimulatorWorkflowTests
@@ -3043,6 +3043,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/PrefabSettingsPresentationTests.cpp
             unit/editor/CollisionSettingsPresentationTests.cpp
             unit/editor/SettingsModalPresentationTests.cpp
+            unit/editor/ProjectConfigurationPresentationTests.cpp
             unit/editor/NavigationDefinitionPresentationTests.cpp
             unit/editor/NavigationPolicyPresentationTests.cpp
             unit/editor/ProjectCreationViewPresentationTests.cpp
@@ -3346,26 +3347,32 @@ target_compile_features(HoroReleaseProcessTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleaseProcessTests PRIVATE HoroEngine::ReleaseProcess)
 add_executable(HoroProjectMigrationTests
         unit/application/ProjectMigrationTests.cpp
+        unit/application/ProjectMigrationEntropyTests.cpp
+        unit/application/PlatformServicesAdoptionTests.cpp
         unit/application/ProjectMigrationUnitFixture.h
         unit/application/ProjectMigrationCatalogTests.cpp
         unit/application/ProjectAuthoringMigrationTests.cpp
 )
 target_compile_features(HoroProjectMigrationTests PRIVATE cxx_std_20)
-target_link_libraries(HoroProjectMigrationTests PRIVATE HoroEngine::ProjectMigrations
-        HoroEngine::NetworkApi HoroEngine::NavigationApi nlohmann_json::nlohmann_json)
+target_link_libraries(HoroProjectMigrationTests PRIVATE HoroEngine::ProjectMigrations HoroEngine::Security
+        HoroEngine::NetworkApi HoroEngine::NavigationApi HoroEngine::PlatformServicesAuthoring
+        HoroEngine::ProjectSurfaceSettings nlohmann_json::nlohmann_json)
 add_executable(HoroProjectMigrationTransactionTests
         unit/editor/ProjectMigrationTransactionTests.cpp
         unit/editor/ProjectMutationAdmissionTests.cpp
+        unit/editor/PlatformServicesMigrationTransactionTests.cpp
 )
 target_compile_features(HoroProjectMigrationTransactionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroProjectMigrationTransactionTests PRIVATE
-        HoroEngine::EditorServices HoroEngine::ProjectMigrations)
+        HoroEngine::EditorServices HoroEngine::ProjectMigrations HoroEngine::PlatformServicesAuthoring
+        HoroEngine::ProjectSurfaceSettings HoroEngine::Security nlohmann_json::nlohmann_json)
 add_executable(HoroProjectOpenServiceTests
         unit/editor/ProjectOpenServiceTests.cpp
+        unit/editor/ProjectOpenPlatformServicesTests.cpp
 )
 target_compile_features(HoroProjectOpenServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroProjectOpenServiceTests PRIVATE
-        HoroEngine::EditorServices HoroEngine::ProjectMigrations nlohmann_json::nlohmann_json)
+        HoroEngine::EditorServices HoroEngine::ProjectMigrations HoroEngine::Security nlohmann_json::nlohmann_json)
 
 add_executable(HoroProjectIntegrityValidatorServiceTests
         unit/editor/ProjectIntegrityValidatorServiceTests.cpp
@@ -3382,7 +3389,8 @@ target_compile_features(HoroProjectMigrationIntegrationTests PRIVATE cxx_std_20)
 target_include_directories(HoroProjectMigrationIntegrationTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/helpers/project_migration)
 target_link_libraries(HoroProjectMigrationIntegrationTests PRIVATE
-        HoroEngine::EditorServices HoroEngine::ProjectMigrations HoroEngine::NavigationApi nlohmann_json::nlohmann_json)
+        HoroEngine::EditorServices HoroEngine::ProjectMigrations HoroEngine::NavigationApi
+        HoroEngine::PlatformServicesAuthoring HoroEngine::ProjectSurfaceSettings HoroEngine::Security nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroProjectMigrationIntegrationTests
         LABELS "migration")
 add_executable(HoroRecentProjectInspectionServiceTests
@@ -3393,12 +3401,16 @@ target_link_libraries(HoroRecentProjectInspectionServiceTests PRIVATE
         HoroEngine::EditorServices HoroEngine::ProjectMigrations)
 add_executable(HoroProjectCreationServiceTests
         unit/editor/ProjectCreationServiceTests.cpp
+        unit/editor/ProjectCreationPublicationTests.cpp
 )
 
 target_compile_features(HoroProjectCreationServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroProjectCreationServiceTests
         PRIVATE
         HoroEngine::EditorServices
+        HoroEngine::Security
+        HoroEngine::PlatformServicesAuthoring
+        HoroEngine::Platform
 )
 add_executable(HoroProjectAssetRegistrySourceTests unit/application/ProjectAssetRegistrySourceTests.cpp)
 target_compile_features(HoroProjectAssetRegistrySourceTests PRIVATE cxx_std_20)
@@ -4148,6 +4160,7 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/PlatformOfflineQueueTests.cpp
         unit/platform_services/PlatformOfflineQueueLifecycleTests.cpp
         unit/platform_services/PlatformProjectConfigurationTests.cpp
+        unit/platform_services/PlatformProjectSettingsTests.cpp
         unit/platform_services/PlatformProviderManifestCookTests.cpp
         unit/platform_services/PlatformRequestTests.cpp
         unit/platform_services/PlatformCompletionQueueTests.cpp
@@ -4168,6 +4181,26 @@ add_executable(HoroPlatformRequestTests
 target_compile_features(HoroPlatformRequestTests PRIVATE cxx_std_20)
 target_include_directories(HoroPlatformRequestTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroPlatformRequestTests PRIVATE HoroEngine::PlatformServices Threads::Threads)
+add_executable(HoroPlatformServicesAuthoringTests
+        unit/application/PlatformServicesAuthoringTests.cpp
+        unit/application/PlatformServicesPolicyCodecTests.cpp
+        unit/application/PlatformServicesProjectSourcesTests.cpp
+        unit/application/PlatformServicesProjectCookTests.cpp
+)
+target_compile_features(HoroPlatformServicesAuthoringTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPlatformServicesAuthoringTests PRIVATE HoroEngine::PlatformServicesAuthoring
+        HoroEngine::ProjectSurfaceSettings HoroEngine::Security HoroEngine::Platform Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
+add_test(NAME HoroPlatformServicesAuthoringTests COMMAND HoroPlatformServicesAuthoringTests)
+set_tests_properties(HoroPlatformServicesAuthoringTests PROPERTIES LABELS "unit;platform-services;project;headless")
+target_sources(HoroPlatformServicesPublicHeaderConsumer PRIVATE support/PlatformStableIdReplacementPublicContract.cpp)
+target_sources(HoroPlatformServicesAuthoringPublicHeaderConsumer PRIVATE support/PlatformServicesDefinitionCodecPublicContract.cpp)
+target_sources(HoroApplicationPublicHeaderConsumer PRIVATE support/ProjectMigrationEntropyPublicContract.cpp)
+target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/ProjectCreationPublicationPublicContract.cpp)
+target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/ConfigurationSettingsPersistencePublicContract.cpp)
+if(TARGET HoroGuiPublicHeaderConsumer)
+    target_sources(HoroGuiPublicHeaderConsumer PRIVATE support/ProjectConfigurationModalPublicContract.cpp)
+endif()
+
 add_executable(HoroPlatformServicesCompositionTests unit/platform_services/PlatformServicesCompositionTests.cpp)
 target_compile_features(HoroPlatformServicesCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPlatformServicesCompositionTests PRIVATE HoroEngine::PlatformServices Catch2::Catch2WithMain Threads::Threads)
@@ -6754,10 +6787,12 @@ target_link_libraries(HoroCliOutputPublicHeaderConsumer PRIVATE HoroEngine::CliH
 add_test(NAME HoroCliOutputPublicHeaderConsumer COMMAND HoroCliOutputPublicHeaderConsumer)
 set_tests_properties(HoroCliOutputPublicHeaderConsumer PROPERTIES LABELS "cli;headless;sonar-coverage;ci-windows")
 add_executable(HoroNavigationHostErrorTests unit/application/navigation/NavigationHostErrorTests.cpp
+    unit/application/PlatformServicesCliHostTests.cpp
     unit/application/AnimationHostErrorTests.cpp
     unit/extensions/ScriptModuleHostErrorTests.cpp
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/CliHostErrorTranslation.cpp"
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/CliHostInterrupts.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/PlatformServicesCliHost.cpp"
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/NavigationCliHost.cpp")
 target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::AnimationCookedAssets)
@@ -6765,11 +6800,16 @@ target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURC
 target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
 target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors
     HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters HoroEngine::Extensions)
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::PlatformServicesAuthoring)
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::ProjectMutationGuard)
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::ProjectSurfaceSettings)
 horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroCliProductionOutputContract integration/CliProductionOutputContract.cpp)
 target_compile_features(HoroCliProductionOutputContract PRIVATE cxx_std_20)
 target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::Platform nlohmann_json::nlohmann_json)
+target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::PlatformServicesAuthoring)
+target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::ProjectMutationGuard)
 add_dependencies(HoroCliProductionOutputContract horo-engine)
 add_test(NAME HoroCliProductionOutputContract COMMAND HoroCliProductionOutputContract "$<TARGET_FILE:horo-engine>")
 set_tests_properties(HoroCliProductionOutputContract PROPERTIES LABELS "cli;integration;headless;sonar-coverage;ci-windows" TIMEOUT 120)

@@ -70,6 +70,11 @@ namespace Horo::TestSupport {
             return native.RemoveDurable(path);
         }
 
+        Result<void> PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                                      AtomicFileReplacementReceipt &receipt) override {
+            return native.PublishDirectoryNoReplaceTracked(prepared, destination, receipt);
+        }
+
         Result<void> SyncDirectory(const std::filesystem::path &path) override {
             return native.SyncDirectory(path);
         }

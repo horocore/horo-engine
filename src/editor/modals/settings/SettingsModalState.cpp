@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/SettingsModalDraft.h"
+#include "SettingsModalInternal.h"
 
 #include <algorithm>
 
@@ -118,8 +119,26 @@ namespace Horo::Editor {
         state.configurationPreviewed = false;
     }
 
+    namespace {
+        /** @brief Commits only the active project session while preserving the pending user draft. */
+        bool ApplyProjectConfiguration(SettingsState &state) {
+            if (!state.projectConfiguration) {
+                state.configurationFailure = state.projectConfigurationError;
+                state.status = SettingsModalStatus::Failure;
+                return false;
+            }
+            const auto applied = state.projectConfiguration->Apply();
+            state.configurationFailure = applied.HasError() ? std::optional<Error>{applied.ErrorValue()} : std::nullopt;
+            state.status = applied.HasError() ? SettingsModalStatus::Failure : SettingsModalStatus::Applied;
+            return applied.HasValue();
+        }
+    }  // namespace
+
     /** @copydoc SettingsModal.h */
     [[nodiscard]] bool ApplySettings(SettingsState &state, EditorSettingsService &settings) {
+        if (static_cast<SettingsModalInternal::SettingsTab>(state.activeTab) == SettingsModalInternal::SettingsTab::ProjectConfiguration) {
+            return ApplyProjectConfiguration(state);
+        }
         if (state.navigationProjectDraftDirty)
             return false;
         if (const auto owner = state.prefab.owner.lock(); owner && owner->IsDirty())

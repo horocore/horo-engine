@@ -247,16 +247,20 @@ namespace {
         REQUIRE(rejected.ErrorValue().diagnostics.front().message.find("raw-secret") == std::string::npos);
     }
 
-    TEST_CASE("Credential References Round Trip Without Admitting Plain Strings", "[unit][foundation][configuration]") {
+    TEST_CASE("Credential Reference Grammar Rejects Invalid Opaque Identities", "[unit][foundation][configuration]") {
         const std::string opaque = "cred:v1:" + std::string(48, 'a');
-        auto reference = CredentialReference::Parse(opaque);
-        REQUIRE(reference.HasValue());
         for (const std::string &invalid : {std::string{}, std::string{"raw-password"}, opaque + "a", "cred:v1:" + std::string(48, 'A'),
                                            "cred:v1:" + std::string(48, 'g'), "cred:v2:" + std::string(48, 'a')}) {
             const auto rejected = CredentialReference::Parse(invalid);
             REQUIRE(rejected.HasError());
             CHECK(rejected.ErrorValue().message.find("raw-password") == std::string::npos);
         }
+    }
+
+    TEST_CASE("Credential References Round Trip Without Admitting Plain Strings", "[unit][foundation][configuration]") {
+        const std::string opaque = "cred:v1:" + std::string(48, 'a');
+        auto reference = CredentialReference::Parse(opaque);
+        REQUIRE(reference.HasValue());
         const SettingKey key{"release.signing.reference"};
         SettingDescriptor descriptor{.key = key,
                                      .type = SettingValueType::CredentialReference,

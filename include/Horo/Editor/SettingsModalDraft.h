@@ -207,6 +207,8 @@ namespace Horo::Editor {
         std::uint64_t settingsRevision = 0;
         std::uint64_t configurationRevision = 0;
         std::shared_ptr<ConfigurationSettingsSession> configuration;
+        std::shared_ptr<ConfigurationSettingsSession> projectConfiguration;
+        std::optional<Error> projectConfigurationError;
         std::optional<Error> configurationFailure;
         bool configurationPreviewed = false;
 

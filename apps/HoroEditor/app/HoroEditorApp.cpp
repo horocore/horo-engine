@@ -90,6 +90,7 @@
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Platform/SecureRandom.h"
+#include "Horo/PlatformServices/PlatformProjectSettings.h"
 #include "Horo/Runtime/Input.h"
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
@@ -2929,7 +2930,12 @@ namespace Horo::Editor {
             auto packageComposition = std::move(preparedPackages).Value();
             auto *packages = packageComposition.selected;
             ProjectMutationCoordinator mutationCoordinator{durableFiles};
-            ProjectMigrationTransactionService migrationTransactions{durableFiles, wallClock, mutationCoordinator, p.background.jobs};
+            ProjectMigrationTransactionService migrationTransactions{durableFiles,
+                                                                     wallClock,
+                                                                     mutationCoordinator,
+                                                                     p.background.jobs,
+                                                                     {},
+                                                                     {.random = Platform::CreateNativeSecureRandomSource()}};
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
             RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
             const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
@@ -2973,9 +2979,14 @@ namespace Horo::Editor {
             AssetRegistryProjectOpenContributor assetRegistryContributor{assetRegistry, collisionInventory};
             SceneScopeProjectOpenContributor sceneScopeContributor{previewProjectRoot, preview.physicsMode};
             std::array<IProjectOpenDerivedStateContributor *, 2> projectOpenContributors{&sceneScopeContributor, &assetRegistryContributor};
-            ProjectOpenService projectOpenService{p.background.jobs,      durableFiles,          projectOpenPreflight,
-                                                  mutationCoordinator,    migrationTransactions, p.rendererAvailability,
-                                                  projectOpenContributors};
+            ProjectOpenService projectOpenService{p.background.jobs,
+                                                  durableFiles,
+                                                  projectOpenPreflight,
+                                                  mutationCoordinator,
+                                                  migrationTransactions,
+                                                  p.rendererAvailability,
+                                                  projectOpenContributors,
+                                                  {.profile = PlatformServices::PlatformServicesHostProfile::InteractiveDevelopment}};
             ScreenRegistry screenRegistry;
             RegisterWelcomeScreen(screenRegistry);
             RegisterProjectCreationScreen(screenRegistry);
@@ -3269,6 +3280,12 @@ namespace Horo::Editor {
             return std::nullopt;
         }
         auto configurationSchema = std::move(moduleSchema).Value();
+        for (const auto &descriptor : PlatformServices::MakePlatformProjectSettingsContribution().settings) {
+            if (const auto registered = configurationSchema.Register(descriptor); registered.HasError()) {
+                LOG_CRITICAL("editor.startup", "Platform project schema rejected: code=%s.", registered.ErrorValue().code.Value().c_str());
+                return std::nullopt;
+            }
+        }
 #if defined(HORO_HAS_OPENXR_HOST)
         // Explicit application composition; descriptor registration performs no native discovery or activation.
         for (const auto &descriptor : XR::XRProjectSettingDescriptors()) {
@@ -3639,7 +3656,8 @@ namespace Horo::Editor {
         auto shaderReload = std::move(createdReload).Value();
         if (shaderReload)
             LOG_INFO("editor.shader_reload", "Development commands: Ctrl+Alt+R reload; Ctrl+Alt+C cancel.");
-        ProjectCreationService projectCreationService{jobSystem, engineEvents};
+        ProjectCreationService projectCreationService{jobSystem, engineEvents, Platform::CreateNativeSecureRandomSource(),
+                                                      std::make_shared<NativeDurableFileSystem>()};
         EditorDataBus editorEvents;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", launch.startup.settings.languageTag.c_str());
         LocalizationService localization{LocaleTag{"en-US"}};

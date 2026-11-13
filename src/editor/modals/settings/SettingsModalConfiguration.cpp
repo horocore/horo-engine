@@ -73,10 +73,12 @@ namespace Horo::Editor::SettingsModalInternal {
 
         /** @brief Draws one admitted primitive field without mutating the shared draft. */
         bool DrawFieldControl(ConfigurationSettingsSession &session, const ConfigurationSettingField &field,
-                              const EditorGuiContext &context) {
+                              const EditorGuiContext &context, const ConfigurationSource source) {
             auto *buffer = session.EditBuffer(field.descriptor.key);
             bool changed = false;
-            const auto &label = SettingsModal::kTextScope.Text(context.localization, "configuration.user_value");
+            const auto &label =
+                SettingsModal::kTextScope.Text(context.localization, source == ConfigurationSource::Project ? "configuration.project_value"
+                                                                                                            : "configuration.user_value");
             Ui::SettingRow(label.c_str(), nullptr, context.theme.fonts, [&] {
                 if (field.descriptor.type == SettingValueType::Boolean) {
                     bool value = *buffer == "true";
@@ -91,6 +93,23 @@ namespace Horo::Editor::SettingsModalInternal {
             return changed;
         }
 
+        /** @brief Displays validation and preview results without changing the draft or its field storage. */
+        void DrawFieldFeedback(const ConfigurationSettingsSession &session, const ConfigurationSettingField &field,
+                               const EditorGuiContext &context) {
+            const auto &key = field.descriptor.key;
+            if (field.error) {
+                const auto &invalid = SettingsModal::kTextScope.Text(context.localization, "configuration.invalid");
+                ImGui::PushStyleColor(ImGuiCol_Text, Theme::Err());
+                ImGui::TextWrapped("%s\n%s", invalid.c_str(), field.error->code.Value().c_str());
+                ImGui::PopStyleColor();
+            }
+            if (session.Preview() && session.Draft().proposedValues.contains(key)) {
+                const auto &preview = SettingsModal::kTextScope.Text(context.localization, "configuration.preview");
+                ImGui::TextWrapped("%s", preview.c_str());
+                DrawValue(session.Preview()->Get(key));
+            }
+        }
+
         /** @brief Applies a copied field identity because stale-edit recovery can replace every session row. */
         void ApplyFieldEdit(SettingsState &state, ConfigurationSettingsSession &session, const SettingKey key) {
             const auto edited = session.Edit(key, *session.EditBuffer(key));
@@ -101,7 +120,8 @@ namespace Horo::Editor::SettingsModalInternal {
                 state.configurationFailure.reset();
                 state.status = SettingsModalStatus::None;
             }
-            if (edited.HasValue() && key.Value() == "editor.theme.active" && session.Preview()) {
+            if (session.Draft().source == ConfigurationSource::User && edited.HasValue() && key.Value() == "editor.theme.active" &&
+                session.Preview()) {
                 const auto &theme = std::get<std::string>(session.Preview()->Get(key));
                 state.appearance.pendingThemeIndex = static_cast<int>(ThemePresetFromConfigurationValue(theme));
                 state.configurationPreviewed = true;
@@ -110,13 +130,21 @@ namespace Horo::Editor::SettingsModalInternal {
     }  // namespace
 
     /** @copydoc DrawConfiguration */
-    void DrawConfiguration(SettingsState &state, const EditorGuiContext &context) {
+    void DrawConfiguration(SettingsState &state, const EditorGuiContext &context, const ConfigurationSource source) {
         using namespace Theme;
         using namespace Ui;
-        if (!state.configuration)
+        const auto &binding = source == ConfigurationSource::Project ? state.projectConfiguration : state.configuration;
+        if (!binding) {
+            if (source == ConfigurationSource::Project && state.projectConfigurationError) {
+                const auto &message = SettingsModal::kTextScope.Text(context.localization, "configuration.project_unavailable");
+                ImGui::TextWrapped("%s", message.c_str());
+            }
             return;
-        auto &session = *state.configuration;
-        const auto &title = SettingsModal::kTextScope.Text(context.localization, "configuration.title");
+        }
+        auto &session = *binding;
+        const auto &title =
+            SettingsModal::kTextScope.Text(context.localization,
+                                           source == ConfigurationSource::Project ? "configuration.project_title" : "configuration.title");
         SectionTitle(title.c_str(), context.theme.fonts);
         for (const auto &field : session.Fields()) {
             const auto &key = field.descriptor.key;
@@ -131,23 +159,21 @@ namespace Horo::Editor::SettingsModalInternal {
                 ImGui::TextWrapped("%s", policy.c_str());
                 continue;
             }
-            const auto &publicPolicy = SettingsModal::kTextScope.Text(context.localization, "configuration.public");
+            const auto &publicPolicy =
+                SettingsModal::kTextScope.Text(context.localization, source == ConfigurationSource::Project ? "configuration.project_public"
+                                                                                                            : "configuration.public");
             ImGui::TextWrapped("%s", publicPolicy.c_str());
-            if (DrawFieldControl(session, field, context)) {
+            if (DrawFieldControl(session, field, context, source)) {
                 ApplyFieldEdit(state, session, key);
                 return;
             }
-            if (field.error) {
-                const auto &invalid = SettingsModal::kTextScope.Text(context.localization, "configuration.invalid");
-                ImGui::PushStyleColor(ImGuiCol_Text, Err());
-                ImGui::TextWrapped("%s\n%s", invalid.c_str(), field.error->code.Value().c_str());
-                ImGui::PopStyleColor();
-            }
-            if (session.Preview() && session.Draft().proposedValues.contains(key)) {
-                const auto &preview = SettingsModal::kTextScope.Text(context.localization, "configuration.preview");
-                ImGui::TextWrapped("%s", preview.c_str());
-                DrawValue(session.Preview()->Get(key));
-            }
+            DrawFieldFeedback(session, field, context);
+        }
+        if (session.Failure()) {
+            const auto &invalid = SettingsModal::kTextScope.Text(context.localization, "configuration.invalid");
+            ImGui::PushStyleColor(ImGuiCol_Text, Theme::Err());
+            ImGui::TextWrapped("%s\n%s", invalid.c_str(), session.Failure()->code.Value().c_str());
+            ImGui::PopStyleColor();
         }
     }
 }  // namespace Horo::Editor::SettingsModalInternal

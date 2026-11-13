@@ -40,7 +40,9 @@ namespace Horo::Editor::SettingsModalInternal {
                         return "configuration.stale";
                     return "configuration.invalid";
                 case SettingsModalStatus::None:
-                    return "configuration.persist_hint";
+                    return static_cast<SettingsTab>(state.activeTab) == SettingsTab::ProjectConfiguration
+                               ? "configuration.project_persist_hint"
+                               : "configuration.persist_hint";
             }
             return "configuration.persist_hint";
         }
@@ -48,6 +50,14 @@ namespace Horo::Editor::SettingsModalInternal {
         /** @brief Restores one validated default preview through the shared authority without committing it. */
         void RestoreDefaultDraft(SettingsState &state, EditorSettingsService &settings) {
             LOG_INFO("editor.settings", "Restore Defaults clicked — draft reset to factory defaults.");
+            if (static_cast<SettingsTab>(state.activeTab) == SettingsTab::ProjectConfiguration) {
+                if (state.projectConfiguration) {
+                    const auto restored = state.projectConfiguration->RestoreDefaults();
+                    state.configurationFailure = restored.HasError() ? std::optional<Error>{restored.ErrorValue()} : std::nullopt;
+                    state.status = restored.HasError() ? SettingsModalStatus::Failure : SettingsModalStatus::Defaults;
+                }
+                return;
+            }
             LoadSettingsForModal(state, settings);
             const auto restored = state.configuration->RestoreDefaults();
             if (restored.HasError()) {
@@ -66,7 +76,8 @@ namespace Horo::Editor::SettingsModalInternal {
 
     void DrawFooterStatus(const SettingsState &st, const EditorGuiContext &ctx, const float footerPaddingX, const float actionsStartX) {
         ImGui::SetCursorPos({footerPaddingX, (ImGui::GetWindowHeight() - ImGui::GetTextLineHeight()) * 0.5F});
-        if (st.dirty || (st.configuration && !st.configuration->Draft().proposedValues.empty())) {
+        if (st.dirty || (st.configuration && !st.configuration->Draft().proposedValues.empty()) ||
+            (st.projectConfiguration && !st.projectConfiguration->Draft().proposedValues.empty())) {
             ScopedTextStyle badge(ctx.theme.fonts.sansCompact, TextPx::Caption(), FontPx::SansCompact);
             ImGui::PushStyleColor(ImGuiCol_Text, Warn());
             ImGui::TextUnformatted(SettingsModal::kTextScope.Text(ctx.localization, "configuration.unsaved").c_str());
@@ -87,8 +98,9 @@ namespace Horo::Editor::SettingsModalInternal {
         if (hasFeedback)
             message = st.modalFeedback.c_str();
         const auto prefab = st.prefab.owner.lock();
+        const bool project = static_cast<SettingsTab>(st.activeTab) == SettingsTab::ProjectConfiguration;
         const auto &prefabHint = SettingsModal::kTextScope.Text(ctx.localization, "prefab.save_first");
-        if (prefab && prefab->IsDirty())
+        if (!project && prefab && prefab->IsDirty())
             message = prefabHint.c_str();
         const auto origin = ImGui::GetWindowPos();
         ImGui::PushClipRect(origin, {origin.x + actionsStartX - 12.0F, origin.y + ImGui::GetWindowHeight()}, true);
@@ -102,6 +114,7 @@ namespace Horo::Editor::SettingsModalInternal {
     [[nodiscard]] bool DrawFooterActions(SettingsState &st, EditorSettingsService &settings, const EditorGuiContext &ctx,
                                          const float centeredActionY, float &actionsStartX) {
         const auto prefab = st.prefab.owner.lock();
+        const bool project = static_cast<SettingsTab>(st.activeTab) == SettingsTab::ProjectConfiguration;
         constexpr float actionH = 32.0F;
         const auto restoreDefaults = SettingsModal::kTextScope.Text(ctx.localization, "restore_defaults");
         const auto cancelLabel = SettingsModal::kTextScope.Text(ctx.localization, "cancel") + "###settings_cancel";
@@ -125,6 +138,7 @@ namespace Horo::Editor::SettingsModalInternal {
         if (Button({.label = restoreDefaults.c_str(),
                     .size = {restoreW, actionH},
                     .variant = ButtonVariant::Secondary,
+                    .enabled = !project || static_cast<bool>(st.projectConfiguration),
                     .font = ctx.theme.fonts.sansCompact,
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {
@@ -144,7 +158,7 @@ namespace Horo::Editor::SettingsModalInternal {
         if (Button({.label = applyLabel.c_str(),
                     .size = {applyW, actionH},
                     .variant = ButtonVariant::Primary,
-                    .enabled = !prefab || !prefab->IsDirty(),
+                    .enabled = project ? static_cast<bool>(st.projectConfiguration) : (!prefab || !prefab->IsDirty()),
                     .font = ctx.theme.fonts.sansCompact,
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {

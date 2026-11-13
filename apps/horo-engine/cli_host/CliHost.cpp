@@ -9,11 +9,13 @@
 #include "Horo/Cli/CliOutputPresenter.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Extensions/HeadlessExtensionHost.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "HostModuleComposition.h"
 #include "NavigationCliHost.h"
 #include "PackageCliHost.h"
+#include "PlatformServicesCliHost.h"
 
 #include <algorithm>
 #include <new>
@@ -191,13 +193,18 @@ namespace Horo::Application::Internal {
                 Cli::MakeNavigationBakeCommandAdapter([&navigation](const CliCommandRequest &command, const CliExecutionContext &context) {
                 return navigation.Bind(command, context);
             }));
+            adapters.push_back(
+                MakePlatformServicesValidationCommandAdapter({.profile = PlatformServices::PlatformServicesHostProfile::HeadlessServer}));
+            adapters.push_back(MakePlatformServicesCookCommandAdapter({.profile = PlatformServices::PlatformServicesHostProfile::Cook},
+                                                                      std::make_shared<NativeDurableFileSystem>()));
             return adapters;
         }
 
         /** @brief Explicit product command grants shared by descriptor and executable admission; package trust stays separate. */
         std::vector<CliCapabilityId> CommandCapabilities() {
-            return {{"horo.extension.module-run"}, {"horo.extension.script-run"}, {"horo.mcp.serve"},
-                    {"horo.observability.smoke"},  {"horo.package.manage"},       {"horo.navigation.bake"}};
+            return {{"horo.extension.module-run"},       {"horo.extension.script-run"},  {"horo.mcp.serve"},
+                    {"horo.observability.smoke"},        {"horo.package.manage"},        {"horo.navigation.bake"},
+                    {"horo.platform-services.validate"}, {"horo.platform-services.cook"}};
         }
 
         /** @brief Owns a mutable admitted dispatcher before invoking its borrowed application services. */

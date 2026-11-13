@@ -20,6 +20,10 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#endif
 #endif
 
 namespace Horo {
@@ -349,6 +353,39 @@ namespace Horo {
 #else
         if (::rename(prepared.c_str(), destination.c_str()) != 0)
             return Result<void>::Failure(FsError(IoFailed, destination));
+#endif
+        receipt.RecordCommitted();
+        return SyncDirectory(destination.parent_path());
+    }
+
+    /** @copydoc NativeDurableFileSystem::PublishDirectoryNoReplaceTracked */
+    Result<void> NativeDurableFileSystem::PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                           const std::filesystem::path &destination,
+                                                                           AtomicFileReplacementReceipt &receipt) {
+        if (receipt.WasCommitted() || prepared.filename().empty() || destination.filename().empty() ||
+            prepared.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
+            destination.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
+            !prepared.is_absolute() || !destination.is_absolute() || prepared != prepared.lexically_normal() ||
+            destination != destination.lexically_normal() || prepared == destination || prepared.parent_path() != destination.parent_path())
+            return Result<void>::Failure(FsError(IoFailed, destination));
+        std::error_code error;
+        const auto source = std::filesystem::symlink_status(NativeApiPath(prepared), error);
+        if (error || source.type() != std::filesystem::file_type::directory)
+            return Result<void>::Failure(FsError(IoFailed, prepared));
+        const auto target = std::filesystem::symlink_status(NativeApiPath(destination), error);
+        if ((error && error != std::errc::no_such_file_or_directory) || target.type() != std::filesystem::file_type::not_found)
+            return Result<void>::Failure(FsError(IoFailed, destination));
+#if defined(_WIN32)
+        if (!MoveFileExW(NativeApiPath(prepared).c_str(), NativeApiPath(destination).c_str(), MOVEFILE_WRITE_THROUGH))
+            return Result<void>::Failure(FsError(IoFailed, destination));
+#elif defined(__APPLE__)
+        if (renameatx_np(AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_EXCL) != 0)
+            return Result<void>::Failure(FsError(IoFailed, destination));
+#elif defined(__linux__) && defined(SYS_renameat2)
+        if (syscall(SYS_renameat2, AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE) != 0)
+            return Result<void>::Failure(FsError(IoFailed, destination));
+#else
+        return Result<void>::Failure(FsError(IoFailed, destination));
 #endif
         receipt.RecordCommitted();
         return SyncDirectory(destination.parent_path());

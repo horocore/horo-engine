@@ -19,6 +19,9 @@
 #include <vector>
 
 namespace Horo::PlatformServices {
+    /** @brief Maximum UTF-8 bytes in the existing opaque project-root identity, never a display label. */
+    inline constexpr std::uint32_t PlatformServicesMaximumProjectIdBytes = 256;
+
     /** @brief Immutable owner allowed to accept one authored progression fact. */
     enum class ProgressionAuthorityMode : std::uint8_t {
         LocalProduct,

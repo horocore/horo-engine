@@ -380,6 +380,51 @@ thread. Hosts that need deferred reload use the staged path.
 
 ## Settings Modal
 
+`ConfigurationSettingsSession` is shared across source-owned editing surfaces.
+Its existing constructors preserve User editing behavior. Composition may supply
+`ConfigurationSettingsPersistence` to select an exact admitted source and provide
+revocable availability, typed domain validation, and durable persistence callbacks.
+All three callbacks and a bounded exact owner-key list are required; an incomplete
+binding fails closed. The key list comes from the module's inert contribution,
+so a source operation cannot edit another module's Project keys. Descriptor
+source policy still decides which fields can be edited, so Project-only keys never
+become User settings as a UI workaround.
+
+The configuration authority outlives the modal and every synchronous callback.
+Callbacks borrow revocable source owners and run on the owner thread; they do not
+reenter configuration writers. Preview and Cancel do not persist. Apply holds one
+`ConfigurationService::Prepare` writer reservation across final domain validation
+and persistence, then commits that exact candidate. A failed durable transaction
+does not publish an in-memory revision. A host with an irreversible filesystem
+receipt must retain it and require reconciliation before allowing another attempt;
+the generic session does not roll back committed files or infer their durability.
+Cross-field-invalid typed drafts remain editable so a later field can repair the
+candidate, but they cannot be applied. This is an additive editing/persistence
+contract; existing User consumers need no source migration and all C++ consumers
+must rebuild.
+
+The GUI's Project configuration destination uses this same session and the same
+descriptor renderer. Its Apply and Restore Defaults actions address that exact
+source, independently of a pending User draft; Cancel discards both modal-owned
+drafts without persistence. A Project commit can make a User draft stale, which
+requires the normal explicit review path before a subsequent User Apply.
+
+Platform Services owns eight localized Project-only descriptors. Workspace
+composition borrows the exact project-open provider/trust context and six-source
+snapshot; a private publication owner supplies weak callbacks, not another draft
+model. Apply retains fail-fast project mutation and exact root-source leases,
+checks all six witnesses after staging, and preserves root identity, salt and
+unrelated authored values. The next immutable source generation is allocated
+before replacement. Uncertain durability retains the new root and original
+publication diagnostic and blocks another write until reconciliation/reopen.
+Already-running operations keep their captured policy; this workflow does not
+activate a provider or change the ProjectReopen reload boundary.
+
+The additive GuiScreen project-draft hook has a default unsupported/null result;
+custom C++ screen implementations must rebuild for its virtual-table change.
+The ProjectOpenService policy view is immutable metadata, not an activation or
+trust grant. These existing headers retain their current target ownership.
+
 The Settings modal edits a draft transaction:
 
 ```cpp

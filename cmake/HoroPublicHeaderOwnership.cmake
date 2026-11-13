@@ -148,6 +148,7 @@ horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/PlatformOfflineQueueStorage.h
     Horo/PlatformServices/PlatformProgressionIdempotency.h
     Horo/PlatformServices/PlatformProjectConfiguration.h
+    Horo/PlatformServices/PlatformProjectSettings.h
     Horo/PlatformServices/PlatformProviderManifestCook.h
     Horo/PlatformServices/PlatformRequest.h
     Horo/PlatformServices/PlatformRequestErrors.h
@@ -163,6 +164,13 @@ horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/PlatformUserSession.h
 )
 
+horo_configure_target_header_boundary(HoroPlatformServicesAuthoring PUBLIC_HEADERS
+    Horo/Application/PlatformServicesAuthoring.h
+    Horo/Application/PlatformServicesDefinitionCodec.h
+    Horo/Application/PlatformServicesProjectSources.h
+    Horo/Application/PlatformServicesProjectCook.h
+)
+
 horo_configure_target_header_boundary(HoroPlatformServicesExtension PUBLIC_HEADERS
     Horo/PlatformServices/PlatformProviderAdmission.h
 )
@@ -176,6 +184,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Application/ProjectCompatibility.h
     Horo/Application/ProjectSourceDocument.h
     Horo/Application/ProjectMigration.h
+    Horo/Application/ProjectMigrationErrors.h
     Horo/Application/ProjectMigrationCatalog.h
     Horo/Release/DistributionModel.h
     Horo/Release/ReleaseArtifactManifest.h

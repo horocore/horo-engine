@@ -292,6 +292,7 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformProgressionErrors.cpp
         platform_services/PlatformProgressionIdempotency.cpp
         platform_services/PlatformProjectConfiguration.cpp
+        platform_services/PlatformProjectSettings.cpp
         platform_services/PlatformProviderManifestCook.cpp
         platform_services/PlatformRequest.cpp
         platform_services/PlatformRequestCompletion.cpp
@@ -307,11 +308,23 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformStatCacheErrors.cpp
         platform_services/PlatformStatCacheCoordinator.cpp
         platform_services/PlatformStableIdRegistry.cpp
+        platform_services/PlatformStableIdRegistryEncoding.cpp
         platform_services/PlatformUserSession.cpp
 )
 add_library(HoroEngine::PlatformServices ALIAS HoroPlatformServices)
 target_compile_features(HoroPlatformServices PUBLIC cxx_std_20)
-target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEngine::Platform)
+target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEngine::Platform PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroPlatformServicesAuthoring STATIC
+    application/project/PlatformServicesLedgerCodec.cpp
+    application/project/PlatformServicesDefinitionCodec.cpp
+    application/project/PlatformServicesProjectInitialization.cpp
+    application/project/PlatformServicesProjectSources.cpp
+    application/project/PlatformServicesProjectCook.cpp
+)
+add_library(HoroEngine::PlatformServicesAuthoring ALIAS HoroPlatformServicesAuthoring)
+target_compile_features(HoroPlatformServicesAuthoring PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformServicesAuthoring PUBLIC HoroEngine::PlatformServices HoroEngine::Application HoroEngine::Assets PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroPackages STATIC
         packages/cache/PackageCache.cpp
@@ -378,7 +391,7 @@ target_include_directories(HoroApplication
 target_link_libraries(HoroApplication PUBLIC HoroEngine::ProjectVersion)
 target_link_libraries(HoroApplication
         PUBLIC HoroEngine::Foundation
-        PRIVATE nlohmann_json::nlohmann_json
+        PRIVATE HoroEngine::Security nlohmann_json::nlohmann_json
 )
 add_dependencies(HoroApplication HoroProjectCompatibilityCatalog)
 
@@ -479,7 +492,7 @@ target_include_directories(HoroProjectMigrations
         PRIVATE ${PROJECT_SOURCE_DIR} ${HORO_GENERATED_DIR}
 )
 target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application
-        PRIVATE HoroEngine::ProjectSettings HoroEngine::ProjectSurfaceSettings HoroEngine::NavigationApi HoroEngine::Assets nlohmann_json::nlohmann_json)
+        PRIVATE HoroEngine::ProjectSettings HoroEngine::ProjectSurfaceSettings HoroEngine::NavigationApi HoroEngine::Assets HoroEngine::PlatformServicesAuthoring nlohmann_json::nlohmann_json)
 add_dependencies(HoroProjectMigrations HoroProjectMigrationCatalog)
 
 add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp
@@ -3829,7 +3842,7 @@ target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEn
 target_sources(HoroEditorServices PRIVATE editor/screens/workspace/prefab/PrefabDocumentLayers.cpp)
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
-target_link_libraries(HoroEditorServices PUBLIC HoroEngine::PrefabProjectSettings)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::PrefabProjectSettings HoroEngine::PlatformServicesAuthoring)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::AnimationGraphSourceCodec)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
@@ -3873,6 +3886,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::ProjectMigrations
         PRIVATE
         HoroFoundationJsonInternal
+        HoroEngine::Security
         HoroEditorPlaySceneHostInternal
         HoroEngine::ProjectAssetRegistrySource
         HoroEngine::PlatformProjectReadFiles
@@ -4211,6 +4225,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceScreenXr.cpp
             editor/screens/workspace/EditorWorkspaceScreenActions.cpp
             editor/screens/workspace/EditorWorkspaceScreenComposition.cpp
+            editor/screens/workspace/EditorWorkspaceScreenProjectSettings.cpp
+            editor/screens/workspace/PlatformProjectSettingsOwner.cpp
             editor/screens/workspace/EditorWorkspaceScreenLifecycle.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
