@@ -44,6 +44,21 @@ namespace Horo::Editor {
                        : std::nullopt;
         }
 
+        /** @brief Shared bounded value projection; frame checks do not construct owned diagnostic strings. */
+        std::optional<Input::InputBinding> ParseDraft(const GyroscopeBindingEditorDraft &draft,
+                                                      const Input::InputBinding &baseline) noexcept {
+            const auto rate = ParseNumber(draft.calibration);
+            const auto scale = ParseNumber(draft.sensitivity);
+            if (!rate || !scale || draft.axis < 0 || draft.axis >= static_cast<int>(Input::SensorAxis::Count) || draft.component < 0 ||
+                draft.component > 1 || baseline.kind != Input::BindingControlKind::GyroscopeAxis)
+                return std::nullopt;
+            auto binding = baseline;
+            binding.gyroscope = {static_cast<Input::SensorAxis>(draft.axis), *rate};
+            binding.component = static_cast<std::uint8_t>(draft.component);
+            binding.scale = *scale;
+            return binding.gyroscope.IsValid() ? std::optional{binding} : std::nullopt;
+        }
+
         /** @brief Resolves an owned request against the current authority before borrowing any binding inventory. */
         Result<Input::InputBinding> ResolveBaseline(const Input::InputRouter &router, const GyroscopeBindingEditRequest &request) {
             using Output = Result<Input::InputBinding>;
@@ -135,7 +150,7 @@ namespace Horo::Editor {
                 ImGui::TextWrapped("%s", Text("gyro.sensitivity").c_str());
                 static_cast<void>(
                     Ui::InputTextControl("##GyroscopeSensitivity", draft_.sensitivity.data(), draft_.sensitivity.size(), fonts));
-                const bool valid = draft_.Evaluate(baseline_).HasValue();
+                const bool valid = draft_.IsValid(baseline_);
                 if (!valid)
                     Ui::ErrorText(Text("gyro.invalid").c_str(), fonts);
                 if (failure_)
@@ -186,16 +201,13 @@ namespace Horo::Editor {
     /** @copydoc GyroscopeBindingEditorDraft::Evaluate */
     Result<Input::InputBinding> GyroscopeBindingEditorDraft::Evaluate(const Input::InputBinding &baseline) const {
         using Output = Result<Input::InputBinding>;
-        const auto rate = ParseNumber(calibration);
-        const auto scale = ParseNumber(sensitivity);
-        if (!rate || !scale || axis < 0 || axis >= static_cast<int>(Input::SensorAxis::Count) || component < 0 || component > 1 ||
-            baseline.kind != Input::BindingControlKind::GyroscopeAxis)
-            return Output::Failure(MakeError(InvalidGyroscopeDraft));
-        auto binding = baseline;
-        binding.gyroscope = {static_cast<Input::SensorAxis>(axis), *rate};
-        binding.component = static_cast<std::uint8_t>(component);
-        binding.scale = *scale;
-        return binding.gyroscope.IsValid() ? Output::Success(binding) : Output::Failure(MakeError(InvalidGyroscopeDraft));
+        const auto binding = ParseDraft(*this, baseline);
+        return binding ? Output::Success(*binding) : Output::Failure(MakeError(InvalidGyroscopeDraft));
+    }
+
+    /** @copydoc GyroscopeBindingEditorDraft::IsValid */
+    bool GyroscopeBindingEditorDraft::IsValid(const Input::InputBinding &baseline) const noexcept {
+        return ParseDraft(*this, baseline).has_value();
     }
 
     /** @copydoc ApplyGyroscopeBindingDraft */

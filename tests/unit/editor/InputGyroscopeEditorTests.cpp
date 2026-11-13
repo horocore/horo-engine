@@ -42,6 +42,7 @@ namespace Horo::Editor {
             baseline.deadzoneKind = Input::DeadzoneKind::Axial;
             baseline.deadzone = 0.2F;
             auto draft = GyroscopeBindingEditorDraft::FromBinding(baseline);
+            REQUIRE(draft.IsValid(baseline));
             REQUIRE(draft.Evaluate(baseline).HasValue());
             REQUIRE(draft.Evaluate(baseline).Value() == baseline);
             std::ranges::replace(draft.calibration, '.', ',');
@@ -56,6 +57,7 @@ namespace Horo::Editor {
         for (const std::string_view value : {"", "-1", "0", "0.0001", "1001", "1.", "1,", " 1", "1 ", "NaN", "inf", "1e100", "1,2.3"}) {
             auto draft = GyroscopeBindingEditorDraft::FromBinding(baseline);
             SetNumber(draft.calibration, value);
+            REQUIRE_FALSE(draft.IsValid(baseline));
             REQUIRE(draft.Evaluate(baseline).HasError());
             REQUIRE(std::string_view{draft.calibration.data()} == value);
         }
@@ -127,6 +129,7 @@ namespace Horo::Editor {
         Tests::EditorGuiContextFixture fixture;
         RegisterLook(fixture.input);
         auto workspace = fixture.input.PushContext(Input::InputContextId{"play"}, Input::InputContextKind::Gameplay);
+        REQUIRE(fixture.input.IsContextActive(workspace));
         EditorModalHost host{fixture.editorEvents, fixture.input};
         auto modal = MakeGyroscopeBindingModal(fixture.context, fixture.input, AppendRequest(fixture.input));
         REQUIRE(host.OpenRoot(std::move(modal)).HasValue());

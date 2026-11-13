@@ -17,6 +17,9 @@ namespace Horo::Editor {
         /** @brief Copies exact finite float text from an existing binding. @param binding Original binding.
          * @return Independent draft; the existing deadzone/modifier policy is preserved separately by the request baseline. */
         [[nodiscard]] static GyroscopeBindingEditorDraft FromBinding(const Input::InputBinding &binding) noexcept;
+        /** @brief Checks frame-local validity without constructing diagnostic errors.
+         * @param baseline Binding whose unrelated policy is retained. @return Whether Apply may be offered. */
+        [[nodiscard]] bool IsValid(const Input::InputBinding &baseline) const noexcept;
         /** @brief Parses complete dot/comma decimal fields, retaining invalid intermediate drafts unchanged.
          * @param baseline Binding whose unrelated fields must be preserved. @return Complete typed gyro binding or invalid-draft error. */
         [[nodiscard]] Result<Input::InputBinding> Evaluate(const Input::InputBinding &baseline) const;
