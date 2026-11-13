@@ -165,3 +165,29 @@ preparation. Fresh full-scope preflight against the PR target remains pending.
 Metal evidence requires an accessible compatible macOS host, native device and
 genuine package. The draft delivery must retain these incomplete acceptance rows
 until actual runtime and quality evidence is recorded.
+
+
+## Published-head CI evidence on 2026-11-13
+
+The completed PR workflow for `9df83097bfc7bf370f5be7eb6e37cc455ba16c8a`
+reported successful Windows/MSVC and Linux/GCC tests, Windows shader contracts,
+macOS x64 reference SDK consumers, Android qualification and hosted SonarCloud
+and Codacy checks. Its macOS JUnit artifact records 197 passing cases across
+`HoroVfxGpuSimulationTests` (15), `HoroGpuParticleSimulatorTests` (7),
+`HoroVfxApiTests` (158), `HoroGpuParticleLayoutTests` (9) and
+`HoroVfxGpuGraphTests` (8), with no failures or skips in those groups.
+
+The overall CI workflow failed. The Linux shader producer could not download
+pinned Lua 5.4.8 because its TLS connection reset. The macOS build then lacked
+its required `ui-paint-metal-msl` producer artifact, and native Metal qualification
+reported the incomplete build. This evidence does not demonstrate Metal GPU
+execution or any measured native budget. The Windows shader report contains
+708 passing cases but no Vulkan command-execution or budget entry.
+
+The subsequent Metal budget and actual CPU-substitute execution additions were
+not in that published head and require their own compile and execution results.
+The refreshed PR target is `origin/codex/editor-improvements` at
+`139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`. Published topic history remains
+intact. The resumed full-scope local preflight attempt against that target stopped
+at the busy physical build lock before starting an analyzer child. No current
+Sonar IDE, CLI secrets or local Codacy result is inferred from hosted checks.
