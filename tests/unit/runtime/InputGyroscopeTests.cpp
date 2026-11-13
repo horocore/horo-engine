@@ -206,6 +206,28 @@ namespace Horo::Input {
                         .HasError());
             REQUIRE(router.RoutingState({}).configurationRevision == revision);
         }
+        for (auto first : {InputBinding{.kind = BindingControlKind::GamepadAxis}, InputBinding{.kind = BindingControlKind::RawGamepadAxis},
+                           InputBinding{.kind = BindingControlKind::PointerWheelX}, InputBinding{.kind = BindingControlKind::PointerWheelY},
+                           GyroscopeBinding(SensorAxis::Y)}) {
+            auto second = first;
+            first.chord[0] = Key::K;
+            first.chordSize = 1;
+            REQUIRE(router
+                        .SetActionMap({{ActionId{"play.first"}, ActionValueType::Axis2D, context, true, {first}},
+                                       {ActionId{"play.second"}, ActionValueType::Axis2D, context, true, {second}}})
+                        .HasError());
+            second.chord[0] = Key::L;
+            second.chordSize = 1;
+            REQUIRE(router
+                        .SetActionMap({{ActionId{"play.first"}, ActionValueType::Axis2D, context, true, {first}},
+                                       {ActionId{"play.second"}, ActionValueType::Axis2D, context, true, {second}}})
+                        .HasError());
+            first.requiredModifiers.control = true;
+            REQUIRE(router
+                        .SetActionMap({{ActionId{"play.first"}, ActionValueType::Axis2D, context, true, {first}},
+                                       {ActionId{"play.second"}, ActionValueType::Axis2D, context, true, {second}}})
+                        .HasValue());
+        }
         InputBinding sticky{.kind = BindingControlKind::Key, .key = Key::K, .requiredModifiers = {.control = true}};
         sticky.accessibility.stickyModifiers = true;
         InputBinding plain{.kind = BindingControlKind::Key, .key = Key::K, .pointerButton = PointerButton::Secondary};

@@ -156,7 +156,7 @@ namespace Horo::Input {
         }
 
         bool SameAnalogAxis(const InputBinding &left, const InputBinding &right) noexcept {
-            if (left.kind != right.kind || !RequiredModifiersOverlap(left, right) || left.chordSize != 0 || right.chordSize != 0)
+            if (left.kind != right.kind || !RequiredModifiersOverlap(left, right))
                 return false;
             using enum BindingControlKind;
             if (left.kind == GamepadAxis)

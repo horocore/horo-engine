@@ -59,6 +59,11 @@ overlap checks. Profiles that previously used inactive-field differences to hide
 duplicate bindings are now rejected; remove the duplicate or assign a genuinely
 different control. Rejection preserves the current map/profile and revision.
 The added all-kind identity/sticky regression is pending its native rerun.
+Analog axis exclusivity also remains in force when either binding has a chord:
+chord keys may be held together and cannot grant two actions the same physical
+axis. Exact, mutually exclusive ordinary modifier states remain separate modes.
+The regression covers gyro, gamepad/raw axes and both wheel axes with chords,
+and checks that different modifier modes are still admitted.
 
 The native MSVC Debug batch at `f1f97b73ab83566272dc85c0e49b95f9d52d1700`
 built both Input test executables and staged/explicit public consumers, then passed
