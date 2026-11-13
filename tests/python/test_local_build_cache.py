@@ -296,7 +296,7 @@ def test_corrupted_configuration_is_safe_miss(repository: tuple[Path, Path, str]
 def test_heavy_lock_is_exclusive_and_releases_after_exception(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository
     with cache.heavy_build_lock(repo):
-        competing = cache._FileLock(root / "heavy-build.lock", blocking=False)
+        competing = cache.heavy_build_lock(repo, blocking=False)
         with pytest.raises(BlockingIOError):
             enter_blocked_context(competing)
     context = cache.heavy_build_lock(repo)
