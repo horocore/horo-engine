@@ -1184,7 +1184,7 @@ namespace Horo::Editor::Ui {
             ImGui::InvisibleButton(rowId.c_str(), {rowW, rowH}, ImGuiButtonFlags_EnableNav | ImGuiButtonFlags_PressedOnClick);
         const bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
         const bool rowFocused = ImGui::IsItemFocused();
-        if (isSelected && isEnabled)
+        if (isSelected && (GImGui->LastItemData.ItemFlags & ImGuiItemFlags_Disabled) == 0)
             ImGui::SetItemDefaultFocus();
         ImGui::EndDisabled();
         const bool changed = clicked && !isSelected;
