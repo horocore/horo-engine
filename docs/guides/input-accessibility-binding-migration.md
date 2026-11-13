@@ -95,6 +95,12 @@ New core, editor and real SDL virtual-device regression sources cover this path.
 Their native execution is pending at this source edit; no physical controller or
 native interaction qualification is claimed by adding them.
 
+Zero detection thresholds still require a nonzero filtered rate before reporting
+held/pressed state. Previously zero or unavailable gyro/stick evidence could be
+reported held when the admitted threshold was zero. Zero remains neutral, a fresh
+nonzero rate produces one press, and returning to zero produces a release. This
+corrects edge derivation without changing threshold admission or wire values.
+
 Physical identity comparisons also ignore fields inactive for the selected kind:
 changing `key` on a gyro/gamepad/wheel binding, for example, never creates a new
 physical control. The same identity helper governs duplicate and chord/sticky

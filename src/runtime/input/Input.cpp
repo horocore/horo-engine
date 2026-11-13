@@ -185,8 +185,8 @@ namespace Horo::Input {
         /** @brief Derives pressed/released edges for a digital control driven by an analog axis. */
         ButtonState DigitalStateFromAxis(const float current, const float previous, const float threshold) noexcept {
             ButtonState state;
-            state.down = std::abs(current) >= threshold;
-            const bool previousDown = std::abs(previous) >= threshold;
+            state.down = current != 0.0F && std::abs(current) >= threshold;
+            const bool previousDown = previous != 0.0F && std::abs(previous) >= threshold;
             state.pressed = state.down && !previousDown;
             state.released = !state.down && previousDown;
             return state;

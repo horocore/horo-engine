@@ -8,6 +8,47 @@
 #include <utility>
 
 namespace Horo::Input {
+    TEST_CASE("Zero detection thresholds preserve neutral gyro and stick rates and their real edges",
+              "[input][accessibility][gyroscope][neutral]") {
+        const std::array bindings{InputBinding{.kind = BindingControlKind::GyroscopeAxis},
+                                  InputBinding{.kind = BindingControlKind::GyroscopeAxis,
+                                               .gyroscope = {SensorAxis::X, 1, GyroscopeSource::AssignedGamepad}},
+                                  InputBinding{.kind = BindingControlKind::GamepadAxis}};
+        for (auto binding : bindings) {
+            binding.digitalThreshold = 0;
+            binding.deadzone = 0;
+            InputRouter router;
+            const ActionId action{"rate"};
+            const InputContextId play{"play"};
+            REQUIRE(router.SetActionMap({{action, ActionValueType::Axis1D, play, true, {binding}}}).HasValue());
+            auto context = router.PushContext(play, InputContextKind::Gameplay);
+            RawInputCollector collector;
+            collector.BeginFrame(1);
+            const auto id = collector.ConnectGamepad("motion");
+            router.BeginFrame(collector.Commit());
+            const auto neutral = router.ReadAction(context, action);
+            CHECK(neutral.x == 0);
+            CHECK_FALSE(neutral.down);
+            CHECK_FALSE(neutral.pressed);
+            collector.BeginFrame(2);
+            const SensorSample moving{SensorAvailability::Available, {0.1F, 0, 0}, 0, 1};
+            REQUIRE(collector.SetSensorSample(SensorKind::Gyroscope, moving));
+            REQUIRE(collector.SetGamepadGyroscopeSample(id, moving));
+            REQUIRE(collector.SetGamepadAxis(id, GamepadAxis::LeftX, 0.1F));
+            router.BeginFrame(collector.Commit());
+            const auto active = router.ReadAction(context, action);
+            CHECK(active.down);
+            CHECK(active.pressed);
+            collector.BeginFrame(3);
+            collector.Neutralize();
+            router.BeginFrame(collector.Commit());
+            const auto released = router.ReadAction(context, action);
+            CHECK(released.x == 0);
+            CHECK_FALSE(released.down);
+            CHECK(released.released);
+        }
+    }
+
     TEST_CASE("Assigned controller gyro uses exact player device ownership and independent physical sources",
               "[input][accessibility][gyroscope][assignment]") {
         RawInputCollector collector;

@@ -524,7 +524,8 @@ namespace Horo::Input {
         std::uint8_t component{0};
         DeadzoneKind deadzoneKind{DeadzoneKind::None};
         float deadzone{0.0F};
-        float digitalThreshold{0.5F};
+        float digitalThreshold{
+            0.5F}; /**< Nonzero filtered axes at/above this magnitude are held; zero remains neutral even at threshold zero. */
         BindingAccessibilityPolicy accessibility; /**< Digital-action semantic interpretation, persisted by the canonical profile codec. */
         GyroscopeBindingPolicy gyroscope;         /**< Used only by GyroscopeAxis; other controls retain its neutral default. */
         [[nodiscard]] friend bool operator==(const InputBinding &, const InputBinding &) noexcept = default;
