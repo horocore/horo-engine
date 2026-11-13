@@ -220,7 +220,8 @@ namespace Horo::Cli {
                 "  --log-level <critical|debug|error|info|trace|warning>  Set the invocation log threshold.\n"
                 "  --non-interactive  Disable terminal prompts.\n"
                 "  -o, --output <human|json|jsonl>  Select the output encoding. (default: human)\n"
-                "  -p, --project <path>  Select the project root.\n\n"
+                "  -p, --project <path>  Select the project root.\n"
+                "  --timeout-ms <integer>  Bound this invocation in milliseconds.\n\n"
                 "Output: human, json, jsonl\n");
         REQUIRE(registry.GenerateHelp("horo-engine", {{"not", "accepted"}}).empty());
     }

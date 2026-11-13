@@ -62,14 +62,14 @@ TEST_CASE("Graphical and headless hosts share one deterministic observability li
     REQUIRE(editor != nullptr);
     REQUIRE(Horo::Application::HostObservabilitySession::Start(MakeConfiguration(temporary.path, "cli")) == nullptr);
     Horo::Log::Logger::Write("Editor.Project", Horo::Log::Level::Info, "editor lifecycle");
-    const auto acceptedBefore = Horo::Log::Logger::Statistics().acceptedRecords;
-    // Completion describes the operation. The nonblocking telemetry queue can reject its diagnostic record.
-    for (unsigned attempt = 0; attempt < 1000 && Horo::Log::Logger::Statistics().acceptedRecords == acceptedBefore; ++attempt) {
+    const auto acceptedBefore = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
+    // Spans enter telemetry directly. Logger's counter tracks only accepted log records.
+    for (unsigned attempt = 0; attempt < 1000 && Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBefore; ++attempt) {
         Horo::Telemetry::OperationSpan operation{"Editor.Project", "Project.Validate"};
         REQUIRE(operation.Complete(Horo::Telemetry::SpanStatus::Succeeded));
         std::this_thread::yield();
     }
-    REQUIRE(Horo::Log::Logger::Statistics().acceptedRecords > acceptedBefore);
+    REQUIRE(Horo::Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBefore);
     editor.reset();
     REQUIRE(std::filesystem::is_regular_file(temporary.path / "test-host.shutdown.json"));
     const auto history = temporary.path / "operations" / "test-host.jsonl";
