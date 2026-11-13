@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -101,6 +102,35 @@ namespace {
         ImGui::NewFrame();
         drawFrame();
         ImGui::Render();
+    }
+
+    /** @brief Checks actual rendered glyphs against the arrow geometry and field bounds, including inherited disablement. */
+    void CheckComboPreviewBounds(const ImDrawList &draw, const int firstVertex, const ImRect bounds) {
+        using namespace Horo::Editor;
+        const auto textColor = Theme::U32(Theme::Text()), arrowColor = Theme::U32(Theme::Muted());
+        const auto whitePixel = ImGui::GetFontTexUvWhitePixel();
+        float arrowLeft = bounds.Max.x;
+        int arrowVertices = 0;
+        for (int index = firstVertex; index < draw.VtxBuffer.Size; ++index) {
+            const auto &vertex = draw.VtxBuffer[index];
+            if (vertex.col != arrowColor || vertex.uv.x != whitePixel.x || vertex.uv.y != whitePixel.y)
+                continue;
+            ++arrowVertices;
+            arrowLeft = std::min(arrowLeft, vertex.pos.x);
+        }
+        REQUIRE(arrowVertices > 0);
+        int textVertices = 0;
+        for (int index = firstVertex; index < draw.VtxBuffer.Size; ++index) {
+            const auto &vertex = draw.VtxBuffer[index];
+            if (vertex.col != textColor || (vertex.uv.x == whitePixel.x && vertex.uv.y == whitePixel.y))
+                continue;
+            ++textVertices;
+            CHECK(vertex.pos.x >= bounds.Min.x);
+            CHECK(vertex.pos.x < arrowLeft);
+            CHECK(vertex.pos.y >= bounds.Min.y);
+            CHECK(vertex.pos.y <= bounds.Max.y);
+        }
+        CHECK(textVertices > 0);
     }
 
     /** @brief Sends one keyboard press and release through the actual Dear ImGui navigation input. */
@@ -1240,23 +1270,24 @@ TEST_CASE("Shared combo keyboard navigation skips disabled rows and preserves no
         return index != 1;
     }};
     int selected = 0;
-    bool changed = false, focus = true;
+    bool changed = false, focus = true, fieldFocused = false;
     const auto draw = [&] {
         ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Always);
         ImGui::SetNextWindowSize({260, 600}, ImGuiCond_Always);
         if (focus)
             ImGui::SetNextWindowFocus();
         ImGui::Begin("Keyboard combo interaction");
-        if (focus)
-            ImGui::SetKeyboardFocusHere();
         focus = false;
         ImGui::SetNextItemWidth(180);
         changed = Ui::ComboControl("KeyboardChoice", &selected, static_cast<int>(labels.size()), source, imgui.fonts) || changed;
+        fieldFocused = ImGui::IsItemFocused();
         ImGui::End();
     };
     for (int frame = 0; frame < 3; ++frame)
         RenderImGuiFrame(draw);
-    REQUIRE(GImGui->NavId != 0);
+    PressImGuiKey(*imgui.io, ImGuiKey_Tab, draw);
+    REQUIRE(fieldFocused);
+    REQUIRE(GImGui->NavCursorVisible);
     PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
     REQUIRE_FALSE(GImGui->OpenPopupStack.empty());
     CHECK(selected == 0);
@@ -1319,24 +1350,10 @@ TEST_CASE("Shared combo selected text stays inside the label area for long local
                     ImGui::BeginDisabled(disabled);
                     auto *const draw = ImGui::GetWindowDrawList();
                     const int firstVertex = draw->VtxBuffer.Size;
-                    const auto textColor = Theme::U32(Theme::Text());
                     ImGui::SetNextItemWidth(width);
                     CHECK_FALSE(
                         Ui::ComboControl("LocalizedChoice", &selected, labels.data(), static_cast<int>(labels.size()), imgui.fonts));
-                    const auto minimum = ImGui::GetItemRectMin(), maximum = ImGui::GetItemRectMax();
-                    const float labelRight = maximum.x - 32 * Theme::GetActiveTokens().sizes.uiScale;
-                    int textVertices = 0;
-                    for (int index = firstVertex; index < draw->VtxBuffer.Size; ++index) {
-                        const auto &vertex = draw->VtxBuffer[index];
-                        if (vertex.col != textColor)
-                            continue;
-                        ++textVertices;
-                        CHECK(vertex.pos.x >= minimum.x);
-                        CHECK(vertex.pos.x <= labelRight);
-                        CHECK(vertex.pos.y >= minimum.y);
-                        CHECK(vertex.pos.y <= maximum.y);
-                    }
-                    CHECK(textVertices > 0);
+                    CheckComboPreviewBounds(*draw, firstVertex, {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()});
                     ImGui::EndDisabled();
                     ImGui::End();
                 });
