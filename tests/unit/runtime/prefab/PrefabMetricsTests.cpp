@@ -18,6 +18,8 @@
 #include <iterator>
 #include <optional>
 #include <set>
+#include <span>
+#include <utility>
 
 namespace Horo::Prefab::MetricTest {
     namespace {
@@ -57,6 +59,70 @@ namespace Horo::Prefab::MetricTest {
                 return BuildPrefabSourceResolverSnapshot(registry.Snapshot(), documents, Limits(), metrics).Value();
             }
         };
+
+        /** @brief Creates the canonical hard-object-limit workload with an exact owned source commitment. */
+        PrefabDependencySource MaximumObjectSource(const PrefabDocument &baseline) {
+            auto data = baseline.Data();
+            data.objects.clear();
+            for (std::uint32_t index = 0; index < PrefabHardLimits::SourceObjectCount; ++index) {
+                data.objects.push_back({.localId = {index},
+                                        .parentLocalId = index == 0 ? std::nullopt : std::optional{LocalObjectId{0}},
+                                        .name = "Qualification object"});
+            }
+            auto document = PrefabDocument::Create(std::move(data), Limits());
+            REQUIRE(document.HasValue());
+            const auto bytes = document.Value().SerializeCanonical();
+            REQUIRE(bytes.HasValue());
+            const PrefabSourceRevision revision{document.Value().Data().projectVersion,
+                                                ComputeSha256(std::as_bytes(std::span{bytes.Value()}))};
+            return {std::move(document).Value(), revision};
+        }
+
+        /** @brief Explicit workload size and independent cumulative allocation and per-sample latency ceilings. */
+        struct QualificationWorkload final {
+            std::uint32_t objects;
+            std::size_t samples;
+            std::size_t maximumRequests;
+            std::size_t maximumBytes;
+            std::chrono::milliseconds maximumLatency;
+        };
+
+        /** @brief Measures the owner-thread callback window and reports bounded samples outside its allocation scope. */
+        void QualifyPipelinePhase(const QualificationWorkload &workload, const char *phase, const char *cache, const std::size_t inputBytes,
+                                  const auto &operation) {
+            std::array<std::chrono::microseconds, 16> elapsed;
+            REQUIRE(workload.samples >= 2);
+            REQUIRE(workload.samples <= elapsed.size());
+            const auto samples = std::span{elapsed}.first(workload.samples);
+            Tests::AllocationProbe::Measurement maximum;
+            for (std::size_t index = 0; index < samples.size(); ++index) {
+                Tests::AllocationProbe::Measurement allocations;
+                const auto begin = std::chrono::steady_clock::now();
+                bool succeeded{};
+                {
+                    Tests::AllocationProbe::ScopedMeasurement measurement;
+                    succeeded = operation();
+                    allocations = measurement.Snapshot();
+                }
+                samples[index] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
+                INFO("phase=" << phase << " objects=" << workload.objects << " sample=" << index);
+                REQUIRE(succeeded);
+                CHECK(allocations.requests <= workload.maximumRequests);
+                CHECK(allocations.requestedBytes <= workload.maximumBytes);
+                CHECK(samples[index] < workload.maximumLatency);
+                maximum.requests = std::max(maximum.requests, allocations.requests);
+                maximum.requestedBytes = std::max(maximum.requestedBytes, allocations.requestedBytes);
+                maximum.largestRequest = std::max(maximum.largestRequest, allocations.largestRequest);
+            }
+            std::ranges::sort(samples);
+            const auto median = (samples[samples.size() / 2 - 1] + samples[samples.size() / 2]) / 2;
+            std::cout << "prefab-pipeline-qualification build=" << HORO_PREFAB_QUALIFICATION_BUILD_TYPE
+                      << " platform=" << HORO_PREFAB_QUALIFICATION_PLATFORM << " phase=" << phase << " cache=" << cache
+                      << " objects_per_operation=" << workload.objects << " input_bytes=" << inputBytes << " samples=" << samples.size()
+                      << " maximum_cpp_requests=" << maximum.requests << " maximum_cpp_requested_bytes=" << maximum.requestedBytes
+                      << " largest_cpp_request=" << maximum.largestRequest << " median_us=" << median.count()
+                      << " maximum_us=" << samples.back().count() << '\n';
+        }
     }  // namespace
 
     TEST_CASE("Prefab metrics measure real canonical stages and external cache outcomes", "[prefab][prefab-metrics]") {
@@ -148,19 +214,9 @@ namespace Horo::Prefab::MetricTest {
     TEST_CASE("Prefab in-flight cancellation bounds cold maximum-object resolution work",
               "[prefab][prefab-metrics][qualification][cancellation]") {
         Sources sources{PrefabMetricHandles{}};
-        auto data = sources.documents.back().document.Data();
-        data.objects.clear();
-        for (std::uint32_t index = 0; index < PrefabHardLimits::SourceObjectCount; ++index) {
-            data.objects.push_back({.localId = {index},
-                                    .parentLocalId = index == 0 ? std::nullopt : std::optional{LocalObjectId{0}},
-                                    .name = "Qualification object"});
-        }
-        const auto document = PrefabDocument::Create(std::move(data), Limits());
-        REQUIRE(document.HasValue());
-        const auto bytes = document.Value().SerializeCanonical();
+        sources.documents.back() = MaximumObjectSource(sources.documents.back().document);
+        const auto bytes = sources.documents.back().document.SerializeCanonical();
         REQUIRE(bytes.HasValue());
-        sources.documents.back() = {document.Value(),
-                                    {document.Value().Data().projectVersion, ComputeSha256(std::as_bytes(std::span{bytes.Value()}))}};
         const auto resolver = sources.Resolver({});
         const auto instance = PrefabInstanceId::Create(41).Value();
         Tests::AllocationProbe::Measurement baseline;
@@ -217,69 +273,71 @@ namespace Horo::Prefab::MetricTest {
     TEST_CASE("Prefab canonical parse expand cook and committed spawn enforce bounded qualification samples",
               "[prefab][prefab-metrics][qualification][performance]") {
         const auto limits = Limits();
-        const auto source = Read("multi.prefab");
-        Sources sources{PrefabMetricHandles{}};
-        const auto resolver = sources.Resolver({});
         const auto instance = PrefabInstanceId::Create(41).Value();
         const auto target = AssetCookTargetId::Parse("linux-x64").Value();
-        const auto qualify = [](const char *phase, const char *cache, const std::size_t inputBytes, const auto &operation) {
-            std::array<std::chrono::microseconds, 16> elapsed;
-            Tests::AllocationProbe::Measurement maximum;
-            for (std::size_t index = 0; index < elapsed.size(); ++index) {
-                Tests::AllocationProbe::Measurement allocations;
-                const auto begin = std::chrono::steady_clock::now();
-                bool succeeded{};
-                {
-                    Tests::AllocationProbe::ScopedMeasurement measurement;
-                    succeeded = operation();
-                    allocations = measurement.Snapshot();
-                }
-                elapsed[index] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin);
-                INFO("phase=" << phase << " sample=" << index);
-                REQUIRE(succeeded);
-                CHECK(allocations.requests <= 4096);
-                CHECK(allocations.requestedBytes <= 4U * 1024U * 1024U);
-                CHECK(elapsed[index] < std::chrono::milliseconds{250});
-                maximum.requests = std::max(maximum.requests, allocations.requests);
-                maximum.requestedBytes = std::max(maximum.requestedBytes, allocations.requestedBytes);
-                maximum.largestRequest = std::max(maximum.largestRequest, allocations.largestRequest);
-            }
-            std::ranges::sort(elapsed);
-            const auto median = (elapsed[elapsed.size() / 2 - 1] + elapsed[elapsed.size() / 2]) / 2;
-            std::cout << "prefab-pipeline-qualification build=" << HORO_PREFAB_QUALIFICATION_BUILD_TYPE
-                      << " platform=" << HORO_PREFAB_QUALIFICATION_PLATFORM << " phase=" << phase << " cache=" << cache
-                      << " objects_per_operation=2 input_bytes=" << inputBytes << " samples=" << elapsed.size()
-                      << " maximum_cpp_requests=" << maximum.requests << " maximum_cpp_requested_bytes=" << maximum.requestedBytes
-                      << " largest_cpp_request=" << maximum.largestRequest << " median_us=" << median.count()
-                      << " maximum_us=" << elapsed.back().count() << '\n';
+        const std::array workloads{
+            QualificationWorkload{2, 16, 4096, 4U * 1024U * 1024U, std::chrono::milliseconds{250}},
+            QualificationWorkload{static_cast<std::uint32_t>(PrefabHardLimits::SourceObjectCount), 4, 128U * 1024U, 64U * 1024U * 1024U,
+                                  std::chrono::milliseconds{1000}},
         };
-        qualify("parse", "disabled", source.size(), [&] {
-            return PrefabDocument::Parse(source, limits).HasValue();
-        });
-        qualify("expand", "disabled", source.size(), [&] {
-            return resolver.Resolve(Test::Asset(2), instance, limits).HasValue();
-        });
-        qualify("cook", "disabled", source.size(), [&] {
-            return CookPrefabTemplate(resolver, sources.registry.Snapshot(), Test::Asset(2), {}, target, limits).HasValue();
-        });
-        SpawnTest::Fixture fixture;
-        fixture.Warm();
-        const auto templateBytes = CookedPrefab::Create(fixture.Data(), limits);
-        REQUIRE(templateBytes.HasValue());
-        const auto request = fixture.Request();
-        qualify("spawn_commit", "warm-template", templateBytes.Value().Bytes().size(), [&] {
-            const auto spawned = fixture.context->Spawn(request);
-            if (spawned.HasError())
-                return false;
-            if (fixture.service->Advance(fixture.tick).HasError())
-                return false;
-            if (fixture.scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, fixture.Frame()).HasError())
-                return false;
-            if (fixture.service->Advance(fixture.tick).HasError())
-                return false;
-            return spawned.Value().State() == PrefabSpawnState::Committed;
-        });
-        CHECK(fixture.Count() == 33);
+        for (const auto &workload : workloads) {
+            Sources sources{PrefabMetricHandles{}};
+            if (workload.objects == PrefabHardLimits::SourceObjectCount)
+                sources.documents.back() = MaximumObjectSource(sources.documents.back().document);
+            const auto encoded = sources.documents.back().document.SerializeCanonical();
+            REQUIRE(encoded.HasValue());
+            const auto &source = encoded.Value();
+            REQUIRE(sources.documents.back().document.Data().objects.size() == workload.objects);
+            const auto resolver = sources.Resolver({});
+            QualifyPipelinePhase(workload, "parse", "disabled", source.size(), [&] {
+                const auto parsed = PrefabDocument::Parse(source, limits);
+                return parsed.HasValue() && parsed.Value().Data().objects.size() == workload.objects;
+            });
+            QualifyPipelinePhase(workload, "expand", "disabled", source.size(), [&] {
+                const auto expanded = resolver.Resolve(Test::Asset(2), instance, limits);
+                return expanded.HasValue() && expanded.Value().Objects().size() == workload.objects;
+            });
+            QualifyPipelinePhase(workload, "cook", "disabled", source.size(), [&] {
+                const auto cooked = CookPrefabTemplate(resolver, sources.registry.Snapshot(), Test::Asset(2), {}, target, limits);
+                return cooked.HasValue() && cooked.Value().Data().entities.size() == workload.objects;
+            });
+            SpawnTest::Fixture fixture;
+            auto runtimeTemplate = fixture.Data();
+            if (workload.objects == PrefabHardLimits::SourceObjectCount) {
+                const auto child = runtimeTemplate.entities.back();
+                runtimeTemplate.entities.resize(1);
+                for (std::uint32_t index = 1; index < workload.objects; ++index) {
+                    auto entity = child;
+                    const auto address = PrefabObjectAddress::Create({}, LocalObjectId{index});
+                    REQUIRE(address.HasValue());
+                    entity.provenance.sourceObject = address.Value();
+                    runtimeTemplate.entities.push_back(std::move(entity));
+                }
+            }
+            const auto templateBytes = CookedPrefab::Create(runtimeTemplate, limits);
+            REQUIRE(templateBytes.HasValue());
+            fixture.Put(std::move(runtimeTemplate));
+            fixture.Warm();
+            const auto request = fixture.Request();
+            QualifyPipelinePhase(workload, "spawn_commit", "warm-template", templateBytes.Value().Bytes().size(), [&] {
+                const auto spawned = fixture.context->Spawn(request);
+                if (spawned.HasError())
+                    return false;
+                if (fixture.service->Advance(fixture.tick).HasError())
+                    return false;
+                if (fixture.scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, fixture.Frame()).HasError())
+                    return false;
+                if (fixture.service->Advance(fixture.tick).HasError())
+                    return false;
+                return spawned.Value().State() == PrefabSpawnState::Committed;
+            });
+            const auto expectedEntities = 1 + workload.objects * workload.samples;
+            CHECK(fixture.Count() == expectedEntities);
+            fixture.service->Shutdown();
+            CHECK(fixture.context->Spawn(request).HasError());
+            fixture.runner->Shutdown();
+            CHECK(fixture.trace.destroys == expectedEntities);
+        }
     }
 
     TEST_CASE("Prefab disabled measurements allocate no producer-side memory", "[prefab][prefab-metrics]") {
