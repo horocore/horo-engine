@@ -1,9 +1,11 @@
 # Cinematic camera qualification
 
 Evidence scope is the CIN-003 delivery branch based on
-`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`. The delivery commits were rebased
-onto this local parent C11 admission-fixture fix without conflicts. GitHub and Jira were read on
-2026-11-11. Tracking status is recorded without changing external work items.
+`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`, verified against the published
+`codex/editor-improvements` remote on 2026-11-13. The delivery commits rebased
+without conflicts. The complete tracker audit ran on 2026-11-11; the open
+implementation tickets and delivery identity were rechecked on 2026-11-13.
+Tracking status is recorded without changing external work items.
 
 | Child | GitHub / Jira | Tracking status | Implementation and acceptance evidence |
 |---|---|---|---|
@@ -56,10 +58,10 @@ composition. No child or parent acceptance is declared complete by this report.
 
 | Remaining evidence | Required input or owner | Next bounded action |
 |---|---|---|
-| Runtime, public consumer and editor regression execution | Main Windows validation coordinator releases an explicit heavy-work slot | Configure the camera worktree, build the camera targets with one worker, then run their CTest cases under the verified common physical lock. |
-| OpenGL cinematic resize and native surface execution | The same slot and the current Windows display/device | Run the opt-in OpenGL viewport and production surface lifecycle smoke tests. Record camera readback and actual renderer output. |
-| Display migration and fullscreen during playback | A heavy-work slot and an available display configuration | Run the native OpenGL window-transition scenarios, which briefly show the test window. Record the actual display/extent and camera readback. A skipped second-display case leaves that acceptance unqualified. |
-| Vulkan cinematic execution | Verified cooked viewport/shadow shaders and the required validation layer, then a heavy-work slot | Run the production Vulkan presentation smoke without weakening validation or cook provenance. |
+| Runtime, public consumer and editor regression execution | Nonblocking acquisition of the canonical physical lock and available CPU/RAM headroom | Configure the camera worktree, build the camera targets with one worker, then run their CTest cases under the verified common physical lock. |
+| OpenGL cinematic resize and native surface execution | The same physical lock and the current Windows display/device | Run the opt-in OpenGL viewport and production surface lifecycle smoke tests. Record camera readback and actual renderer output. |
+| Display migration and fullscreen during playback | Physical lock acquisition and an available display configuration | Run the native OpenGL window-transition scenarios, which briefly show the test window. Record the actual display/extent and camera readback. A skipped second-display case leaves that acceptance unqualified. |
+| Vulkan cinematic execution | Verified cooked viewport/shadow shaders, the required validation layer and physical lock acquisition | Run the production Vulkan presentation smoke without weakening validation or cook provenance. |
 | Metal matrix | macOS/Metal validation host | Run the same authored camera scenarios on the native peer. Windows cannot establish this evidence. |
 | Real dual-view cross-fade and budget exhaustion | Frontend compositor/capability/budget implementation under CIN-003.3 | Admit and qualify two actual views before claiming cross-fade acceptance. Current typed unsupported/fallback coverage does not establish this capability. |
 | Final source quality | A camera compilation database and authenticated/trusted managed IDE and Codacy configuration | Run the full final-base preflight. Report Sonar IDE, CLI secrets and Codacy separately. |
@@ -70,9 +72,10 @@ unimplemented dual-view acceptance remains recorded against existing
 [HORO-1683](https://horo-engine.atlassian.net/browse/HORO-1683), without creating
 or changing external work items.
 
-Formatting and `git diff --check` have run. Native build/test work is deferred
-while the main Windows validation owns heavy-work priority. All later builds
-must hold `scripts/dev.py`'s common-repository `heavy_build_lock`, use
+Formatting and `git diff --check` have run. The 2026-11-13 restart removes the
+old named-grant scheduling gate. The first nonblocking physical lock attempt
+was busy and started no configure child or background waiter. Each later
+bounded batch must hold `scripts/dev.py`'s common-repository `heavy_build_lock`, use
 `--parallel 1`, and set `CTEST_PARALLEL_LEVEL=1`.
 The validation helper also checks its own open lock handle with `psutil` before
 starting configure, compilation, CTest or analysis. A matching Git identity
