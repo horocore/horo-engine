@@ -137,8 +137,7 @@ namespace Horo::Runtime::Ui {
         REQUIRE(disabled.Value().snapshot.Commands().empty());
     }
 
-    TEST_CASE("Caption presenter rejects foreign catalog leases duplicates invalid glyphs and capacity overflow",
-              "[runtime_ui][captions][render]") {
+    TEST_CASE("Caption presenter rejects foreign catalog leases duplicates and invalid glyphs", "[runtime_ui][captions][render]") {
         CaptionPaintFixture fixture;
         fixture.Enqueue();
         fixture.timeline.BeginFrame(10);
@@ -180,7 +179,14 @@ namespace Horo::Runtime::Ui {
                     .Render(fixture.tree, fixture.RenderDescriptor(), viewport, fixture.timeline, fixture.appearance, fixture.localization,
                             prepared)
                     .HasError());
-        fixture.resources[0].role = UiRenderResourceRole::FontFace;
+    }
+
+    TEST_CASE("Caption presenter rejects command capacity overflow without partial publication", "[runtime_ui][captions][render]") {
+        CaptionPaintFixture fixture;
+        fixture.Enqueue();
+        fixture.timeline.BeginFrame(10);
+        REQUIRE(fixture.timeline.Drain(*fixture.queue) == 0);
+        const UiLogicalRect viewport{{0, 0}, {1280 * 64, 720 * 64}};
         fixture.Enqueue({1, 2});
         REQUIRE(fixture.timeline.Drain(*fixture.queue) == 0);
         auto small = fixture.limits;
