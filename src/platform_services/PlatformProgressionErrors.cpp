@@ -8,8 +8,8 @@ namespace Horo::PlatformServices::PlatformProgressionErrors {
     const ErrorCodeDescriptor InvalidConfiguration{.domain = Domain,
                                                    .code = ErrorCode{"platform.progression.invalid_configuration"},
                                                    .defaultSeverity = ErrorSeverity::Error,
-                                                   .summary = "Progression idempotency configuration is invalid.",
-                                                   .remediationHint = "Provide a finite nonzero in-flight capacity.",
+                                                   .summary = "Progression mutation admission configuration is invalid.",
+                                                   .remediationHint = "Provide finite nonzero limits for the selected admission owner.",
                                                    .retryable = false,
                                                    .userActionable = false};
     const ErrorCodeDescriptor InvalidMutation{.domain = Domain,
@@ -29,8 +29,9 @@ namespace Horo::PlatformServices::PlatformProgressionErrors {
     const ErrorCodeDescriptor CapacityExceeded{.domain = Domain,
                                                .code = ErrorCode{"platform.progression.capacity_exceeded"},
                                                .defaultSeverity = ErrorSeverity::Error,
-                                               .summary = "Progression in-flight mutation capacity is exhausted.",
-                                               .remediationHint = "Retire terminal work before admitting another mutation.",
+                                               .summary = "Progression mutation storage capacity is exhausted.",
+                                               .remediationHint =
+                                                   "Respect the owning coordinator's retention policy before admitting more work.",
                                                .retryable = true,
                                                .userActionable = false};
     const ErrorCodeDescriptor Closed{.domain = Domain,
