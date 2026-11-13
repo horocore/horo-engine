@@ -87,6 +87,15 @@ chord exclusivity, error-free frame validity query and strengthened modal-gating
 Native interaction, automatic motion-gesture capture, SDL controller collection
 and actual device evidence remain separate acceptance work.
 
+The subsequent direct-consumer batch at `d460d27` rebuilt eleven targets and
+passed **62/62 cases with zero skips**: Character 16, Runtime UI input 19,
+debugger 15, portable Android input 9 and three direct consumers. Staged
+Character, RuntimeUiInput, AndroidInputIntegration and XRInputBindings headers
+compiled against the current Input surface. Evidence is
+`build/acc-input-consumers-d460d27-results.xml` and its discovery inventory.
+Offline SDK metadata compatibility also passed **24/24** at that commit;
+neither check establishes physical sensor or native Android qualification.
+
 ## Wire and source migration
 
 `CurrentInputBindingProfileSchema` is 2. A newly constructed profile and every

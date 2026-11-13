@@ -39,7 +39,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 |---|---|---|---|
 | Input | `2b2175ca9847ca97dd50d648563a3cafbc2f82bd` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **95/95 passed, zero skipped**, 1.47s; `build/acc-input-identity-2b2175c-results.xml` and corresponding discovery JSON |
 | Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
-| Character input | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | HoroCharacterInputTests, HoroCharacterInputPublicHeaderConsumer | **16/16 passed, zero skipped**, 0.74s; `build/acc-character-results.xml` and discovery JSON |
+| Direct Input consumers | `d460d270be3a71c914c001d5302674c2f599672e` | Eleven targets: Character/Input UI/debugger/portable Android tests; staged Character/RuntimeUiInput/Android/XR consumers; direct navigation/pointer/debugger consumers | **62/62 passed, zero skipped**, 1.42s; `build/acc-input-consumers-d460d27-results.xml` and corresponding discovery JSON |
 | Captions / Runtime UI / optional bridge | `df38a89c2006ef57f0e33a7b91e2c37a4b05bd1b` | HoroRuntimeUiAccessibilityTests, RuntimeUi staged/accessibility consumers, CaptionTransport staged/direct consumers, PlatformAccessibility staged/direct consumers | **49/49 passed, zero skipped**, 0.72s; `build/acc-caption-results.xml` and discovery JSON |
 | GUI / SDL / editor application | `2b2175ca9847ca97dd50d648563a3cafbc2f82bd` | HoroEditorPresentationTests, HoroGuiPublicHeaderConsumer, HoroInputSdlTests, **HoroEditor** | **98/98 passed, zero skipped**, 54.04s: 88 presentation and 10 SDL cases; `build/acc-gui-identity-2b2175c-results.xml` and corresponding discovery JSON |
 
@@ -49,6 +49,14 @@ GUI, SDL input and OpenGL, compiled the actual editor input-cutoff implementatio
 linked `HoroEditor.exe` and staged its runtime assets. It did not launch the editor
 or enable GPU smoke tests. Its presentation tests are display-independent ImGui
 render/model evidence, not observed native interaction or display output.
+
+The direct-consumer batch refreshed callers after the public binding layout
+change: Character **16**, Runtime UI input **19**, input debugger **15**, portable
+Android input **9**, and three direct consumer executables. All four staged
+consumer targets also compiled. This supersedes the earlier Character-only pass
+for current input integration; the Android cases are portable producer/lifecycle
+tests, not NDK/device qualification. Offline SDK compatibility repeated at
+`d460d27` with **24/24 passed** (0.22 seconds), independently of these C++ tests.
 
 The GUI batch executed all ten new Contrast/Input Mapping cases: exact duration
 round trips, malformed drafts, canonical Apply with peer preservation and stale
