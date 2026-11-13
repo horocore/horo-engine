@@ -19,7 +19,7 @@ ACC-001.1 / HORO-1805 is already delivered and is not reimplemented.
 | ACC-001.5 visual | HORO-1809 / #1853 | Added UI scale/contrast snapshot with readable typography floor, visual-safety snapshot and typed effect suppression seam; regression cases written, not executed | Both editor theme layers, coherent DPI/font/UI scale and actual Camera/VFX/animation consumers; visual review |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Existing Runtime UI semantics; added optional platform transport interface, honest no-op Unsupported adapter and opt-in bounded semantic QA journal; tests written, not executed | Native adapters, editor default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Added inert domain contribution, typed tick snapshot for all seven preferences and revision-only hint adapter; lost/stale hint tests written, not executed | Host tick composition, game-owned authority/capability consumers and shared settings UI contribution |
-| ACC-001.8 tooling | HORO-1812 / #1856 | Added unrounded sRGB AA/AAA evaluator, registered editor contrast panel and paired localized copy; numeric/headless UI tests written, not executed | Qualify the four tools and execute the new display-independent primary-text theme checks, platform evidence and documented qualification gaps; depends on all above |
+| ACC-001.8 tooling | HORO-1812 / #1856 | Added evaluator/contrast panel, Windows CI contrast selection, explicit CI evidence-scope reporting and complete 55-criterion open editor inventory with regulatory/platform scope notes; C++ tests unexecuted | Qualify all four tools, execute numeric/theme/native checks and complete the applicability/observed evidence matrix; depends on all above |
 
 ## Interpretation of issue wording
 
@@ -349,3 +349,46 @@ review. The paired-copy/SDK Python pass after these edits is **26 passed**.
 still incomplete under the main coordinator's heavy-slot hold. The own Input
 Mapping code fork still needs authorized integration with Input's unpublished
 scoped capture/persistence changes; no sibling worktree source was changed.
+
+## Editor qualification inventory and CI selection audit
+
+The [editor qualification record](accessibility-editor-qualification.md) now
+inventories every current WCAG 2.2 A/AA criterion, maps Horo workflow/evidence
+gaps to owners, and distinguishes source evidence from observed native results.
+A read-only comparison with the pinned official Recommendation HTML confirmed
+**55 exact unique identifiers and levels**. No entry is passed or silently
+not-applicable. The record uses WCAG2ICT to frame native-software interpretation
+and cites official CVAA/EAA/public platform guidance for limited scope notes;
+actual legal applicability and authorized TRC qualification remain open decisions.
+The EUR-Lex directive text was unavailable behind a verification page, so no
+article-level conclusion is asserted from the Commission's overview.
+
+CI source inspection found that Windows' focused Debug registry omitted the new
+numeric contrast tests. It now includes `HoroVisualAccessibilityTests` and the
+two visual/contrast staged consumers; direct consumers also carry `ci-windows`.
+Linux/macOS GUI-enabled Debug already includes the presentation target containing
+the opaque built-in primary-text pair cases. CI summary copy explicitly reports
+Windows' missing GUI-linked theme coverage and the narrow scope of other checks.
+No CI or native result is inferred from these selection edits. CMake configure,
+actual discovered labels, CTest execution and final quality preflight are pending.
+
+The local ACC helper's old filter named executable targets, but Catch discovery
+registers `Target::case` names. It could therefore have selected only the direct
+consumer. This was found before any ACC native test execution or claimed pass.
+The helper now matches the case-family prefixes, requires every expected family
+and direct consumer in a JSON discovery manifest, and uses `--no-tests=error`.
+Its syntax was checked; it was not launched under the coordinator's HOLD.
+
+The paired-copy, offline SDK and existing CI grouping Python suites ran after
+these edits with **65 passed**. This validates their catalog/metadata/registry
+contracts, not generated CTest membership, C++ behavior or conformance. The
+changed-source diff check passed. All heavy analysis remains incomplete.
+
+Gameplay integration inspection separately confirmed two unresolved boundaries:
+the current `GameRuntimeContext` / behavior callback context has no accessibility
+tick binding, and `ConfigurationService::Snapshot` currently takes `m_mutex`.
+There are no aim-assist, damage or QTE behavior consumers in the active source
+tree beyond the new desired-preference model. Native SDK boundary migration,
+an explicitly owned tick-start acquisition path satisfying the non-blocking
+contract, and game-owned supported/authorized behavior consumers remain required.
+No ambient settings lookup, bus-state cache or silent authority grant was added.
