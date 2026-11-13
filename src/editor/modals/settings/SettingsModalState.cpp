@@ -119,9 +119,9 @@ namespace Horo::Editor {
         state.configurationPreviewed = false;
     }
 
-    /** @copydoc SettingsModal.h */
-    [[nodiscard]] bool ApplySettings(SettingsState &state, EditorSettingsService &settings) {
-        if (static_cast<SettingsModalInternal::SettingsTab>(state.activeTab) == SettingsModalInternal::SettingsTab::ProjectConfiguration) {
+    namespace {
+        /** @brief Commits only the active project session while preserving the pending user draft. */
+        bool ApplyProjectConfiguration(SettingsState &state) {
             if (!state.projectConfiguration) {
                 state.configurationFailure = state.projectConfigurationError;
                 state.status = SettingsModalStatus::Failure;
@@ -131,6 +131,13 @@ namespace Horo::Editor {
             state.configurationFailure = applied.HasError() ? std::optional<Error>{applied.ErrorValue()} : std::nullopt;
             state.status = applied.HasError() ? SettingsModalStatus::Failure : SettingsModalStatus::Applied;
             return applied.HasValue();
+        }
+    }  // namespace
+
+    /** @copydoc SettingsModal.h */
+    [[nodiscard]] bool ApplySettings(SettingsState &state, EditorSettingsService &settings) {
+        if (static_cast<SettingsModalInternal::SettingsTab>(state.activeTab) == SettingsModalInternal::SettingsTab::ProjectConfiguration) {
+            return ApplyProjectConfiguration(state);
         }
         if (state.navigationProjectDraftDirty)
             return false;

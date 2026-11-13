@@ -768,6 +768,20 @@ namespace Horo::Editor {
             state->dataBus.PublishAsync(changed);
         }
 
+        /** @brief Normalizes a destination once before any operation identity or worker captures it. */
+        std::optional<Error> NormalizeDestination(ProjectCreationRequest &request) {
+            if (request.projectRoot.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
+                return MakeFoundationError(ProjectCreationErrors::InvalidRequest, "Project destination contains an embedded NUL.");
+            if (!request.projectRoot.empty()) {
+                std::error_code error;
+                request.projectRoot = std::filesystem::absolute(request.projectRoot, error).lexically_normal();
+                if (error || std::distance(request.projectRoot.begin(), request.projectRoot.end()) > 256)
+                    return MakeFoundationError(ProjectCreationErrors::InvalidRequest,
+                                               "Project destination cannot be normalized within its path-depth bound.");
+            }
+            return std::nullopt;
+        }
+
         [[nodiscard]] std::optional<Error> ValidateRequestSync(const ProjectCreationRequest &request) {
             if (Text::IsBlank(request.templateId) || Text::IsBlank(request.projectName) ||
                 request.projectName.find('/') != std::string::npos || request.projectName.find('\\') != std::string::npos)
@@ -804,18 +818,10 @@ namespace Horo::Editor {
                                                    std::shared_ptr<DurableFileSystem> files)
         : state_(std::make_shared<ProjectCreationServiceState>(dataBus, std::move(random), std::move(files))), jobs_(jobs) {}
 
+    /** @copydoc ProjectCreationService::StartCreate */
     Result<ProjectCreationOperationHandle> ProjectCreationService::StartCreate(ProjectCreationRequest request) const {
-        if (request.projectRoot.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
-            return Result<ProjectCreationOperationHandle>::Failure(
-                MakeFoundationError(ProjectCreationErrors::InvalidRequest, "Project destination contains an embedded NUL."));
-        if (!request.projectRoot.empty()) {
-            std::error_code error;
-            request.projectRoot = std::filesystem::absolute(request.projectRoot, error).lexically_normal();
-            if (error || std::distance(request.projectRoot.begin(), request.projectRoot.end()) > 256)
-                return Result<ProjectCreationOperationHandle>::Failure(
-                    MakeFoundationError(ProjectCreationErrors::InvalidRequest,
-                                        "Project destination cannot be normalized within its path-depth bound."));
-        }
+        if (const auto normalization = NormalizeDestination(request))
+            return Result<ProjectCreationOperationHandle>::Failure(*normalization);
         LOG_DEBUG("editor.project_creation", "StartCreate requested for project '%s' at path '%s', template '%s'",
                   request.projectName.c_str(), Utf8Path(request.projectRoot).c_str(), request.templateId.c_str());
         if (const auto validation = ValidateRequestSync(request)) {

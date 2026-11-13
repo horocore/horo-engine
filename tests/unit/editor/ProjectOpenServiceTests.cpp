@@ -2,6 +2,38 @@
 
 using namespace Horo::Tests::ProjectOpen;
 
+namespace {
+    /** @brief Preserves a configured failure across derived-state installation. */
+    struct FailedPrepared final : IPreparedProjectOpenDerivedState {
+        explicit FailedPrepared(Error error) : error{std::move(error)} {}
+
+        Result<std::string> Install() override {
+            return Result<std::string>::Failure(error);
+        }
+
+        Error error;
+    };
+
+    /** @brief Injects the same cause at either preparation or installation. */
+    struct FailedContributor final : IProjectOpenDerivedStateContributor {
+        FailedContributor(Error error, bool install) : error{std::move(error)}, install{install} {}
+
+        std::string_view Id() const noexcept override {
+            return "test.collision";
+        }
+
+        Result<std::unique_ptr<IPreparedProjectOpenDerivedState>> Prepare(const std::filesystem::path &,
+                                                                          const CancellationToken &) override {
+            if (!install)
+                return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(error);
+            return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Success(std::make_unique<FailedPrepared>(error));
+        }
+
+        Error error;
+        bool install;
+    };
+}  // namespace
+
 TEST_CASE("Project Open Service Tests", "[unit][editor]") {
     TempProject project;
     NativeDurableFileSystem files;
@@ -216,33 +248,7 @@ TEST_CASE("Project open retains the missing collision cause from derived prepara
     REQUIRE(missing.HasError());
     const Error original = missing.ErrorValue();
 
-    struct FailedPrepared final : IPreparedProjectOpenDerivedState {
-        explicit FailedPrepared(Error error) : error{std::move(error)} {}
-
-        Result<std::string> Install() override {
-            return Result<std::string>::Failure(error);
-        }
-
-        Error error;
-    };
-
-    struct FailedContributor final : IProjectOpenDerivedStateContributor {
-        FailedContributor(Error error, bool install) : error{std::move(error)}, install{install} {}
-
-        std::string_view Id() const noexcept override {
-            return "test.collision";
-        }
-
-        Result<std::unique_ptr<IPreparedProjectOpenDerivedState>> Prepare(const std::filesystem::path &,
-                                                                          const CancellationToken &) override {
-            if (!install)
-                return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(error);
-            return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Success(std::make_unique<FailedPrepared>(error));
-        }
-
-        Error error;
-        bool install;
-    } contributor{original, failDuringInstall};
+    FailedContributor contributor{original, failDuringInstall};
 
     NativeDurableFileSystem files;
     SystemWallClock clock;

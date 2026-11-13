@@ -93,6 +93,23 @@ namespace Horo::Editor::SettingsModalInternal {
             return changed;
         }
 
+        /** @brief Displays validation and preview results without changing the draft or its field storage. */
+        void DrawFieldFeedback(const ConfigurationSettingsSession &session, const ConfigurationSettingField &field,
+                               const EditorGuiContext &context) {
+            const auto &key = field.descriptor.key;
+            if (field.error) {
+                const auto &invalid = SettingsModal::kTextScope.Text(context.localization, "configuration.invalid");
+                ImGui::PushStyleColor(ImGuiCol_Text, Theme::Err());
+                ImGui::TextWrapped("%s\n%s", invalid.c_str(), field.error->code.Value().c_str());
+                ImGui::PopStyleColor();
+            }
+            if (session.Preview() && session.Draft().proposedValues.contains(key)) {
+                const auto &preview = SettingsModal::kTextScope.Text(context.localization, "configuration.preview");
+                ImGui::TextWrapped("%s", preview.c_str());
+                DrawValue(session.Preview()->Get(key));
+            }
+        }
+
         /** @brief Applies a copied field identity because stale-edit recovery can replace every session row. */
         void ApplyFieldEdit(SettingsState &state, ConfigurationSettingsSession &session, const SettingKey key) {
             const auto edited = session.Edit(key, *session.EditBuffer(key));
@@ -150,21 +167,11 @@ namespace Horo::Editor::SettingsModalInternal {
                 ApplyFieldEdit(state, session, key);
                 return;
             }
-            if (field.error) {
-                const auto &invalid = SettingsModal::kTextScope.Text(context.localization, "configuration.invalid");
-                ImGui::PushStyleColor(ImGuiCol_Text, Err());
-                ImGui::TextWrapped("%s\n%s", invalid.c_str(), field.error->code.Value().c_str());
-                ImGui::PopStyleColor();
-            }
-            if (session.Preview() && session.Draft().proposedValues.contains(key)) {
-                const auto &preview = SettingsModal::kTextScope.Text(context.localization, "configuration.preview");
-                ImGui::TextWrapped("%s", preview.c_str());
-                DrawValue(session.Preview()->Get(key));
-            }
+            DrawFieldFeedback(session, field, context);
         }
         if (session.Failure()) {
             const auto &invalid = SettingsModal::kTextScope.Text(context.localization, "configuration.invalid");
-            ImGui::PushStyleColor(ImGuiCol_Text, Err());
+            ImGui::PushStyleColor(ImGuiCol_Text, Theme::Err());
             ImGui::TextWrapped("%s\n%s", invalid.c_str(), session.Failure()->code.Value().c_str());
             ImGui::PopStyleColor();
         }

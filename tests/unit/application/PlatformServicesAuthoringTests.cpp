@@ -197,7 +197,7 @@ namespace Horo::Application {
         CheckError(cleanIds.Value().ResolveAchievement("retired.key"), StableIdErrors::Tombstoned);
     }
 
-    TEST_CASE("Definition documents reject coercion and unsafe syntax", "[platform-authoring]") {
+    TEST_CASE("Definition documents reject duplicate missing and private fields", "[platform-authoring]") {
         const auto ids = BuildPlatformStableIdRegistry(Candidate()).Value();
         const auto definitions = Define(ids);
         auto root = nlohmann::json::parse(EncodePlatformStatDefinitions(definitions.stats).Value());
@@ -217,6 +217,12 @@ namespace Horo::Application {
             for (const auto &diagnostic : result.ErrorValue().diagnostics)
                 CHECK(diagnostic.message.find("private-value") == std::string::npos);
         }
+    }
+
+    TEST_CASE("Definition documents reject coercion and preserve exact integer boundaries", "[platform-authoring]") {
+        const auto ids = BuildPlatformStableIdRegistry(Candidate()).Value();
+        const auto definitions = Define(ids);
+        auto root = nlohmann::json::parse(EncodePlatformStatDefinitions(definitions.stats).Value());
         SECTION("Boolean coercion") {
             root["definitions"][0]["hidden"] = 0;
             CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::InvalidDefinition);
