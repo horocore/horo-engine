@@ -3769,6 +3769,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
             unit/editor/InputMappingPanelRenderTests.cpp
+            unit/editor/FocusedPanelLifecycleTests.cpp
             unit/editor/WorldSourceViewportRenderTests.cpp
             unit/editor/PrefabAssetBrowserRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp

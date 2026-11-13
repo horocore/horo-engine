@@ -49,7 +49,7 @@ already captured `GameplayInputFrame`; no new raw-device access was introduced.
 | Unknown-controller Runtime UI navigation, numbered fallback glyphs and optional package presentation | `HoroInputTests` for vocabulary/provider contracts; `HoroRuntimeUiInputTests` for adapter routing |
 | Optional SDL mapping upgrade, finite rumble requests, unsupported/stale devices and focus cancellation | `HoroInputSdlTests` using SDL virtual-device callbacks |
 | Embedded Settings migration and canonical user-profile corruption | `HoroEditorSettingsStoreTests` |
-| Reachable Input Mapping panel, hidden capture withdrawal, narrow/localized/dark/light/disabled presentation | `HoroGlobalDockPanelRenderTests`, `HoroEditorWorkspaceControllerTests` |
+| Reachable Input Mapping, hidden capture/text-focus withdrawal, narrow/localized/dark/light/disabled presentation | `HoroGlobalDockPanelRenderTests` including `FocusedPanelLifecycleTests.cpp`; `HoroEditorWorkspaceControllerTests` |
 | Public contracts and downstream collection projection | `HoroInputPublicHeaderConsumer`, `HoroRuntimeUiNavigationPublicHeaderConsumer`, existing InputCollection and XR projection consumers |
 
 ## Execution Evidence
