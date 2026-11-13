@@ -129,7 +129,9 @@ Sonar IDE C++ execution, CLI secrets and Codacy changed-file analysis remain
 pending the final worktree-aware preflight against the stated base. The parent
 capability remains incomplete while these execution and product gaps remain.
 
-The base revision's analysis compiler-context preparation also hard-codes
-`cmake --build --parallel 2`. That invocation must obey this task's explicit
-single-worker requirement before the native preflight can execute. No analysis
-build was started during main CI's reserved heavy-work interval.
+The published parent already enforces a single compiler worker during analysis
+context preparation. The rebase preserves that implementation. Mocked compiler
+command cases cover Ninja/Make with absent, single-worker and higher inherited
+environment caps, while requiring the actual build command to remain single
+worker. The earlier preflight suite passed 54 tests before rebase. The adjusted
+suite must be rerun on the published parent before delivery.
