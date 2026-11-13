@@ -1,3 +1,4 @@
+#include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
@@ -55,6 +56,7 @@ namespace Horo::Editor {
 
     /** @copydoc SettingsModal.h */
     void ApplySettingsToDraft(SettingsState &st, const EditorSettings &settings) {
+        st.appearance.pendingThemeIndex = -1;
         st.general.startupAction = static_cast<int>(settings.startupBehavior);
         st.general.autoSaveInterval = settings.autoSaveIntervalMinutes;
         st.general.confirmExit = settings.confirmExitWithUnsavedChanges;
@@ -102,15 +104,18 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SettingsModal.h */
-    void LoadSettingsForModal(SettingsState &state, const EditorSettingsService &settings) {
+    void LoadSettingsForModal(SettingsState &state, EditorSettingsService &settings) {
         const EditorSettingsSnapshot snapshot = settings.Snapshot();
         state.committed = snapshot.settings;
         state.settingsRevision = snapshot.revision;
+        state.configurationRevision = snapshot.configurationRevision;
+        state.configuration = std::make_shared<ConfigurationSettingsSession>(settings);
+        state.configurationFailure.reset();
         ApplySettingsToDraft(state, state.committed);
         state.dirty = false;
         state.initialized = true;
-        state.statusIsError = false;
-        state.statusMessage = "Loaded committed editor settings.";
+        state.status = SettingsModalStatus::Loaded;
+        state.configurationPreviewed = false;
     }
 
     /** @copydoc SettingsModal.h */
@@ -120,21 +125,46 @@ namespace Horo::Editor {
         if (const auto owner = state.prefab.owner.lock(); owner && owner->IsDirty())
             return false;
         const EditorSettings draft = CollectDraftSettings(state);
+        if (state.configuration) {
+            for (const auto &field : state.configuration->Fields()) {
+                if (field.error) {
+                    state.configurationFailure = *field.error;
+                    state.status = SettingsModalStatus::Failure;
+                    return false;
+                }
+            }
+        }
+        const ConfigurationDraft *configurationDraft = state.configuration ? &state.configuration->Draft() : nullptr;
         const Result<EditorSettingsSnapshot> result =
-            settings.Commit(EditorSettingsDraft{.baseRevision = state.settingsRevision, .settings = draft});
+            settings.Commit(EditorSettingsDraft{.baseRevision = state.settingsRevision,
+                                                .settings = draft,
+                                                .baseConfigurationRevision = state.configurationRevision},
+                            configurationDraft);
         if (result.HasError()) {
-            state.statusMessage = result.ErrorValue().message;
-            state.statusIsError = true;
+            const bool previewed = state.configurationPreviewed || CollectDraftSettings(state) != state.committed;
+            if (result.ErrorValue().code.Value() == "configuration.draft_stale" ||
+                result.ErrorValue().code.Value() == "editor.settings.draft_stale")
+                LoadSettingsForModal(state, settings);
+            state.configurationFailure = result.ErrorValue();
+            state.status = SettingsModalStatus::Failure;
+            if (previewed) {
+                state.appearance.pendingThemeIndex = state.appearance.themeIndex;
+                state.configurationPreviewed = true;
+            }
             state.dirty = true;
             return false;
         }
 
         state.committed = result.Value().settings;
         state.settingsRevision = result.Value().revision;
+        state.configurationRevision = result.Value().configurationRevision;
+        state.configurationFailure.reset();
+        if (state.configuration)
+            state.configuration->Reload();
         ApplySettingsToDraft(state, state.committed);
         state.dirty = false;
-        state.statusMessage = "Settings applied.";
-        state.statusIsError = false;
+        state.status = SettingsModalStatus::Applied;
+        state.configurationPreviewed = false;
         return true;
     }
 }  // namespace Horo::Editor

@@ -2,6 +2,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
+#include "support/OwnedTestDirectory.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -37,6 +38,39 @@ namespace {
         std::filesystem::path path_;
     };
 }  // namespace
+
+TEST_CASE("Explicit Theme Roots Accept Unicode And Commented Resources But Reject Hostile JSON", "[unit][editor][gui][theme]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Tests::OwnedTestDirectory directory{"theme unicode"};
+    const auto root = directory.Path() / std::filesystem::path{u8"Türkçe temalar"};
+    REQUIRE(std::filesystem::create_directory(root));
+    const auto path = root / std::filesystem::path{u8"Özel.json"};
+    const auto encodedRoot = root.u8string();
+    const auto encodedPath = path.u8string();
+    const std::string rootText{encodedRoot.begin(), encodedRoot.end()};
+    const std::string pathText{encodedPath.begin(), encodedPath.end()};
+    const auto write = [&](const std::string_view document) {
+        std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+        stream << document;
+        REQUIRE(stream.good());
+    };
+    write(R"({/* supported resource comment */ "colors":{"WindowBg":"#112233"}})");
+    Theme::RefreshThemeList(nullptr, rootText.c_str());
+    REQUIRE(Theme::GetThemeList().size() == 4);
+    Theme::ThemeEntry candidate;
+    REQUIRE(Theme::LoadThemeFromJson(pathText.c_str(), candidate));
+    CHECK(candidate.name == std::string{"\xc3\x96zel"});
+    const auto originalColors = candidate.colors;
+    write(R"({"colors":{"WindowBg":"#112233","WindowBg":"#445566"}})");
+    CHECK_FALSE(Theme::LoadThemeFromJson(pathText.c_str(), candidate));
+    CHECK(candidate.colors.size() == originalColors.size());
+    write(std::string{"{\"ignored\":"} + std::string(32, '[') + "0" + std::string(32, ']') + "}");
+    CHECK_FALSE(Theme::LoadThemeFromJson(pathText.c_str(), candidate));
+    Theme::RefreshThemeList();
+    CHECK(Theme::GetThemeList().size() == 3);
+    Theme::SelectThemeByIndex(0);
+}
 
 TEST_CASE("Theme candidates are fenced to the selected source and bounded before parsing", "[unit][editor][gui][theme][reload]") {
     using namespace Horo::Editor;

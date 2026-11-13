@@ -1,3 +1,4 @@
+#include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
@@ -25,10 +26,10 @@ namespace Horo::Editor::SettingsModalInternal {
 
     void DrawFooterStatus(const SettingsState &st, const EditorGuiContext &ctx, const float footerPaddingX, const float actionsStartX) {
         ImGui::SetCursorPos({footerPaddingX, (ImGui::GetWindowHeight() - ImGui::GetTextLineHeight()) * 0.5F});
-        if (st.dirty) {
+        if (st.dirty || (st.configuration && !st.configuration->Draft().proposedValues.empty())) {
             ScopedTextStyle badge(ctx.theme.fonts.sansCompact, TextPx::Caption(), FontPx::SansCompact);
             ImGui::PushStyleColor(ImGuiCol_Text, Warn());
-            ImGui::TextUnformatted("unsaved");
+            ImGui::TextUnformatted(SettingsModal::kTextScope.Text(ctx.localization, "configuration.unsaved").c_str());
             ImGui::PopStyleColor();
             ImGui::SameLine(0.0F, 8.0F);
         }
@@ -37,16 +38,34 @@ namespace Horo::Editor::SettingsModalInternal {
         ImVec4 textColor = Dim();
         if (hasFeedback)
             textColor = Accent();
-        else if (st.statusIsError)
+        else if (st.status == SettingsModalStatus::Failure)
             textColor = Err();
         ImGui::PushStyleColor(ImGuiCol_Text, textColor);
         const auto navigationHint = SettingsModal::kTextScope.Text(ctx.localization, "navigation.save_policy_first");
-        const char *message =
-            st.navigationProjectDraftDirty ? navigationHint.c_str() : "Apply writes user preferences to ~/.horo/editor_settings.json";
+        const char *statusKey = "configuration.persist_hint";
+        switch (st.status) {
+            case SettingsModalStatus::Loaded:
+                statusKey = "configuration.loaded";
+                break;
+            case SettingsModalStatus::Applied:
+                statusKey = "configuration.applied";
+                break;
+            case SettingsModalStatus::Defaults:
+                statusKey = "configuration.defaults";
+                break;
+            case SettingsModalStatus::Failure:
+                statusKey = "configuration.invalid";
+                if (st.configurationFailure && (st.configurationFailure->code.Value() == "configuration.draft_stale" ||
+                                                st.configurationFailure->code.Value() == "editor.settings.draft_stale"))
+                    statusKey = "configuration.stale";
+                break;
+            case SettingsModalStatus::None:
+                break;
+        }
+        const auto status = SettingsModal::kTextScope.Text(ctx.localization, statusKey);
+        const char *message = st.navigationProjectDraftDirty ? navigationHint.c_str() : status.c_str();
         if (hasFeedback)
             message = st.modalFeedback.c_str();
-        else if (!st.statusMessage.empty())
-            message = st.statusMessage.c_str();
         const auto prefab = st.prefab.owner.lock();
         const auto &prefabHint = SettingsModal::kTextScope.Text(ctx.localization, "prefab.save_first");
         if (prefab && prefab->IsDirty())
@@ -55,6 +74,8 @@ namespace Horo::Editor::SettingsModalInternal {
         ImGui::PushClipRect(origin, {origin.x + actionsStartX - 12.0F, origin.y + ImGui::GetWindowHeight()}, true);
         ImGui::TextUnformatted(message);
         ImGui::PopClipRect();
+        if (ImGui::IsItemHovered())
+            ShowTooltip(message, &ctx.theme.fonts);
         ImGui::PopStyleColor();
     }
 
@@ -88,9 +109,19 @@ namespace Horo::Editor::SettingsModalInternal {
                     .baseFontSize = FontPx::SansCompact,
                     .componentSize = ComponentSize::Small})) {
             LOG_INFO("editor.settings", "Restore Defaults clicked — draft reset to factory defaults.");
-            ApplySettingsToDraft(st, DefaultEditorSettings());
-            st.statusMessage = "Defaults loaded into draft. Apply to persist.";
-            st.statusIsError = false;
+            LoadSettingsForModal(st, settings);
+            const auto restored = st.configuration->RestoreDefaults();
+            if (restored.HasError()) {
+                st.configurationFailure = restored.ErrorValue();
+                st.status = SettingsModalStatus::Failure;
+            } else {
+                auto defaults = DefaultEditorSettings();
+                ApplyEditorConfigurationSnapshot(*st.configuration->Preview(), defaults);
+                ApplySettingsToDraft(st, defaults);
+                st.appearance.pendingThemeIndex = st.appearance.themeIndex;
+                st.configurationPreviewed = true;
+                st.status = SettingsModalStatus::Defaults;
+            }
         }
         ImGui::SameLine(0.0F, gap);
         if (Button({.label = cancelLabel.c_str(),

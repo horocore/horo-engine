@@ -27,6 +27,9 @@ namespace {
     using namespace Horo::Editor;
 
     struct SettingsFixture {
+        explicit SettingsFixture(ConfigurationSchema schema = {})
+            : configuration(CreateEditorConfigurationService(DefaultEditorSettings(), &engineEvents, std::move(schema))) {}
+
         EngineDataBus engineEvents;
         EditorDataBus events;
         Input::InputRouter input;
@@ -62,6 +65,90 @@ namespace {
             if (event.phase == SettingsChangePhase::Reverted)
                 ++reverted;
         });
+    }
+
+    TEST_CASE("Shared descriptors commit with legacy controls through one durable modal operation", "[unit][editor][configuration]") {
+        const Horo::TestSupport::ScopedTestHome home{"horo-settings-shared-descriptors"};
+        const SettingKey key{"module.custom_limit"};
+        ConfigurationSchema schema;
+        REQUIRE(schema
+                    .Register({.key = key,
+                               .type = SettingValueType::Integer,
+                               .defaultValue = std::int64_t{4},
+                               .scope = SettingScope::User,
+                               .reloadPolicy = ReloadPolicy::NextOperation,
+                               .sensitivity = SettingSensitivity::Public,
+                               .validation = SettingIntegerRange{1, 32}})
+                    .HasValue());
+        SettingsFixture fixture{std::move(schema)};
+        int committed = 0;
+        int reverted = 0;
+        const auto subscription = SubscribeToChanges(fixture, committed, reverted);
+        int configurationNotifications = 0;
+        const auto configurationSubscription = fixture.engineEvents.Subscribe<ConfigurationChangedEvent>([&](const auto &event) {
+            ++configurationNotifications;
+            const auto observed = fixture.settings.Snapshot();
+            CHECK(observed.configurationRevision == event.revision);
+            CHECK(observed.revision == 1);
+            CHECK(observed.settings.autoSaveIntervalMinutes == 12);
+            CHECK(LoadEditorSettingsDocument().settings.autoSaveIntervalMinutes == 12);
+        });
+        auto *modal = Open(fixture);
+        REQUIRE(modal->Draft().configuration);
+        REQUIRE(modal->Draft().configuration->Edit(key, "14").HasValue());
+        modal->Draft().general.autoSaveInterval = 12;
+        CHECK(fixture.configuration.Snapshot().Revision() == 0);
+        REQUIRE(modal->ApplyDraft());
+        CHECK(committed == 1);
+        CHECK(configurationNotifications == 1);
+        CHECK(fixture.settings.Snapshot().settings.autoSaveIntervalMinutes == 12);
+        CHECK(std::get<std::int64_t>(fixture.configuration.Snapshot().Get(key)) == 14);
+        const auto document = LoadEditorSettingsDocument();
+        REQUIRE_FALSE(document.parseError);
+        REQUIRE_FALSE(document.configurationJson.empty());
+        const auto parsed = ConfigurationResolver::ParseDocument(fixture.configuration.Schema(), document.configurationJson, "editor-user");
+        REQUIRE(parsed.HasValue());
+        CHECK(std::get<std::int64_t>(parsed.Value().at(key).value) == 14);
+        REQUIRE(fixture.host.RequestClose(ModalId{SettingsModal::kModalId}, ModalCloseReason::Cancelled).HasValue());
+        fixture.host.OnUpdate(0);
+        CHECK(reverted == 0);
+    }
+
+    TEST_CASE("Conflicting generic and legacy edits never publish competing appearance values", "[unit][editor][configuration]") {
+        const Horo::TestSupport::ScopedTestHome home{"horo-settings-conflicting-controls"};
+        SettingsFixture fixture;
+        int committed = 0;
+        int reverted = 0;
+        const auto subscription = SubscribeToChanges(fixture, committed, reverted);
+        auto *modal = Open(fixture);
+        REQUIRE(modal->Draft().configuration->Edit(SettingKey{"editor.appearance.ui_scale_percent"}, "125").HasValue());
+        modal->Draft().appearance.uiScale = 175;
+        CHECK_FALSE(modal->ApplyDraft());
+        CHECK(committed == 0);
+        CHECK(fixture.settings.Snapshot().settings.uiScalePercent == 100);
+        CHECK(fixture.configuration.Snapshot().Revision() == 0);
+        CHECK_FALSE(std::filesystem::exists(ResolveEditorSettingsPath()));
+    }
+
+    TEST_CASE("Modal stale configuration review preserves external values and the prior durable document",
+              "[unit][editor][configuration]") {
+        const Horo::TestSupport::ScopedTestHome home{"horo-settings-configuration-stale"};
+        SettingsFixture fixture;
+        REQUIRE(fixture.settings.Commit({.baseRevision = 0, .settings = DefaultEditorSettings()}).HasValue());
+        const auto prior = LoadEditorSettingsDocument().configurationJson;
+        auto *modal = Open(fixture);
+        const SettingKey key{"editor.appearance.ui_scale_percent"};
+        REQUIRE(modal->Draft().configuration->Edit(key, "125").HasValue());
+        ConfigurationDraft external{.baseRevision = fixture.configuration.Snapshot().Revision(), .source = ConfigurationSource::User};
+        external.proposedValues.emplace(key, std::int64_t{150});
+        REQUIRE(fixture.configuration.Commit(external).HasValue());
+        REQUIRE_FALSE(modal->ApplyDraft());
+        REQUIRE(modal->Draft().configurationFailure);
+        CHECK(modal->Draft().configurationFailure->code.Value() == "configuration.draft_stale");
+        CHECK(modal->Draft().appearance.uiScale == 150);
+        CHECK(modal->Draft().configuration->Draft().proposedValues.empty());
+        CHECK(std::get<std::int64_t>(fixture.configuration.Snapshot().Get(key)) == 150);
+        CHECK(LoadEditorSettingsDocument().configurationJson == prior);
     }
 
     TEST_CASE("Opening settings hydrates the authority snapshot", "[unit][editor][settings]") {
