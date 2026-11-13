@@ -33,6 +33,12 @@ namespace Horo::Input::Detail {
     [[nodiscard]] Result<std::vector<AccessibilityActionIdentity>> PrepareAccessibilityIdentities(std::span<const ActionDescriptor> actions,
                                                                                                   const InputBindingProfile &profile);
 
+    /** @brief Old-owner cancellation value and its original cause, independent of the current action map. */
+    struct AccessibilityRelease final {
+        bool released{};
+        ActionReadStatus status{ActionReadStatus::Resolved};
+    };
+
     /** @brief Router-owned fixed mapping inventory; every call is serialized on the existing Input owner thread. */
     class InputAccessibilityRouter final {
         static constexpr std::size_t Capacity = MaximumAccessibilityMappings;
@@ -48,6 +54,7 @@ namespace Horo::Input::Detail {
             std::optional<DigitalAffordance> processor;
             DigitalAffordanceValue cached;
             bool awaitingNeutral{true}, chordHeld{}, physicalHeld{}, retired{}, pendingRelease{}, ownerRemoved{};
+            ActionReadStatus releaseStatus{ActionReadStatus::Resolved};
         };
 
     public:
@@ -109,7 +116,8 @@ namespace Horo::Input::Detail {
          */
         void CancelAction(std::uint64_t context, const ActionId &action, std::optional<PlayerId> player) noexcept;
         /** @brief Delivers one old-owner release even when that still-live context is temporarily ineligible. */
-        [[nodiscard]] bool TakeReleases(std::uint64_t context, const ActionId &action, std::optional<PlayerId> player) noexcept;
+        [[nodiscard]] AccessibilityRelease TakeReleases(std::uint64_t context, const ActionId &action,
+                                                        std::optional<PlayerId> player) noexcept;
         /** @brief Transfers an ended context's withdrawal to the host, preserving its exact original scope and typed name lease. */
         [[nodiscard]] bool TryDequeueRetired(RetiredInputActionRelease &release) noexcept;
         /** @brief Reclaims drained identity leases at explicit frame-end or the next committed-sample boundary. */
@@ -117,7 +125,7 @@ namespace Horo::Input::Detail {
 
     private:
         /** @brief Retires a single cell, keeping an active cancellation release and its immutable name lease. */
-        static void Cancel(Cell &cell) noexcept;
+        static void Cancel(Cell &cell, ActionReadStatus cause = ActionReadStatus::Resolved) noexcept;
         std::array<Cell, Capacity> cells_{};
         std::uint64_t serial_{};
         bool exhausted_{};

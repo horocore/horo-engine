@@ -110,6 +110,29 @@ namespace Horo::Input {
         REQUIRE(fixture.Sample(std::nullopt, true).status == ActionReadStatus::ClockUnavailable);
     }
 
+    TEST_CASE("Timed cancellation releases retain missing clock cause independently of the current action map",
+              "[input][accessibility][router][time][lifetime]") {
+        MappingFixture fixture{{.digital = {.holdMicroseconds = 10}}};
+        static_cast<void>(fixture.Sample(InputSampleTime{0}, false));
+        static_cast<void>(fixture.Sample(InputSampleTime{1}, true));
+        REQUIRE(fixture.Sample(InputSampleTime{11}, true).value.down);
+        fixture.Begin(std::nullopt);
+        static_cast<void>(fixture.input.CommitFrame());
+        bool removed = false;
+        SECTION("The existing binding still requires host time") {}
+        SECTION("The old action map is removed before its release is observed") {
+            REQUIRE(fixture.input.Router().SetActionMap({}).HasValue());
+            removed = true;
+        }
+        const auto release = fixture.Read();
+        REQUIRE(release.status == ActionReadStatus::ClockUnavailable);
+        REQUIRE(release.value.released);
+        REQUIRE_FALSE(release.value.down);
+        const auto again = fixture.Read();
+        REQUIRE_FALSE(again.value.released);
+        REQUIRE(again.status == (removed ? ActionReadStatus::Unavailable : ActionReadStatus::ClockUnavailable));
+    }
+
     TEST_CASE("Router observes releases even when an action skips reads and requires the next hold anew",
               "[input][accessibility][router][lifecycle]") {
         MappingFixture fixture{{.digital = {.holdMicroseconds = 10}}};

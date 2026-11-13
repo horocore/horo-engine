@@ -25,11 +25,13 @@ namespace Horo::Input::Detail {
     }
 
     /** @copydoc InputAccessibilityRouter::Cancel */
-    void InputAccessibilityRouter::Cancel(Cell &cell) noexcept {
+    void InputAccessibilityRouter::Cancel(Cell &cell, const ActionReadStatus cause) noexcept {
         if (!cell.action || cell.context == 0 || cell.retired)
             return;
         const bool released = cell.processor && cell.processor->Cancel().button.released;
         cell.pendingRelease = cell.pendingRelease || released;
+        if (released)
+            cell.releaseStatus = cause;
         cell.retired = true;
         cell.chordHeld = false;
         if (!cell.pendingRelease)
@@ -55,7 +57,7 @@ namespace Horo::Input::Detail {
             const bool lostDevice =
                 cell.device && (!raw.FindGamepad(*cell.device) || (cell.player && assignments.PlayerFor(*cell.device) != cell.player));
             if (missingClock || lostDevice)
-                Cancel(cell);
+                Cancel(cell, missingClock ? ActionReadStatus::ClockUnavailable : ActionReadStatus::Resolved);
             if (cell.retired || !cell.action || cell.context == 0)
                 continue;
             const auto physical = PeekAccessibilityPhysical(cell.source, raw, previous, cell.device);
@@ -105,22 +107,25 @@ namespace Horo::Input::Detail {
                                                 const std::optional<PlayerId> player) noexcept {
         for (auto &cell : cells_)
             if (cell.context == context && cell.action && *cell.action == action && cell.player == player)
-                Cancel(cell);
+                Cancel(cell, ActionReadStatus::ClockUnavailable);
     }
 
     /** @copydoc InputAccessibilityRouter::TakeReleases */
-    bool InputAccessibilityRouter::TakeReleases(const std::uint64_t context, const ActionId &action,
-                                                const std::optional<PlayerId> player) noexcept {
-        bool released = false;
+    AccessibilityRelease InputAccessibilityRouter::TakeReleases(const std::uint64_t context, const ActionId &action,
+                                                                const std::optional<PlayerId> player) noexcept {
+        AccessibilityRelease release;
         for (auto &cell : cells_) {
             if (cell.context != context || !cell.pendingRelease || !cell.action || *cell.action != action || cell.player != player)
                 continue;
-            released = true;
+            release.released = true;
+            if (cell.releaseStatus == ActionReadStatus::ClockUnavailable)
+                release.status = cell.releaseStatus;
             cell.pendingRelease = false;
+            cell.releaseStatus = ActionReadStatus::Resolved;
             if (cell.retired)
                 cell.context = 0;
         }
-        return released;
+        return release;
     }
 
     /** @copydoc InputAccessibilityRouter::EndFrame */

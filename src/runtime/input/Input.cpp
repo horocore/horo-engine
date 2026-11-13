@@ -1099,9 +1099,9 @@ namespace Horo::Input {
         ActionValue &value = evidence.value;
         if (context.router_ != this || !TokenActive(context.token_))
             return evidence;
-        if (impl_->accessibility.TakeReleases(context.token_, actionId, player)) {
+        if (const auto release = impl_->accessibility.TakeReleases(context.token_, actionId, player); release.released) {
             value.released = true;
-            evidence.status = impl_->lastActionStatus = ActionReadStatus::Resolved;
+            evidence.status = impl_->lastActionStatus = release.status;
             return evidence;
         }
         if (!IsContextActive(context))
@@ -1122,7 +1122,7 @@ namespace Horo::Input {
         });
         if (requiresClock && !snapshot.sampleTime) {
             impl_->accessibility.CancelAction(context.token_, actionId, player);
-            value.released = impl_->accessibility.TakeReleases(context.token_, actionId, player);
+            value.released = impl_->accessibility.TakeReleases(context.token_, actionId, player).released;
             evidence.status = impl_->lastActionStatus = ActionReadStatus::ClockUnavailable;
             return evidence;
         }
