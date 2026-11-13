@@ -18,7 +18,7 @@ it must not be attributed to that older remote snapshot.
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Fixed cue/catalog transport, bounded timeline, appearance, safe-area layout and canonical paint/resource lifetimes; 49-case UI batch passed | Host localization/shaping/presentation composition, settings activation and visible native output |
 | ACC-001.3 color | HORO-1807 / #1851 | Foundation-only matrices and authoritative snapshot query; numeric/query/contract cases passed in the 11-case semantic batch | Complete-image GPU execution, cooked shader ABI migration, settings activation and real backend evidence |
-| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, repeat/clock failure propagation; Input **94/94** including calibrated platform gyro and atomically persisted gyro bindings, plus CharacterInput 16/16 passed. Earlier GUI drafts, SDL sample time and editor application compiled; GUI/SDL 92/92 passed before the gyro modal | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; gyro modal compilation/execution, controller motion collection, device evidence and native interaction qualification |
+| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, repeat/clock failure propagation; Input **94/94** including calibrated platform gyro and atomically persisted gyro bindings, plus CharacterInput 16/16 passed. Gyro modal, SDL and editor application compiled; **98/98 GUI/SDL** passed at 8212db8 | Post-batch identity/validity fixes need their 95-case Input and 98-case GUI reruns; scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; controller motion collection, device evidence and native interaction qualification |
 | ACC-001.5 visual | HORO-1809 / #1853 | Atomic UI scale/contrast projection, readable typography floor and tagged safety projection passed in UI/semantic batches | Both editor theme layers, coherent DPI/font/UI scale, actual Camera/VFX/animation consumers and visual qualification |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Runtime UI semantics, truthful Null Unsupported bridge, retained desired preference and bounded opt-in QA journal passed in the UI batch | Native adapters, default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Inert contribution, seven typed preferences, authoritative snapshot and revision-only hint/retry contracts passed in the semantic batch | Host tick composition, game-owned supported/authorized consumers and shared settings contribution |
@@ -41,7 +41,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 | Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
 | Character input | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | HoroCharacterInputTests, HoroCharacterInputPublicHeaderConsumer | **16/16 passed, zero skipped**, 0.74s; `build/acc-character-results.xml` and discovery JSON |
 | Captions / Runtime UI / optional bridge | `df38a89c2006ef57f0e33a7b91e2c37a4b05bd1b` | HoroRuntimeUiAccessibilityTests, RuntimeUi staged/accessibility consumers, CaptionTransport staged/direct consumers, PlatformAccessibility staged/direct consumers | **49/49 passed, zero skipped**, 0.72s; `build/acc-caption-results.xml` and discovery JSON |
-| GUI / SDL / editor application | `ba5844883ac76ba135838d70ae5002dec733317b` | HoroEditorPresentationTests, HoroGuiPublicHeaderConsumer, HoroInputSdlTests, **HoroEditor** | **92/92 passed, zero skipped**, 50.99s: 82 presentation and 10 SDL cases; `build/acc-gui-results.xml` and `build/acc-gui-discovery.json` |
+| GUI / SDL / editor application | `8212db832ae6d35b93d0eea4872a9fc40f636817` | HoroEditorPresentationTests, HoroGuiPublicHeaderConsumer, HoroInputSdlTests, **HoroEditor** | **98/98 passed, zero skipped**, 53.73s: 88 presentation and 10 SDL cases; `build/acc-gui-gyro-8212db8-results.xml` and corresponding discovery JSON |
 
 All batches configured successfully, including header ownership and dependency
 direction checks. Affected staged/public consumers compiled. The GUI batch enabled
@@ -219,12 +219,21 @@ spaces/non-ASCII paths. It supersedes the earlier 88-case Input scope without
 claiming gyro hardware or GUI behavior. Subsequent source adds owned Add/Edit intents
 and an exclusive gyro modal through the existing workspace command and modal
 hosts. Axis/calibration/sensitivity drafts apply only through canonical SetProfile;
-six model/modal/render regression sources are pending. Paired-copy/CI Python
-checks passed **43 tests** after those UI edits. Automatic motion-gesture capture,
+all six model/modal/render cases passed in the **98/98 GUI/SDL** batch at
+`8212db8`, along with the actual editor and staged GUI header builds. Paired-copy/CI
+Python checks passed **43 tests** after those UI edits. Automatic motion-gesture capture,
 SDL controller motion collection, native interaction and device qualification
 remain open.
 
 ### Native bridge, editor semantics and gameplay
+
+Post-batch source review found that inactive binding fields could disguise the
+same physical control from duplicate/chord checks. Commit `830ac15` selects
+physical identity by the active kind for all nine controls and adds one all-kind
+duplicate/sticky regression. Commit `a6174d8` shares one bounded gyro draft parser
+between a frame validity query and explicit error-producing Apply, and strengthens
+the modal-gating precondition. Their required 95-case Input and 98-case GUI reruns
+remain pending; preceding passes are not attributed to these newer edits.
 
 `HoroPlatformAccessibility` consumes existing Runtime UI semantics without making
 baseline Platform depend on UI. Its public surface exposes no native handles.

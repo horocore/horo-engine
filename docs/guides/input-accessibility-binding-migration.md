@@ -72,10 +72,14 @@ Its owned numeric draft preserves full float precision and invalid intermediate
 text; axis, component, calibration and sensitivity reach the same SetProfile
 authority only on Apply. Revision plus an exact replacement baseline rejects
 retargeting, append preserves all existing bindings, and Cancel/close writes
-nothing. Six model/modal/render regression sources and the paired English/Turkish
-copy check cover that workflow; C++ execution and native interaction are still
-pending. Automatic motion-gesture capture, SDL controller collection and actual
-device evidence remain separate acceptance work.
+nothing. All six model/modal/render cases ran in the **98/98** GUI/SDL batch at
+`8212db832ae6d35b93d0eea4872a9fc40f636817` (53.73 seconds, zero skipped), alongside
+the actual editor and staged GUI header builds. Its retained report is
+`build/acc-gui-gyro-8212db8-results.xml`. Paired-copy/CI Python checks passed
+**43 tests**. Later commits `830ac15` and `a6174d8` tighten physical identity and
+use an error-free frame validity query; their Input/GUI reruns remain pending.
+Native interaction, automatic motion-gesture capture, SDL controller collection
+and actual device evidence remain separate acceptance work.
 
 ## Wire and source migration
 
