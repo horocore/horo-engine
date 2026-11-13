@@ -12,8 +12,8 @@ integration with the newly published target. No merge/rebase or history rewrite
 is part of that ref inspection. The initial implementation baseline was
 `f51e0c0f44cd0f4c7931d288a5dde794e3316dfd`.
 The reviewable delivery is [draft PR #3560](https://github.com/horocore/horo-engine/pull/3560).
-Local verification below includes commits beyond its published `55d9991` head;
-it must not be attributed to that older remote snapshot.
+Its published head was verified as `74b798cee9f2e878f493386188d343dd65298fab`
+on 2026-11-13. Each verification row below retains its own exact source identity.
 
 ## Current acceptance matrix
 
@@ -21,7 +21,7 @@ it must not be attributed to that older remote snapshot.
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Fixed cue/catalog transport, bounded timeline, appearance, safe-area layout and canonical paint/resource lifetimes; 49-case UI batch passed | Host localization/shaping/presentation composition, settings activation and visible native output |
 | ACC-001.3 color | HORO-1807 / #1851 | Foundation-only matrices and authoritative snapshot query; numeric/query/contract cases passed in the 11-case semantic batch | Complete-image GPU execution, cooked shader ABI migration, settings activation and real backend evidence |
-| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, calibrated platform gyro and atomic persistence; **99/99 Input** passed on the exact patch committed as 80f09f5, including chord-set identity and finite-scale cancellation. **98/98 GUI/SDL** and the editor application built at clean 80f09f5; direct Input consumers passed **62/62** at d460d27 | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; controller motion collection, device evidence and native interaction qualification |
+| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, calibrated gyro and atomic persistence; **104/104 Input** passed at 74b798c, including controller routing, source/device evidence, neutral zero thresholds and fixed-tick capture. Historical **98/98 GUI/SDL** and editor application built at 80f09f5; direct consumers passed **62/62** at d460d27 | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; current controller SDL/editor/direct-consumer execution, physical controller and native interaction qualification |
 | ACC-001.5 visual | HORO-1809 / #1853 | Atomic UI scale/contrast projection, readable typography floor and tagged safety projection passed in UI/semantic batches | Both editor theme layers, coherent DPI/font/UI scale, actual Camera/VFX/animation consumers and visual qualification |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Runtime UI semantics, truthful Null Unsupported bridge, retained desired preference and bounded opt-in QA journal passed in the UI batch | Native adapters, default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Inert contribution, seven typed preferences, authoritative snapshot and revision-only hint/retry contracts passed in the semantic batch | Host tick composition, game-owned supported/authorized consumers and shared settings contribution |
@@ -48,6 +48,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 
 | Scope | Source commit | Built targets | Executed evidence |
 |---|---|---|---|
+| Input controller core refresh | `74b798cee9f2e878f493386188d343dd65298fab` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **104/104 passed, zero skipped**, 1.59s; `build/acc-controller-core-74b798c-results.xml`, matching discovery JSON and native log. Includes later source spelling, zero-threshold and fixed-tick changes. |
 | Input controller core | `ec59e05e9` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **102/102 passed, zero skipped**, 1.57s; `build/acc-controller-core-ec59e05-results.xml` and corresponding discovery JSON. Later source changes require a fresh run. |
 | Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
 | Direct Input consumers | `d460d270be3a71c914c001d5302674c2f599672e` | Eleven targets: Character/Input UI/debugger/portable Android tests; staged Character/RuntimeUiInput/Android/XR consumers; direct navigation/pointer/debugger consumers | **62/62 passed, zero skipped**, 1.42s; `build/acc-input-consumers-d460d27-results.xml` and corresponding discovery JSON |
@@ -66,9 +67,10 @@ ordinary player filtering, independent transition consumption, source/device
 evidence, strict optional profile source fields and stale-handle rejection.
 Its three new regressions and the direct public consumer executed at `ec59e05`.
 The later `Gamepad` source spelling, zero-threshold neutrality and fixed-tick
-capture regression are not covered by that older compile. SDL opt-in/window-focus
-collection, seven SDL virtual-device regression sources, editor source controls
-and affected direct consumers still need native execution at the final snapshot.
+capture regression executed in the 104-case refresh at `74b798c`.
+SDL opt-in/window-focus collection, seven SDL virtual-device regression sources,
+editor source/device controls, shared combo keyboard interaction and affected
+direct consumers still need native execution at the final snapshot.
 The old GUI/direct-consumer rows do not qualify the changed Input layouts or
 controller adapter. Physical controller and native interaction checks remain.
 
