@@ -590,6 +590,7 @@ namespace Horo::Input {
         impl_->touchAdmissionClosed = false;
         if (impl_->neutralizeOnBeginFrame) {
             impl_->collector.Neutralize();
+            impl_->collector.SetWindowState(impl_->windowState);
             impl_->neutralizeOnBeginFrame = false;
         }
         if (impl_->gyroSyncPending)
@@ -613,8 +614,10 @@ namespace Horo::Input {
         impl_->windowId = windowId;
         impl_->pointerWidth = 0;
         impl_->pointerHeight = 0;
-        if (auto *window = SDL_GetWindowFromID(windowId))
+        if (auto *window = SDL_GetWindowFromID(windowId)) {
             (void)SDL_GetWindowSize(window, &impl_->pointerWidth, &impl_->pointerHeight);
+            impl_->windowState.focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+        }
         impl_->neutralizeOnBeginFrame = true;
         impl_->gyroSyncPending = true;
     }

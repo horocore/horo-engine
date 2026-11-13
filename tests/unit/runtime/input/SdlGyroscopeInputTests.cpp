@@ -3,9 +3,23 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <memory>
 
 namespace {
     using namespace Horo::Input;
+
+    /** @brief Process-local headless SDL video ownership; no native display or graphics context is required. */
+    struct HiddenVideo final {
+        HiddenVideo() {
+            REQUIRE(SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "dummy", SDL_HINT_OVERRIDE));
+            REQUIRE(SDL_InitSubSystem(SDL_INIT_VIDEO));
+        }
+
+        ~HiddenVideo() {
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+            SDL_ResetHint(SDL_HINT_VIDEO_DRIVER);
+        }
+    };
 
     /** @brief Real SDL virtual device; backend native enable calls and queued samples use SDL's ordinary driver path. */
     struct MotionDevice final {
@@ -236,5 +250,24 @@ namespace {
             REQUIRE(device.disables == 0);
         }
         CHECK(device.disables == 1);
+    }
+
+    TEST_CASE("SDL initially unfocused windows cannot enable requested controller motion before a focus event",
+              "[unit][input][sdl][gyroscope][focus]") {
+        HiddenVideo video;
+        std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{SDL_CreateWindow("ACC hidden sensor surface", 64, 64,
+                                                                                          SDL_WINDOW_HIDDEN),
+                                                                         SDL_DestroyWindow};
+        REQUIRE(window != nullptr);
+        REQUIRE((SDL_GetWindowFlags(window.get()) & SDL_WINDOW_INPUT_FOCUS) == 0);
+        MotionDevice device;
+        SdlInputBackend backend;
+        backend.BindWindow(SDL_GetWindowID(window.get()));
+        backend.SetGamepadGyroscopeEnabled(true);
+        const auto &raw = device.Pump(backend);
+        const auto id = device.Id(raw);
+        CHECK_FALSE(raw.window.focused);
+        CHECK(raw.FindGamepad(id)->gyroscope.availability == SensorAvailability::Suspended);
+        CHECK(device.enables == 0);
     }
 }  // namespace
