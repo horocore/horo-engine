@@ -156,6 +156,7 @@ set_target_properties(HoroPhysics PROPERTIES EXPORT_NAME Physics)
 set_target_properties(HoroPhysicsModel PROPERTIES EXPORT_NAME PhysicsModel)
 set_target_properties(HoroAssets PROPERTIES EXPORT_NAME Assets)
 set_target_properties(HoroRuntime PROPERTIES EXPORT_NAME Runtime)
+set_target_properties(HoroRuntimeConsole PROPERTIES EXPORT_NAME RuntimeConsole POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroGameplayVfxIntegration PROPERTIES EXPORT_NAME GameplayVfxIntegration)
 set_target_properties(HoroVfxApi PROPERTIES EXPORT_NAME VfxApi)
 set_target_properties(HoroVfxSimulationData PROPERTIES EXPORT_NAME VfxSimulationData)
@@ -182,6 +183,9 @@ export(TARGETS ${HORO_GAMEPLAY_COMMON_SDK_TARGETS}
 export(TARGETS ${HORO_GAMEPLAY_UI_SDK_TARGETS}
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayRuntimeUiTargets.cmake")
+export(TARGETS HoroRuntimeConsole
+       NAMESPACE HoroEngine::
+       FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayRuntimeConsoleTargets.cmake")
 export(TARGETS ${HORO_GAMEPLAY_PHYSICS_SDK_TARGETS}
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayPhysicsTargets.cmake")

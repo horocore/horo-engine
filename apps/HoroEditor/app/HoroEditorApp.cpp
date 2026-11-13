@@ -1,6 +1,8 @@
 #include "HoroEditorApp.h"
 
 #include "EditorColorOptions.h"
+#include "EditorConsoleExecution.h"
+#include "EditorConsoleLaunch.h"
 #include "EditorDirectionalShadowOptions.h"
 #include "EditorLightingOptions.h"
 #include "Horo/Editor/XRSimulatorModel.h"
@@ -52,6 +54,7 @@
 #include "Horo/Application/ShaderBuildService.h"
 #include "Horo/Application/WorldBakeApplication.h"
 #include "Horo/Assets/AssetRegistry.h"
+#include "Horo/Debug/ConsoleConfiguration.h"
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/DefaultWorkspacePanels.h"
@@ -64,6 +67,7 @@
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/GuiRoute.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
@@ -101,6 +105,7 @@
 #include "PackageHostPolicy.h"
 #include "PackageProjectHost.h"
 #include "RenderGraphInspectionPane.h"
+#include "RuntimeConsoleView.h"
 #include "RuntimeUiPaintHost.h"
 #include "RuntimeUiPaintProjectSources.h"
 #include "ShaderHotReloadHost.h"
@@ -1385,6 +1390,7 @@ namespace Horo::Editor {
             Application::ShaderBuildService &shaderBuild;
             std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
             Application::Internal::ShaderHotReloadHost *shaderReload{};
+            std::shared_ptr<OperationStore> owner;
         };
 
         struct EditorBackgroundServices {
@@ -1425,6 +1431,10 @@ namespace Horo::Editor {
             Input::InputRouter &inputRouter;
             const Log::IStructuredLogQuery &logQuery;
             EditorOperationServices operationServices;
+            std::optional<Application::Internal::EditorConsolePreparation> &consolePreparation;
+            const Debug::ConsoleLaunchConfiguration &consoleLaunch;
+            const ConfigurationService &configuration;
+            std::shared_ptr<ConfigurationService> configurationOwner;
             bool healthy{false}; /**< Set only after runtime startup and a normal, completed main-loop closure. */
         };
 
@@ -1448,6 +1458,8 @@ namespace Horo::Editor {
             Application::Internal::PackageProjectHost *packages;
             EditorNavigationBakeHost *navigation;
             Application::Internal::RuntimeUiPaintPort ui;
+            Runtime::RuntimeSceneService *scene;
+            std::shared_ptr<const Application::INetworkDebuggerQuery> network;
         };
 
         /** @brief Value-owned prepared viewport/GUI workload and the mesh generation used to assemble it. */
@@ -1497,11 +1509,147 @@ namespace Horo::Editor {
                 authorities_.runtime = &host;
             }
 
+            /** @brief Activates the existing prepared core once, retaining view-before-dispatcher destruction order. */
+            Result<void> StartRuntimeConsole() {
+                if (console_)
+                    return Result<void>::Success();
+                if (!p_->consolePreparation || p_->operationServices.owner.get() != &p_->operationServices.operationStore ||
+                    p_->configurationOwner.get() != &p_->configuration)
+                    return Result<void>::Failure(Debug::MakeCommandError(Debug::CommandError::InvalidDescriptor));
+                const auto preferences = Debug::ReadConsoleConfiguration(p_->configuration.Snapshot());
+                if (preferences.HasError())
+                    return Result<void>::Failure(preferences.ErrorValue());
+                std::span<const Debug::OverlaySource> panels = p_->consoleLaunch.panels;
+                if (!p_->consoleLaunch.overlays)
+                    panels = preferences.Value().panels;
+                auto started = Application::Internal::EditorConsoleExecution::Start(*p_->consolePreparation, p_->background.jobs,
+                                                                                    p_->operationServices.owner, p_->configurationOwner,
+                                                                                    std::string("Horo Engine ") +
+                                                                                        HORO_ENGINE_VERSION_STRING + " / Editor",
+                                                                                    panels, authorities_.network);
+                if (started.HasError())
+                    return Result<void>::Failure(started.ErrorValue());
+                console_ = std::move(started).Value();
+                const auto consoleVisible = console_->ConsoleVisible();
+                if (consoleVisible.HasError())
+                    return Result<void>::Failure(consoleVisible.ErrorValue());
+                consoleView_ = std::make_unique<RuntimeConsoleView>(RuntimeConsoleViewPorts{p_->inputRouter,
+                                                                                            console_->Dispatcher(),
+                                                                                            *p_->consolePreparation->history,
+                                                                                            *p_->consolePreparation->registry,
+                                                                                            p_->operationServices.operationStore,
+                                                                                            p_->configuration,
+                                                                                            p_->logQuery,
+                                                                                            {3, false, false},
+                                                                                            &console_->Variables(),
+                                                                                            true,
+                                                                                            authorities_.network},
+                                                                    RuntimeConsoleViewPresentation{consoleVisible.Value(),
+                                                                                                   p_->consoleLaunch.overlays, panels});
+                for (const auto &receipt : console_->Accepted())
+                    if (!receipt.output.text.empty())
+                        LOG_INFO("runtime.console", "%s", receipt.output.text.c_str());
+                return Result<void>::Success();
+            }
+
+            /** @brief Submits UI visibility intents without treating an admission rejection as a fatal process-frame error. */
+            void RequestRuntimeConsoleVisibility(const bool visible) {
+                const auto requested = console_->RequestConsoleVisibility(visible);
+                if (requested.HasError()) {
+                    consoleView_->ReportRequestFailure(requested.ErrorValue());
+                    LOG_WARN("runtime.console", "Visibility request rejected: %s", requested.ErrorValue().code.Value().c_str());
+                }
+            }
+
+            /** @brief Uses the same Developer admission for panel-close and control-hub visibility intents. */
+            void RequestRuntimeStoreOverlayVisibility(const Debug::OverlayVisibilityIntent &intent) {
+                const auto requested = console_->RequestStoreOverlayVisibility(intent.source, intent.visible, {3, false, false});
+                if (requested.HasError()) {
+                    consoleView_->ReportPanelRequestFailure(requested.ErrorValue());
+                    LOG_WARN("runtime.console", "Panel request rejected: %s", requested.ErrorValue().code.Value().c_str());
+                }
+            }
+
+            /** @brief Reports pending activation errors once without preventing replacement requests from reaching the owner. */
+            Result<void> DrainRuntimeConsoleOwner() {
+                if (!console_)
+                    return Result<void>::Success();
+                const auto scene = authorities_.scene ? authorities_.scene->ActiveScene() : std::optional<Runtime::RuntimeSceneView>{};
+                const auto drained = console_->OwnerSafePoint(std::chrono::steady_clock::now(), scene ? &*scene : nullptr);
+                const auto &activation = console_->VariableActivationError();
+                if (!activation) {
+                    consoleActivationErrorCode_.clear();
+                } else if (consoleActivationErrorCode_ != activation->code.Value()) {
+                    consoleActivationErrorCode_ = activation->code.Value();
+                    LOG_WARN("runtime.console", "Variable activation remains pending: %s", consoleActivationErrorCode_.c_str());
+                }
+                if (drained.HasError())
+                    return drained;
+                const auto publishedScene = consoleView_->PublishScene(scene ? &*scene : nullptr);
+                if (publishedScene.HasError())
+                    return publishedScene;
+                const auto visible = console_->ConsoleVisible();
+                if (visible.HasError())
+                    return Result<void>::Failure(visible.ErrorValue());
+                consoleView_->SetVisible(visible.Value());
+                for (const auto source :
+                     {Debug::OverlaySource::Logs, Debug::OverlaySource::Jobs, Debug::OverlaySource::Scene, Debug::OverlaySource::Network}) {
+                    const auto preference = console_->StoreOverlayVisible(source, {3, false, false});
+                    if (preference.HasError())
+                        return Result<void>::Failure(preference.ErrorValue());
+                    const auto projected = consoleView_->SetPanelVisibility(source, preference.Value());
+                    if (projected.HasError())
+                        return projected;
+                }
+                consoleView_->SynchronizeFocus(ConsolePresentationBlocked());
+                return Result<void>::Success();
+            }
+
+            /** @brief Uses actual modal/native/window facts; requested console visibility cannot override these barriers. */
+            bool ConsolePresentationBlocked() const {
+                if (!pacing_.surface)
+                    return true;
+                const auto surface = pacing_.surface->Snapshot();
+                if (surface.HasError() || surface.Value().state != Render::RenderSurfaceState::Ready)
+                    return true;
+                return p_->modalHost.TopModal() != nullptr || !p_->inputRouter.Snapshot().window.focused ||
+                       (SDL_GetWindowFlags(p_->presentation.window) & SDL_WINDOW_MINIMIZED) != 0 || frameState_.nativePresentationPending ||
+                       p_->inputRouter.HasHigherPriorityContext(Input::InputContextKind::ModalRoot);
+            }
+
+            /** @brief Uses the committed configurable action without installing a competing workspace input context. */
+            Result<void> UpdateRuntimeConsoleShortcut() {
+                const bool blocked = ConsolePresentationBlocked();
+                const bool eligible = (consoleView_ && consoleView_->Interactive()) ||
+                                      !p_->inputRouter.HasHigherPriorityContext(Input::InputContextKind::EditorWorkspace);
+                if (frameState_.guiFrameStarted && !blocked && eligible && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+                    const bool terminal =
+                        Ui::ShortcutPressed(EditorActionBindings(kActionRuntimeConsoleToggle, settingsSnapshot_->settings.keymap.profile));
+                    const bool overlays =
+                        Ui::ShortcutPressed(EditorActionBindings(kActionRuntimeOverlaysToggle, settingsSnapshot_->settings.keymap.profile));
+                    if (terminal || overlays) {
+                        if (const auto started = StartRuntimeConsole(); started.HasError())
+                            return started;
+                    }
+                    if (terminal)
+                        RequestRuntimeConsoleVisibility(!consoleView_->Visible());
+                    if (overlays)
+                        consoleView_->SetOverlaysVisible(!consoleView_->OverlaysVisible());
+                }
+                if (consoleView_)
+                    consoleView_->SynchronizeFocus(blocked);
+                return Result<void>::Success();
+            }
+
             Result<void> Startup(const CancellationToken &cancellation) override {
                 if (auto bound = screenHost_->BindRuntimeDispatch(authorities_.runtime->DispatchSource()); bound.HasError())
                     return bound;
                 if (auto liveUi = liveGui_.Start(BuildEditorGuiLiveReloadConfiguration()); liveUi.HasError())
                     return liveUi;
+                if (p_->consoleLaunch.console || p_->consoleLaunch.overlays || !p_->consoleLaunch.startup.empty()) {
+                    if (const auto started = StartRuntimeConsole(); started.HasError())
+                        return started;
+                }
                 pacing_.hostCancellation = cancellation;
                 const auto timing = p_->presentation.renderFrontend.PollNativePresentTiming();
                 if (timing.HasError() &&
@@ -1567,7 +1715,7 @@ namespace Horo::Editor {
                     case Runtime::RuntimePhase::BuildInputSnapshot:
                         return BuildEditorInput(context);
                     case Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands:
-                        return Result<void>::Success();
+                        return DrainRuntimeConsoleOwner();
                     case Runtime::RuntimePhase::VariableUpdate:
                         return UpdatePresentation(context);
                     default:
@@ -1580,6 +1728,10 @@ namespace Horo::Editor {
                     case Runtime::RuntimePhase::RenderExtraction:
                         return ExtractFrame();
                     case Runtime::RuntimePhase::RenderExecution:
+                        if (console_) {
+                            if (const auto drained = console_->RenderSafePoint(); drained.HasError())
+                                return drained;
+                        }
                         return ExecuteFrame(context);
                     case Runtime::RuntimePhase::RenderGui:
                         if (!frameState_.frame.has_value())
@@ -1616,6 +1768,12 @@ namespace Horo::Editor {
             }
 
             void Shutdown() noexcept override {
+                if (consoleView_) {
+                    consoleView_->SetOverlaysVisible(false);
+                    consoleView_->SetVisible(false);
+                }
+                if (console_)
+                    console_->Stop();
                 ShutdownShaderReload();
                 themeReload_.Shutdown();
                 try {
@@ -1805,6 +1963,8 @@ namespace Horo::Editor {
                     if (!p_->inputRouter.TryDequeueRetiredActionRelease(retired))
                         break;
                 }
+                if (consoleView_)
+                    consoleView_->SynchronizeFocus(ConsolePresentationBlocked());
                 screenHost_->OnInputSnapshot();
                 return Result<void>::Success();
             }
@@ -1950,6 +2110,8 @@ namespace Horo::Editor {
                     appliedKeymapRevision_ = settingsSnapshot_->revision;
                 }
                 const float deltaSeconds = static_cast<float>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0F;
+                if (const auto console = UpdateRuntimeConsoleShortcut(); console.HasError())
+                    return console;
                 p_->modalHost.OnUpdate(deltaSeconds);
                 screenHost_->OnUpdate(deltaSeconds);
                 // Independent owner pumping continues after modal closure or project route departure.
@@ -1993,6 +2155,13 @@ namespace Horo::Editor {
                     return Result<void>::Success();
 
                 GuiLive::Invoke<&GuiScreenHost::Draw>(liveGui_.Registry(), *screenHost_);
+                if (consoleView_) {
+                    consoleView_->Draw(p_->localization, p_->fonts, ConsolePresentationBlocked(), std::chrono::steady_clock::now());
+                    if (const auto intent = consoleView_->TakeVisibilityRequest())
+                        RequestRuntimeConsoleVisibility(*intent);
+                    while (const auto intent = consoleView_->TakePanelVisibilityRequest())
+                        RequestRuntimeStoreOverlayVisibility(*intent);
+                }
                 DrawModalBackdrop();
                 p_->modalHost.Draw(liveGui_.Registry());
                 ImGui::Render();
@@ -2407,6 +2576,9 @@ namespace Horo::Editor {
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
             EditorRuntimeAuthorities authorities_;
             EditorPacingState pacing_;
+            std::unique_ptr<Application::Internal::EditorConsoleExecution> console_;
+            std::unique_ptr<RuntimeConsoleView> consoleView_;
+            std::string consoleActivationErrorCode_;
             bool surfaceClosed_{};
             std::uint64_t presentedFrames_{};
             bool colorExitReported_{};
@@ -2906,6 +3078,7 @@ namespace Horo::Editor {
             Application::Internal::PackageProjectHost *packages;
             EditorNavigationBakeHost &navigationBakes;
             std::optional<UpdateExperienceSession> &updateSession;
+            std::shared_ptr<const Application::INetworkDebuggerQuery> network;
 
             /** @brief Transfers the sole Scene/UI participants into the RuntimeHost and retains every borrowed authority through shutdown.
              */
@@ -2915,6 +3088,8 @@ namespace Horo::Editor {
                 std::optional<EditorRendererRestartRequest> rendererRestart;
                 // Runtime participants borrow rendererRestart; destroy them before this callback storage.
                 auto runtime = std::move(preparedRuntime);
+                // The host owns the registered Scene participant throughout every owner cutoff; commands retain only weak views.
+                auto *sceneInspection = runtimeScene.get();
                 auto runtimeSources = RegisterEditorRuntimeSources(*runtime, std::move(runtimeScene), p.presentation, std::move(ui));
                 if (runtimeSources.HasError()) {
                     screenHost.RequestFatalShutdown();
@@ -2927,10 +3102,11 @@ namespace Horo::Editor {
                     screenHost.Shutdown();
                     return std::nullopt;
                 }
-                auto participant = std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, liveGui,
-                                                                              rendererRestart, clock,
-                                                                              EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
-                                                                                                       runtimeSources.Value()});
+                auto participant =
+                    std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, liveGui,
+                                                               rendererRestart, clock,
+                                                               EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
+                                                                                        runtimeSources.Value(), sceneInspection, network});
                 participant->BindHost(*runtime);
                 EditorRuntimeParticipant *pacingParticipant = participant.get();
                 Result<void> startup = runtime->AddParticipant(std::move(participant));
@@ -3060,7 +3236,7 @@ namespace Horo::Editor {
             RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
             EditorExtensionSources extensionSources{p.background.jobs};
             PfdNativeDialogs nativeDialogs;
-            Application::NetworkDebuggerService networkDebugger;
+            auto networkDebugger = std::make_shared<Application::NetworkDebuggerService>();
 
             auto playSaveRetirement = std::make_shared<EditorPlaySaveRetirement>();
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
@@ -3174,11 +3350,11 @@ namespace Horo::Editor {
             screenHost.Services().Register<OperationStore>(p.operationServices.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationServices.operationStore);
             screenHost.Services().Register<IOperationControl>(p.operationServices.operationStore);
-            screenHost.Services().Register<Application::NetworkDebuggerService>(networkDebugger);
-            screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(networkDebugger);
-            screenHost.Services().Register<Application::INetworkDebuggerControl>(networkDebugger);
+            screenHost.Services().Register<Application::NetworkDebuggerService>(*networkDebugger);
+            screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(*networkDebugger);
+            screenHost.Services().Register<Application::INetworkDebuggerControl>(*networkDebugger);
             EditorRuntimeSession session{p,     screenHost, viewportSceneState, settingsSnapshot, liveGui,
-                                         clock, packages,   navigationBakes,    updateSession};
+                                         clock, packages,   navigationBakes,    updateSession,    networkDebugger};
             return session.Run(std::move(createdRuntime).Value(), std::move(runtimeScene), std::move(preparedUi->paint));
         }
     }  // namespace
@@ -3226,7 +3402,9 @@ namespace Horo::Editor {
         std::unique_ptr<ModuleHost> modules;
         // Both canonical authorities are created before native presentation and survive the complete session/drain.
         std::unique_ptr<EngineDataBus> engineEvents;
-        std::unique_ptr<ConfigurationService> configuration;
+        std::shared_ptr<ConfigurationService> configuration;
+        Debug::ConsoleLaunchConfiguration consoleLaunch;
+        std::optional<Application::Internal::EditorConsolePreparation> consolePreparation;
 #if defined(HORO_HAS_OPENXR_HOST)
         std::unique_ptr<EditorOpenXRBootstrap> xrBootstrap;
 #endif
@@ -3293,7 +3471,7 @@ namespace Horo::Editor {
     /** @brief Canonical configuration/event lifetime pair transferred intact into one prepared startup. */
     struct EditorStartupConfiguration final {
         std::unique_ptr<EngineDataBus> events;
-        std::unique_ptr<ConfigurationService> service;
+        std::shared_ptr<ConfigurationService> service;
     };
 
     /** @brief Captures only declared environment bindings once at the graphical composition boundary. */
@@ -3326,7 +3504,7 @@ namespace Horo::Editor {
     /** @brief Registers inert descriptors and resolves explicit captured inputs before any native presentation. */
     [[nodiscard]] static std::optional<EditorStartupConfiguration> PrepareEditorConfiguration(const EditorSettingsDocument &document,
                                                                                               const ModuleHost &modules,
-                                                                                              const EditorOpenXRHostServices *xrHost) {
+                                                                                              const EditorOpenXRHostServices *xrHost, const Debug::ConsoleLaunchArguments &console) {
         auto moduleSchema = modules.BuildConfigurationSchema();
         if (moduleSchema.HasError()) {
             LOG_CRITICAL("editor.startup", "Module configuration failed: %s", moduleSchema.ErrorValue().message.c_str());
@@ -3336,6 +3514,17 @@ namespace Horo::Editor {
         for (const auto &descriptor : PlatformServices::MakePlatformProjectSettingsContribution().settings) {
             if (const auto registered = configurationSchema.Register(descriptor); registered.HasError()) {
                 LOG_CRITICAL("editor.startup", "Platform project schema rejected: code=%s.", registered.ErrorValue().code.Value().c_str());
+                return std::nullopt;
+            }
+        }
+        auto consoleSettings = Debug::ConsoleConfigurationDescriptors(Debug::ProductProfile::Editor);
+        if (consoleSettings.HasError()) {
+            LOG_CRITICAL("editor.startup", "Console configuration failed: %s", consoleSettings.ErrorValue().message.c_str());
+            return std::nullopt;
+        }
+        for (const auto &descriptor : consoleSettings.Value()) {
+            if (const auto registered = configurationSchema.Register(descriptor); registered.HasError()) {
+                LOG_CRITICAL("editor.startup", "Console configuration composition failed: %s", registered.ErrorValue().message.c_str());
                 return std::nullopt;
             }
         }
@@ -3350,7 +3539,7 @@ namespace Horo::Editor {
 #endif
         auto engineEvents = std::make_unique<EngineDataBus>();
         auto configuration =
-            std::make_unique<ConfigurationService>(CreateEditorConfigurationSchema(DefaultEditorSettings(), std::move(configurationSchema)),
+            std::make_shared<ConfigurationService>(CreateEditorConfigurationSchema(DefaultEditorSettings(), std::move(configurationSchema)),
                                                    engineEvents.get());
         ConfigurationResolutionRequest captured;
 #if defined(HORO_HAS_OPENXR_HOST)
@@ -3387,6 +3576,10 @@ namespace Horo::Editor {
         }
         for (auto &[key, value] : std::move(capturedEnvironment).Value())
             captured.environment.insert_or_assign(key, std::move(value));
+        if (const auto merged = Application::Internal::MergeEditorConsoleInputs(console, captured); merged.HasError()) {
+            LOG_CRITICAL("editor.startup", "Console Invocation ownership conflict: %s", merged.ErrorValue().message.c_str());
+            return std::nullopt;
+        }
         if (const auto resolved = configuration->ResolveAndCommit(captured); resolved.HasError()) {
             LOG_CRITICAL("editor.startup", "Captured configuration rejected: code=%s.", resolved.ErrorValue().code.Value().c_str());
             return std::nullopt;
@@ -3506,7 +3699,8 @@ namespace Horo::Editor {
     /** @brief Validates startup inputs and composes the editor's installed modules. */
     [[nodiscard]] static std::optional<PreparedEditorStartup> PrepareEditorStartup(EditorGuiOptions options,
                                                                                    const EditorOpenXRHostServices *xrHost,
-                                                                                   const std::span<char *> arguments) {
+                                                                                   const std::span<char *> arguments,
+                                                                                   const Debug::ConsoleLaunchArguments &console) {
         if (!ValidateEditorStartupOptions(options))
             return std::nullopt;
         std::string projectName;
@@ -3532,10 +3726,25 @@ namespace Horo::Editor {
             return std::nullopt;
         }
         std::unique_ptr<ModuleHost> modules = std::move(composedModules).Value();
-        auto configuration = PrepareEditorConfiguration(settingsDocument, *modules, bootstrap->selected);
+        auto configuration = PrepareEditorConfiguration(settingsDocument, *modules, bootstrap->selected, console);
         if (!configuration)
             return std::nullopt;
         ApplyEditorConfigurationSnapshot(configuration->service->Snapshot(), settings);
+        auto consoleLaunch = Debug::ResolveConsoleLaunch(console, configuration->service->Snapshot(), Debug::ProductProfile::Editor);
+        if (consoleLaunch.HasError()) {
+            LOG_CRITICAL("editor.startup", "Console launch rejected: %s", consoleLaunch.ErrorValue().message.c_str());
+            return std::nullopt;
+        }
+        std::optional<Application::Internal::EditorConsolePreparation> consolePreparation;
+        {
+            auto preparedConsole = Application::Internal::PrepareEditorConsole(consoleLaunch.Value(), configuration->service->Snapshot(),
+                                                                               {.networkInspection = true});
+            if (preparedConsole.HasError()) {
+                LOG_CRITICAL("editor.startup", "Console preparation rejected: %s", preparedConsole.ErrorValue().message.c_str());
+                return std::nullopt;
+            }
+            consolePreparation.emplace(std::move(preparedConsole).Value());
+        }
         PreparedEditorStartup startup{std::move(options),
                                       std::move(projectName),
                                       moduleInfo,
@@ -3545,6 +3754,8 @@ namespace Horo::Editor {
                                       std::move(modules),
                                       std::move(configuration->events),
                                       std::move(configuration->service),
+                                      std::move(consoleLaunch).Value(),
+                                      std::move(consolePreparation),
 #if defined(HORO_HAS_OPENXR_HOST)
                                       std::move(bootstrap->owned),
 #endif
@@ -3656,6 +3867,7 @@ namespace Horo::Editor {
         std::shared_ptr<const Render::IShaderCompilerAdapter> shaderCompiler;
         std::shared_ptr<const Render::ShaderCompilerTargetDescriptor> uiPaintTarget;
         const Application::Internal::ShaderHotReloadHostConfiguration *shaderReload;
+        std::shared_ptr<OperationStore> operationOwner;
     };
 
     struct EditorSessionResult final {
@@ -3745,7 +3957,12 @@ namespace Horo::Editor {
                                            inputBackend,
                                            inputRouter,
                                            launch.logs,
-                                           {launch.buildOutput, launch.operations, shaderBuild, launch.uiPaintTarget, shaderReload.get()}};
+                                           {launch.buildOutput, launch.operations, shaderBuild, launch.uiPaintTarget, shaderReload.get(),
+                                            launch.operationOwner},
+                                           launch.startup.consolePreparation,
+                                           launch.startup.consoleLaunch,
+                                           configuration,
+                                           launch.startup.configuration};
         auto rendererRestart = RunEditorMainLoop(loopParams);
         return {std::move(rendererRestart), loopParams.healthy};
     }
@@ -3996,7 +4213,8 @@ namespace Horo::Editor {
         auto structuredLogStore = std::make_shared<Log::StructuredLogStore>(4096U);
         Log::Logger::SetStructuredLogStore(structuredLogStore);
         BuildOutputStore buildOutputStore{2048U};
-        OperationStore operationStore{64U, 200U, std::make_shared<LoggingOperationHistorySink>()};
+        const auto operationOwner = std::make_shared<OperationStore>(64U, 200U, std::make_shared<LoggingOperationHistorySink>());
+        OperationStore &operationStore = *operationOwner;
 
         // Setup base MDC for the whole application run
         Log::LogContext appCtx("app", "horo-editor", "run_id", "1");
@@ -4009,7 +4227,12 @@ namespace Horo::Editor {
             return 1;
         }
 
-        auto opts = ParseOptions(std::span{argv, static_cast<std::size_t>(argc)});
+        auto captured = Application::Internal::CaptureEditorConsoleLaunch(std::span{argv, static_cast<std::size_t>(argc)});
+        if (captured.HasError()) {
+            LOG_CRITICAL("editor.startup", "Console arguments rejected: %s", captured.ErrorValue().message.c_str());
+            return 1;
+        }
+        auto opts = ParseOptions(captured.Value().hostArguments);
         std::vector<RecentProjectEntry> recentProjects = LoadRecentProjectsFromDisk();
         WelcomeScreenController ctrl{recentProjects};
         auto vm = ctrl.BuildViewModel();
@@ -4019,7 +4242,7 @@ namespace Horo::Editor {
             return 0;
         }
 
-        auto prepared = PrepareEditorStartup(std::move(opts), xrHost, std::span{argv, static_cast<std::size_t>(argc)});
+        auto prepared = PrepareEditorStartup(std::move(opts), xrHost, captured.Value().hostArguments, captured.Value().console);
         if (!prepared) {
             saveTelemetry.reset();
             Log::Logger::Shutdown();
@@ -4046,7 +4269,7 @@ namespace Horo::Editor {
         EditorSessionResult session =
             RunEditorSession({*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures,
                               presentation->composition, editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost,
-                              std::move(shaderCompiler), std::move(uiPaintTarget), shaderReload});
+                              std::move(shaderCompiler), std::move(uiPaintTarget), shaderReload, operationOwner});
 
         RetireEditorSessionPresentation(*presentation, session);
         RetireEditorXrStartup(*prepared);

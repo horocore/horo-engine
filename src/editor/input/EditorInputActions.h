@@ -18,6 +18,8 @@ namespace Horo::Editor {
     inline constexpr auto kActionToolRotate = "editor.tool.rotate";
     inline constexpr auto kActionToolScale = "editor.tool.scale";
     inline constexpr auto kActionViewportFocusSelected = "editor.viewport.focus_selected";
+    inline constexpr auto kActionRuntimeConsoleToggle = "editor.runtime_console.toggle";
+    inline constexpr auto kActionRuntimeOverlaysToggle = "editor.runtime_overlays.toggle";
 
     inline constexpr auto kActionSourceSelectAll = "editor.source.select_all";
     inline constexpr auto kActionSourceCopy = "editor.source.copy";

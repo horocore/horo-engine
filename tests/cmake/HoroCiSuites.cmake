@@ -215,6 +215,14 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroAssetCookServiceTests
     HoroAssetsPublicHeaderConsumer
     HoroInputTests
+    HoroRuntimeConsoleTests
+    HoroRuntimeConsolePublicHeaderConsumer
+    HoroRuntimeConsoleStartupPublicHeaderConsumer
+    HoroRuntimeConsoleUiPublicHeaderConsumer
+    HoroRuntimeConsoleDefaultsPublicHeaderConsumer
+    HoroRuntimeConsoleProductTests
+    HoroRuntimeConsoleScenePublicHeaderConsumer
+    HoroRuntimeConsoleSceneTests
     HoroAndroidInputTests
     HoroAndroidInputIntegrationPublicHeaderConsumer
     HoroCharacterInputTests
@@ -327,6 +335,10 @@ if(WIN32)
             HoroPhysicsStateWorldTests
             HoroPhysicsStateNativeTests)
     endif()
+endif()
+
+if(NOT HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Editor" AND NOT HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Development")
+    list(REMOVE_ITEM HORO_CI_WINDOWS_TARGETS HoroRuntimeConsoleSceneTests)
 endif()
 
 set(HORO_CI_NAVIGATION_TARGETS

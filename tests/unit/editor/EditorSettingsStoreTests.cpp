@@ -1,4 +1,5 @@
 #include "EditorInputActions.h"
+#include "Horo/Debug/ConsoleConfiguration.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsEvents.h"
@@ -117,6 +118,45 @@ namespace {
         REQUIRE(configuration->Commit(MakeEditorAppearanceConfigurationDraft(configuration->Snapshot(), settings)).HasValue());
         CHECK(configuration->Snapshot().Revision() == 1);
         CHECK(std::get<std::string>(configuration->Snapshot().Get(SettingKey{"editor.theme.active"})) == "midnight");
+    }
+
+    TEST_CASE("Editor and runtime console share one configuration authority without overwriting independent settings",
+              "[unit][editor][console][configuration]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        using namespace Horo::Debug;
+
+        auto settings = DefaultEditorSettings();
+        auto descriptors = ConsoleConfigurationDescriptors(ProductProfile::Editor);
+        REQUIRE(descriptors.HasValue());
+        ConfigurationSchema schema;
+        for (const auto &descriptor : descriptors.Value())
+            REQUIRE(schema.Register(descriptor).HasValue());
+        auto sealed = CreateEditorConfigurationSchema(settings, std::move(schema));
+        REQUIRE(sealed.IsSealed());
+        ConfigurationService configuration(std::move(sealed));
+        const SettingKey history{std::string(ConsoleHistorySettingName)};
+        ConfigurationResolutionRequest sources;
+        sources.user.emplace(history, ConfigurationInputValue{std::int64_t{777}, {}});
+        sources.project.emplace(SettingKey(std::string(ConsoleStartupSettingName)), ConfigurationInputValue{false, {}});
+        REQUIRE(configuration.ResolveAndCommit(sources).HasValue());
+        const auto captured = configuration.Snapshot();
+        auto console = ReadConsoleConfiguration(captured);
+        REQUIRE(console.HasValue());
+        CHECK_FALSE(console.Value().console);
+        CHECK_FALSE(console.Value().overlays);
+        CHECK_FALSE(console.Value().startupAllowed);
+        CHECK(console.Value().historyLimit == 777);
+        settings.themePreset = EditorThemePreset::Light;
+        REQUIRE(configuration.Commit(MakeEditorAppearanceConfigurationDraft(captured, settings)).HasValue());
+        CHECK(std::get<std::string>(configuration.Snapshot().Get(SettingKey{"editor.theme.active"})) == "light");
+        REQUIRE(ReadConsoleConfiguration(configuration.Snapshot()).HasValue());
+        CHECK(ReadConsoleConfiguration(configuration.Snapshot()).Value().historyLimit == 777);
+        CHECK_FALSE(ReadConsoleConfiguration(configuration.Snapshot()).Value().startupAllowed);
+        REQUIRE(configuration.Commit({configuration.Snapshot().Revision(), {{history, std::int64_t{900}}}}).HasValue());
+        CHECK(std::get<std::string>(configuration.Snapshot().Get(SettingKey{"editor.theme.active"})) == "light");
+        CHECK(ReadConsoleConfiguration(configuration.Snapshot()).Value().historyLimit == 900);
+        CHECK(ReadConsoleConfiguration(captured).Value().historyLimit == 777);
     }
 
     template <typename T> void RequireSettingValue(const Horo::ConfigurationSnapshot &snapshot, const char *key, const T &expected) {
@@ -595,6 +635,65 @@ TEST_CASE("Global binding authoring validates active project conflicts before pe
     global.keymap = candidate.keymap;
     REQUIRE(service.Commit({.baseRevision = current.revision, .settings = global}).HasValue());
     REQUIRE(Input::LoadBindingProfile(paths.editorUser).Value() == candidate.keymap.profile);
+}
+
+TEST_CASE("Runtime console surface copy exists in both active editor locales", "[editor][console][localization]") {
+    using namespace Horo::Editor;
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        LocalizationService service{LocaleTag{locale}};
+        REQUIRE(service.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                        (std::string{locale} + ".json")));
+        REQUIRE(service.Prepare(LocaleTag{locale}));
+        REQUIRE(service.ActivatePrepared());
+        for (const auto key : {"title", "close", "hint", "send", "empty", "pending", "unavailable", "failed", "history", "history_hint",
+                               "restore", "sensitive", "details", "copy", "shortcuts"}) {
+            const auto &text = service.Get("editor", std::string("runtime_console.") + key);
+            CHECK_FALSE(text.empty());
+            CHECK_FALSE(text.starts_with("[missing:"));
+        }
+        const auto &toggle = service.Get("editor", "settings.keymap.editor.runtime_console.toggle");
+        CHECK_FALSE(toggle.empty());
+        CHECK_FALSE(toggle.starts_with("[missing:"));
+    }
+}
+
+TEST_CASE("Development overlay source and state copy exists in both editor locales", "[editor][console][localization]") {
+    using namespace Horo::Editor;
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        LocalizationService service{LocaleTag{locale}};
+        REQUIRE(service.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                        (std::string{locale} + ".json")));
+        REQUIRE(service.Prepare(LocaleTag{locale}));
+        REQUIRE(service.ActivatePrepared());
+        for (const auto key : {"title",           "close_all",     "close_panel",    "unavailable",    "refresh_failed",
+                               "request_failed",  "severity",      "category",       "filter",         "match.exact",
+                               "match.namespace", "collapse",      "truncated",      "copy",           "empty_logs",
+                               "empty_jobs",      "operation_id",  "job_scope",      "empty_scene",    "scene_unavailable",
+                               "scene_scope",     "scene_parent",  "scene_bounded",  "copy_scene",     "severity.trace",
+                               "severity.debug",  "severity.info", "severity.warn",  "severity.error", "severity.critical",
+                               "severity.off",    "state.queued",  "state.running",  "state.waiting",  "state.cancelling",
+                               "state.succeeded", "state.failed",  "state.cancelled"}) {
+            const auto &text = service.Get("editor", std::string("runtime_overlays.") + key);
+            CHECK_FALSE(text.empty());
+            CHECK_FALSE(text.starts_with("[missing:"));
+        }
+        for (const auto key :
+             {"state",         "detached",      "disabled",    "stale",     "live",       "provider", "provider_unavailable",
+              "deterministic", "native",        "other",       "revision",  "process",    "session",  "scene",
+              "generation",    "connections",   "replication", "rpc",       "prediction", "interest", "capture",
+              "dropped",       "capture_state", "paused",      "not_paused"}) {
+            const auto &text = service.Get("editor", std::string("runtime_overlays.network.") + key);
+            CHECK_FALSE(text.empty());
+            CHECK_FALSE(text.starts_with("[missing:"));
+        }
+        for (unsigned source = 0; source < static_cast<unsigned>(Horo::Debug::OverlaySource::Count); ++source) {
+            const auto name = Horo::Debug::OverlaySourceName(static_cast<Horo::Debug::OverlaySource>(source));
+            const auto &text = service.Get("editor", std::string("runtime_overlays.source.") + std::string(name));
+            CHECK_FALSE(text.empty());
+            CHECK_FALSE(text.starts_with("[missing:"));
+        }
+        CHECK_FALSE(service.Get("editor", "settings.keymap.editor.runtime_overlays.toggle").starts_with("[missing:"));
+    }
 }
 
 TEST_CASE("Canonical keymap JSON rejects duplicate fields unsupported versions wrong types and oversized input", "[unit][editor][keymap]") {

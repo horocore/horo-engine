@@ -32,6 +32,7 @@ add_library(HoroPlatformAccessibility STATIC platform/NullAccessibilityBridge.cp
 add_library(HoroEngine::PlatformAccessibility ALIAS HoroPlatformAccessibility)
 target_compile_features(HoroPlatformAccessibility PUBLIC cxx_std_20)
 target_link_libraries(HoroPlatformAccessibility PUBLIC HoroEngine::Foundation HoroEngine::RuntimeUi)
+add_subdirectory(runtime/console)
 
 target_compile_features(HoroFoundation PUBLIC cxx_std_20)
 target_compile_definitions(HoroFoundation PUBLIC HORO_ENABLE_TELEMETRY=$<BOOL:${HORO_ENABLE_TELEMETRY}>)
@@ -4333,6 +4334,7 @@ target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
         target_link_libraries(HoroGui PRIVATE "-framework AppKit")
     endif ()
     target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformDesktop)
+    include("${PROJECT_SOURCE_DIR}/cmake/HoroEditorRuntimeConsole.cmake")
 endif ()
 
 add_library(HoroExtensions STATIC
