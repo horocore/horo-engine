@@ -1,15 +1,68 @@
 #pragma once
 
 #include "CameraCutTestSupport.h"
+#include "Horo/Runtime/Render/RenderFrontend.h"
+
+#include <SDL3/SDL.h>
+#include <iostream>
+#include <memory>
 
 namespace Horo::Tests::CameraCuts {
-    /** @brief Authors a three-tick native blend whose sampled Linear and SmoothStep poses differ. */
-    inline Cinematic::SequencePlaybackActivation NativeCameraActivation(const Cinematic::CameraBlendCurve curve) {
-        auto activation = TransitionActivation(CameraTransitionTier::SingleViewBlend, curve);
-        std::array keys{activation.plan.CameraKeys()[0], activation.plan.CameraKeys()[1]};
-        keys[1].transitionDuration = 3;
-        activation.plan = Take(Cinematic::SequenceFrameEvaluationPlan::Create(10, Cinematic::SequenceLoopMode::Once, 4, {}, {}, keys));
-        return activation;
+    /** @brief Native presentation observations applied before cinematic camera publication. */
+    enum class NativeOutputChange {
+        None,
+        Fullscreen,
+        SecondDisplay
+    };
+
+    /** @brief Requires a real second display before allocating any native test resources. */
+    inline void RequireDisplayConfiguration(const NativeOutputChange change) {
+        if (change != NativeOutputChange::SecondDisplay)
+            return;
+        int count = 0;
+        const std::unique_ptr<SDL_DisplayID, decltype(&SDL_free)> displays{SDL_GetDisplays(&count), SDL_free};
+        REQUIRE(displays);
+        if (count < 2) {
+            SDL_Quit();
+            SKIP("Cinematic display migration requires two native displays");
+        }
+    }
+
+    /** @brief Observes an actual native output transition before the next cinematic frame. */
+    inline Render::FramebufferExtent ChangeNativeOutput(SDL_Window &window, Render::RenderFrontend &frontend,
+                                                        const NativeOutputChange change) {
+        if (change == NativeOutputChange::None)
+            return {640, 480};
+        REQUIRE(SDL_ShowWindow(&window));
+        REQUIRE(SDL_SyncWindow(&window));
+        if (change == NativeOutputChange::Fullscreen) {
+            REQUIRE(SDL_SetWindowFullscreen(&window, true));
+            REQUIRE(SDL_SyncWindow(&window));
+            CHECK((SDL_GetWindowFlags(&window) & SDL_WINDOW_FULLSCREEN) != 0);
+        } else {
+            int count = 0;
+            const std::unique_ptr<SDL_DisplayID, decltype(&SDL_free)> displays{SDL_GetDisplays(&count), SDL_free};
+            REQUIRE(displays);
+            REQUIRE(count >= 2);
+            const auto current = SDL_GetDisplayForWindow(&window);
+            REQUIRE(current != 0);
+            const auto destination = displays.get()[0] == current ? displays.get()[1] : displays.get()[0];
+            REQUIRE(
+                SDL_SetWindowPosition(&window, SDL_WINDOWPOS_CENTERED_DISPLAY(destination), SDL_WINDOWPOS_CENTERED_DISPLAY(destination)));
+            REQUIRE(SDL_SyncWindow(&window));
+            REQUIRE(SDL_GetDisplayForWindow(&window) == destination);
+        }
+        SDL_PumpEvents();
+        int width = 0;
+        int height = 0;
+        REQUIRE(SDL_GetWindowSizeInPixels(&window, &width, &height));
+        REQUIRE(width > 0);
+        REQUIRE(height > 0);
+        const Render::FramebufferExtent extent{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
+        REQUIRE(frontend.Resize(extent).HasValue());
+        std::cout << "Cinematic native output change " << static_cast<int>(change) << ", display " << SDL_GetDisplayForWindow(&window)
+                  << ", pixels " << extent.width << 'x' << extent.height << '\n';
+        return extent;
     }
 
     /** @brief Builds the exact scene retained through native camera playback qualification. */
@@ -29,7 +82,9 @@ namespace Horo::Tests::CameraCuts {
     class NativeCameraPlayback final {
     public:
         explicit NativeCameraPlayback(const Cinematic::CameraBlendCurve curve)
-            : playback_(Take(CinematicCameraPlayback::Activate(runtime_, camera_, NativeCameraActivation(curve),
+            : playback_(Take(CinematicCameraPlayback::Activate(runtime_, camera_,
+                                                               TransitionActivation(CameraTransitionTier::SingleViewBlend, curve,
+                                                                                    CameraTransitionFallback::Fail, 3),
                                                                {bindings_, 8, CameraCutEndPolicy::HoldLastUntilPlayerEnd, 1, {1, 1}},
                                                                scene_->View()))) {
             REQUIRE(runtime_.Play(playback_.Player()).HasValue());

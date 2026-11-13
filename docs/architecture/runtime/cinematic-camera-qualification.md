@@ -96,6 +96,17 @@ constitute source analysis or connected-mode authentication evidence.
 The online doctor could not compare Codacy cloud configuration because its CLI
 request exited 2. Configuration-drift verification remains incomplete.
 
+The first full three-provider check on 2026-11-13 covered the `dbfc0abc3`
+snapshot against the published base. The report was fresh and incomplete:
+secrets completed cleanly, Sonar IDE lacked this worktree's compilation context,
+and Codacy reported 18 Lizard complexity/length findings with no tool errors.
+Two CMake inputs had no configured local analyzer. The report also retained two
+advisory clone groups. Subsequent source changes separate transition validation,
+binding and commit phases and split transition regressions into a second source
+within the same test executable. All 26 runtime case identities and their
+explicit assertions are preserved. This source audit does not establish C++
+execution or a final quality pass; the full scope must be rerun after these edits.
+
 Windows reports AMD Radeon graphics and an NVIDIA GeForce RTX 5080 with driver
 32.0.16.1088. Device enumeration establishes availability for attempting native
 tests. The Vulkan editor fixture additionally requires packaged viewport and

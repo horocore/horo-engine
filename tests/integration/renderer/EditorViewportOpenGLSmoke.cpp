@@ -29,64 +29,12 @@ namespace Horo::Render::OpenGLSmokeTests {
     using Editor::EditorViewportTextureView;
     using Editor::SdlOpenGLPresentationPort;
     using Editor::ToRenderCamera;
-
-    enum class NativeOutputChange {
-        None,
-        Fullscreen,
-        SecondDisplay
-    };
+    using Tests::CameraCuts::ChangeNativeOutput;
+    using Tests::CameraCuts::NativeOutputChange;
+    using Tests::CameraCuts::RequireDisplayConfiguration;
 
     void Check(const bool condition) {
         REQUIRE((condition));
-    }
-
-    /** @brief Requires a real second display before allocating any native test resources. */
-    void RequireDisplayConfiguration(const NativeOutputChange change) {
-        if (change != NativeOutputChange::SecondDisplay)
-            return;
-        int count = 0;
-        const std::unique_ptr<SDL_DisplayID, decltype(&SDL_free)> displays{SDL_GetDisplays(&count), SDL_free};
-        REQUIRE(displays);
-        if (count < 2) {
-            SDL_Quit();
-            SKIP("Cinematic display migration requires two native displays");
-        }
-    }
-
-    /** @brief Observes an actual native output transition before the next cinematic frame. */
-    FramebufferExtent ChangeNativeOutput(SDL_Window &window, RenderFrontend &frontend, const NativeOutputChange change) {
-        if (change == NativeOutputChange::None)
-            return {640, 480};
-        REQUIRE(SDL_ShowWindow(&window));
-        REQUIRE(SDL_SyncWindow(&window));
-        if (change == NativeOutputChange::Fullscreen) {
-            REQUIRE(SDL_SetWindowFullscreen(&window, true));
-            REQUIRE(SDL_SyncWindow(&window));
-            CHECK((SDL_GetWindowFlags(&window) & SDL_WINDOW_FULLSCREEN) != 0);
-        } else {
-            int count = 0;
-            const std::unique_ptr<SDL_DisplayID, decltype(&SDL_free)> displays{SDL_GetDisplays(&count), SDL_free};
-            REQUIRE(displays);
-            REQUIRE(count >= 2);
-            const auto current = SDL_GetDisplayForWindow(&window);
-            REQUIRE(current != 0);
-            const auto destination = displays.get()[0] == current ? displays.get()[1] : displays.get()[0];
-            REQUIRE(
-                SDL_SetWindowPosition(&window, SDL_WINDOWPOS_CENTERED_DISPLAY(destination), SDL_WINDOWPOS_CENTERED_DISPLAY(destination)));
-            REQUIRE(SDL_SyncWindow(&window));
-            REQUIRE(SDL_GetDisplayForWindow(&window) == destination);
-        }
-        SDL_PumpEvents();
-        int width = 0;
-        int height = 0;
-        REQUIRE(SDL_GetWindowSizeInPixels(&window, &width, &height));
-        REQUIRE(width > 0);
-        REQUIRE(height > 0);
-        const FramebufferExtent extent{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
-        REQUIRE(frontend.Resize(extent).HasValue());
-        std::cout << "Cinematic native output change " << static_cast<int>(change) << ", display " << SDL_GetDisplayForWindow(&window)
-                  << ", pixels " << extent.width << 'x' << extent.height << '\n';
-        return extent;
     }
 
     /** @brief Uses a real SDL OpenGL context while omitting display-server presentation pacing in headless CI. */
@@ -126,13 +74,17 @@ namespace Horo::Render::OpenGLSmokeTests {
         SdlOpenGLPresentationPort port_;
     };
 
+    /** @brief Borrows the fixture's resource spans while copying its exact current camera and light revision. */
+    [[nodiscard]] RenderSceneView ToSceneView(const EditorViewportSceneView &scene) noexcept {
+        return {ToRenderCamera(scene.camera), scene.meshResources,        scene.instances, scene.lights,
+                scene.lightSceneDomain,       scene.lightSnapshotRevision};
+    }
+
     RenderTargetHandle PrepareViewportTarget(EditorViewportRendererOpenGL &viewport, RenderFrontend &frontend,
                                              const EditorViewportSceneView &scene, const EditorViewportExtent extent) {
         for (std::size_t attempt = 0; attempt < 4; ++attempt) {
             viewport.RequestExtent(extent);
-            auto prepared =
-                viewport.PrepareResources(frontend, RenderSceneView{ToRenderCamera(scene.camera), scene.meshResources, scene.instances,
-                                                                    scene.lights, scene.lightSceneDomain, scene.lightSnapshotRevision});
+            auto prepared = viewport.PrepareResources(frontend, ToSceneView(scene));
             Check(prepared.HasValue());
             Check(frontend.ProcessResourceRequests().HasValue());
             if (prepared.Value().has_value())
@@ -173,6 +125,17 @@ namespace Horo::Render::OpenGLSmokeTests {
         CHECK(pixels[offset + 2] == pixels[background + 2]);
     }
 
+    /** @brief Owns and presents exactly one transition frame after target and lighting admission. */
+    void PresentTransitionFrame(RenderFrontend &frontend, const StaticMeshPassDescriptor &descriptor, const std::uint64_t number,
+                                const FramebufferExtent outputExtent) {
+        auto begun = frontend.BeginFrame(FrameDescriptor{.frameNumber = number, .outputExtent = outputExtent});
+        Check(begun.HasValue());
+        RenderFrameScope frame = std::move(begun).Value();
+        const std::array passes{RenderPassDescriptor{.id = RenderPassId{1}, .kind = RenderPassKind::Graphics, .staticMesh = descriptor}};
+        Check(frame.Execute(passes).HasValue());
+        Check(frame.Present().HasValue());
+    }
+
     /** @brief Verifies that replacements keep the active viewport usable until publication. */
     void CheckSeamlessResourceTransition(EditorViewportRendererOpenGL &viewport, RenderFrontend &frontend,
                                          const EditorViewportSceneView &scene, const RenderTargetHandle activeTarget,
@@ -189,12 +152,7 @@ namespace Horo::Render::OpenGLSmokeTests {
         replacementCamera.up = currentCamera.up;
         const EditorViewportSceneView replacementScene{replacementCamera, replacementMeshes,      replacementInstances,
                                                        scene.lights,      scene.lightSceneDomain, scene.lightSnapshotRevision};
-        const RenderSceneView renderScene{ToRenderCamera(replacementScene.camera),
-                                          replacementScene.meshResources,
-                                          replacementScene.instances,
-                                          replacementScene.lights,
-                                          replacementScene.lightSceneDomain,
-                                          replacementScene.lightSnapshotRevision};
+        const auto renderScene = ToSceneView(replacementScene);
 
         RenderTargetHandle resizedTarget;
         bool deferredGeneration{};
@@ -224,16 +182,7 @@ namespace Horo::Render::OpenGLSmokeTests {
                 continue;
             }
 
-            auto begun = frontend.BeginFrame(FrameDescriptor{.frameNumber = 2 + attempt, .outputExtent = outputExtent});
-            Check(begun.HasValue());
-            RenderFrameScope frame = std::move(begun).Value();
-            const std::array passes{RenderPassDescriptor{
-                .id = RenderPassId{1},
-                .kind = RenderPassKind::Graphics,
-                .staticMesh = descriptor,
-            }};
-            Check(frame.Execute(passes).HasValue());
-            Check(frame.Present().HasValue());
+            PresentTransitionFrame(frontend, descriptor, 2 + attempt, outputExtent);
 
             if (currentTarget != activeTarget)
                 resizedTarget = currentTarget;
@@ -387,11 +336,7 @@ namespace Horo::Render::OpenGLSmokeTests {
         const std::array passes{RenderPassDescriptor{
             .id = RenderPassId{1},
             .kind = RenderPassKind::Graphics,
-            .staticMesh =
-                StaticMeshPassDescriptor{.target = target,
-                                         .extent = {extent.width, extent.height},
-                                         .scene = RenderSceneView{ToRenderCamera(scene.camera), scene.meshResources, scene.instances,
-                                                                  scene.lights, scene.lightSceneDomain, scene.lightSnapshotRevision}},
+            .staticMesh = StaticMeshPassDescriptor{.target = target, .extent = {extent.width, extent.height}, .scene = ToSceneView(scene)},
         }};
         ConfigureCallerOpenGLState(callerState);
         Check(frame.Execute(passes).HasValue());
@@ -469,19 +414,24 @@ namespace Horo::Render::OpenGLSmokeTests {
         REQUIRE(presentationPort.MakeCurrent().HasValue());
     }
 
-    TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu]") {
-        const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
-        const auto outputChange = GENERATE(NativeOutputChange::None, NativeOutputChange::Fullscreen, NativeOutputChange::SecondDisplay);
-        constexpr EditorViewportExtent extent{512, 384};
+    /** @brief Owns the SDL window beyond the lifetime of its borrowed renderer and GUI contexts. */
+    using NativeViewportWindow = std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)>;
+
+    /** @brief Admits SDL video/display configuration before allocating the qualification window. */
+    NativeViewportWindow CreateNativeViewportWindow(const NativeOutputChange outputChange) {
         Check(SDL_Init(SDL_INIT_VIDEO));
         RequireDisplayConfiguration(outputChange);
         Check(SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1));
         Check(SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24));
-        SDL_Window *window =
-            SDL_CreateWindow("Horo viewport smoke", 640, 480, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
+        NativeViewportWindow window{SDL_CreateWindow("Horo viewport smoke", 640, 480,
+                                                     SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE),
+                                    SDL_DestroyWindow};
         REQUIRE(window != nullptr);
+        return window;
+    }
 
-        HeadlessOpenGLPresentationPort presentationPort{*window};
+    /** @brief Creates the native frontend while keeping the borrowed presentation port with the test owner. */
+    std::unique_ptr<RenderFrontend> CreateViewportFrontend(HeadlessOpenGLPresentationPort &presentationPort) {
         RenderBackendRegistry registry;
         Check(RegisterOpenGLRenderBackend(registry, presentationPort).HasValue());
         Check(registry.Seal().HasValue());
@@ -491,14 +441,50 @@ namespace Horo::Render::OpenGLSmokeTests {
                                                                          .maxFramesInFlight = 2,
                                                                          .presentMode = PresentMode::Immediate});
         Check(frontendResult.HasValue());
-        std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
-        Check(gladLoadGL(SDL_GL_GetProcAddress) != 0);
+        return std::move(frontendResult).Value();
+    }
+
+    /** @brief Records the real device behind the current qualification context. */
+    void RecordOpenGLDevice() {
         const auto *renderer = glGetString(GL_RENDERER);
         const auto *version = glGetString(GL_VERSION);
         REQUIRE(renderer != nullptr);
         REQUIRE(version != nullptr);
         std::cout << "OpenGL renderer " << reinterpret_cast<const char *>(renderer) << ", version "
                   << reinterpret_cast<const char *>(version) << '\n';
+    }
+
+    /** @brief Verifies viewport readback and GUI composition within one fully presented initial frame. */
+    EditorViewportTextureView CheckInitialViewportFrame(EditorViewportRendererOpenGL &viewport, RenderFrontend &frontend,
+                                                        Editor::EditorGuiRendererOpenGL &gui, const EditorViewportSceneView &scene,
+                                                        const RenderTargetHandle target, const EditorViewportExtent extent,
+                                                        const CallerOpenGLState &callerState) {
+        viewport.RequestExtent(extent);
+
+        const EditorViewportTextureView textureView = viewport.TextureView();
+        Check(textureView.IsValid());
+        PrepareGuiComposition(gui, textureView);
+        RenderFrameScope frame = ExecuteViewportFrame(frontend, scene, target, extent, callerState);
+        CheckCallerOpenGLState(callerState);
+        RestoreDefaultOpenGLState();
+        Check(viewport.IsReady());
+        Check(textureView.v0 == 1.0F && textureView.v1 == 0.0F);
+        CheckViewportPixels(textureView, extent.width, extent.height);
+        CheckGuiComposition(gui, frame, textureView, callerState);
+        Check(frame.Present().HasValue());
+        return textureView;
+    }
+
+    TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu]") {
+        const auto curve = GENERATE(Cinematic::CameraBlendCurve::Linear, Cinematic::CameraBlendCurve::SmoothStep);
+        const auto outputChange = GENERATE(NativeOutputChange::None, NativeOutputChange::Fullscreen, NativeOutputChange::SecondDisplay);
+        constexpr EditorViewportExtent extent{512, 384};
+        auto window = CreateNativeViewportWindow(outputChange);
+
+        HeadlessOpenGLPresentationPort presentationPort{*window};
+        auto frontend = CreateViewportFrontend(presentationPort);
+        Check(gladLoadGL(SDL_GL_GetProcAddress) != 0);
+        RecordOpenGLDevice();
 
         ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
@@ -521,19 +507,7 @@ namespace Horo::Render::OpenGLSmokeTests {
         scene.camera.up = cinematicCamera.up;
         Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
         const RenderTargetHandle target = PrepareViewportTarget(viewport, *frontend, scene, extent);
-        viewport.RequestExtent(extent);
-
-        const EditorViewportTextureView textureView = viewport.TextureView();
-        Check(textureView.IsValid());
-        PrepareGuiComposition(gui, textureView);
-        RenderFrameScope frame = ExecuteViewportFrame(*frontend, scene, target, extent, callerState);
-        CheckCallerOpenGLState(callerState);
-        RestoreDefaultOpenGLState();
-        Check(viewport.IsReady());
-        Check(textureView.v0 == 1.0F && textureView.v1 == 0.0F);
-        CheckViewportPixels(textureView, extent.width, extent.height);
-        CheckGuiComposition(gui, frame, textureView, callerState);
-        Check(frame.Present().HasValue());
+        const auto textureView = CheckInitialViewportFrame(viewport, *frontend, gui, scene, target, extent, callerState);
         const auto outputExtent = ChangeNativeOutput(*window, *frontend, outputChange);
         CHECK(cinematic.Position() == 6);
         const auto resizedCamera = cinematic.Advance(2);
@@ -551,7 +525,7 @@ namespace Horo::Render::OpenGLSmokeTests {
         ImGui::DestroyContext();
         DestroyCallerOpenGLState(callerState);
         frontend.reset();
-        SDL_DestroyWindow(window);
+        window.reset();
         SDL_Quit();
     }
 

@@ -1601,6 +1601,7 @@ horo_register_catch_test(HoroCinematicPropertyIntegrationTests LABELS "unit;cine
 add_executable(HoroCameraCutRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/CameraCutRuntimeTests.cpp
+        unit/runtime/cinematic/CameraTransitionRuntimeTests.cpp
 )
 target_compile_features(HoroCameraCutRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroCameraCutRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
