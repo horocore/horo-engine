@@ -55,7 +55,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/ProcessEvents.h
     Horo/Foundation/PathUtils.h
     Horo/Foundation/Paths.h
-    Horo/Foundation/Platform.h # HostPlatformServices stays Foundation-owned; online providers use a separate namespace.
+    Horo/Foundation/Platform.h # PlatformHostServices stays Foundation-owned; online providers use a separate namespace.
     Horo/Foundation/Progress.h
     Horo/Foundation/Result.h
     Horo/Foundation/Sha256.h
@@ -137,6 +137,7 @@ horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
+    Horo/PlatformServices/PlatformDiagnostics.h
     Horo/PlatformServices/AchievementDefinitionRegistry.h
     Horo/PlatformServices/PlatformCloudObjects.h
     Horo/PlatformServices/PlatformAchievementCoordinator.h

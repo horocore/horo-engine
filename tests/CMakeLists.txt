@@ -126,6 +126,7 @@ target_sources(HoroSecurityPublicHeaderConsumer PRIVATE support/ConfigurationCre
 target_sources(HoroPlatformServicesExtensionPublicHeaderConsumer PRIVATE
         support/PlatformHostServicesPublicContract.cpp
         support/PlatformHostServicesReversePublicContract.cpp)
+target_sources(HoroPlatformServicesPublicHeaderConsumer PRIVATE support/PlatformOfflinePublicContract.cpp)
 target_sources(HoroWorldBakeApplicationPublicHeaderConsumer PRIVATE support/WorldBakePublicContract.cpp)
 target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp
         support/AssetReimportDestinationPublicContract.cpp)
@@ -3811,7 +3812,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/NavigationBakeRenderTests.cpp
     )
 
-    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform)
+    target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform HoroEngine::PlatformServices)
     target_compile_features(HoroGlobalDockPanelRenderTests PRIVATE cxx_std_20)
     target_sources(HoroGlobalDockPanelRenderTests PRIVATE unit/editor/RenderGraphInspectionPaneTests.cpp
         ../apps/HoroEditor/app/RenderGraphInspectionPane.cpp)

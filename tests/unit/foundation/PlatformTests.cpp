@@ -192,7 +192,7 @@ namespace {
             .temporary = "/test/tmp",
         });
 
-        Horo::HostPlatformServices services(files, clock, processes, directories);
+        Horo::PlatformHostServices services(files, clock, processes, directories);
 
         REQUIRE((services.files.Exists("/test/project.horo")));
         REQUIRE((files.lastPath == "/test/project.horo"));
@@ -214,7 +214,7 @@ namespace {
             .hasCrashService = false,
         };
 
-        const Horo::HostPlatformServices services(files, clock, processes, directories, capabilities);
+        const Horo::PlatformHostServices services(files, clock, processes, directories, capabilities);
 
         REQUIRE((!services.Capabilities().supportsProcessExecution));
         REQUIRE((!services.Capabilities().hasCredentialStore));

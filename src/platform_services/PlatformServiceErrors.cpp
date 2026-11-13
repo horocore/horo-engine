@@ -1,5 +1,7 @@
 #include "Horo/PlatformServices/PlatformServiceErrors.h"
 
+#include "Horo/PlatformServices/PlatformOfflineQueueErrors.h"
+#include "Horo/PlatformServices/PlatformOfflineQueueStorage.h"
 #include "Horo/PlatformServices/PlatformRequestErrors.h"
 #include "Horo/PlatformServices/PlatformServicesBackend.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
@@ -177,5 +179,18 @@ namespace Horo::PlatformServices {
         domain.descriptors.push_back(&PlatformServiceErrors::ProviderFailed);
         domain.descriptors.insert(domain.descriptors.end(), Descriptors.begin(), Descriptors.end());
         return domain;
+    }
+
+    /** @copydoc PlatformOfflineErrorDomain */
+    ModuleErrorDomainDescriptor PlatformOfflineErrorDomain() {
+        namespace Storage = ::Horo::PlatformOfflineQueue::PlatformOfflineQueueErrors;
+        return ModuleErrorDomainDescriptor{.id = ErrorDomainId{"horo.platform.offline"},
+                                           .descriptors = {&Storage::InvalidConfiguration, &Storage::InvalidPartition,
+                                                           &Storage::InvalidRecord, &Storage::UnsupportedVersion, &Storage::PayloadTooLarge,
+                                                           &Storage::CapacityExceeded, &Storage::Corrupt, &Storage::DurableUnavailable,
+                                                           &Storage::StorageUnknown, &Storage::IdentityConflict, &Storage::RevisionConflict,
+                                                           &OfflineQueueErrors::InvalidIntent, &OfflineQueueErrors::Stale,
+                                                           &OfflineQueueErrors::Expired, &OfflineQueueErrors::InvalidTransition,
+                                                           &OfflineQueueErrors::ClockMovedBackward, &OfflineQueueErrors::QueueUnavailable}};
     }
 }  // namespace Horo::PlatformServices

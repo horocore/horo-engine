@@ -89,7 +89,7 @@ producer failed at the same compilation, leaving the scanner without inputs.
 Changing include order cannot make the declarations compatible.
 
 The baseline operating-system service bundle is renamed to
-`Horo::HostPlatformServices`. Its header, owning target, borrowed service
+`Horo::PlatformHostServices`. Its header, owning target, borrowed service
 references, constructor parameters, capability derivation and layout are
 unchanged. The online-services namespace retains its established name. No alias
 for the old class is provided, because such an alias recreates the collision.

@@ -5,6 +5,6 @@
 
 #include <type_traits>
 
-static_assert(std::is_constructible_v<Horo::HostPlatformServices, Horo::FileSystem &, Horo::Clock &, Horo::ProcessService &,
+static_assert(std::is_constructible_v<Horo::PlatformHostServices, Horo::FileSystem &, Horo::Clock &, Horo::ProcessService &,
                                       Horo::UserDirectories &>);
 static_assert(!std::is_copy_constructible_v<Horo::PlatformServices::PlatformProviderLifecycleHost>);

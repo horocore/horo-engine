@@ -460,7 +460,7 @@ namespace Horo {
     class CrashService;
 
     /** @brief Explicitly composed baseline and optional platform services for one host lifetime. */
-    class HostPlatformServices {
+    class PlatformHostServices {
     public:
         /**
          * @brief Constructs a platform service bundle from host-owned services.
@@ -473,7 +473,7 @@ namespace Horo {
          * @param dialogs Optional native dialog service.
          * @param crash Optional crash service.
          */
-        HostPlatformServices(FileSystem &files, Clock &clock, ProcessService &processes, UserDirectories &directories,
+        PlatformHostServices(FileSystem &files, Clock &clock, ProcessService &processes, UserDirectories &directories,
                              PlatformCapabilities capabilities = {}, CredentialStore *credentials = nullptr,
                              NativeDialogs *dialogs = nullptr, CrashService *crash = nullptr) noexcept;
 

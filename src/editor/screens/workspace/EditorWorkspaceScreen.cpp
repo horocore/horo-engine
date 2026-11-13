@@ -7,6 +7,7 @@
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/PlatformServices/PlatformDiagnostics.h"
 #include "WorkspacePathText.h"
 #include "editor/screens/NavigationErrors.h"
 
@@ -34,6 +35,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
               .operationControl = services.TryGet<IOperationControl>(),
               .networkDebuggerQuery = services.TryGetConst<Application::INetworkDebuggerQuery>(),
               .networkDebuggerControl = services.TryGet<Application::INetworkDebuggerControl>(),
+              .platformDiagnostics = services.TryGet<PlatformServices::IPlatformDiagnostics>(),
           },
           projectServices_{
               .assetRegistry = services.TryGet<Assets::AssetRegistry>(),

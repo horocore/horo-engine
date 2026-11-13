@@ -24,8 +24,13 @@ meaningful operating system differences or force every host to create a window.
 
 ## Capability Model
 
+The host's operating-system service bundle is `Horo::PlatformHostServices`.
+`Horo::PlatformServices` is reserved for the provider-neutral online platform
+service namespace. These contracts must be includable together by host and editor
+composition; an OS service bundle must not occupy that namespace's name.
+
 ```cpp
-struct HostPlatformServices {
+struct PlatformHostServices {
     FileSystem& files;
     Clock& clock;
     ProcessService& processes;
@@ -36,7 +41,7 @@ struct HostPlatformServices {
 };
 ```
 
-The baseline bundle is `Horo::HostPlatformServices`. The distinct
+The baseline bundle is `Horo::PlatformHostServices`. The distinct
 `Horo::PlatformServices` namespace owns online provider services. Both public
 contracts must be usable in the same translation unit. See the
 [composition migration](../../guides/platform-provider-package-qualification.md#host-platform-bundle-migration).

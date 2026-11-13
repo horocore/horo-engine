@@ -276,6 +276,7 @@ target_include_directories(HoroPlatform PRIVATE
         "$<TARGET_PROPERTY:HoroPublicationLockInternal,INTERFACE_INCLUDE_DIRECTORIES>")
 
 add_library(HoroPlatformServices STATIC
+        platform_services/PlatformDiagnostics.cpp
         platform_services/AchievementDefinitionRegistry.cpp
         platform_services/PlatformCloudObjects.cpp
         platform_services/PlatformAchievementCoordinator.cpp
@@ -283,6 +284,7 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformOfflineQueueAdmission.cpp
         platform_services/PlatformOfflineQueueErrors.cpp
         platform_services/PlatformOfflineQueueLifecycle.cpp
+        platform_services/PlatformOfflineQueueRetry.cpp
         platform_services/PlatformDefinitionErrors.cpp
         platform_services/PlatformDefinitionRegistries.cpp
         platform_services/PlatformPresenceCoordinator.cpp
@@ -4162,6 +4164,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/console/GlobalDockConsolePane.cpp
             editor/screens/workspace/panels/global_dock/panes/mcp/GlobalDockMcpPane.cpp
             editor/screens/workspace/panels/global_dock/panes/network/GlobalDockNetworkPane.cpp
+            editor/screens/workspace/panels/global_dock/panes/platform/PlatformDiagnosticsPane.cpp
             editor/screens/workspace/panels/global_dock/panes/operations/GlobalDockOperationsPane.cpp
             editor/screens/workspace/panels/global_dock/panes/performance/GlobalDockPerformancePane.cpp
             editor/screens/workspace/panels/global_dock/panes/physics/GlobalDockPhysicsPane.cpp
@@ -4246,6 +4249,7 @@ if (HORO_BUILD_EDITOR_GUI)
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
     target_link_libraries(HoroGui PUBLIC HoroEngine::Runtime)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformServices)
     target_link_libraries(HoroGui PUBLIC HoroEngine::EditorXRSimulatorModel)
     target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
     target_link_libraries(HoroGui PRIVATE HoroFoundationJsonInternal)

@@ -413,8 +413,8 @@ namespace Horo {
 #endif
     }
 
-    /** @copydoc HostPlatformServices::HostPlatformServices */
-    HostPlatformServices::HostPlatformServices(FileSystem &files, Clock &clock, ProcessService &processes,  // NOSONAR(cpp:S107)
+    /** @copydoc PlatformHostServices::PlatformHostServices */
+    PlatformHostServices::PlatformHostServices(FileSystem &files, Clock &clock, ProcessService &processes,  // NOSONAR(cpp:S107)
                                                UserDirectories &directories, const PlatformCapabilities capabilities,
                                                CredentialStore *credentials, NativeDialogs *dialogs, CrashService *crash) noexcept
         : files(files), clock(clock), processes(processes), directories(directories), capabilities(capabilities), credentials(credentials),
@@ -425,8 +425,8 @@ namespace Horo {
         this->capabilities.hasCrashService = crash != nullptr;
     }
 
-    /** @copydoc HostPlatformServices::Capabilities */
-    const PlatformCapabilities &HostPlatformServices::Capabilities() const noexcept {
+    /** @copydoc PlatformHostServices::Capabilities */
+    const PlatformCapabilities &PlatformHostServices::Capabilities() const noexcept {
         return capabilities;
     }
 

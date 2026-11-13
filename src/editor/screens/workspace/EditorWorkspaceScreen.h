@@ -49,6 +49,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         IOperationControl *operationControl{nullptr};
         const Application::INetworkDebuggerQuery *networkDebuggerQuery{};
         Application::INetworkDebuggerControl *networkDebuggerControl{};
+        PlatformServices::IPlatformDiagnostics *platformDiagnostics{};
     };
 
     struct WorkspaceProjectServices {

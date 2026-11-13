@@ -27,10 +27,12 @@ namespace Horo::PlatformServices {
     inline constexpr auto PlatformOfflineQueueMaximumProgressionAge = std::chrono::days{30};
     inline constexpr auto PlatformOfflineQueueMaximumPresenceAge = std::chrono::minutes{15};
     inline constexpr auto PlatformOfflineQueueMaximumTerminalRetention = std::chrono::days{30};
+    inline constexpr std::uint32_t PlatformOfflineQueueMaximumAttempts = 64;
+    inline constexpr auto PlatformOfflineQueueMaximumRetryDelay = std::chrono::hours{24};
 
     namespace detail {
         /** @brief Checks whether a fixed byte array contains a nonzero identity value. */
-        template <std::size_t Size> [[nodiscard]] constexpr bool HasNonZeroByte(const std::array<std::byte, Size> &bytes) noexcept {
+        template <std::size_t Size> [[nodiscard]] constexpr bool OfflineHasNonZeroByte(const std::array<std::byte, Size> &bytes) noexcept {
             return std::ranges::any_of(bytes, [](const std::byte byte) {
                 return byte != std::byte{};
             });
@@ -43,7 +45,7 @@ namespace Horo::PlatformServices {
 
         /** @brief Checks that the protected partition is nonzero. @return True when valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return detail::HasNonZeroByte(bytes);
+            return detail::OfflineHasNonZeroByte(bytes);
         }
 
         [[nodiscard]] constexpr auto operator<=>(const PlatformOfflineSubjectPartition &) const noexcept = default;
@@ -55,7 +57,7 @@ namespace Horo::PlatformServices {
 
         /** @brief Checks that the identity is nonzero. @return True when valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return detail::HasNonZeroByte(bytes);
+            return detail::OfflineHasNonZeroByte(bytes);
         }
 
         [[nodiscard]] constexpr auto operator<=>(const PlatformOfflineIntentId &) const noexcept = default;
@@ -261,6 +263,8 @@ namespace Horo::PlatformServices {
         PlatformOfflineOperation operation;
         PlatformOfflineOperationState state{PlatformOfflineOperationState::Pending};
         std::vector<PlatformOfflineReceiptSnapshot> receipts;
+        std::uint32_t attempts{}; /**< Dispatches already begun; never reset by suspend/resume. */
+        std::optional<std::chrono::steady_clock::time_point> nextEligibleAt;
     };
 
     /** @brief Admission disposition after exact-identity joining, legal coalescing, or presence replacement. */
@@ -280,6 +284,16 @@ namespace Horo::PlatformServices {
         ~PlatformOfflineAdmission() = default;
     };
 
+    /** @brief Fixed-size privacy-safe projection; contains no subject, intent identity, definition or presence content. */
+    struct PlatformOfflineQueueDiagnostics final {
+        std::array<std::size_t, 9> receiptsByState{}; /**< Positions follow PlatformOfflineIntentState. */
+        std::size_t active{};
+        std::size_t retained{};
+        std::size_t activeCapacity{};
+        std::size_t retainedCapacity{};
+        bool closed{};
+    };
+
     /** @brief Explicit finite limits for the in-memory queue policy core. */
     struct PlatformOfflineQueueConfig final {
         std::size_t activeCapacity{256};                                    /**< Maximum active receipts across all protected subjects. */
@@ -291,6 +305,9 @@ namespace Horo::PlatformServices {
         std::chrono::seconds producerRedeliveryHorizon{std::chrono::hours{24}}; /**< Duplicate-delivery window covered by retention. */
         std::size_t maximumPresenceDetailBytes{256};                            /**< Maximum UTF-8 detail payload size. */
         PlatformOfflineQueueGeneration generation{1};                           /**< Queue-lifetime fence for operation handles. */
+        std::uint32_t maximumAttempts{8};                                /**< Finite total dispatch budget, including the first submit. */
+        std::chrono::seconds initialRetryDelay{1};                       /**< Positive lower bound preventing immediate retry loops. */
+        std::chrono::seconds maximumRetryDelay{std::chrono::minutes{5}}; /**< Hard cap including provider hints and jitter. */
     };
 
     /**
@@ -363,6 +380,19 @@ namespace Horo::PlatformServices {
         [[nodiscard]] Result<PlatformRequestMutation> MarkReconciling(PlatformOfflineOperationHandle operation);
 
         /**
+         * @brief Retries only an owner-proven uncommitted attempt, with finite jittered exponential backoff.
+         * @param operation Exact dispatch whose provider confirms no remote effect.
+         * @param now Monotonic owner time.
+         * @param jitter Host-supplied random sample; no account or mutation bytes should seed it.
+         * @param providerDelay Optional normalized provider minimum delay, clamped to the product cap.
+         * @return Applied, typed lifecycle/clock error, or terminal permanent failure after attempt exhaustion.
+         * @details Persist the transition before scheduling again. Unknown remote outcome must use MarkReconciling instead.
+         */
+        [[nodiscard]] Result<PlatformRequestMutation> RetryUncommitted(PlatformOfflineOperationHandle operation, TimePoint now,
+                                                                       std::uint32_t jitter,
+                                                                       std::chrono::seconds providerDelay = std::chrono::seconds::zero());
+
+        /**
          * @brief Suspends only work that has not crossed the dispatch boundary.
          * @param operation Aggregate operation handle.
          * @return Applied/unchanged, or stale/invalid-transition failure.
@@ -426,6 +456,13 @@ namespace Horo::PlatformServices {
         /** @brief Returns aggregate operation count, including terminal records awaiting compaction. */
         [[nodiscard]] std::size_t OperationCount() const noexcept;
 
+        /** @brief Copies bounded aggregate evidence on the owner lane. @return Detached value without private identity or payload. */
+        [[nodiscard]] PlatformOfflineQueueDiagnostics Diagnostics() const noexcept;
+
+        /** @brief Suspends all unsent work without provider calls or cancellation of ambiguous effects.
+         * @return Number of changed operations. This owner-lane primitive does not grant developer/profile authorization. */
+        [[nodiscard]] std::size_t SuspendAllPending() noexcept;
+
     private:
         struct State;
         struct AdmissionCommit;
@@ -449,7 +486,7 @@ namespace Horo::PlatformServices {
         [[nodiscard]] std::size_t DueReceiptCount(TimePoint now) const noexcept;
         /** @brief Adds a bounded lifetime without overflowing the monotonic clock. @param time Base time. @param age Lifetime. @return Safe
          * deadline. */
-        [[nodiscard]] static std::optional<TimePoint> AddAge(TimePoint time, std::chrono::seconds age) noexcept;
+        [[nodiscard]] static std::optional<TimePoint> AddAge(TimePoint time, std::chrono::milliseconds age) noexcept;
         /** @brief Finds the newest non-terminal operation in one lane. @param lane Semantic lane. @return Tail or null. */
         [[nodiscard]] State *FindTail(const PlatformOfflineLaneKey &lane) noexcept;
         /** @brief Counts active receipts for one protected subject. @param subject Subject partition. @return Active count. */
@@ -468,6 +505,9 @@ namespace Horo::PlatformServices {
         void PrepareSupersededPresenceIds(const State *presenceTail, std::vector<PlatformOfflineIntentId> &superseded) const;
         /** @brief Checks whether all active receipts in a state remain before their deadlines. @return True when live. */
         [[nodiscard]] static bool ReceiptsRemainLive(const State &state, TimePoint now);
+        /** @brief Checks that remaining live receipts still describe the exact previously submitted aggregate.
+         * @param state Candidate operation. @return False when partial expiry would require changing its attempted payload. */
+        [[nodiscard]] static bool LiveReceiptsMatchOperation(const State &state);
         /** @brief Copies immutable operation and receipt state. @param state Queue-owned record. @return Detached snapshot. */
         [[nodiscard]] PlatformOfflineOperationSnapshot Snapshot(const State &state) const;
         /** @brief Expires safe unsent receipts. @param state Queue-owned record. @param now Current time. @param expired Optional event
