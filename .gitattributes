@@ -9,3 +9,6 @@
 /tests/fixtures/renderer/color/creative-look-produced/** -text
 # Prefab reference revisions and canonical artifacts authenticate exact source bytes.
 /tests/fixtures/prefab-reference-corpus/** -text
+
+# Keep the local analyzer input size stable across platforms.
+/scripts/analyze.py text eol=lf

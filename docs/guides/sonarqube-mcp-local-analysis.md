@@ -127,6 +127,13 @@ Header-only selections require a literal include chain to a compiled translation
 unit. Macro-generated include chains without provable context are incomplete.
 Platform-guarded files absent from this build are incomplete, not clean.
 
+Include lookup probes each candidate before canonicalizing it. Only missing files
+and non-directory search components advance to the next search directory; other
+filesystem errors remain incomplete. Existing symlinks still undergo canonical
+resolution, and staged headers still require the original content identity.
+This avoids repeatedly walking nonexistent Windows path parents without changing
+include search order or the subsequent native-build and C++ sensor requirements.
+
 Requests require fresh Sonar logs naming all submitted files, active C/C++ rules,
 a positive count of analyzed compilation units and completed analysis. Sensor
 errors or missing connected-mode synchronization reject the result. Initial

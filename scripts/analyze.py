@@ -2222,7 +2222,14 @@ def header_context(entries: list[dict], headers: list[Path], root: Path) -> dict
                 contents[path] = include_pattern.findall(path.read_text(encoding="utf-8", errors="replace"))
             for include in contents[path]:
                 for directory in [path.parent, *entry["includes"]]:
-                    candidate = (directory / include).resolve()
+                    candidate = directory / include
+                    try:
+                        # Missing Windows paths make realpath walk every parent. Probe first;
+                        # lstat still sends existing symlinks through normal canonical validation.
+                        candidate.lstat()
+                    except (FileNotFoundError, NotADirectoryError):
+                        continue
+                    candidate = candidate.resolve()
                     if candidate.is_file():
                         candidate = original_header(candidate, root)
                         pending.append(candidate)
