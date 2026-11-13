@@ -87,6 +87,45 @@ namespace Horo::Tests::VoiceRenderFixture {
         }
     };
 
+    TEST_CASE("Active stream voice retains old media while replacement prepares or fails", "[audio][stream][reload]") {
+        StreamRig rig;
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto runtime = rig.Create();
+        StreamRig::Publish(*runtime, *plan, staging);
+        REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 4));
+        StreamRig::Start(*runtime, staging);
+        auto next = std::make_shared<Audio::StreamingTests::PackageFixture>();
+        SECTION("Rejected replacement never releases active voice storage") {
+            next->openFailure = Audio::StreamingTests::OpenFailure::TypedFailure;
+            const auto candidate =
+                rig.service
+                    ->StageReplacement(rig.stream, {BorrowedCallbackContext{next.get()}, &Audio::StreamingTests::Open, next},
+                                       Audio::StreamingTests::Request())
+                    .Value();
+            REQUIRE(Audio::StreamingTests::PumpUntilFailure(*rig.service, candidate));
+            CHECK(rig.service->CommitReplacement(rig.stream, candidate).HasError());
+            REQUIRE(rig.service->Retire(candidate).HasValue());
+        }
+        SECTION("Successful replacement leaves the active voice on its retained generation") {
+            const auto candidate =
+                rig.service
+                    ->StageReplacement(rig.stream, {BorrowedCallbackContext{next.get()}, &Audio::StreamingTests::Open, next},
+                                       Audio::StreamingTests::Request())
+                    .Value();
+            REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, candidate, 4));
+            REQUIRE(rig.service->CommitReplacement(rig.stream, candidate).HasValue());
+            REQUIRE(rig.service->Retire(candidate).HasValue());
+        }
+        CHECK(rig.service->Retire(rig.stream).HasError());
+        CHECK(rig.package.releases.load() == 0);
+        const auto rendered = runtime->Render(1);
+        REQUIRE(rendered.error == nullptr);
+        CHECK(rendered.input.samples.planes[0][0] == 1.0F);
+        CHECK(runtime->Cursor().frame == 1);
+        rig.Finish(*runtime);
+    }
+
     TEST_CASE("Virtual stream realization positions the worker at the logical cursor", "[audio][virtualization][stream]") {
         StreamRig rig{true};
         auto plan = Plan(Asset());

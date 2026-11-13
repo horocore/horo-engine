@@ -28,4 +28,11 @@ namespace {
     static_assert(!std::is_constructible_v<AudioStreamingService, JobSystem &, AudioStreamPackageSource, AudioStreamingLimits>);
     static_assert(!HasBraceKeyBypass<AudioStreamingService>);
     static_assert(HasCheckedFactory<AudioStreamingService>);
+    static_assert(requires(AudioStreamingService &service, Horo::Audio::AudioStreamHandle handle, AudioStreamPackageSource source,
+                           Horo::Audio::AudioStreamRequest request) {
+        service.StageReplacement(handle, std::move(source), request);
+        service.CommitReplacement(handle, handle);
+        service.Snapshot().budgetRejections;
+        service.Snapshot(handle).Value().decodeNanoseconds;
+    });
 }  // namespace

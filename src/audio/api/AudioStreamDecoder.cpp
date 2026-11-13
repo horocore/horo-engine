@@ -2,6 +2,8 @@
 
 #include "Horo/Audio/AudioStreamDecoderErrors.h"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace Horo::Audio {
@@ -94,6 +96,13 @@ namespace Horo::Audio {
         const AudioStreamDecodeProgress progress = produced.Value();
         if (progress.frames > requestedFrames || progress.frames > spec_.frameCount - cursor_ ||
             (progress.frames == 0 && !progress.endOfStream) || progress.endOfStream != (cursor_ + progress.frames == spec_.frameCount)) {
+            state_ = AudioStreamDecoderState::Failed;
+            return Result<AudioStreamDecodedBlock>::Failure(MakeError(AudioStreamDecoderErrors::ProtocolViolation));
+        }
+        const auto samples = output.first(static_cast<std::size_t>(progress.frames) * spec_.outputFormat.layout.orderedChannels.size());
+        if (!std::ranges::all_of(samples, [](const auto sample) {
+            return std::isfinite(sample);
+        })) {
             state_ = AudioStreamDecoderState::Failed;
             return Result<AudioStreamDecodedBlock>::Failure(MakeError(AudioStreamDecoderErrors::ProtocolViolation));
         }
