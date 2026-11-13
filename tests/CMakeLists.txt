@@ -4059,9 +4059,24 @@ add_executable(HoroCliCommandRegistryTests
         unit/cli/CliOptionParserTests.cpp
         unit/cli/CliOutputPresenterTests.cpp
 )
+
+add_test(NAME HoroCliHeadlessDependencyPolicy COMMAND "${CMAKE_COMMAND}"
+    "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli_headless_policy"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunCliHeadlessPolicyTest.cmake")
+set_tests_properties(HoroCliHeadlessDependencyPolicy PROPERTIES LABELS "cli;cmake;headless" TIMEOUT 60)
 target_compile_features(HoroCliCommandRegistryTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroCliCommandRegistryTests PRIVATE
+    HORO_CLI_OUTPUT_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cli/output-v1.json")
 target_link_libraries(HoroCliCommandRegistryTests PRIVATE HoroEngine::CliHost HoroEngine::Platform nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroCliCommandRegistryTests LABELS "unit;cli;headless")
+
+add_executable(HoroCliHostLifecycleTests unit/cli/CliHostProgressPumpTests.cpp
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/CliHostProgressPump.cpp")
+target_compile_features(HoroCliHostLifecycleTests PRIVATE cxx_std_20)
+target_include_directories(HoroCliHostLifecycleTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
+target_link_libraries(HoroCliHostLifecycleTests PRIVATE HoroEngine::CliHost Threads::Threads nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroCliHostLifecycleTests LABELS "unit;cli;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroMcpSessionTests
         unit/mcp/McpSessionTests.cpp
@@ -6942,7 +6957,7 @@ horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cl
 
 add_executable(HoroCliProductionOutputContract integration/CliProductionOutputContract.cpp)
 target_compile_features(HoroCliProductionOutputContract PRIVATE cxx_std_20)
-target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::Platform nlohmann_json::nlohmann_json)
+target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
 target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::PlatformServicesAuthoring)
 target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::ProjectMutationGuard)
 add_dependencies(HoroCliProductionOutputContract horo-engine)
@@ -7352,7 +7367,7 @@ target_compile_features(HoroReferenceExtensionCliTests PRIVATE cxx_std_20)
 target_include_directories(HoroReferenceExtensionCliTests PRIVATE
     "${PROJECT_SOURCE_DIR}/tests/support" "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 target_link_libraries(HoroReferenceExtensionCliTests PRIVATE HoroEngine::CliHost HoroEngine::Extensions HoroEngine::Foundation
-    HoroEngine::Platform HoroEngine::Security HoroHostSignatureDocuments MbedTLS::mbedcrypto Catch2::Catch2WithMain)
+    HoroEngine::Platform HoroEngine::Security HoroHostSignatureDocuments MbedTLS::mbedcrypto Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
 add_dependencies(HoroReferenceExtensionCliTests horo-engine)
 add_custom_target(HoroReferenceExtensionQualification DEPENDS HoroReferenceExtensionActivation
     HoroReferenceExtensionCliTests HoroNativeExtensionServiceTests HoroExtensionAuthorCiStage)
@@ -7387,6 +7402,15 @@ target_include_directories(HoroFoundationJsonTests PRIVATE "${PROJECT_SOURCE_DIR
 
 # Genuine two-VM module operations in both actual product owners.
 include(HoroScriptModuleTests)
+
+foreach(target IN ITEMS HoroCliProductionOutputContract HoroNavigationNativeCliTests HoroPackageApplicationTests
+        HoroReferenceExtensionCliTests HoroModuleScriptProductHostTests)
+    if(TARGET ${target})
+        target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
+        target_compile_definitions(${target} PRIVATE
+            HORO_CLI_OUTPUT_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/cli/output-v1.json")
+    endif()
+endforeach()
 
 # Genuine dynamic prefab reconstruction through the existing Save and Scene owners.
 include(HoroPrefabPersistenceTests)

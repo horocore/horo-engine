@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -30,6 +31,20 @@ namespace Horo::Cli {
         REQUIRE_FALSE(nonTty.ShouldPresent({"cook", 0.2F, {}}, start + std::chrono::milliseconds{10}));
         REQUIRE(nonTty.ShouldPresent({"link", 0.0F, {}}, start + std::chrono::milliseconds{20}));
         REQUIRE(nonTty.ShouldPresent({"link", 0.5F, {}}, start + std::chrono::seconds{2}));
+    }
+
+    TEST_CASE("CLI progress bounds retained text while a consumer is stalled", "[unit][cli][progress][qualification]") {
+        CliProgressMailbox mailbox;
+        const std::string oversized(8192, 'x');
+        for (unsigned index = 0; index < 65'536; ++index)
+            mailbox.Report({oversized, 0.5F, oversized});
+        mailbox.Report({oversized, 1.0F, oversized});
+        const auto final = mailbox.Take();
+        REQUIRE(final);
+        CHECK(final->phase.size() == 4096);
+        CHECK(final->message.size() == 4096);
+        CHECK(final->completion == 1.0F);
+        CHECK_FALSE(mailbox.Take());
     }
 
     TEST_CASE("CLI progress presentation isolates streams and human cadence", "[unit][cli][progress]") {
@@ -111,5 +126,48 @@ namespace Horo::Cli {
         REQUIRE(updated.has_value());
         REQUIRE(updated->phase == "cook");
         REQUIRE(updated->completion == 0.5F);
+    }
+
+    TEST_CASE("CLI progress projections preserve bounded operation retention and release cancellation owners",
+              "[unit][cli][progress][qualification]") {
+        OperationStore operations{1, 2};
+        constexpr unsigned Invocations = 4096;
+        for (unsigned invocation = 1; invocation <= Invocations; ++invocation) {
+            auto owner = std::make_shared<unsigned>(0);
+            const std::weak_ptr<unsigned> lifetime = owner;
+            const auto id = operations.Begin({.kind = OperationKind::Validation,
+                                              .title = "Validate",
+                                              .phase = "prepare",
+                                              .progress = 0.0F,
+                                              .cancellable = true,
+                                              .requestCancel = [owner] {
+                ++*owner;
+            }});
+            REQUIRE(id);
+            owner.reset();
+            REQUIRE_FALSE(lifetime.expired());
+            CliProgressProjection projection{&operations, nullptr, {.invocation = {invocation}, .operation = CliOperationId{*id}}};
+            REQUIRE(projection.Poll());
+            REQUIRE(operations.Update(*id, {.state = OperationState::Succeeded, .phase = "done", .progress = 1.0F}));
+            CHECK(lifetime.expired());
+            const auto terminal = projection.Poll();
+            REQUIRE(terminal);
+            CHECK(terminal->completion == 1.0F);
+            CHECK_FALSE(projection.Poll());
+        }
+        const auto retained = operations.SnapshotIfChanged(0);
+        REQUIRE(retained);
+        CHECK(retained->operations.size() == 2);
+        CHECK(retained->droppedTerminalCount == Invocations - 2);
+        CHECK_FALSE(operations.RequestCancel(1));
+    }
+
+    TEST_CASE("CLI invocation deadline avoids overflow at the largest duration", "[unit][cli][timeout]") {
+        CliInvocationStopController stop{std::chrono::milliseconds::max()};
+        REQUIRE(stop.Deadline());
+        CHECK(*stop.Deadline() == std::chrono::steady_clock::time_point::max());
+        CHECK_FALSE(stop.Token().IsCancellationRequested());
+        stop.Shutdown();
+        CHECK(stop.Token().IsCancellationRequested());
     }
 }  // namespace Horo::Cli

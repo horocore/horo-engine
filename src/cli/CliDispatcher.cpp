@@ -157,15 +157,22 @@ namespace Horo::Cli {
         }
 
         [[nodiscard]] Result<std::optional<std::chrono::steady_clock::time_point>> ResolveDeadline(
-            const CliTimeoutPolicy &policy, const std::uint64_t requestedMilliseconds) {
+            const CliTimeoutPolicy &policy, const std::uint64_t requestedMilliseconds,
+            const std::optional<std::chrono::steady_clock::time_point> hostDeadline) {
             if (requestedMilliseconds != 0 && (policy.maximumMilliseconds == 0 || requestedMilliseconds > policy.maximumMilliseconds))
                 return Result<std::optional<std::chrono::steady_clock::time_point>>::Failure(MakeError(CliErrors::ExecutionContextInvalid));
 
             const std::uint64_t timeout = requestedMilliseconds == 0 ? policy.defaultMilliseconds : requestedMilliseconds;
             if (timeout == 0)
-                return Result<std::optional<std::chrono::steady_clock::time_point>>::Success(std::nullopt);
-            return Result<std::optional<std::chrono::steady_clock::time_point>>::Success(std::chrono::steady_clock::now() +
-                                                                                         std::chrono::milliseconds(timeout));
+                return Result<std::optional<std::chrono::steady_clock::time_point>>::Success(hostDeadline);
+            const auto now = std::chrono::steady_clock::now();
+            const auto available =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::time_point::max() - now);
+            if (timeout > static_cast<std::uint64_t>(available.count()))
+                return Result<std::optional<std::chrono::steady_clock::time_point>>::Failure(MakeError(CliErrors::ExecutionContextInvalid));
+            const auto requestedDeadline = now + std::chrono::milliseconds(timeout);
+            return Result<std::optional<std::chrono::steady_clock::time_point>>::Success(
+                hostDeadline ? std::min(*hostDeadline, requestedDeadline) : requestedDeadline);
         }
 
         [[nodiscard]] Result<const CliCommandDescriptor *> ValidateRegistration(const CliCommandAdapterRegistration &registration,
@@ -391,7 +398,8 @@ namespace Horo::Cli {
                                                             : CliErrors::ExecutionCancelled));
 
         Result<std::optional<std::chrono::steady_clock::time_point>> admittedDeadline =
-            ResolveDeadline(descriptor->timeout, invocation.timeoutMilliseconds);
+            ResolveDeadline(descriptor->timeout, invocation.timeoutMilliseconds,
+                            invocation.stopControl == nullptr ? std::nullopt : invocation.stopControl->Deadline());
         if (admittedDeadline.HasError())
             return CliTerminalResult::Failure(std::move(initial), admittedDeadline.ErrorValue());
         const std::optional<std::chrono::steady_clock::time_point> deadline = std::move(admittedDeadline).Value();
