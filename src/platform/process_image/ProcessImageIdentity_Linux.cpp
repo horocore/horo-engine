@@ -139,14 +139,12 @@ namespace Horo::Platform {
     Result<ProcessImageIdentity> CaptureCurrentProcessImageIdentity() {
         try {
             auto state = std::make_shared<NativeState>();
-            auto opened = OpenImage(*state);
-            if (opened.HasError())
+            if (auto opened = OpenImage(*state); opened.HasError())
                 return Result<ProcessImageIdentity>::Failure(opened.ErrorValue());
             auto hash = HashImage(*state);
             if (hash.HasError())
                 return Result<ProcessImageIdentity>::Failure(hash.ErrorValue());
-            auto verified = VerifyNative(*state);
-            if (verified.HasError())
+            if (auto verified = VerifyNative(*state); verified.HasError())
                 return Result<ProcessImageIdentity>::Failure(verified.ErrorValue());
             return Result<ProcessImageIdentity>::Success(ProcessImageIdentity{hash.Value(), std::move(state)});
         } catch (const std::bad_alloc &) {

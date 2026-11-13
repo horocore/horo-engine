@@ -206,9 +206,9 @@ namespace Horo::Vfx::SpawnDetail {
 
     VfxSpawnStatus ValidateBudget(const VfxSpawnBudget &budget) noexcept {
         using enum Horo::Vfx::VfxSpawnStatus;
-        const bool queues = budget.maximumPending > 0 && budget.maximumPending <= VfxSpawnHardLimits::Pending &&
-                            budget.maximumResults > 0 && budget.maximumResults <= VfxSpawnHardLimits::Results;
-        if (!queues)
+        if (const bool queues = budget.maximumPending > 0 && budget.maximumPending <= VfxSpawnHardLimits::Pending &&
+                                budget.maximumResults > 0 && budget.maximumResults <= VfxSpawnHardLimits::Results;
+            !queues)
             return InvalidRequest;
         const bool owners = budget.maximumOwners > 0 && budget.maximumOwners <= VfxSpawnHardLimits::Producers &&
                             budget.maximumProducers > 0 && budget.maximumProducers <= VfxSpawnHardLimits::Producers;

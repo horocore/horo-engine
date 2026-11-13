@@ -39,8 +39,7 @@ namespace Horo::Gameplay::VfxContextDetail {
             return {.status = ResourceBudgetExceeded};
         const auto receipt = Receipt(scene, moduleState);
         std::array<Vfx::VfxSpawnRequest, Vfx::VfxSpawnHardLimits::Layers> scratch;
-        const auto resolved = Resolve(scene, moduleState, key, payload, receipt, scratch);
-        if (resolved.status != Accepted)
+        if (const auto resolved = Resolve(scene, moduleState, key, payload, receipt, scratch); resolved.status != Accepted)
             return {.status = resolved.status};
         if (scene.pendingCount + scene.resultCount >= scene.pending.size())
             return {.status = EventQueueFull};

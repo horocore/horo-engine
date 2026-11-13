@@ -86,16 +86,14 @@ namespace Horo::Vfx {
 
     /** @copydoc VfxWorld::TryEnqueueSpawns */
     VfxSpawnOutcome VfxWorld::TryEnqueueSpawns(const std::span<const VfxSpawnRequest> requests) noexcept {
-        const auto status = SpawnAdmissionStatus();
-        if (status != VfxSpawnStatus::Accepted)
+        if (const auto status = SpawnAdmissionStatus(); status != VfxSpawnStatus::Accepted)
             return requests.empty() ? VfxSpawnOutcome{.status = status} : MakeVfxSpawnOutcome(requests.front(), status);
         return SpawnDetail::Enqueue(*spawn_, scene_, requests);
     }
 
     /** @copydoc VfxWorld::UpdateSpawns */
     VfxSpawnUpdate VfxWorld::UpdateSpawns(const std::uint64_t tick, const float deltaSeconds) noexcept {
-        const auto status = SpawnAdmissionStatus();
-        if (status != VfxSpawnStatus::Accepted)
+        if (const auto status = SpawnAdmissionStatus(); status != VfxSpawnStatus::Accepted)
             return {.status = status};
         return SpawnDetail::Update(*spawn_, tick, deltaSeconds);
     }
