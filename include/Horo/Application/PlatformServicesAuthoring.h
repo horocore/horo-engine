@@ -12,6 +12,37 @@
 #include <string_view>
 
 namespace Horo::Application {
+    /** @brief Canonical project-owned source paths; private provider mappings remain adapter-owned. */
+    namespace PlatformServicesDocumentPaths {
+        inline constexpr std::string_view Ledger = ".horo/platform_services.ids.json";
+        inline constexpr std::string_view Achievements = ".horo/platform_services.achievements.json";
+        inline constexpr std::string_view Stats = ".horo/platform_services.stats.json";
+        inline constexpr std::string_view Leaderboards = ".horo/platform_services.leaderboards.json";
+        inline constexpr std::string_view Presence = ".horo/platform_services.presence.json";
+    }  // namespace PlatformServicesDocumentPaths
+
+    /** @brief Complete unpublished first generation; the root is the only persisted salt authority. */
+    struct PlatformServicesInitialDocuments final {
+        std::string projectSource;
+        std::string ledgerSource;
+        std::string achievementSource;
+        std::string statSource;
+        std::string leaderboardSource;
+        std::string presenceSource;
+    };
+
+    /**
+     * @brief Prepares the complete first platform generation without filesystem writes or entropy discovery.
+     * @param projectSource Strict canonical root capture with no existing platform salt or policy.
+     * @param salt Nonzero bytes obtained once from the host-injected cryptographic source.
+     * @return Preserved root semantics plus explicit Null policy, empty ledger and all four semantic documents, or typed failure.
+     * @pre The creation or explicit migration caller has verified that no platform identity, references or private mappings exist.
+     * @details Existing platform root fields fail closed. This is never a repair path and must not run during ordinary open/cook.
+     * The host publishes all documents in its existing creation/migration transaction and rechecks source authority before commit.
+     */
+    [[nodiscard]] Result<PlatformServicesInitialDocuments> PreparePlatformServicesInitialDocuments(
+        std::string_view projectSource, const PlatformServices::PlatformServicesIdSalt &salt);
+
     /**
      * @brief Decodes a complete ledger without writing or repairing project metadata.
      * @param source UTF-8 ledger JSON, bounded to 4 MiB with at most eight nesting levels.
@@ -39,6 +70,19 @@ namespace Horo::Application {
      * @return Canonical nonzero salt or typed invalid-salt failure.
      */
     [[nodiscard]] Result<PlatformServices::PlatformServicesIdSalt> ResolveProjectPlatformServicesSalt(const ProjectSourceDocument &source);
+
+    /**
+     * @brief Decodes portable policy into a detached candidate without resolving a provider or activating services.
+     * @param source Canonical captured root, including its sole valid salt authority.
+     * @param profile Explicit host-owned profile, never read from project text.
+     * @param limits Finite portable validation bounds.
+     * @return Shape-validated candidate or typed salt, syntax, enum, range or Null-required-capability failure.
+     * @details Migration preserves exact provider requirements even when no provider is installed in that process.
+     * A successful candidate is not an activation policy: hosts must use the shared resolver with actual trusted contributions.
+     */
+    [[nodiscard]] Result<PlatformServices::PlatformProjectConfigurationCandidate> DecodeProjectPlatformServicesConfigurationCandidate(
+        const ProjectSourceDocument &source, PlatformServices::PlatformServicesHostProfile profile,
+        const PlatformServices::PlatformProjectConfigurationLimits &limits = {});
 
     /**
      * @brief Validates captured portable project policy through the shared typed Platform Services validator.

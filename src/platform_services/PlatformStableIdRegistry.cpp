@@ -10,7 +10,6 @@ namespace Horo::PlatformServices {
         constexpr std::string_view FingerprintDomain = "horo.platform-services.registry-fingerprint.v2";
         constexpr std::size_t MaxEntries = 4096;
         constexpr std::size_t MaxAliasesPerEntry = 16;
-        constexpr std::size_t MaxProjectIdBytes = 128;
         constexpr std::size_t MaxRemovalProvenanceBytes = 256;
         constexpr std::size_t MaxProviderMappings = 16384;
 
@@ -91,7 +90,7 @@ namespace Horo::PlatformServices {
 
         [[nodiscard]] bool HasValidCandidateMetadata(const PlatformStableIdRegistryCandidate &candidate) noexcept {
             return candidate.schemaVersion == PlatformStableIdRegistrySchemaVersion && !candidate.projectId.empty() &&
-                   candidate.projectId.size() <= MaxProjectIdBytes && IsValidUtf8ScalarSequence(candidate.projectId) &&
+                   candidate.projectId.size() <= PlatformServicesMaximumProjectIdBytes && IsValidUtf8ScalarSequence(candidate.projectId) &&
                    candidate.entries.size() <= MaxEntries;
         }
 

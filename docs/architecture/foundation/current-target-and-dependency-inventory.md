@@ -45,9 +45,16 @@ include directories do not enforce those ownership boundaries, as documented in
 ### Foundation, Platform, Application, And Runtime
 
 Platform Services authoring follow-up (2026-11-11):
+The terminal `horo-engine` target also privately consumes Foundation-only
+HoroProjectMutationGuard for its registered cook command, retaining the shared
+project lease from source admission through tracked paired publication.
+The terminal `horo-engine` target privately consumes HoroPlatformServicesAuthoring
+for its registered read-only `platform-services validate` adapter. It explicitly
+selects the HeadlessServer policy and uses the same bounded project-source capture
+and revision fences as editor open; no native provider activation is added.
 `HoroPlatformServicesAuthoring` (`HoroEngine::PlatformServicesAuthoring`) owns
 `Application/PlatformServicesAuthoring.h` and bounded project ledger/policy codecs.
-Its direct public dependencies are PlatformServices and Application; JSON is a
+Its direct public dependencies are PlatformServices, Application and Assets; JSON is a
 private dependency. Application retains the canonical root parser and captures
 optional module source values without depending on PlatformServices. The lower
 PlatformServices target owns its canonical ledger encoder/fingerprint and its
@@ -499,3 +506,24 @@ Source capture uses the scheduler I/O lane before owner-lane service admission.
 Hosts inject concrete builders and retain source authority; no editor, CLI, MCP
 or concrete-provider dependency is added to Automation. Its public-header
 consumer validates the new additive API and transitive declared contracts.
+
+Platform Services identity adoption preparation uses the existing HoroApplication
+migration executor with an explicit optional operation-owned Security entropy
+capability. HoroApplication links HoroSecurity privately; its existing public
+ProjectMigration.h only forward-declares that interface. Native provider selection
+remains in host composition. HoroProjectMigrations privately consumes the separate
+HoroPlatformServicesAuthoring adapters for its 0.4.0 platform adoption stage;
+those codecs must not move into HoroApplication and create a reverse cycle.
+
+HoroEditorServices publicly consumes HoroPlatformServicesAuthoring for its exposed
+owned project-session source snapshot and privately consumes HoroSecurity for injected
+first-generation preparation. HoroPlatformServicesAuthoring publicly declares HoroAssets
+for its bounded source witness types and shared capture implementation.
+It also owns PlatformServicesProjectCook.h and the synchronous paired publisher,
+which reuses Assets tracked file publication with a final domain revision fence.
+The fixed derived pair is the existing Platform Services cook fingerprint preimage;
+no new dependency edge, asset identity allocation or native provider activation is added.
+HoroEditorApp explicitly supplies native entropy to creation and migration services.
+The public ProjectMigrationErrors.h under HoroApplication owns the existing stage
+failure/cancellation declarations; no additional broad source usage requirement
+is introduced for the independent 0.4.0 migration stage.

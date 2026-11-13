@@ -1,3 +1,4 @@
+#include "../../support/project/PlatformServicesMigrationFixture.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
@@ -45,6 +46,15 @@ namespace {
             auto source = EncodeProjectSurfaceSettings(surfaces.Value());
             REQUIRE(source.HasValue());
             std::ofstream(root / ".horo/surfaces.json") << source.Value();
+            out.close();
+            std::ifstream input(root / ".horo/project.json", std::ios::binary);
+            const std::string metadata{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+            input.close();
+            PlatformServices::PlatformServicesIdSalt salt;
+            salt.bytes.front() = std::byte{1};
+            const auto initial = PreparePlatformServicesInitialDocuments(metadata, salt);
+            REQUIRE(initial.HasValue());
+            Tests::PlatformMigration::WriteInitialDocuments(root, initial.Value());
         }
 
         ~TempProject() {
@@ -116,6 +126,36 @@ namespace {
         std::thread::id installThread;
     };
 
+    /** @brief Invalidates an already captured source at a deterministic preparation boundary. */
+    struct SourceMutationContributor final : IProjectOpenDerivedStateContributor {
+        struct Prepared final : IPreparedProjectOpenDerivedState {
+            explicit Prepared(bool &installed) : installed_(installed) {}
+
+            Result<std::string> Install() override {
+                installed_ = true;
+                return Result<std::string>::Success("source-mutation");
+            }
+
+            bool &installed_;
+        };
+
+        std::string_view path;
+        bool installed{};
+
+        std::string_view Id() const noexcept override {
+            return "test.source-mutation";
+        }
+
+        Result<std::unique_ptr<IPreparedProjectOpenDerivedState>> Prepare(const std::filesystem::path &root,
+                                                                          const CancellationToken &) override {
+            std::ofstream output(root / path, std::ios::binary | std::ios::app);
+            output << ' ';
+            REQUIRE(output.good());
+            output.close();
+            return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Success(std::make_unique<Prepared>(installed));
+        }
+    };
+
     ProjectOpenProgressSnapshot PumpToTerminal(ProjectOpenService &service, ProjectOpenOperationId id) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         float previousProgress = 0.0F;
@@ -140,7 +180,8 @@ TEST_CASE("Project Open Service Tests", "[unit][editor]") {
     SystemWallClock clock;
     JobSystem jobs{{.workerCount = 3, .maxQueuedJobs = 32}};
     ProjectMutationCoordinator mutations{files};
-    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectMigrationTransactionService transactions{files, clock, mutations,
+                                                    jobs,  {},    {.random = std::make_shared<Tests::PlatformMigration::Random>()}};
     ProjectOpenPreflightService preflight{transactions};
     RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
     ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers};
@@ -271,7 +312,8 @@ TEST_CASE("Project open validates the default scene before workspace preparation
     SystemWallClock clock;
     JobSystem jobs{{.workerCount = 3, .maxQueuedJobs = 32}};
     ProjectMutationCoordinator mutations{files};
-    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectMigrationTransactionService transactions{files, clock, mutations,
+                                                    jobs,  {},    {.random = std::make_shared<Tests::PlatformMigration::Random>()}};
     ProjectOpenPreflightService preflight{transactions};
     RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
     ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers};
@@ -378,7 +420,8 @@ TEST_CASE("Project open retains the missing collision cause from derived prepara
     SystemWallClock clock;
     JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8}};
     ProjectMutationCoordinator mutations{files};
-    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectMigrationTransactionService transactions{files, clock, mutations,
+                                                    jobs,  {},    {.random = std::make_shared<Tests::PlatformMigration::Random>()}};
     ProjectOpenPreflightService preflight{transactions};
     RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
     std::array<IProjectOpenDerivedStateContributor *, 1> contributors{&contributor};
@@ -405,7 +448,8 @@ TEST_CASE("Project open rejects missing catalogs without implicit adoption", "[u
     SystemWallClock clock;
     JobSystem jobs{{.workerCount = 3, .maxQueuedJobs = 32}};
     ProjectMutationCoordinator mutations{files};
-    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectMigrationTransactionService transactions{files, clock, mutations,
+                                                    jobs,  {},    {.random = std::make_shared<Tests::PlatformMigration::Random>()}};
     ProjectOpenPreflightService preflight{transactions};
     RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
     ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers};
@@ -426,7 +470,8 @@ TEST_CASE("Project session rejects catalog drift before reservation or activatio
     SystemWallClock clock;
     JobSystem jobs{{.workerCount = 3, .maxQueuedJobs = 32}};
     ProjectMutationCoordinator mutations{files};
-    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectMigrationTransactionService transactions{files, clock, mutations,
+                                                    jobs,  {},    {.random = std::make_shared<Tests::PlatformMigration::Random>()}};
     ProjectOpenPreflightService preflight{transactions};
     RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
     ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers};
@@ -497,7 +542,8 @@ TEST_CASE("Surface adoption migration preserves semantic absence and rolls back 
     SystemWallClock clock;
     JobSystem jobs{{.workerCount = 3, .maxQueuedJobs = 32}};
     ProjectMutationCoordinator mutations{files};
-    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectMigrationTransactionService transactions{files, clock, mutations,
+                                                    jobs,  {},    {.random = std::make_shared<Tests::PlatformMigration::Random>()}};
     ProjectOpenPreflightService preflight{transactions};
     RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
     ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers};
@@ -520,4 +566,119 @@ TEST_CASE("Surface adoption migration preserves semantic absence and rolls back 
     if (priorCatalog)
         CHECK(ReadText(project.root / ".horo/surfaces.json") == *priorCatalog);
     service.Shutdown();
+}
+
+TEST_CASE("Ordinary current project open rejects missing platform authority without migration or repair", "[unit][editor][platform-open]") {
+    TempProject project;
+    std::string expected;
+    SECTION("Required root salt") {
+        auto metadata = ReadJson(project.root / ".horo/project.json");
+        metadata.erase("platformServicesIdSalt");
+        std::ofstream(project.root / ".horo/project.json", std::ios::binary | std::ios::trunc) << metadata.dump();
+        expected = PlatformServices::StableIdErrors::InvalidSalt.code.Value();
+    }
+    SECTION("Required stat document") {
+        REQUIRE(std::filesystem::remove(project.root / PlatformServicesDocumentPaths::Stats));
+        expected = Assets::AssetSourceErrors::ReadFailed.code.Value();
+    }
+    const auto original = ReadText(project.root / ".horo/project.json");
+    JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 8});
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    ProjectMutationCoordinator mutations(files);
+    auto random = std::make_shared<Tests::PlatformMigration::Random>();
+    random->fail = true;
+    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs, {}, {.random = random}};
+    ProjectOpenPreflightService preflight(transactions);
+    REQUIRE(preflight.Inspect(project.root).compatibility.status == ProjectCompatibilityStatus::Current);
+    REQUIRE_FALSE(preflight.Inspect(project.root).migrationPlan.has_value());
+    RendererAvailabilitySnapshot renderers({{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"});
+    ProjectOpenService service(jobs, files, preflight, mutations, transactions, renderers);
+    auto operation = service.Start({.projectRoot = project.root});
+    REQUIRE(operation.HasValue());
+    const auto terminal = PumpToTerminal(service, operation.Value().Id());
+    REQUIRE(terminal.outcome == ProjectOpenOutcome::Failed);
+    REQUIRE(terminal.diagnostic.has_value());
+    CHECK(terminal.diagnostic->code.Value() == expected);
+    CHECK_FALSE(terminal.readySession.has_value());
+    CHECK(ReadText(project.root / ".horo/project.json") == original);
+    CHECK(random->calls == 0);
+}
+
+TEST_CASE("Any platform source edit rejects session publication before derived-state installation", "[unit][editor][platform-open]") {
+    TempProject project;
+    SourceMutationContributor mutation;
+    SECTION("Root") {
+        mutation.path = ".horo/project.json";
+    }
+    SECTION("Ledger") {
+        mutation.path = PlatformServicesDocumentPaths::Ledger;
+    }
+    SECTION("Achievement") {
+        mutation.path = PlatformServicesDocumentPaths::Achievements;
+    }
+    SECTION("Stat") {
+        mutation.path = PlatformServicesDocumentPaths::Stats;
+    }
+    SECTION("Leaderboard") {
+        mutation.path = PlatformServicesDocumentPaths::Leaderboards;
+    }
+    SECTION("Presence") {
+        mutation.path = PlatformServicesDocumentPaths::Presence;
+    }
+    JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 8});
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    ProjectMutationCoordinator mutations(files);
+    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectOpenPreflightService preflight(transactions);
+    RendererAvailabilitySnapshot renderers({{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"});
+    const std::array<IProjectOpenDerivedStateContributor *, 1> contributors{&mutation};
+    ProjectOpenService service(jobs, files, preflight, mutations, transactions, renderers, contributors);
+    auto operation = service.Start({.projectRoot = project.root});
+    REQUIRE(operation.HasValue());
+    const auto terminal = PumpToTerminal(service, operation.Value().Id());
+    REQUIRE(terminal.outcome == ProjectOpenOutcome::Failed);
+    REQUIRE(terminal.diagnostic.has_value());
+    CHECK(terminal.diagnostic->code.Value() == "project.open.session_stale");
+    CHECK_FALSE(terminal.readySession.has_value());
+    CHECK_FALSE(mutation.installed);
+}
+
+TEST_CASE("Platform source edits invalidate both a ready reservation and its final activation commit", "[unit][editor][platform-open]") {
+    TempProject project;
+    JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 8});
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    ProjectMutationCoordinator mutations(files);
+    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectOpenPreflightService preflight(transactions);
+    RendererAvailabilitySnapshot renderers({{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"});
+    ProjectOpenService service(jobs, files, preflight, mutations, transactions, renderers);
+    auto operation = service.Start({.projectRoot = project.root});
+    REQUIRE(operation.HasValue());
+    const auto terminal = PumpToTerminal(service, operation.Value().Id());
+    REQUIRE(terminal.outcome == ProjectOpenOutcome::ReadyToActivate);
+    REQUIRE(terminal.readySession.has_value());
+    SECTION("Before reservation") {
+        std::ofstream(project.root / PlatformServicesDocumentPaths::Presence, std::ios::binary | std::ios::app) << ' ';
+        CHECK(service.ReserveSession(*terminal.readySession).HasError());
+    }
+    SECTION("After reservation") {
+        auto reservation = service.ReserveSession(*terminal.readySession);
+        REQUIRE(reservation.HasValue());
+        REQUIRE(reservation.Value().Candidate().platformServices != nullptr);
+        std::ofstream(project.root / PlatformServicesDocumentPaths::Stats, std::ios::binary | std::ios::app) << ' ';
+        CHECK(reservation.Value().Commit().HasError());
+    }
+    SECTION("Shutdown revokes activation while retained CPU models stay owned") {
+        auto reservation = service.ReserveSession(*terminal.readySession);
+        REQUIRE(reservation.HasValue());
+        const auto retained = reservation.Value().Candidate().platformServices;
+        REQUIRE(retained != nullptr);
+        service.Shutdown();
+        CHECK(reservation.Value().Commit().HasError());
+        CHECK(retained->Stats().Definitions().empty());
+        CHECK(retained->Configuration().UsesNullProvider());
+    }
 }

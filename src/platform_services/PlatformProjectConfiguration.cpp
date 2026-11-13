@@ -376,6 +376,19 @@ namespace Horo::PlatformServices {
         return fingerprint_;
     }
 
+    /** @copydoc ValidatePlatformProjectConfigurationCandidate */
+    Result<void> ValidatePlatformProjectConfigurationCandidate(const PlatformProjectConfigurationCandidate &candidate,
+                                                               const PlatformProjectConfigurationLimits &limits) {
+        if (!HasValidLimits(limits))
+            return Result<void>::Failure(FieldError(PlatformProjectConfigurationErrors::CapacityExceeded, "limits",
+                                                    "Configured validation limits must be nonzero and within hard engine bounds."));
+        if (auto shape = ValidateCandidateShape(candidate, limits); shape.HasError())
+            return shape;
+        if (candidate.provider.mode == PlatformProviderSelectionMode::Null)
+            return ValidateRequiredServices(candidate.services, nullptr);
+        return Result<void>::Success();
+    }
+
     /** @copydoc BuildPlatformProjectConfiguration */
     Result<PlatformProjectConfiguration> BuildPlatformProjectConfiguration(
         const PlatformProjectConfigurationCandidate &candidate, const std::span<const PlatformProviderModuleContribution> contributions,

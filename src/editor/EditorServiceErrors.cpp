@@ -40,6 +40,15 @@ namespace Horo::Editor {
     }  // namespace SettingsErrors
 
     namespace ProjectCreationErrors {
+        const ErrorCodeDescriptor UnexpectedFailure{
+            .domain = ProjectCreationDomain,
+            .code = ErrorCode{"project_creation.unexpected_failure"},
+            .defaultSeverity = ErrorSeverity::Error,
+            .summary = "Project creation encountered an unexpected host failure.",
+            .remediationHint = "Inspect the publication state and retained diagnostic before retrying.",
+            .retryable = false,
+            .userActionable = true,
+        };
         const ErrorCodeDescriptor DestinationOccupied{
             .domain = ProjectCreationDomain,
             .code = ErrorCode{"project_creation.destination_occupied"},

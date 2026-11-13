@@ -2,6 +2,7 @@
 
 /** @file ProjectSession.h @brief Validated project-session candidate and activation reservation contracts. */
 
+#include "Horo/Application/PlatformServicesProjectSources.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Foundation/Result.h"
 
@@ -24,16 +25,20 @@ namespace Horo::Editor {
         [[nodiscard]] bool operator==(const ProjectSessionCandidateId &) const noexcept = default;
     };
 
-    /** @brief Immutable project data verified before an editor workspace may be constructed. */
+    /** @brief Immutable project data verified before an editor workspace may be constructed.
+     * @details Platform models and all six source witnesses are retained by shared const ownership.
+     * Callers retaining models beyond the activation lease must copy that shared ownership.
+     */
     struct ProjectSessionCandidate {
         ProjectSessionCandidateId id;
         ProjectOpenOperationId sourceOperation;
         std::filesystem::path projectRoot;
         std::string projectName;
         std::string rendererBackend;
-        std::string sourceFingerprint;
         std::vector<std::string> derivedStateRevisions;
         Application::ProjectSurfaceFileSnapshot surfaces; /**< Exact validated catalog retained through activation. */
+        std::shared_ptr<const Application::PlatformServicesProjectSourceSnapshot>
+            platformServices; /**< Complete source/configuration generation, fenced through activation. */
     };
 
     /** @brief Reservation over one ready session; destruction rolls an uncommitted reservation back to ready. */

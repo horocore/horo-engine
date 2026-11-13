@@ -2933,7 +2933,12 @@ namespace Horo::Editor {
             auto packageComposition = std::move(preparedPackages).Value();
             auto *packages = packageComposition.selected;
             ProjectMutationCoordinator mutationCoordinator{durableFiles};
-            ProjectMigrationTransactionService migrationTransactions{durableFiles, wallClock, mutationCoordinator, p.background.jobs};
+            ProjectMigrationTransactionService migrationTransactions{durableFiles,
+                                                                     wallClock,
+                                                                     mutationCoordinator,
+                                                                     p.background.jobs,
+                                                                     {},
+                                                                     {.random = Platform::CreateNativeSecureRandomSource()}};
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
             RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
             const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
@@ -2977,9 +2982,14 @@ namespace Horo::Editor {
             AssetRegistryProjectOpenContributor assetRegistryContributor{assetRegistry, collisionInventory};
             SceneScopeProjectOpenContributor sceneScopeContributor{previewProjectRoot, preview.physicsMode};
             std::array<IProjectOpenDerivedStateContributor *, 2> projectOpenContributors{&sceneScopeContributor, &assetRegistryContributor};
-            ProjectOpenService projectOpenService{p.background.jobs,      durableFiles,          projectOpenPreflight,
-                                                  mutationCoordinator,    migrationTransactions, p.rendererAvailability,
-                                                  projectOpenContributors};
+            ProjectOpenService projectOpenService{p.background.jobs,
+                                                  durableFiles,
+                                                  projectOpenPreflight,
+                                                  mutationCoordinator,
+                                                  migrationTransactions,
+                                                  p.rendererAvailability,
+                                                  projectOpenContributors,
+                                                  {.profile = PlatformServices::PlatformServicesHostProfile::InteractiveDevelopment}};
             ScreenRegistry screenRegistry;
             RegisterWelcomeScreen(screenRegistry);
             RegisterProjectCreationScreen(screenRegistry);
@@ -3586,7 +3596,8 @@ namespace Horo::Editor {
         auto shaderReload = std::move(createdReload).Value();
         if (shaderReload)
             LOG_INFO("editor.shader_reload", "Development commands: Ctrl+Alt+R reload; Ctrl+Alt+C cancel.");
-        ProjectCreationService projectCreationService{jobSystem, engineEvents};
+        ProjectCreationService projectCreationService{jobSystem, engineEvents, Platform::CreateNativeSecureRandomSource(),
+                                                      std::make_shared<NativeDurableFileSystem>()};
         EditorDataBus editorEvents;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", launch.startup.settings.languageTag.c_str());
         LocalizationService localization{LocaleTag{"en-US"}};

@@ -1,19 +1,96 @@
+#include "../../support/NativePublicationFiles.h"
+#include "Horo/Application/PlatformServicesAuthoring.h"
+#include "Horo/Application/PlatformServicesDefinitionCodec.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Security/SecureMemory.h"
+#include "Horo/Security/SecurityErrors.h"
 
+#include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
 namespace {
+    /** @brief Injects failures around genuine durable preparation and irreversible native publication. */
+    class CreationFiles final : public Horo::TestSupport::NativePublicationFiles {
+    public:
+        bool failWrite{};
+        bool failSync{};
+        bool failBeforeCommit{};
+        bool failAfterCommit{};
+        bool throwAfterCommit{};
+        bool throwDuringWrite{};
+        bool throwBeforeCommit{};
+        bool allocationAfterCommit{};
+        bool unknownAfterCommit{};
+
+        Horo::Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
+            if (throwDuringWrite)
+                throw std::runtime_error("injected preparation exception");
+            if (failWrite)
+                return Failure();
+            return native.WriteDurable(path, bytes);
+        }
+
+        Horo::Result<void> SyncDirectory(const std::filesystem::path &path) override {
+            if (failSync)
+                return Failure();
+            return native.SyncDirectory(path);
+        }
+
+        Horo::Result<void> PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                                            Horo::AtomicFileReplacementReceipt &receipt) override {
+            if (throwBeforeCommit)
+                throw std::runtime_error("injected publication exception");
+            if (failBeforeCommit)
+                return Failure();
+            auto published = native.PublishDirectoryNoReplaceTracked(prepared, destination, receipt);
+            if (published.HasError())
+                return published;
+            if (throwAfterCommit)
+                throw std::runtime_error("injected post-commit failure");
+            if (allocationAfterCommit)
+                throw std::bad_alloc{};
+            if (unknownAfterCommit)
+                throw 41;
+            if (failAfterCommit)
+                return Failure();
+            return published;
+        }
+
+    private:
+        static Horo::Result<void> Failure() {
+            return Horo::Result<void>::Failure(Horo::MakeError(Horo::SecurityErrors::EntropyUnavailable, "injected filesystem failure"));
+        }
+    };
+
+    /** @brief Supplies deterministic nonzero entropy and can simulate zero/failure without native discovery. */
+    class CreationRandom final : public Horo::Security::SecureRandomSource {
+    public:
+        bool fail{};
+        bool zero{};
+        std::uint32_t calls{};
+
+        Horo::Result<void> Fill(const std::span<std::byte> destination) override {
+            ++calls;
+            std::ranges::fill(destination, zero ? std::byte{} : std::byte{0xA5});
+            if (fail)
+                return Horo::Result<void>::Failure(Horo::MakeError(Horo::SecurityErrors::EntropyUnavailable));
+            return Horo::Result<void>::Success();
+        }
+    };
+
     class TemporaryDirectory {
     public:
         TemporaryDirectory() {
@@ -79,11 +156,12 @@ namespace {
         return {};
     }
 
-    TEST_CASE("Creates Portable Project In An Atomic Promotion", "[unit][editor]") {
+    TEST_CASE("Creates Portable Project In An Atomic Promotion", "[unit][editor][platform-creation]") {
         TemporaryDirectory temporary;
         Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
         Horo::EngineDataBus bus;
-        Horo::Editor::ProjectCreationService service{jobs, bus};
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(),
+                                                     std::make_shared<Horo::NativeDurableFileSystem>()};
         const auto root = temporary.Path() / "MyGame";
 
         const auto started = service.StartCreate(ValidRequest(root));
@@ -116,6 +194,33 @@ namespace {
         const auto compatibility = Horo::Application::InspectProjectCompatibility(root);
         REQUIRE((compatibility.status == Horo::Application::ProjectCompatibilityStatus::Current));
         REQUIRE((compatibility.metadata.has_value()));
+        const auto source = Horo::Application::DecodeProjectSourceDocument(project);
+        REQUIRE(source.HasValue());
+        const auto salt = Horo::Application::ResolveProjectPlatformServicesSalt(source.Value());
+        REQUIRE(salt.HasValue());
+        const auto ledgerBytes = Read(root / Horo::Application::PlatformServicesDocumentPaths::Ledger);
+        const auto ids = Horo::Application::DecodePlatformServicesLedger(ledgerBytes, source.Value().metadata.projectId, salt.Value());
+        REQUIRE(ids.HasValue());
+        CHECK(ids.Value().Entries().empty());
+        CHECK(ledgerBytes.find("psid1:") == std::string::npos);
+        const auto achievements =
+            Horo::Application::DecodePlatformAchievementDefinitions(Read(root /
+                                                                         Horo::Application::PlatformServicesDocumentPaths::Achievements),
+                                                                    ids.Value());
+        const auto stats =
+            Horo::Application::DecodePlatformStatDefinitions(Read(root / Horo::Application::PlatformServicesDocumentPaths::Stats),
+                                                             ids.Value());
+        REQUIRE(achievements.HasValue());
+        REQUIRE(stats.HasValue());
+        REQUIRE(
+            Horo::Application::DecodePlatformLeaderboardDefinitions(Read(root /
+                                                                         Horo::Application::PlatformServicesDocumentPaths::Leaderboards),
+                                                                    ids.Value(), stats.Value())
+                .HasValue());
+        REQUIRE(
+            Horo::Application::DecodePlatformPresenceDefinitions(Read(root / Horo::Application::PlatformServicesDocumentPaths::Presence),
+                                                                 ids.Value())
+                .HasValue());
         const auto collision = Horo::Application::LoadProjectCollisionSettings(root, compatibility.metadata->projectId);
         REQUIRE(collision.HasValue());
         CHECK(collision.Value().settings->Input().revision == 1);
@@ -142,7 +247,8 @@ namespace {
         TemporaryDirectory temporary;
         Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
         Horo::EngineDataBus bus;
-        Horo::Editor::ProjectCreationService service{jobs, bus};
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(),
+                                                     std::make_shared<Horo::NativeDurableFileSystem>()};
         const auto root = temporary.Path() / "EmptyGame";
         auto request = ValidRequest(root);
         request.templateId = "empty";
@@ -163,7 +269,8 @@ namespace {
         TemporaryDirectory temporary;
         Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
         Horo::EngineDataBus bus;
-        Horo::Editor::ProjectCreationService service{jobs, bus};
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(),
+                                                     std::make_shared<Horo::NativeDurableFileSystem>()};
         auto request = ValidRequest(temporary.Path() / "IncoherentGame");
         request.includeStarterContent = false;
 
@@ -180,7 +287,8 @@ namespace {
         std::ofstream(root / "keep.txt") << "keep";
         Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
         Horo::EngineDataBus bus;
-        Horo::Editor::ProjectCreationService service{jobs, bus};
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(),
+                                                     std::make_shared<Horo::NativeDurableFileSystem>()};
 
         const auto started = service.StartCreate(ValidRequest(root));
         REQUIRE((started.HasError()));
@@ -194,7 +302,8 @@ namespace {
         TemporaryDirectory temporary;
         Horo::JobSystem jobs{{.workerCount = 0, .maxQueuedJobs = 4}};
         Horo::EngineDataBus bus;
-        Horo::Editor::ProjectCreationService service{jobs, bus};
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(),
+                                                     std::make_shared<Horo::NativeDurableFileSystem>()};
         std::atomic<int> createdEvents{0};
         const auto subscription = bus.Subscribe<Horo::Editor::ProjectCreatedEvent>([&](const auto &) {
             ++createdEvents;
@@ -215,11 +324,51 @@ namespace {
         jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
     }
 
+    TEST_CASE("Shutdown revokes queued creation without leaving a permanent queued operation", "[unit][editor][platform-creation]") {
+        TemporaryDirectory temporary;
+        Horo::JobSystem jobs{{.workerCount = 0, .maxQueuedJobs = 4}};
+        Horo::EngineDataBus bus;
+        auto random = std::make_shared<CreationRandom>();
+        Horo::Editor::ProjectCreationService service{jobs, bus, random, std::make_shared<Horo::NativeDurableFileSystem>()};
+        std::atomic<int> created{};
+        std::atomic<int> changed{};
+        const auto createdSubscription = bus.Subscribe<Horo::Editor::ProjectCreatedEvent>([&](const auto &) {
+            ++created;
+        });
+        const auto revisionSubscription = bus.Subscribe<Horo::Editor::ProjectCreationRevisionChangedEvent>([&](const auto &) {
+            ++changed;
+        });
+        const auto root = temporary.Path() / "ShutdownQueued";
+        const auto accepted = service.StartCreate(ValidRequest(root));
+        REQUIRE(accepted.HasValue());
+        const auto queued = service.Query(accepted.Value().id);
+        REQUIRE(queued.has_value());
+        REQUIRE(queued->state == Horo::Editor::ProjectCreationOperationState::Queued);
+        jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
+        const auto terminal = service.Query(accepted.Value().id);
+        REQUIRE(terminal.has_value());
+        CHECK(terminal->state == Horo::Editor::ProjectCreationOperationState::Cancelled);
+        CHECK(terminal->publication == Horo::Editor::ProjectCreationPublicationState::Unpublished);
+        REQUIRE(terminal->error.has_value());
+        REQUIRE(terminal->error->cause.has_value());
+        CHECK(terminal->error->cause->code.Value() == "job.cancelled");
+        const auto repeated = service.Query(accepted.Value().id);
+        REQUIRE(repeated.has_value());
+        CHECK(repeated->state == Horo::Editor::ProjectCreationOperationState::Cancelled);
+        CHECK(random->calls == 0);
+        CHECK(std::filesystem::is_empty(temporary.Path()));
+        CHECK(changed.load() == 0);
+        service.PumpMainThread();
+        CHECK(changed.load() == 1);
+        CHECK(created.load() == 0);
+    }
+
     TEST_CASE("Publishes Committed Events Only After Main Thread Dispatch", "[unit][editor]") {
         TemporaryDirectory temporary;
         Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
         Horo::EngineDataBus bus;
-        Horo::Editor::ProjectCreationService service{jobs, bus};
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(),
+                                                     std::make_shared<Horo::NativeDurableFileSystem>()};
         std::atomic<int> createdEvents{0};
         std::atomic<int> revisionEvents{0};
         std::atomic<int> foreignThreadEvents{0};
@@ -249,5 +398,181 @@ namespace {
         REQUIRE((createdEvents.load() == 1));
         REQUIRE((revisionEvents.load() == 1));
         REQUIRE((foreignThreadEvents.load() == 0));
+    }
+
+    TEST_CASE("Identity preparation failures publish no project or staging directory", "[unit][editor][platform-creation]") {
+        TemporaryDirectory temporary;
+        Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+        Horo::EngineDataBus bus;
+        auto random = std::make_shared<CreationRandom>();
+        std::shared_ptr<Horo::Security::SecureRandomSource> injected = random;
+        std::string expected{Horo::SecurityErrors::EntropyUnavailable.code.Value()};
+        SECTION("No injected capability") {
+            injected.reset();
+        }
+        SECTION("Entropy failure") {
+            random->fail = true;
+        }
+        SECTION("Zero salt") {
+            random->zero = true;
+            expected = Horo::PlatformServices::StableIdErrors::InvalidSalt.code.Value();
+        }
+        Horo::Editor::ProjectCreationService service{jobs, bus, injected, std::make_shared<Horo::NativeDurableFileSystem>()};
+        const auto destination = temporary.Path() / "Unpublished";
+        const auto started = service.StartCreate(ValidRequest(destination));
+        REQUIRE(started.HasValue());
+        const auto terminal = WaitForTerminal(service, started.Value().id);
+        REQUIRE(terminal.state == Horo::Editor::ProjectCreationOperationState::Failed);
+        REQUIRE(terminal.error.has_value());
+        CHECK(terminal.error->code == Horo::Editor::ProjectCreationErrorCode::IdentityPreparationFailed);
+        REQUIRE(terminal.error->cause.has_value());
+        CHECK(terminal.error->cause->code.Value() == expected);
+        CHECK(random->calls == (injected ? 1U : 0U));
+        CHECK_FALSE(std::filesystem::exists(destination));
+        CHECK(std::filesystem::is_empty(temporary.Path()));
+    }
+
+    TEST_CASE("Creation rejects starter paths that could replace identity authority", "[unit][editor][platform-creation]") {
+        TemporaryDirectory temporary;
+        Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+        Horo::EngineDataBus bus;
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(),
+                                                     std::make_shared<Horo::NativeDurableFileSystem>()};
+        for (const auto &scene : {".horo/project.json", ".HORO/platform_services.json", "Assets/../.horo/project.json"}) {
+            auto request = ValidRequest(temporary.Path() / "MyGame");
+            request.defaultScene = scene;
+            CHECK(service.StartCreate(std::move(request)).HasError());
+        }
+        CHECK(std::filesystem::is_empty(temporary.Path()));
+    }
+
+    TEST_CASE("Creation preserves portable UTF-8 starter paths on the native filesystem", "[unit][editor][platform-creation]") {
+        TemporaryDirectory temporary;
+        Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+        Horo::EngineDataBus bus;
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(),
+                                                     std::make_shared<Horo::NativeDurableFileSystem>()};
+        auto request = ValidRequest(temporary.Path() / std::filesystem::path{u8"project ü 图"});
+        const std::u8string scene{u8"Assets/Scenes/başlangıç 图.horo"};
+        request.defaultScene.assign(scene.begin(), scene.end());
+        const auto root = request.projectRoot;
+        const auto started = service.StartCreate(request);
+        REQUIRE(started.HasValue());
+        const auto terminal = WaitForTerminal(service, started.Value().id);
+        REQUIRE(terminal.state == Horo::Editor::ProjectCreationOperationState::Succeeded);
+        CHECK(terminal.publication == Horo::Editor::ProjectCreationPublicationState::Durable);
+        CHECK(std::filesystem::is_regular_file(root / std::filesystem::path{scene}));
+        CHECK(Read(root / ".horo/project.json").find(request.defaultScene) != std::string::npos);
+    }
+
+    TEST_CASE("Creation retains foreign staging and cleans only its own unpublished tree", "[unit][editor][platform-creation]") {
+        TemporaryDirectory temporary;
+        Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+        Horo::EngineDataBus bus;
+        auto files = std::make_shared<CreationFiles>();
+        const auto destination = temporary.Path() / "MyGame";
+        const auto staging = temporary.Path() / ".MyGame.horo-create-1";
+        bool foreign{};
+        SECTION("Foreign staging survives") {
+            foreign = true;
+            REQUIRE(std::filesystem::create_directory(staging));
+            std::ofstream(staging / "sentinel") << "foreign";
+        }
+        SECTION("Durable write fails") {
+            files->failWrite = true;
+        }
+        SECTION("Directory sync fails") {
+            files->failSync = true;
+        }
+        SECTION("Publication fails before commit") {
+            files->failBeforeCommit = true;
+        }
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(), files};
+        const auto started = service.StartCreate(ValidRequest(destination));
+        REQUIRE(started.HasValue());
+        const auto terminal = WaitForTerminal(service, started.Value().id);
+        CHECK(terminal.state == Horo::Editor::ProjectCreationOperationState::Failed);
+        CHECK(terminal.publication == Horo::Editor::ProjectCreationPublicationState::Unpublished);
+        REQUIRE(terminal.error.has_value());
+        CHECK_FALSE(std::filesystem::exists(destination));
+        if (foreign)
+            CHECK(Read(staging / "sentinel") == "foreign");
+        else {
+            CHECK_FALSE(std::filesystem::exists(staging));
+            REQUIRE(terminal.error->cause.has_value());
+            CHECK(terminal.error->cause->message == "injected filesystem failure");
+        }
+    }
+
+    TEST_CASE("Unexpected creation exceptions leave a terminal unpublished operation and clean owned staging",
+              "[unit][editor][platform-creation]") {
+        TemporaryDirectory temporary;
+        Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+        Horo::EngineDataBus bus;
+        auto files = std::make_shared<CreationFiles>();
+        SECTION("Preparation exception") {
+            files->throwDuringWrite = true;
+        }
+        SECTION("Publication exception before commit") {
+            files->throwBeforeCommit = true;
+        }
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(), files};
+        const auto root = temporary.Path() / "ExceptionProject";
+        const auto started = service.StartCreate(ValidRequest(root));
+        REQUIRE(started.HasValue());
+        const auto terminal = WaitForTerminal(service, started.Value().id);
+        CHECK(terminal.state == Horo::Editor::ProjectCreationOperationState::Failed);
+        CHECK(terminal.publication == Horo::Editor::ProjectCreationPublicationState::Unpublished);
+        REQUIRE(terminal.error.has_value());
+        CHECK(terminal.error->code == Horo::Editor::ProjectCreationErrorCode::UnexpectedFailure);
+        REQUIRE(terminal.error->cause.has_value());
+        CHECK(terminal.error->cause->code.Value() == "project_creation.unexpected_failure");
+        CHECK_FALSE(std::filesystem::exists(root));
+        CHECK_FALSE(std::filesystem::exists(temporary.Path() / ".ExceptionProject.horo-create-1"));
+    }
+
+    TEST_CASE("Post-commit creation failure retains the whole project for reconciliation", "[unit][editor][platform-creation]") {
+        TemporaryDirectory temporary;
+        Horo::JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+        Horo::EngineDataBus bus;
+        auto files = std::make_shared<CreationFiles>();
+        SECTION("Typed post-commit failure") {
+            files->failAfterCommit = true;
+        }
+        SECTION("Throw after commit") {
+            files->throwAfterCommit = true;
+        }
+        SECTION("Allocation exception after commit") {
+            files->allocationAfterCommit = true;
+        }
+        SECTION("Nonstandard exception after commit") {
+            files->unknownAfterCommit = true;
+        }
+        std::atomic<int> createdEvents{};
+        const auto subscription = bus.Subscribe<Horo::Editor::ProjectCreatedEvent>([&](const auto &) {
+            ++createdEvents;
+        });
+        Horo::Editor::ProjectCreationService service{jobs, bus, std::make_shared<CreationRandom>(), files};
+        const auto destination = temporary.Path() / std::filesystem::path{u8"Project ü 图"};
+        const auto started = service.StartCreate(ValidRequest(destination));
+        REQUIRE(started.HasValue());
+        const auto terminal = WaitForTerminal(service, started.Value().id);
+        CHECK(terminal.state == Horo::Editor::ProjectCreationOperationState::Failed);
+        CHECK(terminal.publication == Horo::Editor::ProjectCreationPublicationState::ReconciliationRequired);
+        REQUIRE(terminal.error.has_value());
+        CHECK(terminal.error->code == Horo::Editor::ProjectCreationErrorCode::DurabilityUnconfirmed);
+        REQUIRE(terminal.error->cause.has_value());
+        CHECK(terminal.error->cause->code.Value() ==
+              (files->failAfterCommit ? "security.entropy_unavailable" : "project_creation.unexpected_failure"));
+        CHECK(std::filesystem::is_regular_file(destination / ".horo/project.json"));
+        for (const auto path :
+             {Horo::Application::PlatformServicesDocumentPaths::Ledger, Horo::Application::PlatformServicesDocumentPaths::Achievements,
+              Horo::Application::PlatformServicesDocumentPaths::Stats, Horo::Application::PlatformServicesDocumentPaths::Leaderboards,
+              Horo::Application::PlatformServicesDocumentPaths::Presence})
+            CHECK(std::filesystem::is_regular_file(destination / path));
+        CHECK(service.StartCreate(ValidRequest(destination)).HasError());
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+        service.PumpMainThread();
+        CHECK(createdEvents.load() == 0);
     }
 }  // namespace

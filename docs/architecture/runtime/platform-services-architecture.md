@@ -1270,6 +1270,27 @@ validation and cancellation checks, including one after final fingerprinting, pa
 the host must recheck cancellation and source revisions before atomically publishing
 both streams or discarding both.
 
+The existing fingerprint preimage is also the canonical paired publication unit:
+big-endian u32 domain-text length, `horo.platform-services.cook-generation.v1`,
+u32 neutral-stream length and bytes, then u32 mapping-stream length and bytes.
+Its SHA-256 is the unchanged generation fingerprint. The bounded pair codec
+admits at most 64 MiB including framing and requires the caller's expected digest
+when decoding. Framing/digest admission does not replace runtime semantic or
+provider-trust validation. No native values are added to either stream.
+
+The Project authoring application owns the synchronous paired publisher. It
+accepts only an admitted Cook-profile source snapshot and explicit durable writer
+authority, expected output identity and native destination lease. It publishes at
+`build/cooked/platform-services/current.pls-cook` through the existing tracked
+Assets single-file publication primitive. After private staging it rechecks all
+six source identities, the host's exact mapping/lifecycle witness and cancellation
+immediately before native replacement. Exact providers require that witness;
+source text cannot manufacture it. Pre-commit failure preserves the prior pair;
+post-commit durability uncertainty retains the new complete pair and returns its
+reconciliation receipt. Cooperating source writers remain serialized by their
+existing mutation/lease contract; byte revalidation is not a transaction against
+noncooperating filesystem mutation.
+
 Runtime loads bounded sorted tables with the expected fingerprint and performs only
 typed numeric lookup. It never hashes strings, reads editor aliases or asks a provider
 to allocate identity. Registry generations remain pinned by admitted requests and

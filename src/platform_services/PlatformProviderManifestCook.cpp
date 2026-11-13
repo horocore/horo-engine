@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <optional>
 #include <ranges>
 #include <string_view>
 #include <utility>
@@ -17,6 +18,7 @@ namespace Horo::PlatformServices {
 
         constexpr std::size_t MaximumMappings = 16384;
         constexpr std::size_t MaximumSourceBytes = 256;
+        constexpr std::string_view GenerationDomain = "horo.platform-services.cook-generation.v1";
 
         class Writer final {
         public:
@@ -58,7 +60,33 @@ namespace Horo::PlatformServices {
         };
 
         [[nodiscard]] bool IsCancelled(const PlatformProviderManifestCookInput &input) noexcept {
-            return input.cancellation.stop_requested();
+            return input.cancellation.stop_requested() || input.hostCancellation.IsCancellationRequested();
+        }
+
+        /** @brief Shares the unchanged v1 fingerprint preimage between cooking and durable pair encoding. */
+        std::vector<std::byte> GenerationBytes(const PlatformProviderManifestCookOutput &output) {
+            Writer binding;
+            binding.Text(GenerationDomain);
+            binding.U32(static_cast<std::uint32_t>(output.neutralBytes.size()));
+            binding.Bytes(output.neutralBytes);
+            binding.U32(static_cast<std::uint32_t>(output.mappingBytes.size()));
+            binding.Bytes(output.mappingBytes);
+            return std::move(binding).Take();
+        }
+
+        /** @brief Consumes exactly one bounded big-endian length-prefixed field without allocating. */
+        std::optional<std::span<const std::byte>> Field(std::span<const std::byte> &remaining) {
+            if (remaining.size() < 4)
+                return {};
+            std::uint32_t size{};
+            for (const auto byte : remaining.first(4))
+                size = (size << 8U) | std::to_integer<std::uint32_t>(byte);
+            remaining = remaining.subspan(4);
+            if (size > remaining.size())
+                return {};
+            const auto value = remaining.first(size);
+            remaining = remaining.subspan(size);
+            return value;
         }
 
         [[nodiscard]] bool IsCoherent(const PlatformProviderManifestCookInput &input) noexcept {
@@ -327,16 +355,43 @@ namespace Horo::PlatformServices {
         if (IsCancelled(input))
             return Result<Output>::Failure(MakeError(PlatformProviderManifestCookErrors::Cancelled));
         Output output{.neutralBytes = std::move(neutral).Take(), .mappingBytes = std::move(mappings).Take()};
-        Writer binding;
-        binding.Text("horo.platform-services.cook-generation.v1");
-        binding.U32(static_cast<std::uint32_t>(output.neutralBytes.size()));
-        binding.Bytes(output.neutralBytes);
-        binding.U32(static_cast<std::uint32_t>(output.mappingBytes.size()));
-        binding.Bytes(output.mappingBytes);
-        const auto bindingBytes = std::move(binding).Take();
+        const auto bindingBytes = GenerationBytes(output);
         output.generationFingerprint = ComputeSha256(bindingBytes);
         if (IsCancelled(input))
             return Result<Output>::Failure(MakeError(PlatformProviderManifestCookErrors::Cancelled));
         return Result<Output>::Success(std::move(output));
+    }
+
+    /** @copydoc EncodePlatformProviderManifestCookGeneration */
+    Result<std::vector<std::byte>> EncodePlatformProviderManifestCookGeneration(const PlatformProviderManifestCookOutput &output) {
+        using Return = Result<std::vector<std::byte>>;
+        constexpr auto maximumPayload = PlatformProviderManifestCookGenerationMaximumBytes - GenerationDomain.size() - 12U;
+        if (output.neutralBytes.empty() || output.mappingBytes.empty() || output.neutralBytes.size() > maximumPayload ||
+            output.mappingBytes.size() > maximumPayload - output.neutralBytes.size())
+            return Return::Failure(MakeError(PlatformProviderManifestCookErrors::InvalidInput));
+        auto bytes = GenerationBytes(output);
+        if (ComputeSha256(bytes) != output.generationFingerprint)
+            return Return::Failure(MakeError(PlatformProviderManifestCookErrors::StaleGeneration));
+        return Return::Success(std::move(bytes));
+    }
+
+    /** @copydoc DecodePlatformProviderManifestCookGeneration */
+    Result<PlatformProviderManifestCookOutput> DecodePlatformProviderManifestCookGeneration(const std::span<const std::byte> bytes,
+                                                                                            const Sha256Digest &expectedFingerprint) {
+        using Return = Result<PlatformProviderManifestCookOutput>;
+        if (bytes.size() > PlatformProviderManifestCookGenerationMaximumBytes)
+            return Return::Failure(MakeError(PlatformProviderManifestCookErrors::InvalidInput));
+        auto remaining = bytes;
+        const auto domain = Field(remaining);
+        const auto neutral = Field(remaining);
+        const auto mappings = Field(remaining);
+        if (!domain || !neutral || !mappings || neutral->empty() || mappings->empty() || !remaining.empty() ||
+            !std::ranges::equal(*domain, std::as_bytes(std::span{GenerationDomain.data(), GenerationDomain.size()})))
+            return Return::Failure(MakeError(PlatformProviderManifestCookErrors::InvalidInput));
+        if (ComputeSha256(bytes) != expectedFingerprint)
+            return Return::Failure(MakeError(PlatformProviderManifestCookErrors::StaleGeneration));
+        return Return::Success({.neutralBytes = {neutral->begin(), neutral->end()},
+                                .mappingBytes = {mappings->begin(), mappings->end()},
+                                .generationFingerprint = expectedFingerprint});
     }
 }  // namespace Horo::PlatformServices

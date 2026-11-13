@@ -1,4 +1,5 @@
 #include "Horo/Application/PlatformServicesAuthoring.h"
+#include "Horo/Application/PlatformServicesDefinitionCodec.h"
 #include "Horo/PlatformServices/PlatformProviderManifestCook.h"
 
 #include <algorithm>
@@ -67,8 +68,16 @@ namespace Horo::Application {
                      {{"renderBackend", "null"}, {"platformServices", nlohmann::json::parse(EncodePolicy(configuration.Value()))}}}};
         }
 
-        /** @brief Composes real semantic registries from a captured ledger before the common Null cook. */
-        PlatformProviderManifestCookOutput Cook(const PlatformStableIdRegistry &ids, const PlatformProjectConfiguration &configuration) {
+        /** @brief Complete semantic source fixture used by codec and cook regressions. */
+        struct Definitions {
+            AchievementDefinitionRegistry achievements;
+            StatDefinitionRegistry stats;
+            LeaderboardDefinitionRegistry leaderboards;
+            PresenceDefinitionRegistry presence;
+        };
+
+        /** @brief Builds semantic fixtures once through their existing owning validators. */
+        Definitions Define(const PlatformStableIdRegistry &ids) {
             const auto stat = ids.ResolveStat("active.key").Value();
             const auto stats = BuildStatDefinitionRegistry(ids, {.stableIdRegistryFingerprint = ids.Fingerprint(),
                                                                  .definitions = {{.id = stat,
@@ -106,6 +115,36 @@ namespace Horo::Application {
                                                                        .maximumDetailUtf8Bytes = 0,
                                                                        .localizationKey = "presence.active"}}});
             REQUIRE(presence.HasValue());
+            return {achievements.Value(), stats.Value(), leaderboards.Value(), presence.Value()};
+        }
+
+        /** @brief Reloads all semantic source documents before cooking, retaining exact semantic fingerprints. */
+        PlatformProviderManifestCookOutput Cook(const PlatformStableIdRegistry &ids, const PlatformProjectConfiguration &configuration) {
+            const auto original = Define(ids);
+            const auto achievementBytes = EncodePlatformAchievementDefinitions(original.achievements);
+            const auto statBytes = EncodePlatformStatDefinitions(original.stats);
+            const auto leaderboardBytes = EncodePlatformLeaderboardDefinitions(original.leaderboards);
+            const auto presenceBytes = EncodePlatformPresenceDefinitions(original.presence);
+            REQUIRE(achievementBytes.HasValue());
+            REQUIRE(statBytes.HasValue());
+            REQUIRE(leaderboardBytes.HasValue());
+            REQUIRE(presenceBytes.HasValue());
+            const auto achievements = DecodePlatformAchievementDefinitions(achievementBytes.Value(), ids);
+            const auto stats = DecodePlatformStatDefinitions(statBytes.Value(), ids);
+            REQUIRE(achievements.HasValue());
+            REQUIRE(stats.HasValue());
+            const auto leaderboards = DecodePlatformLeaderboardDefinitions(leaderboardBytes.Value(), ids, stats.Value());
+            const auto presence = DecodePlatformPresenceDefinitions(presenceBytes.Value(), ids);
+            REQUIRE(leaderboards.HasValue());
+            REQUIRE(presence.HasValue());
+            CHECK(achievements.Value().Fingerprint() == original.achievements.Fingerprint());
+            CHECK(stats.Value().Fingerprint() == original.stats.Fingerprint());
+            CHECK(leaderboards.Value().Fingerprint() == original.leaderboards.Fingerprint());
+            CHECK(presence.Value().Fingerprint() == original.presence.Fingerprint());
+            CHECK(EncodePlatformAchievementDefinitions(achievements.Value()).Value() == achievementBytes.Value());
+            CHECK(EncodePlatformStatDefinitions(stats.Value()).Value() == statBytes.Value());
+            CHECK(EncodePlatformLeaderboardDefinitions(leaderboards.Value()).Value() == leaderboardBytes.Value());
+            CHECK(EncodePlatformPresenceDefinitions(presence.Value()).Value() == presenceBytes.Value());
             auto cooked = CookPlatformProviderManifest({.stableIds = ids,
                                                         .achievements = achievements.Value(),
                                                         .leaderboards = leaderboards.Value(),
@@ -116,6 +155,20 @@ namespace Horo::Application {
             return std::move(cooked).Value();
         }
     }  // namespace
+
+    TEST_CASE("Canonical root capture fingerprints exact bytes rather than authored fingerprint fields", "[platform-authoring]") {
+        auto root = Root();
+        root["sourceFingerprint"] = "not-an-authority";
+        const auto bytes = root.dump();
+        const auto first = DecodeProjectSourceDocument(bytes);
+        const auto reformatted = DecodeProjectSourceDocument(bytes + " ");
+        REQUIRE(first.HasValue());
+        REQUIRE(reformatted.HasValue());
+        REQUIRE(first.Value().sourceFingerprint.has_value());
+        CHECK(*first.Value().sourceFingerprint == ComputeSha256(std::as_bytes(std::span{bytes.data(), bytes.size()})));
+        CHECK(first.Value().sourceFingerprint != reformatted.Value().sourceFingerprint);
+        CHECK(first.Value().metadata.projectId == reformatted.Value().metadata.projectId);
+    }
 
     TEST_CASE("Project ledger codec produces the same complete bytes after reordering and clean reload", "[platform-authoring]") {
         auto candidate = Candidate();
@@ -418,5 +471,194 @@ namespace Horo::Application {
         CHECK(originalIds.Value().Fingerprint() != incrementalIds.Value().Fingerprint());
         CHECK(originalIds.Value().ResolveAchievement("active.key").Value() == cleanIds.Value().ResolveAchievement("active.key").Value());
         CheckError(cleanIds.Value().ResolveAchievement("retired.key"), StableIdErrors::Tombstoned);
+    }
+
+    TEST_CASE("Definition documents reject coercion and preserve typed semantic failures", "[platform-authoring]") {
+        const auto ids = BuildPlatformStableIdRegistry(Candidate()).Value();
+        const auto definitions = Define(ids);
+        auto root = nlohmann::json::parse(EncodePlatformStatDefinitions(definitions.stats).Value());
+        SECTION("Duplicate members") {
+            auto bytes = root.dump();
+            bytes.insert(1, "\"schemaVersion\":1,");
+            CheckError(DecodePlatformStatDefinitions(bytes, ids), PlatformDefinitionErrors::InvalidDefinition);
+        }
+        SECTION("Missing field") {
+            root["definitions"][0].erase("hidden");
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::InvalidDefinition);
+        }
+        SECTION("Private provider field") {
+            root["definitions"][0]["providerNativeName"] = "private-value-must-not-escape";
+            const auto result = DecodePlatformStatDefinitions(root.dump(), ids);
+            CheckError(result, PlatformDefinitionErrors::InvalidDefinition);
+            for (const auto &diagnostic : result.ErrorValue().diagnostics)
+                CHECK(diagnostic.message.find("private-value") == std::string::npos);
+        }
+        SECTION("Boolean coercion") {
+            root["definitions"][0]["hidden"] = 0;
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::InvalidDefinition);
+        }
+        SECTION("Fractional integer") {
+            root["definitions"][0]["range"]["maximum"] = 100.0;
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::InvalidDefinition);
+        }
+        SECTION("Unsigned overflow") {
+            root["definitions"][0]["range"]["maximum"] = UINT64_MAX;
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::InvalidDefinition);
+        }
+        SECTION("Signed endpoint boundaries remain exact") {
+            root["definitions"][0]["range"] = {{"minimum", INT64_MIN}, {"maximum", INT64_MAX}};
+            const auto decoded = DecodePlatformStatDefinitions(root.dump(), ids);
+            REQUIRE(decoded.HasValue());
+            CHECK(decoded.Value().Definitions()[0].range.minimum == INT64_MIN);
+            CHECK(decoded.Value().Definitions()[0].range.maximum == INT64_MAX);
+        }
+        SECTION("Unknown enum value") {
+            root["definitions"][0]["mutation"] = 4;
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::InvalidDefinition);
+        }
+        SECTION("Malformed UTF-8") {
+            auto bytes = root.dump();
+            bytes.insert(bytes.find("stat.active"), 1, static_cast<char>(0xFF));
+            CheckError(DecodePlatformStatDefinitions(bytes, ids), PlatformDefinitionErrors::InvalidDefinition);
+        }
+        SECTION("Deep nesting") {
+            root["definitions"][0]["range"]["minimum"] = nlohmann::json::parse("[[[[[[[[[[0]]]]]]]]]]");
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::InvalidDefinition);
+        }
+        SECTION("Capacity limits retain typed failure") {
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids, {.maximumDefinitions = 0}),
+                       PlatformDefinitionErrors::CapacityExceeded);
+        }
+        SECTION("Unsupported schema retains validator error") {
+            root["schemaVersion"] = 2;
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::UnsupportedVersion);
+        }
+        SECTION("Foreign owner") {
+            root["projectId"] = "project.foreign";
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::StaleIdentityRegistry);
+        }
+        SECTION("Stale ledger generation") {
+            root["stableIdRegistryFingerprint"] = FormatSha256({});
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::StaleIdentityRegistry);
+        }
+        SECTION("Wrong identity kind") {
+            root["definitions"][0]["id"] = FormatPlatformServiceStableId({ids.ResolveAchievement("active.key").Value().value});
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::UnknownIdentity);
+        }
+        SECTION("Tombstone identity") {
+            const auto retired = DerivePlatformServiceStableId(Candidate().salt, PlatformServiceIdKind::Stat, "retired.key").Value();
+            root["definitions"][0]["id"] = FormatPlatformServiceStableId(retired);
+            CHECK(DecodePlatformStatDefinitions(root.dump(), ids).HasError());
+        }
+        SECTION("Missing active definition") {
+            root["definitions"] = nlohmann::json::array();
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::IncompleteRegistry);
+        }
+        SECTION("Duplicate definition") {
+            root["definitions"].push_back(root["definitions"][0]);
+            CheckError(DecodePlatformStatDefinitions(root.dump(), ids), PlatformDefinitionErrors::DuplicateDefinition);
+        }
+        SECTION("Document byte bound") {
+            CheckError(DecodePlatformStatDefinitions(std::string(4U * 1024U * 1024U + 1, ' '), ids),
+                       PlatformDefinitionErrors::InvalidDefinition);
+        }
+    }
+
+    TEST_CASE("Every definition codec retains owning validator failures", "[platform-authoring]") {
+        const auto ids = BuildPlatformStableIdRegistry(Candidate()).Value();
+        const auto definitions = Define(ids);
+        auto achievement = nlohmann::json::parse(EncodePlatformAchievementDefinitions(definitions.achievements).Value());
+        achievement["definitions"][0]["progress"]["total"] = 2;
+        CheckError(DecodePlatformAchievementDefinitions(achievement.dump(), ids), AchievementDefinitionErrors::InvalidDefinition);
+        auto leaderboard = nlohmann::json::parse(EncodePlatformLeaderboardDefinitions(definitions.leaderboards).Value());
+        leaderboard["definitions"][0]["sourceStat"] = FormatPlatformServiceStableId({ids.ResolveAchievement("active.key").Value().value});
+        CheckError(DecodePlatformLeaderboardDefinitions(leaderboard.dump(), ids, definitions.stats),
+                   PlatformDefinitionErrors::InvalidCrossReference);
+        leaderboard["definitions"][0]["sourceStat"] = nullptr;
+        const auto independent = DecodePlatformLeaderboardDefinitions(leaderboard.dump(), ids, definitions.stats);
+        REQUIRE(independent.HasValue());
+        CHECK(nlohmann::json::parse(EncodePlatformLeaderboardDefinitions(independent.Value()).Value())["definitions"][0]["sourceStat"]
+                  .is_null());
+        auto presence = nlohmann::json::parse(EncodePlatformPresenceDefinitions(definitions.presence).Value());
+        presence["definitions"][0]["maximumDetailUtf8Bytes"] = 1;
+        CheckError(DecodePlatformPresenceDefinitions(presence.dump(), ids), PlatformDefinitionErrors::InvalidDefinition);
+    }
+
+    TEST_CASE("Platform source adoption preserves the existing 256-byte opaque root identity", "[platform-authoring]") {
+        auto candidate = Candidate();
+        candidate.projectId = std::string(256, 'x');
+        const auto ids = BuildPlatformStableIdRegistry(candidate);
+        REQUIRE(ids.HasValue());
+        const auto reloaded = DecodePlatformServicesLedger(Encode(ids.Value()), candidate.projectId, candidate.salt);
+        REQUIRE(reloaded.HasValue());
+        CHECK(reloaded.Value().ProjectId() == candidate.projectId);
+        auto root = Root();
+        root["projectId"] = candidate.projectId;
+        const auto captured = DecodeProjectSourceDocument(root.dump());
+        REQUIRE(captured.HasValue());
+        const auto configuration = ResolveProjectPlatformServicesConfiguration(captured.Value(), PlatformServicesHostProfile::Cook, {}, {});
+        REQUIRE(configuration.HasValue());
+        CHECK(configuration.Value().ProjectId() == candidate.projectId);
+        CHECK_FALSE(Cook(ids.Value(), configuration.Value()).neutralBytes.empty());
+        candidate.projectId.push_back('x');
+        CheckError(BuildPlatformStableIdRegistry(candidate), StableIdErrors::InvalidLedger);
+    }
+
+    TEST_CASE("Definition documents honor supported counts above default limits", "[platform-authoring]") {
+        PlatformStableIdRegistryCandidate candidate{.projectId = "project.large-definitions", .salt = Candidate().salt};
+        for (std::uint32_t index = 0; index < 4096; ++index) {
+            const auto key = "stat.key_" + std::to_string(index);
+            candidate.entries.push_back(
+                {.kind = PlatformServiceIdKind::Stat,
+                 .canonicalKey = key,
+                 .storedId = DerivePlatformServiceStableId(candidate.salt, PlatformServiceIdKind::Stat, key).Value()});
+        }
+        const auto ids = BuildPlatformStableIdRegistry(candidate);
+        REQUIRE(ids.HasValue());
+        StatDefinitionRegistryCandidate document{.stableIdRegistryFingerprint = ids.Value().Fingerprint()};
+        for (const auto &entry : ids.Value().Entries())
+            document.definitions.push_back({.id = {entry.storedId.value},
+                                            .range = {0, 100},
+                                            .mutation = StatMutationPolicy::SetMaximum,
+                                            .localizationKey = "stat.title"});
+        const PlatformDefinitionRegistryLimits limits{.maximumDefinitions = 4096};
+        const auto registry = BuildStatDefinitionRegistry(ids.Value(), document, limits);
+        REQUIRE(registry.HasValue());
+        const auto bytes = EncodePlatformStatDefinitions(registry.Value());
+        REQUIRE(bytes.HasValue());
+        const auto reloaded = DecodePlatformStatDefinitions(bytes.Value(), ids.Value(), limits);
+        REQUIRE(reloaded.HasValue());
+        CHECK(reloaded.Value().Definitions().size() == 4096);
+        CHECK(reloaded.Value().Fingerprint() == registry.Value().Fingerprint());
+        CheckError(DecodePlatformStatDefinitions(bytes.Value(), ids.Value()), PlatformDefinitionErrors::CapacityExceeded);
+    }
+
+    TEST_CASE("Definition document encoders reject uninitialized snapshots", "[platform-authoring]") {
+        CheckError(EncodePlatformAchievementDefinitions(AchievementDefinitionRegistry{}), AchievementDefinitionErrors::InvalidDefinition);
+        CheckError(EncodePlatformStatDefinitions(StatDefinitionRegistry{}), PlatformDefinitionErrors::InvalidDefinition);
+        CheckError(EncodePlatformLeaderboardDefinitions(LeaderboardDefinitionRegistry{}), PlatformDefinitionErrors::InvalidDefinition);
+        CheckError(EncodePlatformPresenceDefinitions(PresenceDefinitionRegistry{}), PlatformDefinitionErrors::InvalidDefinition);
+    }
+
+    TEST_CASE("Previously captured semantic documents cannot cross a ledger replacement", "[platform-authoring]") {
+        auto candidate = Candidate();
+        const auto previous = BuildPlatformStableIdRegistry(candidate).Value();
+        const auto definitions = Define(previous);
+        candidate.entries.front().aliases.push_back("reviewed.compatibility.alias");
+        const auto replacement = BuildPlatformStableIdRegistryReplacement(previous, previous.Fingerprint(), candidate);
+        REQUIRE(replacement.HasValue());
+        CHECK(replacement.Value().Fingerprint() != previous.Fingerprint());
+        CheckError(DecodePlatformAchievementDefinitions(EncodePlatformAchievementDefinitions(definitions.achievements).Value(),
+                                                        replacement.Value()),
+                   AchievementDefinitionErrors::StaleIdentityRegistry);
+        CheckError(DecodePlatformStatDefinitions(EncodePlatformStatDefinitions(definitions.stats).Value(), replacement.Value()),
+                   PlatformDefinitionErrors::StaleIdentityRegistry);
+        CheckError(DecodePlatformLeaderboardDefinitions(EncodePlatformLeaderboardDefinitions(definitions.leaderboards).Value(),
+                                                        replacement.Value(), Define(replacement.Value()).stats),
+                   PlatformDefinitionErrors::StaleIdentityRegistry);
+        CheckError(DecodePlatformPresenceDefinitions(EncodePlatformPresenceDefinitions(definitions.presence).Value(), replacement.Value()),
+                   PlatformDefinitionErrors::StaleIdentityRegistry);
+        CHECK(EncodePlatformServicesLedger(previous).HasValue());
+        CHECK(definitions.stats.StableIdRegistryFingerprint() == previous.Fingerprint());
     }
 }  // namespace Horo::Application

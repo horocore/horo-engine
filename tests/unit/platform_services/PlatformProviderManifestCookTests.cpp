@@ -131,6 +131,57 @@ namespace Horo::PlatformServices {
         };
     }  // namespace
 
+    TEST_CASE("Paired cook encoding is the existing preimage and rejects malformed streams", "[platform-services][manifest-cook]") {
+        Fixture fixture;
+        const auto cooked = CookPlatformProviderManifest(fixture.Input());
+        REQUIRE(cooked.HasValue());
+        auto encoded = EncodePlatformProviderManifestCookGeneration(cooked.Value());
+        REQUIRE(encoded.HasValue());
+        auto bytes = std::move(encoded).Value();
+        CHECK(ComputeSha256(bytes) == cooked.Value().generationFingerprint);
+        const auto decoded = DecodePlatformProviderManifestCookGeneration(bytes, cooked.Value().generationFingerprint);
+        REQUIRE(decoded.HasValue());
+        CHECK(decoded.Value().neutralBytes == cooked.Value().neutralBytes);
+        CHECK(decoded.Value().mappingBytes == cooked.Value().mappingBytes);
+        const auto wrongFingerprint = DecodePlatformProviderManifestCookGeneration(bytes, Sha256Digest{});
+        REQUIRE(wrongFingerprint.HasError());
+        CHECK(wrongFingerprint.ErrorValue().code.Value() == PlatformProviderManifestCookErrors::StaleGeneration.code.Value());
+        SECTION("Trailing bytes cannot be admitted even under their own hash") {
+            bytes.push_back(std::byte{});
+        }
+        SECTION("Truncated second stream") {
+            bytes.pop_back();
+        }
+        SECTION("Unknown framing domain") {
+            bytes[4] ^= std::byte{1};
+        }
+        const auto malformed = DecodePlatformProviderManifestCookGeneration(bytes, ComputeSha256(bytes));
+        REQUIRE(malformed.HasError());
+        CHECK(malformed.ErrorValue().code.Value() == PlatformProviderManifestCookErrors::InvalidInput.code.Value());
+        auto changed = cooked.Value();
+        changed.mappingBytes.back() ^= std::byte{1};
+        CHECK(EncodePlatformProviderManifestCookGeneration(changed).HasError());
+    }
+
+    TEST_CASE("Paired cook framing rejects empty output and the finite encoded-byte ceiling", "[platform-services][manifest-cook]") {
+        CHECK(EncodePlatformProviderManifestCookGeneration({}).HasError());
+        const std::vector<std::byte> oversized(PlatformProviderManifestCookGenerationMaximumBytes + 1U);
+        const auto decoded = DecodePlatformProviderManifestCookGeneration(oversized, {});
+        REQUIRE(decoded.HasError());
+        CHECK(decoded.ErrorValue().code.Value() == PlatformProviderManifestCookErrors::InvalidInput.code.Value());
+    }
+
+    TEST_CASE("Host cancellation reaches the shared cook without a watcher thread", "[platform-services][manifest-cook]") {
+        Fixture fixture;
+        CancellationSource cancellation;
+        auto input = fixture.Input();
+        input.hostCancellation = cancellation.Token();
+        cancellation.RequestCancellation();
+        const auto cooked = CookPlatformProviderManifest(input);
+        REQUIRE(cooked.HasError());
+        CHECK(cooked.ErrorValue().code.Value() == PlatformProviderManifestCookErrors::Cancelled.code.Value());
+    }
+
     TEST_CASE("Provider manifest cook is byte-stable for equivalent mapping order", "[platform-services][manifest-cook]") {
         Fixture fixture;
         const auto first = CookPlatformProviderManifest(fixture.Input());

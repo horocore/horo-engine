@@ -93,8 +93,9 @@ namespace {
         "workspace.recovery.discard",
     };
     constexpr std::array projectLoadingKeys{
-        "project_loading.status.loading_scene",
-        "project_loading.error.scene",
+        "project_loading.status.loading_scene",      "project_loading.error.scene",
+        "project_loading.error.platform_identity",   "project_loading.error.creation_durability",
+        "project_loading.error.creation_unexpected", "project_loading.error.creation_publication",
     };
     constexpr std::array sceneConflictKeys{
         "workspace.scene_conflict.available",      "workspace.scene_conflict.compare",

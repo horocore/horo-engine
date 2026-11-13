@@ -148,11 +148,13 @@ namespace Horo::Editor {
          * @param transactions Crash-safe migration transaction service.
          * @param rendererAvailability Immutable renderer installation snapshot.
          * @param derivedContributors Ordered disposable-state rebuild contributors.
+         * @param platformPolicy Explicit host profile and trusted inert provider metadata, copied for the service lifetime.
          */
         ProjectOpenService(JobSystem &jobs, DurableFileSystem &files, ProjectOpenPreflightService &preflight,
                            ProjectMutationCoordinator &mutations, ProjectMigrationTransactionService &transactions,
                            const RendererAvailabilitySnapshot &rendererAvailability,
-                           std::span<IProjectOpenDerivedStateContributor *const> derivedContributors = {});
+                           std::span<IProjectOpenDerivedStateContributor *const> derivedContributors = {},
+                           Application::PlatformServicesProjectValidationContext platformPolicy = {});
         ~ProjectOpenService();
         ProjectOpenService(const ProjectOpenService &) = delete;
         ProjectOpenService &operator=(const ProjectOpenService &) = delete;
