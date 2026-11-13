@@ -128,8 +128,9 @@ completed all 387 steps. Then
 `ctest --test-dir build/pq-release -R '^HoroPrefabTests::' --no-tests=error --timeout 60 --parallel 1 --output-on-failure`
 passed all 120 registered tests in 4.22 seconds. This includes the added shared
 8192-edge graph, exact nested fanout, variant-depth, deep diagnostic and overflow
-regressions. It does not execute the separate metrics, document-session, cook,
-debug snapshot, reference-corpus or fuzz targets. No complete parent or
+regressions, plus the diagnostic and immutable debug-snapshot model cases owned
+by this target. It does not execute the separate metrics, document-session, cook,
+Scene debug-snapshot, reference-corpus or fuzz targets. No complete parent or
 cross-platform qualification is inferred.
 
 The batch verified its actual canonical Windows lock handle before launching
