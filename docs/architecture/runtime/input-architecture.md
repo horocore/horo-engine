@@ -317,6 +317,13 @@ into one command. A repeat therefore survives a presentation frame with no tick,
 but does not fire again on later catch-up ticks. Movement transition bits retain
 their physical/semantic transition meaning and do not turn repeats into presses.
 
+If a routed binding cannot advance because its host sample clock is absent or
+mapping capacity is exhausted, capture clears the complete held/pending command
+projection. An earlier zero-tick frame cannot leave a stale command queued after
+that failure. `LastCaptureStatus()` retains the original `ClockUnavailable` or
+`CapacityExceeded` outcome, including duplicate captures of the same sample.
+Optional missing actions remain neutral; an eligible capture still resolves.
+
 The concrete frame also carries the move action's `down`, `pressed`, and
 `released` bits. These preserve existing semantic callbacks even when opposing
 movement bindings cancel the axis value; their edges follow the same once-per-

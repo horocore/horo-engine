@@ -1368,30 +1368,36 @@ namespace Horo::Input {
         capturedFrame_ = snapshot.frame;
         hasCapturedFrame_ = true;
         if (!snapshot.window.focused || !router.IsContextActive(context)) {
-            moveX_ = 0.0F;
-            moveY_ = 0.0F;
-            lookX_ = 0.0F;
-            lookY_ = 0.0F;
-            pendingJump_ = false;
-            pendingInteract_ = false;
-            moveDown_ = false;
-            pendingMovePressed_ = false;
-            pendingMoveReleased_ = false;
+            ClearCapturedInput();
+            lastCaptureStatus_ = ActionReadStatus::Unavailable;
             return;
         }
-        const ActionValue move = router.ReadAction(context, move_, player);
-        const ActionValue look = router.ReadAction(context, look_, player);
-        const ActionValue jump = router.ReadAction(context, jump_, player);
-        const ActionValue interact = router.ReadAction(context, interact_, player);
-        moveX_ = move.x;
-        moveY_ = move.y;
-        lookX_ = look.x;
-        lookY_ = look.y;
-        pendingJump_ = pendingJump_ || jump.pressed || jump.repeated;
-        pendingInteract_ = pendingInteract_ || interact.pressed || interact.repeated;
-        moveDown_ = move.down;
-        pendingMovePressed_ = pendingMovePressed_ || move.pressed;
-        pendingMoveReleased_ = pendingMoveReleased_ || move.released;
+        const ActionEvidence move = router.ReadActionEvidence(context, move_, player);
+        const ActionEvidence look = router.ReadActionEvidence(context, look_, player);
+        const ActionEvidence jump = router.ReadActionEvidence(context, jump_, player);
+        const ActionEvidence interact = router.ReadActionEvidence(context, interact_, player);
+        for (const auto status : {move.status, look.status, jump.status, interact.status}) {
+            if (status == ActionReadStatus::ClockUnavailable || status == ActionReadStatus::CapacityExceeded) {
+                ClearCapturedInput();
+                lastCaptureStatus_ = status;
+                return;
+            }
+        }
+        lastCaptureStatus_ = ActionReadStatus::Resolved;
+        moveX_ = move.value.x;
+        moveY_ = move.value.y;
+        lookX_ = look.value.x;
+        lookY_ = look.value.y;
+        pendingJump_ = pendingJump_ || jump.value.pressed || jump.value.repeated;
+        pendingInteract_ = pendingInteract_ || interact.value.pressed || interact.value.repeated;
+        moveDown_ = move.value.down;
+        pendingMovePressed_ = pendingMovePressed_ || move.value.pressed;
+        pendingMoveReleased_ = pendingMoveReleased_ || move.value.released;
+    }
+
+    /** @copydoc GameplayInputFrameBuilder::LastCaptureStatus */
+    ActionReadStatus GameplayInputFrameBuilder::LastCaptureStatus() const noexcept {
+        return lastCaptureStatus_;
     }
 
     /** @copydoc GameplayInputFrameBuilder::Consume */
@@ -1411,6 +1417,12 @@ namespace Horo::Input {
     /** @copydoc GameplayInputFrameBuilder::Reset */
     void GameplayInputFrameBuilder::Reset() noexcept {
         hasCapturedFrame_ = false;
+        lastCaptureStatus_ = ActionReadStatus::Unavailable;
+        ClearCapturedInput();
+    }
+
+    /** @copydoc GameplayInputFrameBuilder::ClearCapturedInput */
+    void GameplayInputFrameBuilder::ClearCapturedInput() noexcept {
         moveX_ = 0.0F;
         moveY_ = 0.0F;
         lookX_ = 0.0F;

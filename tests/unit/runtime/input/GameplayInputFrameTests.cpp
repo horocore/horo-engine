@@ -124,6 +124,56 @@ namespace {
         REQUIRE(builder.Consume(8) == GameplayInputFrame{.tick = 8});
     }
 
+    TEST_CASE("Gameplay Capture Preserves Clock Failures And Clears Previously Latched Commands", "[unit][runtime][input][accessibility]") {
+        InputService input;
+        const InputContextId gameplayId{"gameplay"};
+        auto jumpBinding = KeyBinding(Key::Space);
+        jumpBinding.accessibility.digital.holdMicroseconds = 10;
+        REQUIRE(input.Router()
+                    .SetActionMap({{ActionId{"move"}, ActionValueType::Axis2D, gameplayId, true, {KeyBinding(Key::W, 1.0F, 1)}},
+                                   {ActionId{"jump"}, ActionValueType::Digital, gameplayId, true, {jumpBinding}},
+                                   {ActionId{"interact"}, ActionValueType::Digital, gameplayId, true, {KeyBinding(Key::K)}}})
+                    .HasValue());
+        auto gameplay = input.Router().PushContext(gameplayId, InputContextKind::Gameplay);
+        GameplayInputFrameBuilder builder{ActionId{"move"}, ActionId{"look"}, ActionId{"jump"}, ActionId{"interact"}};
+        REQUIRE(builder.LastCaptureStatus() == ActionReadStatus::Unavailable);
+        FrameNumber frame{};
+        const auto capture = [&](const std::optional<InputSampleTime> time, const bool down) {
+            input.BeginFrame(++frame, time);
+            input.Collector().SetKey(Key::W, down);
+            input.Collector().SetKey(Key::Space, down);
+            input.Collector().SetKey(Key::K, down);
+            static_cast<void>(input.CommitFrame());
+            builder.Capture(input.Router(), gameplay);
+        };
+        capture(InputSampleTime{0}, false);
+        capture(InputSampleTime{1}, true);
+        capture(InputSampleTime{11}, true);  // Movement and two commands are pending without a fixed tick.
+        REQUIRE(builder.LastCaptureStatus() == ActionReadStatus::Resolved);
+        capture(std::nullopt, true);
+        REQUIRE(builder.LastCaptureStatus() == ActionReadStatus::ClockUnavailable);
+        builder.Capture(input.Router(), gameplay);
+        REQUIRE(builder.LastCaptureStatus() == ActionReadStatus::ClockUnavailable);
+        REQUIRE(builder.Consume(1) == GameplayInputFrame{.tick = 1});
+
+        capture(InputSampleTime{20}, true);
+        REQUIRE(builder.LastCaptureStatus() == ActionReadStatus::Resolved);
+        const auto restored = builder.Consume(2);
+        REQUIRE(restored.moveY == 1.0F);
+        REQUIRE_FALSE(restored.jumpPressed);
+        REQUIRE_FALSE(restored.interactPressed);
+        capture(InputSampleTime{21}, false);
+        capture(InputSampleTime{22}, true);
+        const auto fresh = builder.Consume(3);
+        REQUIRE_FALSE(fresh.jumpPressed);
+        REQUIRE(fresh.interactPressed);
+        capture(InputSampleTime{32}, true);
+        REQUIRE(builder.Consume(4).jumpPressed);
+        builder.Reset();
+        REQUIRE(builder.LastCaptureStatus() == ActionReadStatus::Unavailable);
+        REQUIRE(builder.Consume(5) == GameplayInputFrame{.tick = 5});
+    }
+
     TEST_CASE("Gameplay Capture Neutralizes Pending Commands When Ownership Changes", "[unit][runtime][input]") {
         RawInputCollector collector;
         InputRouter router;

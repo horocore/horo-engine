@@ -185,6 +185,19 @@ than the complete mapping capacity through context replacement without an explic
 router `EndFrame`, then checks that host draining cannot steal a live modal
 cancellation. This regression and the graphical application change remain
 uncompiled/unexecuted; other application compositions still need qualification.
+
+`GameplayInputFrameBuilder` now clears all held and pending commands when any
+routed action reports `ClockUnavailable` or `CapacityExceeded`. Previously its
+value-only reads could retain a jump/interact edge from an earlier zero-tick
+frame through a failed capture. Capture's call signature is unchanged; the new
+`LastCaptureStatus()` getter exposes the exact failure without allocating a
+diagnostic in this frame path. Duplicate capture preserves the outcome, and
+`Reset()` returns it to `Unavailable`. Optional absent actions remain neutral.
+Rebuild consumers of the changed public builder layout. The existing staged
+accessibility consumer now exercises this getter; regressions cover missing
+clock, retained-status/duplicate capture, complete neutralization, fresh hold
+after restoration and mapping-capacity failure. These changes still need their
+native build/test pass.
 Input's independently owned scoped persistence/capture work must be
 integrated without replacing its strengthened validation or adding another save
 path. That work and this version-two change currently live in separate unpushed

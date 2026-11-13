@@ -943,9 +943,16 @@ namespace Horo::Input {
          * @details Edges survive presentation frames with no fixed tick and fire on the next tick only.
          *          Jump and interact accept activation and configured semantic repeat edges. Multiple
          *          pending edges coalesce into one command; catch-up ticks do not repeat that command.
+         *          A missing timed sample clock or mapping capacity failure clears the complete pending
+         *          projection. LastCaptureStatus preserves that failure until a new snapshot is captured.
          *          Call once per committed snapshot after all higher-priority input consumers have run.
          */
         void Capture(InputRouter &router, const InputContextToken &context, std::optional<PlayerId> player = std::nullopt);
+        /** @brief Returns the last committed capture outcome; repeated captures of the same sample preserve it.
+         * @return Resolved after an eligible capture, Unavailable after reset/focus/context loss, or the original
+         * ClockUnavailable/CapacityExceeded failure. Optional absent actions remain neutral in an eligible capture.
+         */
+        [[nodiscard]] ActionReadStatus LastCaptureStatus() const noexcept;
         /**
          * @brief Returns a value command for one fixed tick without accessing device or router state.
          * @param tick Tick assigned by the fixed-step scheduler; successive calls must use successive ticks.
@@ -956,12 +963,15 @@ namespace Horo::Input {
         void Reset() noexcept;
 
     private:
+        /** @brief Clears held and pending values without reopening capture of an already observed snapshot. */
+        void ClearCapturedInput() noexcept;
         ActionId move_;
         ActionId look_;
         ActionId jump_;
         ActionId interact_;
         FrameNumber capturedFrame_{0};
         bool hasCapturedFrame_{false};
+        ActionReadStatus lastCaptureStatus_{ActionReadStatus::Unavailable};
         float moveX_{0.0F};
         float moveY_{0.0F};
         float lookX_{0.0F};

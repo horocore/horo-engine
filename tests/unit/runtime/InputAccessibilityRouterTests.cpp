@@ -423,6 +423,10 @@ namespace Horo::Input {
         }
         auto next = input.Router().PushContext(InputContextId{"play"}, InputContextKind::Gameplay);
         REQUIRE(input.Router().ReadActionEvidence(next, target).status == ActionReadStatus::CapacityExceeded);
+        GameplayInputFrameBuilder frames{{}, {}, target, {}};
+        frames.Capture(input.Router(), next);
+        REQUIRE(frames.LastCaptureStatus() == ActionReadStatus::CapacityExceeded);
+        REQUIRE(frames.Consume(1) == GameplayInputFrame{.tick = 1});
         input.BeginFrame(6);
         input.Collector().SetModifiers({});
         input.Collector().SetKey(Key::K, true);
