@@ -1,7 +1,7 @@
 # CLI contract qualification
 
 This local delivery was rebased onto the verified local parent
-`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`.
+`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`.
 Its parent is GitHub #1857 / HORO-1813 [CLI-001]. The remaining children are
 GitHub #1865 / HORO-1821 [CLI-001.8] and GitHub #1866 / HORO-1822 [CLI-001.9].
 Their titles and identities were checked against both issue services on
@@ -130,8 +130,8 @@ helpers inspect their own native open-file handles after acquisition and
 before configuring, compiling, testing or preparing analysis compiler context.
 They require the canonical machine-wide lock handle and stop on a mismatch.
 
-Final source, consumer and quality verification is pending the shared heavy
-validation queue. The parent and both children retain their open acceptance.
+Final source, consumer and quality verification is pending physical heavy-build
+lock availability. The parent and both children retain their open acceptance.
 
 ## Whole-parent acceptance audit
 
@@ -198,10 +198,14 @@ closed decision issue.
 | [CLI-001.9 #1866](https://github.com/horocore/horo-engine/issues/1866) / HORO-1822 | A5. Equivalent GUI, CLI, and MCP requests produce equivalent domain results and exactly one authoritative mutation. | Real navigation application/CLI/MCP digests/build counts and approval replay test; final run pending |
 | [CLI-001.9 #1866](https://github.com/horocore/horo-engine/issues/1866) / HORO-1822 | A6. Stress tests prove bounded memory, progress, input, output, subscription, and operation retention behavior. | Parser/dispatch/output/progress bounds covered; new 4,096-invocation projection test checks two-record retention and cancellation-owner release; final execution and aggregate subscription lifecycle evidence pending |
 
-The immediate required slot is the owned `build/validate_cli.py core` pass,
+The next bounded batch is the owned `build/validate_cli.py core` pass,
 then its `broader` pass, each with the canonical physical lock verified and
 one compiler/test worker. Full `scripts/analyze.py check --base` follows final
-fixes with the same lock. No heavy work is queued in the background while
-allocation is missing. Native Linux/macOS runners, CFG-001.6's typed provider
+fixes with the same lock. The 2026-11-13 restart removes named-grant scheduling
+requirements. Admission uses an atomic nonblocking attempt on the canonical OS
+lock, followed by actual handle and CPU/RAM checks. A busy lock defers the batch
+without starting children or a background waiter. No old textual HOLD gates
+apply to this independent worktree. The first restart attempt found the physical
+lock busy, so no final configure, build or CTest evidence was produced. Native Linux/macOS runners, CFG-001.6's typed provider
 contract, and the missing packaging composition remain external acceptance
 requirements; they cannot be replaced by mocks or a renamed SDK utility.
