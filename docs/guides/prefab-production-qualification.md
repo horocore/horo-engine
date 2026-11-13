@@ -77,6 +77,18 @@ capability. Missing product contracts or measurement gates remain incomplete.
 
 ## Concrete remaining dependencies
 
+The native GitHub `blocked_by` relationships were read again on 13 November:
+navigation [#1079](https://github.com/horocore/horo-engine/issues/1079) depends on
+#1076 (closed), #1078 (open) and
+[usages/repair #1064](https://github.com/horocore/horo-engine/issues/1064) (open).
+Concurrency [#1083](https://github.com/horocore/horo-engine/issues/1083) depends on
+#1060, #1033, [cross-document apply/revert #1032](https://github.com/horocore/horo-engine/issues/1032)
+and #1072 (all open). These are actual dependency relationships, not an ordering
+inferred from ticket numbers or milestones. Open status alone does not establish
+missing code: the implemented Save, recovery, rebase and preview boundaries still
+receive independent tests. The missing usage/repair owner and multi-owner
+apply-to-source paths described below are specific inspected contract gaps.
+
 A 13 November production-call audit found the definitions of
 `MakePrefabDiagnosticRecord` and `MakePrefabBuildOutputRecord` in
 `PrefabDiagnostics.cpp`, with no references to those factories elsewhere under
@@ -201,6 +213,12 @@ from those previous-head results.
 The newly published target ref resolved to
 `139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d`; PR metadata still reported the
 original `3df476ff430a2ad28cd62a8a0c1780ae0fea71bc` base snapshot at inspection.
+The generated GitHub PR merge ref was separately verified as
+`f9d39e7a45ba7e68a8d8e81a26cb4003216dc2e9`, with parents exactly
+`139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d` and
+`776ee7fc8c6764e3f844042af504b89e186b1610`. Native CI and Sonar coverage use
+the default PR merge checkout. That establishes integration source identity,
+not an executed integration pass; local results retain their exact branch input.
 Published branch ancestry was preserved without force push or merge. A fresh
 full-preflight admission using the published target, and a separate core-test
 admission, both returned physical `LOCK_BUSY` before creating children. The

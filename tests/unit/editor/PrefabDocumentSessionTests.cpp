@@ -348,8 +348,11 @@ namespace Horo::Editor {
         CHECK(loser->Reload(retained.fence, false).HasError());
         REQUIRE(loser->Reload(retained.fence, true).HasValue());
         CHECK(loser->Snapshot().sourceRevision == winner->Snapshot().sourceRevision);
+        CHECK(loser->Snapshot().fence.instance == pending.fence.instance);
         CHECK_FALSE(loser->Snapshot().dirty);
-        CHECK(loser->Execute(pending.fence, RenamePrefabObject{{0}, "Stale completion"}).HasError());
+        const auto stale = loser->Execute(pending.fence, RenamePrefabObject{{0}, "Stale completion"});
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == SourceDocumentErrors::Stale.code.Value());
     }
 
     TEST_CASE("Prefab recovery is separate durable intent and cannot overwrite an external source", "[editor][prefab][session]") {
