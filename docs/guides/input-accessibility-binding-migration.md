@@ -52,9 +52,13 @@ control must reject it rather than silently drop it. Digital actions and enabled
 digital affordances cannot use a gyro binding. Duplicate or conflicting physical
 gyro axes remain conflicts despite different calibration, scale or output component.
 
-The added gyro/router/profile regression sources and the extended atomic
-save/load case with spaces and a non-ASCII path are pending native execution;
-the earlier 88-case Input pass predates this extension. A subsequent editor change
+The native MSVC Debug batch at `f1f97b73ab83566272dc85c0e49b95f9d52d1700`
+built both Input test executables and staged/explicit public consumers, then passed
+**94/94 cases with zero skips** in 1.46 seconds. This includes all six added
+gyro/router/profile cases and the extended atomic save/load case with spaces and
+a non-ASCII path. Reports are `build/acc-input-gyro-f1f97b7-results.xml` and its
+discovery JSON. The earlier 88-case Input pass predates the extension.
+A subsequent editor change
 adds explicit Add/Edit commands routed through the existing exclusive modal host.
 Its owned numeric draft preserves full float precision and invalid intermediate
 text; axis, component, calibration and sensitivity reach the same SetProfile

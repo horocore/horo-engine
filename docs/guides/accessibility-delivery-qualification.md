@@ -18,7 +18,7 @@ it must not be attributed to that older remote snapshot.
 |---|---|---|---|
 | ACC-001.2 captions | HORO-1806 / #1850 | Fixed cue/catalog transport, bounded timeline, appearance, safe-area layout and canonical paint/resource lifetimes; 49-case UI batch passed | Host localization/shaping/presentation composition, settings activation and visible native output |
 | ACC-001.3 color | HORO-1807 / #1851 | Foundation-only matrices and authoritative snapshot query; numeric/query/contract cases passed in the 11-case semantic batch | Complete-image GPU execution, cooked shader ABI migration, settings activation and real backend evidence |
-| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, repeat/clock failure propagation; Input 88/88 and CharacterInput 16/16 passed. GUI drafts, SDL sample time and actual editor application compiled; GUI/SDL 92/92 passed | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; gyro interpretation and device evidence; native interaction qualification |
+| ACC-001.4 input | HORO-1808 / #1852 | Canonical binding policy/codec, router lifetimes, repeat/clock failure propagation; Input **94/94** including calibrated platform gyro and atomically persisted gyro bindings, plus CharacterInput 16/16 passed. Earlier GUI drafts, SDL sample time and editor application compiled; GUI/SDL 92/92 passed before the gyro modal | Scoped persistence/capture integration with INP-001.6 / HORO-1795 / #1839; gyro modal compilation/execution, controller motion collection, device evidence and native interaction qualification |
 | ACC-001.5 visual | HORO-1809 / #1853 | Atomic UI scale/contrast projection, readable typography floor and tagged safety projection passed in UI/semantic batches | Both editor theme layers, coherent DPI/font/UI scale, actual Camera/VFX/animation consumers and visual qualification |
 | ACC-001.6 bridge | HORO-1810 / #1854 | Runtime UI semantics, truthful Null Unsupported bridge, retained desired preference and bounded opt-in QA journal passed in the UI batch | Native adapters, default shared-control metadata, bypass detection, QA review UI and real assistive-technology qualification |
 | ACC-001.7 assists | HORO-1811 / #1855 | Inert contribution, seven typed preferences, authoritative snapshot and revision-only hint/retry contracts passed in the semantic batch | Host tick composition, game-owned supported/authorized consumers and shared settings contribution |
@@ -37,7 +37,7 @@ empty selection from passing. Reports are local ignored artifacts, not source.
 
 | Scope | Clean commit | Built targets | Executed evidence |
 |---|---|---|---|
-| Input | `dcf772e37900d8a9ca87d4bcb2a55942ce4ebb2e` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **88/88 passed, zero skipped**, 1.36s; `build/acc-input-results.xml` and `build/acc-input-discovery.json` |
+| Input | `f1f97b73ab83566272dc85c0e49b95f9d52d1700` | HoroInputAccessibilityTests, HoroInputTests, HoroInputPublicHeaderConsumer, HoroInputAccessibilityPublicHeaderConsumer | **94/94 passed, zero skipped**, 1.46s; `build/acc-input-gyro-f1f97b7-results.xml` and corresponding discovery JSON |
 | Foundation-only semantic contracts | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | Visual/Gameplay accessibility test targets, both staged header targets, Visual/Gameplay/Contrast direct contract consumers | **11/11 passed, zero skipped**, 0.24s; `build/acc-semantic-results.xml` and discovery JSON |
 | Character input | `6308740ffc1b7167f2ffc7ef98044b1ffbe02837` | HoroCharacterInputTests, HoroCharacterInputPublicHeaderConsumer | **16/16 passed, zero skipped**, 0.74s; `build/acc-character-results.xml` and discovery JSON |
 | Captions / Runtime UI / optional bridge | `df38a89c2006ef57f0e33a7b91e2c37a4b05bd1b` | HoroRuntimeUiAccessibilityTests, RuntimeUi staged/accessibility consumers, CaptionTransport staged/direct consumers, PlatformAccessibility staged/direct consumers | **49/49 passed, zero skipped**, 0.72s; `build/acc-caption-results.xml` and discovery JSON |
@@ -212,9 +212,11 @@ by these independent passing tests. Gyro still needs interpretation and hardware
 Subsequent source work adds platform GyroscopeAxis rate bindings through the same
 router/profile owner, with typed SI calibration, ordinary sensitivity/deadzone,
 availability/focus neutralization and physical-axis conflict validation. The
-migration guide records its public layout/wire additions. Six new regression
-cases and the extended public consumer are pending execution; none is covered by
-the earlier 88-case Input result. Subsequent source adds owned Add/Edit intents
+migration guide records its public layout/wire additions. The native batch at
+`f1f97b7` built all four Input targets and passed **94/94 cases**, including all six
+new gyro regressions, the extended explicit consumer and atomic save/load with
+spaces/non-ASCII paths. It supersedes the earlier 88-case Input scope without
+claiming gyro hardware or GUI behavior. Subsequent source adds owned Add/Edit intents
 and an exclusive gyro modal through the existing workspace command and modal
 hosts. Axis/calibration/sensitivity drafts apply only through canonical SetProfile;
 six model/modal/render regression sources are pending. Paired-copy/CI Python
