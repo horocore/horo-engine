@@ -91,8 +91,8 @@ namespace Horo::Render::ExposureGpuCookDetail {
         /** @brief Proves the single unsized array and its exact actual element stride. */
         void RuntimeShape(const Json &runtime, const Buffer &native) {
             const auto &shape = Rows(runtime, "array", 1);
-            const auto &literal = Rows(runtime, "array_size_is_literal", 1);
-            if (shape.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(shape[0]) != 0)
+            if (const auto &literal = Rows(runtime, "array_size_is_literal", 1);
+                shape.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(shape[0]) != 0)
                 throw EvidenceFailure{};
             if (Unsigned(runtime.at("offset")) != 0 || Unsigned(runtime.at("array_stride")) != native.layout.bytes)
                 throw EvidenceFailure{};
@@ -218,7 +218,7 @@ namespace Horo::Render {
             auto candidate = Normalize(manifest, Parse(stages[0].json), native, names);
             // Only actual native+JSON float2D evidence can resolve a binary Depth=2 classification.
             ProveSpirv(validatedSpirv, stage);
-            return NormalizeShaderReflection(manifest, target, std::move(candidate));
+            return NormalizeShaderReflection(manifest, target, candidate);
         } catch (const EvidenceFailure &failure) {
             return Return::Failure(MakeError(ShaderReflectionErrors::InvalidReflection, EvidenceMessage(failure)));
         } catch (const Json::exception &failure) {

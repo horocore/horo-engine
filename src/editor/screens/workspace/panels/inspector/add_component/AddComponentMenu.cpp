@@ -42,7 +42,7 @@ namespace Horo::Editor {
                                  PhysicsInspectorSession &physics, EditorWorkspaceViewCommandData &command) {
         if (command.command != EditorWorkspaceViewCommand::None)
             return;
-        std::visit([&](const auto &value) {
+        std::visit([&]<typename VisitedValue>(const VisitedValue &value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, ComponentType>) {
                 command.command = EditorWorkspaceViewCommand::AddComponentToObject;

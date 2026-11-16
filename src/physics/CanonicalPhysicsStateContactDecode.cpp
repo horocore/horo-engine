@@ -99,7 +99,9 @@ namespace Horo::Physics::Detail {
     Result<void> DecodeCanonicalPhysicsContacts(CanonicalPhysicsStateStream &stream, const CanonicalPhysicsStateBindings &bindings,
                                                 SolverStorage &staging, std::uint32_t &pairCount, std::uint32_t &manifoldCount,
                                                 std::uint32_t &ccdCount) {
-        pairCount = manifoldCount = ccdCount = 0;
+        ccdCount = 0;
+        manifoldCount = 0;
+        pairCount = 0;
         stream.Read(pairCount);
         if (pairCount > staging.pairs.size())
             return Invalid("Native Physics contact pairs exceed prepared snapshot storage.");

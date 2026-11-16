@@ -78,8 +78,7 @@ namespace Horo::Runtime::RuntimeSaveSessionDetail {
             return FailOwned(work, MakeError(SaveErrors::RestoreTransitionInvalid), SaveOperationCommitOutcome::NotCommitted);
         if (work.producer.ObserveCancellation() == SaveCancellationObservation::Cancelled)
             return Result<void>::Success();
-        work.preparedRestore.emplace(
-            RuntimeSavePreparedRestore{work.context, work.participants, std::move(work.producer), std::move(staging), work.source});
+        work.preparedRestore.emplace(work.context, work.participants, std::move(work.producer), std::move(staging), work.source);
         work.handoffAttempted = true;
         return ValidateDisposition(work, Invoke(work));
     }

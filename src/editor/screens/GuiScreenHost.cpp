@@ -757,8 +757,8 @@ namespace Horo::Editor {
                     std::vector<Input::InputBinding> defaults;
                     if (const auto binding = ParseEditorShortcut(entry.command.shortcut))
                         defaults.push_back(*binding);
-                    actions.push_back({Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
-                                       Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults)});
+                    actions.emplace_back(Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
+                                         Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults));
                 }
                 settingsService_->SetContributedInputActions(std::move(actions));
                 extensionCommandRevision_ = revision;
@@ -979,9 +979,7 @@ namespace Horo::Editor {
                 modal = std::make_unique<BuildModal>(context, std::move(request), services.TryGet<Application::GameplayBuildService>(),
                                                      retainedBuild, services.TryGetConst<IBuildOutputQuery>());
             else
-                modal = std::make_unique<BuildReleaseModal>(context, BuildReleasePage::Release, std::move(request),
-                                                            services.TryGet<Application::GameplayBuildService>(), retainedBuild,
-                                                            services.TryGet<IBuildReleaseJobs>());
+                modal = std::make_unique<BuildReleaseModal>(context, std::move(request), services.TryGet<IBuildReleaseJobs>());
             if (const auto opened = host->OpenRoot(std::move(modal)); opened.HasError())
                 LOG_WARN("editor.build", "Build/release modal admission failed: %s", opened.ErrorValue().code.Value().c_str());
             return true;

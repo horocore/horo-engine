@@ -253,7 +253,7 @@ namespace Horo::Physics::Detail {
 
             /** @brief Uses the same checked native builder against an explicitly owned unpublished recipient. */
             static Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PreparePending(
-                const std::shared_ptr<PhysicsStructuralState> &state, Runtime::RuntimeSceneView scene,
+                const std::shared_ptr<PhysicsStructuralState> &state, const Runtime::RuntimeSceneView &scene,
                 std::span<const Runtime::RuntimeEntityView> created) {
                 if (!state || state->closed || !scene.IsCurrent() || state->scene != scene.RuntimeId() ||
                     !state->authority->IsCurrent(state->evidence))

@@ -13,8 +13,7 @@ namespace Horo::Application::Internal {
     /** @copydoc ShaderHotReloadHost::ShaderHotReloadHost */
     ShaderHotReloadHost::ShaderHotReloadHost(const JobSystem &jobs, std::unique_ptr<ShaderHotReloadService> service,
                                              std::shared_ptr<const ShaderHotReloadSourceRecipe> recipe, ShaderHotReloadFence fence)
-        : jobs_(jobs), service_(std::move(service)), recipe_(std::move(recipe)), completion_(std::make_shared<Completion>()),
-          fence_(fence) {}
+        : jobs_(jobs), service_(std::move(service)), recipe_(std::move(recipe)), fence_(fence) {}
 
     /** @copydoc ShaderHotReloadHost::Create */
     Result<std::unique_ptr<ShaderHotReloadHost>> ShaderHotReloadHost::Create(ShaderBuildService &compiler, const JobSystem &jobs,

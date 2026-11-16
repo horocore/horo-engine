@@ -59,7 +59,7 @@ namespace Horo::Application::Internal {
             return Result<Runtime::RuntimeSceneView>::Failure(admitted.ErrorValue());
         if (const auto started = service.Startup(boundary.cancellation); started.HasError())
             return Result<Runtime::RuntimeSceneView>::Failure(started.ErrorValue());
-        if (const auto queued = service.QueuePreparation(std::move(definition)); queued.HasError())
+        if (const auto queued = service.QueuePreparation(definition); queued.HasError())
             return RetireLoad(service, queued.ErrorValue());
         std::uint64_t frame = 1;
         for (;;) {

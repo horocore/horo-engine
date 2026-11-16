@@ -143,7 +143,8 @@ namespace Horo::AI {
         std::size_t ActionCount(const StateMachineAssetDescriptor &source) {
             std::size_t count{};
             for (const auto &state : source.states)
-                count += state.entryProvider.has_value() + state.updateProvider.has_value() + state.exitProvider.has_value();
+                count += (state.entryProvider.has_value() ? 1U : 0U) + (state.updateProvider.has_value() ? 1U : 0U) +
+                         (state.exitProvider.has_value() ? 1U : 0U);
             return count;
         }
 

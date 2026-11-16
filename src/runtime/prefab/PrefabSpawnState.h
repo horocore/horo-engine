@@ -61,7 +61,7 @@ namespace Horo::Prefab::Detail {
         }
 
         /** @brief Records explicit deletion only from a successful actual group-destruction receipt. */
-        void PublishDestroyedGroup() noexcept {
+        void PublishDestroyedGroup() const noexcept {
             if (instance.state_ && instance.state_->persistence)
                 instance.state_->persistence->PublishDespawn();
         }
@@ -138,8 +138,8 @@ namespace Horo::Prefab::Detail {
 
         /** @brief All command/reference/tick admission still requires the actual published active Scene incarnation. */
         Result<void> Check() const {
-            if (auto owner = CheckOwner(); owner.HasError())
-                return owner;
+            if (auto ownerCheck = CheckOwner(); ownerCheck.HasError())
+                return ownerCheck;
             const auto active = scenes->ActiveScene();
             if (!active || active->RuntimeId() != scene)
                 return Result<void>::Failure(MakeError(PrefabErrors::SceneUnavailable));
@@ -148,8 +148,8 @@ namespace Horo::Prefab::Detail {
 
         /** @brief Cold attachment binding may read only the actual retained private candidate; it cannot queue/execute commands. */
         Result<Runtime::RuntimeSceneView> BindingView() const {
-            if (auto owner = CheckOwner(); owner.HasError())
-                return Result<Runtime::RuntimeSceneView>::Failure(owner.ErrorValue());
+            if (auto ownerCheck = CheckOwner(); ownerCheck.HasError())
+                return Result<Runtime::RuntimeSceneView>::Failure(ownerCheck.ErrorValue());
             const auto active = scenes->ActiveScene();
             if (active && active->RuntimeId() == scene)
                 return Result<Runtime::RuntimeSceneView>::Success(*active);
@@ -265,8 +265,8 @@ namespace Horo::Prefab::Detail {
             auto state = std::make_shared<PrefabInstanceState>();
             state->identity = identity;
             state->scope = scope;
-            state->entities = std::move(found.Value().entities);
-            state->persistence = std::move(found.Value().publication);
+            state->entities = found.Value().entities;
+            state->persistence = found.Value().publication;
             PrefabInstance handle;
             handle.state_ = std::move(state);
             return Result<PrefabInstance>::Success(std::move(handle));
@@ -279,7 +279,7 @@ namespace Horo::Prefab::Detail {
                                                     const std::span<const Assets::AssetId> lineage, std::string_view creator) {
             PrefabMetricOperation attempt{metrics, PrefabMetricPhase::Spawn};
             bool overflow{};
-            auto result = [&]() -> Result<PrefabOperation> {
+            auto result = [&]() {
                 if (auto valid = Admit(request.notBeforeTick, scope, cancellation, &overflow); valid.HasError())
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
                 if (auto valid = ValidateSpawnLineage(request, lineage); valid.HasError())

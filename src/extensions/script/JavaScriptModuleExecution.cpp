@@ -2,6 +2,8 @@
 #include "Horo/Foundation/Utf8.h"
 #include "JavaScriptModuleInternal.h"
 
+#include <array>
+
 namespace Horo::Extensions::JavaScriptModuleDetail {
     namespace {
         ScriptCallResult ErrorResult(const Error &error, const ScriptValueLimits &limits) {
@@ -16,12 +18,12 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         }
     }  // namespace
 
-    JSValue State::ImmediateAsync(ScriptCallResult result) {
-        JSValue callbacks[]{JS_UNDEFINED, JS_UNDEFINED};
-        Value promise{context, Checked(JS_NewPromiseCapability(context, callbacks))};
+    JSValue State::ImmediateAsync(ScriptCallResult callResult) {
+        std::array<JSValue, 2> callbacks{JS_UNDEFINED, JS_UNDEFINED};
+        Value promise{context, Checked(JS_NewPromiseCapability(context, callbacks.data()))};
         Value resolve{context, callbacks[0]};
         Value reject{context, callbacks[1]};
-        Value outcome{context, values.WriteOutcome(std::move(result))};
+        Value outcome{context, values.WriteOutcome(std::move(callResult))};
         auto argument = outcome.Get();
         Value settled{context, Checked(JS_Call(context, resolve.Get(), JS_UNDEFINED, 1, &argument))};
         return promise.Release();
@@ -30,11 +32,11 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
     JSValue State::Async(ScriptInvocationHandle handle) {
         if (pending.size() >= authority->Limits().maximumPendingCalls)
             throw ConversionFailure{MakeError(ExtensionErrors::ScriptInvocationCapacityExceeded)};
-        JSValue callbacks[]{JS_UNDEFINED, JS_UNDEFINED};
-        Value promise{context, Checked(JS_NewPromiseCapability(context, callbacks))};
+        std::array<JSValue, 2> callbacks{JS_UNDEFINED, JS_UNDEFINED};
+        Value promise{context, Checked(JS_NewPromiseCapability(context, callbacks.data()))};
         Value resolve{context, callbacks[0]};
         Value reject{context, callbacks[1]};
-        pending.push_back({std::move(handle), resolve.Get(), reject.Get(), authority});
+        pending.emplace_back(std::move(handle), resolve.Get(), reject.Get(), authority);
         (void)resolve.Release();
         (void)reject.Release();
         return promise.Release();
@@ -56,9 +58,9 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             arguments.push_back(values.Read(argv[i], function.parameters[static_cast<std::size_t>(i)].type, api, budget));
         auto call = authority->Invoke(selected.Value().imported->Alias(), function.id, std::move(arguments));
         if (call.HasError()) {
-            auto result = ErrorResult(call.ErrorValue(), authority->Limits().values);
-            return function.invocation == ScriptExportInvocationMode::Asynchronous ? ImmediateAsync(std::move(result))
-                                                                                   : values.WriteOutcome(std::move(result));
+            auto failureResult = ErrorResult(call.ErrorValue(), authority->Limits().values);
+            return function.invocation == ScriptExportInvocationMode::Asynchronous ? ImmediateAsync(std::move(failureResult))
+                                                                                   : values.WriteOutcome(std::move(failureResult));
         }
         if (function.invocation == ScriptExportInvocationMode::Asynchronous)
             return Async(std::move(call).Value());

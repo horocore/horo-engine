@@ -142,7 +142,7 @@ namespace Horo::Runtime {
         try {
             auto state = std::make_shared<SaveContentDetail::WorldState>(service, descriptor_, content_.state_);
             auto check = std::make_unique<ContentPublicationCheck>(std::move(content_));
-            auto queued = service->QueuePreparationWithPublicationCheck(std::move(definition_), std::move(check));
+            auto queued = service->QueuePreparationWithPublicationCheck(definition_, std::move(check));
             if (queued.HasError())
                 return Result<QueuedSavedSceneBootstrap>::Failure(queued.ErrorValue());
             state->publication.emplace(std::move(queued).Value());
@@ -202,8 +202,9 @@ namespace Horo::Runtime {
             using Return = Result<PreparedSavedSceneBootstrap>;
             // The caller's final failure slot exists before foreign code; no Result/Error is moved after it throws.
             return Return::CompleteInPlace(MakeError(SaveErrors::RestoreAdapterContractInvalid),
-                                           [&, allocationFailure = Failure<PreparedSavedSceneBootstrap>(
-                                                   SaveErrors::RestoreAllocationFailed)](Return &completed) mutable noexcept {
+                                           [decoder, &input, &content, &descriptor, resolved,
+                                            allocationFailure = Failure<PreparedSavedSceneBootstrap>(SaveErrors::RestoreAllocationFailed)](
+                                               Return &completed) mutable noexcept {
                 try {
                     auto decoded = decoder->DecodeBaseline(input);
                     if (decoded.HasError()) {

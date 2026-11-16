@@ -46,7 +46,7 @@ namespace Horo::Editor {
     }
 
     void GamePanel::DrawUnavailable(const ImVec2 &origin, const float width, const float height, const EditorWorkspaceViewModel &viewModel,
-                                    const EditorGuiContext &context) {
+                                    const EditorGuiContext &context) const {
         const auto fallback = viewModel.playViewSource == EditorPlayViewSource::Simulator ? "simulator_unavailable" : "idle";
         const std::string message = !viewModel.playError.empty() ? viewModel.playError : kTextScope.Text(context.localization, fallback);
         const ImVec2 extent = ImGui::CalcTextSize(message.c_str());

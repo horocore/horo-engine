@@ -201,7 +201,7 @@ namespace Horo::Application::Internal {
                 auto target = Reference(map, binding.target);
                 if (target.HasError())
                     return Result<void>::Failure(target.ErrorValue());
-                recipe.bindings.push_back({binding.id, std::move(target).Value()});
+                recipe.bindings.emplace_back(binding.id, std::move(target).Value());
             }
             return Result<void>::Success();
         }
@@ -220,7 +220,7 @@ namespace Horo::Application::Internal {
                 const auto &actual = projected.behaviors[index++];
                 if (actual.typeId != behavior->typeId || actual.schemaVersion != behavior->schemaVersion || !actual.instanceId.value)
                     return Invalid<void>("Actual prefab projection changed durable behavior type or schema identity.");
-                member.behaviors.push_back({behavior->typeId, behavior->instanceId, actual.instanceId, behavior->schemaVersion});
+                member.behaviors.emplace_back(behavior->typeId, behavior->instanceId, actual.instanceId, behavior->schemaVersion);
             }
             if (index != projected.behaviors.size())
                 return Invalid<void>("Actual prefab projection contains an undeclared durable behavior occurrence.");
@@ -502,8 +502,8 @@ namespace Horo::Application::Internal {
             return Invalid<std::shared_ptr<PlaySavePrefabInventory>>(
                 "The actual Play world or aggregate prefab identity bounds are invalid.");
         try {
-            auto state = std::make_shared<State>(State{scenes, world, scene->RuntimeId(), std::move(authored), std::move(entropy), limits,
-                                                       std::move(profile), std::move(schemas)});
+            auto state = std::make_shared<State>(scenes, world, scene->RuntimeId(), std::move(authored), std::move(entropy), limits,
+                                                 std::move(profile), std::move(schemas));
             if (auto map = state->Map(*scene); map.HasError())
                 return Outcome::Failure(map.ErrorValue());
             return Outcome::Success(std::shared_ptr<PlaySavePrefabInventory>(new PlaySavePrefabInventory(std::move(state))));
@@ -545,8 +545,8 @@ namespace Horo::Application::Internal {
                 return Invalid<std::shared_ptr<PlaySavePrefabInventory>>("Invalid private Scene inventory owner.");
             if (auto valid = EncodePrefabPersistentState(saved, limits, profile); valid.HasError())
                 return Outcome::Failure(valid.ErrorValue());
-            auto state = std::make_shared<State>(State{scenes, saved.world, candidate.View().RuntimeId(), std::move(authored),
-                                                       std::move(entropy), limits, std::move(profile), std::move(schemas)});
+            auto state = std::make_shared<State>(scenes, saved.world, candidate.View().RuntimeId(), std::move(authored), std::move(entropy),
+                                                 limits, std::move(profile), std::move(schemas));
             if (auto adopted = state->Adopt(saved, restored, candidate.View()); adopted.HasError())
                 return Outcome::Failure(adopted.ErrorValue());
             return Outcome::Success(std::shared_ptr<PlaySavePrefabInventory>(new PlaySavePrefabInventory(std::move(state))));
@@ -577,7 +577,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc PlaySavePrefabInventory::Close */
-    void PlaySavePrefabInventory::Close() noexcept {
+    void PlaySavePrefabInventory::Close() const noexcept {
         state_->closed = true;
     }
 }  // namespace Horo::Application::Internal

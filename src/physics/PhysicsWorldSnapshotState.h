@@ -54,7 +54,7 @@ namespace Horo::Physics::Detail {
 
         /** @brief At most the cold-admitted slot count; no shared_ptr promotion or
          * count guesses confer write authority. */
-        [[nodiscard]] Result<std::shared_ptr<PhysicsStateSnapshotSlot>> SealSlot() {
+        [[nodiscard]] Result<std::shared_ptr<PhysicsStateSnapshotSlot>> SealSlot() const {
             for (const auto &slot : slots)
                 if (slot->TryWrite())
                     return Result<std::shared_ptr<PhysicsStateSnapshotSlot>>::Success(slot);
@@ -63,7 +63,7 @@ namespace Horo::Physics::Detail {
 
         /** @brief Atomically publishes only a fully written immutable value,
          * transferring its first reader into the opaque lease. */
-        [[nodiscard]] PhysicsStateSnapshotLease Publish(const std::shared_ptr<PhysicsStateSnapshotSlot> &slot) noexcept {
+        [[nodiscard]] PhysicsStateSnapshotLease Publish(const std::shared_ptr<PhysicsStateSnapshotSlot> &slot) const noexcept {
             slot->PublishWrite();
             return PhysicsStateSnapshotLease{slot};
         }

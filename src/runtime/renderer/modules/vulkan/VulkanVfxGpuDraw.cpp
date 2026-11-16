@@ -115,7 +115,7 @@ namespace Horo::Render::Detail {
     Result<void> VulkanVfxGpuRuntime::Impl::EncodeDraw(VkCommandBuffer command, VulkanCommandTicket ticket,
                                                        const RenderQueueSubmission &submission, const RenderGraphVfxGpuDraw &draw,
                                                        const RenderGraphExecutionRequest &request,
-                                                       std::span<const VulkanGraphResource> resources) {
+                                                       std::span<const VulkanGraphResource> resources) const {
         if (const auto valid = ValidateDraw(draw, request, resources); valid.HasError())
             return valid;
         auto simulation = std::static_pointer_cast<VulkanVfxGpuSimulation>(draw.simulationLease);

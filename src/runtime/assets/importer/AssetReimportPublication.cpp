@@ -119,9 +119,9 @@ namespace Horo::Assets::Detail {
             if (registry.Publish(std::move(candidate).Value()).status == AssetRegistryBuildStatus::Failed)
                 return Void::Failure(MakeError(AssetErrors::IndexMalformed));
             admission.committed = true;
-            auto index =
-                AssetIndexStore::SaveAtomically(admission.root / std::filesystem::path{ProjectLayout::AssetIndexPath}, registry.Snapshot());
-            if (index.HasError())
+            if (auto index = AssetIndexStore::SaveAtomically(admission.root / std::filesystem::path{ProjectLayout::AssetIndexPath},
+                                                             registry.Snapshot());
+                index.HasError())
                 return Void::Failure(std::move(index).ErrorValue());
             return Void::Success();
         }

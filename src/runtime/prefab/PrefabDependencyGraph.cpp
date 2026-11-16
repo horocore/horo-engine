@@ -123,7 +123,7 @@ namespace Horo::Prefab {
                 return Result<void>::Failure(MakeError(PrefabErrors::DependencyRevisionMismatch));
             if (auto charged = Charge(capture.budget); charged.HasError())
                 return charged;
-            capture.skews.push_back({owner.assetId, target, kind, placement, authored, actual});
+            capture.skews.emplace_back(owner.assetId, target, kind, placement, authored, actual);
             return Result<void>::Success();
         }
 
@@ -308,7 +308,7 @@ namespace Horo::Prefab {
                                                                      const PrefabLimitProfile &limits, const PrefabMetricHandles &metrics,
                                                                      PrefabSourceRevisionPolicy revisionPolicy) {
         PrefabMetricOperation observation{metrics, PrefabMetricPhase::Graph};
-        auto result = [&]() -> Result<PrefabDependencyGraphSnapshot> {
+        auto result = [&]() {
             if (revisionPolicy > PrefabSourceRevisionPolicy::PreserveLayerRebase)
                 return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
             PrefabExpansionBudget budget{limits};

@@ -53,7 +53,7 @@ namespace Horo::Editor {
         void LayerControls(const Terrain::TerrainAuthoringLayerBinding &binding, std::size_t count, const EditorGuiContext &context);
         void LayerRow(Terrain::TerrainLayerId layer, std::size_t index, const EditorGuiContext &context);
         void ActionControls(const Frame &frame, std::optional<TerrainToolCommand> &command, const EditorGuiContext &context);
-        void CookStatus(const Frame &frame, const EditorGuiContext &context);
+        void CookStatus(const Frame &frame, const EditorGuiContext &context) const;
         void CookControls(const Frame &frame, std::optional<TerrainToolCommand> &command, const EditorGuiContext &context);
         void Surface(const Frame &frame, const Terrain::TerrainCanonicalSource &source) const;
         void Weights(const Frame &frame, const Terrain::TerrainCanonicalSource &source) const;
@@ -62,7 +62,7 @@ namespace Horo::Editor {
         void Foliage(const Frame &frame, const Terrain::TerrainCanonicalSource &source) const;
         [[nodiscard]] std::optional<TerrainSurfaceHit> Pick(const Frame &frame, const Terrain::TerrainCanonicalSource &source,
                                                             std::optional<TerrainToolCommand> &command);
-        [[nodiscard]] bool InputSurface(const Frame &frame, bool controls);
+        [[nodiscard]] bool InputSurface(const Frame &frame, bool controls) const;
         [[nodiscard]] bool PrepareFrame(const Frame &frame, const Terrain::TerrainCanonicalSource &source);
         bool ProcessInput(const Frame &frame, const Terrain::TerrainCanonicalSource &source, bool controls,
                           std::optional<TerrainToolCommand> &command);

@@ -174,8 +174,8 @@ namespace Horo::Render {
                     candidate_.targetBindings.push_back({.id = binding.id, .active = false});
                 }
                 for (const auto &parameter : manifest.parameters)
-                    candidate_.parameters.push_back({parameter.id, parameter.binding, parameter.type, parameter.rows, parameter.columns,
-                                                     parameter.arrayCount, 0, 0, 0, true, false});
+                    candidate_.parameters.emplace_back(parameter.id, parameter.binding, parameter.type, parameter.rows, parameter.columns,
+                                                       parameter.arrayCount, 0, 0, 0, true, false);
             }
 
             void Stage(const SpirvReflectionStage &stage, const NativeStage &native, const ShaderEntryPoint &entry) {
@@ -384,7 +384,7 @@ namespace Horo::Render {
                 locations.push_back(location);
             }
             std::ranges::sort(locations);
-            if (std::adjacent_find(locations.begin(), locations.end()) != locations.end())
+            if (std::ranges::adjacent_find(locations) != locations.end())
                 throw InvalidEvidence{};
             return Outcome::Success(std::move(locations));
         } catch (const Json::exception &) {

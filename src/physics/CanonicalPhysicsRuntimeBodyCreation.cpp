@@ -88,7 +88,7 @@ namespace Horo::Physics::Detail {
                                                             const PhysicsSceneGroupShape &input,
                                                             const StateDetail::ConstructionRecipeLease *recipe) {
             using Outcome = Result<CanonicalSceneShapeRecord>;
-            auto *pool = batch.world->owner.constructionRecipes;
+            const auto *pool = batch.world->owner.constructionRecipes;
             if (auto admitted = ValidateCanonicalRecipeAdmission(pool, recipe); admitted.HasError())
                 return Outcome::Failure(admitted.ErrorValue());
             auto created = PrepareGroupNativeShape(batch, input);

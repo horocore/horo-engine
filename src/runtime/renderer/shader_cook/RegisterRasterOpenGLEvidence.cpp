@@ -106,7 +106,7 @@ namespace Horo::Render::RegisterRasterCookDetail {
             constexpr std::array<std::string_view, 5> entry{"void", "main", "(", ")", "{"};
             if (tokens.size() < version.size() || !std::ranges::equal(tokens.first(version.size()), version))
                 throw InvalidEvidence{};
-            const auto found = std::search(tokens.begin(), tokens.end(), entry.begin(), entry.end());
+            const auto found = std::ranges::search(tokens, entry).begin();
             if (found == tokens.end())
                 throw InvalidEvidence{};
             if (std::search(found + 1, tokens.end(), entry.begin(), entry.end()) != tokens.end())

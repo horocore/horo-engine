@@ -3,9 +3,17 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <span>
 
 namespace Horo::Prefab::ValueDetail {
     namespace {
+        /** @brief Keeps an uncomposed source distinct from the final variant or nested composition step. */
+        PrefabValueOrigin CompositionOrigin(std::span<const PrefabCompositionOriginStep> chain) {
+            if (chain.empty())
+                return PrefabValueOrigin::Source;
+            return chain.back().kind == PrefabCompositionOrigin::Variant ? PrefabValueOrigin::Variant : PrefabValueOrigin::Nested;
+        }
+
         /** @brief Charge owned provenance before copying possibly large strings into
          * the immutable result. */
         Result<void> AddBinding(ResolutionState &state, PrefabValueOverrideTarget target, PrefabOverrideValue value,
@@ -64,9 +72,7 @@ namespace Horo::Prefab::ValueDetail {
             auto target = PrefabPropertyAddress::Create(source.key.object, schema.componentType, payload.instance, schema.property);
             if (target.HasError())
                 return Result<void>::Failure(target.ErrorValue());
-            const auto origin = source.originChain.empty()                                           ? PrefabValueOrigin::Source
-                                : source.originChain.back().kind == PrefabCompositionOrigin::Variant ? PrefabValueOrigin::Variant
-                                                                                                     : PrefabValueOrigin::Nested;
+            const auto origin = CompositionOrigin(source.originChain);
             return AddBinding(state, std::move(target).Value(), std::move(value).Value(), object, component, &schema, origin);
         }
 
@@ -141,9 +147,7 @@ namespace Horo::Prefab::ValueDetail {
             if (auto charged = state.budget.Consume(1); charged.HasError())
                 return charged;
             const auto &object = state.objects[i];
-            const auto origin = object.originChain.empty()                                           ? PrefabValueOrigin::Source
-                                : object.originChain.back().kind == PrefabCompositionOrigin::Variant ? PrefabValueOrigin::Variant
-                                                                                                     : PrefabValueOrigin::Nested;
+            const auto origin = CompositionOrigin(object.originChain);
             if (auto added = AddBinding(state, object.key.object, object.object.localTransform, i, std::nullopt, nullptr, origin);
                 added.HasError())
                 return added;

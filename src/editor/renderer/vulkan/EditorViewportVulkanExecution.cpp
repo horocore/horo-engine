@@ -96,7 +96,7 @@ namespace Horo::Editor {
     }
 
     Result<std::uint32_t> EditorViewportRendererVulkan::PrepareViewportSlot(Render::FrameToken frame,
-                                                                            const Render::StaticMeshPassDescriptor &pass) {
+                                                                            const Render::StaticMeshPassDescriptor &pass) const {
         using namespace Render;
         using Output = Result<std::uint32_t>;
         if (!pass.IsValid() || !IsReady() || pass.target != resources_.Target() ||

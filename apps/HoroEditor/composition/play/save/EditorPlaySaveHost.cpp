@@ -9,7 +9,8 @@ namespace Horo::Application::Internal {
         /** @brief Declares read scope without replacing the actual request's native preparation/capture. */
         Result<void> ValidatePhysicsSelection(const PlaySaveStorageSchema &schema,
                                               std::span<const Editor::PlaySaveGameplayBinding> gameplay,
-                                              const std::shared_ptr<PlaySavePhysicsServices> &physics, Runtime::RuntimeSceneView scene) {
+                                              const std::shared_ptr<PlaySavePhysicsServices> &physics,
+                                              const Runtime::RuntimeSceneView &scene) {
             if (!schema.physics || !physics)
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
             if (*schema.physics != Physics::Detail::PhysicsStateSaveDescriptor())
@@ -169,8 +170,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         if (!command.selection || !snapshot || !snapshot->manager)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
-        const auto expected = command.kind == Load ? Runtime::SaveManagerCommandKind::Load : Runtime::SaveManagerCommandKind::Delete;
-        if (command.selection->kind != expected)
+        if (const auto expected = command.kind == Load ? Runtime::SaveManagerCommandKind::Load : Runtime::SaveManagerCommandKind::Delete;
+            command.selection->kind != expected)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
         return snapshot->manager->ValidateCommand(*command.selection);
     }
@@ -261,7 +262,7 @@ namespace Horo::Application::Internal {
             state_->epoch == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::LifecycleUnavailable));
         ++state_->epoch;
-        for (const auto mutation : state_->mutations)
+        for (const auto &mutation : state_->mutations)
             if (const auto ended = state_->barrier->EndMutation(mutation, {state_->epoch}); ended.HasError())
                 return ended;
         state_->mutations.clear();

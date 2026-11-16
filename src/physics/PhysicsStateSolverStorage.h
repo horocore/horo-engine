@@ -9,16 +9,16 @@ namespace Horo::Physics::StateDetail {
      * are never passed as a decode destination. */
     struct SolverStorage final {
         /** @brief Allows MSVC debug-iterator proxy allocation failures to reach cold preparation's error boundary. */
-        SolverStorage() : bodies(0), activeBodyOrder(0), constraints(0), pairs(0), manifolds(0), ccdManifolds(0), activeBodyScratch(0) {}
+        SolverStorage() = default;
 
         PhysicsStateLimits limits;
-        std::vector<PhysicsStateBody> bodies;
-        std::vector<PhysicsStateObjectId> activeBodyOrder;
-        std::vector<PhysicsStateConstraint> constraints;
-        std::vector<PhysicsStateBodyPair> pairs;
-        std::vector<PhysicsStateManifold> manifolds;
-        std::vector<PhysicsStateManifoldKey> ccdManifolds;
-        std::vector<std::uint8_t> activeBodyScratch;
+        std::vector<PhysicsStateBody> bodies = std::vector<PhysicsStateBody>(std::size_t{0});
+        std::vector<PhysicsStateObjectId> activeBodyOrder = std::vector<PhysicsStateObjectId>(std::size_t{0});
+        std::vector<PhysicsStateConstraint> constraints = std::vector<PhysicsStateConstraint>(std::size_t{0});
+        std::vector<PhysicsStateBodyPair> pairs = std::vector<PhysicsStateBodyPair>(std::size_t{0});
+        std::vector<PhysicsStateManifold> manifolds = std::vector<PhysicsStateManifold>(std::size_t{0});
+        std::vector<PhysicsStateManifoldKey> ccdManifolds = std::vector<PhysicsStateManifoldKey>(std::size_t{0});
+        std::vector<std::uint8_t> activeBodyScratch = std::vector<std::uint8_t>(std::size_t{0});
         PhysicsStateSolverView used;
 
         /** @brief Captures actual vector payload capacities after cold allocation;

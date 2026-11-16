@@ -278,7 +278,7 @@ namespace Horo::Application::Internal {
                 return record_ && owners_->configured && request_.service == Network::NetworkModeServiceKind::Scene;
             }
 
-            void RevokeGameplayContext() noexcept {
+            void RevokeGameplayContext() const noexcept {
                 if (record_)
                     if (const auto context = record_->gameplay.lock())
                         context->Revoke();
@@ -296,7 +296,7 @@ namespace Horo::Application::Internal {
                 gameplay_.reset();
             }
 
-            void DrainModuleRetirements() noexcept {
+            void DrainModuleRetirements() const noexcept {
                 if (owners_->gameplay && owners_->gameplay->moduleRetirements)
                     (void)owners_->gameplay->moduleRetirements->Drain();
             }
@@ -362,7 +362,7 @@ namespace Horo::Application::Internal {
                 return PrepareConfiguredTemplates();
             }
 
-            Result<void> PrepareConfiguredNative() {
+            Result<void> PrepareConfiguredNative() const {
                 const auto &input = *owners_->configured;
                 auto participant = record_->native.MakeParticipant(*owners_->physics, owners_->authority, input.settings);
                 if (participant.HasError())
@@ -380,7 +380,7 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
             }
 
-            Result<void> PrepareConfiguredAi() {
+            Result<void> PrepareConfiguredAi() const {
                 const auto &input = *owners_->configured;
                 auto ai = AI::AiSceneRuntime::Create(input.aiSettings);
                 if (ai.HasError())
@@ -397,7 +397,7 @@ namespace Horo::Application::Internal {
             }
 
             /** @brief Each genuine current/replacement World gets an independent source owner copied from explicit policy. */
-            Result<void> PrepareConfiguredVfx() {
+            Result<void> PrepareConfiguredVfx() const {
                 if (!owners_->gameplay || !owners_->gameplay->vfxScene)
                     return Result<void>::Success();
                 if (!owners_->fixed)
@@ -413,7 +413,7 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
             }
 
-            Result<void> PrepareConfiguredTemplates() {
+            Result<void> PrepareConfiguredTemplates() const {
                 const auto &input = *owners_->configured;
                 const auto &boundary = input.load;
                 if (owners_->gameplay && owners_->gameplay->prefabPermission == GameplayPrefabPermission::Granted) {

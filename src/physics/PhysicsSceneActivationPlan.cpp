@@ -49,7 +49,7 @@ namespace Horo::Physics::Detail {
         }
 
         [[nodiscard]] Result<Runtime::RuntimeSceneAssetView> ResolveAsset(const Runtime::RuntimeSceneDefinition &definition,
-                                                                          const Runtime::RuntimeSceneView scene,
+                                                                          const Runtime::RuntimeSceneView &scene,
                                                                           const Assets::AssetId asset, const ErrorCodeDescriptor &errorCode,
                                                                           const std::string_view stage, const Runtime::SceneObjectId object,
                                                                           const std::uint64_t component) {
@@ -68,8 +68,9 @@ namespace Horo::Physics::Detail {
             return Result<Runtime::RuntimeSceneAssetView>::Success(*resolved);
         }
 
-        [[nodiscard]] Result<Math::Mat4> ComposeWorldMatrix(const Runtime::RuntimeSceneView scene, const Runtime::RuntimeEntityView &entity,
-                                                            const Math::Mat4 &localMatrix, std::vector<std::uint8_t> &states,
+        [[nodiscard]] Result<Math::Mat4> ComposeWorldMatrix(const Runtime::RuntimeSceneView &scene,
+                                                            const Runtime::RuntimeEntityView &entity, const Math::Mat4 &localMatrix,
+                                                            std::vector<std::uint8_t> &states,
                                                             std::vector<std::optional<Math::Transform>> &cache) {
             if (!entity.parent.has_value())
                 return Result<Math::Mat4>::Success(localMatrix);
@@ -184,7 +185,7 @@ namespace Horo::Physics::Detail {
         }
 
         [[nodiscard]] Result<PlannedBody> BuildPlannedBody(const Runtime::PhysicsSceneComponentView &view,
-                                                           const Runtime::RuntimeSceneView scene,
+                                                           const Runtime::RuntimeSceneView &scene,
                                                            std::vector<std::uint8_t> &transformStates,
                                                            std::vector<std::optional<Math::Transform>> &transformCache) {
             const Runtime::RigidBodyComponent &component = *view.rigidBody;
@@ -220,7 +221,7 @@ namespace Horo::Physics::Detail {
         }
 
         [[nodiscard]] Result<std::vector<PlannedBody>> BuildPlannedBodies(const std::vector<Runtime::PhysicsSceneComponentView> &views,
-                                                                          const Runtime::RuntimeSceneView scene) {
+                                                                          const Runtime::RuntimeSceneView &scene) {
             std::vector<PlannedBody> bodies;
             std::vector<std::uint8_t> transformStates(scene.SlotCount());
             std::vector<std::optional<Math::Transform>> transformCache(scene.SlotCount());
@@ -262,7 +263,7 @@ namespace Horo::Physics::Detail {
 
         /** @brief Resolve the entire physical and semantic material closure before shape or native preparation. */
         Result<PreparedColliderBindings> PrepareColliderBindings(const Runtime::RuntimeSceneDefinition &definition,
-                                                                 Runtime::RuntimeSceneView scene, const ColliderReference &reference,
+                                                                 const Runtime::RuntimeSceneView &scene, const ColliderReference &reference,
                                                                  const PhysicsSurfaceWorldBinding &surfaces) {
             const auto &collider = *reference.component;
             std::vector<PhysicsQueryMaterial> materials;
@@ -287,7 +288,7 @@ namespace Horo::Physics::Detail {
         }
 
         [[nodiscard]] Result<PlannedCollider> BuildPlannedCollider(const Runtime::RuntimeSceneDefinition &definition,
-                                                                   const Runtime::RuntimeSceneView scene,
+                                                                   const Runtime::RuntimeSceneView &scene,
                                                                    const ColliderReference &reference,
                                                                    const PhysicsSurfaceWorldBinding &surfaces) {
             const Runtime::ColliderComponent &collider = *reference.component;
@@ -345,7 +346,7 @@ namespace Horo::Physics::Detail {
         }
 
         [[nodiscard]] Result<void> AppendPlannedCollider(const Runtime::RuntimeSceneDefinition &definition,
-                                                         const Runtime::RuntimeSceneView scene, const ColliderReference &reference,
+                                                         const Runtime::RuntimeSceneView &scene, const ColliderReference &reference,
                                                          std::vector<PlannedBody> &bodies, const PhysicsSurfaceWorldBinding &surfaces) {
             const Runtime::ColliderComponent &collider = *reference.component;
             PlannedBody *body = FindPlannedBody(bodies, collider.body);
@@ -368,7 +369,7 @@ namespace Horo::Physics::Detail {
         }
 
         [[nodiscard]] Result<void> AppendPlannedColliders(const Runtime::RuntimeSceneDefinition &definition,
-                                                          const Runtime::RuntimeSceneView scene,
+                                                          const Runtime::RuntimeSceneView &scene,
                                                           const std::vector<Runtime::PhysicsSceneComponentView> &views,
                                                           std::vector<PlannedBody> &bodies, const PhysicsSurfaceWorldBinding &surfaces) {
             const std::vector<ColliderReference> colliders = CollectEnabledColliders(views);

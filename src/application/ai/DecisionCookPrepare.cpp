@@ -30,7 +30,7 @@ namespace Horo::Application::DecisionCookDetail {
         }
 
         Result<std::vector<std::size_t>> Closure(const State &state, std::size_t root) {
-            std::vector<std::size_t> closure{root};
+            std::vector closure{root};
             for (std::size_t cursor = 0; cursor < closure.size(); ++cursor) {
                 for (const auto id : Calls(state.inputs[closure[cursor]].graph)) {
                     const auto found = std::ranges::lower_bound(state.inputs, id, {}, [](const auto &input) {

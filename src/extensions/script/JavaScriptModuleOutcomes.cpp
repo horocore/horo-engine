@@ -1,6 +1,8 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "JavaScriptModuleValues.h"
 
+#include <memory>
+
 namespace Horo::Extensions::JavaScriptModuleDetail {
     OutcomeBox::~OutcomeBox() {
         if (budget && cost) {
@@ -10,7 +12,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
     }
 
     void FinalizeOutcome(JSRuntime *, JSValue value) noexcept {
-        delete static_cast<OutcomeBox *>(JS_GetOpaque(value, JS_GetClassID(value)));
+        const std::unique_ptr<OutcomeBox> outcome{static_cast<OutcomeBox *>(JS_GetOpaque(value, JS_GetClassID(value)))};
     }
 
     namespace {

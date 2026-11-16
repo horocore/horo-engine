@@ -28,8 +28,8 @@ namespace Horo::Prefab::Detail {
                 const auto &members = data.entities[identity.source.entity.value].members;
                 if (identity.source.member >= members.size())
                     return Result<void>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
-                const auto *behavior = std::get_if<Gameplay::BehaviorComponent>(&members[identity.source.member]);
-                if (!behavior || !identity.runtime.value || behavior->typeId != identity.type ||
+                if (const auto *behavior = std::get_if<Gameplay::BehaviorComponent>(&members[identity.source.member]);
+                    !behavior || !identity.runtime.value || behavior->typeId != identity.type ||
                     behavior->schemaVersion != identity.schemaVersion)
                     return Result<void>::Failure(
                         MakeError(PrefabErrors::OverrideConflict,
@@ -80,7 +80,7 @@ namespace Horo::Prefab::Detail {
 
             /** @brief Projects one exact raw member through the actual host codec or
              * registered component schema. */
-            Result<void> ProjectRaw(const RawComponentPayload &raw, PrefabGroupProjection &projection, std::size_t entity) {
+            Result<void> ProjectRaw(const RawComponentPayload &raw, PrefabGroupProjection &projection, std::size_t entity) const {
                 auto &target = projection.components[entity];
 
                 if (projector) {

@@ -65,7 +65,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> UploadReloadGrid(const Math::Mat4 &mvp, Math::Vec3 color) const;
 
         [[nodiscard]] Result<void> CreateProgram(ProgramGeneration &candidate);
-        [[nodiscard]] Result<void> CreateShadowProgram(ProgramGeneration &candidate);
+        [[nodiscard]] Result<void> CreateShadowProgram(ProgramGeneration &candidate) const;
         void AdoptProgram(ProgramGeneration &candidate) noexcept;
         [[nodiscard]] Result<void> ValidatePassRequest(const Render::StaticMeshPassDescriptor &descriptor,
                                                        EditorViewportExtent requestedExtent) const;
@@ -105,7 +105,7 @@ namespace Horo::Editor {
             std::int32_t baseColor{-1};
         };
 
-        [[nodiscard]] Result<void> LoadUniformLocations(ProgramGeneration &candidate);
+        [[nodiscard]] Result<void> LoadUniformLocations(ProgramGeneration &candidate) const;
 
         EditorViewportForwardLighting forwardLighting_;
         std::optional<Render::DirectionalShadowFrame> frameShadow_;

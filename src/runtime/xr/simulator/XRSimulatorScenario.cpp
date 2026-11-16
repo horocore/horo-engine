@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 
 namespace Horo::XR {
     namespace XRSimulatorErrors {
@@ -100,7 +101,7 @@ namespace Horo::XR {
         const XRSimulatorSource *FindSource(const XRSimulatorStep &step, const XRTrackedDeviceRole role) noexcept {
             const auto sources = std::span{step.sources}.first(step.sourceCount);
             const auto found = std::ranges::find(sources, role, &XRSimulatorSource::role);
-            return found == sources.end() ? nullptr : &*found;
+            return found == sources.end() ? nullptr : std::to_address(found);
         }
 
         bool Normalized(const XRSimulatorAction &action) noexcept {

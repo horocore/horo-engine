@@ -41,8 +41,8 @@ namespace Horo::Editor {
                            std::ranges::any_of(invalid, [](bool value) {
             return value;
         }) || durability.has_value();
-        return std::make_shared<PrefabProjectSettingsView>(
-            PrefabProjectSettingsView{revision, publication, values, std::move(validation), dirty, std::move(durability)});
+        return std::make_shared<PrefabProjectSettingsView>(revision, publication, values, std::move(validation), dirty,
+                                                           std::move(durability));
     }
 
     /** @copydoc PrefabProjectSettingsSession::Open */
@@ -54,6 +54,7 @@ namespace Horo::Editor {
             auto lease = mutations.TryAcquire({root, ProjectMutationOwner::Save, "prefab.settings.open"});
             if (lease.HasError())
                 return Return::Failure(std::move(lease).ErrorValue());
+            const auto mutationLease = std::move(lease).Value();
             auto file = Application::LoadPrefabProjectSettings(root);
             if (file.HasError())
                 return Return::Failure(std::move(file).ErrorValue());

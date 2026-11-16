@@ -47,7 +47,7 @@ namespace Horo::AI::Detail {
         }
 
         void WritePropertyValue(DecisionWriter &writer, const BehaviorTreePropertyValue &value) {
-            std::visit([&](const auto &item) {
+            std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
                 using T = std::decay_t<decltype(item)>;
                 if constexpr (std::is_same_v<T, bool>)
                     writer.Unsigned(item, 1);
@@ -201,7 +201,7 @@ namespace Horo::AI::Detail {
             return;
         }
         writer.Unsigned(value.index(), 1);
-        std::visit([&](const auto &item) {
+        std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
             using T = std::decay_t<decltype(item)>;
             if constexpr (std::is_same_v<T, bool>)
                 writer.Unsigned(item, 1);

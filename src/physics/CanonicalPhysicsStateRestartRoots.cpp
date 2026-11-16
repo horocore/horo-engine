@@ -31,7 +31,7 @@ namespace Horo::Physics::Detail {
                 return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
             std::size_t sceneCount{};
             for (const auto &root : manifest.shapes.roots)
-                sceneCount += !IsQueryRoot(manifest, root.shape);
+                sceneCount += IsQueryRoot(manifest, root.shape) ? 0U : 1U;
             if (sceneCount > world.scene.maximumShapes || sceneCount > std::numeric_limits<std::uint32_t>::max() - world.nextResourceSlot)
                 return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
             return Result<void>::Success();

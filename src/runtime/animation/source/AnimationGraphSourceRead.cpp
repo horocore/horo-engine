@@ -179,8 +179,8 @@ namespace Horo::Animation {
                 Keys(sample, {"id", "clip", "x", "y", "canLead"});
                 if (!sample["canLead"].is_boolean())
                     Reject(AnimationErrors::GraphMalformed);
-                tree.samples.push_back({Id<GraphBlendSampleId>(sample["id"]), AssetIdentity<AnimationClipId>(sample["clip"]),
-                                        Coordinate(sample["x"]), Coordinate(sample["y"]), sample["canLead"].get<bool>()});
+                tree.samples.emplace_back(Id<GraphBlendSampleId>(sample["id"]), AssetIdentity<AnimationClipId>(sample["clip"]),
+                                          Coordinate(sample["x"]), Coordinate(sample["y"]), sample["canLead"].get<bool>());
             }
         }
 

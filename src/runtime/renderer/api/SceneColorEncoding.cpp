@@ -2,6 +2,7 @@
 
 #include "RenderErrorDescriptor.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -29,10 +30,9 @@ namespace Horo::Render {
 
         /** @brief Rejects unrepresentable results without clamping signed working RGB. */
         bool Representable(const std::array<double, 3> &values) noexcept {
-            for (double value : values)
-                if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max())
-                    return false;
-            return true;
+            return std::ranges::none_of(values, [](double value) {
+                return !std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max();
+            });
         }
     }  // namespace
 

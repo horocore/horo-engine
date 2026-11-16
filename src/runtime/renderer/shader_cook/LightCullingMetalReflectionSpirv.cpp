@@ -170,9 +170,8 @@ namespace Horo::Render::LightCullingMetalCookDetail {
                     throw InvalidEvidence{};
                 proof.extensionSet = w[1];
             }
-            if (instruction.op == 14)
-                if (w.size() != 3 || w[1] != 0 || w[2] != 1)
-                    throw InvalidEvidence{};
+            if (instruction.op == 14 && (w.size() != 3 || w[1] != 0 || w[2] != 1))
+                throw InvalidEvidence{};
             if (instruction.op == 17)
                 Capability(w);
         }

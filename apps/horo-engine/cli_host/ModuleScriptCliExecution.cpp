@@ -4,6 +4,7 @@
 #include "ScriptModuleHostServices.h"
 
 #include <algorithm>
+#include <format>
 #include <thread>
 
 namespace Horo::Application::Internal {
@@ -45,7 +46,7 @@ namespace Horo::Application::Internal {
             for (std::size_t index = 0; index < count; ++index) {
                 const auto part =
                     std::span{bytes}.subspan(index * bytesPerChunk, std::min(bytesPerChunk, bytes.size() - index * bytesPerChunk));
-                output.fields.emplace_back("result-" + std::to_string(index), Hex(part));
+                output.fields.emplace_back(std::format("result-{}", index), Hex(part));
             }
             return Output::Success(std::move(output));
         }

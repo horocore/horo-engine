@@ -87,7 +87,7 @@ namespace Horo::Extensions {
     }
 
     Result<std::vector<ScriptModuleUpdateReport>> ScriptModuleHostServices::CommitOwned(
-        std::vector<ScriptModuleHostRebindCandidate> &candidates) {
+        std::vector<ScriptModuleHostRebindCandidate> &candidates) const {
         using Output = Result<std::vector<ScriptModuleUpdateReport>>;
         std::vector<ScriptModuleUpdateReport> reports;
         reports.reserve(candidates.size());

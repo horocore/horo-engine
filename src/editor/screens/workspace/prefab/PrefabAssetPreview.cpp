@@ -197,7 +197,7 @@ namespace Horo::Editor {
                             MakeError(resolved.Value().rebased.conflicts.empty() && resolved.Value().rebased.componentConflicts.empty()
                                           ? Prefab::PrefabErrors::OverrideOrphan
                                           : Prefab::PrefabErrors::OverrideConflict));
-                    context.candidate = std::move(*resolved.Value().effective);
+                    context.candidate = *resolved.Value().effective;
                 }
                 auto image = RenderPrefabAssetPreview(context.candidate, input.width, input.height, cancellation);
                 if (image.HasError())

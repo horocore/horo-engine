@@ -72,12 +72,12 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> RegisterPhysicsCapture();
         [[nodiscard]] Result<void> ReleasePhysicsCapture();
         /** @brief Builds same-request preparation without retaining this state in detached workers. */
-        [[nodiscard]] std::shared_ptr<Runtime::IRuntimeSaveCapturePreparation> CapturePreparation();
+        [[nodiscard]] std::shared_ptr<Runtime::IRuntimeSaveCapturePreparation> CapturePreparation() const;
         /** @brief Reads the same exact complete current identity map for all canonical Gameplay owners. */
         [[nodiscard]] Result<Runtime::PersistentEntityIdentityMap> CurrentIdentities() const;
         /** @brief Binds actual installed behavior sources through the real current
          * identity map, never metadata-only coverage. */
-        [[nodiscard]] Result<void> BindActiveGameplay();
+        [[nodiscard]] Result<void> BindActiveGameplay() const;
         /** @brief Rebinds actual current sources before registering the one canonical
          * capture inventory. */
         [[nodiscard]] Result<void> RecomposeBindings();

@@ -6,6 +6,7 @@
 #include <bit>
 #include <chrono>
 #include <fstream>
+#include <functional>
 #include <set>
 
 namespace Horo::Application::Internal {
@@ -93,7 +94,7 @@ namespace Horo::Application::Internal {
             if (packet.manifest.modules.size() > 16)
                 return Denied<void>();
             std::size_t total{};
-            std::set<std::string> paths;
+            std::set<std::string, std::less<>> paths;
             for (const auto &moduleEntry : packet.manifest.modules) {
                 if (PresentationOnly(moduleEntry))
                     continue;

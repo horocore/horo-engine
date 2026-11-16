@@ -26,6 +26,8 @@ namespace Horo::Physics::StateDetail {
                     case 2:
                         v = PhysicsDensity{value};
                         break;
+                    default:
+                        return false;
                 }
             }
             return true;

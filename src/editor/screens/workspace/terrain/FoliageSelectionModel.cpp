@@ -22,7 +22,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(TerrainEditErrors::LimitExceeded));
         std::vector<Terrain::FoliageInstanceId> candidate(ids.begin(), ids.end());
         std::ranges::sort(candidate);
-        candidate.erase(std::unique(candidate.begin(), candidate.end()), candidate.end());
+        candidate.erase(std::ranges::unique(candidate).begin(), candidate.end());
         for (auto id : candidate)
             if (!document.Placements().contains(id))
                 return Result<void>::Failure(MakeError(TerrainEditErrors::Invalid));

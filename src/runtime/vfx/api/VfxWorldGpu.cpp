@@ -33,20 +33,18 @@ namespace Horo::Vfx {
         /** @brief Checks the complete CPU inventory before admitting a GPU binding. */
         bool CompatibleCpu(const VfxGpuEmitterPreparation &gpu, std::span<const VfxEmitterPreparation> cpu) noexcept {
             const auto buffer = gpu.simulator->Preparation().descriptor.identity.buffer.slot;
-            for (const auto &other : cpu)
-                if (!Compatible(gpu.effect, gpu.emitter, buffer, other.effect, other.emitter, other.particles.buffer.slot))
-                    return false;
-            return true;
+            return std::ranges::none_of(cpu, [&](const VfxEmitterPreparation &other) {
+                return !Compatible(gpu.effect, gpu.emitter, buffer, other.effect, other.emitter, other.particles.buffer.slot);
+            });
         }
 
         /** @brief Checks earlier GPU bindings before any ownership transfer. */
         bool CompatibleGpu(const VfxGpuEmitterPreparation &gpu, std::span<VfxGpuEmitterPreparation> previous) noexcept {
             const auto buffer = gpu.simulator->Preparation().descriptor.identity.buffer.slot;
-            for (const auto &other : previous)
-                if (!Compatible(gpu.effect, gpu.emitter, buffer, other.effect, other.emitter,
-                                other.simulator->Preparation().descriptor.identity.buffer.slot))
-                    return false;
-            return true;
+            return std::ranges::none_of(previous, [&](const VfxGpuEmitterPreparation &other) {
+                return !Compatible(gpu.effect, gpu.emitter, buffer, other.effect, other.emitter,
+                                   other.simulator->Preparation().descriptor.identity.buffer.slot);
+            });
         }
 
         /** @brief Preflights every GPU owner and identity relation without mutating caller storage. */

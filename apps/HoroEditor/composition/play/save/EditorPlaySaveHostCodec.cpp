@@ -99,8 +99,8 @@ namespace Horo::Application::Internal {
                 return Outcome::Failure(object.ErrorValue());
             if (deleted.HasError())
                 return Outcome::Failure(deleted.ErrorValue());
-            const auto *authored = std::get_if<AuthoredPersistentEntityProvenance>(&expected.provenance);
-            if (!authored || !std::ranges::equal(identity.Value(), std::as_bytes(std::span{expected.identity.Bytes()})) ||
+            if (const auto *authored = std::get_if<AuthoredPersistentEntityProvenance>(&expected.provenance);
+                !authored || !std::ranges::equal(identity.Value(), std::as_bytes(std::span{expected.identity.Bytes()})) ||
                 generation.Value() != expected.generation.value || object.Value() != authored->object.value)
                 return Outcome::Failure(InvalidRecord());
             auto result = expected;

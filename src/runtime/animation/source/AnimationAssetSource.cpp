@@ -49,6 +49,16 @@ namespace Horo::Animation {
             }
         }
 
+        /** @brief Selects the envelope-owned metadata or body field without evaluating absent payload keys. */
+        const Json &FieldValue(std::string_view name, std::string_view identityKey, const Json &envelope, const Json &body,
+                               const Json &identity) {
+            if (name == "contractVersion")
+                return envelope.at("contractVersion");
+            if (name == identityKey)
+                return identity;
+            return body.at(std::string(name));
+        }
+
         template <typename T>
         T Data(const Json &envelope, Assets::AssetId identity, std::string_view identityKey, const AnimationCookedContext &context) {
             if (!identity.IsValid())
@@ -62,9 +72,7 @@ namespace Horo::Animation {
             std::size_t index{};
             const auto read = [&](auto &field) {
                 const auto name = SourceFields<T>::names[index++];
-                const auto &wire = name == "contractVersion" ? envelope.at("contractVersion")
-                                   : name == identityKey     ? ownIdentity
-                                                             : body.at(std::string(name));
+                const auto &wire = FieldValue(name, identityKey, envelope, body, ownIdentity);
                 Decode(wire, field, policy);
             };
             std::apply([&](auto &...field) {

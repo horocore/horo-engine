@@ -116,7 +116,7 @@ namespace Horo::Application::Internal {
             return UpdateView(phase);
         }
 
-        Result<void> UpdateView(const Runtime::RuntimePhase phase) {
+        Result<void> UpdateView(const Runtime::RuntimePhase phase) const {
             if (phase != Runtime::RuntimePhase::EndFrame)
                 return Result<void>::Success();
             const auto scene = scenes->ActiveScene();

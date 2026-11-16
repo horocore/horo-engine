@@ -1,5 +1,6 @@
 #include "VfxWorldSpawnInternal.h"
 
+#include <memory>
 #include <tuple>
 
 namespace Horo::Vfx::SpawnDetail {
@@ -90,7 +91,7 @@ namespace Horo::Vfx::SpawnDetail {
             const auto free = std::ranges::find(state.producers, std::uint64_t{}, &Detail::VfxSpawnProducer::producer);
             if (free == state.producers.end())
                 return ResourceBudgetExceeded;
-            output = &*free;
+            output = std::to_address(free);
             return Accepted;
         }
     }  // namespace

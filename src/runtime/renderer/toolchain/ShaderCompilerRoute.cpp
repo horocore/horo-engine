@@ -380,7 +380,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
                     return Result<void>::Failure(locations.ErrorValue());
                 for (const auto location : locations.Value())
                     arguments.insert(arguments.end(), {"--rename-interface-variable", entry.stage == ShaderStage::Vertex ? "out" : "in",
-                                                       std::to_string(location), "horo_raster_varying_" + std::to_string(location)});
+                                                       std::to_string(location), std::format("horo_raster_varying_{}", location)});
                 return Result<void>::Success();
             }
 

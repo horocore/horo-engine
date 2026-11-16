@@ -3,6 +3,7 @@
 #include "ExposureGpuReflection.h"
 #include "LightCullingMetalReflectionInternal.h"
 
+#include <format>
 #include <source_location>
 
 namespace Horo::Render::ExposureGpuCookDetail {
@@ -18,8 +19,7 @@ namespace Horo::Render::ExposureGpuCookDetail {
 
     /** @brief Builds bounded actionable context for one independently checked exposure proof predicate. */
     inline std::string EvidenceMessage(const EvidenceFailure &failure) {
-        return std::string{"Exposure evidence rejected in "} + failure.location.function_name() + ":" +
-               std::to_string(failure.location.line()) + ".";
+        return std::format("Exposure evidence rejected in {}:{}.", failure.location.function_name(), failure.location.line());
     }
 
     using Tokens = RegisterRasterCookDetail::TokenView;

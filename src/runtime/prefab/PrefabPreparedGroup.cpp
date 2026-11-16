@@ -143,7 +143,7 @@ namespace Horo::Prefab::Detail {
         for (const auto &dependency : lease.Dependencies())
             resources.emplace_back(dependency.metadata, dependency.artifact);
         PrefabPreparedGroup group;
-        auto tokens = group.commands.CreateGroup(std::move(entries), std::move(resources), std::move(admission));
+        auto tokens = group.commands.CreateGroup(std::move(entries), std::move(resources), admission);
         if (tokens.HasError())
             return Result<PrefabPreparedGroup>::Failure(tokens.ErrorValue());
         group.entities = std::move(tokens).Value();

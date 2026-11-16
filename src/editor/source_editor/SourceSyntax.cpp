@@ -422,14 +422,15 @@ namespace Horo::Editor {
         auto insertion = plain.Value().insert + "    ";
         const auto innerEnd = caret + insertion.size();
         const auto tail = source.Text().substr(std::max(view.anchor, view.caret));
-        const auto next = tail.find_first_not_of(" \t");
-        if (next != std::string_view::npos && (tail[next] == '}' || tail[next] == ']' || tail[next] == ')'))
+        if (const auto next = tail.find_first_not_of(" \t");
+            next != std::string_view::npos && (tail[next] == '}' || tail[next] == ']' || tail[next] == ')'))
             insertion += plain.Value().insert;
         auto plan = PlanSourceReplacement(source, view, insertion);
         if (plan.HasError())
             return plan;
         auto completed = std::move(plan).Value();
-        completed.after.anchor = completed.after.caret = innerEnd;
+        completed.after.caret = innerEnd;
+        completed.after.anchor = innerEnd;
         return Result<SourceEditingPlan>::Success(std::move(completed));
     }
 }  // namespace Horo::Editor

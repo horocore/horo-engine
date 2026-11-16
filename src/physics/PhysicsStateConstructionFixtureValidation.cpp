@@ -1,5 +1,6 @@
 #include "PhysicsStateConstructionManifestInternal.h"
 
+#include <algorithm>
 #include <array>
 
 namespace Horo::Physics::StateDetail {
@@ -20,12 +21,10 @@ namespace Horo::Physics::StateDetail {
         }
 
         bool DirectAnalyticChildren(const PhysicsStateConstructionManifest &m, PhysicsStateCompoundRecipe group) noexcept {
-            for (const auto &edge : m.shapes.edges.subspan(group.begin, group.count)) {
+            return std::ranges::all_of(m.shapes.edges.subspan(group.begin, group.count), [&m](const PhysicsStateShapeRecipeEdge &edge) {
                 const auto *shape = std::get_if<PhysicsShapeDescriptor>(&m.shapes.nodes[edge.child].geometry);
-                if (!shape || std::holds_alternative<PhysicsStaticPlaneShape>(*shape))
-                    return false;
-            }
-            return true;
+                return shape && !std::holds_alternative<PhysicsStaticPlaneShape>(*shape);
+            });
         }
 
         Result<void> Children(const PhysicsStateConstructionManifest &m, const PhysicsStateConstructionFixture &f) {

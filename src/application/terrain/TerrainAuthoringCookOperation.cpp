@@ -81,6 +81,7 @@ namespace Horo::Application::TerrainCookDetail {
         auto lease = environment.mutations->TryAcquire({request.sourceRoot, Editor::ProjectMutationOwner::Asset, "terrain.authoring.cook"});
         if (lease.HasError())
             return Return::Failure(std::move(lease).ErrorValue());
+        const auto mutationLease = std::move(lease).Value();
         auto captured = CaptureSources(environment, request, cancellation);
         if (captured.HasError())
             return Return::Failure(std::move(captured).ErrorValue());

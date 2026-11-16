@@ -60,7 +60,9 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
                 ~Release() {
                     JS_FreeCStringUTF16(context, text);
                 }
-            } release{context, text};
+            };
+
+            Release release{context, text};
 
             if (length > maximum || !ScalarString(text, length))
                 InvalidValue("String exceeds its bound or contains an unmatched surrogate.");
@@ -88,7 +90,9 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             ~Release() {
                 JS_FreeCString(context, text);
             }
-        } release{context, text};
+        };
+
+        Release release{context, text};
 
         if (length > maximum)
             InvalidValue("Primitive text exceeds its bound.");
@@ -153,7 +157,9 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             ~Release() {
                 JS_FreePropertyEnum(context, table, length);
             }
-        } release{context, table, length};
+        };
+
+        Release release{context, table, length};
 
         if (length > budget.limits.maximumElements)
             InvalidValue("Object property count exceeds the finite limit.");

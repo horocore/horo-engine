@@ -504,7 +504,7 @@ namespace Horo::Editor {
                                                        Theme::FontPx::Sans, &sansCfg, ranges);
             f.monospaceEmphasis = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-SemiBold.ttf").c_str(),
                                                                Theme::FontPx::Sans, &sansCfg, ranges);
-            f.codeFamilies.push_back({"IBM Plex Mono", f.monospace, f.monospaceEmphasis});
+            f.codeFamilies.emplace_back("IBM Plex Mono", f.monospace, f.monospaceEmphasis);
             // Native font discovery stays in the executable composition root. Only loaded
             // atlas families are offered; the source widget never probes the filesystem.
             const auto addFamily = [&](const char *name, const char *path) {
@@ -512,7 +512,7 @@ namespace Horo::Editor {
                 if (!std::filesystem::is_regular_file(path, error))
                     return;
                 if (auto *face = io.Fonts->AddFontFromFileTTF(path, Theme::FontPx::Sans, &sansCfg, ranges))
-                    f.codeFamilies.push_back({name, face, face});
+                    f.codeFamilies.emplace_back(name, face, face);
             };
 #if defined(__APPLE__)
             addFamily("Menlo", "/System/Library/Fonts/Menlo.ttc");
@@ -945,8 +945,8 @@ namespace Horo::Editor {
 
         void ApplySavedThemePreference() {
             const char *overridePath = std::getenv("HORO_THEME_OVERRIDE");
-            const int active = Theme::GetActiveThemeIndex();
-            if (overridePath && active >= 0 && static_cast<std::size_t>(active) < Theme::GetThemeList().size() &&
+            if (const int active = Theme::GetActiveThemeIndex();
+                overridePath && active >= 0 && static_cast<std::size_t>(active) < Theme::GetThemeList().size() &&
                 Theme::GetThemeList()[static_cast<std::size_t>(active)].sourcePath == overridePath)
                 return;
             auto doc = LoadEditorSettingsDocument();
@@ -1073,8 +1073,7 @@ namespace Horo::Editor {
             const auto view = composition.frontend->CreateRenderViewIdentity();
             if (view.HasError())
                 return Result<void>::Failure(view.ErrorValue());
-            const auto bound = composition.viewportRenderer->BindLightingViewIdentity(view.Value());
-            if (bound.HasError())
+            if (const auto bound = composition.viewportRenderer->BindLightingViewIdentity(view.Value()); bound.HasError())
                 return bound;
             const auto selected = composition.frontend->ResolveLightPreparation(profile.requested, profile.fallback, readiness);
             if (selected.HasError())
@@ -1894,8 +1893,9 @@ namespace Horo::Editor {
 
                 *settingsSnapshot_ = p_->settings.Snapshot();
                 if (settingsSnapshot_->revision != appliedKeymapRevision_) {
-                    const auto applied = p_->inputRouter.SetProfile(BuiltinEditorInputProfile(settingsSnapshot_->settings.keymap.profile));
-                    if (applied.HasError())
+                    if (const auto applied =
+                            p_->inputRouter.SetProfile(BuiltinEditorInputProfile(settingsSnapshot_->settings.keymap.profile));
+                        applied.HasError())
                         LOG_ERROR("editor.input", "Unable to activate editor keymap: %s", applied.ErrorValue().message.c_str());
                     appliedKeymapRevision_ = settingsSnapshot_->revision;
                 }
@@ -2627,7 +2627,7 @@ namespace Horo::Editor {
             return created;
         }
 
-        IEditorPlayXrHost *SelectedEditorPlayHost(EditorRenderComposition &composition) noexcept {
+        IEditorPlayXrHost *SelectedEditorPlayHost(const EditorRenderComposition &composition) noexcept {
             if (composition.simulator)
                 return composition.simulator.get();
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
@@ -3322,10 +3322,11 @@ namespace Horo::Editor {
             LOG_CRITICAL("editor.xr", "Explicit XR tracking-root selection is malformed or duplicated.");
             return false;
         }
-        const bool nativeArguments = std::ranges::any_of(arguments, [](const char *value) {
+        if (const bool nativeArguments = std::ranges::any_of(arguments,
+                                                             [](const char *value) {
             return std::string_view{value}.starts_with("--xr-host-");
         });
-        if (options.xrSimulator && (host || nativeArguments)) {
+            options.xrSimulator && (host || nativeArguments)) {
             LOG_CRITICAL("editor.xr", "Select Simulator without native XR host services or --xr-host-* arguments.");
             return false;
         }
@@ -3340,11 +3341,11 @@ namespace Horo::Editor {
         PreparedEditorBootstrap result;
         result.selected = host;
 #if defined(HORO_HAS_OPENXR_HOST)
-        const bool nativeArguments =
-            std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())), [](const char *value) {
+        if (const bool nativeArguments = std::ranges::any_of(arguments.subspan(std::min<std::size_t>(1, arguments.size())),
+                                                             [](const char *value) {
             return std::string_view{value}.starts_with("--xr-host-");
         });
-        if (host && nativeArguments) {
+            host && nativeArguments) {
             LOG_CRITICAL("editor.xr", "Injected installer services and explicit host bootstrap inputs cannot select two authorities.");
             return {};
         }
@@ -3574,7 +3575,7 @@ namespace Horo::Editor {
             selectedJobs = ownedJobs.get();
         }
         JobSystem &jobSystem = *selectedJobs;
-        const bool hasQualifiedCompiler = static_cast<bool>(launch.shaderCompiler);
+        const auto hasQualifiedCompiler = static_cast<bool>(launch.shaderCompiler);
         Application::ShaderBuildService shaderBuild{std::move(launch.shaderCompiler), launch.buildOutput};
         auto createdReload = CreateEditorShaderReload(launch, shaderBuild, jobSystem, hasQualifiedCompiler);
         if (createdReload.HasError()) {

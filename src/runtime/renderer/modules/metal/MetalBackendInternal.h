@@ -61,7 +61,9 @@ namespace Horo::Render::Detail {
         }
 
         /** @brief Legacy runtimes have no registered native GPU steps to reject. */
-        virtual void RejectUnsubmittedVfxGpuGraph(const RenderGraphExecutionRequest &) noexcept {}
+        virtual void RejectUnsubmittedVfxGpuGraph(const RenderGraphExecutionRequest &) noexcept {
+            // Legacy injected runtimes never register native GPU graph work for rollback.
+        }
 
         [[nodiscard]] virtual Result<void> ValidateVfxGpuCompute(const RenderGraphVfxGpuCompute &,
                                                                  const RenderGraphExecutionRequest &) const {

@@ -116,7 +116,7 @@ namespace Horo::Editor {
     /** @copydoc PrefabDocumentSession::Apply */
     Result<std::shared_ptr<const Prefab::PrefabDocument>> PrefabDocumentSession::Apply(const Edit &edit) const {
         auto data = source_->Data();
-        auto applied = std::visit([&]<typename T>(const T &value) -> Result<void> {
+        auto applied = std::visit([&]<typename T>(const T &value) {
             if constexpr (std::is_same_v<T, LayerReplacement>) {
                 if (!data.composition)
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::CompositionInvalid));

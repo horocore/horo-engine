@@ -204,7 +204,7 @@ namespace Horo::Prefab {
     namespace {
         /** @brief Validates copied cancellation, lineage and placement without constructing a Scene command. */
         Result<void> ValidateGroupOptions(const PrefabPreparedGroupOptions &options, const CancellationToken &cancellation,
-                                          std::optional<Runtime::RuntimeSceneView> scene, std::size_t maximumDepth) {
+                                          const std::optional<Runtime::RuntimeSceneView> &scene, std::size_t maximumDepth) {
             if (cancellation.IsCancellationRequested() || options.scopeCancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
             if (options.spawnLineage.size() > maximumDepth)

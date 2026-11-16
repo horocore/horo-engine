@@ -55,7 +55,7 @@ namespace Horo::Physics::Detail {
         [[nodiscard]] Result<void> PreflightPendingContinuation() const;
         PhysicsSceneActivationCandidate *candidate_{};
         std::weak_ptr<PhysicsStructuralState> state_;
-        std::thread::id ownerThread_;
+        std::thread::id ownerThread_{std::this_thread::get_id()};
         Runtime::SceneRuntimeId scene_;
         std::uint64_t revision_{};
         bool published_{};

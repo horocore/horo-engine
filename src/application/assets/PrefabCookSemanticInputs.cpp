@@ -134,7 +134,7 @@ namespace Horo::Application::PrefabCookDetail {
                     return Return::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
                 edges += dependencies.size();
                 std::ranges::sort(dependencies);
-                dependencies.erase(std::unique(dependencies.begin(), dependencies.end()), dependencies.end());
+                dependencies.erase(std::ranges::unique(dependencies).begin(), dependencies.end());
                 return Return::Success(std::move(dependencies));
             }
 
@@ -149,8 +149,7 @@ namespace Horo::Application::PrefabCookDetail {
                         colors[asset] = 2;
                         continue;
                     }
-                    const auto prior = colors.find(asset);
-                    if (prior != colors.end()) {
+                    if (const auto prior = colors.find(asset); prior != colors.end()) {
                         if (prior->second == 1)
                             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::CyclicComposition));
                         continue;

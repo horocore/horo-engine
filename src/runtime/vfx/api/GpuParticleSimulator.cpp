@@ -116,10 +116,11 @@ namespace Horo::Vfx {
         /** @brief Contains an uncertain or lost native submission; it can never become an unsubmitted retry. */
         GpuParticleStepStatus TerminalNative(State &s, const Render::GpuVfxStepAcknowledgement &ack) noexcept {
             const bool candidate = s.pending && s.pending->step == ack.Step();
-            const bool submitted = std::ranges::any_of(s.submitted, [&ack](const auto &record) {
+            if (const bool submitted = std::ranges::any_of(s.submitted,
+                                                           [&ack](const auto &record) {
                 return record.occupied && record.step == ack.Step();
             });
-            if (!candidate && !submitted)
+                !candidate && !submitted)
                 return GpuParticleStepStatus::StaleAcknowledgement;
             s.deviceLost = ack.State() == Render::VfxGpuSubmissionState::DeviceLost;
             s.uncertain = !s.deviceLost;

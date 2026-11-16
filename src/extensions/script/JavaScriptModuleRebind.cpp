@@ -120,11 +120,11 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         };
     }  // namespace
 
-    bool State::PendingFrom(const std::shared_ptr<ScriptModuleContext> &context) const noexcept {
+    bool State::PendingFrom(const std::shared_ptr<ScriptModuleContext> &origin) const noexcept {
         if (closed.load(std::memory_order_acquire))
             return false;
         return std::ranges::any_of(pending, [&](const auto &item) {
-            return item.origin == context;
+            return item.origin == origin;
         });
     }
 

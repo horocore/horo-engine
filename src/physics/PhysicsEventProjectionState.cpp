@@ -119,7 +119,8 @@ namespace Horo::Physics::Detail {
         callbackWrite_.store(0);
         callbackDropped_.store(0);
         callbackOverflowed_.store(false);
-        overflowedDuringTick_ = surfaceConflict_ = false;
+        surfaceConflict_ = false;
+        overflowedDuringTick_ = false;
     }
 
     /** @copydoc PhysicsEventProjection::RetainedPayloadBytes */

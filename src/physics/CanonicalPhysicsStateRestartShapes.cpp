@@ -41,7 +41,7 @@ namespace Horo::Physics::Detail {
 
         Result<CanonicalPhysicsStateCreatedShape> Native(const PhysicsStateShapeRecipes &manifest, const CanonicalRestartShapes &previous,
                                                          const PhysicsStateShapeRecipe &recipe) {
-            return ObserveCanonicalPhysicsShapeCreation([&recipe, &manifest, &previous]() -> Result<JPH::Ref<JPH::Shape>> {
+            return ObserveCanonicalPhysicsShapeCreation([&recipe, &manifest, &previous]() {
                 if (const auto *analytic = std::get_if<PhysicsShapeDescriptor>(&recipe.geometry))
                     return CreateNativeShape(*analytic);
                 return CompoundNative(manifest, previous, std::get<PhysicsStateCompoundRecipe>(recipe.geometry));

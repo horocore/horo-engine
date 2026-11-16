@@ -151,12 +151,12 @@ namespace Horo::Prefab {
                 result.objects_.emplace_back(object.sourcePrefab, object.key, object.parent, object.object.components.size());
             }
             for (const auto &value : provenance.first(result.valueCoverage_.retained)) {
+                using enum PrefabValueOrigin;
                 if (cancellation.IsCancellationRequested())
                     return Return::Failure(MakeError(PrefabErrors::Cancelled));
                 if (!ValidTarget(value.target, policy.Policy()) || !value.sourcePrefab.IsValid() || !MatchesObject(value, candidate) ||
-                    (value.origin != PrefabValueOrigin::Source && value.origin != PrefabValueOrigin::Inherited &&
-                     value.origin != PrefabValueOrigin::Instance && value.origin != PrefabValueOrigin::Variant &&
-                     value.origin != PrefabValueOrigin::Nested))
+                    (value.origin != Source && value.origin != Inherited && value.origin != Instance && value.origin != Variant &&
+                     value.origin != Nested))
                     return Return::Failure(MakeError(PrefabErrors::DiagnosticInvalid));
                 result.values_.emplace_back(value.target, value.origin, value.sourcePrefab);
             }

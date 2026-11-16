@@ -31,7 +31,7 @@ namespace Horo::AI {
 
         void WriteGraph(Detail::DecisionWriter &writer, const DecisionGraphSource &source) {
             WriteHeader(writer, source);
-            std::visit([&](const auto &body) {
+            std::visit([&]<typename VisitedValue>(const VisitedValue &body) {
                 using T = std::decay_t<decltype(body)>;
                 if constexpr (std::is_same_v<T, std::shared_ptr<const BehaviorTreeAsset>>) {
                     if (!body) {
@@ -97,7 +97,8 @@ namespace Horo::AI {
                 return Result<std::size_t>::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
             auto count = machine.states.size() + machine.transitions.size();
             for (const auto &state : machine.states)
-                count += state.entryProvider.has_value() + state.updateProvider.has_value() + state.exitProvider.has_value();
+                count += (state.entryProvider.has_value() ? 1U : 0U) + (state.updateProvider.has_value() ? 1U : 0U) +
+                         (state.exitProvider.has_value() ? 1U : 0U);
             return Result<std::size_t>::Success(count);
         }
 

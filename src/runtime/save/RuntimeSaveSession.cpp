@@ -390,9 +390,9 @@ namespace Horo::Runtime {
         if (!outcome.Value().capture) {
             if (outcome.Value().barrier.state == SaveBarrierState::Pending)
                 return Result<void>::Success();
-            return Fail(work, outcome.Value().error ? std::move(*outcome.Value().error) : MakeError(SaveErrors::LifecycleUnavailable));
+            return Fail(work, outcome.Value().error ? *outcome.Value().error : MakeError(SaveErrors::LifecycleUnavailable));
         }
-        work.capture = std::move(*outcome.Value().capture);
+        work.capture = *outcome.Value().capture;
         capturePreparation_.reset();
         capturePreparedFor_.reset();
         ReleaseBarrier();

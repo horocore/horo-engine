@@ -136,7 +136,7 @@ namespace Horo::Prefab {
                     auto target = Reference(world);
                     if (failure)
                         return;
-                    instance.bindings.push_back({id, std::move(target)});
+                    instance.bindings.emplace_back(id, std::move(target));
                 }
             }
 
@@ -266,7 +266,7 @@ namespace Horo::Prefab {
         }
 
         /** @brief Requires complete canonical bytes and the same whole-recipe semantic validation. */
-        Result<void> FinishDecoded(Reader &reader, std::span<const std::byte> bytes, const PrefabPersistentState &state,
+        Result<void> FinishDecoded(const Reader &reader, std::span<const std::byte> bytes, const PrefabPersistentState &state,
                                    const PrefabPersistenceLimits &limits, const PrefabLimitProfile &profile) {
             if (auto complete = reader.reader.RequireFinished(); complete.HasError())
                 return Result<void>::Failure(complete.ErrorValue());

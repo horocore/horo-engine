@@ -152,7 +152,7 @@ namespace Horo::Extensions {
             auto plan = cache.Acquire(state->runtime, *entry.Backend(), policy);
             if (plan.HasError())
                 return Output::Failure(plan.ErrorValue());
-            state->bound.push_back({entry.Backend(), std::move(binding).Value(), std::move(plan).Value()});
+            state->bound.emplace_back(entry.Backend(), std::move(binding).Value(), std::move(plan).Value());
         }
         return Output::Success(std::shared_ptr<ScriptModuleContext>{new ScriptModuleContext{std::move(state)}});
     }

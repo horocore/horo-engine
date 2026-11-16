@@ -431,9 +431,9 @@ namespace Horo::Physics::Detail {
     namespace {
         /** @brief Parent construction requests plus retained child geometry form one
          * conservative immutable DAG reservation. */
-        Result<CanonicalPhysicsStateCreatedShape> ReservedCompound(CanonicalWorld &world,
+        Result<CanonicalPhysicsStateCreatedShape> ReservedCompound(const CanonicalWorld &world,
                                                                    std::span<const PhysicsSceneShapeInstance> instances,
-                                                                   JPH::StaticCompoundShapeSettings &settings) {
+                                                                   const JPH::StaticCompoundShapeSettings &settings) {
             using Outcome = Result<CanonicalPhysicsStateCreatedShape>;
             std::size_t children{};
             for (const auto &instance : instances)
@@ -600,8 +600,8 @@ namespace Horo::Physics::Detail {
 
     namespace {
         Result<CanonicalConstraintCreation> ConstraintCreation(const CanonicalConstraintBodies &bodies,
-                                                               const PhysicsConstraintDescriptor &descriptor, JPH::Body &first,
-                                                               JPH::Body &second, const CanonicalConstraintCreation *recorded) {
+                                                               const PhysicsConstraintDescriptor &descriptor, const JPH::Body &first,
+                                                               const JPH::Body &second, const CanonicalConstraintCreation *recorded) {
             if (recorded) {
                 auto current = ReadCanonicalPhysicsStateFpControl();
                 if (current.HasError())

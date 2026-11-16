@@ -68,7 +68,7 @@ namespace Horo::Extensions {
         return Result<void>::Success();
     }
 
-    Result<std::uint64_t> ModuleScriptHostAuthority::IssueGeneration() {
+    Result<std::uint64_t> ModuleScriptHostAuthority::IssueGeneration() const {
         if (auto admitted = RequireOpenOwner(); admitted.HasError())
             return Result<std::uint64_t>::Failure(admitted.ErrorValue());
         auto &next = impl_->state->nextGeneration;

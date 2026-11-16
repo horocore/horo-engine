@@ -65,7 +65,8 @@ namespace Horo::Physics::Detail {
 
         /** @brief Clears the bridge before a new independent capture. */
         void Clear() noexcept {
-            written_ = read_ = 0;
+            read_ = 0;
+            written_ = 0;
             failed_ = false;
         }
 

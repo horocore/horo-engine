@@ -1,6 +1,7 @@
 #include "FoliagePaletteModel.h"
 
 #include <algorithm>
+#include <memory>
 #include <set>
 
 namespace Horo::Editor {
@@ -63,7 +64,7 @@ namespace Horo::Editor {
         const auto found = std::ranges::find_if(items_, [this](const auto &item) {
             return item.source.type == *selected_;
         });
-        return found == items_.end() ? nullptr : &*found;
+        return found == items_.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc FoliagePaletteModel::Close */

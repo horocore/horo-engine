@@ -464,8 +464,8 @@ namespace Horo::Runtime {
                 const auto found = live.find(member.identity);
                 if (found == live.end() || found->second->generation.value != member.generation || member.entity >= maximumEntries)
                     return Failure<void>(SaveErrors::RestoreParticipantInvalid);
-                const auto &origin = std::get<SpawnedPersistentEntityProvenance>(found->second->provenance);
-                if (!origin.prefabInstance || *origin.prefabInstance != partition.occurrence ||
+                if (const auto &origin = std::get<SpawnedPersistentEntityProvenance>(found->second->provenance);
+                    !origin.prefabInstance || *origin.prefabInstance != partition.occurrence ||
                     !identities.insert(member.identity).second || !slots.insert(member.entity).second)
                     return Failure<void>(SaveErrors::RestoreParticipantInvalid);
                 return Result<void>::Success();

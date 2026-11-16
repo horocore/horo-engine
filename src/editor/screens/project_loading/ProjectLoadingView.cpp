@@ -11,6 +11,13 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Chooses the existing localized action key without evaluating another state transition. */
+        const char *PrimaryProjectLoadingKey(const ProjectLoadingViewState &state) {
+            if (state.hasFailed)
+                return state.canRetry ? "action.retry" : "action.back";
+            return "action.cancel";
+        }
+
         /** @brief Applies the loading view's primary action after its button is activated. */
         ProjectLoadingViewCommand PrimaryProjectLoadingCommand(ProjectLoadingViewState &state, const EditorGuiContext &ctx) {
             using enum ProjectLoadingViewCommand;
@@ -42,10 +49,8 @@ namespace Horo::Editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
         ImGui::Begin("ProjectLoadingCanvas", nullptr, windowFlags);
 
-        const auto primaryLabel =
-            ProjectLoadingTextScope.Text(ctx.localization,
-                                         state.hasFailed ? (state.canRetry ? "action.retry" : "action.back") : "action.cancel");
-        const auto backLabel = ProjectLoadingTextScope.Text(ctx.localization, "action.back");
+        const auto &primaryLabel = ProjectLoadingTextScope.Text(ctx.localization, PrimaryProjectLoadingKey(state));
+        const auto &backLabel = ProjectLoadingTextScope.Text(ctx.localization, "action.back");
         const auto measureButton = [&](const std::string &label) {
             Theme::ScopedTextStyle text(ctx.theme.fonts.sansCompact, metrics.fontSize, Theme::FontPx::SansCompact);
             return std::max(Ui::ScaledLayoutValue(128.0F), ImGui::CalcTextSize(label.c_str()).x + metrics.paddingX * 2.0F);

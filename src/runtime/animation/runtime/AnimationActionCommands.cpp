@@ -24,7 +24,7 @@ namespace Horo::Animation {
 
         /** @brief Exact issued identity prevents stale released records and foreign
          * instance generations from aliasing. */
-        std::uint32_t Record(const GraphInstanceState &state, const GraphActionHandle handle) noexcept {
+        std::uint32_t Record(const GraphInstanceState &state, const GraphActionHandle &handle) noexcept {
             if (!handle.IsValid() || handle.instance != state.identity)
                 return NoActionIndex;
             for (std::uint32_t i = 0; i < state.actions.records.size(); ++i)

@@ -352,7 +352,7 @@ namespace Horo::Prefab {
                                                                                           const PrefabLimitProfile &limits,
                                                                                           const CancellationToken &cancellation) const {
         PrefabMetricOperation observation{metrics_, PrefabMetricPhase::Resolve};
-        auto result = [&]() -> Result<PrefabSourceOverrideResolution> {
+        auto result = [&]() {
             try {
                 return ResolveOverridesImpl(rootAsset, instance, limits, cancellation);
             } catch (const std::bad_alloc &) {

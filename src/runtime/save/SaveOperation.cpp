@@ -20,25 +20,22 @@ namespace Horo::Runtime {
     struct SaveOperationDetail::SharedState final {
         using CallbackList = std::vector<SaveOperationCompletionCallback>;
 
-        SharedState()
-            : completionCallbacks(std::make_unique<CallbackList>(std::initializer_list<SaveOperationCompletionCallback>{})),
-              cancellationError(MakeError(SaveErrors::OperationCancelled, std::string(std::size_t{0}, '\0'))),
-              deadlineError(MakeError(SaveErrors::OperationDeadlineExceeded, std::string(std::size_t{0}, '\0'))),
-              abandonmentError(MakeError(SaveErrors::OperationAbandoned, std::string(std::size_t{0}, '\0'))) {
+        SharedState() {
             // Copy construction is fallible here; the terminal path later assigns into this existing Error.
             terminalSnapshot.terminalError.emplace(abandonmentError);
         }
 
-        mutable std::mutex mutex;
+        std::mutex mutex;
         SaveOperationSnapshot snapshot;
         SaveOperationSnapshot terminalSnapshot;
         CancellationToken parentCancellation;
         std::size_t maximumCompletionCallbacks{};
-        std::unique_ptr<CallbackList> completionCallbacks;
+        std::unique_ptr<CallbackList> completionCallbacks{
+            std::make_unique<CallbackList>(std::initializer_list<SaveOperationCompletionCallback>{})};
         bool commitStarted{};
-        Error cancellationError;
-        Error deadlineError;
-        Error abandonmentError;
+        Error cancellationError{MakeError(SaveErrors::OperationCancelled, std::string(std::size_t{0}, '\0'))};
+        Error deadlineError{MakeError(SaveErrors::OperationDeadlineExceeded, std::string(std::size_t{0}, '\0'))};
+        Error abandonmentError{MakeError(SaveErrors::OperationAbandoned, std::string(std::size_t{0}, '\0'))};
     };
 
     namespace {
@@ -62,7 +59,7 @@ namespace Horo::Runtime {
         };
 
         struct TransitionRequest;
-        using TransitionHandler = SaveOperationTransitionResult (*)(const std::shared_ptr<SharedState> &, TransitionRequest &,
+        using TransitionHandler = SaveOperationTransitionResult (*)(const std::shared_ptr<SharedState> &, const TransitionRequest &,
                                                                     CompletionDispatch &) noexcept;
 
         struct TransitionRequest final {
@@ -188,7 +185,7 @@ namespace Horo::Runtime {
             terminal.deadline = source.deadline;
             terminal.revision = source.revision;
             if (error)
-                *terminal.terminalError = std::move(*error);
+                terminal.terminalError = std::move(*error);
             else
                 terminal.terminalError.reset();
             return CompletionDispatch{state, std::move(state->completionCallbacks)};
@@ -270,7 +267,7 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] SaveOperationTransitionResult PublishProgressLocked(const std::shared_ptr<SharedState> &state,
-                                                                          TransitionRequest &request, CompletionDispatch &) noexcept {
+                                                                          const TransitionRequest &request, CompletionDispatch &) noexcept {
             if (!IsValidProgressTransition(*state, request))
                 return SaveOperationTransitionResult::InvalidTransition;
             state->snapshot.state = SaveOperationState::Running;
@@ -280,7 +277,8 @@ namespace Horo::Runtime {
             return SaveOperationTransitionResult::Applied;
         }
 
-        [[nodiscard]] SaveOperationTransitionResult CompleteLocked(const std::shared_ptr<SharedState> &state, TransitionRequest &request,
+        [[nodiscard]] SaveOperationTransitionResult CompleteLocked(const std::shared_ptr<SharedState> &state,
+                                                                   const TransitionRequest &request,
                                                                    CompletionDispatch &dispatch) noexcept {
             const bool validMutation =
                 RequiresCommit(state->snapshot.kind) && state->commitStarted && request.outcome == SaveOperationCommitOutcome::Committed;
@@ -293,7 +291,7 @@ namespace Horo::Runtime {
             return SaveOperationTransitionResult::Applied;
         }
 
-        [[nodiscard]] SaveOperationTransitionResult FailLocked(const std::shared_ptr<SharedState> &state, TransitionRequest &request,
+        [[nodiscard]] SaveOperationTransitionResult FailLocked(const std::shared_ptr<SharedState> &state, const TransitionRequest &request,
                                                                CompletionDispatch &dispatch) noexcept {
             if (const bool validOutcome = request.outcome == SaveOperationCommitOutcome::NotCommitted ||
                                           (state->commitStarted && request.outcome == SaveOperationCommitOutcome::Unknown);
@@ -305,7 +303,7 @@ namespace Horo::Runtime {
 
         [[nodiscard]] SaveOperationTransitionResult ApplyTransition(const std::shared_ptr<SharedState> &state,
                                                                     const std::chrono::steady_clock::time_point now,
-                                                                    TransitionRequest request) {
+                                                                    const TransitionRequest &request) {
             if (!state)
                 return SaveOperationTransitionResult::AlreadyTerminal;
             CompletionDispatch dispatch;

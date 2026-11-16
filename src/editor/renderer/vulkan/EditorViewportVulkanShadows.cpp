@@ -60,7 +60,7 @@ namespace Horo::Editor {
 
     Result<void> EditorViewportRendererVulkan::WriteShadowDraw(Render::FrameToken frame, const DrawSlot &draw,
                                                                const Render::RenderStaticMeshInstance &instance,
-                                                               const Render::DirectionalShadowFrame &shadow, std::uint32_t cascade) {
+                                                               const Render::DirectionalShadowFrame &shadow, std::uint32_t cascade) const {
         auto relativeModel = instance.localToWorld;
         relativeModel.values[12] -= shadow.cameraOrigin.x;
         relativeModel.values[13] -= shadow.cameraOrigin.y;

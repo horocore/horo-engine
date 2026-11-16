@@ -56,17 +56,17 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc EditorPlaySaveHost::State::CapturePreparation */
-    std::shared_ptr<Runtime::IRuntimeSaveCapturePreparation> EditorPlaySaveHost::State::CapturePreparation() {
+    std::shared_ptr<Runtime::IRuntimeSaveCapturePreparation> EditorPlaySaveHost::State::CapturePreparation() const {
         if (!physics)
             return {};
-        return std::make_shared<PhysicsCapturePreparation>([this]() -> Result<void> {
+        return std::make_shared<PhysicsCapturePreparation>([this]() {
             if (retiring || suspending || std::this_thread::get_id() != owner)
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::LifecycleUnavailable));
             auto current = CurrentIdentities();
             if (current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
             return physics->PrepareCapture(current.Value());
-        }, [this]() -> Result<Runtime::RuntimeSaveCapturePreparationEvidence> {
+        }, [this]() {
             using Outcome = Result<Runtime::RuntimeSaveCapturePreparationEvidence>;
             if (retiring || suspending || std::this_thread::get_id() != owner)
                 return Outcome::Failure(MakeError(Runtime::SaveErrors::LifecycleUnavailable));

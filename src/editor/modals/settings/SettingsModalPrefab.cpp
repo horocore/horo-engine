@@ -23,14 +23,12 @@ namespace Horo::Editor::SettingsModalInternal {
 
         /** @brief Cache formatted captions only when locale messages or immutable derived work change. */
         void Captions(SettingsPrefabDraft &draft, const EditorGuiContext &ctx) {
-            const auto &ceiling = Text(ctx, "settings.prefab.ceiling");
-            if (draft.ceilingPattern != ceiling) {
+            if (const auto &ceiling = Text(ctx, "settings.prefab.ceiling"); draft.ceilingPattern != ceiling) {
                 draft.ceilingPattern = ceiling;
                 for (const auto &field : Application::PrefabLimitFields())
                     draft.ceilings[static_cast<std::size_t>(field.field)] = std::vformat(ceiling, std::make_format_args(field.hardCeiling));
             }
-            const auto &hard = Text(ctx, "settings.prefab.hard_safety");
-            if (draft.hardPattern != hard) {
+            if (const auto &hard = Text(ctx, "settings.prefab.hard_safety"); draft.hardPattern != hard) {
                 draft.hardPattern = hard;
                 const auto bytes = Prefab::PrefabHardLimits::SourceDocumentBytes;
                 const auto depth = Prefab::PrefabHardLimits::SourceJsonDepth;
@@ -47,8 +45,7 @@ namespace Horo::Editor::SettingsModalInternal {
 
         /** @brief Keep original typed failures and localized summaries distinct from draft/accepted state. */
         void Command(SettingsPrefabDraft &draft, PrefabProjectSettingsSession &owner, const PrefabSettingsCommandKind kind) {
-            auto outcome = owner.Execute({kind, draft.view->revision});
-            if (outcome.HasError()) {
+            if (auto outcome = owner.Execute({kind, draft.view->revision}); outcome.HasError()) {
                 draft.error = std::move(outcome).ErrorValue();
                 draft.statusKey = "settings.prefab.error.command";
                 return;
@@ -81,6 +78,16 @@ namespace Horo::Editor::SettingsModalInternal {
             return ImGui::CalcTextSize(label.c_str()).x + Theme::Layout::ControlW + gap > ImGui::GetContentRegionAvail().x;
         }
 
+        /** @brief Maps an existing typed validation finding to its established localized diagnostic. */
+        const char *FindingKey(Application::PrefabPolicyFinding finding) {
+            using enum Application::PrefabPolicyFinding;
+            if (finding == InvalidNumber)
+                return "settings.prefab.error.number";
+            if (finding == ValueExceedsSet)
+                return "settings.prefab.error.value_set";
+            return "settings.prefab.error.range";
+        }
+
         /** @brief Draw one stable field without copying payloads, parsing files or allocating temporary input buffers. */
         void Field(SettingsPrefabDraft &draft, PrefabProjectSettingsSession &owner, const Application::PrefabLimitFieldDescriptor &field,
                    const EditorGuiContext &ctx) {
@@ -102,9 +109,9 @@ namespace Horo::Editor::SettingsModalInternal {
                 const auto text = std::string_view{draft.text[index].data()};
                 const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
                 const bool valid = !text.empty() && parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
-                auto outcome = owner.Execute({valid ? PrefabSettingsCommandKind::Edit : PrefabSettingsCommandKind::InvalidNumber,
-                                              draft.view->revision, field.field, value});
-                if (outcome.HasError()) {
+                if (auto outcome = owner.Execute({valid ? PrefabSettingsCommandKind::Edit : PrefabSettingsCommandKind::InvalidNumber,
+                                                  draft.view->revision, field.field, value});
+                    outcome.HasError()) {
                     draft.error = std::move(outcome).ErrorValue();
                     draft.statusKey = "settings.prefab.error.command";
                 } else {
@@ -116,11 +123,8 @@ namespace Horo::Editor::SettingsModalInternal {
                     draft.view = current.Value();
             }
             Ui::WrappedText(available, draft.ceilings[index], Theme::Dim(), fonts);
-            const auto finding = draft.view->validation.fields[index];
-            if (finding != Application::PrefabPolicyFinding::None) {
-                const auto key = finding == Application::PrefabPolicyFinding::InvalidNumber     ? "settings.prefab.error.number"
-                                 : finding == Application::PrefabPolicyFinding::ValueExceedsSet ? "settings.prefab.error.value_set"
-                                                                                                : "settings.prefab.error.range";
+            if (const auto finding = draft.view->validation.fields[index]; finding != Application::PrefabPolicyFinding::None) {
+                const auto key = FindingKey(finding);
                 Ui::WrappedText(available, Text(ctx, key), Theme::Err(), fonts);
             }
             ImGui::PopID();
@@ -129,8 +133,7 @@ namespace Horo::Editor::SettingsModalInternal {
         /** @brief Reuse shared full-width action controls with persistent stable IDs independent of locale. */
         void Action(SettingsPrefabDraft &draft, PrefabProjectSettingsSession &owner, const EditorGuiContext &ctx, const std::size_t index,
                     const char *key, const char *id, const PrefabSettingsCommandKind kind, const bool enabled) {
-            const auto &text = Text(ctx, key);
-            if (draft.actionText[index] != text) {
+            if (const auto &text = Text(ctx, key); draft.actionText[index] != text) {
                 draft.actionText[index] = text;
                 draft.actionLabels[index] = text + id;
             }

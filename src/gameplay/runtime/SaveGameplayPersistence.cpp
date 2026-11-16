@@ -97,8 +97,7 @@ namespace Horo::Runtime {
         class PreparedProjection final : public ICanonicalRestorePreparedState, public IRestoreReferenceContributor {
         public:
             void Bind(const IPreparedGameplayPersistenceState &state, const std::optional<Gameplay::BehaviorPersistenceTarget> &target) {
-                const auto *actual = dynamic_cast<const Gameplay::IBehaviorPersistenceReferenceInventory *>(&state);
-                if (actual)
+                if (const auto *actual = dynamic_cast<const Gameplay::IBehaviorPersistenceReferenceInventory *>(&state); actual)
                     inventory_ = actual->RestoreReferences();
                 target_ = target;
             }
@@ -135,8 +134,9 @@ namespace Horo::Runtime {
                                   std::shared_ptr<Gameplay::Detail::PreparedGameplaySourceBinding> publication,
                                   GameplayPersistenceRestorePolicy policy) noexcept
                 : descriptor_(std::move(descriptor)), moduleLease_(std::move(moduleLease)), source_(std::move(source)),
-                  encoded_(std::move(encoded)), target_(std::move(target)), publication_(std::move(publication)), policy_(policy),
-                  requirement_{descriptor_.participant.participant, descriptor_.participant.schemaVersion, descriptor_.participant.scope} {}
+                  encoded_(std::move(encoded)), target_(std::move(target)), publication_(std::move(publication)),
+                  requirement_{descriptor_.participant.participant, descriptor_.participant.schemaVersion, descriptor_.participant.scope},
+                  policy_(policy) {}
 
             [[nodiscard]] const StagedRestoreParticipantRequirement &Requirement() const noexcept override {
                 return requirement_;

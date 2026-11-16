@@ -24,6 +24,19 @@ namespace Horo::Editor {
             return binding;
         }
 
+        /** @brief Borrows only the exact recognized modifier flag; the caller rejects unknown or repeated tokens. */
+        bool *ShortcutModifier(Input::ModifierState &modifiers, std::string_view token) {
+            if (token == "CTRL")
+                return &modifiers.control;
+            if (token == "SHIFT")
+                return &modifiers.shift;
+            if (token == "ALT")
+                return &modifiers.alt;
+            if (token == "META")
+                return &modifiers.command;
+            return nullptr;
+        }
+
         /** @brief Resolves the final canonical shortcut token, retaining modifiers already validated by the parser. */
         std::optional<Input::InputBinding> BindShortcutKey(Input::InputBinding &binding, const std::string_view token) {
             for (int index = 1; index < static_cast<int>(Input::Key::Count); ++index) {
@@ -137,11 +150,7 @@ namespace Horo::Editor {
             });
             if (separator == std::string_view::npos)
                 return BindShortcutKey(binding, token);
-            bool *modifier = token == "CTRL"    ? &binding.requiredModifiers.control
-                             : token == "SHIFT" ? &binding.requiredModifiers.shift
-                             : token == "ALT"   ? &binding.requiredModifiers.alt
-                             : token == "META"  ? &binding.requiredModifiers.command
-                                                : nullptr;
+            bool *modifier = ShortcutModifier(binding.requiredModifiers, token);
             if (!modifier || *modifier)
                 return std::nullopt;
             *modifier = true;

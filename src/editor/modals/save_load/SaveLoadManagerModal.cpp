@@ -121,8 +121,8 @@ namespace Horo::Editor {
         for (std::size_t index = 0; index < page_.rows.size(); ++index) {
             const auto &row = page_.rows[index];
             ImGui::PushID(static_cast<int>(index));
-            const auto &label = row.displayName.empty() ? Text("unnamed") : row.displayName;
-            if (ImGui::Selectable(label.c_str(), selected_ && *selected_ == row.slot))
+            if (const auto &label = row.displayName.empty() ? Text("unnamed") : row.displayName;
+                ImGui::Selectable(label.c_str(), selected_ && *selected_ == row.slot))
                 selected_ = row.slot;
             ImGui::PopID();
         }
@@ -192,7 +192,7 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc SaveLoadManagerModal::DrawOperation */
-    void SaveLoadManagerModal::DrawOperation() {
+    void SaveLoadManagerModal::DrawOperation() const {
         if (!snapshot_ || !snapshot_->manager)
             return;
         for (const auto &operation : snapshot_->manager->Operations()) {

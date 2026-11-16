@@ -35,7 +35,7 @@ namespace Horo::Animation::Detail {
             if (!field.allowedUnsigned.empty() && field.kind != AnimationEventValueKind::UnsignedInteger)
                 return false;
             std::ranges::sort(field.allowedUnsigned);
-            return std::adjacent_find(field.allowedUnsigned.begin(), field.allowedUnsigned.end()) == field.allowedUnsigned.end();
+            return std::ranges::adjacent_find(field.allowedUnsigned) == field.allowedUnsigned.end();
         }
 
         /** @brief Requires unique exact field IDs and finite per-schema storage before marker lookup. */

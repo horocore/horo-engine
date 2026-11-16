@@ -26,16 +26,22 @@ namespace Horo::Editor {
             return {};
         }
 
-        void OnAttach(PanelContext &) override {}
+        void OnAttach(PanelContext &) override {
+            // Presentation reads the controller-owned model; attachment acquires no resources.
+        }
 
-        void OnDetach() override {}
+        void OnDetach() override {
+            // The controller retains selection and assets across panel attachment changes.
+        }
 
         void DrawIcon(ImDrawList *draw, const ImVec2 &position, const ImVec2 &size, ImU32 color) override;
         void DrawPanel(const ImVec2 &position, const ImVec2 &size, const EditorWorkspaceViewModel &model,
                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) override;
 
     private:
-        void DrawTypes(const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
-        void DrawCreation(const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
+        void DrawTypes(const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
+                       const EditorGuiContext &context) const;
+        void DrawCreation(const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
+                          const EditorGuiContext &context) const;
     };
 }  // namespace Horo::Editor

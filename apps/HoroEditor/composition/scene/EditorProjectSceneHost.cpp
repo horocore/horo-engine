@@ -144,11 +144,11 @@ namespace Horo::Application::Internal {
                 auto settings = CaptureSettings(root, policy);
                 if (settings.HasError())
                     return Result<void>::Failure(settings.ErrorValue());
-                return PrepareSceneOwners(std::move(settings).Value(), policy);
+                return PrepareSceneOwners(std::move(settings).Value());
             }
 
             /** @brief Registers actual native, structural and presentation owners before the sole Scene service starts. */
-            Result<void> PrepareSceneOwners(Physics::PhysicsSceneActivationSettings settings, const EditorProjectScenePolicy &policy) {
+            Result<void> PrepareSceneOwners(Physics::PhysicsSceneActivationSettings settings) {
                 scenes_ = std::make_unique<Runtime::RuntimeSceneService>(registry_, *loads_, Runtime::RuntimeSceneAssetLimits{}, identity_);
                 auto participant = native_.MakeParticipant(*physics_, authority_, std::move(settings));
                 if (participant.HasError())
@@ -485,8 +485,8 @@ namespace Horo::Application::Internal {
                 auto candidate = Assets::PrepareAssetRegistryCandidate(root);
                 if (candidate.HasError())
                     return Result<void>::Failure(candidate.ErrorValue());
-                auto report = registry_.Publish(std::move(candidate).Value());
-                if (report.status != Assets::AssetRegistryBuildStatus::Complete)
+                if (auto report = registry_.Publish(std::move(candidate).Value());
+                    report.status != Assets::AssetRegistryBuildStatus::Complete)
                     return Result<void>::Failure(report.diagnostics.empty() ? MakeError(InvalidProjectScene)
                                                                             : report.diagnostics.front().error);
                 return Result<void>::Success();

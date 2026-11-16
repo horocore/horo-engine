@@ -53,6 +53,12 @@ namespace Horo::Editor {
 
     /** @brief Owns both unpublished programs and their exact uniform locations on the current GL context. */
     struct EditorViewportRendererOpenGL::ProgramGeneration final : Render::IShaderHotReloadCandidate {
+        ProgramGeneration() = default;
+        ProgramGeneration(const ProgramGeneration &) = delete;
+        ProgramGeneration &operator=(const ProgramGeneration &) = delete;
+        ProgramGeneration(ProgramGeneration &&) = delete;
+        ProgramGeneration &operator=(ProgramGeneration &&) = delete;
+
         EditorViewportRendererOpenGL *owner{};
         Render::ShaderHotReloadTargetState expected;
         std::uint32_t gridProgram{};
@@ -149,11 +155,9 @@ namespace Horo::Editor {
             return Result<void>::Failure(gridBuffer.ErrorValue());
         }
         gridVertexBufferHandle_ = gridBuffer.Value().handle;
-        const auto processed = frontend_->ProcessResourceRequests();
-        if (processed.HasError())
+        if (const auto processed = frontend_->ProcessResourceRequests(); processed.HasError())
             return Result<void>::Failure(processed.ErrorValue());
-        const auto completed = frontend_->ResourceOperationResult(gridBuffer.Value().operation);
-        if (completed.HasError())
+        if (const auto completed = frontend_->ResourceOperationResult(gridBuffer.Value().operation); completed.HasError())
             return Result<void>::Failure(completed.ErrorValue());
         const auto nativeBuffer = OpenGLViewportResourceBridge::ResolveBuffer(*frontend_, gridVertexBufferHandle_);
         if (nativeBuffer.HasError())
@@ -516,7 +520,7 @@ namespace Horo::Editor {
         return LoadUniformLocations(candidate);
     }
 
-    Result<void> EditorViewportRendererOpenGL::LoadUniformLocations(ProgramGeneration &candidate) {
+    Result<void> EditorViewportRendererOpenGL::LoadUniformLocations(ProgramGeneration &candidate) const {
         candidate.uniforms.mvp = glGetUniformLocation(candidate.program, "uMvp");
         candidate.uniforms.model = glGetUniformLocation(candidate.program, "uModel");
         candidate.uniforms.cameraPosition = glGetUniformLocation(candidate.program, "uCameraPosition");
@@ -570,7 +574,7 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    Result<void> EditorViewportRendererOpenGL::CreateShadowProgram(ProgramGeneration &candidate) {
+    Result<void> EditorViewportRendererOpenGL::CreateShadowProgram(ProgramGeneration &candidate) const {
         auto vertex = CompileShader(GL_VERTEX_SHADER, Detail::ShadowVertexShader);
         if (vertex.HasError())
             return Result<void>::Failure(vertex.ErrorValue());

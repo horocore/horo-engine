@@ -80,8 +80,10 @@ namespace Horo::Extensions::LuaModuleDetail {
                 try {
                     view.error = error.error;
                 } catch (...) {
+                    // The preallocated Lua failure below remains available if copying diagnostics fails.
                 }
             } catch (...) {
+                // Translate C++ failures only after all exception-owned values have been destroyed.
             }
             return luaL_error(lua, "Candidate namespace preparation failed.");
         }
@@ -128,6 +130,7 @@ namespace Horo::Extensions::LuaModuleDetail {
             BuildImports(lua);
             success = true;
         } catch (...) {
+            // Leave the C++ catch before Lua raises through its protected call boundary.
         }
         if (!success)
             return luaL_error(lua, "Import projection allocation or type boundary failed.");

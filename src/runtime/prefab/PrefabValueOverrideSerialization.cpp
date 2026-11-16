@@ -212,8 +212,8 @@ namespace Horo::Prefab {
             std::ranges::sort(keys, {}, &decltype(keys)::value_type::first);
             std::vector<const Json *> ordered;
             ordered.reserve(keys.size());
-            for (const auto &key : keys)
-                ordered.push_back(key.second);
+            for (const auto &[bytes, row] : keys)
+                ordered.push_back(row);
             return ordered;
         }
 

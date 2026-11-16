@@ -52,6 +52,24 @@ TEST_CASE("Camera grid depth has distinct near and far slices and exclusive righ
     CHECK(MapClusteredLightPixel(grid, 0, 0, std::numeric_limits<float>::quiet_NaN()).HasError());
 }
 
+TEST_CASE("Cluster pixel bounds retain integer extents beyond exact float precision", "[renderer][light][cluster]") {
+    auto descriptor = Descriptor();
+    descriptor.extent = {16777217U, 16777217U};
+    descriptor.x = 1;
+    descriptor.y = 1;
+    descriptor.z = 1;
+    std::array<LightCluster, 1> clusters;
+    const auto grid = Build(descriptor, clusters);
+    constexpr float lastRepresentableInside = 16777216.0F;
+    constexpr float firstRepresentableOutside = 16777218.0F;
+    CHECK(MapClusteredLightPixel(grid, lastRepresentableInside, lastRepresentableInside, 0.5F).Value() == 0);
+    CHECK(MapClusteredLightViewDepth(grid, lastRepresentableInside, lastRepresentableInside, 10.0F).Value() == 0);
+    CHECK_FALSE(MapClusteredLightPixel(grid, firstRepresentableOutside, 0, 0.5F).Value());
+    CHECK_FALSE(MapClusteredLightPixel(grid, 0, firstRepresentableOutside, 0.5F).Value());
+    CHECK_FALSE(MapClusteredLightViewDepth(grid, firstRepresentableOutside, 0, 10.0F).Value());
+    CHECK_FALSE(MapClusteredLightViewDepth(grid, 0, firstRepresentableOutside, 10.0F).Value());
+}
+
 TEST_CASE("Camera grid rejects malformed projection domains dimensions and insufficient storage", "[renderer][light][cluster]") {
     auto descriptor = Descriptor();
     const auto mutation = GENERATE(0, 1, 2, 3, 4, 5);

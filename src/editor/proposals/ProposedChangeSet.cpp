@@ -120,7 +120,7 @@ namespace Horo::Editor::Proposals {
 
         /** @brief Reads the original affected source identity for deterministic operation ordering. */
         const SourceDocumentId &Path(const FileOperation &operation) {
-            return std::visit([](const auto &value) -> const SourceDocumentId & {
+            return std::visit([]<typename VisitedValue>(const VisitedValue &value) -> const SourceDocumentId & {
                 if constexpr (std::is_same_v<std::decay_t<decltype(value)>, CreateFile>)
                     return value.path;
                 else

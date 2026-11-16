@@ -1,5 +1,7 @@
 #include "PhysicsStateConstructionManifestCodec.h"
 
+#include <algorithm>
+
 namespace Horo::Physics::StateDetail {
     namespace {
         bool Aliases(std::span<const std::byte> a, std::span<const std::byte> b) noexcept {
@@ -34,9 +36,8 @@ namespace Horo::Physics::StateDetail {
                                                                 std::as_bytes(m.joints),        std::as_bytes(m.fixtures),
                                                                 std::as_bytes(m.queryChildren), std::as_bytes(m.owners),
                                                                 std::as_bytes(scratch)};
-        for (const auto input : inputs)
-            if (Aliases(input, output))
-                return false;
-        return true;
+        return std::ranges::none_of(inputs, [&](const std::span<const std::byte> input) {
+            return Aliases(input, output);
+        });
     }
 }  // namespace Horo::Physics::StateDetail

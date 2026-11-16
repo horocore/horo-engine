@@ -135,8 +135,7 @@ namespace Horo::Application {
                 policy.*Members[i] = static_cast<std::size_t>(values[i]);
         }
         constexpr auto value = static_cast<std::size_t>(PrefabLimitField::OverrideValueBytes);
-        constexpr auto set = static_cast<std::size_t>(PrefabLimitField::OverrideSetBytes);
-        if (values[value] > values[set]) {
+        if (constexpr auto set = static_cast<std::size_t>(PrefabLimitField::OverrideSetBytes); values[value] > values[set]) {
             result.fields[value] = PrefabPolicyFinding::ValueExceedsSet;
             result.fields[set] = PrefabPolicyFinding::ValueExceedsSet;
             invalid = true;
@@ -191,7 +190,7 @@ namespace Horo::Application {
     Result<PrefabProjectSettings> PrefabProjectSettings::Create(const PrefabPolicyValues &values, const ConfigurationRevision revision) {
         ConfigurationSourceMap project;
         for (std::size_t i = 0; i < Fields.size(); ++i)
-            project.emplace(SettingKey{std::string(Fields[i].key)}, ConfigurationInputValue{values[i], {}});
+            project.try_emplace(SettingKey{std::string(Fields[i].key)}, ConfigurationInputValue{values[i], {}});
         return Resolve(project, revision);
     }
 

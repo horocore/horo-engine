@@ -4,6 +4,7 @@
 #include "Horo/Foundation/PathUtils.h"
 
 #include <atomic>
+#include <format>
 
 namespace Horo::Assets::Detail {
     namespace {
@@ -13,15 +14,15 @@ namespace Horo::Assets::Detail {
         std::filesystem::path BackupPath(const std::filesystem::path &target) {
             std::filesystem::path name{"."};
             name += target.filename().native();
-            name += ".horo-reimport-" + std::to_string(++temporarySequence) + "-original";
+            name += std::format(".horo-reimport-{}-original", ++temporarySequence);
             return target.parent_path() / name;
         }
 
         Result<std::filesystem::path> TargetPath(const AssetReimportRequest &request, const std::filesystem::path &root) {
             using Return = Result<std::filesystem::path>;
             const auto path = NormalizeAssetImportPath(request.absoluteAssetPath);
-            const auto assetRoot = NormalizeAssetImportPath(ProjectLayout::AssetRoot(root));
-            if (!request.absoluteAssetPath.is_absolute() || !Foundation::Paths::HasPathPrefix(root, path) ||
+            if (const auto assetRoot = NormalizeAssetImportPath(ProjectLayout::AssetRoot(root));
+                !request.absoluteAssetPath.is_absolute() || !Foundation::Paths::HasPathPrefix(root, path) ||
                 !Foundation::Paths::HasPathPrefix(assetRoot, path))
                 return Return::Failure(MakeError(AssetErrors::SourceMissing));
             return Return::Success(path);
@@ -75,8 +76,7 @@ namespace Horo::Assets::Detail {
 
         Result<void> Backup(ReimportAdmission &admission, ReimportEntry &entry, std::span<const std::byte> original,
                             const CancellationToken &cancellation) {
-            auto written = admission.files->WritePrivateDurable(entry.backup, original, entry.backupCreated);
-            if (written.HasError())
+            if (auto written = admission.files->WritePrivateDurable(entry.backup, original, entry.backupCreated); written.HasError())
                 return written;
             auto verified = InspectReimportAssetSource(admission.root, entry.backup, cancellation);
             if (verified.HasError())

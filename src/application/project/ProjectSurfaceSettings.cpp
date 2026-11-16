@@ -76,8 +76,7 @@ namespace Horo::Application {
     /** @copydoc ProjectSurfaceSettings::Capture */
     Result<Physics::PhysicsSurfaceWorldBinding> ProjectSurfaceSettings::Capture(const std::uint64_t mappingGeneration) const {
         Physics::PhysicsSurfaceWorldBinding binding{catalog_, mappingGeneration, input_.defaultSurfaceId};
-        auto valid = Physics::ValidatePhysicsSurfaceWorldBinding(binding);
-        if (valid.HasError())
+        if (auto valid = Physics::ValidatePhysicsSurfaceWorldBinding(binding); valid.HasError())
             return Result<Physics::PhysicsSurfaceWorldBinding>::Failure(valid.ErrorValue());
         return Result<Physics::PhysicsSurfaceWorldBinding>::Success(std::move(binding));
     }

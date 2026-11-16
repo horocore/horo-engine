@@ -50,10 +50,9 @@ namespace Horo::Render {
             for (const auto &binding : reflection.bindings)
                 if (!binding.active)
                     return false;
-            for (const auto &parameter : reflection.parameters)
-                if (parameter.active && parameter.byteOffset != (parameter.id.value - 1U) * 16U)
-                    return false;
-            return true;
+            return std::ranges::none_of(reflection.parameters, [](const ShaderReflectedParameter &parameter) {
+                return parameter.active && parameter.byteOffset != (parameter.id.value - 1U) * 16U;
+            });
         }
 
         /** @brief Appends one fixed logical resource declaration. */

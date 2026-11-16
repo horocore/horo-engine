@@ -4,7 +4,9 @@ namespace Horo::Physics::StateDetail {
     using namespace ConstructionFields;
 
     namespace {
-        void Bounds(const PhysicsFixedConstraint &, float &, float &) noexcept {}
+        void Bounds(const PhysicsFixedConstraint &, float &, float &) noexcept {
+            // Fixed constraints have no range parameters; preserve the zero-filled wire slots.
+        }
 
         void Bounds(const PhysicsDistanceConstraint &v, float &a, float &b) noexcept {
             a = v.minimumMeters;
@@ -47,6 +49,8 @@ namespace Horo::Physics::StateDetail {
                     case 3:
                         v = PhysicsSliderConstraint{first, second};
                         break;
+                    default:
+                        return false;
                 }
             }
             return true;

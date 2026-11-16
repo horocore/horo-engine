@@ -45,8 +45,7 @@ namespace Horo::Editor {
                     if (transformOverride.present && transformOverride.entity == entity)
                         local = &transformOverride.localTransform;
                 }
-                const auto accumulated = AccumulatePose(*local, pose);
-                if (accumulated.HasError())
+                if (const auto accumulated = AccumulatePose(*local, pose); accumulated.HasError())
                     return Result<WorldPose>::Failure(accumulated.ErrorValue());
                 if (!view.Value().parent)
                     return Result<WorldPose>::Success(pose);
@@ -215,8 +214,7 @@ namespace Horo::Editor {
                                                      EditorViewportSceneSnapshot &snapshot) {
         if (!ValidSnapshot(scene, snapshot))
             return InvalidPreview();
-        const auto transforms = StageTransforms(scene, previews, snapshot);
-        if (transforms.HasError())
+        if (const auto transforms = StageTransforms(scene, previews, snapshot); transforms.HasError())
             return transforms;
         const auto instances = StageInstances(scene, snapshot);
         if (instances.HasError())
@@ -239,8 +237,7 @@ namespace Horo::Editor {
                                                  EditorViewportSceneSnapshot &snapshot) {
         if (!ValidSnapshot(scene, snapshot))
             return InvalidPreview();
-        const auto validation = ValidateLightPreview(preview, snapshot);
-        if (validation.HasError())
+        if (const auto validation = ValidateLightPreview(preview, snapshot); validation.HasError())
             return validation;
         auto *bank = AvailableBank(snapshot);
         if (bank == nullptr)

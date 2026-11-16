@@ -183,7 +183,7 @@ namespace Horo::Editor {
             const float before = patch.heightsMeters[index];
             if (!std::isfinite(before))
                 return Result<void>::Failure(MakeError(TerrainEditErrors::Invalid));
-            const float t = static_cast<float>(1.0 - distance / brush.radiusMeters);
+            const auto t = static_cast<float>(1.0 - distance / brush.radiusMeters);
             const float falloff = t * t * (3.0F - 2.0F * t);
             auto value = SculptHeight(source, region, brush, previous, x, z, before, falloff);
             if (value.HasError())
@@ -220,7 +220,7 @@ namespace Horo::Editor {
                 if (cancellation.IsCancellationRequested())
                     return Result<TerrainRasterPatch>::Failure(MakeError(TerrainEditErrors::Cancelled));
                 if (!previous.empty())
-                    std::copy(patch.heightsMeters.begin(), patch.heightsMeters.end(), previous.begin());
+                    std::ranges::copy(patch.heightsMeters, previous.begin());
                 auto applied = ApplyStamp(source, region, brush, stamp, previous, patch, cancellation);
                 if (applied.HasError())
                     return Result<TerrainRasterPatch>::Failure(std::move(applied).ErrorValue());

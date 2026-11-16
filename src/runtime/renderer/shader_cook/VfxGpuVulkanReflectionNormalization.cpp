@@ -63,9 +63,8 @@ namespace Horo::Render {
 
         void Entry(const Json &json, const SpirvReflectionStage &stage, VfxGpuProgramRole role) {
             const auto &rows = Rows(json, "entryPoints", 1);
-            if (const auto mode = stage.stage == ShaderStage::Compute  ? "comp"
-                                  : stage.stage == ShaderStage::Vertex ? "vert"
-                                                                       : "frag";
+            const auto rasterMode = stage.stage == ShaderStage::Vertex ? "vert" : "frag";
+            if (const auto mode = stage.stage == ShaderStage::Compute ? "comp" : rasterMode;
                 rows.size() != 1 || rows[0].at("name").get_ref<const std::string &>() != EntryName(role, stage.stage) ||
                 rows[0].at("mode") != mode)
                 throw InvalidEvidence{};
@@ -74,7 +73,8 @@ namespace Horo::Render {
 
         void Counts(const Json &json, VfxGpuProgramRole role, ShaderStage stage) {
             const bool fragment = stage == ShaderStage::Fragment;
-            const auto storage = fragment ? 0u : Compute(role) ? 4u : 1u;
+            const auto activeStorage = Compute(role) ? 4u : 1u;
+            const auto storage = fragment ? 0u : activeStorage;
             if (const auto uniform = fragment ? 0u : 1u;
                 Rows(json, "ssbos", 4).size() != storage || Rows(json, "ubos", 1).size() != uniform)
                 throw InvalidEvidence{};
@@ -252,8 +252,8 @@ namespace Horo::Render {
             const auto &row = rows[0];
             if (row.at("type") != "vec4" || Unsigned(row.at("location")) != 0 || row.contains("array"))
                 throw InvalidEvidence{};
-            candidate.stageInterface.push_back({stage, input ? ShaderInterfaceDirection::Input : ShaderInterfaceDirection::Output, 0,
-                                                ShaderValueType::Float32, 1, 4, 1, row.at("name").get<std::string>()});
+            candidate.stageInterface.emplace_back(stage, input ? ShaderInterfaceDirection::Input : ShaderInterfaceDirection::Output, 0,
+                                                  ShaderValueType::Float32, 1, 4, 1, row.at("name").get<std::string>());
         }
 
         void StageIdentity(const ShaderArtifactStageView &record, const SpirvReflectionStage &json, ShaderStage stage,
@@ -272,7 +272,8 @@ namespace Horo::Render {
             ShaderReflectionCandidate candidate{.backend = ShaderTargetBackend::Vulkan,
                                                 .interfaceSchemaVersion = target.interfaceSchemaVersion};
             for (std::size_t i = 0; i < count; ++i) {
-                const auto stage = Compute(role) ? ShaderStage::Compute : i == 0 ? ShaderStage::Vertex : ShaderStage::Fragment;
+                const auto rasterStage = i == 0 ? ShaderStage::Vertex : ShaderStage::Fragment;
+                const auto stage = Compute(role) ? ShaderStage::Compute : rasterStage;
                 const auto &record = package.stages[i];
                 StageIdentity(record, stages[i], stage, role);
                 const auto json = Parse(stages[i].json);

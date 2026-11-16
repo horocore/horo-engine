@@ -48,18 +48,18 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> AddActor(Set &set, const RuntimeSceneView &scene, const RuntimeEntityView &entity);
         [[nodiscard]] bool ReadAttempt(const FixedStepContext &context, RuntimeDispatchFacts &facts) const noexcept;
         [[nodiscard]] Result<void> BeginAttempt(const FixedStepContext &context);
-        [[nodiscard]] Result<void> EvaluateActor(Actor &actor, const FixedStepContext &context);
+        [[nodiscard]] Result<void> EvaluateActor(Actor &actor, const FixedStepContext &context) const;
         [[nodiscard]] Result<void> PrepareAttempt(const FixedStepContext &context);
-        [[nodiscard]] Result<void> ArmActors();
-        void PublishActors() noexcept;
-        void AbortActors() noexcept;
+        [[nodiscard]] Result<void> ArmActors() const;
+        void PublishActors() const noexcept;
+        void AbortActors() const noexcept;
         void PublishAttempt(const FixedStepContext &context) noexcept;
         void AbortAttempt(const FixedStepContext &context) noexcept;
         void ClearAttempt() noexcept;
         void Close() noexcept;
 
         SceneAnimationRuntimeConfig config;
-        const std::thread::id owner;
+        const std::thread::id owner{std::this_thread::get_id()};
         AnimationSceneInternal::AssetGenerations assetGenerations;
         std::shared_ptr<Scope> active;
         std::uint32_t nextGeneration{1};

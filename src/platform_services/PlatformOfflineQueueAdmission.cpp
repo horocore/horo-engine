@@ -160,7 +160,7 @@ namespace Horo::PlatformServices {
 
     /** @brief Publishes prepared admission only after the outer returned Result has been constructed. */
     struct PlatformOfflineQueue::AdmissionCommit final {
-        explicit AdmissionCommit(PlatformOfflineQueue &owner) noexcept : owner(owner), exceptions(std::uncaught_exceptions()) {}
+        explicit AdmissionCommit(PlatformOfflineQueue &owner) noexcept : owner(owner) {}
 
         AdmissionCommit(const AdmissionCommit &) = delete;
         AdmissionCommit &operator=(const AdmissionCommit &) = delete;
@@ -198,7 +198,7 @@ namespace Horo::PlatformServices {
         }
 
         PlatformOfflineQueue &owner;
-        int exceptions;
+        int exceptions{std::uncaught_exceptions()};
         std::size_t tailIndex{};
         TimePoint now{};
         PlatformOfflineOperation combined;
@@ -366,7 +366,7 @@ namespace Horo::PlatformServices {
             if (coalesced.HasError())
                 return Result<PlatformOfflineAdmission>::Failure(coalesced.ErrorValue());
             if (auto coalescedAdmission = std::move(coalesced).Value(); coalescedAdmission.has_value())
-                return Result<PlatformOfflineAdmission>::Success(std::move(*coalescedAdmission));
+                return Result<PlatformOfflineAdmission>::Success(*coalescedAdmission);
             return AdmitFresh(intent, now, *expiresAt, tail, commit);
         } catch (const std::bad_alloc &) {
             return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::CapacityExceeded));

@@ -136,7 +136,9 @@ namespace Horo::Application::Internal {
                 if (!committed)
                     owner.Retire(identity);
             }
-        } rollback{*this, scene->identity};
+        };
+
+        Rollback rollback{*this, scene->identity};
 
         auto created = RuntimeInternal::XRSimulatorHostAccess::Create({*this, [this] {
             return Coordinator();

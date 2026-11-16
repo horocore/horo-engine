@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -45,7 +46,7 @@ namespace Horo::Physics::Detail {
         /** @brief Allocates with exact private header provenance; impossible
          * exhaustion is an adapter invariant failure. */
         void *Allocate(std::size_t size, std::size_t alignment) noexcept {
-            if (alignment == 0 || alignment > 16 || (alignment & (alignment - 1)) != 0)
+            if (alignment > 16 || !std::has_single_bit(alignment))
                 std::abort();
             const auto base = reinterpret_cast<std::uintptr_t>(storage_.data());
             const auto padding = (16 - ((base + used_) & 15U)) & 15U;
@@ -118,7 +119,8 @@ namespace Horo::Physics::Detail {
             if (!Quiescent())
                 std::abort();
             used_ = 0;
-            allocations_ = foreignReallocations_ = 0;
+            foreignReallocations_ = 0;
+            allocations_ = 0;
         }
 
     private:

@@ -11,7 +11,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
 
     void FinalizeHandle(JSRuntime *, JSValue value) noexcept {
         // The class ID belongs to this engine-owned runtime, never a script-supplied class.
-        delete static_cast<HandleBox *>(JS_GetOpaque(value, JS_GetClassID(value)));
+        const std::unique_ptr<HandleBox> ownedHandle{static_cast<HandleBox *>(JS_GetOpaque(value, JS_GetClassID(value)))};
     }
 
     JSValue Values::WriteHandle(const ScriptHandle &handle) {
@@ -103,26 +103,26 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
 
     JSValue Values::Write(const ScriptValue &value, Budget &budget, std::size_t depth) {
         budget.Charge(depth);
-        using K = ScriptValue::Kind;
+        using enum ScriptValue::Kind;
         switch (value.GetKind()) {
-            case K::Null:
+            case Null:
                 return JS_NULL;
-            case K::Boolean:
+            case Boolean:
                 return JS_NewBool(context, *value.AsBoolean());
-            case K::SignedInteger:
+            case SignedInteger:
                 return Checked(JS_NewBigInt64(context, *value.AsSignedInteger()));
-            case K::UnsignedInteger:
+            case UnsignedInteger:
                 return Checked(JS_NewBigUint64(context, *value.AsUnsignedInteger()));
-            case K::Number:
+            case Number:
                 return JS_NewFloat64(context, *value.AsNumber());
-            case K::String: {
+            case String: {
                 auto text = value.AsString();
                 budget.Charge(depth, text.size());
                 return Checked(JS_NewStringLen(context, text.data(), text.size()));
             }
-            case K::Handle:
+            case Handle:
                 return WriteHandle(*value.AsHandle());
-            case K::Enum:
+            case Enum:
                 return Checked(JS_NewBigInt64(context, value.AsEnum()->value));
             default:
                 return WriteCollection(value, budget, depth);

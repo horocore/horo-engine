@@ -18,7 +18,8 @@ namespace Horo::Editor {
             return std::nullopt;
         for (auto &record : storage_->records) {
             if (delaySeconds <= 0) {
-                record.autosaveElapsed = record.autosaveRetry = 0;
+                record.autosaveRetry = 0;
+                record.autosaveElapsed = 0;
                 record.autosaveRevision = 0;
                 continue;
             }

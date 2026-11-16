@@ -115,6 +115,12 @@ TEST_CASE("VFX cook rejects unproven intermediate or native layout rather than p
     SECTION("Offset") {
         Replace(evidence.stages[0].json, "\"offset\":8192", "\"offset\":8208");
     }
+    SECTION("Vector cannot claim matrix layout even with false row major") {
+        Replace(evidence.stages[0].json, "\"offset\":8192", "\"offset\":8192,\"row_major\":false");
+    }
+    SECTION("Scalar cannot claim a vector type at the same offset") {
+        Replace(evidence.stages[0].json, "\"name\":\"AlphaCutoff\",\"type\":\"float\"", "\"name\":\"AlphaCutoff\",\"type\":\"vec4\"");
+    }
     SECTION("Native array shape") {
         Replace(evidence.translations[0], "ClipFromLocal[128]", "ClipFromLocal[127]");
     }

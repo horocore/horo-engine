@@ -65,7 +65,7 @@ namespace Horo::Application::PrefabCookDetail {
                 if (!node)
                     return Return::Failure(MakeError(PrefabSceneCookErrors::Invalid));
                 if (!node->sourceRevision)
-                    roles.push_back({node->assetId, node->assetType});
+                    roles.emplace_back(node->assetId, node->assetType);
             }
             return Return::Success(std::move(roles));
         }
@@ -95,7 +95,7 @@ namespace Horo::Application::PrefabCookDetail {
                 });
                 if (found == artifacts.end())
                     return Return::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-                projection.envelopes.push_back({role.id, found->envelope});
+                projection.envelopes.emplace_back(role.id, found->envelope);
             }
             if (state.animation)
                 projection.expected = std::move(roles);

@@ -65,7 +65,7 @@ namespace Horo::Extensions {
         }
 
         std::vector<ScriptExportFunctionDescriptor> Methods() {
-            using P = ScriptExportPrimitiveKind;
+            using enum ScriptExportPrimitiveKind;
             using M = ScriptExportInvocationMode;
             return {{.id = "echo",
                      .introducedVersion = Introduced,
@@ -75,18 +75,18 @@ namespace Horo::Extensions {
                     {.id = "digest",
                      .introducedVersion = Introduced,
                      .invocation = M::Asynchronous,
-                     .parameters = {Parameter("bytes", Primitive(P::Bytes))},
-                     .results = {Output("hash", Primitive(P::UnsignedInteger))}},
+                     .parameters = {Parameter("bytes", Primitive(Bytes))},
+                     .results = {Output("hash", Primitive(UnsignedInteger))}},
                     {.id = "sum",
                      .introducedVersion = Introduced,
                      .invocation = M::Synchronous,
-                     .parameters = {Parameter("a", Primitive(P::SignedInteger)), Parameter("b", Primitive(P::SignedInteger))},
-                     .results = {Output("sum", Primitive(P::SignedInteger))},
+                     .parameters = {Parameter("a", Primitive(SignedInteger)), Parameter("b", Primitive(SignedInteger))},
+                     .results = {Output("sum", Primitive(SignedInteger))},
                      .errorIds = {"horo.reference.range"}},
                     {.id = "reject",
                      .introducedVersion = Introduced,
                      .invocation = M::Synchronous,
-                     .parameters = {Parameter("message", Primitive(P::String))},
+                     .parameters = {Parameter("message", Primitive(String))},
                      .errorIds = {"horo.reference.rejected"}}};
         }
     }  // namespace

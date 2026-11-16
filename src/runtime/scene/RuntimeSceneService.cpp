@@ -32,15 +32,17 @@ namespace Horo::Runtime {
         /** @brief New animation-bearing Scenes require one actual composed activation authority before any publication. */
         Result<void> ValidateActivationOwners(const RuntimeSceneDefinition &definition,
                                               std::span<const std::unique_ptr<SceneActivationParticipant>> participants) {
-            const bool required = std::ranges::any_of(definition.Entities(), [](const auto &entity) {
+            if (const bool required = std::ranges::any_of(definition.Entities(),
+                                                          [](const auto &entity) {
                 return entity.components.animation.has_value();
             });
-            if (!required)
+                !required)
                 return Result<void>::Success();
-            const auto owners = std::ranges::count_if(participants, [](const auto &participant) {
+            if (const auto owners = std::ranges::count_if(participants,
+                                                          [](const auto &participant) {
                 return participant->RequiredOwner() == SceneActivationOwner::Animation;
             });
-            if (owners != 1)
+                owners != 1)
                 return Result<void>::Failure(
                     MakeError(SceneErrors::AssetServicesUnavailable, "Animation requires exactly one canonical Scene activation owner."));
             return Result<void>::Success();
@@ -554,10 +556,11 @@ namespace Horo::Runtime {
 
     Result<void> RuntimeSceneService::AppendPreparationDependency(const SceneAssetDependency &dependency) {
         auto &prep = *preparation_;
-        const auto existing = std::ranges::find(prep.entries, dependency.id, [](const auto &entry) {
+        if (const auto existing = std::ranges::find(prep.entries, dependency.id,
+                                                    [](const auto &entry) {
             return entry.dependency.id;
         });
-        if (existing != prep.entries.end()) {
+            existing != prep.entries.end()) {
             if (existing->dependency.expectedType != dependency.expectedType)
                 return Result<void>::Failure(
                     WithAssetContext(MakeError(SceneErrors::AssetTypeMismatch), prep.definition.Id(), dependency.id));

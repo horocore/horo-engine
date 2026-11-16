@@ -15,7 +15,7 @@ namespace Horo::AI {
         Result<Detail::DecisionCompilationCandidate> PrepareCompilation(DecisionGraphAssetId root,
                                                                         std::span<const DecisionGraphSource> sources,
                                                                         const DecisionCompilationEnvironment &environment,
-                                                                        DecisionCompilationLimits limits,
+                                                                        const DecisionCompilationLimits &limits,
                                                                         DecisionClosureAdmission admission) {
             DecisionCodecLimits codec{.compilation = limits};
             auto encoded = DecisionPlanCodec::EncodeSource(sources, root, codec);

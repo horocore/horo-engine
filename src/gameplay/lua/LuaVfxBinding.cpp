@@ -155,7 +155,7 @@ namespace Horo::Gameplay::Detail {
             return valid;
         }
 
-        int Result(lua_State *state, const GameplayVfxSubmission submission) {
+        int Result(lua_State *state, const GameplayVfxSubmission &submission) {
             lua_pushinteger(state, static_cast<lua_Integer>(submission.status));
             std::array<char, 20> sequence{};
             const auto encoded = std::to_chars(sequence.data(), sequence.data() + sequence.size(), submission.receipt.occurrence.sequence);

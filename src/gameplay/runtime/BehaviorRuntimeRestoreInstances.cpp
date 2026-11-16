@@ -56,9 +56,9 @@ namespace Horo::Gameplay {
             AttachmentIndex result;
             for (std::size_t index = 0; index < instances.size(); ++index)
                 if (!result
-                         .emplace(AttachmentKey{instances[index].entity, instances[index].component.instanceId.value,
-                                                instances[index].component.typeId},
-                                  index)
+                         .try_emplace(AttachmentKey{instances[index].entity, instances[index].component.instanceId.value,
+                                                    instances[index].component.typeId},
+                                      index)
                          .second)
                     return Result<AttachmentIndex>::Failure(BehaviorRestoreError("Actual attachment identity is duplicated."));
             return Result<AttachmentIndex>::Success(std::move(result));
@@ -217,7 +217,7 @@ namespace Horo::Gameplay {
         std::vector<BehaviorReloadLifecycle> result(0);
         result.reserve(runtime.impl_->instances.size());
         for (const auto &instance : runtime.impl_->instances)
-            result.push_back({instance.entity, instance.component.instanceId, instance.component.typeId, Flags(instance)});
+            result.emplace_back(instance.entity, instance.component.instanceId, instance.component.typeId, Flags(instance));
         return result;
     }
 
@@ -228,7 +228,7 @@ namespace Horo::Gameplay {
             return Outcome::Failure(BehaviorRestoreError("Reload attachment inventory changed."));
         std::map<AttachmentKey, const BehaviorReloadLifecycle *> identities;
         for (const auto &entry : saved)
-            if (!identities.emplace(AttachmentKey{entry.entity, entry.instance.value, entry.type}, &entry).second)
+            if (!identities.try_emplace(AttachmentKey{entry.entity, entry.instance.value, entry.type}, &entry).second)
                 return Outcome::Failure(BehaviorRestoreError("Reload attachment identity is duplicated."));
         std::vector<BehaviorLifecycleFlags> flags;
         flags.reserve(saved.size());
@@ -363,8 +363,7 @@ namespace Horo::Gameplay {
             return Result<void>::Failure(BehaviorRestoreError("Unknown required restore service."));
         if (auto physics = CheckRestorePhysicsServices(impl, bits); physics.HasError())
             return physics;
-        const bool navigationReady = impl.navigation && impl.navigation->IsUsable();
-        if ((bits & 2U) != 0 && !navigationReady)
+        if (const bool navigationReady = impl.navigation && impl.navigation->IsUsable(); (bits & 2U) != 0 && !navigationReady)
             return Result<void>::Failure(BehaviorRestoreError("Required restore navigation service is unavailable."));
         if ((bits & 8U) != 0 && !impl.runtimeUi)
             return Result<void>::Failure(BehaviorRestoreError("Required restore UI service is unavailable."));

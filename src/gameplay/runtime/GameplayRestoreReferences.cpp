@@ -44,7 +44,7 @@ namespace Horo::Gameplay::Detail {
 
         class SourceVisitor final : public IBehaviorPersistenceVisitor {
         public:
-            SourceVisitor(const RestoreReferenceAuthorities &authorities) : authorities_(authorities) {}
+            explicit SourceVisitor(const RestoreReferenceAuthorities &authorities) : authorities_(authorities) {}
 
             Result<void> Visit(std::span<const BehaviorRestoreInstance> instances) override {
                 if (instances.size() > 16'384)
@@ -57,7 +57,7 @@ namespace Horo::Gameplay::Detail {
                     if (resolved.Value() != actual)
                         return Result<void>::Failure(Invalid());
                     const BehaviorRestoreAttachment key{instance.persistentEntity, instance.persistentGeneration, instance.instance};
-                    if (!sources.emplace(key, RestoreEntityReference{{authorities_.world, key.entity}, {key.generation}}).second)
+                    if (!sources.try_emplace(key, RestoreEntityReference{{authorities_.world, key.entity}, {key.generation}}).second)
                         return Result<void>::Failure(Invalid());
                 }
                 return Result<void>::Success();

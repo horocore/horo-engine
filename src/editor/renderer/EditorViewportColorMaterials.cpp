@@ -42,7 +42,7 @@ namespace Horo::Editor {
             {{d.domainMinimum.x, d.domainMinimum.y, d.domainMinimum.z, 0},
              {d.domainMaximum.x, d.domainMaximum.y, d.domainMaximum.z, 0},
              {float(d.dimension), d.interpolation == ColorLutInterpolation::Tetrahedral ? 1.0F : 0.0F, 1, 0}}};
-        for (std::size_t i = 0; i < values.size(); ++i)
+        for (std::uint32_t i = 0; i < values.size(); ++i)
             if (const auto packed = Parameter(bytes, programs_[0].layout, i + 4, values[i]); packed.HasError())
                 return packed;
         return Result<void>::Success();
@@ -68,7 +68,7 @@ namespace Horo::Editor {
                   std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation >> 32)),
                   std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission)),
                   std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission >> 32))}}};
-            for (std::size_t i = 0; i < values.size(); ++i)
+            for (std::uint32_t i = 0; i < values.size(); ++i)
                 if (const auto packed = Parameter(size, programs_[role].layout, i + 1, values[i]); packed.HasError())
                     return packed;
         }
@@ -122,8 +122,7 @@ namespace Horo::Editor {
                 for (auto &binding : slot.bindings[role]) {
                     if (!binding)
                         continue;
-                    const auto released = programs_[role].materials->Release(binding->Id());
-                    if (released.HasError())
+                    if (const auto released = programs_[role].materials->Release(binding->Id()); released.HasError())
                         return released;
                     binding.reset();
                 }

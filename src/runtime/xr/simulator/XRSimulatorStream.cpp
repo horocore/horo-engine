@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 
 namespace Horo::XR {
     namespace {
@@ -46,7 +47,7 @@ namespace Horo::XR {
 
         const XRTrackedDeviceRecord *Device(const std::span<const XRTrackedDeviceRecord> devices, const XRTrackedDeviceRole role) noexcept {
             const auto found = std::ranges::find(devices, role, &XRTrackedDeviceRecord::role);
-            return found == devices.end() ? nullptr : &*found;
+            return found == devices.end() ? nullptr : std::to_address(found);
         }
 
         XRFakeActionKind FakeKind(const XRTrackedActionKind kind) noexcept {
@@ -127,7 +128,6 @@ namespace Horo::XR {
             return Result<void>::Success();
         }
         const auto session = outcome.session.session;
-        const auto origin = Value<XRWorldOriginRevision>(1);
         std::array<RuntimeInternal::TrackingSourceEvidence, XRSimulatorHardLimits::MaximumSources> sources;
         for (std::size_t index = 0; index < step.sourceCount; ++index) {
             const auto &source = step.sources[index];
@@ -218,7 +218,11 @@ namespace Horo::XR {
             playback = XRSimulatorPlayback::Paused;
             return Result<XRSimulatorAdvance>::Success({.cursor = cursor, .relativeNanoseconds = time});
         }
-        const auto step = replay ? scenario->Steps()[cursor] : pendingEvent ? Event(*pendingEvent) : controls;
+        const auto step = [this] {
+            if (replay)
+                return scenario->Steps()[cursor];
+            return pendingEvent ? Event(*pendingEvent) : controls;
+        }();
         return Consume(step, hostCutoff);
     }
 

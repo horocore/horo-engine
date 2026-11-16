@@ -54,6 +54,7 @@ namespace Horo::Extensions {
                 return;
             }
         } catch (...) {
+            // The caller-owned emergency result below requires no new diagnostic allocation.
         }
         result = std::move(fallback);
     }

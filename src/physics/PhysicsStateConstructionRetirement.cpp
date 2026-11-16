@@ -46,7 +46,7 @@ namespace Horo::Physics::StateDetail {
             return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         std::size_t available{};
         for (std::uint32_t index = 0; index < limits_.maximumNodes; ++index)
-            available += !nodes_[index].occupied;
+            available += nodes_[index].occupied ? 0U : 1U;
         return nodes <= available ? Result<void>::Success() : Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
     }
 }  // namespace Horo::Physics::StateDetail

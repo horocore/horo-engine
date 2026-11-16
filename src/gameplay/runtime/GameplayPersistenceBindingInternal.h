@@ -10,7 +10,7 @@ namespace Horo::Gameplay::Detail {
     class GameplayPersistenceSourceSlot final : public IPersistenceSource {
     public:
         GameplayPersistenceSourceSlot(std::shared_ptr<IPersistenceSource> factory, const std::atomic_bool &admission)
-            : factory_(factory), current_(std::move(factory)), admission_(&admission), owner_(std::this_thread::get_id()) {}
+            : factory_(factory), current_(std::move(factory)), admission_(&admission) {}
 
         [[nodiscard]] const std::shared_ptr<IPersistenceSource> &Factory() const noexcept {
             RequireOwner();
@@ -80,7 +80,7 @@ namespace Horo::Gameplay::Detail {
         std::optional<BehaviorPersistenceTarget> target_;
         bool closed_{};
         const std::atomic_bool *admission_;
-        const std::thread::id owner_;
+        const std::thread::id owner_{std::this_thread::get_id()};
     };
 
     /** @brief Constructed before the sole gate. Publish swaps only; old native source survives through explicit transient retirement. */

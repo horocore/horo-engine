@@ -176,8 +176,8 @@ namespace Horo::Prefab::Detail {
             std::ranges::sort(ordered, {}, &std::pair<std::uint32_t, const Json *>::first);
             std::vector<const Json *> result;
             result.reserve(ordered.size());
-            for (const auto &entry : ordered)
-                result.push_back(entry.second);
+            for (const auto &[identity, row] : ordered)
+                result.push_back(row);
             return Result<std::vector<const Json *>>::Success(std::move(result));
         }
 

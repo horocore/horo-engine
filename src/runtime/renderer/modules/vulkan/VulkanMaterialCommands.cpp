@@ -95,7 +95,7 @@ namespace Horo::Render::Detail {
         barriers.push_back(barrier.Value());
         const VulkanGraphResourceState after{next, submission.signal, true, true};
         if (existing == updates.end())
-            updates.push_back({resource.state, after});
+            updates.emplace_back(resource.state, after);
         else
             existing->value = after;
         materialPassStates[materialPassStateCount++] = resource.state;

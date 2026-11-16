@@ -234,7 +234,7 @@ namespace Horo::AI::Detail {
                            .requiredBlackboardSchemaVersion = source.blackboardVersion,
                            .source = source.location};
         if (auto lowered = std::visit(
-                [&](const auto &body) -> Result<void> {
+                [&]<typename VisitedValue>(const VisitedValue &body) -> Result<void> {
             using Body = std::decay_t<decltype(body)>;
             if constexpr (std::is_same_v<Body, std::shared_ptr<const BehaviorTreeAsset>>)
                 return LowerTree(result, source, body);

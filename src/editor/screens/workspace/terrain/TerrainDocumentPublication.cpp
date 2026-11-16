@@ -102,12 +102,14 @@ namespace Horo::Editor {
         auto lease = mutations.TryAcquire({root_, ProjectMutationOwner::Save, "terrain.source.save"});
         if (lease.HasError())
             return Return::Failure(std::move(lease).ErrorValue());
+        const auto mutationLease = std::move(lease).Value();
         auto sourceLock = LockSource(root_, path_, files);
         if (sourceLock.HasError())
             return Return::Failure(std::move(sourceLock).ErrorValue());
         auto metadataLock = LockSource(root_, metadataPath_, files);
         if (metadataLock.HasError())
             return Return::Failure(std::move(metadataLock).ErrorValue());
+        const auto metadataLease = std::move(metadataLock).Value();
         if (auto metadata = CheckMetadata(root_, metadataPath_, acceptedMetadata_); metadata.HasError()) {
             ObserveConflict(conflict_, metadata.ErrorValue());
             return Return::Failure(std::move(metadata).ErrorValue());

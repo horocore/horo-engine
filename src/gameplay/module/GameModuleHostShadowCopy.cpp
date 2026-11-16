@@ -42,8 +42,7 @@ namespace Horo::Gameplay {
             auto stem = libraryPath.stem().u8string();
             if (const auto marker = stem.find(u8".horo_reload_"); marker != std::u8string::npos)
                 stem.resize(marker);
-            constexpr std::size_t maximumStemBytes = 64;
-            if (stem.size() > maximumStemBytes) {
+            if (constexpr std::size_t maximumStemBytes = 64; stem.size() > maximumStemBytes) {
                 auto length = maximumStemBytes;
                 while ((static_cast<unsigned char>(stem[length]) & 0xc0U) == 0x80U)
                     --length;

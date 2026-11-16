@@ -79,8 +79,8 @@ namespace Horo::Application::Internal {
         private:
             /** @brief Creates only actual candidate-bound receipts using this bundle's
              * one identity map. */
-            Result<RuntimeSaveRestoreStaging> PrepareActualOwners(RuntimeSceneView candidate,
-                                                                  const SaveParticipantRegistrySnapshot &participants) {
+            Result<RuntimeSaveRestoreStaging> PrepareActualOwners(const RuntimeSceneView &candidate,
+                                                                  const SaveParticipantRegistrySnapshot &participants) const {
                 using Outcome = Result<RuntimeSaveRestoreStaging>;
                 const auto *identities = control_->bundle ? control_->bundle->Identities() : nullptr;
                 if (!identities || !control_->source || candidate.RuntimeId() != control_->candidate)
@@ -125,7 +125,7 @@ namespace Horo::Application::Internal {
                 return RecordFailure(PrepareGameplay(scene));
             }
 
-            Result<void> PrepareGameplay(RuntimeScene &scene) {
+            Result<void> PrepareGameplay(RuntimeScene &scene) const {
                 control_->candidate = scene.View().RuntimeId();
                 std::shared_ptr<const Gameplay::GameplayPrefabContext> prefabs;
                 if (control_->dynamic && control_->prefabs) {

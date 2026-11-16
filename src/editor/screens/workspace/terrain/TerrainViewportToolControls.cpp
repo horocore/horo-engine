@@ -5,6 +5,7 @@
 #include "TerrainViewportTool.h"
 
 #include <algorithm>
+#include <format>
 
 namespace Horo::Editor {
     namespace {
@@ -15,7 +16,7 @@ namespace Horo::Editor {
         /** @brief Format a stable layer identity only when its captured semantic binding/locale changes. */
         std::string LayerLabel(const EditorGuiContext &context, Terrain::TerrainLayerId id, std::size_t index) {
             constexpr char Hex[] = "0123456789abcdef";
-            std::string label = Text(context, "terrain.tools.layer") + " " + std::to_string(index + 1) + " · ";
+            std::string label = std::format("{} {} · ", Text(context, "terrain.tools.layer"), index + 1);
             for (auto byte : id.Bytes()) {
                 label += Hex[byte >> 4];
                 label += Hex[byte & 15];
@@ -43,17 +44,17 @@ namespace Horo::Editor {
                                  Text(context, "terrain.tools.carve").c_str(),         Text(context, "terrain.tools.restore").c_str(),
                                  Text(context, "terrain.tools.foliage_paint").c_str(), Text(context, "terrain.tools.foliage_erase").c_str(),
                                  Text(context, "terrain.tools.foliage_select").c_str()};
-        if (int mode = static_cast<int>(mode_);
+        if (auto mode = static_cast<int>(mode_);
             Ui::DrawComboPropRow(Text(context, "terrain.tools.tool").c_str(), "##terrain_tool", mode, choices, context.theme.fonts))
             mode_ = static_cast<TerrainToolMode>(mode);
-        float radius = static_cast<float>(brush_.radiusMeters);
+        auto radius = static_cast<float>(brush_.radiusMeters);
         if (Ui::DrawFloatPropRow(Text(context, "terrain.tools.radius").c_str(), "##terrain_radius", radius, context.theme.fonts).changed)
             brush_.radiusMeters = radius;
     }
 
     /** @copydoc TerrainViewportTool::SculptControls */
     void TerrainViewportTool::SculptControls(const EditorGuiContext &context) {
-        int mode = static_cast<int>(brush_.mode);
+        auto mode = static_cast<int>(brush_.mode);
         if (const std::array choices{Text(context, "terrain.tools.raise").c_str(), Text(context, "terrain.tools.lower").c_str(),
                                      Text(context, "terrain.tools.smooth").c_str(), Text(context, "terrain.tools.flatten").c_str(),
                                      Text(context, "terrain.tools.noise").c_str()};
@@ -215,7 +216,7 @@ namespace Horo::Editor {
     }
 
     /** @brief Render the retained actual cook receipt even when its source is no longer eligible for adoption. */
-    void TerrainViewportTool::CookStatus(const Frame &frame, const EditorGuiContext &context) {
+    void TerrainViewportTool::CookStatus(const Frame &frame, const EditorGuiContext &context) const {
         const char *key = frame.cookRunning   ? "terrain.tools.cooking"
                           : frame.cookCurrent ? "terrain.tools.cooked"
                                               : "terrain.tools.cook_hint";

@@ -117,8 +117,7 @@ namespace Horo::Editor {
         if (actual.HasError())
             return Result<void>::Failure(actual.ErrorValue());
         const auto &output = actual.Value();
-        const Render::RenderOutputColor legacySdr;
-        if (output.active != legacySdr || output.requested.color != legacySdr)
+        if (const Render::RenderOutputColor legacySdr; output.active != legacySdr || output.requested.color != legacySdr)
             return Result<void>::Failure(MakeError(Render::RenderPresentationErrors::OutputUnsupported));
         if (output.revision != output_.revision || output.display.revision != output_.display.revision)
             reset_ = true;

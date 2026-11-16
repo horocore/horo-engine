@@ -211,7 +211,7 @@ namespace Horo::Render::Detail {
 
     Result<void> VulkanVfxGpuRuntime::Impl::EncodeCompute(VkCommandBuffer command, VulkanCommandTicket ticket,
                                                           const RenderQueueSubmission &submission, const RenderGraphVfxGpuCompute &work,
-                                                          const RenderGraphExecutionRequest &request) {
+                                                          const RenderGraphExecutionRequest &request) const {
         if (const auto valid = ValidateCompute(work, request); valid.HasError())
             return valid;
         auto simulation = std::static_pointer_cast<VulkanVfxGpuSimulation>(work.simulationLease);
@@ -239,7 +239,8 @@ namespace Horo::Render::Detail {
         if (record.observe) {
             auto &output = simulation->observations[record.observation];
             output.held = true;
-            output.completed = output.failed = false;
+            output.failed = false;
+            output.completed = false;
             output.observationStep = record.step;
         }
         WriteParameters(*simulation, operation, parameters);
@@ -257,7 +258,7 @@ namespace Horo::Render::Detail {
     }
 
     Result<void> VulkanVfxGpuRuntime::Validate(const RenderGraphExecutionRequest &request, std::size_t pass,
-                                               std::span<const VulkanGraphResource> bindings) {
+                                               std::span<const VulkanGraphResource> bindings) const {
         if (const auto *compute = std::get_if<RenderGraphVfxGpuCompute>(&request.workloads[pass].workload))
             return impl_->ValidateCompute(*compute, request);
         if (const auto *draw = std::get_if<RenderGraphVfxGpuDraw>(&request.workloads[pass].workload))
@@ -275,7 +276,7 @@ namespace Horo::Render::Detail {
         return Result<void>::Failure(VulkanVfxGpuInvalid("Not a typed native particle pass."));
     }
 
-    void VulkanVfxGpuRuntime::Impl::Finish(VulkanVfxGpuSimulation &simulation, VulkanCommandTicket ticket, bool accepted) noexcept {
+    void VulkanVfxGpuRuntime::Impl::Finish(VulkanVfxGpuSimulation &simulation, VulkanCommandTicket ticket, bool accepted) const noexcept {
         FinishJournals(simulation, ticket, accepted);
         std::size_t index{};
         while (index < simulation.active.size()) {
@@ -300,7 +301,7 @@ namespace Horo::Render::Detail {
             impl_->Finish(*simulation, ticket, accepted);
     }
 
-    void VulkanVfxGpuRuntime::Uncertain(VulkanCommandTicket ticket) noexcept {
+    void VulkanVfxGpuRuntime::Uncertain(VulkanCommandTicket ticket) const noexcept {
         for (const auto &simulation : impl_->simulations) {
             for (auto &journal : simulation->journals) {
                 if (!journal.occupied || journal.accepted || journal.ticket != ticket)
@@ -331,7 +332,7 @@ namespace Horo::Render::Detail {
         }
     }
 
-    void VulkanVfxGpuRuntime::Impl::Reject(VulkanVfxGpuSimulation &simulation, const RenderGraphVfxGpuCompute &work) noexcept {
+    void VulkanVfxGpuRuntime::Impl::Reject(VulkanVfxGpuSimulation &simulation, const RenderGraphVfxGpuCompute &work) const noexcept {
         auto candidate = work.work;
         candidate.callerCancellation = {};
         candidate.lifetimeCancellation = {};
@@ -366,10 +367,9 @@ namespace Horo::Render::Detail {
         for (const auto &state : simulation.states)
             if (state.capture.resource.buffer == buffer)
                 return true;
-        for (const auto &observation : simulation.observations)
-            if (observation.capture.resource.buffer == buffer)
-                return true;
-        return false;
+        return std::ranges::any_of(simulation.observations, [&](const VulkanVfxGpuBuffer &observation) {
+            return observation.capture.resource.buffer == buffer;
+        });
     }
 
     bool VulkanVfxGpuRuntime::Owns(VkBuffer buffer) const noexcept {

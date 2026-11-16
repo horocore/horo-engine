@@ -271,7 +271,7 @@ namespace Horo::AI {
         if (generation->contracts_.size() > MaximumNodes - declarations.size())
             return Result<void>::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
         for (std::size_t index = 0; index < generation->contracts_.size(); ++index)
-            declarations.push_back({generation->contracts_[index], generation->factories_[index]});
+            declarations.emplace_back(generation->contracts_[index], generation->factories_[index]);
         parents_.push_back(generation);
         return Result<void>::Success();
     }

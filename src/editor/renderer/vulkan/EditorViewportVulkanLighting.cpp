@@ -17,7 +17,7 @@ namespace Horo::Editor {
 
     Result<void> EditorViewportRendererVulkan::PrepareViewportOutput(Render::RenderFrameScope &frame,
                                                                      const Render::PrimaryOutputAttachment &output,
-                                                                     const Render::StaticMeshPassDescriptor *viewport) {
+                                                                     const Render::StaticMeshPassDescriptor *viewport) const {
         if (viewport) {
             if (auto ready = ValidateEditorViewportMeshReadiness(resources_, viewport->scene.instances); ready.HasError())
                 return ready;

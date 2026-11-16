@@ -154,7 +154,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorGuiLiveReload::Update */
-    void EditorGuiLiveReload::Update(const double elapsedSeconds) {
+    void EditorGuiLiveReload::Update(const double elapsedSeconds) const {
 #if defined(HORO_EDITOR_LIVE_UI)
         if (!state_ || !state_->runtime)
             return;

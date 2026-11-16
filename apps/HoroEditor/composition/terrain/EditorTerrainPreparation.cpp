@@ -78,6 +78,7 @@ namespace Horo::Editor {
                                                                  .publicationFiles =
                                                                      std::shared_ptr<DurableFileSystem>(&files,
                                                                                                         [](DurableFileSystem *) {
+            // This is a borrow; the application composition retains file-system ownership.
         }),
                                                                  .newPublicationOperationId = NewIdentity,
                                                                  .operations = &operations,

@@ -12,8 +12,8 @@ namespace Horo::Editor {
             double z{};
         };
 
-        Point Sub(Point a, Point b) noexcept {
-            return {a.x - b.x, a.y - b.y, a.z - b.z};
+        Point Sub(Point left, Point right) noexcept {
+            return {left.x - right.x, left.y - right.y, left.z - right.z};
         }
 
         Point Cross(Point a, Point b) noexcept {
@@ -132,7 +132,10 @@ namespace Horo::Editor {
             Axis axis;
             axis.cell = Cell(origin + direction * begin, samples);
             axis.samples = samples;
-            axis.step = direction > 0 ? 1 : direction < 0 ? -1 : 0;
+            if (direction > 0)
+                axis.step = 1;
+            else if (direction < 0)
+                axis.step = -1;
             axis.next = std::numeric_limits<double>::infinity();
             axis.delta = axis.next;
             if (axis.step != 0) {

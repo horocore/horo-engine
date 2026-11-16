@@ -75,7 +75,7 @@ namespace Horo::Animation::Detail {
 
         /** @brief Prepares truthful discontinuity closure before recording an already validated path. */
         void StageTrace(GraphInstanceState &state, const std::uint32_t player, const AnimationClipTrace &trace, const bool allowed,
-                        const GraphActionHandle action) noexcept {
+                        const GraphActionHandle &action) noexcept {
             auto &work = state.notifies;
             auto &owner = work.candidate[player];
             Relocate(state, player, trace);

@@ -39,10 +39,9 @@ namespace Horo::Editor {
         /** @brief Owned canonical source; captures keep this publication alive after owner retirement. */
         struct AnimationDocumentRoot final {
             Animation::AnimationGraphData data;
-            std::string bytes;
+            std::string bytes = std::string(std::size_t{0}, char{});
 
-            AnimationDocumentRoot(Animation::AnimationGraphData &&source, std::string &&sourceBytes)
-                : data(std::move(source)), bytes(std::size_t{0}, char{}) {
+            AnimationDocumentRoot(Animation::AnimationGraphData &&source, std::string &&sourceBytes) : data(std::move(source)) {
                 // Prepare checked iterator ownership before transferring the completed text.
                 bytes.swap(sourceBytes);
             }
@@ -238,7 +237,10 @@ namespace Horo::Editor {
         std::shared_ptr<const Detail::AnimationDocumentOwner> owner{std::make_shared<const Detail::AnimationDocumentOwner>()};
         SemanticDocumentHistory<Delta> history;
         const std::thread::id thread{std::this_thread::get_id()};
-        std::uint64_t revision{1}, currentState{1}, nextState{2}, firstState{1};
+        std::uint64_t revision{1};
+        std::uint64_t currentState{1};
+        std::uint64_t nextState{2};
+        std::uint64_t firstState{1};
         bool dirty{};
 
         explicit Impl(const AnimationGraphDocumentLimits &policy) : limits(policy), history({policy.historyEntries, policy.historyBytes}) {}

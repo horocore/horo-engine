@@ -97,7 +97,7 @@ namespace Horo::Editor {
                 prepared.Value()->Shutdown();
                 return started;
             }
-            if (auto queued = scenes.QueuePreparation(std::move(definition)); queued.HasError()) {
+            if (auto queued = scenes.QueuePreparation(definition); queued.HasError()) {
                 prepared.Value()->Shutdown();
                 return queued;
             }

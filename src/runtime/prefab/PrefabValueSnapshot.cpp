@@ -74,7 +74,7 @@ namespace Horo::Prefab {
         auto resolved = ResolvePrefabValueOverrides(source, authored ? *authored : empty, schemas, limits, cancellation);
         if (resolved.HasError())
             return Return::Failure(resolved.ErrorValue());
-        auto inspection = [&]() -> Result<std::shared_ptr<const PrefabValueSnapshot>> {
+        auto inspection = [&] {
             using Return = Result<std::shared_ptr<const PrefabValueSnapshot>>;
             if (capture.maximumEntries > PrefabHardLimits::OverrideRecords || capture.maximumBytes > PrefabHardLimits::SourceDocumentBytes)
                 return Return::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
@@ -117,7 +117,7 @@ namespace Horo::Prefab {
                     if (retain(sizeof(orphan) + RecordBytes(orphan.original)))
                         snapshot->orphans_.push_back(orphan);
                 }
-                const auto captureComponent = [&](const auto &evidence, const PrefabComponentOverrideRecord &record) -> Result<void> {
+                const auto captureComponent = [&](const auto &evidence, const PrefabComponentOverrideRecord &record) {
                     if (cancellation.IsCancellationRequested())
                         return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
                     if (retain(ComponentBytes(record)))
@@ -161,9 +161,9 @@ namespace Horo::Prefab {
                             continue;
                         if (retain(2 * sizeof(PrefabOpaqueValueEvidence) + component.component.typeId.Value().size() +
                                    object.key.object.NestedInstanceScope().size() * sizeof(LocalObjectId)))
-                            snapshot->opaque_.push_back({object.key, component.component.typeId, component.instance,
-                                                         component.component.schemaVersion, ComputeSha256(component.component.payload),
-                                                         component.component.payload.size()});
+                            snapshot->opaque_.emplace_back(object.key, component.component.typeId, component.instance,
+                                                           component.component.schemaVersion, ComputeSha256(component.component.payload),
+                                                           component.component.payload.size());
                     }
                 snapshot->retainedBytes_ = used;
                 return Return::Success(std::move(snapshot));
@@ -174,7 +174,7 @@ namespace Horo::Prefab {
         if (cancellation.IsCancellationRequested())
             return Return::Failure(MakeError(PrefabErrors::Cancelled));
         if (inspection.HasError())
-            return Return::Success({{}, std::move(resolved).Value(), std::move(inspection.ErrorValue())});
+            return Return::Success({{}, std::move(resolved).Value(), inspection.ErrorValue()});
         return Return::Success({std::move(inspection).Value(), std::move(resolved).Value(), {}});
     }
 }  // namespace Horo::Prefab

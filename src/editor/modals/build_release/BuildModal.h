@@ -35,7 +35,7 @@ namespace Horo::Editor {
         void DrawActivity();
         void DrawStages();
         [[nodiscard]] bool DrawFooter();
-        void Choice(const char *key, int &value, std::initializer_list<const char *> options);
+        void Choice(const char *key, int &value, std::initializer_list<const char *> options) const;
         void DrawTargetRow(bool productRow);
         [[nodiscard]] bool Supported() const;
         [[nodiscard]] bool Running() const;

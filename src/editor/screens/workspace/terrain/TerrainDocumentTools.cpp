@@ -20,6 +20,7 @@ namespace Horo::Editor {
             auto lease = mutations.TryAcquire({root_, ProjectMutationOwner::Save, "terrain.paint"});
             if (lease.HasError())
                 return Return::Failure(std::move(lease).ErrorValue());
+            const auto mutationLease = std::move(lease).Value();
             if (auto valid = ValidateResources(); valid.HasError())
                 return Return::Failure(std::move(valid).ErrorValue());
             auto produced = ProduceTerrainPaint(document_.Source(), layers_, fence, operation, brush, stamps, {}, cancellation);
@@ -66,6 +67,7 @@ namespace Horo::Editor {
             auto lease = mutations.TryAcquire({root_, ProjectMutationOwner::Save, "terrain.foliage.paint"});
             if (lease.HasError())
                 return Return::Failure(std::move(lease).ErrorValue());
+            const auto mutationLease = std::move(lease).Value();
             if (auto valid = ValidateDefinition(definition); valid.HasError())
                 return Return::Failure(std::move(valid).ErrorValue());
             return document_.Execute(operation, cancellation);

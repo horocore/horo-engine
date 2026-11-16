@@ -64,7 +64,7 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<Runtime::PersistentEntityIdentityMap> Identities() const;
         /** @brief Revokes new metadata preparation before Stop; accepted publications remain retained until real settlement. */
-        void Close() noexcept;
+        void Close() const noexcept;
 
     private:
         /** @brief Adopts only a completely validated cold inventory state. */

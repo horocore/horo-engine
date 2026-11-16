@@ -208,6 +208,7 @@ namespace Horo::Editor {
             auto lease = mutations.TryAcquire({root_, ProjectMutationOwner::Save, "terrain.resources.refresh"});
             if (lease.HasError())
                 return Result<void>::Failure(std::move(lease).ErrorValue());
+            const auto mutationLease = std::move(lease).Value();
             auto current = CaptureCurrent();
             if (current.HasError())
                 return Result<void>::Failure(std::move(current).ErrorValue());

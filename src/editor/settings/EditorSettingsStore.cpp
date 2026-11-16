@@ -6,6 +6,7 @@
 #include "editor/input/EditorInputActions.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <fstream>
@@ -20,20 +21,20 @@
 namespace Horo::Editor {
     /** @copydoc CodeEditorBooleanSettings */
     std::span<const CodeEditorBooleanSetting> CodeEditorBooleanSettings() noexcept {
-        static constexpr CodeEditorBooleanSetting settings[]{
+        static constexpr std::array<CodeEditorBooleanSetting, 4> settings{{
             {"codeShowLineNumbers", &CodeEditorSettings::showLineNumbers},
             {"codeShowWhitespace", &CodeEditorSettings::showWhitespace},
             {"codeWordWrap", &CodeEditorSettings::wordWrap},
             {"codeShowScrollBar", &CodeEditorSettings::showScrollBar},
-        };
+        }};
         return settings;
     }
 
     /** @copydoc CodeEditorIntegerSettings */
     std::span<const CodeEditorIntegerSetting> CodeEditorIntegerSettings() noexcept {
-        static constexpr CodeEditorIntegerSetting settings[]{
+        static constexpr std::array<CodeEditorIntegerSetting, 1> settings{{
             {"codeAutoSaveDelaySeconds", &CodeEditorSettings::autoSaveDelaySeconds, 0, 300},
-        };
+        }};
         return settings;
     }
 

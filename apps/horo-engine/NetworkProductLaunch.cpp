@@ -178,7 +178,7 @@ namespace Horo::Application::Internal {
                 entity.components.behaviors.emplace_back(Gameplay::BehaviorInstanceId{1}, descriptor.typeId, descriptor.schemaVersion, true,
                                                          std::vector<Gameplay::BehaviorField>{});
             }
-            builder.Add(std::move(entity));
+            builder.Add(entity);
             auto created = std::move(builder).Build();
             if (created.HasError())
                 return Result<std::shared_ptr<const Runtime::RuntimeSceneDefinition>>::Failure(created.ErrorValue());

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <new>
 #include <set>
 
@@ -93,7 +94,7 @@ namespace Horo::Prefab {
                 const auto found = std::ranges::find(recipe.members, entities[entity].provenance, &PrefabPersistentMember::source);
                 if (found == recipe.members.end())
                     return Invalid<void>("An installed cooked member has no exact saved provenance.");
-                const auto [inserted, unique] = nodes.emplace(found->record.identity, Node{&*found, index, entity, {}});
+                const auto [inserted, unique] = nodes.try_emplace(found->record.identity, Node{std::to_address(found), index, entity, {}});
                 if (!unique)
                     return Invalid<void>("Repeated stable member identity in reconstruction inventory.");
                 local.push_back(&inserted->second);
@@ -101,19 +102,19 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        Result<void> ValidateRecords(std::span<const Runtime::PersistentEntityRecord> records) const {
+        Result<void> ValidateRecords(std::span<const Runtime::PersistentEntityRecord> incomingRecords) const {
             std::map<Runtime::PersistentEntityId, const Runtime::PersistentEntityRecord *> admitted;
-            for (const auto &record : records)
-                if (!admitted.emplace(record.identity, &record).second)
+            for (const auto &record : incomingRecords)
+                if (!admitted.try_emplace(record.identity, &record).second)
                     return Invalid<void>("Repeated aggregate entity identity.");
             std::size_t spawned{};
-            for (const auto &record : records)
-                spawned += std::holds_alternative<Runtime::SpawnedPersistentEntityProvenance>(record.provenance);
+            for (const auto &record : incomingRecords)
+                spawned += std::holds_alternative<Runtime::SpawnedPersistentEntityProvenance>(record.provenance) ? 1U : 0U;
             std::size_t members{};
             for (const auto &recipe : saved.instances)
                 for (const auto &member : recipe.members) {
-                    const auto found = admitted.find(member.record.identity);
-                    if (found == admitted.end() || !SameRecord(member.record, *found->second))
+                    if (const auto found = admitted.find(member.record.identity);
+                        found == admitted.end() || !SameRecord(member.record, *found->second))
                         return Invalid<void>("Prefab recipe and sole aggregate entity inventory disagree.");
                     ++members;
                 }
@@ -153,10 +154,10 @@ namespace Horo::Prefab {
             while (!remaining.empty()) {
                 const auto before = remaining.size();
                 for (auto current = remaining.begin(); current != remaining.end();) {
-                    auto ready = ParentReady(*current, ordered);
-                    if (ready.HasError())
-                        return Result<void>::Failure(ready.ErrorValue());
-                    if (!ready.Value()) {
+                    auto parentReady = ParentReady(*current, ordered);
+                    if (parentReady.HasError())
+                        return Result<void>::Failure(parentReady.ErrorValue());
+                    if (!parentReady.Value()) {
                         ++current;
                         continue;
                     }
@@ -229,11 +230,12 @@ namespace Horo::Prefab {
             if (!declaration.componentType)
                 return Result<Detail::PrefabRestoredBinding>::Success({slot, Runtime::RuntimeGroupExternalEntitySlot{{*node.dense}, {}}});
             const auto &members = prepared[node.instance]->Data().entities[node.local].members;
-            const auto found = std::ranges::find_if(members, [&](const auto &member) {
+            if (const auto found = std::ranges::find_if(members,
+                                                        [&](const auto &member) {
                 const auto *raw = std::get_if<RawComponentPayload>(&member);
                 return raw && raw->component.typeId == *declaration.componentType;
             });
-            if (found == members.end())
+                found == members.end())
                 return Invalid<Detail::PrefabRestoredBinding>("Saved dynamic component binding lost its required installed target schema.");
             return Result<Detail::PrefabRestoredBinding>::Success(
                 {slot, Runtime::RuntimeGroupExternalEntitySlot{{*node.dense}, declaration.componentType}});
@@ -387,12 +389,11 @@ namespace Horo::Prefab {
             PrefabPreparedGroupOptions options;
             options.rootPlacement = saved.instances[index].placement;
             options.spawnLineage = saved.instances[index].creationLineage;
-            options.primitiveMeshes = std::move(projection.Value().primitiveMeshes);
-            options.members = std::move(projection.Value().members);
-            options.references = std::move(projection.Value().references);
-            options.physicsReferences = std::move(projection.Value().physicsReferences);
-            auto localEntries =
-                Detail::MakePrefabGroupEntries(prepared[index]->Data().entities, std::move(projection.Value().components), options);
+            options.primitiveMeshes = projection.Value().primitiveMeshes;
+            options.members = projection.Value().members;
+            options.references = projection.Value().references;
+            options.physicsReferences = projection.Value().physicsReferences;
+            auto localEntries = Detail::MakePrefabGroupEntries(prepared[index]->Data().entities, projection.Value().components, options);
             for (std::size_t local = 0; local < localEntries.size(); ++local) {
                 if (!localNodes[index][local]->dense.has_value())
                     continue;
@@ -408,10 +409,11 @@ namespace Horo::Prefab {
 
         Result<void> AddResource(Assets::AssetDependency metadata, Assets::AssetPayloadLease lease,
                                  std::vector<Runtime::RuntimeGroupAssetLease> &resources) const {
-            const auto found = std::ranges::find_if(resources, [&](const auto &resource) {
+            if (const auto found = std::ranges::find_if(resources,
+                                                        [&](const auto &resource) {
                 return resource.metadata.id == metadata.id;
             });
-            if (found != resources.end()) {
+                found != resources.end()) {
                 if (found->metadata.expectedType != metadata.expectedType || found->artifact.Digest() != lease.Digest())
                     return Invalid<void>("Aggregate prefab recipes disagree about one exact installed asset revision/type.");
                 return Result<void>::Success();
@@ -440,7 +442,7 @@ namespace Horo::Prefab {
             if (auto valid = ValidateRecords(incoming); valid.HasError())
                 return valid;
             for (const auto &record : incoming)
-                records.emplace(record.identity, record);
+                records.try_emplace(record.identity, record);
             if (auto valid = OrderInstances(); valid.HasError())
                 return valid;
             if (auto valid = AssignDenseSlots(maximumEntities); valid.HasError())
@@ -451,8 +453,8 @@ namespace Horo::Prefab {
                         behaviorIds.insert(behavior.instanceId);
             instances.reserve(saved.instances.size());
             for (std::size_t index = 0; index < saved.instances.size(); ++index)
-                instances.push_back({saved.instances[index].identity, leases[index],
-                                     std::vector<Runtime::EntityRef>(saved.instances[index].members.size())});
+                instances.emplace_back(saved.instances[index].identity, leases[index],
+                                       std::vector<Runtime::EntityRef>(saved.instances[index].members.size()));
             return Result<void>::Success();
         }
 
@@ -471,14 +473,14 @@ namespace Horo::Prefab {
                         continue;
                     const auto &record = node->member->record;
                     entries[*node->dense].restorePartition = partitions.size();
-                    partition.members.push_back({*node->dense, record.identity, record.generation.value});
+                    partition.members.emplace_back(*node->dense, record.identity, record.generation.value);
                 }
                 partitions.push_back(std::move(partition));
             }
             return partitions;
         }
 
-        Result<std::vector<Runtime::PersistentEntityRuntimeBinding>> Materialize(Runtime::RuntimeScene &scene,
+        Result<std::vector<Runtime::PersistentEntityRuntimeBinding>> Materialize(const Runtime::RuntimeScene &scene,
                                                                                  Runtime::SceneRestoreCandidateCommands &commands) {
             using Outcome = Result<std::vector<Runtime::PersistentEntityRuntimeBinding>>;
             std::vector<Runtime::RuntimeEntityGroupEntry> entries;

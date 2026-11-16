@@ -2,6 +2,8 @@
 #include "Horo/Foundation/Platform.h"
 #include "ModuleScriptPackage.h"
 
+#include <format>
+
 namespace Horo::Application::Internal {
     namespace {
         template <typename T> Result<T> IoFailure() {
@@ -41,7 +43,7 @@ namespace Horo::Application::Internal {
                 if (Within(options.temporaryRoot, options.packageRoot) || Within(options.packageRoot, options.temporaryRoot))
                     return IoFailure<void>();
                 for (unsigned index = 0; index < 32; ++index) {
-                    path = options.temporaryRoot / (".horo-extension-script-" + std::to_string(index));
+                    path = options.temporaryRoot / std::format(".horo-extension-script-{}", index);
                     std::error_code error;
                     owned = std::filesystem::create_directory(path, error);
                     if (owned) {

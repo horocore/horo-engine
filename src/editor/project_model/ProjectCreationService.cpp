@@ -327,7 +327,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Authors one real template surface UUID only in the unpublished new-project directory. */
-        [[nodiscard]] bool WriteSurfaceScaffolding(const std::filesystem::path &staging, const std::string &projectId) {
+        [[nodiscard]] bool WriteSurfaceScaffolding(const std::filesystem::path &staging, std::string_view projectId) {
             auto bytes = AllocateCollisionIdentityBytes(nullptr);
             if (bytes.HasError())
                 return false;
@@ -335,7 +335,7 @@ namespace Horo::Editor {
             Application::ProjectSurfaceSettingsInput input;
             input.projectId = projectId;
             input.defaultSurfaceId = id;
-            input.surfaces.push_back({id, "Default"});
+            input.surfaces.emplace_back(id, "Default");
             auto settings = Application::ProjectSurfaceSettings::Create(std::move(input));
             if (settings.HasError())
                 return false;

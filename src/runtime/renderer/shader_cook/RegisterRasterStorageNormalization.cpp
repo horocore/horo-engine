@@ -48,8 +48,8 @@ namespace Horo::Render::RegisterRasterCookDetail {
                 throw InvalidEvidence{};
             const auto &member = members[0];
             const auto &array = Rows(member, "array", 1);
-            const auto &literal = Rows(member, "array_size_is_literal", 1);
-            if (array.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(array[0]) != 0)
+            if (const auto &literal = Rows(member, "array_size_is_literal", 1);
+                array.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(array[0]) != 0)
                 throw InvalidEvidence{};
             RuntimeMemberMetadata(member);
             return member;

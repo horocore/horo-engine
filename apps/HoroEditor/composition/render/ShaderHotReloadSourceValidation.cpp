@@ -16,7 +16,7 @@ namespace Horo::Application::Internal::ShaderSourceDetail {
                 return true;
             }
 
-            bool Text(const std::string &text) noexcept {
+            bool Text(std::string_view text) noexcept {
                 return text.size() <= MaximumIdentityBytes && Charge(text.size());
             }
 
@@ -95,13 +95,13 @@ namespace Horo::Application::Internal::ShaderSourceDetail {
         bool ManifestMetadata(const Render::ShaderManifest &manifest, MetadataBudget &budget) {
             if (!budget.Text(manifest.sourceIdentity))
                 return false;
-            const std::size_t bytes = sizeof(manifest) + manifest.entryPoints.size() * sizeof(Render::ShaderEntryPoint) +
-                                      manifest.bindings.size() * sizeof(Render::ShaderResourceBinding) +
-                                      manifest.parameters.size() * sizeof(Render::ShaderParameter) +
-                                      manifest.inlineConstants.size() * sizeof(Render::ShaderInlineConstantRange) +
-                                      manifest.specializationInputs.size() * sizeof(Render::ShaderSpecializationInput) +
-                                      manifest.targets.size() * sizeof(Render::ShaderTargetRequirement);
-            if (!budget.Charge(bytes))
+            if (const std::size_t bytes = sizeof(manifest) + manifest.entryPoints.size() * sizeof(Render::ShaderEntryPoint) +
+                                          manifest.bindings.size() * sizeof(Render::ShaderResourceBinding) +
+                                          manifest.parameters.size() * sizeof(Render::ShaderParameter) +
+                                          manifest.inlineConstants.size() * sizeof(Render::ShaderInlineConstantRange) +
+                                          manifest.specializationInputs.size() * sizeof(Render::ShaderSpecializationInput) +
+                                          manifest.targets.size() * sizeof(Render::ShaderTargetRequirement);
+                !budget.Charge(bytes))
                 return false;
             for (const auto &entry : manifest.entryPoints)
                 if (!budget.Text(entry.name))

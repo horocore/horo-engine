@@ -76,7 +76,7 @@ namespace Horo::Gameplay {
             for (std::size_t i = 0; i < values.size(); ++i) {
                 if (values[i].HasError())
                     return Result<CanonicalEncodedValue>::Failure(values[i].ErrorValue());
-                fields.push_back({CanonicalFieldId::Create(static_cast<std::uint32_t>(i + 1)).Value(), std::move(values[i]).Value()});
+                fields.emplace_back(CanonicalFieldId::Create(static_cast<std::uint32_t>(i + 1)).Value(), std::move(values[i]).Value());
             }
             CanonicalValueWriter writer{limits};
             if (auto record = writer.WriteRecord(fields); record.HasError())

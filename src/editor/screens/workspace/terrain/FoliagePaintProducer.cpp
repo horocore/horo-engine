@@ -158,7 +158,7 @@ namespace Horo::Editor {
             }
             if (edits.size() >= limits.maximumPlacementEdits)
                 return Fail<void>(TerrainEditErrors::LimitExceeded);
-            edits.push_back({value.id, value});
+            edits.emplace_back(value.id, value);
             return Result<void>::Success();
         }
 

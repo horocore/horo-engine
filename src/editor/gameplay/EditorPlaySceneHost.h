@@ -170,10 +170,14 @@ namespace Horo::Editor {
         }
 
         /** @brief Publishes the same prepared attempt without allocation, I/O or cancellation reconsideration. */
-        virtual void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept {}
+        virtual void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept {
+            // Legacy hosts publish directly in OnRuntimeFixedUpdate and stage no candidate.
+        }
 
         /** @brief Discards only staged state, including a retired-before-fence callback. */
-        virtual void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept {}
+        virtual void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &) noexcept {
+            // The default fixed update leaves no staged candidate to discard.
+        }
 
         /** @brief Observes actual native owner retirement after Shutdown on the same owner lane.
          * @return True only after native resource owners drain; pending/error retains this host and its providers.

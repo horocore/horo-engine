@@ -36,7 +36,7 @@ namespace Horo::Editor {
         /** @brief Displays current typed diagnostics without rendering private filesystem inputs. */
         void DrawStatus();
         /** @brief Shows only actual canonical operation stage, progress and publication outcome. */
-        void DrawOperation();
+        void DrawOperation() const;
         const EditorGuiContext &context_;
         std::weak_ptr<EditorPlayRuntimeBinding> binding_;
         std::shared_ptr<const PlaySaveSnapshot> snapshot_;

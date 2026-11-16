@@ -1,5 +1,6 @@
 #include "LuaModuleInternal.h"
 
+#include <array>
 #include <charconv>
 
 namespace Horo::Extensions::LuaModuleDetail {
@@ -20,9 +21,9 @@ namespace Horo::Extensions::LuaModuleDetail {
 
     void State::PrepareUnsignedText() {
         auto value = values.Unbox(1, BoxKind::Unsigned);
-        char digits[21]{};
-        const auto parsed = std::to_chars(digits, digits + sizeof(digits), *value.AsUnsignedInteger());
-        scratchValue = ScriptValue::String({digits, static_cast<std::size_t>(parsed.ptr - digits)});
+        std::array<char, 21> digits{};
+        const auto parsed = std::to_chars(digits.data(), digits.data() + digits.size(), *value.AsUnsignedInteger());
+        scratchValue = ScriptValue::String({digits.data(), static_cast<std::size_t>(parsed.ptr - digits.data())});
     }
 
     bool State::ProjectOutcome(const Box &box, std::string_view key) {
@@ -90,6 +91,7 @@ namespace Horo::Extensions::LuaModuleDetail {
             state.scratchResult.reset();
             success = true;
         } catch (...) {
+            // Raise the Lua projection error below after C++ exception cleanup completes.
         }
         if (!success)
             return luaL_error(lua, "Outcome projection exceeded its bound.");

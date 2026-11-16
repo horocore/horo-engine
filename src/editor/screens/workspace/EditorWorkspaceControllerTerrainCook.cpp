@@ -54,9 +54,9 @@ namespace Horo::Editor {
                                                      capture.layerDigest};
         Application::TerrainAuthoringCookRequest request{capture.root, m_terrainCook->cookedRoot, capture.asset,
                                                          fence,        capture.metadataDigest,    m_terrainCook->profile};
-        auto receipt = std::make_shared<Application::TerrainAuthoringCookCompletion>(
-            Application::TerrainAuthoringCookCompletion{fence, Result<Assets::AssetCookReport>::Failure(
-                                                                   MakeError(Application::TerrainAuthoringCookErrors::Failed))});
+        auto receipt =
+            std::make_shared<Application::TerrainAuthoringCookCompletion>(fence, Result<Assets::AssetCookReport>::Failure(MakeError(
+                                                                                     Application::TerrainAuthoringCookErrors::Failed)));
         if (auto started = m_terrainCook->host->Start(std::move(request)); started.HasError())
             return started;
         m_terrainCookReceipt = std::move(receipt);

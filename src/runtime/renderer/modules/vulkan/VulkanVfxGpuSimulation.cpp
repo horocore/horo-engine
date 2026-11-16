@@ -21,7 +21,7 @@ namespace Horo::Render::Detail {
             buffers.push_back(simulation.forces.capture.resource.buffer);
             buffers.push_back(simulation.arena.resource.buffer);
             std::ranges::sort(buffers);
-            return std::adjacent_find(buffers.begin(), buffers.end()) == buffers.end();
+            return std::ranges::adjacent_find(buffers) == buffers.end();
         }
 
         Result<VulkanVfxGpuBuffer> Buffer(VulkanResourceRuntime &resources, const NativeVfxGpuBuffer &issued, const VfxGpuSimulationId &id,

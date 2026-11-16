@@ -1,5 +1,6 @@
 #include "DirectionalShadowInternal.h"
 
+#include <algorithm>
 #include <bit>
 #include <string_view>
 
@@ -94,10 +95,9 @@ namespace Horo::Render::DirectionalShadowDetail {
                     return false;
                 remaining -= mesh.indices.size() * sizeof(std::uint32_t);
             }
-            for (const auto &instance : scene.instances)
-                if (std::ranges::find(scene.meshResources, instance.mesh, &RenderMeshResourceView::handle) == scene.meshResources.end())
-                    return false;
-            return true;
+            return std::ranges::none_of(scene.instances, [&](const RenderStaticMeshInstance &instance) {
+                return std::ranges::find(scene.meshResources, instance.mesh, &RenderMeshResourceView::handle) == scene.meshResources.end();
+            });
         }
 
         void Geometry(Signature &hash, const RenderSceneView &scene) noexcept {

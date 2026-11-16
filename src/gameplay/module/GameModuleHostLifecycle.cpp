@@ -213,7 +213,7 @@ namespace Horo::Gameplay {
         return InvokeRestoreReload(*gameplayModule, snapshot, runtimeContext);
     }
 
-    void LoadedGameModule::Impl::RevokeRuntimeServices() noexcept {
+    void LoadedGameModule::Impl::RevokeRuntimeServices() const noexcept {
         if (ai) {
             ai->Revoke();
             ai->RetireOwnedTasksAtSafePoint();

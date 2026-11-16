@@ -1,6 +1,7 @@
 #include "D3D12CommandState.h"
 
 #include <algorithm>
+#include <memory>
 
 namespace Horo::Render::D3D12Detail {
     namespace {
@@ -95,7 +96,7 @@ namespace Horo::Render::D3D12Detail {
         const auto found = std::ranges::find(queues_, queue, [](const CommandQueueHistory &entry) {
             return entry.binding.queue;
         });
-        return found == queues_.end() ? nullptr : &*found;
+        return found == queues_.end() ? nullptr : std::to_address(found);
     }
 
     CommandQueueHistory *CommandService::FindQueue(const RenderQueueId queue) noexcept {

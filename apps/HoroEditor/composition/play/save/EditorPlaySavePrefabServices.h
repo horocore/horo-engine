@@ -20,16 +20,16 @@ namespace Horo::Application::Internal {
         /** @brief Binds real frozen Gameplay metadata after ordinary initial publication, preserving one current Scene scope. */
         [[nodiscard]] Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> Bind(const Gameplay::BehaviorRegistry &behaviors,
                                                                                     const Gameplay::ComponentRegistry &components,
-                                                                                    std::uint64_t tick);
+                                                                                    std::uint64_t tick) const;
         /** @brief Installs the single entropy-issued Save inventory before any structural prefab queue (pending loads are allowed). */
         [[nodiscard]] Result<void> InstallPersistence(Runtime::SaveWorldId world, std::vector<Runtime::PersistentEntityRecord> authored,
-                                                      std::shared_ptr<Security::SecureRandomSource> entropy);
+                                                      std::shared_ptr<Security::SecureRandomSource> entropy) const;
         /** @brief Creates genuine candidate services after exact dynamic reconstruction and before Gameplay restore prehooks. */
         [[nodiscard]] Result<std::shared_ptr<const Gameplay::GameplayPrefabContext>> PrepareRestored(
             Runtime::RuntimeScene &scene, const Prefab::PrefabPersistentState &saved, const Prefab::PrefabRestoreEntities &restored,
-            std::uint64_t tick);
+            std::uint64_t tick) const;
         /** @brief Revokes an exact unpublished slot if later preparation fails before Scene participant creation. */
-        void CancelPrepared(Runtime::SceneRuntimeId scene) noexcept;
+        void CancelPrepared(Runtime::SceneRuntimeId scene) const noexcept;
         /** @brief Reads the actual current host fixed-step cursor used for new candidate scopes. */
         [[nodiscard]] std::uint64_t Tick() const noexcept;
         /** @brief Returns only the current Scene's one published Save inventory. */
@@ -41,12 +41,12 @@ namespace Horo::Application::Internal {
             Prefab::PrefabPersistentState saved, std::vector<Prefab::PrefabTemplateLease> leases,
             const CancellationToken &cancellation) const;
         /** @brief Advances the actual current Scene's ordinary spawn service at its existing safe point. */
-        [[nodiscard]] Result<void> Advance(std::uint64_t tick);
+        [[nodiscard]] Result<void> Advance(std::uint64_t tick) const;
         /** @brief Applies existing lifecycle/fixed-step calls to the genuinely current Scene slot only. */
-        [[nodiscard]] Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame);
-        [[nodiscard]] Result<void> OnFixedUpdate(const Runtime::FixedStepContext &frame);
+        [[nodiscard]] Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame) const;
+        [[nodiscard]] Result<void> OnFixedUpdate(const Runtime::FixedStepContext &frame) const;
         /** @brief Revokes current module clients after Save/module settlement, retaining the same Scene's durable inventory. */
-        void Quiesce() noexcept;
+        void Quiesce() const noexcept;
 
     private:
         std::shared_ptr<State> state_;

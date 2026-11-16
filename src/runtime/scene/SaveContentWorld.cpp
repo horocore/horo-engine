@@ -183,6 +183,12 @@ namespace Horo::Runtime {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Admits only known capture policies and requires opaque retention for degraded content. */
+        bool AllowsCapturePolicy(const SaveContentDetail::WorldState &world, const SaveDegradedWorldPolicy policy) noexcept {
+            return policy == SaveDegradedWorldPolicy::PreserveOpaque ||
+                   (policy == SaveDegradedWorldPolicy::Reject && !world.content->degraded);
+        }
     }  // namespace
 
     /** @copydoc SaveContentSnapshot::SaveContentSnapshot */
@@ -226,16 +232,14 @@ namespace Horo::Runtime {
         // Explicit empty-string construction keeps preflight failure catchable on checked MSVC.
         // Final error storage exists before any admission mutation or capture callback.
         return Return::CompleteInPlace(MakeError(SaveErrors::CanonicalCodecAllocationFailed, std::string(std::size_t{0}, '\0')),
-                                       [&](Return &completed) {
+                                       [this, &barrier, &request, &participants, &generation, policy](Return &completed) {
             try {
                 auto view = CurrentWorld(state_);
                 if (view.HasError()) {
                     completed = Return::Failure(view.ErrorValue());
                     return;
                 }
-                if (state_->captureAdmission ||
-                    (policy != SaveDegradedWorldPolicy::Reject && policy != SaveDegradedWorldPolicy::PreserveOpaque) ||
-                    (state_->content->degraded && policy != SaveDegradedWorldPolicy::PreserveOpaque)) {
+                if (state_->captureAdmission || !AllowsCapturePolicy(*state_, policy)) {
                     completed = Return::Failure(MakeError(SaveErrors::RestoreContextInvalid));
                     return;
                 }

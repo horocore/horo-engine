@@ -95,7 +95,9 @@ namespace Horo::Animation::Detail {
                      const std::int64_t consumed) noexcept {
             slot.blendElapsed = std::min(action.blendIn.ticks, slot.blendElapsed + consumed);
             slot.weight =
-                action.blendIn.ticks == 0 ? 1.0F : ActionCurve(action.curve, static_cast<double>(slot.blendElapsed) / action.blendIn.ticks);
+                action.blendIn.ticks == 0
+                    ? 1.0F
+                    : ActionCurve(action.curve, static_cast<double>(slot.blendElapsed) / static_cast<double>(action.blendIn.ticks));
             Handoff(state, slot, consumed);
         }
 
@@ -111,8 +113,8 @@ namespace Horo::Animation::Detail {
                 std::min(Magnitude(remaining), static_cast<std::uint64_t>(definition.blendOut.ticks - slot.outElapsed)));
             slot.outElapsed += consumed;
             Handoff(state, slot, consumed);
-            slot.weight =
-                slot.outStart * (1.0F - ActionCurve(definition.curve, static_cast<double>(slot.outElapsed) / definition.blendOut.ticks));
+            slot.weight = slot.outStart * (1.0F - ActionCurve(definition.curve, static_cast<double>(slot.outElapsed) /
+                                                                                    static_cast<double>(definition.blendOut.ticks)));
             record.observation.weight = slot.weight;
             remaining += remaining < 0 ? consumed : -consumed;
             if (slot.outElapsed == definition.blendOut.ticks)
@@ -121,8 +123,7 @@ namespace Horo::Animation::Detail {
 
         /** @brief An explicit region is the only authorized successor override; exit
          * remains last.next. */
-        std::uint32_t Successor(GraphInstanceState &state, ActionSlotState &slot, const PreparedAction &prepared,
-                                const GraphActionDefinition &action) noexcept {
+        std::uint32_t Successor(ActionSlotState &slot, const PreparedAction &prepared, const GraphActionDefinition &action) noexcept {
             const auto &section = prepared.sections[slot.section];
             if (section.loop == NoActionIndex || prepared.loops[section.loop].last != slot.section)
                 return section.next;
@@ -170,7 +171,7 @@ namespace Horo::Animation::Detail {
             auto &record = work.candidateRecords[slot.active];
             const auto &prepared = work.definitions[record.action];
             const auto &action = state.program->Actions()[record.action];
-            const auto next = Successor(state, slot, prepared, action);
+            const auto next = Successor(slot, prepared, action);
             if (next == NoActionIndex) {
                 StopAction(state, slot.active, GraphActionCompletionReason::Completed, GraphActionStopPolicy::BlendOut, tick);
                 return {};

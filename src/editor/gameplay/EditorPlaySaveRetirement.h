@@ -85,6 +85,10 @@ namespace Horo::Editor {
 
         /** @brief Allocates the fixed four-slot application default cold. @throws std::bad_alloc on allocation failure. */
         EditorPlaySaveRetirement();
+        EditorPlaySaveRetirement(const EditorPlaySaveRetirement &) = delete;
+        EditorPlaySaveRetirement &operator=(const EditorPlaySaveRetirement &) = delete;
+        EditorPlaySaveRetirement(EditorPlaySaveRetirement &&) = delete;
+        EditorPlaySaveRetirement &operator=(EditorPlaySaveRetirement &&) = delete;
         /** @brief Allocates finite owner storage cold. @param capacity Positive ceiling, at most eight retired/reserved units.
          * @return Actual queue or typed invalid/capacity/allocation failure. */
         [[nodiscard]] static Result<std::shared_ptr<EditorPlaySaveRetirement>> Create(std::size_t capacity = 4);

@@ -12,7 +12,7 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
             return result;
         }
 
-        Value Field(Values &values, JSValueConst object, const std::string &name) {
+        Value Field(Values &values, JSValueConst object, std::string_view name) {
             auto atom = JS_NewAtomLen(values.context, name.data(), name.size());
             auto result = values.Own(object, atom);
             JS_FreeAtom(values.context, atom);

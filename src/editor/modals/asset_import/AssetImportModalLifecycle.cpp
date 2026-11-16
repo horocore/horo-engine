@@ -32,8 +32,7 @@ namespace Horo::Editor {
             auto canonical = std::filesystem::canonical(root, error);
             if (error)
                 return Result<std::filesystem::path>::Failure(MakeError(GuiLive::HostSymbol<&Assets::AssetSourceErrors::InvalidPath>()));
-            const bool directory = std::filesystem::is_directory(canonical, error);
-            if (error || !directory)
+            if (const bool directory = std::filesystem::is_directory(canonical, error); error || !directory)
                 return Result<std::filesystem::path>::Failure(MakeError(GuiLive::HostSymbol<&Assets::AssetSourceErrors::InvalidPath>()));
             return Result<std::filesystem::path>::Success(std::move(canonical));
         }

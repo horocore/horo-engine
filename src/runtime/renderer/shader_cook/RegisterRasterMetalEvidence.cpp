@@ -74,8 +74,8 @@ namespace Horo::Render::RegisterRasterCookDetail {
                 return;
             if (result.interfaces.size() == 256)
                 throw InvalidEvidence{};
-            result.interfaces.push_back(
-                {stage, direction, *location, ShaderValueType::Float32, 1, VectorWidth(field[0]), 1, std::string{field[1]}});
+            result.interfaces.emplace_back(stage, direction, *location, ShaderValueType::Float32, 1, VectorWidth(field[0]), 1,
+                                           std::string{field[1]});
         }
 
         /** @brief Inspects only the structure attached to the selected stage entry. */

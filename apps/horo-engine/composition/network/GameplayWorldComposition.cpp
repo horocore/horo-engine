@@ -448,15 +448,15 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         if (vfxTickOpen_)
             return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
-        const auto seconds = static_cast<float>(static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
-        if (vfxScene_->BeginTick(context.simulationTick, seconds) != Vfx::VfxSpawnStatus::Accepted)
+        if (const auto seconds = static_cast<float>(static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
+            vfxScene_->BeginTick(context.simulationTick, seconds) != Vfx::VfxSpawnStatus::Accepted)
             return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
         vfxTickOpen_ = true;
         return Result<void>::Success();
     }
 
     /** @copydoc GameplayWorldComposition::FlushVfxTicks */
-    Result<void> GameplayWorldComposition::FlushVfxTicks() {
+    Result<void> GameplayWorldComposition::FlushVfxTicks() const {
         if (!vfxScene_)
             return Result<void>::Success();
         if (IsVfxOwnerFailure(vfxScene_->FlushSealedTicks().status))
@@ -465,7 +465,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc GameplayWorldComposition::PrepareFixedCommit */
-    Result<void> GameplayWorldComposition::PrepareFixedCommit(const Runtime::FixedStepContext &context) {
+    Result<void> GameplayWorldComposition::PrepareFixedCommit(const Runtime::FixedStepContext &context) const {
         if (!vfxScene_)
             return Result<void>::Success();
         if (!vfxTickOpen_ || context.simulationTick != tick_ || !behaviors_)

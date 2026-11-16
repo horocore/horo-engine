@@ -142,12 +142,12 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidateDraw(const RenderGraphVfxGpuDraw &, const RenderGraphExecutionRequest &,
                                                 std::span<const VulkanGraphResource>) const;
         [[nodiscard]] Result<void> EncodeCompute(VkCommandBuffer, VulkanCommandTicket, const RenderQueueSubmission &,
-                                                 const RenderGraphVfxGpuCompute &, const RenderGraphExecutionRequest &);
+                                                 const RenderGraphVfxGpuCompute &, const RenderGraphExecutionRequest &) const;
         [[nodiscard]] Result<void> EncodeDraw(VkCommandBuffer, VulkanCommandTicket, const RenderQueueSubmission &,
                                               const RenderGraphVfxGpuDraw &, const RenderGraphExecutionRequest &,
-                                              std::span<const VulkanGraphResource>);
-        void Finish(VulkanVfxGpuSimulation &, VulkanCommandTicket, bool) noexcept;
-        void Reject(VulkanVfxGpuSimulation &, const RenderGraphVfxGpuCompute &) noexcept;
+                                              std::span<const VulkanGraphResource>) const;
+        void Finish(VulkanVfxGpuSimulation &, VulkanCommandTicket, bool) const noexcept;
+        void Reject(VulkanVfxGpuSimulation &, const RenderGraphVfxGpuCompute &) const noexcept;
     };
 
     [[nodiscard]] Error VulkanVfxGpuInvalid(const char *);

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <format>
+#include <memory>
 #include <new>
 #include <type_traits>
 
@@ -11,7 +12,7 @@ namespace Horo::Editor {
     namespace {
         /** @brief Formats a bounded read-only value once during projection preparation, never during Draw. */
         std::string ValueLabel(const Prefab::PrefabOverrideValue &value) {
-            return std::visit([](const auto &item) -> std::string {
+            return std::visit([]<typename VisitedValue>(const VisitedValue &item) -> std::string {
                 using T = std::decay_t<decltype(item)>;
                 if constexpr (std::is_same_v<T, std::string>) {
                     if (item.size() <= 128)
@@ -84,9 +85,9 @@ namespace Horo::Editor {
             };
             for (const auto &value : snapshot.Values())
                 if (matches(value.target)) {
-                    row.valueDiff.push_back({TargetLabel(value.target), ValueLabel(value.sourceValue), ValueLabel(value.effectiveValue),
-                                             value.schemaDefault ? std::optional{ValueLabel(*value.schemaDefault)} : std::nullopt,
-                                             OriginKey(value.origin), nullptr, value.sourceValue != value.effectiveValue});
+                    row.valueDiff.emplace_back(TargetLabel(value.target), ValueLabel(value.sourceValue), ValueLabel(value.effectiveValue),
+                                               value.schemaDefault ? std::optional{ValueLabel(*value.schemaDefault)} : std::nullopt,
+                                               OriginKey(value.origin), nullptr, value.sourceValue != value.effectiveValue);
                     if (value.disposition == Prefab::PrefabValueDisposition::RemovedByInstance) {
                         row.valueDiff.back().stateKey = "workspace.prefab.diff.component_removed";
                         row.valueDiff.back().effective.clear();
@@ -117,7 +118,7 @@ namespace Horo::Editor {
                                              false,
                                              true});
             for (const auto &evidence : snapshot.Components())
-                std::visit([&](const auto &item) {
+                std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
                     using T = std::decay_t<decltype(item)>;
                     const auto &record = [&]() -> const Prefab::PrefabComponentOverrideRecord & {
                         if constexpr (std::is_same_v<T, Prefab::PrefabComponentOverrideRecord>)

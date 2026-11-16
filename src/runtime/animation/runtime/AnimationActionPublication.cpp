@@ -5,6 +5,7 @@
 namespace Horo::Animation::Detail {
     /** @copydoc CommitActions */
     void CommitActions(GraphInstanceState &state, const std::uint32_t publication, const AnimationTickId tick) noexcept {
+        using enum GraphActionPhase;
         auto &work = state.actions;
         work.records.swap(work.candidateRecords);
         work.slots.swap(work.candidateSlots);
@@ -15,10 +16,9 @@ namespace Horo::Animation::Detail {
         for (auto &record : work.records) {
             record.cancelIntent = false;
             // A queued request has not yet transferred release intent to its actual slot/loop owner.
-            if (record.observation.phase != GraphActionPhase::Queued && record.observation.phase != GraphActionPhase::Pending)
+            if (record.observation.phase != Queued && record.observation.phase != Pending)
                 record.releaseIntent = false;
-            if (record.observation.handle.IsValid() && record.observation.phase == GraphActionPhase::Terminal &&
-                record.observation.terminalTick == tick)
+            if (record.observation.handle.IsValid() && record.observation.phase == Terminal && record.observation.terminalTick == tick)
                 work.completions[publication][work.completionCounts[publication]++] = record.observation;
         }
         for (std::uint32_t i = 0; i < work.slots.size(); ++i) {

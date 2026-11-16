@@ -125,7 +125,7 @@ namespace Horo::Prefab {
                                             const AssetCookTargetId &target, const PrefabLimitProfile &limits,
                                             const PrefabTemplateCookOptions &options) {
         PrefabMetricOperation observation{sources.Metrics(), PrefabMetricPhase::Cook};
-        auto result = [&]() -> Result<CookedPrefab> {
+        auto result = [&]() {
             if (options.cancellation.IsCancellationRequested())
                 return Result<CookedPrefab>::Failure(MakeError(PrefabErrors::Cancelled));
             if (!target.IsValid())

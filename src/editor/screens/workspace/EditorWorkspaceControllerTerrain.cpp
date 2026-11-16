@@ -20,7 +20,7 @@ namespace Horo::Editor {
 
         /** @brief Establish an explicit isolated asset-preview camera without changing any Scene entity. */
         Result<void> FrameSource(EditorViewportCamera &camera, const Terrain::TerrainCanonicalSource &source) {
-            const auto [minimum, maximum] = std::minmax_element(source.heightsMeters.begin(), source.heightsMeters.end());
+            const auto [minimum, maximum] = std::ranges::minmax_element(source.heightsMeters);
             const double x = (source.width - 1) * source.coordinates.spacingX;
             const double z = (source.height - 1) * source.coordinates.spacingZ;
             const double y = (double(*minimum) + double(*maximum)) * 0.5;
@@ -86,8 +86,10 @@ namespace Horo::Editor {
                 if (owned)
                     static_cast<void>(registry.Close(instance));
             }
-        } admission{m_documentRegistry, identity.Value().identity.instance,
-                    identity.Value().disposition == DocumentOpenDisposition::Opened};
+        };
+
+        OpenIdentity admission{m_documentRegistry, identity.Value().identity.instance,
+                               identity.Value().disposition == DocumentOpenDisposition::Opened};
 
         auto opened = TerrainDocumentHost::Open(m_sourceOpenService.ProjectRoot(), absolute, asset, identity.Value().identity,
                                                 m_workspaceSession, *m_mutations, m_assetRegistry);
@@ -107,7 +109,9 @@ namespace Horo::Editor {
                 if (!accepted)
                     static_cast<void>(document.Close());
             }
-        } prepared{*opened.Value()};
+        };
+
+        PreparedOwner prepared{*opened.Value()};
 
         auto camera = m_viewport.Current().camera;
         if (auto framed = FrameSource(camera, *opened.Value()->BorrowSource()); framed.HasError())

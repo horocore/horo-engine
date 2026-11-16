@@ -322,7 +322,7 @@ namespace Horo::Editor {
 
         /** @brief Stops play and drains native module retirement before workspace destruction. @return Typed busy if callbacks remain. */
         /** @brief Returns only revocable owner-lane UI binding; the modal never retains this controller. */
-        [[nodiscard]] std::weak_ptr<EditorPlayRuntimeBinding> PlaySaveBinding() noexcept {
+        [[nodiscard]] std::weak_ptr<EditorPlayRuntimeBinding> PlaySaveBinding() const noexcept {
             return m_playSession.SaveBinding();
         }
 

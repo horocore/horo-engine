@@ -354,7 +354,7 @@ namespace Horo::Editor {
                     area += from.x * to.y - from.y * to.x;
                 }
                 if (area < 0)
-                    std::reverse(face.corners.begin(), face.corners.end());
+                    std::ranges::reverse(face.corners);
                 face.brightness =
                     std::clamp(0.72F + 0.18F * facing + 0.18F * Math::Dot(normal, basis.up) - 0.10F * Math::Dot(normal, basis.right), 0.5F,
                                1.15F);
@@ -462,9 +462,9 @@ namespace Horo::Editor {
             auto before = MoveClipDistance(previous, plane, depth);
             for (const auto current : std::span{input.points}.first(input.count)) {
                 const auto after = MoveClipDistance(current, plane, depth);
-                if ((before >= 0.0) != (after >= 0.0))
-                    if (!AppendMoveClip(output, MoveClipLerp(previous, current, before / (before - after))))
-                        return false;
+                if (((before >= 0.0) != (after >= 0.0)) &&
+                    !AppendMoveClip(output, MoveClipLerp(previous, current, before / (before - after))))
+                    return false;
                 if (after >= 0.0 && !AppendMoveClip(output, current))
                     return false;
                 previous = current;
@@ -826,7 +826,7 @@ namespace Horo::Editor {
                 return Result<void>::Failure(scale.ErrorValue());
             LinearHandleHitState hitState;
             std::array axisOrder{0, 1, 2};
-            std::sort(axisOrder.begin(), axisOrder.end(), [&](const int left, const int right) {
+            std::ranges::sort(axisOrder, [&](const int left, const int right) {
                 const float leftDepth = Math::Dot(geometry.worldAxes[left], screenBasis.Value().towardCamera);
                 const float rightDepth = Math::Dot(geometry.worldAxes[right], screenBasis.Value().towardCamera);
                 return leftDepth < rightDepth || (leftDepth == rightDepth && left < right);

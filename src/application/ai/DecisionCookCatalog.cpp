@@ -1,6 +1,7 @@
 #include "DecisionCookState.h"
 
 #include <algorithm>
+#include <memory>
 
 namespace Horo::Application::DecisionCookDetail {
     namespace {
@@ -49,7 +50,7 @@ namespace Horo::Application::DecisionCookDetail {
                 if (found == state_->prepared.end() || found->asset != source.id || found->type != source.type ||
                     found->sourceDigest != source.sourceDigest)
                     return nullptr;
-                return &*found;
+                return std::to_address(found);
             }
 
             const std::shared_ptr<const State> state_;

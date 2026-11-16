@@ -45,7 +45,7 @@ namespace Horo::Animation::GraphSourceDetail {
 
         /** @brief Emits a complete bounded range in its already-canonical order. */
         template <typename Range, typename F> void Array(const Range &range, const F &item) {
-            Container('[', ']', [&] {
+            Container('[', ']', [this, &range, &item] {
                 for (const auto &value : range) {
                     Separator();
                     item(value);

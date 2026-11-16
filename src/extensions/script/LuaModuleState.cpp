@@ -1,6 +1,7 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "LuaModuleInternal.h"
 
+#include <array>
 #include <cassert>
 #include <cstdlib>
 #include <limits>
@@ -90,8 +91,8 @@ namespace Horo::Extensions::LuaModuleDetail {
         Open(lua, LUA_MATHLIBNAME, luaopen_math);
         Open(lua, LUA_UTF8LIBNAME, luaopen_utf8);
         // No protected user calls: script must not catch and repeatedly suppress the host's budget hook.
-        constexpr const char *removed[]{"dofile", "loadfile", "load",   "collectgarbage", "print",
-                                        "warn",   "pcall",    "xpcall", "setmetatable",   "getmetatable"};
+        constexpr std::array<const char *, 10> removed{"dofile", "loadfile", "load",   "collectgarbage", "print",
+                                                       "warn",   "pcall",    "xpcall", "setmetatable",   "getmetatable"};
         for (auto name : removed)
             Remove(lua, name);
         lua_getglobal(lua, "string");

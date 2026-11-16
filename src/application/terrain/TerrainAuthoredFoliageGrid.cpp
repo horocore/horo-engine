@@ -10,8 +10,8 @@ namespace Horo::Application::TerrainCookDetail {
         /** @brief Round only inside the representable integer interval; preserve the source's explicit precision tolerance. */
         Result<std::int64_t> Millimeters(double meters, double tolerance) {
             const double scaled = meters * 1000;
-            constexpr auto maximum = static_cast<double>(std::numeric_limits<std::int64_t>::max());
-            if (!std::isfinite(scaled) || scaled >= maximum || scaled <= -maximum)
+            if (constexpr auto maximum = static_cast<double>(std::numeric_limits<std::int64_t>::max());
+                !std::isfinite(scaled) || scaled >= maximum || scaled <= -maximum)
                 return Result<std::int64_t>::Failure(MakeError(Terrain::TerrainSourceErrors::PrecisionLost));
             const auto rounded = std::round(scaled);
             if (std::abs(rounded / 1000 - meters) > tolerance)
@@ -42,15 +42,14 @@ namespace Horo::Application::TerrainCookDetail {
             auto step = Spacing(spacing, tolerance);
             if (step.HasError())
                 return Return::Failure(std::move(step).ErrorValue());
-            auto last = Millimeters(origin + double(samples - 1) * spacing, tolerance);
-            if (last.HasError())
+            if (auto last = Millimeters(origin + double(samples - 1) * spacing, tolerance); last.HasError())
                 return Return::Failure(std::move(last).ErrorValue());
             const auto delta = std::uint64_t{samples - 1} * step.Value();
             if (delta > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
                 first.Value() > std::numeric_limits<std::int64_t>::max() - static_cast<std::int64_t>(delta))
                 return Return::Failure(MakeError(Terrain::TerrainSourceErrors::PrecisionLost));
-            const auto finalMillimeters = first.Value() + static_cast<std::int64_t>(delta);
-            if (std::abs(double(finalMillimeters) / 1000 - (origin + double(samples - 1) * spacing)) > tolerance)
+            if (const auto finalMillimeters = first.Value() + static_cast<std::int64_t>(delta);
+                std::abs(double(finalMillimeters) / 1000 - (origin + double(samples - 1) * spacing)) > tolerance)
                 return Return::Failure(MakeError(Terrain::TerrainSourceErrors::PrecisionLost));
             return Return::Success({first.Value(), step.Value()});
         }

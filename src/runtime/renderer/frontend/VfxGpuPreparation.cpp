@@ -146,7 +146,7 @@ namespace Horo::Render {
         };
 
         /** @brief Resolves one ordinary registered buffer without exposing its CPU backing or native API type. */
-        Result<void> ResolveBuffer(RenderResourceRegistry &registry, NativeVfxGpuBuffer &buffer) {
+        Result<void> ResolveBuffer(const RenderResourceRegistry &registry, NativeVfxGpuBuffer &buffer) {
             const auto native =
                 registry.BackendInstance(RenderResourceClass::Buffer, {buffer.handle.owner, buffer.handle.slot, buffer.handle.generation});
             if (native.HasError())

@@ -89,12 +89,12 @@ namespace Horo::Vfx {
                 frame->batches_.reserve(budget.maximumBatches);
                 frame->instances_.reserve(budget.maximumInstances);
                 frame->gpuBatches_.reserve(gpuBatchCapacity);
-                const auto actualBytes =
-                    static_cast<std::uint64_t>(budget.frameSlots) *
-                    (frame->batches_.capacity() * sizeof(Render::VfxRenderBatch) +
-                     frame->instances_.capacity() * sizeof(Render::VfxRenderInstance) +
-                     frame->gpuBatches_.capacity() * sizeof(Render::GpuVfxRenderBatch) + sizeof(Render::RenderWorldFrameData));
-                if (actualBytes > budget.maximumBytes)
+                if (const auto actualBytes =
+                        static_cast<std::uint64_t>(budget.frameSlots) *
+                        (frame->batches_.capacity() * sizeof(Render::VfxRenderBatch) +
+                         frame->instances_.capacity() * sizeof(Render::VfxRenderInstance) +
+                         frame->gpuBatches_.capacity() * sizeof(Render::GpuVfxRenderBatch) + sizeof(Render::RenderWorldFrameData));
+                    actualBytes > budget.maximumBytes)
                     return Result<VfxRenderExtractor>::Failure(MakeError(VfxErrors::LimitExceeded));
                 extractor.slots_.push_back(std::move(frame));
             }

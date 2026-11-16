@@ -37,7 +37,7 @@ namespace Horo::Editor {
         /** @brief Publishes a completed replacement before the next frame begins.
          * @param elapsedSeconds Host elapsed time for file-change notification coalescing.
          */
-        void Update(double elapsedSeconds);
+        void Update(double elapsedSeconds) const;
         /** @brief Returns this borrowed service only in an explicitly enabled development build. */
         [[nodiscard]] const GuiLive::IRegistry *Registry() const noexcept;
         /** @copydoc GuiLive::IRegistry::Find */

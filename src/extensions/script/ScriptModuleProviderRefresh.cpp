@@ -10,7 +10,7 @@ namespace Horo::Extensions {
     }  // namespace
 
     Result<std::vector<ScriptModuleOperationBindings>> ScriptModuleHostServices::ReferenceUpdates(
-        const ScriptModuleReferenceInstallation &candidate) {
+        const ScriptModuleReferenceInstallation &candidate) const {
         using Output = Result<std::vector<ScriptModuleOperationBindings>>;
         std::vector<ScriptModuleOperationBindings> updates;
         updates.reserve(impl_->activeOperations);
@@ -96,7 +96,7 @@ namespace Horo::Extensions {
         return reports;
     }
 
-    Result<ScriptModuleUpdateReport> ScriptModuleHostServices::RequestNativeUpdate(const ScriptModuleProgram &candidate) {
+    Result<ScriptModuleUpdateReport> ScriptModuleHostServices::RequestNativeUpdate(const ScriptModuleProgram &candidate) const {
         using Output = Result<ScriptModuleUpdateReport>;
         if (auto lane = impl_->authority->RequireOpenOwner(); lane.HasError())
             return Output::Failure(lane.ErrorValue());

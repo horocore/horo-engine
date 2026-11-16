@@ -7,6 +7,7 @@
 #include "PrefabSceneCookState.h"
 
 #include <algorithm>
+#include <memory>
 #include <new>
 
 namespace Horo::Application::PrefabCookDetail {
@@ -365,8 +366,7 @@ namespace Horo::Application::PrefabCookDetail {
                                                       context.request.assets.limits.maximumAssets, context.cancellation, resources);
             if (semantic.HasError())
                 return Result<PreparedScene>::Failure(semantic.ErrorValue());
-            Assets::AssetCookKeySelection selection{input.record.id, std::move(semantic.Value().sources),
-                                                    semantic.Value().producerSettings};
+            Assets::AssetCookKeySelection selection{input.record.id, semantic.Value().sources, semantic.Value().producerSettings};
             auto key = Assets::AssetCookKeyProjection::Create(context.inputs, {selection}, context.request.assets.limits.maximumAssets);
             if (key.HasError())
                 return Result<PreparedScene>::Failure(key.ErrorValue());
@@ -392,11 +392,12 @@ namespace Horo::Application::PrefabCookDetail {
                                                                                                const Assets::AssetCookInputSnapshot &inputs,
                                                                                                const CancellationToken &cancellation) {
             using Return = Result<std::shared_ptr<const Animation::PreparedAnimationCook>>;
-            const bool present = std::ranges::any_of(inputs.Sources(), [](const auto &source) {
+            if (const bool present = std::ranges::any_of(inputs.Sources(),
+                                                         [](const auto &source) {
                 const auto &type = source.record.type.Value();
                 return type == "core.animation.skeleton" || type == "core.animation.clip" || type == "core.animation.graph";
             });
-            if (!present)
+                !present)
                 return Return::Success({});
             Animation::AnimationAssetCookLimits limits;
             limits.maximumAssets = std::min(limits.maximumAssets, request.assets.limits.maximumAssets);
@@ -542,7 +543,7 @@ namespace Horo::Application::PrefabCookDetail {
                 if (semantic.Value().sources.size() > 1'048'576U - total)
                     return Outcome::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
                 total += semantic.Value().sources.size();
-                selections.push_back({input.record.id, std::move(semantic.Value().sources), semantic.Value().producerSettings});
+                selections.emplace_back(input.record.id, semantic.Value().sources, semantic.Value().producerSettings);
             }
             return Assets::AssetCookKeyProjection::Create(inputs, std::move(selections), request.assets.limits.maximumAssets);
         }

@@ -68,11 +68,11 @@ namespace Horo::Application::TerrainCookDetail {
                                                                              const TerrainAuthoringCookRequest &request,
                                                                              const CancellationToken &cancellation) {
         Assets::CookerCatalog catalog;
-        auto registered = catalog.Register({"horo.builtin.terrain.authoring",
-                                            Assets::AssetTypeId::Parse("core.terrain").Value(),
-                                            {request.profile.target},
-                                            std::make_shared<Strategy>(std::move(capture), request.profile, cancellation)});
-        if (registered.HasError())
+        if (auto registered = catalog.Register({"horo.builtin.terrain.authoring",
+                                                Assets::AssetTypeId::Parse("core.terrain").Value(),
+                                                {request.profile.target},
+                                                std::make_shared<Strategy>(std::move(capture), request.profile, cancellation)});
+            registered.HasError())
             return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(std::move(registered).ErrorValue());
         return catalog.Publish();
     }

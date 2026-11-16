@@ -14,7 +14,7 @@ namespace Horo::Physics::Detail {
     namespace {
         /** @brief Requires an exact declared material lease before decoding its immutable canonical payload. */
         [[nodiscard]] Result<Runtime::RuntimeSceneAssetView> ResolveCharacterAsset(const Runtime::RuntimeSceneDefinition &definition,
-                                                                                   Runtime::RuntimeSceneView scene,
+                                                                                   const Runtime::RuntimeSceneView &scene,
                                                                                    Assets::AssetId material) {
             const auto dependency = std::ranges::find(definition.AssetDependencies(), material, &Runtime::SceneAssetDependency::id);
             const auto resolved = scene.FindAsset(material);
@@ -27,7 +27,7 @@ namespace Horo::Physics::Detail {
         }
 
         /** @brief Rejects native descendants that would retain pre-recovery poses; visual hierarchy remains unrestricted. */
-        [[nodiscard]] Result<void> RequireCharacterTopology(const Runtime::RuntimeSceneView scene) {
+        [[nodiscard]] Result<void> RequireCharacterTopology(const Runtime::RuntimeSceneView &scene) {
             for (std::size_t index = 0; index < scene.SlotCount(); ++index) {
                 const auto entity = scene.EntityAt(index);
                 if (!entity)
@@ -67,7 +67,7 @@ namespace Horo::Physics::Detail {
 
         /** @brief Resolves canonical immutable material bytes and uses their actual source revision as captured evidence. */
         [[nodiscard]] Result<PhysicsQueryMaterial> CharacterMaterial(const Runtime::RuntimeSceneDefinition &definition,
-                                                                     Runtime::RuntimeSceneView scene, Runtime::SceneObjectId object,
+                                                                     const Runtime::RuntimeSceneView &scene, Runtime::SceneObjectId object,
                                                                      const Runtime::CharacterControllerComponent &component) {
             const auto &binding = *component.collision.defaultMaterial;
             auto resolved = ResolveCharacterAsset(definition, scene, binding.material);

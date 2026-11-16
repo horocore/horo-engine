@@ -266,7 +266,7 @@ namespace Horo::Animation::GraphCompileDetail {
             const auto &entry = definitions[program.EntryIndex()];
             plan.memory.callDepth = entry.callDepth;
             plan.occurrences.reserve(static_cast<std::size_t>(entry.evaluationInstructions));
-            std::vector<OccurrenceFrame> frames = std::vector<OccurrenceFrame>(std::size_t{0});
+            auto frames = std::vector<OccurrenceFrame>(std::size_t{0});
             frames.reserve(entry.callDepth);
             frames.push_back(Frame(program.EntryIndex(), definitions));
             while (!frames.empty()) {

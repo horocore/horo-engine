@@ -244,7 +244,7 @@ namespace Horo::Prefab {
                                                                 const std::span<const PrefabRuntimeComponentProjection> components,
                                                                 const PrefabRuntimePlacement &placement, const PrefabLimitProfile &limits) {
         PrefabMetricOperation observation{candidate.Metrics(), PrefabMetricPhase::Expand};
-        auto result = [&]() -> Result<ExpandedPrefabSceneSubtree> {
+        auto result = [&]() {
             using Output = Result<ExpandedPrefabSceneSubtree>;
             if (auto valid = ValidateInputs(candidate, identities, components, placement, limits); valid.HasError())
                 return Output::Failure(valid.ErrorValue());

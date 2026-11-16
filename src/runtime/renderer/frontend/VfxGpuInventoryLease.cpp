@@ -10,7 +10,7 @@
 namespace Horo::Render::Detail {
     /** @copydoc VfxGpuInventoryLease::VfxGpuInventoryLease */
     VfxGpuInventoryLease::VfxGpuInventoryLease(RenderResourceRegistry &registry, std::weak_ptr<const VfxFrontendState> authority) noexcept
-        : registry_(&registry), authority_(std::move(authority)), owner_(std::this_thread::get_id()) {}
+        : registry_(&registry), authority_(std::move(authority)) {}
 
     /** @copydoc VfxGpuInventoryLease::Create */
     Result<std::shared_ptr<VfxGpuInventoryLease>> VfxGpuInventoryLease::Create(RenderResourceRegistry &registry,

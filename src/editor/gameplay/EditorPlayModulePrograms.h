@@ -16,7 +16,7 @@ namespace Horo::Editor {
         Result<void> Poll();
         /** Queue one explicit additive builtin update for the actual owner Poll safe point. */
         Result<void> RequestReferenceUpdate(Extensions::ScriptExportVersion);
-        Result<Extensions::ScriptModuleUpdateReport> RequestNativeUpdate(const Extensions::ScriptModuleProgram &);
+        Result<Extensions::ScriptModuleUpdateReport> RequestNativeUpdate(const Extensions::ScriptModuleProgram &) const;
         std::optional<Extensions::ScriptModuleUpdateReport> TakeUpdateReport();
         std::optional<Extensions::ScriptCallResult> TakeResult();
 

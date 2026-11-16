@@ -51,7 +51,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc EditorPlaySaveHost::State::BindActiveGameplay */
-    Result<void> EditorPlaySaveHost::State::BindActiveGameplay() {
+    Result<void> EditorPlaySaveHost::State::BindActiveGameplay() const {
         if (!liveBindings)
             return Result<void>::Success();
         if (const auto active = scenes.ActiveScene(); !active) {

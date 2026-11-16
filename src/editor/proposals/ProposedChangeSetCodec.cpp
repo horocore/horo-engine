@@ -73,10 +73,8 @@ namespace Horo::Editor::Proposals {
                     if (objects.empty())
                         throw InvalidWire{};
                     objects.pop_back();
-                } else if (event == Json::parse_event_t::key) {
-                    if (objects.empty() || !objects.back().insert(String(value, 128)).second)
-                        throw InvalidWire{};
-                }
+                } else if (event == Json::parse_event_t::key && (objects.empty() || !objects.back().insert(String(value, 128)).second))
+                    throw InvalidWire{};
                 return true;
             };
             return Json::parse(text.begin(), text.end(), callback);
@@ -116,15 +114,15 @@ namespace Horo::Editor::Proposals {
             result.reserve(values.size());
             for (const auto &value : values) {
                 Shape(value, {"offset", "before", "after"});
-                result.push_back({Number(value.at("offset")), String(value.at("before"), limits.maximumTextBytes),
-                                  String(value.at("after"), limits.maximumTextBytes)});
+                result.emplace_back(Number(value.at("offset")), String(value.at("before"), limits.maximumTextBytes),
+                                    String(value.at("after"), limits.maximumTextBytes));
             }
             return result;
         }
 
         /** @brief Encodes exactly one closed operation variant. */
         Json Operation(const FileOperation &operation) {
-            return std::visit([](const auto &value) -> Json {
+            return std::visit([]<typename VisitedValue>(const VisitedValue &value) -> Json {
                 using T = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<T, CreateFile>)
                     return {{"kind", "create"}, {"path", value.path.Value()}, {"text", value.text}};

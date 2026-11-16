@@ -44,7 +44,7 @@ namespace Horo::Render::Detail {
 
         RenderResourceRegistry *registry_;
         std::weak_ptr<const VfxFrontendState> authority_;
-        std::thread::id owner_;
+        std::thread::id owner_{std::this_thread::get_id()};
         std::vector<RenderBufferHandle> buffers_;
         bool active_{true};
     };

@@ -43,7 +43,7 @@ namespace Horo::Physics::StateDetail {
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
         // Canonical decode has validated all rows before this private owner publishes immutable values.
-        std::copy(input.begin(), input.end(), encoded_.begin());
+        std::ranges::copy(input, encoded_.begin());
         view_ = decoded.Value();
         usedBytes_ = input.size();
         sealed_ = true;

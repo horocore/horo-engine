@@ -17,8 +17,8 @@ namespace Horo::Editor {
     }  // namespace
 
     Result<void> EditorPlaySessionController::BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &source) {
-        const auto status = source.BindingStatus();
-        if (status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Reentrant)
+        if (const auto status = source.BindingStatus();
+            status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Reentrant)
             return InvalidFixedAttempt();
         if (dispatchSource_.IsValid() || state_ != EditorPlaySessionState::Idle)
             return InvalidFixedAttempt();
@@ -39,7 +39,7 @@ namespace Horo::Editor {
             return prepared;
         if (!ShouldTick())
             return Result<void>::Success();
-        fixedAttempt_.emplace(FixedAttempt{sceneHost_.get(), context.dispatchEvidence, facts, state_ == EditorPlaySessionState::Paused});
+        fixedAttempt_.emplace(sceneHost_.get(), context.dispatchEvidence, facts, state_ == EditorPlaySessionState::Paused);
         const Gameplay::FixedDeltaTime delta{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0};
         if (auto gameplay = RunGameplayFixed(input, delta); gameplay.HasError())
             return RejectFixedAttempt(context, gameplay.ErrorValue());
@@ -103,8 +103,8 @@ namespace Horo::Editor {
 
     void EditorPlaySessionController::AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept {
         Runtime::RuntimeDispatchFacts ignored;
-        const auto status = context.dispatchEvidence.Read(dispatchSource_, Runtime::RuntimePhase::FixedUpdate, ignored);
-        if (status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Retired)
+        if (const auto status = context.dispatchEvidence.Read(dispatchSource_, Runtime::RuntimePhase::FixedUpdate, ignored);
+            status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Retired)
             return;
         if (!MatchesFixedAttempt(context))
             return;

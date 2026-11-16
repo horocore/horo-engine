@@ -220,8 +220,8 @@ namespace Horo::Runtime {
                                           std::span<const EntityRef> entities, RuntimeResolvedGroupReference &output) const {
             if (target.entity.index >= entities.size() || target.entity.index >= group.entries.size())
                 return false;
-            const auto &entry = group.entries[target.entity.index];
-            if (target.component && !std::ranges::any_of(entry.info.components.gameplayComponents, [&](const auto &component) {
+            if (const auto &entry = group.entries[target.entity.index];
+                target.component && !std::ranges::any_of(entry.info.components.gameplayComponents, [&](const auto &component) {
                 return component.typeId == *target.component;
             }))
                 return false;

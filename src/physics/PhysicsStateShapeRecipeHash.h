@@ -34,7 +34,7 @@ namespace Horo::Physics::Detail {
     inline Sha256Digest CanonicalPrimitiveRecipe(const PhysicsShapeDescriptor &descriptor) noexcept {
         StateDetail::StateHash hash{"Horo.Physics.ShapeRecipe.v2"};
         hash.Word(descriptor.index());
-        std::visit([&hash](const auto &shape) {
+        std::visit([&hash]<typename VisitedValue>(const VisitedValue &shape) {
             using Shape = std::decay_t<decltype(shape)>;
             if constexpr (std::is_same_v<Shape, PhysicsBoxShape>)
                 hash.Vector(shape.halfExtentsMeters);
@@ -64,7 +64,7 @@ namespace Horo::Physics::Detail {
      * retired Horo shape record is needed. */
     inline Sha256Digest CanonicalQueryGeometryRecipe(const PhysicsQueryFixtureShape &descriptor,
                                                      const std::optional<PhysicsStateFpControl> &control) noexcept {
-        return std::visit([&control](const auto &shape) -> Sha256Digest {
+        return std::visit([&control]<typename VisitedValue>(const VisitedValue &shape) -> Sha256Digest {
             using Shape = std::decay_t<decltype(shape)>;
             if constexpr (std::is_same_v<Shape, PhysicsCompoundShapeDescriptor>) {
                 auto hash = BeginCanonicalCompoundRecipe(shape.children.size());

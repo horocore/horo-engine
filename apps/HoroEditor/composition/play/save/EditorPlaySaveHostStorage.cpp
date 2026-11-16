@@ -186,7 +186,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc PlaySaveStorage::NewSlot */
-    Result<Runtime::SaveSlotLifecycleTarget> PlaySaveStorage::NewSlot() {
+    Result<Runtime::SaveSlotLifecycleTarget> PlaySaveStorage::NewSlot() const {
         using Outcome = Result<Runtime::SaveSlotLifecycleTarget>;
         const auto index = List();
         if (index.HasError())
@@ -206,7 +206,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PlaySaveStorage::Header */
     Result<Runtime::SaveArchiveHeader> PlaySaveStorage::Header(const Runtime::SaveSlotLifecycleTarget &target,
-                                                               std::uint64_t unixMilliseconds, std::uint64_t playNanoseconds) {
+                                                               std::uint64_t unixMilliseconds, std::uint64_t playNanoseconds) const {
         using Outcome = Result<Runtime::SaveArchiveHeader>;
         if (target.address.namespaceAccess.expected != state_->config.sandbox || target.address.namespaceAccess.expectedRevision != 1)
             return Outcome::Failure(MakeError(Runtime::SaveErrors::NamespaceUnavailable));
@@ -233,7 +233,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PlaySaveStorage::Read */
     Result<Runtime::ValidatedSaveArchive> PlaySaveStorage::Read(const Runtime::SaveManagerCommand &selection,
-                                                                const CancellationToken &cancellation) {
+                                                                const CancellationToken &cancellation) const {
         using Outcome = Result<Runtime::ValidatedSaveArchive>;
         const auto result =
             state_->lifecycle->Execute({.kind = Runtime::SaveSlotLifecycleKind::Export, .source = Target(selection)}, cancellation);
@@ -250,7 +250,7 @@ namespace Horo::Application::Internal {
     /** @copydoc PlaySaveStorage::Commit */
     Result<Runtime::SaveSlotLifecycleResult> PlaySaveStorage::Commit(const Runtime::SaveSlotLifecycleTarget &target,
                                                                      const Runtime::FinalizedSaveArchive &archive,
-                                                                     Runtime::SaveSlotDisplayMetadata display) {
+                                                                     Runtime::SaveSlotDisplayMetadata display) const {
         using Outcome = Result<Runtime::SaveSlotLifecycleResult>;
         const auto admitted = Runtime::SaveArchiveReader{PlaySaveArchiveLimits()}.Read(archive.Archive().bytes);
         if (admitted.HasError())
@@ -272,7 +272,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PlaySaveStorage::Delete */
     Result<Runtime::SaveSlotLifecycleResult> PlaySaveStorage::Delete(const Runtime::SaveManagerCommand &selection,
-                                                                     const CancellationToken &cancellation) {
+                                                                     const CancellationToken &cancellation) const {
         return state_->lifecycle->Execute({.kind = Runtime::SaveSlotLifecycleKind::Delete,
                                            .source = Target(selection),
                                            .deleteMode = Runtime::SaveSlotDeleteMode::Permanent},
@@ -280,7 +280,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc PlaySaveStorage::Cleanup */
-    Result<void> PlaySaveStorage::Cleanup() {
+    Result<void> PlaySaveStorage::Cleanup() const {
         auto selected = List();
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
@@ -304,7 +304,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc PlaySaveStorage::CloseAdmission */
-    void PlaySaveStorage::CloseAdmission() noexcept {
+    void PlaySaveStorage::CloseAdmission() const noexcept {
         state_->closed.store(true, std::memory_order_release);
     }
 }  // namespace Horo::Application::Internal

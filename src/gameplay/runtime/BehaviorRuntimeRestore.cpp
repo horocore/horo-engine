@@ -150,7 +150,7 @@ namespace Horo::Gameplay {
             }
 
         private:
-            Result<void> PreparePendingHooks() {
+            Result<void> PreparePendingHooks() const {
                 auto result = BehaviorRuntimeRestoreAccess::PrepareHooks(*owner_->pending);
                 if (result.HasError()) {
                     BehaviorRuntimeRestoreAccess::ShutdownCandidate(*owner_->pending);

@@ -7,6 +7,7 @@
 #include <exception>
 #include <initializer_list>
 #include <limits>
+#include <memory>
 #include <new>
 #include <span>
 #include <string>
@@ -34,7 +35,7 @@ namespace Horo::Runtime {
         public:
             PendingParticipantRegistration(std::vector<SaveParticipantBinding> &bindings, std::uint64_t &generation,
                                            const std::uint64_t next) noexcept
-                : bindings_(bindings), generation_(generation), next_(next), exceptions_(std::uncaught_exceptions()) {}
+                : bindings_(bindings), generation_(generation), next_(next) {}
 
             ~PendingParticipantRegistration() {
                 if (std::uncaught_exceptions() != exceptions_)
@@ -50,7 +51,7 @@ namespace Horo::Runtime {
             std::vector<SaveParticipantBinding> &bindings_;
             std::uint64_t &generation_;
             std::uint64_t next_;
-            int exceptions_;
+            int exceptions_{std::uncaught_exceptions()};
         };
 
         /** @brief Projects every ordered registry operation to the canonical participant text. */
@@ -164,8 +165,8 @@ namespace Horo::Runtime {
                 if (!dependency.participant.IsValid() || dependency.participant == descriptor.participant ||
                     !IsKnown(dependency.requirement) || !IsKnown(dependency.phase))
                     return Result<void>::Failure(MakeError(SaveErrors::ParticipantDescriptorInvalid));
-                const std::byte phaseMask = DependencyPhaseMask(dependency.phase);
-                if (std::ranges::any_of(std::span{descriptor.dependencies}.first(index), [&](const auto &earlier) {
+                if (const std::byte phaseMask = DependencyPhaseMask(dependency.phase);
+                    std::ranges::any_of(std::span{descriptor.dependencies}.first(index), [&](const auto &earlier) {
                     return earlier.participant == dependency.participant && (DependencyPhaseMask(earlier.phase) & phaseMask) != std::byte{};
                 }))
                     return Result<void>::Failure(MakeError(SaveErrors::ParticipantDescriptorInvalid));

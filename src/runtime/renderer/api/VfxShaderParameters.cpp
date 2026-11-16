@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <span>
 
@@ -80,7 +81,7 @@ namespace Horo::Render {
             const auto field = std::ranges::find_if(layout.parameters, [id](const auto &parameter) {
                 return parameter.active && parameter.binding == VfxShaderParameterIds::Instances && parameter.id == id;
             });
-            return field == layout.parameters.end() ? nullptr : &*field;
+            return field == layout.parameters.end() ? nullptr : std::to_address(field);
         }
 
         /** @brief Bounds a complete physical field without overflowing offsets and excludes irregular byte alignment. */
@@ -185,7 +186,7 @@ namespace Horo::Render {
             for (std::size_t row = 0; row < 4; ++row)
                 for (std::size_t column = 0; column < 4; ++column)
                     matrices[instance * 16 + row * 4 + column] = input.clipFromLocal[column * 4 + row];
-            std::copy(input.linearColor.begin(), input.linearColor.end(), colors.begin() + instance * 4);
+            std::ranges::copy(input.linearColor, colors.begin() + instance * 4);
         }
         const std::array values{MaterialParameterValue{VfxShaderParameterIds::ClipFromLocal, std::span<const float>{matrices}},
                                 MaterialParameterValue{VfxShaderParameterIds::InstanceColor, std::span<const float>{colors}}};

@@ -112,8 +112,8 @@ namespace Horo::Application::Internal {
             if (identity.HasError())
                 return Result<void>::Failure(identity.ErrorValue());
             const auto records = inventory.Records();
-            const auto record = std::ranges::find(records, identity.Value(), &PersistentEntityRecord::identity);
-            if (record == records.end() || !std::holds_alternative<SpawnedPersistentEntityProvenance>(record->provenance) ||
+            if (const auto record = std::ranges::find(records, identity.Value(), &PersistentEntityRecord::identity);
+                record == records.end() || !std::holds_alternative<SpawnedPersistentEntityProvenance>(record->provenance) ||
                 !entity.components || UnregisteredState(*entity.components, gameplay, physics))
                 return Result<void>::Failure(Unsupported());
             return Result<void>::Success();
@@ -172,7 +172,7 @@ namespace Horo::Application::Internal {
                 const auto entity = scene.Find(authored->object);
                 record.disposition = entity ? PersistentEntityDisposition::Live : PersistentEntityDisposition::Tombstone;
                 if (entity)
-                    bindings.push_back({record.identity, record.generation, *entity});
+                    bindings.emplace_back(record.identity, record.generation, *entity);
             }
             if (bindings.size() != liveCount)
                 return Outcome::Failure(Unsupported());
@@ -273,7 +273,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(Unsupported());
         std::size_t live = 0;
         for (std::size_t slot = 0; slot < scene.SlotCount(); ++slot)
-            live += scene.EntityAt(slot).has_value();
+            live += scene.EntityAt(slot).has_value() ? 1U : 0U;
         return CaptureIdentities(scene, baseline, identities, live);
     }
 

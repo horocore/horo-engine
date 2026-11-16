@@ -100,7 +100,7 @@ namespace Horo::Render {
             RenderMemoryScopeId scope;
         };
 
-        Result<RenderMemoryCostPlan> QueryPipelineCost(IRenderBackend &backend, const RenderGraphicsPipelineDescriptor &descriptor,
+        Result<RenderMemoryCostPlan> QueryPipelineCost(const IRenderBackend &backend, const RenderGraphicsPipelineDescriptor &descriptor,
                                                        std::uint64_t vertex, std::uint64_t fragment) {
             if (descriptor.state.depthOnly && !backend.Capabilities().supportsMaterialPassBatches &&
                 !backend.Capabilities().supportsMaterialRasterGraph)

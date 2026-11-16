@@ -124,7 +124,8 @@ namespace Horo::Render {
         const auto states = VfxGpuStateBufferCount(record.descriptor);
         const auto &readback = record.descriptor.readback;
         const auto observations = readback.enabled ? readback.maximumPendingResults : 1U;
-        record.buffers.reserve(std::size_t{states} + observations + 1 + (record.preparationResources.parameterArena.byteSize != 0));
+        record.buffers.reserve(std::size_t{states} + observations + 1 +
+                               (record.preparationResources.parameterArena.byteSize != 0 ? 1U : 0U));
         record.states.resize(states);
         record.observations.resize(observations);
         record.generations.resize(states);
@@ -148,7 +149,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::RetireVfxGpuRecord */
     void RenderFrontend::RetireVfxGpuRecord(Detail::VfxGpuRecord &record) noexcept {
-        record.released = record.stopped = true;
+        record.stopped = true;
+        record.released = true;
         for (auto &request : record.requests)
             if (request.occupied)
                 request.cancelRequested = true;
@@ -218,7 +220,9 @@ namespace Horo::Render {
         if (vfxGpuStorage_->readbacks)
             vfxGpuStorage_->readbacks->StopAdmission();
         for (auto &slot : vfxGpuStorage_->slots)
-            if (slot.record)
-                slot.record->released = slot.record->stopped = true;
+            if (slot.record) {
+                slot.record->stopped = true;
+                slot.record->released = true;
+            }
     }
 }  // namespace Horo::Render

@@ -92,11 +92,13 @@ namespace Horo::Application::Internal {
             declarations.reserve(bindings.size());
             for (const auto &binding : bindings)
                 declarations.push_back(binding.declaration);
-            auto schema = std::make_shared<PlaySaveStorageSchema>(
-                PlaySaveStorageSchema{definition, std::move(identities).Value(), std::move(declarations),
-                                      behaviorOwner ? std::optional{Gameplay::BehaviorLifecycleParticipant()} : std::nullopt,
-                                      prefabs ? std::optional{prefabs->Provider().LimitProfile()} : std::nullopt,
-                                      physics ? std::optional{Physics::Detail::PhysicsStateSaveDescriptor()} : std::nullopt});
+            auto schema =
+                std::make_shared<PlaySaveStorageSchema>(definition, std::move(identities).Value(), std::move(declarations),
+                                                        behaviorOwner ? std::optional{Gameplay::BehaviorLifecycleParticipant()}
+                                                                      : std::nullopt,
+                                                        prefabs ? std::optional{prefabs->Provider().LimitProfile()} : std::nullopt,
+                                                        physics ? std::optional{Physics::Detail::PhysicsStateSaveDescriptor()}
+                                                                : std::nullopt);
             auto live = std::make_shared<const std::vector<Editor::PlaySaveGameplayBinding>>(std::move(bindings));
             return EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wallClock, std::move(scope).Value()}, std::move(schema),
                                               std::move(live), std::move(behaviorOwner), std::move(prefabs), std::move(physics));

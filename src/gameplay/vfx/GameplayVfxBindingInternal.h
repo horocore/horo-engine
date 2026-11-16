@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 namespace Horo::Gameplay::Detail {
     struct GameplayVfxCompiledParameter final {
@@ -63,6 +64,6 @@ namespace Horo::Gameplay::VfxBindingDetail {
     [[nodiscard]] inline const Detail::GameplayVfxCompiledBinding *FindDestination(const Detail::GameplayVfxCompiledBindings &state,
                                                                                    const std::uint64_t destination) noexcept {
         const auto found = std::ranges::lower_bound(state.bindings, destination, {}, &Detail::GameplayVfxCompiledBinding::destination);
-        return found != state.bindings.end() && found->destination == destination ? &*found : nullptr;
+        return found != state.bindings.end() && found->destination == destination ? std::to_address(found) : nullptr;
     }
 }  // namespace Horo::Gameplay::VfxBindingDetail

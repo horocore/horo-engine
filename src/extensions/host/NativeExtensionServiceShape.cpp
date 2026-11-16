@@ -2,6 +2,7 @@
 #include "NativeExtensionServiceInternal.h"
 
 #include <charconv>
+#include <format>
 #include <limits>
 
 namespace Horo::Extensions {
@@ -121,9 +122,8 @@ namespace Horo::Extensions {
                                                     .introducedVersion = version,
                                                     .invocation = ScriptExportInvocationMode::Synchronous};
             for (std::uint32_t index = 0; index < method.arguments; ++index)
-                function.parameters.push_back({.id = "arg" + std::to_string(index),
-                                               .type = {ScriptExportPrimitiveKind::SignedInteger},
-                                               .introducedVersion = version});
+                function.parameters.push_back(
+                    {.id = std::format("arg{}", index), .type = {ScriptExportPrimitiveKind::SignedInteger}, .introducedVersion = version});
             function.results.push_back({.id = "value", .type = {ScriptExportPrimitiveKind::SignedInteger}, .introducedVersion = version});
             descriptor.functions.push_back(std::move(function));
         }

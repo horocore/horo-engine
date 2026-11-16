@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <new>
 
 namespace Horo::AI {
@@ -85,6 +86,11 @@ namespace Horo::AI {
     public:
         explicit RegisteredDecisionNodeExecutor(std::shared_ptr<const DecisionNodeGeneration> generation)
             : generation_(std::move(generation)) {}
+
+        RegisteredDecisionNodeExecutor(const RegisteredDecisionNodeExecutor &) = delete;
+        RegisteredDecisionNodeExecutor &operator=(const RegisteredDecisionNodeExecutor &) = delete;
+        RegisteredDecisionNodeExecutor(RegisteredDecisionNodeExecutor &&) = delete;
+        RegisteredDecisionNodeExecutor &operator=(RegisteredDecisionNodeExecutor &&) = delete;
 
         ~RegisteredDecisionNodeExecutor() override {
             if (std::this_thread::get_id() != generation_->owner_ || invoking_)
@@ -282,7 +288,7 @@ namespace Horo::AI {
 
         NodeInstance *Find(DecisionNodeId id, DecisionNodeRole role) noexcept {
             const auto found = std::ranges::find(nodes_, id, &NodeInstance::node);
-            return found != nodes_.end() && found->role == role ? &*found : nullptr;
+            return found != nodes_.end() && found->role == role ? std::to_address(found) : nullptr;
         }
 
         NodeInstance *FindOperation(const AiTaskOperationContext &operation) noexcept {

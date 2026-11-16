@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <imgui.h>
+#include <numbers>
 
 namespace Horo::Editor {
     void XRSimulatorPanel::OnAttach(PanelContext &context) {
@@ -89,7 +90,8 @@ namespace Horo::Editor {
             ImGui::TextWrapped("%s", kTextScope.Text(context.localization, roles[role]).c_str());
         bool changed =
             ImGui::DragFloat3(kTextScope.Text(context.localization, "position").c_str(), &source.pose.position.x, 0.01F, -100, 100);
-        changed |= ImGui::DragFloat3(kTextScope.Text(context.localization, "rotation").c_str(), &euler.x, 0.01F, -3.14F, 3.14F);
+        changed |= ImGui::DragFloat3(kTextScope.Text(context.localization, "rotation").c_str(), &euler.x, 0.01F, -std::numbers::pi_v<float>,
+                                     std::numbers::pi_v<float>);
         ImGui::PopID();
         if (!changed)
             return false;

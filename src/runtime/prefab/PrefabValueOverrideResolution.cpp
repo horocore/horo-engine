@@ -194,7 +194,7 @@ namespace Horo::Prefab {
                                                                  const PrefabValueSchemaSnapshot *schemas, const PrefabLimitProfile &limits,
                                                                  const CancellationToken &cancellation) {
         PrefabMetricOperation observation{source.Metrics(), PrefabMetricPhase::Rebase};
-        auto result = [&]() -> Result<PrefabOverrideResolution> {
+        auto result = [&]() {
             try {
                 return Resolve(source, set, schemas, limits, cancellation);
             } catch (const std::bad_alloc &) {
@@ -220,7 +220,7 @@ namespace Horo::Prefab {
                                                             const PrefabValueEdit &edit, const PrefabValueSchemaSnapshot *schemas,
                                                             const PrefabLimitProfile &limits, const CancellationToken &cancellation) {
         PrefabMetricOperation observation{source.Metrics(), PrefabMetricPhase::Rebase};
-        auto result = [&]() -> Result<PrefabOverrideResolution> {
+        auto result = [&]() {
             try {
                 return PrepareEdit(source, current, edit, schemas, limits, cancellation);
             } catch (const std::bad_alloc &) {

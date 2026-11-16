@@ -523,7 +523,7 @@ namespace Horo::Extensions {
         });
         state_->preparedCommands.clear();
         for (const auto &command : state_->commands.Snapshot())
-            state_->preparedCommands.push_back({command.command, command.provider});
+            state_->preparedCommands.emplace_back(command.command, command.provider);
         state_->preparedRevision = revision;
     }
 

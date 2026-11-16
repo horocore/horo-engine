@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 #include <utility>
 
 namespace Horo::Editor {
@@ -134,12 +135,9 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    BuildReleaseModal::BuildReleaseModal(const EditorGuiContext &context, const BuildReleasePage page,
-                                         Application::GameplayBuildRequest request, Application::GameplayBuildService *builds,
-                                         std::optional<std::uint64_t> &retainedBuild, IBuildReleaseJobs *releases,
-                                         const BuildReleaseTab initialTab)
-        : EditorModal(kTextScope), context_(context), page_(page), request_(std::move(request)), builds_(builds),
-          retainedBuild_(retainedBuild) {
+    BuildReleaseModal::BuildReleaseModal(const EditorGuiContext &context, Application::GameplayBuildRequest request,
+                                         IBuildReleaseJobs *releases, const BuildReleaseTab initialTab)
+        : EditorModal(kTextScope), context_(context), request_(std::move(request)) {
         draft_.view = static_cast<int>(initialTab);
         if (releases)
             releases_.emplace(*releases);
@@ -202,13 +200,13 @@ namespace Horo::Editor {
     }
 
     /** @copydoc BuildReleaseModal::Field */
-    void BuildReleaseModal::Field(const char *key, std::string &value) {
+    void BuildReleaseModal::Field(const char *key, std::string &value) const {
         Ui::FieldLabel(Label(key).c_str(), context_.theme.fonts);
         Input(key, value, context_.theme.fonts);
     }
 
     /** @copydoc BuildReleaseModal::Choice */
-    void BuildReleaseModal::Choice(const char *key, int &value, const std::initializer_list<const char *> options) {
+    void BuildReleaseModal::Choice(const char *key, int &value, const std::initializer_list<const char *> options) const {
         Ui::FieldLabel(Label(key).c_str(), context_.theme.fonts);
         Select(context_, key, value, options);
     }
@@ -250,7 +248,7 @@ namespace Horo::Editor {
             Ui::Badge(badge, fonts);
             ImGui::TableNextColumn();
             Ui::FieldLabel(Text("target").c_str(), fonts);
-            const auto target = job ? "#" + std::to_string(job->target.value) : Target();
+            const auto target = job ? std::format("#{}", job->target.value) : Target();
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, target, Theme::Text(), fonts);
             ImGui::TableNextColumn();
             Ui::FieldLabel(Label("prepare_release.candidate_path").c_str(), fonts);
@@ -260,8 +258,7 @@ namespace Horo::Editor {
         } else {
             Ui::Badge(badge, fonts);
             Ui::FieldLabel(Text("target").c_str(), fonts);
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, job ? "#" + std::to_string(job->target.value) : Target(), Theme::Text(),
-                            fonts);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, job ? std::format("#{}", job->target.value) : Target(), Theme::Text(), fonts);
             Ui::FieldLabel(Label("prepare_release.candidate_path").c_str(), fonts);
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, job ? Label("prepare_release.path_unavailable") : CandidatePath(),
                             Theme::Text(), fonts);
@@ -348,7 +345,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc BuildReleaseModal::DrawReview */
-    void BuildReleaseModal::DrawReview() {
+    void BuildReleaseModal::DrawReview() const {
         const auto &fonts = context_.theme.fonts;
         Ui::SectionTitle(Label("prepare_release.review_heading").c_str(), fonts);
         Ui::Hint(Label("prepare_release.review_hint").c_str(), fonts);
@@ -417,7 +414,7 @@ namespace Horo::Editor {
         ImGui::EndChild();
         ImGui::PopID();
         ImGui::Spacing();
-        const auto pageLabel = std::to_string(page + 1) + " / " + std::to_string(pages);
+        const auto pageLabel = std::format("{} / {}", page + 1, pages);
         const char *nextLabel = context_.localization.Get("editor", "project_creation.next").c_str();
         const auto &metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
         float actionsWidth{};

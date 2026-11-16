@@ -9,7 +9,7 @@ namespace Horo::AI::Detail {
     namespace {
         void WriteValue(DecisionWriter &writer, const BlackboardValue &value) {
             writer.Unsigned(value.index(), 1);
-            std::visit([&](const auto &item) {
+            std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
                 using T = std::decay_t<decltype(item)>;
                 if constexpr (std::is_same_v<T, BlackboardScalarValue>)
                     WriteScalar(writer, item);

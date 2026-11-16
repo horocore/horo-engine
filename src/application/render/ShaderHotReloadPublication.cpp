@@ -18,7 +18,7 @@ namespace Horo::Application {
             return BuildOutputResult::Cancelled;
         }
 
-        Result<void> Current(Render::IShaderHotReloadTarget &target, Render::ShaderHotReloadTargetState expected) {
+        Result<void> Current(const Render::IShaderHotReloadTarget &target, Render::ShaderHotReloadTargetState expected) {
             try {
                 auto current = target.CaptureState();
                 if (current.HasError())

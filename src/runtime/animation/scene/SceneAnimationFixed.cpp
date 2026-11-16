@@ -31,7 +31,7 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    Result<void> SceneAnimationRuntime::State::EvaluateActor(Actor &actor, const FixedStepContext &context) {
+    Result<void> SceneAnimationRuntime::State::EvaluateActor(Actor &actor, const FixedStepContext &context) const {
         if (!actor.playing)
             return Result<void>::Success();
         const auto snapshot = config.inputs ? config.inputs->Read(actor.entity, context) : SceneAnimationInputSnapshot{};
@@ -59,7 +59,7 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    Result<void> SceneAnimationRuntime::State::ArmActors() {
+    Result<void> SceneAnimationRuntime::State::ArmActors() const {
         if (!active || active->closed)
             return Result<void>::Success();
         for (const auto &actor : active->current->actors) {
@@ -72,7 +72,7 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    void SceneAnimationRuntime::State::PublishActors() noexcept {
+    void SceneAnimationRuntime::State::PublishActors() const noexcept {
         if (!active || active->closed)
             return;
         for (const auto &actor : active->current->actors) {
@@ -83,7 +83,7 @@ namespace Horo::Runtime {
         }
     }
 
-    void SceneAnimationRuntime::State::AbortActors() noexcept {
+    void SceneAnimationRuntime::State::AbortActors() const noexcept {
         if (!active || active->closed)
             return;
         for (const auto &actor : active->current->actors) {

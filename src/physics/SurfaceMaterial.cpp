@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
+#include <memory>
 #include <new>
 
 namespace Horo::Physics {
@@ -139,7 +140,7 @@ namespace Horo::Physics {
     /** @copydoc SurfaceCatalogSnapshot::Find */
     const SurfaceCatalogEntry *SurfaceCatalogSnapshot::Find(SurfaceMaterialId id) const noexcept {
         const auto found = std::ranges::lower_bound(value_.surfaces, id, {}, &SurfaceCatalogEntry::id);
-        return found != value_.surfaces.end() && found->id == id ? &*found : nullptr;
+        return found != value_.surfaces.end() && found->id == id ? std::to_address(found) : nullptr;
     }
 
     /** @copydoc ValidatePhysicsSurfaceWorldBinding */

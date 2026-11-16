@@ -95,9 +95,8 @@ namespace Horo::Editor {
         static_assert(std::is_nothrow_move_assignable_v<Outcome>);
         *retained = std::move(created).Value();
         try {
-            if (auto refreshed = RefreshTerrainAssetCreation(view, *retained, request.kind); refreshed.HasError())
-                if (!retained->failure)
-                    retained->failure = refreshed.ErrorValue();
+            if (auto refreshed = RefreshTerrainAssetCreation(view, *retained, request.kind); refreshed.HasError() && !retained->failure)
+                retained->failure = refreshed.ErrorValue();
         } catch (...) {
             if (!retained->failure)
                 retained->failure = std::move(postPublicationFailure);

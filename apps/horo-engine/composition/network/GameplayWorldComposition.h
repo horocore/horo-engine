@@ -159,7 +159,7 @@ namespace Horo::Application::Internal {
         /** @brief Arms source metadata after all fixed work succeeds; preparation does not commit a tick.
          * @param context Exact attempted fixed opportunity. @return Typed source reservation/admission outcome.
          */
-        [[nodiscard]] Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context);
+        [[nodiscard]] Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context) const;
         /** @brief Seals metadata only at the genuine scheduler commitment; World work still waits for actual Scene publication.
          * @param context Same fixed opportunity whose actual commitment was verified by the owning participant.
          */
@@ -216,7 +216,7 @@ namespace Horo::Application::Internal {
         /** @brief Admits an exact host tick before behavior callbacks; never synthesizes a clock. */
         [[nodiscard]] Result<void> BeginVfxTick(const Runtime::FixedStepContext &context);
         /** @brief Publishes staged VFX only after the actual Scene lifecycle commit succeeds. */
-        [[nodiscard]] Result<void> FlushVfxTicks();
+        [[nodiscard]] Result<void> FlushVfxTicks() const;
         /** @brief Cancels this composition's open source tick before callback or owner retirement. */
         void AbortVfxTick() noexcept;
         /** @brief Derives this module's exact Scene-scoped UI client before callbacks start. */

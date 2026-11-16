@@ -1,6 +1,7 @@
 #include "AnimationBlendTreeGeometry.h"
 #include "AnimationGraphCompilerInternal.h"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -21,10 +22,9 @@ namespace Horo::Animation::GraphCompileDetail {
         bool ValidSamples(const GraphBlendTreeNode &tree, const AnimationGraphData &data) {
             if (tree.samples.empty() || tree.samples.size() > AnimationGraphHardLimits::BlendSamplesPerTree || !UniqueIds(tree.samples))
                 return false;
-            for (const auto &sample : tree.samples)
-                if (!ValidSample(sample, tree, data))
-                    return false;
-            return true;
+            return std::ranges::none_of(tree.samples, [&](const GraphBlendSample &sample) {
+                return !ValidSample(sample, tree, data);
+            });
         }
 
         /** @brief A coordinate is an exact Float declaration, not an implicitly converted integer/trigger. */

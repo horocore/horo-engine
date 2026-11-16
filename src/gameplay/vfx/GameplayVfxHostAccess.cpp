@@ -1,6 +1,8 @@
 #include "GameplayVfxContextInternal.h"
 #include "Horo/Foundation/Utf8.h"
 
+#include <algorithm>
+
 namespace Horo::Gameplay::Detail {
     namespace {
         using VfxBindingDetail::Reject;
@@ -80,10 +82,10 @@ namespace Horo::Gameplay::Detail {
             if (binding.requirement == Vfx::VfxRequirementClass::GameplayRequired &&
                 (!asset.requiredGameplay || asset.requiredReserve == 0))
                 return false;
-            for (const auto &parameter : std::span{layer.parameters.data(), layer.parameterCount})
-                if (!ParameterFits(binding, parameter, asset))
-                    return false;
-            return true;
+            return std::ranges::none_of(std::span{layer.parameters.data(), layer.parameterCount},
+                                        [&](const GameplayVfxCompiledParameter &parameter) {
+                return !ParameterFits(binding, parameter, asset);
+            });
         }
 
         [[nodiscard]] Vfx::VfxSpawnStatus WorldStatus(const GameplayVfxBindingTable &table, const Vfx::VfxWorld &world) noexcept {

@@ -183,7 +183,7 @@ namespace Horo::Prefab {
                                                                                         EffectivePrefabCandidate candidate) {
         const auto metrics = key.metrics_;
         PrefabMetricOperation observation{metrics, PrefabMetricPhase::Cache};
-        auto result = [&]() -> Result<std::shared_ptr<const EffectivePrefabCandidate>> {
+        auto result = [&]() {
             try {
                 return StoreImpl(std::move(key), std::move(candidate));
             } catch (const std::bad_alloc &) {

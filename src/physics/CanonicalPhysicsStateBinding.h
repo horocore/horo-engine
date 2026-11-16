@@ -4,6 +4,7 @@
 #include "Horo/Physics/PhysicsStateSnapshot.h"
 
 #include <algorithm>
+#include <memory>
 #include <span>
 
 namespace Horo::Physics::Detail {
@@ -62,7 +63,7 @@ namespace Horo::Physics::Detail {
     inline const CanonicalPhysicsStateBodyBinding *FindNativeStateBody(const CanonicalPhysicsStateBindings &bindings,
                                                                        const std::uint32_t id) noexcept {
         const auto found = std::ranges::lower_bound(bindings.nativeBodies, id, {}, &CanonicalPhysicsStateBodyBinding::nativeId);
-        return found != bindings.nativeBodies.end() && found->nativeId == id ? &*found : nullptr;
+        return found != bindings.nativeBodies.end() && found->nativeId == id ? std::to_address(found) : nullptr;
     }
 
     /** @brief Resolves a stable public body key without accepting native indexes as
@@ -70,6 +71,6 @@ namespace Horo::Physics::Detail {
     inline const CanonicalPhysicsStateBodyBinding *FindStableStateBody(const CanonicalPhysicsStateBindings &bindings,
                                                                        const PhysicsStateObjectId id) noexcept {
         const auto found = std::ranges::lower_bound(bindings.stableBodies, id, {}, &CanonicalPhysicsStateBodyBinding::id);
-        return found != bindings.stableBodies.end() && found->id == id ? &*found : nullptr;
+        return found != bindings.stableBodies.end() && found->id == id ? std::to_address(found) : nullptr;
     }
 }  // namespace Horo::Physics::Detail

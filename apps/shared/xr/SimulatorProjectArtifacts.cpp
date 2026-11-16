@@ -117,7 +117,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Publish complete validated bytes using the supplied root-bound writer authority. */
         Result<void> Publish(const std::filesystem::path &destination, const std::span<const std::byte> bytes,
-                             const Platform::ProjectReadContext &context, AtomicFileReplacementReceipt &receipt) {
+                             const Platform::ProjectReadContext &context, AtomicFileReplacementReceipt &receipt) const {
             auto lockPath = destination;
             lockPath += ".lock";
             auto acquired = composition.publication->TryAcquireExclusive(lockPath, "horo.xr-simulator.capture");

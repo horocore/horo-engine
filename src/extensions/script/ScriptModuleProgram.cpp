@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <memory>
 
 namespace Horo::Extensions {
     namespace {
@@ -74,7 +75,7 @@ namespace Horo::Extensions {
 
         const ScriptModuleCapturedArtifact *Find(const ScriptModuleProgramInput &input, const std::filesystem::path &path) {
             const auto found = std::ranges::find(input.artifacts, path, &ScriptModuleCapturedArtifact::relative);
-            return found == input.artifacts.end() ? nullptr : &*found;
+            return found == input.artifacts.end() ? nullptr : std::to_address(found);
         }
     }  // namespace
 
@@ -125,7 +126,7 @@ namespace Horo::Extensions {
             return Invalid("Selected module is absent from the signed manifest.");
         if (auto valid = ValidateScriptModuleSelectedDeclaration(*found); valid.HasError())
             return valid;
-        module_ = &*found;
+        module_ = std::to_address(found);
         return Result<void>::Success();
     }
 

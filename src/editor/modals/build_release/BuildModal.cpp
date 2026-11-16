@@ -157,7 +157,7 @@ namespace Horo::Editor {
                !runAfter_;
     }
 
-    void BuildModal::Choice(const char *key, int &value, const std::initializer_list<const char *> options) {
+    void BuildModal::Choice(const char *key, int &value, const std::initializer_list<const char *> options) const {
         std::array<const char *, 5> labels{};
         std::size_t count{};
         for (const auto *option : options)

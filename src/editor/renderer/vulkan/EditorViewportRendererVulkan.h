@@ -223,7 +223,7 @@ namespace Horo::Editor {
                                                       const Render::DirectionalShadowFrame &shadow);
         [[nodiscard]] Result<void> WriteShadowDraw(Render::FrameToken frame, const DrawSlot &draw,
                                                    const Render::RenderStaticMeshInstance &instance,
-                                                   const Render::DirectionalShadowFrame &shadow, std::uint32_t cascade);
+                                                   const Render::DirectionalShadowFrame &shadow, std::uint32_t cascade) const;
         [[nodiscard]] Result<void> ExecuteShadowedViewport(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass,
                                                            std::size_t draws, const Render::DirectionalShadowFrame *shadow);
 
@@ -246,7 +246,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> CreateEmptyGraph();
         /** @brief Submits the cached empty-scene clear through the exact current frontend frame. */
         [[nodiscard]] Result<void> ExecuteEmptyViewport(Render::RenderFrameScope &frame, Render::ClearColor clearColor);
-        [[nodiscard]] Result<std::uint32_t> PrepareViewportSlot(Render::FrameToken frame, const Render::StaticMeshPassDescriptor &pass);
+        [[nodiscard]] Result<std::uint32_t> PrepareViewportSlot(Render::FrameToken frame,
+                                                                const Render::StaticMeshPassDescriptor &pass) const;
         [[nodiscard]] Result<void> PrepareShadowFrame(Render::FrameToken frame, std::uint32_t slot,
                                                       const Render::StaticMeshPassDescriptor &pass);
         [[nodiscard]] Result<std::size_t> PrepareViewportOverlay(Render::FrameToken frame, std::uint32_t slot,
@@ -255,7 +256,7 @@ namespace Horo::Editor {
                                                         const Render::StaticMeshPassDescriptor &pass);
         [[nodiscard]] Result<void> ExecuteViewport(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass);
         [[nodiscard]] Result<void> PrepareViewportOutput(Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output,
-                                                         const Render::StaticMeshPassDescriptor *viewport);
+                                                         const Render::StaticMeshPassDescriptor *viewport) const;
 
         [[nodiscard]] Result<void> WriteForwardDraw(Render::FrameToken frame, const DrawSlot &draw,
                                                     const Render::RenderStaticMeshInstance &instance, const Render::RenderSceneView &scene);

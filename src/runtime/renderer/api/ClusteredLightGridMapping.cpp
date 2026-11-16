@@ -32,7 +32,8 @@ namespace Horo::Render {
         }
 
         bool OutsidePixel(const ClusteredLightGridDescriptor &descriptor, float x, float y) noexcept {
-            return x < 0 || y < 0 || x >= descriptor.extent.width || y >= descriptor.extent.height;
+            return x < 0 || y < 0 || static_cast<double>(x) >= descriptor.extent.width ||
+                   static_cast<double>(y) >= descriptor.extent.height;
         }
 
         std::uint32_t Index(const ClusteredLightGridDescriptor &descriptor, float pixelX, float pixelY, double viewDepth) noexcept {

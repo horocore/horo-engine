@@ -11,6 +11,26 @@ using namespace Horo::Runtime;
 
 using namespace Horo::Runtime::SceneContentWorldTest;
 
+TEST_CASE("Unknown degraded-world policies leave capture readiness available without invoking adapters", "[scene][save][content]") {
+    WorldFixture fixture;
+    REQUIRE(fixture.barrier->Request(91, fixture.generation).HasValue());
+    const SaveContentCaptureRequest request{.phase = RuntimePhase::CommitDeferredLifecycleChanges,
+                                            .generation = fixture.generation,
+                                            .capturedState = SceneTest::Id<CapturedStateId>(22),
+                                            .epoch = {.value = 41}};
+    auto rejected =
+        fixture.world->CaptureAtSafePoint(*fixture.barrier, request, fixture.participants, static_cast<SaveDegradedWorldPolicy>(255));
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == SaveErrors::RestoreContextInvalid.code.Value());
+    CHECK(fixture.adapter->calls == 0);
+    auto admitted = fixture.world->CaptureAtSafePoint(*fixture.barrier, request, fixture.participants, SaveDegradedWorldPolicy::Reject);
+    REQUIRE(admitted.HasValue());
+    CHECK(admitted.Value().barrier.state == SaveBarrierState::Captured);
+    REQUIRE(admitted.Value().capture);
+    CHECK(fixture.adapter->calls == 1);
+    REQUIRE(fixture.barrier->Acknowledge(91).HasValue());
+}
+
 TEST_CASE("Content-bound real Scene publication and safe-point captures recompute schema2 state and survive live retirement",
           "[scene][save][content]") {
     WorldFixture fixture;

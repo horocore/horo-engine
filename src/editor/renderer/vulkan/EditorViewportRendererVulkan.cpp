@@ -203,11 +203,11 @@ namespace Horo::Editor {
         if (shadowCook.HasError())
             return Outcome::Failure(shadowCook.ErrorValue());
         auto candidate = std::make_unique<ProgramGeneration>(*this);
-        candidate->shadowProgram.payload = std::move(shadowCook.Value().payload);
-        candidate->shadowProgram.metadata = std::move(shadowCook.Value().metadata);
+        candidate->shadowProgram.payload = shadowCook.Value().payload;
+        candidate->shadowProgram.metadata = shadowCook.Value().metadata;
         candidate->expected = expected;
-        candidate->program.payload = std::move(cooked.Value().payload);
-        candidate->program.metadata = std::move(cooked.Value().metadata);
+        candidate->program.payload = cooked.Value().payload;
+        candidate->program.metadata = cooked.Value().metadata;
         if (const auto prepared = PrepareProgram(*candidate); prepared.HasError())
             return Outcome::Failure(prepared.ErrorValue());
         if (cancellation.IsCancellationRequested())

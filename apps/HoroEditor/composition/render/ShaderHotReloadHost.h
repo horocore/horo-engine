@@ -75,7 +75,7 @@ namespace Horo::Application::Internal {
         const JobSystem &jobs_;
         std::unique_ptr<ShaderHotReloadService> service_;
         std::shared_ptr<const ShaderHotReloadSourceRecipe> recipe_;
-        std::shared_ptr<Completion> completion_;
+        std::shared_ptr<Completion> completion_{std::make_shared<Completion>()};
         std::optional<JobHandle> capture_;
         ShaderHotReloadFence fence_;
         bool closed_{};

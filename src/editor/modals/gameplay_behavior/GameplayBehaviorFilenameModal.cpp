@@ -161,8 +161,8 @@ namespace Horo::Editor {
             destinationError_ = true;
             return;
         }
-        const bool directoryExists = std::filesystem::is_directory(destination, error);
-        if (error || !directoryExists || !Foundation::Paths::HasPathPrefix(scriptsRoot, destination)) {
+        if (const bool directoryExists = std::filesystem::is_directory(destination, error);
+            error || !directoryExists || !Foundation::Paths::HasPathPrefix(scriptsRoot, destination)) {
             destinationError_ = true;
             return;
         }
@@ -214,7 +214,7 @@ namespace Horo::Editor {
             Ui::ErrorText(Text("invalid_destination").c_str(), fonts);
     }
 
-    void GameplayBehaviorFilenameModal::DrawTemplate() {
+    void GameplayBehaviorFilenameModal::DrawTemplate() const {
         const auto &fonts = context_.theme.fonts;
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text("template"), Theme::Text(), fonts);
         const std::array templates{Text("basic_template").c_str()};

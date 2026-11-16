@@ -20,12 +20,10 @@ namespace Horo::Animation::Detail {
 
         /** @brief A frozen transition source keeps its original cursors and cannot lead an advancing group. */
         bool FrozenSource(const GraphInstanceState &state, const GraphInstructionOccurrence &occurrence) noexcept {
-            for (const auto &guard : occurrence.guards) {
+            return std::ranges::any_of(occurrence.guards, [&state](const GraphStateGuard &guard) {
                 const auto &machine = state.candidate.machines[guard.machine];
-                if (machine.runtime.frozenSource && guard.lane == machine.sourceLane)
-                    return true;
-            }
-            return false;
+                return machine.runtime.frozenSource && guard.lane == machine.sourceLane;
+            });
         }
 
         /** @brief Uses canonical staged transition contributions solely for leader selection; tree pose weights remain normalized. */

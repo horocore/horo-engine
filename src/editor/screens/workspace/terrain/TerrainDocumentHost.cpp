@@ -95,7 +95,7 @@ namespace Horo::Editor {
                                              Assets::AssetId workspace, TerrainAuthoringDocument document,
                                              Assets::AssetSourceIdentity source, Assets::AssetSourceIdentity metadata)
         : root_(std::move(root)), path_(std::move(path)), metadataPath_(path_), identity_(std::move(identity)), workspace_(workspace),
-          document_(std::move(document)), accepted_(source), acceptedMetadata_(metadata), owner_(std::this_thread::get_id()) {
+          document_(std::move(document)), accepted_(source), acceptedMetadata_(metadata) {
         metadataPath_ += ".horo";
     }
 
@@ -112,6 +112,7 @@ namespace Horo::Editor {
             auto lease = mutations.TryAcquire({root, ProjectMutationOwner::Save, "terrain.source.open"});
             if (lease.HasError())
                 return Return::Failure(std::move(lease).ErrorValue());
+            const auto mutationLease = std::move(lease).Value();
             auto capture = Capture(root, path, asset, Terrain::TerrainCapabilityRevision::Create(identity.instance.Value()).Value());
             if (capture.HasError())
                 return Return::Failure(std::move(capture).ErrorValue());

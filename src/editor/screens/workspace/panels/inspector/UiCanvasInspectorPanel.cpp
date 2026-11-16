@@ -5,6 +5,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 
 namespace Horo::Editor {
@@ -249,7 +250,7 @@ namespace Horo::Editor {
         changed =
             Ui::CheckboxControl(Label(context, "intrinsic_required"), &presentation_.intrinsic.required, context.theme.fonts) || changed;
         std::array<std::int32_t *, 2> values{&presentation_.intrinsic.fallback.width, &presentation_.intrinsic.fallback.height};
-        const char *keys[]{"fallback_width", "fallback_height"};
+        constexpr std::array keys{"fallback_width", "fallback_height"};
         for (std::size_t i = 0; i < values.size(); ++i) {
             Ui::FieldLabel(Label(context, keys[i]), context.theme.fonts);
             auto &text = intrinsicText_[i];
@@ -278,11 +279,11 @@ namespace Horo::Editor {
             changed = Identity(context, "token_asset", value.token.asset, tokenAsset_) || changed;
             changed = Identity(context, "token_id", value.token.id, tokenId_) || changed;
         } else {
-            const char *categories[]{Label(context, "category_color"),      Label(context, "category_dimension"),
-                                     Label(context, "category_typography"), Label(context, "category_imagery"),
-                                     Label(context, "category_shape"),      Label(context, "category_scalar"),
-                                     Label(context, "category_enum"),       Label(context, "category_motion")};
-            if (int category = static_cast<int>(value.literal.index());
+            const std::array categories{Label(context, "category_color"),      Label(context, "category_dimension"),
+                                        Label(context, "category_typography"), Label(context, "category_imagery"),
+                                        Label(context, "category_shape"),      Label(context, "category_scalar"),
+                                        Label(context, "category_enum"),       Label(context, "category_motion")};
+            if (auto category = static_cast<int>(value.literal.index());
                 Ui::DrawComboPropRow(Label(context, "category"), "category", category, categories, context.theme.fonts)) {
                 value = Runtime::Ui::UiStyleValueSource::Literal(Literal(category));
                 UiInspectorWidgets::CaptureStyle(value.literal, styleText_);

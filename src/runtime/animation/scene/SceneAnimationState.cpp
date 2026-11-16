@@ -8,7 +8,7 @@ namespace Horo::Runtime {
     namespace A = Animation;
     using namespace AnimationSceneInternal;
 
-    SceneAnimationRuntime::State::State(SceneAnimationRuntimeConfig value) : config(std::move(value)), owner(std::this_thread::get_id()) {}
+    SceneAnimationRuntime::State::State(SceneAnimationRuntimeConfig value) : config(std::move(value)) {}
 
     SceneAnimationRuntime::State::Actor::Actor(PreparedAssets prepared, A::AnimationGraphInstance instanceOwner, EntityRef owner,
                                                A::AnimationAuthoringComponent component, A::AnimationInstanceHandle identity)

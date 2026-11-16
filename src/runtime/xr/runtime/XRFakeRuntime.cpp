@@ -71,7 +71,9 @@ namespace Horo::XR {
             ~ResetStage() {
                 resources.failStage.reset();
             }
-        } reset{resources_};
+        };
+
+        ResetStage reset{resources_};
 
         auto activated = sessions_.Activate(capabilities, capabilities.System(), capabilities.Revision(), plan);
         resources_.failStage.reset();

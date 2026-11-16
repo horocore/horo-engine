@@ -1,5 +1,7 @@
 #include "GameplayVfxBindingInternal.h"
 
+#include <memory>
+
 namespace Horo::Gameplay::VfxBindingDetail {
     namespace {
         struct CompileContext final {
@@ -22,7 +24,7 @@ namespace Horo::Gameplay::VfxBindingDetail {
                 return Reject<const Vfx::VfxSpawnAssetInfo *>(GameplayVfxErrors::AssetUnavailable);
             if (const auto checked = std::span{context.checked.data(), context.checkedCount};
                 std::ranges::find(checked, asset) != checked.end())
-                return Result<const Vfx::VfxSpawnAssetInfo *>::Success(&*info);
+                return Result<const Vfx::VfxSpawnAssetInfo *>::Success(std::to_address(info));
             auto exists = context.provider.Exists(asset, context.cancellation);
             if (exists.HasError())
                 return Result<const Vfx::VfxSpawnAssetInfo *>::Failure(WrapError(GameplayVfxErrors::AssetUnavailable, exists.ErrorValue()));
@@ -31,13 +33,13 @@ namespace Horo::Gameplay::VfxBindingDetail {
             if (context.checkedCount == context.checked.size())
                 return Reject<const Vfx::VfxSpawnAssetInfo *>(GameplayVfxErrors::LimitExceeded);
             context.checked[context.checkedCount++] = asset;
-            return Result<const Vfx::VfxSpawnAssetInfo *>::Success(&*info);
+            return Result<const Vfx::VfxSpawnAssetInfo *>::Success(std::to_address(info));
         }
 
         [[nodiscard]] const Vfx::VfxSpawnParameter *FindChannel(const Vfx::VfxSpawnAssetInfo &asset, const std::uint16_t channel) noexcept {
             const auto channels = std::span{asset.parameters.data(), asset.parameterCount};
             const auto found = std::ranges::find(channels, channel, &Vfx::VfxSpawnParameter::channel);
-            return found == channels.end() ? nullptr : &*found;
+            return found == channels.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] bool FitsRange(const Vfx::VfxSpawnParameter *target, const float minimum, const float maximum) noexcept {
@@ -114,10 +116,9 @@ namespace Horo::Gameplay::VfxBindingDetail {
                 return false;
             if (info.parameterCount > Vfx::VfxSpawnHardLimits::Parameters || (info.parameterSchema == 0) != (info.parameterCount == 0))
                 return false;
-            for (const auto &parameter : std::span{info.parameters.data(), info.parameterCount})
-                if (!std::isfinite(parameter.minimum) || !std::isfinite(parameter.maximum) || parameter.minimum > parameter.maximum)
-                    return false;
-            return true;
+            return std::ranges::all_of(std::span{info.parameters.data(), info.parameterCount}, [](const Vfx::VfxSpawnParameter &parameter) {
+                return std::isfinite(parameter.minimum) && std::isfinite(parameter.maximum) && parameter.minimum <= parameter.maximum;
+            });
         }
 
         [[nodiscard]] bool ValidPreparedPalette(const std::span<const Vfx::VfxSpawnAssetInfo> prepared) noexcept {

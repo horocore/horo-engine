@@ -1,6 +1,8 @@
 #include "GameplayVfxBindingInternal.h"
 #include "Horo/Foundation/Utf8.h"
 
+#include <algorithm>
+
 namespace Horo::Gameplay::VfxBindingDetail {
     namespace {
         template <typename Range, typename Projection> [[nodiscard]] bool StrictOrder(const Range &values, const Projection projection) {
@@ -21,10 +23,9 @@ namespace Horo::Gameplay::VfxBindingDetail {
                 return input.channel;
             }))
                 return false;
-            for (const auto &input : binding.inputs)
-                if (!std::isfinite(input.minimum) || !std::isfinite(input.maximum) || input.minimum > input.maximum)
-                    return false;
-            return true;
+            return std::ranges::none_of(binding.inputs, [](const Vfx::VfxSpawnParameter &input) {
+                return !std::isfinite(input.minimum) || !std::isfinite(input.maximum) || input.minimum > input.maximum;
+            });
         }
 
         [[nodiscard]] bool ValidConstants(const Vfx::VfxParameterBlock &block) noexcept {
@@ -44,14 +45,11 @@ namespace Horo::Gameplay::VfxBindingDetail {
                 return route.target;
             }))
                 return false;
-            for (const auto &route : layer.routes) {
-                if (std::ranges::find(binding.inputs, route.source, &Vfx::VfxSpawnParameter::channel) == binding.inputs.end())
-                    return false;
-                if (std::ranges::find(layer.constants.Values(), route.target, &Vfx::VfxParameterValue::channel) !=
-                    layer.constants.Values().end())
-                    return false;
-            }
-            return true;
+            return std::ranges::all_of(layer.routes, [&binding, &layer](const GameplayVfxParameterRoute &route) {
+                return std::ranges::find(binding.inputs, route.source, &Vfx::VfxSpawnParameter::channel) != binding.inputs.end() &&
+                       std::ranges::find(layer.constants.Values(), route.target, &Vfx::VfxParameterValue::channel) ==
+                           layer.constants.Values().end();
+            });
         }
 
         [[nodiscard]] bool WithinLayerLimits(const GameplayVfxLayer &layer) noexcept {

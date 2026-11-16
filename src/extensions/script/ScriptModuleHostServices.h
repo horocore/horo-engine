@@ -56,7 +56,7 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<bool> PollProviderRetirement();
         /** Verify the actual signed candidate under current independent trust, but never stage/unload/replace a live native module.
          * A real live source owner must exist. Its prior provider stays admitted; unknown native API safety requires restart. */
-        [[nodiscard]] Result<ScriptModuleUpdateReport> RequestNativeUpdate(const ScriptModuleProgram &);
+        [[nodiscard]] Result<ScriptModuleUpdateReport> RequestNativeUpdate(const ScriptModuleProgram &) const;
         [[nodiscard]] ScriptModuleBindingCacheStats CacheStats() const noexcept;
         /** Prepare every namespace/descriptor candidate before committing any. Owner safe point only; no source rerun.
          * Failure retains every previous active binding. Accepted predecessor work remains deliverable in the same VM.
@@ -69,8 +69,8 @@ namespace Horo::Extensions {
         explicit ScriptModuleHostServices(std::unique_ptr<Impl>);
         std::unique_ptr<Impl> impl_;
         Result<std::vector<ScriptModuleUpdateReport>> RefreshReferenceOwned(ScriptExportVersion);
-        Result<std::vector<ScriptModuleOperationBindings>> ReferenceUpdates(const ScriptModuleReferenceInstallation &);
+        Result<std::vector<ScriptModuleOperationBindings>> ReferenceUpdates(const ScriptModuleReferenceInstallation &) const;
         Result<std::vector<ScriptModuleUpdateReport>> RebindOwned(std::vector<ScriptModuleOperationBindings>);
-        Result<std::vector<ScriptModuleUpdateReport>> CommitOwned(std::vector<struct ScriptModuleHostRebindCandidate> &);
+        Result<std::vector<ScriptModuleUpdateReport>> CommitOwned(std::vector<struct ScriptModuleHostRebindCandidate> &) const;
     };
 }  // namespace Horo::Extensions

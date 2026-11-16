@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <optional>
 
 namespace Horo::Physics::StateDetail {
@@ -51,7 +52,7 @@ namespace Horo::Physics::StateDetail {
      * positions have no authority. */
     inline const PhysicsStateBody *FindBody(std::span<const PhysicsStateBody> bodies, PhysicsStateObjectId id) noexcept {
         const auto found = std::ranges::lower_bound(bodies, id, {}, &PhysicsStateBody::id);
-        return found != bodies.end() && found->id == id ? &*found : nullptr;
+        return found != bodies.end() && found->id == id ? std::to_address(found) : nullptr;
     }
 
     /** @brief Validates a complete body pair against actual typed body inventory.

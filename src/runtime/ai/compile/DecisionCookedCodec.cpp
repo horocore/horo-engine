@@ -44,7 +44,8 @@ namespace Horo::AI {
         }
 
         Result<std::span<const std::uint8_t>> ReadPayload(std::span<const std::uint8_t> payload,
-                                                          const DecisionCompilationEnvironment &environment, DecisionCodecLimits limits) {
+                                                          const DecisionCompilationEnvironment &environment,
+                                                          const DecisionCodecLimits &limits) {
             Detail::DecisionReader reader(payload);
             if (reader.Unsigned(4) != environment.runtimeLayoutVersion)
                 return Invalid<std::span<const std::uint8_t>>();

@@ -31,7 +31,7 @@ namespace Horo::Editor {
 
     /** @copydoc FoliagePaletteTab::DrawTypes */
     void FoliagePaletteTab::DrawTypes(const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
-                                      const EditorGuiContext &context) {
+                                      const EditorGuiContext &context) const {
         const auto &state = *model.terrainToolSelection;
         const auto *selected = state.palette.Active();
         const auto items = state.palette.Items();
@@ -57,7 +57,7 @@ namespace Horo::Editor {
 
     /** @copydoc FoliagePaletteTab::DrawCreation */
     void FoliagePaletteTab::DrawCreation(const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
-                                         const EditorGuiContext &context) {
+                                         const EditorGuiContext &context) const {
         const bool enabled = model.terrainAssetCreationAvailable && model.playState == EditorPlayState::Idle;
         if (Ui::Button({.label = kTextScope.Text(context.localization, "foliage.create_type").c_str(), .enabled = enabled})) {
             command.command = EditorWorkspaceViewCommand::CreateTerrainFoliageType;

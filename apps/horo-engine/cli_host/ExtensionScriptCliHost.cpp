@@ -78,9 +78,9 @@ namespace Horo::Application::Internal {
         impl_->settled = true;  // No native module has entered yet; failed host construction can safely clean the owned copy.
         impl_->locations.push_back({impl_->options->package, "script-invocation", impl_->staging.filename(), {}});
         Extensions::HeadlessExtensionHostConfiguration configuration;
-        configuration.roots.push_back({"script-invocation", impl_->staging.parent_path(), Extensions::Discovery::RootKind::User,
-                                       Extensions::Discovery::RootApproval::Approved,
-                                       Extensions::Discovery::ConfigurationOrigin::UserLocal});
+        configuration.roots.emplace_back("script-invocation", impl_->staging.parent_path(), Extensions::Discovery::RootKind::User,
+                                         Extensions::Discovery::RootApproval::Approved,
+                                         Extensions::Discovery::ConfigurationOrigin::UserLocal);
         configuration.artifactGate = std::make_shared<ExtensionScriptArtifactGate>(impl_->staging, impl_->packet);
         configuration.servicePolicy = ServicePolicy();
         if (impl_->options->moduleOperation)

@@ -351,7 +351,7 @@ namespace Horo::Editor {
         const auto field = [&](const char *key, const auto value) {
             DrawEvidenceRow(width, context, text(key), std::format("{}", value));
         };
-        std::visit([&](const auto &r) {
+        std::visit([&]<typename VisitedValue>(const VisitedValue &r) {
             using T = std::decay_t<decltype(r)>;
             DrawEvidenceRow(width, context, text("column.event"), RecordEvent(r, context, static_cast<std::size_t>(view_)));
             DrawEvidenceRow(width, context, text("column.connection"), RecordConnection(r));

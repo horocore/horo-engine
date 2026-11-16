@@ -1,5 +1,6 @@
 #include "AnimationGraphCompilerInternal.h"
 
+#include <algorithm>
 #include <set>
 #include <string_view>
 
@@ -19,10 +20,9 @@ namespace Horo::Animation::GraphCompileDetail {
                 return false;
             if (!Letter(static_cast<unsigned char>(text.front())))
                 return false;
-            for (const auto c : text)
-                if (!Letter(static_cast<unsigned char>(c)) && !(c >= '0' && c <= '9'))
-                    return false;
-            return true;
+            return std::ranges::none_of(text, [](const char c) {
+                return !Letter(static_cast<unsigned char>(c)) && !(c >= '0' && c <= '9');
+            });
         }
 
         /** @brief Checks finite action ceilings independently from ordinary graph node

@@ -15,7 +15,7 @@ namespace Horo::Application::ShaderHotReloadDetail {
         for (const auto &program : work->request.programs) {
             auto result = compiler.Compile(program.build, cancellation);
             if (result.HasError()) {
-                const auto error = result.ErrorValue();
+                const auto &error = result.ErrorValue();
                 std::lock_guard lock(work->mutex);
                 work->completed.emplace(Result<CompiledSet>::Failure(error));
                 return Result<void>::Failure(error);

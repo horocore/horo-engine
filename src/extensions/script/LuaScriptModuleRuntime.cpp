@@ -24,6 +24,11 @@ namespace Horo::Extensions {
         public:
             explicit Runtime(std::unique_ptr<State> state) : state_(std::move(state)) {}
 
+            Runtime(const Runtime &) = delete;
+            Runtime &operator=(const Runtime &) = delete;
+            Runtime(Runtime &&) = delete;
+            Runtime &operator=(Runtime &&) = delete;
+
             ~Runtime() override {
                 assert(state_->owner == std::this_thread::get_id());
                 Close();

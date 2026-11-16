@@ -35,8 +35,8 @@ namespace Horo::Render::LightCullingMetalCookDetail {
                 return;
             }
             const auto &array = Rows(json, "array", 1);
-            const auto &literal = Rows(json, "array_size_is_literal", 1);
-            if (array.size() != 1 || literal.size() != 1 || literal[0] != true)
+            if (const auto &literal = Rows(json, "array_size_is_literal", 1);
+                array.size() != 1 || literal.size() != 1 || literal[0] != true)
                 throw InvalidEvidence{};
             if (Unsigned(array[0]) != expected.count || Unsigned(json.at("array_stride")) != expected.stride)
                 throw InvalidEvidence{};
@@ -63,8 +63,8 @@ namespace Horo::Render::LightCullingMetalCookDetail {
 
         void RuntimeShape(const Json &runtime) {
             const auto &array = Rows(runtime, "array", 1);
-            const auto &literal = Rows(runtime, "array_size_is_literal", 1);
-            if (array.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(array[0]) != 0)
+            if (const auto &literal = Rows(runtime, "array_size_is_literal", 1);
+                array.size() != 1 || literal.size() != 1 || literal[0] != true || Unsigned(array[0]) != 0)
                 throw InvalidEvidence{};
             if (Unsigned(runtime.at("offset")) != 0 || !Plain(runtime))
                 throw InvalidEvidence{};

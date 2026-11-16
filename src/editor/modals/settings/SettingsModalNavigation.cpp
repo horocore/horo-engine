@@ -98,8 +98,8 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {general.c_str(), "G", General}, ctx);
         DrawNavItem(st, {appearance.c_str(), "A", Appearance}, ctx);
         DrawNavItem(st, {input.c_str(), "I", Input}, ctx);
-        const auto codeEditor = SettingsModal::kTextScope.Text(ctx.localization, "nav.code_editor");
-        const auto keymaps = SettingsModal::kTextScope.Text(ctx.localization, "nav.keymaps");
+        const auto &codeEditor = SettingsModal::kTextScope.Text(ctx.localization, "nav.code_editor");
+        const auto &keymaps = SettingsModal::kTextScope.Text(ctx.localization, "nav.keymaps");
         DrawNavGroup(codeEditor.c_str(), ctx);
         DrawNavItem(st, {appearance.c_str(), "A", CodeEditorAppearance}, ctx);
         DrawNavItem(st, {keymaps.c_str(), "K", Keymaps}, ctx);
@@ -108,7 +108,7 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {SettingsModal::kTextScope.Text(ctx.localization, "collision.title").c_str(), "C", Collision}, ctx);
         DrawNavItem(st, {audio.c_str(), "S", Audio}, ctx);
         DrawNavItem(st, {network.c_str(), "N", Network}, ctx);
-        const auto navigation = SettingsModal::kTextScope.Text(ctx.localization, "nav.navigation");
+        const auto &navigation = SettingsModal::kTextScope.Text(ctx.localization, "nav.navigation");
         DrawNavItem(st, {navigation.c_str(), "N", Navigation}, ctx);
         DrawNavItem(st, {SettingsModal::kTextScope.Text(ctx.localization, "prefab.title").c_str(), "P", Prefab}, ctx);
         DrawNavItem(st, {packages.c_str(), "K", Packages}, ctx);
@@ -213,14 +213,14 @@ namespace Horo::Editor::SettingsModalInternal {
 
     /** @brief Presents source editor appearance using the same committed settings authority as the workspace. */
     void DrawCodeEditorAppearance(SettingsState &st, const EditorGuiContext &ctx) {
-        const auto title = SettingsModal::kTextScope.Text(ctx.localization, "nav.code_editor");
+        const auto &title = SettingsModal::kTextScope.Text(ctx.localization, "nav.code_editor");
         SectionTitle(title.c_str(), ctx.theme.fonts);
-        const auto fontSizeLabel = SettingsModal::kTextScope.Text(ctx.localization, "appearance.code_font_size");
-        const auto fontSizeDescription = SettingsModal::kTextScope.Text(ctx.localization, "appearance.code_font_size.description");
+        const auto &fontSizeLabel = SettingsModal::kTextScope.Text(ctx.localization, "appearance.code_font_size");
+        const auto &fontSizeDescription = SettingsModal::kTextScope.Text(ctx.localization, "appearance.code_font_size.description");
         const std::string typoGroup = SettingsModal::kTextScope.Text(ctx.localization, "appearance.typography_group");
         SettingGroup(typoGroup.c_str(), ctx.theme.fonts, true);
-        const auto familyLabel = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.font_family");
-        const auto familyDescription = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.font_family.description");
+        const auto &familyLabel = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.font_family");
+        const auto &familyDescription = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.font_family.description");
         SettingRow(familyLabel.c_str(), familyDescription.c_str(), ctx.theme.fonts, [&st, &ctx] {
             const auto &families = ctx.theme.fonts.codeFamilies;
             int selected = 0;
@@ -236,7 +236,7 @@ namespace Horo::Editor::SettingsModalInternal {
         SettingRow(fontSizeLabel.c_str(), fontSizeDescription.c_str(), ctx.theme.fonts, [&st, &ctx]() {
             (void)InputTextControl("##font-size", st.appearance.editorFontSize, 8, ctx.theme.fonts);
         });
-        const auto behavior = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.behavior");
+        const auto &behavior = SettingsModal::kTextScope.Text(ctx.localization, "code_editor.behavior");
         SettingGroup(behavior.c_str(), ctx.theme.fonts);
         for (const auto &entry : CodeEditorBooleanSettings()) {
             const std::string key = std::string{"code_editor."} + entry.key;
@@ -281,7 +281,7 @@ namespace Horo::Editor::SettingsModalInternal {
 
     /** @brief Edits registered commands without creating a second shortcut store. */
     void DrawKeymaps(SettingsState &st, const EditorGuiContext &ctx) {
-        const auto title = SettingsModal::kTextScope.Text(ctx.localization, "nav.keymaps");
+        const auto &title = SettingsModal::kTextScope.Text(ctx.localization, "nav.keymaps");
         SectionTitle(title.c_str(), ctx.theme.fonts);
         const std::string mappingsGroup = SettingsModal::kTextScope.Text(ctx.localization, "input.mappings_group");
         const std::string mappingsDescription = SettingsModal::kTextScope.Text(ctx.localization, "input.mappings_description");
@@ -294,8 +294,8 @@ namespace Horo::Editor::SettingsModalInternal {
                 std::vector<Input::InputBinding> defaults;
                 if (const auto binding = ParseEditorShortcut(entry.command.shortcut))
                     defaults.push_back(*binding);
-                contributions.push_back({Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
-                                         Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults)});
+                contributions.emplace_back(Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
+                                           Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults));
             }
         const auto actions = EditorKeymapActions(profile, contributions);
         for (const auto &action : actions) {

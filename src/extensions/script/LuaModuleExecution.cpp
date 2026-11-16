@@ -55,7 +55,9 @@ namespace Horo::Extensions::LuaModuleDetail {
             ~Active() {
                 flag = false;
             }
-        } active{executing};
+        };
+
+        Active active{executing};
 
         const int status = lua_resume(thread, lua, count, &returned);
         values.lua = thread;

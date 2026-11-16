@@ -47,7 +47,8 @@ namespace Horo::Application {
             }
         };
 
-        Result<Render::ShaderHotReloadTargetState> Capture(Render::IShaderHotReloadTarget &target) {
+        /** @brief Translates foreign target failures at the application boundary without mutating the target. */
+        Result<Render::ShaderHotReloadTargetState> Capture(const Render::IShaderHotReloadTarget &target) {
             try {
                 return target.CaptureState();
             } catch (...) {
@@ -113,6 +114,7 @@ namespace Horo::Application {
         try {
             static_cast<void>(job->RequestCancel());
         } catch (...) {
+            // Cancellation publication may fail; the mandatory worker join still fences borrowed state.
         }
         // No worker retains the service or target; borrowed compiler lifetime is fenced by this join.
         try {
@@ -140,6 +142,7 @@ namespace Horo::Application {
         try {
             static_cast<void>(operations.Update(active->operation, {.state = OperationState::Cancelling, .phase = "cancel"}));
         } catch (...) {
+            // Cancellation is already requested; diagnostic publication must not undo it.
         }
     }
 

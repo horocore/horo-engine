@@ -169,6 +169,25 @@ namespace Horo::Prefab::ValueDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Marks value provenance removed only after the complete component topology has passed validation. */
+        Result<void> RefreshRemovedValueBindings(ResolutionState &state) {
+            for (auto &binding : state.bindings) {
+                const auto *property = std::get_if<PrefabPropertyAddress>(&binding.provenance.target);
+                if (!property)
+                    continue;
+                const auto &components = state.objects[binding.object].object.components;
+                if (auto charged = state.budget.Consume(components.size()); charged.HasError())
+                    return charged;
+                if (std::ranges::none_of(components, [property](const auto &component) {
+                    return component.instance == property->ComponentInstance() && component.component.typeId == property->ComponentType();
+                })) {
+                    binding.provenance.disposition = PrefabValueDisposition::RemovedByInstance;
+                    binding.provenance.origin = PrefabValueOrigin::Instance;
+                }
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Apply admitted topology only after value payload indices have been
          * finalized. */
         Result<void> ApplyRecords(ResolutionState &state, const PrefabValueOverrideSet &set) {
@@ -206,21 +225,7 @@ namespace Horo::Prefab::ValueDetail {
                     std::ranges::sort(object.object.components, {}, &RawComponentPayload::instance);
                 }
             }
-            for (auto &binding : state.bindings) {
-                const auto *property = std::get_if<PrefabPropertyAddress>(&binding.provenance.target);
-                if (!property)
-                    continue;
-                const auto &components = state.objects[binding.object].object.components;
-                if (auto charged = state.budget.Consume(components.size()); charged.HasError())
-                    return charged;
-                if (std::ranges::none_of(components, [property](const auto &component) {
-                    return component.instance == property->ComponentInstance() && component.component.typeId == property->ComponentType();
-                })) {
-                    binding.provenance.disposition = PrefabValueDisposition::RemovedByInstance;
-                    binding.provenance.origin = PrefabValueOrigin::Instance;
-                }
-            }
-            return Result<void>::Success();
+            return RefreshRemovedValueBindings(state);
         }
     }  // namespace
 

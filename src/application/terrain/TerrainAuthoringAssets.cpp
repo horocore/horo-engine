@@ -18,8 +18,7 @@ namespace Horo::Application {
         }
 
         Result<void> Reference(const Assets::AssetRegistrySnapshot &registry, Assets::AssetId asset, std::string_view type) {
-            const auto *record = registry.Find(asset);
-            if (!record || record->type.Value() != type)
+            if (const auto *record = registry.Find(asset); !record || record->type.Value() != type)
                 return Result<void>::Failure(MakeError(Terrain::TerrainErrors::IdentityInvalid));
             return Result<void>::Success();
         }

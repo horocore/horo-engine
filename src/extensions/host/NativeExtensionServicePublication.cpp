@@ -25,7 +25,7 @@ namespace Horo::Extensions {
             for (const auto &claim : nativeModule.imports)
                 services.push_back(claim.ServiceId());
             std::ranges::sort(services);
-            services.erase(std::unique(services.begin(), services.end()), services.end());
+            services.erase(std::ranges::unique(services).begin(), services.end());
             request.capabilities.push_back({{HORO_EXTENSION_SERVICE_CAPABILITY}, {{HORO_EXTENSION_SERVICE_PERMISSION}}});
             for (const auto &service : services) {
                 if (std::ranges::find(policy.availableCapabilities, ExtensionCapabilityId{service}) == policy.availableCapabilities.end())

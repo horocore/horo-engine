@@ -228,6 +228,7 @@ namespace Horo::Runtime {
          * @return Atomic terminal transition disposition.
          * @details Lvalue errors are copied before attempting the transition; allocation failure leaves the operation unchanged.
          * An rvalue error transfers into storage reserved at admission without constructing another Error on the terminal path.
+         * It is consumed only when failure wins the transition; an already terminal operation or winning cancellation leaves it intact.
          */
         [[nodiscard]] SaveOperationTransitionResult Fail(const Error &error, SaveOperationCommitOutcome outcome,
                                                          std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());

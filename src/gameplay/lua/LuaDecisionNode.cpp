@@ -3,6 +3,7 @@
 #include "LuaBehaviorSandbox.h"
 #include "LuaDecisionNodeBoundary.h"
 
+#include <array>
 #include <charconv>
 #include <limits>
 #include <new>
@@ -110,8 +111,7 @@ namespace Horo::Gameplay {
                 while (lua_next(inner, table) != 0) {
                     if (!lua_isinteger(inner, -2))
                         throw std::invalid_argument("Expected contiguous metadata list");
-                    const auto index = lua_tointeger(inner, -2);
-                    if (index < 1 || static_cast<std::size_t>(index) > count)
+                    if (const auto index = lua_tointeger(inner, -2); index < 1 || static_cast<std::size_t>(index) > count)
                         throw std::invalid_argument("Invalid metadata list index");
                     lua_pop(inner, 1);
                 }
@@ -152,7 +152,7 @@ namespace Horo::Gameplay {
         /** @brief Metadata decoding uses protected raw reads; native allocations unwind through the protected frame. */
         BehaviorTreeProperty ReadProperty(lua_State *state) {
             using enum Horo::AI::BehaviorTreePropertyKind;
-            constexpr const char *keys[]{"id", "kind", "value"};
+            constexpr std::array<const char *, 3> keys{"id", "kind", "value"};
             ExactKeys(state, -1, keys);
             BehaviorTreeProperty property;
             property.id = RequiredIdentity<BehaviorTreePropertyId>(state, -1, "id");
@@ -188,7 +188,7 @@ namespace Horo::Gameplay {
         }
 
         DecisionNodePort ReadPort(lua_State *state) {
-            constexpr const char *keys[]{"id", "direction", "kind", "cardinality", "required"};
+            constexpr std::array<const char *, 5> keys{"id", "direction", "kind", "cardinality", "required"};
             ExactKeys(state, -1, keys);
             return {.id = Identity(state, -1, "id"),
                     .direction = Enumeration(state, -1, "direction", DecisionPortDirection::Count),
@@ -198,7 +198,7 @@ namespace Horo::Gameplay {
         }
 
         DecisionBlackboardRequirement ReadRequirement(lua_State *state) {
-            constexpr const char *keys[]{"key", "kind", "cardinality", "access", "presence", "requireDefault"};
+            constexpr std::array<const char *, 6> keys{"key", "kind", "cardinality", "access", "presence", "requireDefault"};
             ExactKeys(state, -1, keys);
             return {.key = RequiredIdentity<BlackboardKeyId>(state, -1, "key"),
                     .kind = Enumeration(state, -1, "kind", BlackboardValueKind::Count),
@@ -241,8 +241,8 @@ namespace Horo::Gameplay {
         }
 
         void ReadContract(lua_State *state, int table, DecisionNodeContract &contract) {
-            constexpr const char *keys[]{"role",   "capabilities", "ports",   "properties", "requirements", "start",
-                                         "resume", "abort",        "cleanup", "check",      "service"};
+            constexpr std::array<const char *, 11> keys{"role",   "capabilities", "ports",   "properties", "requirements", "start",
+                                                        "resume", "abort",        "cleanup", "check",      "service"};
             ExactKeys(state, table, keys);
             const auto role = Text(state, table, "role");
             if (role == "task")
@@ -309,9 +309,9 @@ namespace Horo::Gameplay {
         };
 
         void PushUnsigned(lua_State *state, std::uint64_t value) {
-            char text[21];
-            const auto result = std::to_chars(text, text + sizeof(text), value);
-            lua_pushlstring(state, text, static_cast<std::size_t>(result.ptr - text));
+            std::array<char, 21> text;
+            const auto result = std::to_chars(text.data(), text.data() + text.size(), value);
+            lua_pushlstring(state, text.data(), static_cast<std::size_t>(result.ptr - text.data()));
         }
 
         void PushProperty(lua_State *state, const BehaviorTreeProperty &property) {
@@ -330,7 +330,7 @@ namespace Horo::Gameplay {
         }
 
         void PushScalar(lua_State *state, const BlackboardScalarValue &value) {
-            std::visit([state](const auto &scalar) {
+            std::visit([state]<typename VisitedValue>(const VisitedValue &scalar) {
                 using T = std::decay_t<decltype(scalar)>;
                 if constexpr (std::is_same_v<T, bool>)
                     lua_pushboolean(state, scalar);
@@ -393,12 +393,12 @@ namespace Horo::Gameplay {
                 auto value = context->blackboard.Read(binding.key);
                 if (value.HasError())
                     return Result<void>::Failure(value.ErrorValue());
-                values.push_back({binding.key, std::move(value).Value()});
+                values.emplace_back(binding.key, std::move(value).Value());
             }
             return Result<void>::Success();
         }
 
-        bool ValidLuaIdentity(const std::string &source, DecisionNodeTypeId type, DecisionProviderId provider, std::uint32_t version) {
+        bool ValidLuaIdentity(std::string_view source, DecisionNodeTypeId type, DecisionProviderId provider, std::uint32_t version) {
             return source.size() <= 256U * 1024U && type.IsValid() && provider.IsValid() && version != 0;
         }
 
@@ -436,7 +436,7 @@ namespace Horo::Gameplay {
         static AI::IBehaviorTreeExecutor *Create(void *image, std::span<const AI::BehaviorTreeProperty> properties);
 
         static void Destroy(void *, AI::IBehaviorTreeExecutor *instance) noexcept {
-            delete instance;
+            const std::unique_ptr<AI::IBehaviorTreeExecutor> ownedInstance{instance};
         }
 
         bool CanAdmit() const noexcept {
@@ -451,13 +451,14 @@ namespace Horo::Gameplay {
             NodeVm compiler(limits);
             if (!compiler.Load(source, sourceLocation))
                 return Invalid<void>();
-            const bool parsed = Protected(compiler.state, [this, &compiler](lua_State *state) {
+            if (const bool parsed = Protected(compiler.state,
+                                              [this, &compiler](lua_State *state) {
                 lua_rawgeti(state, LUA_REGISTRYINDEX, compiler.table);
                 ReadContract(state, -1, contract);
                 ValidateCallbacks(state, -1, contract.role);
                 return 0;
             });
-            if (!parsed)
+                !parsed)
                 return Invalid<void>();
             for (auto &requirement : contract.descriptor.requirements)
                 requirement.source = sourceLocation;

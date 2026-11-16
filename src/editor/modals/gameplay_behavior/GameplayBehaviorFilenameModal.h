@@ -43,7 +43,7 @@ namespace Horo::Editor {
         /** @brief Returns the relative message key for the current filename validation state. */
         [[nodiscard]] const char *NameStatusKey() const;
         void DrawDestination();
-        void DrawTemplate();
+        void DrawTemplate() const;
         void BrowseDestination();
         void RefreshAvailability();
 

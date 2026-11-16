@@ -14,7 +14,9 @@ namespace Horo::Gameplay::Detail::DecisionScript {
         struct Frame {
             Call &call;
             std::exception_ptr exception;
-        } frame{call, {}};
+        };
+
+        Frame frame{call, {}};
 
         const int count = arguments ? lua_gettop(state) : 0;
         if (count > 12 || !lua_checkstack(state, count + LUA_MINSTACK))

@@ -101,8 +101,8 @@ namespace Horo::Assets {
             AssetReimportReport report{admission.metadata.assetId, std::move(prepared.reasons), std::move(prepared.sourceHash),
                                        admission.contribution->version, admission.contribution->moduleVersion};
             static_assert(std::is_nothrow_move_constructible_v<AssetReimportReport>);
-            auto published = Detail::PublishReimport(admission, std::move(prepared.asset), serialized.Value(), registry, cancellation);
-            if (published.HasError())
+            if (auto published = Detail::PublishReimport(admission, std::move(prepared.asset), serialized.Value(), registry, cancellation);
+                published.HasError())
                 return Return::Failure(std::move(published).ErrorValue());
             LogCommitted(admission);
             return Return::Success(std::move(report));

@@ -12,7 +12,7 @@ namespace Horo::AI::Detail {
         struct Builder final {
             const DecisionCompilationEnvironment &environment;
             const DecisionCompilationLimits &limits;
-            DecisionClosureAdmission admission;
+            [[no_unique_address]] DecisionClosureAdmission admission;
             DecisionCompilationCandidate candidate;
             std::vector<LoweredDecisionGraph> lowered;
             std::vector<DecisionAssetDescriptor> catalog;

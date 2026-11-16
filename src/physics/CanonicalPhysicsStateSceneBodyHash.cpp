@@ -42,7 +42,7 @@ namespace Horo::Physics::Detail {
             hash.Pose(value.pose);
             hash.Word(static_cast<std::uint8_t>(value.motion));
             hash.Word(value.mass.index());
-            std::visit([&](const auto &mass) {
+            std::visit([&]<typename VisitedValue>(const VisitedValue &mass) {
                 using Mass = std::decay_t<decltype(mass)>;
                 if constexpr (std::is_same_v<Mass, PhysicsMass>)
                     hash.Float(mass.kilograms);

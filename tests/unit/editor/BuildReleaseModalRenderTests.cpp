@@ -186,63 +186,60 @@ TEST_CASE("Release request form and review fit localized modals without starting
             CHECK_FALSE(harness.localization.Get("editor", std::string{"workspace.build_release."} + key).starts_with("[missing:"));
         for (const auto size : {ImVec2{320, 600}, ImVec2{1200, 900}}) {
             ImGui::GetIO().DisplaySize = size;
-            for (const auto page : {BuildReleasePage::Build, BuildReleasePage::Release}) {
-                for (int tab = 0; tab < 2; ++tab) {
-                    INFO("locale=" << locale << ", width=" << size.x << ", tab=" << tab);
-                    REQUIRE(harness.host
-                                .OpenRoot(std::make_unique<BuildReleaseModal>(harness.context, page, Application::GameplayBuildRequest{},
-                                                                              nullptr, harness.buildId, nullptr,
-                                                                              static_cast<BuildReleaseTab>(tab)))
-                                .HasValue());
-                    CHECK(harness.host.InteractionScope().kind == EditorInteractionScopeKind::Modal);
-                    harness.Draw();
-                    harness.Draw();
-                    bool found{};
-                    bool foundContent{};
-                    for (auto *window : ImGui::GetCurrentContext()->Windows) {
-                        const std::string_view name{window->Name};
-                        if (!window->Active || name.find("BuildReleaseWorkflow") == std::string_view::npos)
-                            continue;
-                        INFO("window=" << name);
-                        CHECK(window->Size.x <= size.x);
-                        CHECK(name.find("PrepareReleaseSummary") == std::string_view::npos);
-                        if (name.find("ReleaseReviewDetails") != std::string_view::npos)
-                            CHECK((window->ChildFlags & ImGuiChildFlags_Borders) == 0);
-                        if (name.find("BuildReleaseTabs") != std::string_view::npos)
-                            FAIL("Release preparation must use a sectioned form and review, not editor tabs");
-                        if (name.find("PrepareReleaseContent") != std::string_view::npos) {
-                            foundContent = true;
-                            if (tab == 0 && size.x >= 1200 && name.substr(name.rfind('/') + 1).starts_with("##PrepareReleaseContent_")) {
-                                for (const auto *id : {"##ReleaseIdentity", "##ReleaseSource"}) {
-                                    const auto *table = ImGui::GetCurrentContext()->Tables.GetByKey(window->GetID(id));
-                                    REQUIRE(table != nullptr);
-                                    REQUIRE(table->ColumnsCount == 2);
-                                    std::array<float, 2> top{std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
-                                    std::array<float, 2> bottom{};
-                                    for (const auto &vertex : window->DrawList->VtxBuffer) {
-                                        if (vertex.col != Theme::U32(Theme::Bg3()) || !table->OuterRect.Contains(vertex.pos))
-                                            continue;
-                                        const int column = vertex.pos.x < table->Columns[1].MinX ? 0 : 1;
-                                        top[column] = std::min(top[column], vertex.pos.y);
-                                        bottom[column] = std::max(bottom[column], vertex.pos.y);
-                                    }
-                                    REQUIRE(bottom[0] > top[0]);
-                                    REQUIRE(bottom[1] > top[1]);
-                                    CHECK(std::abs(top[0] - top[1]) < 0.5F);
-                                    CHECK(std::abs(bottom[0] - bottom[1]) < 0.5F);
+            for (int tab = 0; tab < 2; ++tab) {
+                INFO("locale=" << locale << ", width=" << size.x << ", tab=" << tab);
+                REQUIRE(harness.host
+                            .OpenRoot(std::make_unique<BuildReleaseModal>(harness.context, Application::GameplayBuildRequest{}, nullptr,
+                                                                          static_cast<BuildReleaseTab>(tab)))
+                            .HasValue());
+                CHECK(harness.host.InteractionScope().kind == EditorInteractionScopeKind::Modal);
+                harness.Draw();
+                harness.Draw();
+                bool found{};
+                bool foundContent{};
+                for (auto *window : ImGui::GetCurrentContext()->Windows) {
+                    const std::string_view name{window->Name};
+                    if (!window->Active || name.find("BuildReleaseWorkflow") == std::string_view::npos)
+                        continue;
+                    INFO("window=" << name);
+                    CHECK(window->Size.x <= size.x);
+                    CHECK(name.find("PrepareReleaseSummary") == std::string_view::npos);
+                    if (name.find("ReleaseReviewDetails") != std::string_view::npos)
+                        CHECK((window->ChildFlags & ImGuiChildFlags_Borders) == 0);
+                    if (name.find("BuildReleaseTabs") != std::string_view::npos)
+                        FAIL("Release preparation must use a sectioned form and review, not editor tabs");
+                    if (name.find("PrepareReleaseContent") != std::string_view::npos) {
+                        foundContent = true;
+                        if (tab == 0 && size.x >= 1200 && name.substr(name.rfind('/') + 1).starts_with("##PrepareReleaseContent_")) {
+                            for (const auto *id : {"##ReleaseIdentity", "##ReleaseSource"}) {
+                                const auto *table = ImGui::GetCurrentContext()->Tables.GetByKey(window->GetID(id));
+                                REQUIRE(table != nullptr);
+                                REQUIRE(table->ColumnsCount == 2);
+                                std::array<float, 2> top{std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+                                std::array<float, 2> bottom{};
+                                for (const auto &vertex : window->DrawList->VtxBuffer) {
+                                    if (vertex.col != Theme::U32(Theme::Bg3()) || !table->OuterRect.Contains(vertex.pos))
+                                        continue;
+                                    const int column = vertex.pos.x < table->Columns[1].MinX ? 0 : 1;
+                                    top[column] = std::min(top[column], vertex.pos.y);
+                                    bottom[column] = std::max(bottom[column], vertex.pos.y);
                                 }
+                                REQUIRE(bottom[0] > top[0]);
+                                REQUIRE(bottom[1] > top[1]);
+                                CHECK(std::abs(top[0] - top[1]) < 0.5F);
+                                CHECK(std::abs(bottom[0] - bottom[1]) < 0.5F);
                             }
                         }
-                        CHECK(window->ScrollMax.x == 0);
-                        found = true;
                     }
-                    CHECK(found);
-                    CHECK(foundContent);
-                    CHECK_FALSE(harness.buildId.has_value());
-                    REQUIRE(harness.host.RequestClose(*harness.host.TopModalId(), ModalCloseReason::Cancelled).HasValue());
-                    harness.host.OnUpdate(0);
-                    CHECK_FALSE(harness.host.HasOpenModal());
+                    CHECK(window->ScrollMax.x == 0);
+                    found = true;
                 }
+                CHECK(found);
+                CHECK(foundContent);
+                CHECK_FALSE(harness.buildId.has_value());
+                REQUIRE(harness.host.RequestClose(*harness.host.TopModalId(), ModalCloseReason::Cancelled).HasValue());
+                harness.host.OnUpdate(0);
+                CHECK_FALSE(harness.host.HasOpenModal());
             }
         }
     }
@@ -255,9 +252,7 @@ TEST_CASE("Release modal open refresh close and reopen never submit or cancel se
     REQUIRE(harness.localization.Prepare(LocaleTag{"en-US"}));
     REQUIRE(harness.localization.ActivatePrepared());
     for (int attempt = 0; attempt < 2; ++attempt) {
-        REQUIRE(harness.host
-                    .OpenRoot(std::make_unique<BuildReleaseModal>(harness.context, BuildReleasePage::Release,
-                                                                  Application::GameplayBuildRequest{}, nullptr, harness.buildId, &jobs))
+        REQUIRE(harness.host.OpenRoot(std::make_unique<BuildReleaseModal>(harness.context, Application::GameplayBuildRequest{}, &jobs))
                     .HasValue());
         harness.host.OnUpdate(1);
         harness.Draw();
@@ -273,10 +268,8 @@ TEST_CASE("Reviewing a release request never submits an unvalidated execution pl
     ObservedReleaseJobs jobs;
     BuildReleaseHarness harness;
     ImGui::GetIO().DisplaySize = {1200, 900};
-    REQUIRE(harness.host
-                .OpenRoot(std::make_unique<BuildReleaseModal>(harness.context, BuildReleasePage::Release,
-                                                              Application::GameplayBuildRequest{}, nullptr, harness.buildId, &jobs))
-                .HasValue());
+    REQUIRE(
+        harness.host.OpenRoot(std::make_unique<BuildReleaseModal>(harness.context, Application::GameplayBuildRequest{}, &jobs)).HasValue());
     harness.Draw();
     harness.Draw();
     const auto activeWindow = [](std::string_view suffix) -> ImGuiWindow * {

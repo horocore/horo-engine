@@ -166,8 +166,7 @@ namespace Horo::Prefab::ValueDetail {
         Detail::JsonParseGuard guard{PrefabHardLimits::SourceJsonDepth};
         try {
             OwnedJson owned{guard.Parse(bytes.begin(), bytes.end())};
-            const auto &json = owned.Get();
-            if (json.is_discarded() || !json.is_object() || guard.HasDuplicate() || guard.IsTooDeep())
+            if (const auto &json = owned.Get(); json.is_discarded() || !json.is_object() || guard.HasDuplicate() || guard.IsTooDeep())
                 return Invalid<OwnedJson>(std::string{failure});
             return Result<OwnedJson>::Success(std::move(owned));
         } catch (const Json::exception &) {

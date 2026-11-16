@@ -98,9 +98,9 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity, "Group parent must precede its child."));
             if (entry.members.size() > 64 || (uniformLineage && entry.spawnLineage != entries.front().spawnLineage))
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
-            const bool partitionValid = uniformLineage ? !entry.restorePartition.has_value()
-                                                       : entry.restorePartition.has_value() && *entry.restorePartition < partitionCount;
-            if (!partitionValid)
+            if (const bool partitionValid = uniformLineage ? !entry.restorePartition.has_value()
+                                                           : entry.restorePartition.has_value() && *entry.restorePartition < partitionCount;
+                !partitionValid)
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
             return ValidateGroupLineage(entry.spawnLineage);
         }

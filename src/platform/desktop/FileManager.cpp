@@ -27,8 +27,8 @@ namespace Horo::FileManagerErrors {
 namespace Horo::FileManagerInternal {
     /** @copydoc PrepareTarget */
     Result<Target> PrepareTarget(const std::filesystem::path &path) {
-        const auto &native = path.native();
-        if (!path.is_absolute() || native.find(std::filesystem::path::value_type{}) != native.npos)
+        if (const auto &native = path.native();
+            !path.is_absolute() || native.find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
             return Result<Target>::Failure(MakeError(FileManagerErrors::InvalidTarget));
 
         std::error_code error;

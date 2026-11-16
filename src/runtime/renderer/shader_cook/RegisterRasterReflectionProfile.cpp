@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 
 namespace Horo::Render::RegisterRasterCookDetail {
     namespace {
@@ -22,7 +23,7 @@ namespace Horo::Render::RegisterRasterCookDetail {
     const ShaderReflectionBindingName *FindName(const std::span<const ShaderReflectionBindingName> names,
                                                 const ShaderBindingId id) noexcept {
         const auto found = std::ranges::find(names, id, &ShaderReflectionBindingName::id);
-        return found == names.end() ? nullptr : &*found;
+        return found == names.end() ? nullptr : std::to_address(found);
     }
 }  // namespace Horo::Render::RegisterRasterCookDetail
 

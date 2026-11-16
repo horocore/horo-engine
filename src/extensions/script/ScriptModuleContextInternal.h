@@ -37,9 +37,10 @@ namespace Horo::Extensions {
         std::atomic_bool closed{};
         std::atomic_bool sealed{};
 
-        Impl(ScriptCapabilityContext value, const JobSystem &system, ScriptModuleRuntimeIdentity identity, ScriptModuleRuntimeLimits policy,
-             std::vector<ScriptModuleImport> declarations)
-            : context(std::move(value)), jobs(system), runtime(std::move(identity)), limits(policy), imports(std::move(declarations)) {}
+        Impl(ScriptCapabilityContext value, const JobSystem &system, ScriptModuleRuntimeIdentity identity,
+             ScriptModuleRuntimeLimits runtimeLimits, std::vector<ScriptModuleImport> declarations)
+            : context(std::move(value)), jobs(system), runtime(std::move(identity)), limits(runtimeLimits),
+              imports(std::move(declarations)) {}
     };
 
     /** Read-only owner/capability liveness, separate from the new-admission seal used during compatible replacement. */
@@ -94,8 +95,7 @@ namespace Horo::Extensions {
 
     void ReapScriptModuleWork(auto &state) {
         for (auto &work : state.work) {
-            const auto job = work.job.Snapshot();
-            if (job && job->state == JobState::Cancelled)
+            if (const auto job = work.job.Snapshot(); job && job->state == JobState::Cancelled)
                 static_cast<void>(work.controller->Handle().RequestCancellation());
             static_cast<void>(work.controller->ObserveCancellation());
         }

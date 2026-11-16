@@ -252,8 +252,7 @@ namespace Horo::Editor {
             }
             if (!hovered && !pointerCaptured)
                 return;
-            const bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-            if (clicked || pointerCaptured) {
+            if (const bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left); clicked || pointerCaptured) {
                 const auto previousSelection = CaptureSelection();
                 // Display has resolved the current pointer against the current glyph layout.
                 editor->OnMouseDown(mouse, Zep::ZepMouseButton::Left);
@@ -332,9 +331,9 @@ namespace Horo::Editor {
 
         /** @brief Recognizes text-producing input without scanning the document on navigation/idle frames. */
         bool HasTextInput(const Input::InputBindingProfile &profile) const {
-            const auto &io = ImGui::GetIO();
-            if (io.InputQueueCharacters.Size > 0 || ImGui::IsKeyPressed(ImGuiKey_Backspace) || ImGui::IsKeyPressed(ImGuiKey_Delete) ||
-                ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_Tab))
+            if (const auto &io = ImGui::GetIO(); io.InputQueueCharacters.Size > 0 || ImGui::IsKeyPressed(ImGuiKey_Backspace) ||
+                                                 ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Enter) ||
+                                                 ImGui::IsKeyPressed(ImGuiKey_Tab))
                 return true;
             return Ui::ShortcutPressed(EditorActionBindings(kActionSourceCut, profile)) ||
                    Ui::ShortcutPressed(EditorActionBindings(kActionSourcePaste, profile));

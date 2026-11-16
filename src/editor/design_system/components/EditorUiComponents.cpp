@@ -428,8 +428,8 @@ namespace Horo::Editor::Ui {
             if (hasShortcut)
                 drawList->AddText(presentation.fonts.sans, fontSize, {textRight - shortcutSize.x, textY}, Theme::U32(Theme::Dim()),
                                   presentation.shortcut);
-            const float labelWidth = presentation.fonts.sans->CalcTextSizeA(fontSize, FLT_MAX, 0.0F, presentation.label, labelEnd).x;
-            if (row.hovered && labelWidth > labelRight - labelX) {
+            if (const float labelWidth = presentation.fonts.sans->CalcTextSizeA(fontSize, FLT_MAX, 0.0F, presentation.label, labelEnd).x;
+                row.hovered && labelWidth > labelRight - labelX) {
                 const std::string fullLabel = labelEnd ? std::string{presentation.label, labelEnd} : std::string{presentation.label};
                 ShowTooltip(fullLabel.c_str(), &presentation.fonts);
             }
@@ -878,7 +878,7 @@ namespace Horo::Editor::Ui {
     /** @copydoc CaptureShortcut */
     bool CaptureShortcut(Input::InputBinding &binding) {
         const auto modifiers = PhysicalShortcutModifiers(ImGui::GetIO());
-        for (int value = static_cast<int>(Input::Key::A); value < static_cast<int>(Input::Key::Count); ++value) {
+        for (auto value = static_cast<int>(Input::Key::A); value < static_cast<int>(Input::Key::Count); ++value) {
             const auto key = static_cast<Input::Key>(value);
             const auto guiKey = ShortcutKey(key);
             if (guiKey != ImGuiKey_None && ImGui::IsKeyPressed(guiKey, false)) {

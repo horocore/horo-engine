@@ -34,8 +34,8 @@ namespace Horo::Application::TerrainCookDetail {
                 const auto beginZ = std::uint64_t(z) * tiles.profile.interiorQuads;
                 if (beginX >= tiles.sourceWidth || beginZ >= tiles.sourceHeight)
                     return Return::Failure(MakeError(Terrain::FoliagePlacementCookErrors::InvalidInput));
-                regions.emplace(tile.id, FoliageTileRegion{tile.id, static_cast<std::uint32_t>(beginX), static_cast<std::uint32_t>(beginZ),
-                                                           tile.samplesX, tile.samplesZ});
+                regions.try_emplace(tile.id, FoliageTileRegion{tile.id, static_cast<std::uint32_t>(beginX),
+                                                               static_cast<std::uint32_t>(beginZ), tile.samplesX, tile.samplesZ});
             }
             return Return::Success(std::move(regions));
         }

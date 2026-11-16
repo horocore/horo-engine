@@ -29,7 +29,9 @@ namespace Horo::Application::Internal {
     private:
         struct NativeState final : Runtime::ICanonicalRestorePreparedState {
             std::shared_ptr<Physics::Detail::PreparedPhysicsSceneRestore> prepared;
-        } state_;
+        };
+
+        NativeState state_;
 
         [[nodiscard]] Result<void> CheckContext(const Runtime::StagedRestoreContext &) const;
         [[nodiscard]] Result<void> CheckNative() const;

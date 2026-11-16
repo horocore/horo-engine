@@ -38,9 +38,7 @@ namespace Horo::Gameplay {
         class LifecycleReceipt final : public IStagedRestoreParticipant {
         public:
             LifecycleReceipt(std::shared_ptr<BehaviorRuntimeRestoreCandidate> candidate, std::vector<BehaviorLifecycleFlags> flags)
-                : candidate_(std::move(candidate)), flags_(std::move(flags)),
-                  requirement_{BehaviorLifecycleParticipant().participant, ParticipantSchemaVersion::Create(1).Value(),
-                               SaveParticipantScope::RuntimeScene} {}
+                : candidate_(std::move(candidate)), flags_(std::move(flags)) {}
 
             const StagedRestoreParticipantRequirement &Requirement() const noexcept override {
                 return requirement_;
@@ -108,7 +106,9 @@ namespace Horo::Gameplay {
         private:
             std::shared_ptr<BehaviorRuntimeRestoreCandidate> candidate_;
             std::vector<BehaviorLifecycleFlags> flags_;
-            StagedRestoreParticipantRequirement requirement_;
+            StagedRestoreParticipantRequirement requirement_{BehaviorLifecycleParticipant().participant,
+                                                             ParticipantSchemaVersion::Create(1).Value(),
+                                                             SaveParticipantScope::RuntimeScene};
             Projection projection_;
             bool decoded_{};
             bool validated_{};

@@ -44,8 +44,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportColorPipeline::DrainCreations */
     Result<void> EditorViewportColorPipeline::DrainCreations() {
-        const auto processed = frontend_->ProcessResourceRequests();
-        if (processed.HasError())
+        if (const auto processed = frontend_->ProcessResourceRequests(); processed.HasError())
             return Result<void>::Failure(processed.ErrorValue());
         for (const auto &record : std::span{creations_}.first(creationCount_)) {
             const auto result = frontend_->ResourceOperationResult(record.operation);
@@ -239,12 +238,13 @@ namespace Horo::Editor {
         std::optional<Error> first;
         for (std::size_t role = 0; role < programs_.size(); ++role) {
             auto &program = programs_[role];
-            const auto retained = std::ranges::any_of(slots_, [role](const auto &slot) {
+            if (const auto retained = std::ranges::any_of(slots_,
+                                                          [role](const auto &slot) {
                 return std::ranges::any_of(slot.bindings[role], [](const auto &binding) {
                     return binding != nullptr;
                 });
             });
-            if (retained)
+                retained)
                 continue;
             if (program.materials) {
                 const auto closed = program.materials->Shutdown();

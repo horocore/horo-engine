@@ -64,8 +64,8 @@ namespace Horo::JsonEncoding::Detail {
         static void Clear(nlohmann::json &value) noexcept {
             if (value.is_object()) {
                 auto &fields = value.get_ref<nlohmann::json::object_t &>();
-                for (auto &field : fields)
-                    Clear(field.second);
+                for (auto &[name, child] : fields)
+                    Clear(child);
                 fields.clear();
             } else if (value.is_array()) {
                 auto &children = value.get_ref<nlohmann::json::array_t &>();
@@ -200,7 +200,7 @@ namespace Horo::JsonEncoding::Detail {
         /** @brief Converts through one owned implementation; every destination slot exists before a child is transferred into it.
          * @pre The enclosing codec has admitted its finite tree depth and payload budget, as for dump(). */
         [[nodiscard]] OwnedJsonValue ToOwnedJson() const {
-            return std::visit([]<typename Item>(const Item &item) -> OwnedJsonValue {
+            return std::visit([]<typename Item>(const Item &item) {
                 if constexpr (std::is_same_v<Item, array_t>) {
                     OwnedJsonValue result{nlohmann::json(nlohmann::json::value_t::array)};
                     auto &children = result.Get().get_ref<nlohmann::json::array_t &>();

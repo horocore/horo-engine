@@ -485,7 +485,7 @@ namespace Horo::Physics::Detail {
 
         /** @brief Reads controls across the complete actual static-body settings and creation boundary. */
         Result<CreatedFixtureBody> CreateFixtureBody(CanonicalQueryAccess &access, const PhysicsQueryFixtureDescriptor &fixture,
-                                                     const JPH::Shape &shape, StateDetail::ConstructionRecipePool *pool) {
+                                                     const JPH::Shape &shape, const StateDetail::ConstructionRecipePool *pool) {
             using Outcome = Result<CreatedFixtureBody>;
             const auto before = ReadCanonicalBodyControl();
             if (auto admitted = AdmitCanonicalBodyControl(pool, before); admitted.HasError())

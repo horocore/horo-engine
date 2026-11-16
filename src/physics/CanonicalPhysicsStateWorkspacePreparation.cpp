@@ -22,7 +22,7 @@ namespace Horo::Physics::Detail {
             for (std::size_t index = 0; index < values.size(); ++index) {
                 if (labels[index].size() > static_cast<std::size_t>(end - next))
                     return MakeError(PhysicsErrors::CapacityExceeded);
-                next = std::copy(labels[index].begin(), labels[index].end(), next);
+                next = std::ranges::copy(labels[index], next).out;
                 const auto converted = std::to_chars(next, message.data() + message.size(), values[index]);
                 if (converted.ec != std::errc{})
                     return MakeError(PhysicsErrors::CapacityExceeded);

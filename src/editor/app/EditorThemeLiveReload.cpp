@@ -69,7 +69,7 @@ namespace Horo::Editor::Theme {
     };
 
     /** @copydoc LiveReload::LiveReload */
-    LiveReload::LiveReload(JobSystem &jobs, EditorDataBus &events) : state_(std::make_unique<State>(State{jobs, events})) {}
+    LiveReload::LiveReload(JobSystem &jobs, EditorDataBus &events) : state_(std::make_unique<State>(jobs, events)) {}
 
     LiveReload::~LiveReload() {
         Shutdown();

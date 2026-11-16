@@ -101,8 +101,7 @@ namespace Horo::Extensions {
         auto actual = ActualCall(*state, evidence);
         if (actual.HasError())
             return actual;
-        const auto descriptor = actual.Value().Descriptor();
-        if (!descriptor || !SameDescriptor(evidence.descriptor, *descriptor))
+        if (const auto descriptor = actual.Value().Descriptor(); !descriptor || !SameDescriptor(evidence.descriptor, *descriptor))
             return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid));
         return actual;
     }

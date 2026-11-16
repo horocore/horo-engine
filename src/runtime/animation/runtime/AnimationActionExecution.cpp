@@ -56,8 +56,8 @@ namespace Horo::Animation::Detail {
             const auto weight =
                 action.blendOut.ticks == 0
                     ? 0.0F
-                    : slot.handoffWeight *
-                          (1.0F - ActionCurve(action.curve, static_cast<double>(slot.handoffElapsed) / action.blendOut.ticks));
+                    : slot.handoffWeight * (1.0F - ActionCurve(action.curve, static_cast<double>(slot.handoffElapsed) /
+                                                                                 static_cast<double>(action.blendOut.ticks)));
             return Layer(state, action, state.actions.definitions[slot.handoffAction], slot.handoffSection,
                          Pose(state, state.actions.frozen, slotIndex), weight, occurrence);
         }

@@ -11,7 +11,7 @@ namespace Horo::Extensions {
         if (program.RequestsReference())
             result.emplace_back("horo.script.reference");
         std::ranges::sort(result, {}, &ExtensionCapabilityId::value);
-        result.erase(std::unique(result.begin(), result.end()), result.end());
+        result.erase(std::ranges::unique(result).begin(), result.end());
         return result;
     }
 

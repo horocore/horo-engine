@@ -58,6 +58,7 @@ namespace Horo::Extensions {
     }
 
     Result<ScriptModuleUpdateReport> ScriptModuleContext::InspectReplacement(const ScriptModuleContext &next) const {
+        using enum ScriptModuleUpdateKind;
         try {
             using Output = Result<ScriptModuleUpdateReport>;
             if (impl_->owner != std::this_thread::get_id() || next.impl_->owner != impl_->owner)
@@ -68,11 +69,10 @@ namespace Horo::Extensions {
             if (auto valid = ValidateReplacement(next); valid.HasError()) {
                 report.diagnostic = valid.ErrorValue();
                 report.kind = valid.ErrorValue().code.Value() == ExtensionErrors::ScriptExportDescriptorIncompatible.code.Value()
-                                  ? ScriptModuleUpdateKind::Breaking
-                                  : ScriptModuleUpdateKind::Unavailable;
+                                  ? Breaking
+                                  : Unavailable;
             } else
-                report.kind = report.previousFingerprints == report.candidateFingerprints ? ScriptModuleUpdateKind::Unchanged
-                                                                                          : ScriptModuleUpdateKind::Compatible;
+                report.kind = report.previousFingerprints == report.candidateFingerprints ? Unchanged : Compatible;
             return Output::Success(std::move(report));
         } catch (...) {
             return Result<ScriptModuleUpdateReport>::Failure(MakeError(ExtensionErrors::ScriptInvocationAbandoned));

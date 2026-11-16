@@ -17,8 +17,7 @@ namespace Horo::Physics::Detail {
     /** @copydoc PhysicsSceneStateTarget::PhysicsSceneStateTarget */
     PhysicsSceneStateTarget::PhysicsSceneStateTarget(PhysicsSceneActivationCandidate &candidate,
                                                      std::shared_ptr<PhysicsStructuralState> state, bool published) noexcept
-        : candidate_(&candidate), state_(state), ownerThread_(std::this_thread::get_id()), scene_(state->scene), revision_(state->revision),
-          published_(published) {}
+        : candidate_(&candidate), state_(state), scene_(state->scene), revision_(state->revision), published_(published) {}
 
     /** @copydoc PhysicsSceneStateTarget::Validate */
     Result<std::shared_ptr<PhysicsStructuralState>> PhysicsSceneStateTarget::Validate() const {

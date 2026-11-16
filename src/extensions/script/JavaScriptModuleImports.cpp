@@ -1,6 +1,7 @@
 #include "JavaScriptModuleInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 namespace Horo::Extensions::JavaScriptModuleDetail {
@@ -51,8 +52,9 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
                 const auto &alias = imported.Alias();
                 Value aliasValue{state.context, Checked(JS_NewStringLen(state.context, alias.data(), alias.size()))};
                 Value methodValue{state.context, Checked(JS_NewStringLen(state.context, method.id.data(), method.id.size()))};
-                JSValue data[]{aliasValue.Get(), methodValue.Get()};
-                auto function = Checked(JS_NewCFunctionData(state.context, Invoke, static_cast<int>(method.parameters.size()), 0, 2, data));
+                std::array<JSValue, 2> data{aliasValue.Get(), methodValue.Get()};
+                auto function =
+                    Checked(JS_NewCFunctionData(state.context, Invoke, static_cast<int>(method.parameters.size()), 0, 2, data.data()));
                 Define(state.context, object, method.id, function);
             }
         }

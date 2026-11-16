@@ -1,6 +1,7 @@
 #include "ScriptModuleContextInternal.h"
 
 #include <algorithm>
+#include <memory>
 
 namespace Horo::Extensions {
     namespace {
@@ -18,7 +19,7 @@ namespace Horo::Extensions {
             return ValidateScriptResult(*function, result, *api, limits);
         }
 
-        Result<ScriptInvocationTransitionResult> Publish(ScriptInvocationController &controller, Result<ScriptCallResult> result,
+        Result<ScriptInvocationTransitionResult> Publish(const ScriptInvocationController &controller, Result<ScriptCallResult> result,
                                                          const ScriptValueLimits &limits) {
             if (result.HasError())
                 return controller.Fail(result.ErrorValue());
@@ -101,7 +102,7 @@ namespace Horo::Extensions {
         const auto method = std::ranges::find(api.functions, function, &ScriptExportFunctionDescriptor::id);
         if (method == api.functions.end())
             return Output::Failure(MakeError(ExtensionErrors::ScriptInvocationInvalid, "Script function is not declared."));
-        return Output::Success({&*bound, &*method});
+        return Output::Success({std::to_address(bound), std::to_address(method)});
     }
 
     Result<ScriptInvocationHandle> ScriptModuleContext::Invoke(std::string_view alias, std::string_view function,
@@ -147,7 +148,7 @@ namespace Horo::Extensions {
             static_cast<void>(controller->Fail(submitted.ErrorValue()));
             return Output::Success(handle);
         }
-        impl_->work.push_back({std::move(submitted).Value(), handle, std::move(controller)});
+        impl_->work.emplace_back(std::move(submitted).Value(), handle, std::move(controller));
         return Output::Success(handle);
     }
 

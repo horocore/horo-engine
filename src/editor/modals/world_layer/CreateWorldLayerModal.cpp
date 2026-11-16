@@ -40,7 +40,7 @@ namespace Horo::Editor {
     /** @copydoc CreateWorldLayerModal::DrawName */
     bool CreateWorldLayerModal::DrawName() {
         const auto &fonts = context_.theme.fonts;
-        const auto label = CreateWorldLayerModal::kTextScope.Text(context_.localization, "name");
+        const auto &label = CreateWorldLayerModal::kTextScope.Text(context_.localization, "name");
         Ui::FieldLabel(label.c_str(), fonts);
         if (Ui::InputTextControl("##LayerName", name_, 1025, fonts))
             failureKey_.clear();
@@ -54,7 +54,7 @@ namespace Horo::Editor {
 
     /** @copydoc CreateWorldLayerModal::Draw */
     ModalFrameResult CreateWorldLayerModal::Draw() {
-        const auto title = CreateWorldLayerModal::kTextScope.Text(context_.localization, "create");
+        const auto &title = CreateWorldLayerModal::kTextScope.Text(context_.localization, "create");
         const auto &fonts = context_.theme.fonts;
         const float footerHeight = 2.0F * DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium).minimumHeight +
                                    ImGui::GetStyle().ItemSpacing.y + 2.0F * Theme::Layout::CardPad;
@@ -69,7 +69,7 @@ namespace Horo::Editor {
         const bool valid = DrawName();
         ImGui::EndChild();
         shell.BeginFooter({Theme::Layout::CardPad, Theme::Layout::CardPad});
-        if (const auto cancel = CreateWorldLayerModal::kTextScope.Text(context_.localization, "cancel");
+        if (const auto &cancel = CreateWorldLayerModal::kTextScope.Text(context_.localization, "cancel");
             Ui::Button({.label = cancel.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans})) {
             shell.EndFooter();
             return ModalFrameResult::RequestClose(ModalCloseReason::Cancelled);

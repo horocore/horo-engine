@@ -37,7 +37,7 @@ namespace Horo::Physics::Detail {
                                                             static_cast<std::uint32_t>(c.materials.size()),
                                                             StateDetail::CaptureStateSurface(c.surface),
                                                             c.collider};
-                std::copy(c.materials.begin(), c.materials.end(), rows.storage.materials.begin() + rows.materials);
+                std::ranges::copy(c.materials, rows.storage.materials.begin() + rows.materials);
                 rows.materials += c.materials.size();
             }
             return Result<void>::Success();

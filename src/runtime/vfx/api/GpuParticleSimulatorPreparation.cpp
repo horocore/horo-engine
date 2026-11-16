@@ -166,8 +166,7 @@ namespace Horo::Vfx::GpuParticleDetail {
                 return Result<std::unique_ptr<Detail::GpuParticleSimulatorState>>::Failure(MakeError(VfxErrors::GpuSimulationInvalid));
             SeedFloats(*s, i.initial);
             SeedIdentities(*s, i.initial);
-            auto packed = Render::PackGpuParticleForces(i.forces, s->forceWords);
-            if (packed.HasError())
+            if (auto packed = Render::PackGpuParticleForces(i.forces, s->forceWords); packed.HasError())
                 return Result<std::unique_ptr<Detail::GpuParticleSimulatorState>>::Failure(packed.ErrorValue());
             if (auto sealed = Seal(*s); sealed.HasError())
                 return Result<std::unique_ptr<Detail::GpuParticleSimulatorState>>::Failure(sealed.ErrorValue());

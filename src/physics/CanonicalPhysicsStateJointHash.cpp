@@ -44,7 +44,7 @@ namespace Horo::Physics::Detail {
         void Parameters(StateDetail::StateHash &hash, const PhysicsConstraintDescriptor &value) noexcept {
             hash.Word(value.parameters.index());
             hash.Word(static_cast<std::uint8_t>(value.collisionPolicy));
-            std::visit([&](const auto &parameters) {
+            std::visit([&]<typename VisitedValue>(const VisitedValue &parameters) {
                 using Type = std::decay_t<decltype(parameters)>;
                 if constexpr (std::is_same_v<Type, PhysicsHingeConstraint>) {
                     hash.Float(parameters.minimumRadians);

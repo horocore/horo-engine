@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 
 namespace Horo::Editor {
     inline constexpr const char *BackgroundBuildStatusId = "horo.status.build";
@@ -38,7 +39,7 @@ namespace Horo::Editor {
         content.tone = EditorStatusItemTone::Accent;
         content.available = true;
         if (build->progress.has_value() && std::isfinite(*build->progress))
-            content.value = std::to_string(static_cast<int>(std::clamp(*build->progress, 0.0F, 1.0F) * 100)) + "%";
+            content.value = std::format("{}%", static_cast<int>(std::clamp(*build->progress, 0.0F, 1.0F) * 100));
         return content;
     }
 }  // namespace Horo::Editor

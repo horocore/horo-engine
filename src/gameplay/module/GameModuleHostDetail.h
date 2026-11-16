@@ -88,7 +88,7 @@ namespace Horo::Gameplay {
         /** @brief Expose the already admitted scoped holders only after project service activation succeeds. */
         void PublishRuntimeContext();
         void Shutdown() noexcept;
-        void RevokeRuntimeServices() noexcept;
+        void RevokeRuntimeServices() const noexcept;
 
         std::shared_ptr<Detail::GameModuleCodeImage> codeImage;
         Detail::NativeRegistries registries;

@@ -36,6 +36,10 @@ namespace Horo::Extensions {
         NativeScalarService(NativeServiceShape shape, const HoroExtensionServiceDescriptor &native,
                             std::shared_ptr<ExtensionModuleLifetime> moduleLifetime);
         ~NativeScalarService();
+        NativeScalarService(const NativeScalarService &) = delete;
+        NativeScalarService &operator=(const NativeScalarService &) = delete;
+        NativeScalarService(NativeScalarService &&) = delete;
+        NativeScalarService &operator=(NativeScalarService &&) = delete;
         Result<std::int64_t> Invoke(const NativeServiceCall &request, const BackendServiceCallContext &context) const;
         void Shutdown() noexcept;
         Result<ScriptCallResult> InvokeScript(const ScriptInvocationRequest &, const BackendServiceCallContext &) const;
@@ -61,8 +65,6 @@ namespace Horo::Extensions {
         ScriptExportDescriptorSnapshotPtr descriptors;
         void Revoke() noexcept override;
     };
-
-    struct NativeServiceModule;
 
     struct NativeServiceImportClient final {
         NativeServiceImportClient(std::weak_ptr<NativeServiceModule> owner, ResolvedExtensionServiceImport binding)

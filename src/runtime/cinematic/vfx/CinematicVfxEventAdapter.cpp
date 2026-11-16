@@ -2,6 +2,7 @@
 #include "Horo/Cinematic/EventTrackErrors.h"
 
 #include <algorithm>
+#include <memory>
 #include <new>
 
 namespace Horo::Cinematic {
@@ -113,7 +114,7 @@ namespace Horo::Cinematic {
             auto payload = VfxEventDetail::PreparePayload(key.payload, projection);
             if (payload.HasError())
                 return Result<void>::Failure(payload.ErrorValue());
-            keys.push_back({&key, std::move(payload).Value()});
+            keys.emplace_back(&key, std::move(payload).Value());
         }
         return keys.empty() ? Result<void>::Failure(MakeError(EventTrackErrors::BindingUnavailable)) : Result<void>::Success();
     }
@@ -158,7 +159,7 @@ namespace Horo::Cinematic {
         });
         if (key == keys.end() || !MatchesSource(*key->source, request))
             return nullptr;
-        return &*key;
+        return std::to_address(key);
     }
 
     /** @copydoc CinematicVfxEventAdapter::State::Dispatch */

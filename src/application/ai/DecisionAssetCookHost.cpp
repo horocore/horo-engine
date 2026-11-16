@@ -71,7 +71,7 @@ namespace Horo::Application {
             auto assets = request.assets;
             const auto state = std::move(prepared).Value();
             const auto original = request.assets.validateHostInputs;
-            assets.validateHostInputs = [state, original, cancellation]() -> Result<void> {
+            assets.validateHostInputs = [state, original, cancellation]() {
                 if (auto current = original(); current.HasError())
                     return current;
                 return DecisionCookDetail::Verify(*state, cancellation);

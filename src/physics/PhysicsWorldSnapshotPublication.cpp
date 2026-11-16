@@ -73,7 +73,8 @@ namespace Horo::Physics::Detail {
         world->publication.Commit(restored.completedTick, restored.appliedCommands,
                                   {world->statistics.eventDepth, restored.droppedEventCount, false});
         pendingRestore = false;
-        pendingRestoreSerial = validatedRestoreSerial = 0;
+        validatedRestoreSerial = 0;
+        pendingRestoreSerial = 0;
         pendingNative = {};
         pendingSnapshot = {};
         restoreCancellation = {};

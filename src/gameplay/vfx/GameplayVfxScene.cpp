@@ -103,7 +103,12 @@ namespace Horo::Gameplay {
 
         struct Candidate final : Runtime::SceneActivationCandidate {
             Candidate(std::shared_ptr<State> owner, Lease source, Runtime::SceneRuntimeId scene, bool retirement)
-                : owner(std::move(owner)), source(std::move(source)), scene(scene), retirement(retirement) {}
+                : owner(owner), source(std::move(source)), scene(scene), retirement(retirement) {}
+
+            Candidate(const Candidate &) = delete;
+            Candidate &operator=(const Candidate &) = delete;
+            Candidate(Candidate &&) = delete;
+            Candidate &operator=(Candidate &&) = delete;
 
             ~Candidate() override {
                 Shutdown();
@@ -193,7 +198,7 @@ namespace Horo::Gameplay {
             return output;
         }
 
-        [[nodiscard]] Result<std::vector<Vfx::VfxSpawnAssetInfo>> Palette(Vfx::VfxWorld &world) const {
+        [[nodiscard]] Result<std::vector<Vfx::VfxSpawnAssetInfo>> Palette(const Vfx::VfxWorld &world) const {
             std::vector<Vfx::VfxSpawnAssetInfo> output;
             output.reserve(recipes.size());
             for (const auto &recipe : recipes) {

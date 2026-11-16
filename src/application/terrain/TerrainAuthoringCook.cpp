@@ -91,7 +91,7 @@ namespace Horo::Application {
 
         void Complete(const TerrainAuthoringCookFence &fence, Result<Assets::AssetCookReport> result) {
             std::lock_guard lock(transfer);
-            completed.emplace(TerrainAuthoringCookCompletion{fence, std::move(result)});
+            completed.emplace(fence, std::move(result));
             running.store(false);
         }
 

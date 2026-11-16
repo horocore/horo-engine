@@ -50,27 +50,27 @@ namespace Horo::Application::Internal {
         /** @brief Reads the actual bounded authoritative lifecycle index on a worker. */
         [[nodiscard]] Result<Runtime::SaveSlotIndex> List() const;
         /** @brief Issues a fresh opaque manual slot under the exact current catalog CAS. */
-        [[nodiscard]] Result<Runtime::SaveSlotLifecycleTarget> NewSlot();
+        [[nodiscard]] Result<Runtime::SaveSlotLifecycleTarget> NewSlot() const;
         /** @brief Issues one genuine generation and complete host metadata without publishing a slot. */
         [[nodiscard]] Result<Runtime::SaveArchiveHeader> Header(const Runtime::SaveSlotLifecycleTarget &target,
-                                                                std::uint64_t unixMilliseconds, std::uint64_t playNanoseconds);
+                                                                std::uint64_t unixMilliseconds, std::uint64_t playNanoseconds) const;
         /** @brief Exports and production-reader-admits the exact selected generation; stale projection consent fails. */
         [[nodiscard]] Result<Runtime::ValidatedSaveArchive> Read(const Runtime::SaveManagerCommand &selection,
-                                                                 const CancellationToken &cancellation);
+                                                                 const CancellationToken &cancellation) const;
         /** @brief Publishes already verified detached archive bytes through the ordinary atomic lifecycle catalog. */
         [[nodiscard]] Result<Runtime::SaveSlotLifecycleResult> Commit(const Runtime::SaveSlotLifecycleTarget &target,
                                                                       const Runtime::FinalizedSaveArchive &archive,
-                                                                      Runtime::SaveSlotDisplayMetadata display);
+                                                                      Runtime::SaveSlotDisplayMetadata display) const;
         /** @brief Deletes only an explicitly selected sandbox slot through existing lifecycle consent checks. */
         [[nodiscard]] Result<Runtime::SaveSlotLifecycleResult> Delete(const Runtime::SaveManagerCommand &selection,
-                                                                      const CancellationToken &cancellation);
+                                                                      const CancellationToken &cancellation) const;
         /** @brief Retires only this activation's selected slot payloads after runtime and worker quiescence.
          * @return Success or original cleanup/reconciliation failure; no recursive filesystem deletion is performed.
          * @details Runs on a worker before CloseAdmission. The caller already closed UI/runtime request admission.
          */
-        [[nodiscard]] Result<void> Cleanup();
+        [[nodiscard]] Result<void> Cleanup() const;
         /** @brief Revokes new worker binding admission without waiting or invalidating accepted immutable inputs. */
-        void CloseAdmission() noexcept;
+        void CloseAdmission() const noexcept;
         /** @brief Retains only the state owned by the validated factory. */
         explicit PlaySaveStorage(std::shared_ptr<State> state) noexcept;
 

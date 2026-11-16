@@ -374,8 +374,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
 
         const std::string baseName = SuggestGameplayBehaviorBaseName(*destination, kind);
-        const auto browse = [this](const std::string_view title,
-                                   const std::filesystem::path &initialDirectory) -> std::optional<std::filesystem::path> {
+        const auto browse = [this](const std::string_view title, const std::filesystem::path &initialDirectory) {
             auto dialogContext = input_.router.PushContext(Input::InputContextId{"editor.native_dialog.behavior_destination"},
                                                            Input::InputContextKind::NativeDialog);
             const std::string selected = pfd::select_folder(std::string{title}, WorkspacePathText(initialDirectory)).result();

@@ -36,7 +36,7 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    Result<ScriptModuleUpdateReport> EditorPlayModulePrograms::RequestNativeUpdate(const ScriptModuleProgram &candidate) {
+    Result<ScriptModuleUpdateReport> EditorPlayModulePrograms::RequestNativeUpdate(const ScriptModuleProgram &candidate) const {
         if (owner_ != std::this_thread::get_id())
             return Result<ScriptModuleUpdateReport>::Failure(MakeError(ExtensionErrors::ScriptInvocationThreadViolation));
         if (executing_ || !host_ || !runtime_ || !scene_)

@@ -40,7 +40,7 @@ namespace Horo::Editor::SettingsModalInternal {
         else if (st.statusIsError)
             textColor = Err();
         ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-        const auto navigationHint = SettingsModal::kTextScope.Text(ctx.localization, "navigation.save_policy_first");
+        const auto &navigationHint = SettingsModal::kTextScope.Text(ctx.localization, "navigation.save_policy_first");
         const char *message =
             st.navigationProjectDraftDirty ? navigationHint.c_str() : "Apply writes user preferences to ~/.horo/editor_settings.json";
         if (hasFeedback)
@@ -62,7 +62,7 @@ namespace Horo::Editor::SettingsModalInternal {
                                          const float centeredActionY, float &actionsStartX) {
         const auto prefab = st.prefab.owner.lock();
         constexpr float actionH = 32.0F;
-        const auto restoreDefaults = SettingsModal::kTextScope.Text(ctx.localization, "restore_defaults");
+        const auto &restoreDefaults = SettingsModal::kTextScope.Text(ctx.localization, "restore_defaults");
         const auto cancelLabel = SettingsModal::kTextScope.Text(ctx.localization, "cancel") + "###settings_cancel";
         const auto applyLabel = SettingsModal::kTextScope.Text(ctx.localization, "apply") + "###settings_apply";
         const auto &tokens = GetActiveTokens();

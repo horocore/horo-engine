@@ -205,9 +205,12 @@ namespace Horo::Prefab {
         if (span_ && generation_ == Telemetry::Runtime::Generation()) {
             auto &span = std::get<Telemetry::SpanRecord>(span_->payload);
             span.duration = elapsed;
-            span.status = outcome == PrefabMetricOutcome::Success     ? Telemetry::SpanStatus::Succeeded
-                          : outcome == PrefabMetricOutcome::Cancelled ? Telemetry::SpanStatus::Cancelled
-                                                                      : Telemetry::SpanStatus::Failed;
+            if (outcome == PrefabMetricOutcome::Success)
+                span.status = Telemetry::SpanStatus::Succeeded;
+            else if (outcome == PrefabMetricOutcome::Cancelled)
+                span.status = Telemetry::SpanStatus::Cancelled;
+            else
+                span.status = Telemetry::SpanStatus::Failed;
             static_cast<void>(Telemetry::Runtime::EmitRecord(std::move(*span_), generation_));
         }
         span_.reset();
@@ -215,10 +218,10 @@ namespace Horo::Prefab {
 
     /** @copydoc PrefabMetricOperation::Fail */
     void PrefabMetricOperation::Fail(const Error &error) noexcept {
-        Complete(error.domain.Value() == PrefabErrors::Cancelled.domain.Value() &&
-                         error.code.Value() == PrefabErrors::Cancelled.code.Value()
-                     ? PrefabMetricOutcome::Cancelled
-                 : Overflow(error) ? PrefabMetricOutcome::Overflow
-                                   : PrefabMetricOutcome::Failed);
+        if (error.domain.Value() == PrefabErrors::Cancelled.domain.Value() && error.code.Value() == PrefabErrors::Cancelled.code.Value()) {
+            Complete(PrefabMetricOutcome::Cancelled);
+            return;
+        }
+        Complete(Overflow(error) ? PrefabMetricOutcome::Overflow : PrefabMetricOutcome::Failed);
     }
 }  // namespace Horo::Prefab

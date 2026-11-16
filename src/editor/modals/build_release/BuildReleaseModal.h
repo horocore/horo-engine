@@ -11,12 +11,6 @@
 #include <initializer_list>
 
 namespace Horo::Editor {
-    /** @brief Initial workflow chosen by the application menu. */
-    enum class BuildReleasePage {
-        Build,
-        Release
-    };
-
     /** @brief Form and review views of the release preparation workflow. */
     enum class BuildReleaseTab {
         Configuration,
@@ -32,20 +26,15 @@ namespace Horo::Editor {
         /** @brief Shared build/release status vocabulary, distinct from this form's workspace labels. */
         static constexpr GuiLocalizationScope kReleaseTextScope{"workspace.build_release"};
 
-        /** @brief Borrows host services and the retained build identity; all borrows
+        /** @brief Borrows host context and release jobs; all borrows
          * outlive the modal.
          * @param context Shared theme and localization.
-         * @param page Menu-selected workflow.
          * @param request Project and SDK inputs captured by the host.
-         * @param builds Optional native build authority.
-         * @param retainedBuild Host-owned last build identity, preserved across modal
-         * closes.
          * @param releases Optional shared release job capability.
          * @param initialTab Initial form or review view.
          */
-        BuildReleaseModal(const EditorGuiContext &context, BuildReleasePage page, Application::GameplayBuildRequest request,
-                          Application::GameplayBuildService *builds, std::optional<std::uint64_t> &retainedBuild,
-                          IBuildReleaseJobs *releases = nullptr, BuildReleaseTab initialTab = BuildReleaseTab::Configuration);
+        BuildReleaseModal(const EditorGuiContext &context, Application::GameplayBuildRequest request, IBuildReleaseJobs *releases = nullptr,
+                          BuildReleaseTab initialTab = BuildReleaseTab::Configuration);
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -72,24 +61,11 @@ namespace Horo::Editor {
             std::string name;
             std::string version;
             std::string notes;
-            std::string minimumEngine;
-            std::string defines;
-            std::string beforeBuild;
-            std::string afterBuild;
             std::string output;
             std::string branch;
-            std::string symbols;
-            std::string endpoint;
-            bool debugSymbols{true};
-            bool crashReporter{true};
-            bool allowDowngrades{};
-            bool lto{true};
-            bool stripEditor{true};
-            bool unitTests{};
-            bool failUnresolved{true};
-            bool delta{};
-            bool compress{true};
-        } draft_;
+        };
+
+        Draft draft_;
 
         /** @brief Draws observed stages, never placeholder progress. */
         void DrawStages();
@@ -102,7 +78,7 @@ namespace Horo::Editor {
         /** @brief Draws the immutable observation or authored draft summary. */
         void DrawSummary();
         /** @brief Draws request values for review without submitting a job. */
-        void DrawReview();
+        void DrawReview() const;
         /** @brief Draws footer actions; returns true only for closing/backgrounding. */
         [[nodiscard]] bool DrawFooter();
         /** @brief Formats the current authored target, not provider capability evidence. */
@@ -110,9 +86,9 @@ namespace Horo::Editor {
         /** @brief Formats the authored local candidate path preview. */
         [[nodiscard]] std::string CandidatePath() const;
         /** @brief Draws a measured shared field with its localized label. */
-        void Field(const char *key, std::string &value);
+        void Field(const char *key, std::string &value) const;
         /** @brief Draws a bounded choice from a closed localized option set. */
-        void Choice(const char *key, int &value, std::initializer_list<const char *> options);
+        void Choice(const char *key, int &value, std::initializer_list<const char *> options) const;
         /** @brief Resolves a workspace-relative form label without constructing
          * a qualified lookup string during drawing. */
         [[nodiscard]] const std::string &Label(const char *key) const;
@@ -124,10 +100,7 @@ namespace Horo::Editor {
         /** @brief Resolves copy from the closed localization vocabulary. */
         [[nodiscard]] const std::string &Text(const char *key) const;
         const EditorGuiContext &context_;
-        BuildReleasePage page_;
         Application::GameplayBuildRequest request_;
-        Application::GameplayBuildService *builds_;
-        std::optional<std::uint64_t> &retainedBuild_;
         std::optional<Application::GameplayBuildSnapshot> build_;
         std::optional<BuildReleaseModalSession> releases_;
         std::optional<Error> error_;

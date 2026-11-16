@@ -133,7 +133,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc TerrainViewportTool::InputSurface */
-    bool TerrainViewportTool::InputSurface(const Frame &frame, bool controls) {
+    bool TerrainViewportTool::InputSurface(const Frame &frame, bool controls) const {
         if (controls || !frame.eligible || !ModeAvailable(frame))
             return false;
         const auto cursor = ImGui::GetCursorScreenPos();

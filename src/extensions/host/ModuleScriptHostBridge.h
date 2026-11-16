@@ -100,7 +100,7 @@ namespace Horo::Extensions {
         std::thread::id OwnerThread() const noexcept;
         std::shared_ptr<const std::atomic<bool>> ClosedFlag() const noexcept;
         Result<void> RequireOpenOwner() const;
-        Result<std::uint64_t> IssueGeneration();
+        Result<std::uint64_t> IssueGeneration() const;
         Result<ExtensionCapabilityAdmission> AdmitReference(std::string moduleId, std::uint64_t generation) const;
         Result<ModuleScriptSourceLease> Source(std::string_view package, std::string_view moduleId) const;
         Result<ModuleScriptResolvedImport> Resolve(std::string_view package, std::string_view moduleId, std::string_view id) const;

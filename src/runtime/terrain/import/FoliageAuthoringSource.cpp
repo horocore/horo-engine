@@ -142,8 +142,8 @@ namespace Horo::Terrain {
                                 std::uint32_t &placements, std::uint32_t &definitions) {
             if (bytes > limits.maximumBytes)
                 return Result<void>::Failure(MakeError(TerrainSourceErrors::LimitExceeded));
-            std::uint32_t magic{};
-            if (!reader.Integer(magic) || !reader.Integer(placements) || !reader.Integer(definitions) || magic != Magic)
+            if (std::uint32_t magic{};
+                !reader.Integer(magic) || !reader.Integer(placements) || !reader.Integer(definitions) || magic != Magic)
                 return Invalid<void>();
             if (auto admitted = Admit(placements, definitions, limits); admitted.HasError())
                 return admitted;

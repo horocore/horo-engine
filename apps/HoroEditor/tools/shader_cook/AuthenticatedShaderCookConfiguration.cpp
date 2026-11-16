@@ -127,9 +127,8 @@ namespace Horo::Application::Internal {
         if (const auto installed = InstallTools(configuration, *catalog.Value().approval, inputs, executables, profile);
             installed.HasError())
             return Configuration::Failure(installed.ErrorValue());
-        return Configuration::Success({std::move(configuration),
-                                       std::make_shared<const std::vector<std::uint8_t>>(std::move(catalog.Value().catalog)),
-                                       std::make_shared<const std::vector<std::uint8_t>>(std::move(catalog.Value().signature))});
+        return Configuration::Success({std::move(configuration), std::make_shared<const std::vector<std::uint8_t>>(catalog.Value().catalog),
+                                       std::make_shared<const std::vector<std::uint8_t>>(catalog.Value().signature)});
     }
 
     Result<AuthenticatedShaderCookConfiguration> MakeAuthenticatedSpirvCookConfiguration(const AuthenticatedSpirvCookInputs &inputs) {

@@ -39,11 +39,9 @@ namespace Horo::Editor {
         const auto &artifact = view.compiled->artifacts.front();
         if (artifact.backend != backend || !artifact.reflection || view.manifest->targets.size() != 1)
             return Outcome::Failure(MakeError(Render::ShaderCompilerPipelineErrors::InvalidAdapterOutput));
-        const auto interface = ValidateViewportReloadInterface(view, *artifact.reflection, role);
-        if (interface.HasError())
+        if (const auto interface = ValidateViewportReloadInterface(view, *artifact.reflection, role); interface.HasError())
             return Outcome::Failure(interface.ErrorValue());
-        const auto valid = Render::ValidateReflectedShaderArtifact(artifact, *artifact.reflection);
-        if (valid.HasError())
+        if (const auto valid = Render::ValidateReflectedShaderArtifact(artifact, *artifact.reflection); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
         return Outcome::Success(&artifact);
     }
@@ -80,14 +78,13 @@ namespace Horo::Editor {
                                 static_cast<float>(frame.profile.filterRadius)};
             for (std::size_t index = 0; index < frame.cascadeCount; ++index) {
                 const auto &cascade = frame.cascades[index];
-                std::copy(cascade.cameraRelativeViewProjection.values.begin(), cascade.cameraRelativeViewProjection.values.end(),
-                          shadow.begin() + index * 16);
+                std::ranges::copy(cascade.cameraRelativeViewProjection.values, shadow.begin() + index * 16);
                 const std::array<float, 4> split{cascade.splitFar, cascade.blendStart, cascade.splitNear, cascade.worldUnitsPerTexel};
                 const auto &rect = cascade.atlasScaleBias;
                 const float y = backend == Render::ShaderTargetBackend::OpenGL ? 1.0F - rect.w - rect.y : rect.w;
                 const std::array<float, 4> atlas{rect.x, rect.y, rect.z, y};
-                std::copy(split.begin(), split.end(), cascadeSplits.begin() + index * 4);
-                std::copy(atlas.begin(), atlas.end(), atlasRects.begin() + index * 4);
+                std::ranges::copy(split, cascadeSplits.begin() + index * 4);
+                std::ranges::copy(atlas, atlasRects.begin() + index * 4);
             }
         }
         for (std::size_t index = 0; index < count; ++index) {
@@ -98,7 +95,7 @@ namespace Horo::Editor {
                  {light.color.x, light.color.y, light.color.z, light.intensity},
                  {light.innerConeCosine, light.outerConeCosine, 0, 0}}};
             for (std::size_t kind = 0; kind < values.size(); ++kind)
-                std::copy(values[kind].begin(), values[kind].end(), lights[kind].begin() + index * 4);
+                std::ranges::copy(values[kind], lights[kind].begin() + index * 4);
         }
     }
 

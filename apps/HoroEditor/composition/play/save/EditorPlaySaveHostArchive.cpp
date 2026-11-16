@@ -47,8 +47,8 @@ namespace Horo::Application::Internal {
             ArchiveParts parts{.manifest = {.saveSchemaVersion = SaveSchemaVersion::Create(1).Value()}};
             for (const auto &participant : snapshot.Participants())
                 if (participant.disposition == CanonicalCaptureDisposition::Captured)
-                    parts.manifest.participants.push_back(
-                        {participant.participant, participant.schemaVersion, participant.required, participant.records});
+                    parts.manifest.participants.emplace_back(participant.participant, participant.schemaVersion, participant.required,
+                                                             participant.records);
             std::size_t remaining = PlaySaveMaximumPayloadBytes;
             parts.chunks.reserve(snapshot.Records().size());
             for (const auto &record : snapshot.Records()) {
@@ -130,7 +130,7 @@ namespace Horo::Application::Internal {
                     return Outcome::Failure(MakeError(SaveErrors::CaptureIncomplete));
                 auto decoded = std::move(*std::move(bytes).Value());
                 remaining -= decoded.size();
-                parts.chunks.push_back({entry, std::move(decoded)});
+                parts.chunks.emplace_back(entry, std::move(decoded));
             }
             return Outcome::Success(std::move(parts));
         }

@@ -65,7 +65,14 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
         std::size_t values{};
     };
 
+    /** @brief One VM-owned handle charge; copying would release the same budget twice. */
     struct HandleBox final {
+        HandleBox() = default;
+        HandleBox(const HandleBox &) = delete;
+        HandleBox &operator=(const HandleBox &) = delete;
+        HandleBox(HandleBox &&) = delete;
+        HandleBox &operator=(HandleBox &&) = delete;
+
         ScriptHandle handle;
         std::shared_ptr<HandleBudget> budget;
         std::size_t cost{};
@@ -74,7 +81,14 @@ namespace Horo::Extensions::JavaScriptModuleDetail {
 
     void FinalizeHandle(JSRuntime *, JSValue) noexcept;
 
+    /** @brief One VM-owned outcome charge with exactly one finalizer. */
     struct OutcomeBox final {
+        OutcomeBox() = default;
+        OutcomeBox(const OutcomeBox &) = delete;
+        OutcomeBox &operator=(const OutcomeBox &) = delete;
+        OutcomeBox(OutcomeBox &&) = delete;
+        OutcomeBox &operator=(OutcomeBox &&) = delete;
+
         std::vector<std::byte> encoded;
         std::shared_ptr<HandleBudget> budget;
         std::size_t cost{};

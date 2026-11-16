@@ -280,8 +280,7 @@ namespace Horo::Editor {
                 return Result<void>::Failure(
                     OpenError(ProjectOpenErrors::ScenePreflightFailed, "The configured project default scene does not exist."));
             SceneDocument validation;
-            auto valid = validation.LoadSaved(scene.Value()->objects, scene.Value()->prefabInstances);
-            if (valid.HasError())
+            if (auto valid = validation.LoadSaved(scene.Value()->objects, scene.Value()->prefabInstances); valid.HasError())
                 return Result<void>::Failure(OpenError(ProjectOpenErrors::ScenePreflightFailed, valid.ErrorValue().message));
             return Result<void>::Success();
         }
@@ -575,7 +574,7 @@ namespace Horo::Editor {
             snapshot.phase = cancelled ? ProjectOpenPhase::Cancelled : ProjectOpenPhase::Failed;
             snapshot.outcome = cancelled ? ProjectOpenOutcome::Cancelled : ProjectOpenOutcome::Failed;
             snapshot.progress = 1.0F;
-            snapshot.diagnostic = error.has_value() ? std::move(error) : job.error;
+            snapshot.diagnostic = error.has_value() ? error : job.error;
             if (cancelled)
                 LOG_WARN("editor.project_open", "Project open cancelled operation=%llu.",
                          static_cast<unsigned long long>(snapshot.operationId.value));

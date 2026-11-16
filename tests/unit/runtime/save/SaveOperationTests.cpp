@@ -541,3 +541,20 @@ TEST_CASE("Operation errors expose stable actionable descriptors", "[unit][runti
         CHECK_FALSE(descriptor->remediationHint.empty());
     }
 }
+
+TEST_CASE("Rejected rvalue failures retain the caller error until an applied transition", "[unit][runtime][save][operation]") {
+    auto terminal = Operation();
+    REQUIRE(terminal.Fail(MakeError(SaveErrors::CompositionInjectedFailure), SaveOperationCommitOutcome::NotCommitted) ==
+            SaveOperationTransitionResult::Applied);
+    auto ignored = MakeError(SaveErrors::CompositionInjectedFailure, "retained after terminal rejection");
+    CHECK(terminal.Fail(std::move(ignored), SaveOperationCommitOutcome::NotCommitted) == SaveOperationTransitionResult::AlreadyTerminal);
+    CHECK(ignored.message == "retained after terminal rejection");
+
+    auto cancelled = Operation();
+    REQUIRE(cancelled.Handle().RequestCancellation() == SaveCancellationRequestResult::Requested);
+    auto superseded = MakeError(SaveErrors::CompositionInjectedFailure, "retained after cancellation wins");
+    CHECK(cancelled.Fail(std::move(superseded), SaveOperationCommitOutcome::NotCommitted) ==
+          SaveOperationTransitionResult::CancellationWon);
+    CHECK(superseded.message == "retained after cancellation wins");
+    CHECK(Snapshot(cancelled.Handle()).state == SaveOperationState::Cancelled);
+}

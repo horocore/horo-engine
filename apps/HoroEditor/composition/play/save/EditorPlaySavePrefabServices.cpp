@@ -136,7 +136,7 @@ namespace Horo::Application::Internal {
 
     Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PlaySavePrefabServices::Bind(const Gameplay::BehaviorRegistry &behaviors,
                                                                                           const Gameplay::ComponentRegistry &components,
-                                                                                          std::uint64_t tick) {
+                                                                                          std::uint64_t tick) const {
         using Outcome = Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>;
         if (auto valid = state_->CheckActive(); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
@@ -158,7 +158,7 @@ namespace Horo::Application::Internal {
 
     Result<void> PlaySavePrefabServices::InstallPersistence(Runtime::SaveWorldId world,
                                                             std::vector<Runtime::PersistentEntityRecord> authored,
-                                                            std::shared_ptr<Security::SecureRandomSource> entropy) {
+                                                            std::shared_ptr<Security::SecureRandomSource> entropy) const {
         if (auto valid = state_->CheckActive(); valid.HasError())
             return valid;
         auto &slot = *state_->active;
@@ -180,7 +180,7 @@ namespace Horo::Application::Internal {
 
     Result<std::shared_ptr<const Gameplay::GameplayPrefabContext>> PlaySavePrefabServices::PrepareRestored(
         Runtime::RuntimeScene &scene, const Prefab::PrefabPersistentState &saved, const Prefab::PrefabRestoreEntities &restored,
-        std::uint64_t tick) {
+        std::uint64_t tick) const {
         using Outcome = Result<std::shared_ptr<const Gameplay::GameplayPrefabContext>>;
         if (!state_->behaviors || !state_->components || state_->pending || saved.world != state_->world ||
             !state_->scenes.IsRestoreCandidate(scene))
@@ -204,7 +204,7 @@ namespace Horo::Application::Internal {
         return Outcome::Success(slot->context);
     }
 
-    void PlaySavePrefabServices::CancelPrepared(Runtime::SceneRuntimeId scene) noexcept {
+    void PlaySavePrefabServices::CancelPrepared(Runtime::SceneRuntimeId scene) const noexcept {
         if (state_->pending && state_->pending->scene == scene) {
             state_->pending->Shutdown();
             state_->pending.reset();
@@ -229,21 +229,21 @@ namespace Horo::Application::Internal {
                                                      &state_->projector, {}, state_->limits, cancellation);
     }
 
-    Result<void> PlaySavePrefabServices::Advance(std::uint64_t tick) {
+    Result<void> PlaySavePrefabServices::Advance(std::uint64_t tick) const {
         state_->tick = tick;
         return state_->active && state_->active->spawns ? state_->active->spawns->Advance(tick) : Result<void>::Success();
     }
 
-    Result<void> PlaySavePrefabServices::OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame) {
+    Result<void> PlaySavePrefabServices::OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame) const {
         return state_->active && state_->active->spawns ? state_->active->spawns->OnPhase(phase, frame) : Result<void>::Success();
     }
 
-    Result<void> PlaySavePrefabServices::OnFixedUpdate(const Runtime::FixedStepContext &frame) {
+    Result<void> PlaySavePrefabServices::OnFixedUpdate(const Runtime::FixedStepContext &frame) const {
         state_->tick = frame.simulationTick;
         return state_->active && state_->active->spawns ? state_->active->spawns->OnFixedUpdate(frame) : Result<void>::Success();
     }
 
-    void PlaySavePrefabServices::Quiesce() noexcept {
+    void PlaySavePrefabServices::Quiesce() const noexcept {
         if (state_->active)
             state_->active->Quiesce();
     }

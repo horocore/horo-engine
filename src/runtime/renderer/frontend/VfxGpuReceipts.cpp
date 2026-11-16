@@ -8,6 +8,7 @@
 #include "VfxGpuStorage.h"
 
 #include <algorithm>
+#include <memory>
 
 namespace Horo::Render {
     namespace {
@@ -41,7 +42,7 @@ namespace Horo::Render {
             const auto found = std::ranges::find_if(record.steps, [&](const auto &step) {
                 return step.occupied && step.identity == identity;
             });
-            return found == record.steps.end() ? nullptr : &*found;
+            return found == record.steps.end() ? nullptr : std::to_address(found);
         }
 
         bool ComputeBuffers(const VfxGpuRecord &record, const VfxGpuFrontendStep &step, const RenderGraphVfxGpuCompute &work,
@@ -83,11 +84,10 @@ namespace Horo::Render {
             for (std::size_t index = 0; index < record.states.size(); ++index)
                 if (record.states[index].handle == buffer && record.generations[index] == draw.generation)
                     return true;
-            for (const auto &step : record.steps)
-                if (step.occupied && record.scheduledGraph == request.graph.Owner() && step.identity.targetGeneration == draw.generation &&
-                    record.states[step.destination].handle == buffer)
-                    return true;
-            return false;
+            return std::ranges::any_of(record.steps, [&record, &request, &draw, buffer](const VfxGpuFrontendStep &step) {
+                return step.occupied && record.scheduledGraph == request.graph.Owner() &&
+                       step.identity.targetGeneration == draw.generation && record.states[step.destination].handle == buffer;
+            });
         }
 
         bool ExactDraw(const VfxGpuRecord &record, const RenderGraphVfxGpuDraw &draw, const RenderGraphExecutionRequest &request) noexcept {
@@ -149,7 +149,8 @@ namespace Horo::Render {
             if (receipt.state == VfxGpuSubmissionState::SubmissionUncertain) {
                 if (step.accepted || step.uncertain)
                     return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
-                record.stopped = step.uncertain = true;
+                step.uncertain = true;
+                record.stopped = true;
                 return Result<void>::Success();
             }
             return TerminalNativeFact(record, step, receipt);

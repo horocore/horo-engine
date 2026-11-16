@@ -1,5 +1,7 @@
 #include "PhysicsStateConstructionManifestInternal.h"
 
+#include <algorithm>
+
 namespace Horo::Physics::StateDetail {
     namespace {
         bool Movable(const PhysicsStateShapeRecipes &graph, const PhysicsStateShapeRecipe &recipe,
@@ -7,10 +9,9 @@ namespace Horo::Physics::StateDetail {
             if (const auto *analytic = std::get_if<PhysicsShapeDescriptor>(&recipe.geometry))
                 return !std::holds_alternative<PhysicsStaticPlaneShape>(*analytic);
             const auto group = std::get<PhysicsStateCompoundRecipe>(recipe.geometry);
-            for (const auto &edge : graph.edges.subspan(group.begin, group.count))
-                if (!previous[edge.child])
-                    return false;
-            return true;
+            return std::ranges::none_of(graph.edges.subspan(group.begin, group.count), [&](const PhysicsStateShapeRecipeEdge &edge) {
+                return !previous[edge.child];
+            });
         }
 
         Result<void> ColliderPoses(const PhysicsStateConstructionManifest &manifest, const PhysicsStateConstructionBody &body,

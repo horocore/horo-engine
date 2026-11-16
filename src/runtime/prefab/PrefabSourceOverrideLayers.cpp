@@ -76,7 +76,7 @@ namespace Horo::Prefab {
                         object.parent->object = parent.Value();
                     }
                 }
-                std::move(objects.begin(), objects.end(), state.objects.begin() + begin);
+                std::ranges::move(objects, state.objects.begin() + begin);
                 return Result<void>::Success();
             }
 

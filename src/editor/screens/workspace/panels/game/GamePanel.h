@@ -43,7 +43,7 @@ namespace Horo::Editor {
         void RequestViewport(float width, float height);
         [[nodiscard]] bool CanDraw(const EditorWorkspaceViewModel &viewModel, const EditorViewportTextureView &texture) const;
         void DrawUnavailable(const ImVec2 &origin, float width, float height, const EditorWorkspaceViewModel &viewModel,
-                             const EditorGuiContext &context);
+                             const EditorGuiContext &context) const;
         IEditorViewportRenderer *viewportRenderer_{};
     };
 }  // namespace Horo::Editor

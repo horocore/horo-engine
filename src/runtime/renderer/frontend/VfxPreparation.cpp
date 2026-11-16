@@ -6,6 +6,7 @@
 #include "VfxFrontendState.h"
 
 #include <algorithm>
+#include <memory>
 #include <new>
 
 namespace Horo::Render {
@@ -21,7 +22,7 @@ namespace Horo::Render {
             if (!binding || binding->offset != 0)
                 return Binding::Failure(MakeError(VfxFrameErrors::InvalidInput));
             for (const auto &other : descriptor.resources)
-                if (&other != &*resource)
+                if (&other != std::to_address(resource))
                     if (const auto *alias = std::get_if<MaterialBufferBinding>(&other.value); alias && alias->buffer == binding->buffer)
                         return Binding::Failure(MakeError(VfxFrameErrors::InvalidInput));
             return Binding::Success(*binding);
@@ -76,7 +77,7 @@ namespace Horo::Render {
         const auto selected = VfxInstanceBinding(descriptor);
         if (selected.HasError())
             return Result<VfxSlotPreparation>::Failure(selected.ErrorValue());
-        const auto binding = selected.Value();
+        const auto &binding = selected.Value();
         if (binding.buffer.owner != resourceRegistry_->Owner() || binding.buffer.slot >= buffers_.size())
             return Result<VfxSlotPreparation>::Failure(MakeError(VfxFrameErrors::InvalidInput));
         // A selected-adapter query may reenter the owner and resize/release registry metadata.
@@ -140,7 +141,7 @@ namespace Horo::Render {
         const auto selected = InspectVfxSlotMaterial(*material);
         if (selected.HasError())
             return Preparation::Failure(selected.ErrorValue());
-        const auto facts = selected.Value();
+        const auto &facts = selected.Value();
         const auto bufferHandle = facts.residents.buffer;
         if (buffers_[bufferHandle.slot].vfxPreparing)
             return Preparation::Failure(MakeError(VfxFrameErrors::Pending, "This buffer's VFX slot is already being prepared."));

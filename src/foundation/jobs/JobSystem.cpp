@@ -122,7 +122,7 @@ namespace Horo {
     JobSystem::State::State(const JobSystemConfig &value)
         : config(value), schedulerIdentity(NextSchedulerIdentity()), execution(std::make_shared<JobExecutionState>(value)),
           store(std::make_shared<JobStoreState>(value.maxRetainedTerminalJobs)),
-          preCancelledError(MakeJobError(JobErrors::Cancelled, "Job was cancelled before execution.")), workers(std::size_t{0}) {}
+          preCancelledError(MakeJobError(JobErrors::Cancelled, "Job was cancelled before execution.")) {}
 
     /** @copydoc JobSystem::State::PruneQueues */
     void JobSystem::State::PruneQueues() {

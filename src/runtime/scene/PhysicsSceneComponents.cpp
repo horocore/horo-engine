@@ -324,8 +324,8 @@ namespace Horo::Runtime {
             for (const auto &binding : component.surfaceBindings) {
                 if (!binding.slot.IsValid() || !binding.surface.IsValid())
                     return Failure("Invalid collider surface binding.");
-                const auto physical = std::ranges::find(component.materials, binding.slot, &PhysicsColliderMaterialBinding::slot);
-                if (physical == component.materials.end())
+                if (const auto physical = std::ranges::find(component.materials, binding.slot, &PhysicsColliderMaterialBinding::slot);
+                    physical == component.materials.end())
                     return Failure("Surface binding has no physical material slot.");
                 if (std::ranges::find(slots, binding.slot) != slots.end())
                     return Failure("Duplicate collider surface slot.");

@@ -177,15 +177,12 @@ namespace Horo::Render::ExposureGpuCookDetail {
         /** @brief Restricts the module to shader arithmetic without pointer extension capabilities. */
         void Module(Proof &proof, const Instruction &instruction) {
             const auto w = instruction.w;
-            if (instruction.op == 17) {
-                if (w.size() != 2 || (w[1] != 1 && w[1] != 4466))
-                    throw EvidenceFailure{};
-            }
+            if (instruction.op == 17 && (w.size() != 2 || (w[1] != 1 && w[1] != 4466)))
+                throw EvidenceFailure{};
             if (instruction.op == 11)
                 Extension(proof, w);
-            if (instruction.op == 14)
-                if (w.size() != 3 || w[1] != 0 || w[2] != 1)
-                    throw EvidenceFailure{};
+            if (instruction.op == 14 && (w.size() != 3 || w[1] != 0 || w[2] != 1))
+                throw EvidenceFailure{};
         }
 
         /** @brief Indexes exact primitive widths and member offsets from the validated module. */
@@ -367,9 +364,8 @@ namespace Horo::Render::ExposureGpuCookDetail {
                 const auto i = name.id.value - 1;
                 used[i] = true;
                 const auto &node = Id(proof, proof.resources[i]);
-                if (const auto expected = i == 0   ? 0u
-                                          : i == 4 ? 2u
-                                                   : 12u;
+                const auto bufferStorage = i == 4 ? 2u : 12u;
+                if (const auto expected = i == 0 ? 0u : bufferStorage;
                     node.name != (i == 4 ? "Dispatch" : name.name) || node.storage != expected)
                     throw EvidenceFailure{};
                 ResourceLayout(proof, node, i);

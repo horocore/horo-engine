@@ -264,7 +264,7 @@ namespace Horo::Editor {
                                                                  const Gameplay::BehaviorRegistry &registry) {
         if (const auto started = sceneHost_->Scenes().Startup(preparationCancellation_.Token()); started.HasError())
             return started;
-        if (const auto queued = sceneHost_->Scenes().QueuePreparation(std::move(definition)); queued.HasError())
+        if (const auto queued = sceneHost_->Scenes().QueuePreparation(definition); queued.HasError())
             return queued;
         pendingRegistry_ = &registry;
         return Result<void>::Success();

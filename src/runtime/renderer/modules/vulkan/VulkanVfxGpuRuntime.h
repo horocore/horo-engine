@@ -21,11 +21,12 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<std::size_t> Copy(const std::shared_ptr<IResidentVfxGpuSimulation> &, const VfxGpuStepIdentity &,
                                                std::span<std::byte>);
         [[nodiscard]] Result<void> Discard(const std::shared_ptr<IResidentVfxGpuSimulation> &, const VfxGpuStepIdentity &);
-        [[nodiscard]] Result<void> Validate(const RenderGraphExecutionRequest &, std::size_t pass, std::span<const VulkanGraphResource>);
+        [[nodiscard]] Result<void> Validate(const RenderGraphExecutionRequest &, std::size_t pass,
+                                            std::span<const VulkanGraphResource>) const;
         [[nodiscard]] Result<void> Encode(VkCommandBuffer, VulkanCommandTicket, const RenderQueueSubmission &,
                                           const RenderGraphExecutionRequest &, std::size_t pass, std::span<const VulkanGraphResource>);
         void Finish(VulkanCommandTicket, bool accepted) noexcept;
-        void Uncertain(VulkanCommandTicket) noexcept;
+        void Uncertain(VulkanCommandTicket) const noexcept;
         [[nodiscard]] Result<void> CollectRetired();
         [[nodiscard]] bool Owns(VkBuffer) const noexcept;
         void Reject(const RenderGraphExecutionRequest &) noexcept;

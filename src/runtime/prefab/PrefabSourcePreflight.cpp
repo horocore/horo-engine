@@ -2,6 +2,8 @@
 #include "PrefabSourceExpansionInternal.h"
 
 #include <algorithm>
+#include <format>
+#include <memory>
 
 namespace Horo::Prefab::Detail {
     namespace {
@@ -49,7 +51,7 @@ namespace Horo::Prefab::Detail {
                 failure.message += edge.kind == PrefabCompositionOrigin::Variant ? " VariantParent " : " NestedPlacement ";
                 failure.message += edge.owner.ToString() + " -> " + edge.source.ToString();
                 if (edge.placement)
-                    failure.message += " placement=" + std::to_string(edge.placement->value);
+                    failure.message += std::format(" placement={}", edge.placement->value);
             }
             return Result<void>::Failure(std::move(failure));
         }
@@ -60,7 +62,7 @@ namespace Horo::Prefab::Detail {
             const auto found = std::ranges::lower_bound(sources, asset, {}, [](const auto &source) {
                 return source.document.Data().assetId;
             });
-            return found != sources.end() && found->document.Data().assetId == asset ? &*found : nullptr;
+            return found != sources.end() && found->document.Data().assetId == asset ? std::to_address(found) : nullptr;
         }
 
         Result<void> Visit(Inspection &inspection, const PrefabDependencySource &source, std::size_t nestedEdges, std::size_t variantEdges);
@@ -126,8 +128,7 @@ namespace Horo::Prefab::Detail {
 
         /** @brief Revalidates every source and all its layer bounds under the current operation profile before materialization. */
         Result<void> AdmitSource(Inspection &inspection, const PrefabDependencySource &source) {
-            const auto &data = source.document.Data();
-            if (data.composition) {
+            if (const auto &data = source.document.Data(); data.composition) {
                 if (auto charged = ChargeLayerRecords(inspection, data.composition->variantOverrides); charged.HasError())
                     return charged;
                 for (const auto &placement : data.composition->nestedPlacements)

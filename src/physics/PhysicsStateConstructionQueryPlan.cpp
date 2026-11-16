@@ -36,7 +36,7 @@ namespace Horo::Physics::Detail {
         if (!control.Value())
             return Outcome::Success({});
         try {
-            auto result = std::visit([&](const auto &value) -> Outcome {
+            auto result = std::visit([&]<typename VisitedValue>(const VisitedValue &value) -> Outcome {
                 if constexpr (std::is_same_v<std::decay_t<decltype(value)>, PhysicsCompoundShapeDescriptor>)
                     return QueryCompound(*pool, value, *control.Value());
                 else

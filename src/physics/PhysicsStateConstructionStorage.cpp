@@ -23,9 +23,9 @@ namespace Horo::Physics::StateDetail {
 
     ConstructionRecipePool::ConstructionRecipePool(PhysicsStateConstructionLimits limits, PhysicsStateFpControl profile,
                                                    PhysicsStateConstructionTracking tracking)
-        : limits_(limits), profile_(profile), tracking_(tracking), owner_(std::this_thread::get_id()),
-          nodes_(std::make_unique<Node[]>(limits.maximumNodes)), edges_(std::make_unique<Edge[]>(limits.maximumEdges)),
-          freeEdge_(limits.maximumEdges ? 0 : None), freeEdges_(limits.maximumEdges) {
+        : limits_(limits), profile_(profile), tracking_(tracking), nodes_(std::make_unique<Node[]>(limits.maximumNodes)),
+          edges_(std::make_unique<Edge[]>(limits.maximumEdges)), freeEdge_(limits.maximumEdges ? 0 : None),
+          freeEdges_(limits.maximumEdges) {
         for (std::uint32_t index = 0; index < limits.maximumEdges; ++index)
             edges_[index].next = index + 1 == limits.maximumEdges ? None : index + 1;
     }
@@ -70,7 +70,7 @@ namespace Horo::Physics::StateDetail {
         return sizeof(*this) + std::size_t{limits_.maximumNodes} * sizeof(Node) + std::size_t{limits_.maximumEdges} * sizeof(Edge);
     }
 
-    Result<std::uint32_t> ConstructionRecipePool::ReserveNode(PhysicsStateFpControl actual) {
+    Result<std::uint32_t> ConstructionRecipePool::ReserveNode(PhysicsStateFpControl actual) const {
         if (!Owner())
             return Result<std::uint32_t>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
         if (!KnownProfile(actual) || (tracking_ == PhysicsStateConstructionTracking::Required && actual != profile_))
@@ -91,13 +91,13 @@ namespace Horo::Physics::StateDetail {
         return ConstructionRecipeLease{shared_from_this(), slot, node.serial};
     }
 
-    void ConstructionRecipePool::AddReader(std::uint32_t slot, std::uint64_t) noexcept {
+    void ConstructionRecipePool::AddReader(std::uint32_t slot, std::uint64_t) const noexcept {
         // A valid source lease itself holds a reader. At least sizeof(lease) bytes per live alias
         // make uint64 overflow unreachable in the addressable storage model. No weak promotion exists.
         nodes_[slot].readers.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void ConstructionRecipePool::DropReader(std::uint32_t slot, std::uint64_t) noexcept {
+    void ConstructionRecipePool::DropReader(std::uint32_t slot, std::uint64_t) const noexcept {
         nodes_[slot].readers.fetch_sub(1, std::memory_order_acq_rel);
     }
 

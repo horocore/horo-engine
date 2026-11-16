@@ -142,8 +142,8 @@ namespace Horo {
             std::filesystem::create_directories(NativeApiPath(canonicalParent), error);
             if (error)
                 return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
-            const auto parent = std::filesystem::canonical(NativeApiPath(canonicalParent), error);
-            if (error || NativeApiPath(parent) != NativeApiPath(canonicalParent))
+            if (const auto parent = std::filesystem::canonical(NativeApiPath(canonicalParent), error);
+                error || NativeApiPath(parent) != NativeApiPath(canonicalParent))
                 return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
             return Result<std::filesystem::path>::Success(canonicalParent / path.filename());
         }

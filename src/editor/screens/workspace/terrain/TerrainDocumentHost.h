@@ -137,7 +137,7 @@ namespace Horo::Editor {
         Assets::AssetRegistrySnapshot registry_;
         bool containerSource_{};
         bool durabilityUnconfirmed_{};
-        std::thread::id owner_;
+        std::thread::id owner_{std::this_thread::get_id()};
         bool busy_{};
         bool conflict_{};
     };

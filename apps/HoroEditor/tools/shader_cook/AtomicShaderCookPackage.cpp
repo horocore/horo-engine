@@ -74,8 +74,7 @@ namespace Horo::Editor::Offline {
         Result<void> OutsideScratch(std::filesystem::path ancestor, const std::filesystem::path &scratch) {
             for (;;) {
                 std::error_code error;
-                const bool same = std::filesystem::equivalent(ancestor, scratch, error);
-                if (error || same)
+                if (const bool same = std::filesystem::equivalent(ancestor, scratch, error); error || same)
                     return ScratchFailure();
                 const auto parent = ancestor.parent_path();
                 if (parent == ancestor)
@@ -250,8 +249,8 @@ namespace Horo::Editor::Offline {
             std::filesystem::create_directory(path, error);
             if (error && error != std::errc::file_exists)
                 return IoFailure();
-            const auto status = std::filesystem::symlink_status(path, error);
-            if (error || !std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
+            if (const auto status = std::filesystem::symlink_status(path, error);
+                error || !std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
                 return IoFailure();
             return Result<void>::Success();
         }

@@ -201,8 +201,7 @@ namespace Horo::Editor {
                 editorState = ResolveSceneObjectEditorState(document->objects, SceneObjectId{entity.authoredObject->value});
             if (respectEditorVisibility && editorState.has_value() && !editorState->effectivelyVisible)
                 return Result<void>::Success();
-            const auto light = ExtractEntityLight(entity, canonicalLights, snapshot);
-            if (light.HasError())
+            if (const auto light = ExtractEntityLight(entity, canonicalLights, snapshot); light.HasError())
                 return light;
             return ExtractPrimitiveMeshInstance(scene, entity, editorState, meshCache, snapshot, policy);
         }
@@ -382,8 +381,7 @@ namespace Horo::Editor {
                 return Result<EditorViewportSceneSnapshot>::Failure(assetResult.ErrorValue());
         }
 
-        const auto disabled = CaptureDisabledLights(scene, document, respectEditorVisibility, extracted);
-        if (disabled.HasError())
+        if (const auto disabled = CaptureDisabledLights(scene, document, respectEditorVisibility, extracted); disabled.HasError())
             return Result<EditorViewportSceneSnapshot>::Failure(disabled.ErrorValue());
         InitializePreviewStorage(scene, extracted);
         return Result<EditorViewportSceneSnapshot>::Success(std::move(extracted));

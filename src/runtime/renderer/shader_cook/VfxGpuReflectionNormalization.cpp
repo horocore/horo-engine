@@ -64,9 +64,8 @@ namespace Horo::Render::VfxGpuCookDetail {
 
         void Entry(const Json &json, VfxGpuProgramRole role, ShaderStage stage) {
             const auto &entries = Rows(json, "entryPoints", 1);
-            if (const auto mode = stage == ShaderStage::Compute  ? "comp"
-                                  : stage == ShaderStage::Vertex ? "vert"
-                                                                 : "frag";
+            const auto rasterMode = stage == ShaderStage::Vertex ? "vert" : "frag";
+            if (const auto mode = stage == ShaderStage::Compute ? "comp" : rasterMode;
                 entries.size() != 1 || entries[0].at("name").get_ref<const std::string &>() != EntryName(role, stage) ||
                 entries[0].at("mode") != mode)
                 throw InvalidEvidence{};
@@ -197,7 +196,8 @@ namespace Horo::Render::VfxGpuCookDetail {
         }
 
         void ResourceCounts(const Json &json, VfxGpuProgramRole role, ShaderStage stage) {
-            const auto storage = stage == ShaderStage::Fragment ? 0u : Compute(role) ? 4u : 1u;
+            const auto activeStorage = Compute(role) ? 4u : 1u;
+            const auto storage = stage == ShaderStage::Fragment ? 0u : activeStorage;
             const auto uniform = stage == ShaderStage::Fragment ? 0u : 1u;
             if (Rows(json, "ssbos", storage).size() != storage || Rows(json, "ubos", uniform).size() != uniform)
                 throw InvalidEvidence{};
@@ -281,7 +281,8 @@ namespace Horo::Render::VfxGpuCookDetail {
                 throw InvalidEvidence{};
             ShaderReflectionCandidate candidate{.backend = ShaderTargetBackend::Metal, .interfaceSchemaVersion = 1};
             for (std::size_t i = 0; i < stages.size(); ++i) {
-                const auto stage = Compute(role) ? ShaderStage::Compute : i == 0 ? ShaderStage::Vertex : ShaderStage::Fragment;
+                const auto rasterStage = i == 0 ? ShaderStage::Vertex : ShaderStage::Fragment;
+                const auto stage = Compute(role) ? ShaderStage::Compute : rasterStage;
                 if (stages[i].stage != stage || stages[i].entryPoint != EntryName(role, stage))
                     throw InvalidEvidence{};
                 const auto json = Parse(stages[i].json);

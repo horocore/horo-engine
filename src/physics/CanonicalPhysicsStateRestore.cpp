@@ -59,7 +59,7 @@ namespace Horo::Physics::Detail {
         /** @brief No public wire data is ever handed directly to native RestoreState.
          */
         Result<void> Restore(CanonicalWorld &candidate, const CanonicalPhysicsStateBindings &bindings, const PhysicsStateSolverView &state,
-                             const PhysicsContinuousCollisionPolicy &policy, CanonicalPhysicsStateCaptureScratch scratch) {
+                             const PhysicsContinuousCollisionPolicy &policy, const CanonicalPhysicsStateCaptureScratch &scratch) {
             if (auto ccd = ApplyCanonicalContinuousCollision({&candidate}, policy); ccd.HasError())
                 return ccd;
             if (auto intent = ApplyCanonicalStateIntent(candidate, bindings, state); intent.HasError())

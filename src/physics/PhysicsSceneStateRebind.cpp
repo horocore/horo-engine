@@ -87,16 +87,16 @@ namespace Horo::Physics::Detail {
         Mapper mapper{old, next};
         if (auto actual = SceneTables(*this, mapper); actual.HasError())
             return actual;
-        if (auto bodies = Bodies(authoredBodies, mapper); bodies.HasError())
-            return bodies;
-        if (auto shapes = Shapes(authoredShapes, mapper); shapes.HasError())
-            return shapes;
-        if (auto constraints = Constraints(authoredConstraints, mapper); constraints.HasError())
-            return constraints;
-        if (auto bodies = Bodies(legacyBodies, mapper); bodies.HasError())
-            return bodies;
-        if (auto shapes = Shapes(legacyShapes, mapper); shapes.HasError())
-            return shapes;
+        if (auto authoredBodiesResult = Bodies(authoredBodies, mapper); authoredBodiesResult.HasError())
+            return authoredBodiesResult;
+        if (auto authoredShapesResult = Shapes(authoredShapes, mapper); authoredShapesResult.HasError())
+            return authoredShapesResult;
+        if (auto authoredConstraintsResult = Constraints(authoredConstraints, mapper); authoredConstraintsResult.HasError())
+            return authoredConstraintsResult;
+        if (auto legacyBodiesResult = Bodies(legacyBodies, mapper); legacyBodiesResult.HasError())
+            return legacyBodiesResult;
+        if (auto legacyShapesResult = Shapes(legacyShapes, mapper); legacyShapesResult.HasError())
+            return legacyShapesResult;
         return Constraints(legacyConstraints, mapper);
     }
 

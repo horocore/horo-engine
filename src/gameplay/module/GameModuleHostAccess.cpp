@@ -115,7 +115,7 @@ namespace Horo::Gameplay {
             std::vector<GameplayPersistenceDeclaration> declarations;
             declarations.reserve(impl_->registries.persistence->registrations_.size());
             for (const auto &registration : impl_->registries.persistence->registrations_)
-                declarations.push_back({registration.descriptor, registration.ownerIdentity});
+                declarations.emplace_back(registration.descriptor, registration.ownerIdentity);
             return Outcome::Success(std::move(declarations));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(Runtime::SaveErrors::ParticipantRegistryAllocationFailed));
@@ -203,8 +203,8 @@ namespace Horo::Gameplay {
         });
         if (found == registrations.end())
             return Outcome::Failure(MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
-        const auto *type = std::get_if<BehaviorTypeId>(&found->ownerIdentity);
-        if (!type || *type != target.Type() || found->descriptor.owner != Runtime::GameplayPersistenceOwner::BehaviorInstance)
+        if (const auto *type = std::get_if<BehaviorTypeId>(&found->ownerIdentity);
+            !type || *type != target.Type() || found->descriptor.owner != Runtime::GameplayPersistenceOwner::BehaviorInstance)
             return Outcome::Failure(MakeError(Runtime::SaveErrors::RestoreParticipantInvalid));
         const auto index = static_cast<std::size_t>(found - registrations.begin());
         std::shared_ptr<const std::atomic_bool> admission{impl_, &impl_->runtimeLeaseAdmission};

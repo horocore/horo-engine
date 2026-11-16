@@ -38,7 +38,8 @@ namespace Horo::Render::VfxGpuCookDetail {
 
         Entry Selected(Tokens tokens, VfxGpuProgramRole role, ShaderStage stage) {
             const auto name = EntryName(role, stage);
-            const auto keyword = stage == ShaderStage::Compute ? "kernel" : stage == ShaderStage::Vertex ? "vertex" : "fragment";
+            const auto rasterKeyword = stage == ShaderStage::Vertex ? "vertex" : "fragment";
+            const auto keyword = stage == ShaderStage::Compute ? "kernel" : rasterKeyword;
             std::optional<Entry> selected;
             for (std::size_t at = 0; at + 3 < tokens.size(); ++at) {
                 if (!EntryPrefix(tokens, at, keyword, name))
@@ -72,7 +73,8 @@ namespace Horo::Render::VfxGpuCookDetail {
                 const auto field = body.subspan(i * 3, 3);
                 if (field[1] != names[i] || field[2] != ";")
                     throw InvalidEvidence{};
-                if (const auto expected = Compute(role) || i == 4 ? "uint4" : i == 0 ? "float4x4" : "float4"; field[0] != expected)
+                const auto floatingType = i == 0 ? "float4x4" : "float4";
+                if (const auto expected = Compute(role) || i == 4 ? "uint4" : floatingType; field[0] != expected)
                     throw InvalidEvidence{};
                 auto value = Primitive(field[0], field[1], buffer.bytes);
                 buffer.bytes += value.bytes;
@@ -174,7 +176,7 @@ namespace Horo::Render::VfxGpuCookDetail {
             AttributedField(field);
             if (!InterfaceKind(field, stage, direction))
                 throw InvalidEvidence{};
-            result.interfaces.push_back({stage, direction, 0, ShaderValueType::Float32, 1, 4, 1, std::string{field[1]}});
+            result.interfaces.emplace_back(stage, direction, 0, ShaderValueType::Float32, 1, 4, 1, std::string{field[1]});
         }
 
         void Interfaces(Tokens tokens, std::string_view type, ShaderStage stage, ShaderInterfaceDirection direction,
