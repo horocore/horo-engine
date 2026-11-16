@@ -6,6 +6,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import shutil
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -361,7 +362,7 @@ def test_cpd_rejects_partial_or_unexpected_xml(xml: str, tmp_path: Path):
 def test_codacy_zero_exit_with_missing_tool_is_incomplete(tmp_path: Path, monkeypatch):
     payload = {"issues": [], "errors": [], "toolResults": [], "capability": {"unavailable": [{"toolId": "Lizard"}]}}
     monkeypatch.setattr(tools, 'json_command', lambda *_: (payload, 0))
-    result = tools.codacy_check(tmp_path, tmp_path, [Path("a.cpp")], {"tools": [{"toolId": "Lizard"}]},
+    result = tools.codacy_check(tmp_path, [Path("a.cpp")], {"tools": [{"toolId": "Lizard"}]},
                                 {"Lizard": {"languages": ["CPP"]}}, 2)
     assert result["status"] == "incomplete"
     assert result["errors"][0]["reason"] == "missing_or_incomplete_execution"
@@ -371,10 +372,32 @@ def test_codacy_routes_cpp_alias_to_semgrep(tmp_path: Path, monkeypatch):
     calls = []
     payload = {"issues": [], "errors": [], "toolResults": [{"toolId": "Semgrep", "status": "success", "filesAnalyzed": 1}]}
     monkeypatch.setattr(tools, 'json_command', lambda argv, *_: (calls.append(argv) or payload, 0))
-    result = tools.codacy_check(tmp_path, tmp_path, [Path("a.cpp")], {"tools": [{"toolId": "Semgrep"}]},
+    result = tools.codacy_check(tmp_path, [Path("a.cpp")], {"tools": [{"toolId": "Semgrep"}]},
                                 {"Semgrep": {"languages": ["C++"]}}, 2)
     assert result["status"] == "clean"
     assert "Semgrep" in calls[0]
+    assert Path(calls[0][calls[0].index('--output') + 1]).parent == tmp_path.parent / 'reports'
+
+
+def test_codacy_file_report_is_authoritative_when_piped_stdout_is_truncated(tmp_path, monkeypatch):
+    report = tmp_path / 'full-report.json'
+    payload = {'issues': [{'message': 'x' * 70000}], 'errors': [], 'toolResults': []}
+
+    def execute(argv, *_args):
+        report.write_text(json.dumps(payload), encoding='utf-8')
+        return subprocess.CompletedProcess(argv, 1, stdout=json.dumps(payload)[:65536], stderr='')
+
+    monkeypatch.setattr(tools, 'quality_run', execute)
+    actual, code = tools.json_command(['codacy-analysis', 'analyze', '--output', str(report)], tmp_path, 2, report)
+    assert code == 1
+    assert actual == payload
+
+
+def test_missing_codacy_file_report_cannot_fall_back_to_clean_stdout(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, 'quality_run', lambda argv, *_args:
+                        subprocess.CompletedProcess(argv, 0, stdout='{"issues":[]}', stderr=''))
+    with pytest.raises(AnalysisError, match='no usable JSON'):
+        tools.json_command(['codacy-analysis', 'analyze'], tmp_path, 2, tmp_path / 'missing.json')
 
 
 def test_secrets_does_not_store_sensitive_scanner_output(tmp_path: Path, monkeypatch):
@@ -554,7 +577,7 @@ def test_private_profile_preserves_user_settings_and_credentials(tmp_path: Path)
     sonar_key = 'secret://{"extensionId":"sonarsource.sonarlint-vscode","key":"connection"}'
     other_key = 'secret://{"extensionId":"unrelated","key":"connection"}'
     # Synthetic ciphertext envelopes, never actual credentials or plaintext storage.
-    prefix = b"v10" if sys.platform == "win32" else b"v11"
+    prefix = b"v10" if sys.platform in {"win32", "darwin"} else b"v11"
     encrypted = json.dumps({"type": "Buffer", "data": list(prefix + bytes(range(32)))})
     local_state = source / "Local State"
     if sys.platform == "win32":
@@ -586,3 +609,175 @@ def test_private_profile_preserves_user_settings_and_credentials(tmp_path: Path)
         assert support.read_json(profile / "Local State") == {"os_crypt": {"encrypted_key": wrapped}}
     else:
         assert not (profile / "Local State").exists()
+
+
+def test_code_settings_jsonc_preserves_strings_and_rejects_malformed(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text('\ufeff{/* comment */ "url":"https://host/a//b", // line\n'
+                    '"text":"/*literal*/,}", "items":["quote\\\"",],}', encoding="utf-8")
+    assert support.read_code_settings(path) == {"url": "https://host/a//b", "text": "/*literal*/,}", "items": ['quote"']}
+    for malformed in ['{"a":/* missing end}', '[1,2]', '{"a": 1,,}']:
+        path.write_text(malformed)
+        with pytest.raises(support.AnalysisError, match="JSONC"):
+            support.read_code_settings(path)
+
+
+def test_known_ide_labs_metadata_error_keeps_verified_sensor_evidence():
+    source = Path('/repo/source.cpp').resolve()
+    telemetry = ('2026-11-16 14:11:04.730 [info] [Error - 14:11:04.730] '
+                 'Cannot determine if user has Joined IDE Labs or not\n'
+                 'java.util.concurrent.ExecutionException: org.eclipse.lsp4j.jsonrpc.ResponseErrorException: '
+                 'Request sonarlint/hasJoinedIdeLabs defines 1 params but received none.\n'
+                 '\tat java.base/java.util.concurrent.CompletableFuture.reportGet(Unknown Source)\n')
+    success = f'{source.as_uri()} activeRules: [456 cpp] 1 compilation units analyzed Analysis detected 0 issues'
+    proof = sonar.verify_evidence(telemetry + success, [source])
+    assert proof['compilationUnits'] == 1
+    assert proof['ideLabsTelemetryWarning']
+    assert sonar.evidence_warnings([proof]) == [
+        'IDE Labs telemetry RPC signature mismatch; CFamily execution was independently verified']
+    with pytest.raises(AnalysisError, match='No positive'):
+        sonar.verify_evidence(telemetry, [source])
+    with pytest.raises(AnalysisError, match='analysis errors'):
+        sonar.verify_evidence(telemetry + success + '\n[Error - CFamily failed', [source])
+    unknown_failure = telemetry.replace('received none.', 'received unknown data.') + success
+    with pytest.raises(AnalysisError, match='analysis errors'):
+        sonar.verify_evidence(unknown_failure, [source])
+
+
+@pytest.mark.parametrize('completion', ['No secrets found', 'No issues found'])
+def test_secrets_completion_accepts_supported_cli_versions(completion):
+    result = subprocess.CompletedProcess(['sonar', 'analyze', 'secrets'], 0, stdout=completion, stderr='')
+    assert support.secret_batch_exit(result) == 0
+
+
+def push_timeout_log():
+    return ('2026-11-16 18:15:24.313 [info] [Error - 18:15:24.313] '
+            '[sonarlint : sonarcloud-websocket-2] Error occurred on the WebSocket\n'
+            '2026-11-16 18:15:24.313 [info] [Error - 18:15:24.313] '
+            '[sonarlint : sonarcloud-websocket-2] java.io.IOException: Operation timed out\n'
+            '\tat java.base/sun.nio.ch.SocketDispatcher.read0(Native Method)\n')
+
+
+def test_push_timeout_preserves_independent_local_sensor_proof():
+    source = Path('/repo/source.cpp').resolve()
+    success = f'{source.as_uri()} activeRules: [456 cpp] 1 compilation units analyzed Analysis detected 0 issues'
+    proof = sonar.verify_evidence(push_timeout_log() + success, [source])
+    assert proof['completion']
+    assert proof['cloudPushTransportWarning']
+    assert 'live cloud synchronization is unverified' in sonar.evidence_warnings([proof])[0]
+    with pytest.raises(AnalysisError, match='No positive'):
+        sonar.verify_evidence(push_timeout_log(), [source])
+
+
+@pytest.mark.parametrize('fault', ['different_stream', 'other_error', 'missing_header', 'sensor_error'])
+def test_push_timeout_does_not_hide_unknown_or_sensor_errors(fault):
+    source = Path('/repo/source.cpp').resolve()
+    log = push_timeout_log()
+    if fault == 'different_stream':
+        log = log.replace('websocket-2] java.io', 'websocket-3] java.io')
+    elif fault == 'other_error':
+        log = log.replace('Operation timed out', 'HTTP authentication failed')
+    elif fault == 'missing_header':
+        log = log.split('\n', 1)[1]
+    else:
+        log += '[Error - CFamily failed\n'
+    log += f'{source.as_uri()} activeRules: [456 cpp] 1 compilation units analyzed Analysis detected 0 issues'
+    with pytest.raises(AnalysisError, match='analysis errors'):
+        sonar.verify_evidence(log, [source])
+
+
+@pytest.mark.parametrize('failure', ['sensor', 'authentication'])
+def test_file_failure_retains_verified_prefix_and_stops_remaining_requests(tmp_path, monkeypatch, failure):
+    paths = [tmp_path / name for name in ('first.cpp', 'second.cpp', 'third.cpp')]
+    calls = []
+    checkpoints = []
+
+    def request(_root, _port, submitted, _timeout, _startup):
+        path = submitted[-1]
+        calls.append(path)
+        if path == paths[1] and failure == 'authentication':
+            raise AnalysisError('Authenticate the managed Sonar profile')
+        return [{'filePath': str(path), 'ruleKey': 'cpp:fixture'}]
+
+    def evidence(_profile, _offsets, submitted):
+        if submitted[-1] == paths[1]:
+            raise AnalysisError('No positive CFamily sensor evidence')
+        return {'compilationUnits': 1, 'completion': True}
+
+    monkeypatch.setattr(sonar, 'request_analysis', request)
+    monkeypatch.setattr(sonar, 'sensor_evidence', evidence)
+    monkeypatch.setattr(sonar, 'log_offsets', lambda _profile: {})
+    args = SimpleNamespace(timeout=1, startup_timeout=1)
+    with pytest.raises(sonar.FileAnalysisError) as caught:
+        sonar.analyze_files(tmp_path, {'profile': str(tmp_path / 'profile'), 'port': 64120}, {}, paths, args,
+                            lambda findings, proof: checkpoints.append((len(findings), len(proof))))
+    partial = caught.value
+    assert partial.path == paths[1]
+    assert [finding['filePath'] for finding in partial.findings] == [str(paths[0])]
+    assert [proof['path'] for proof in partial.evidence] == ['first.cpp']
+    assert len(partial.unverified) == (1 if failure == 'sensor' else 0)
+    assert calls == paths[:2]
+    assert checkpoints == [(1, 1)]
+
+
+def test_successful_files_checkpoint_only_verified_responses(tmp_path, monkeypatch):
+    paths = [tmp_path / name for name in ('first.cpp', 'second.cpp')]
+    checkpoints = []
+    monkeypatch.setattr(sonar, 'log_offsets', lambda _profile: {})
+    monkeypatch.setattr(sonar, 'request_analysis', lambda _root, _port, submitted, *_args:
+                        [{'filePath': str(submitted[-1]), 'ruleKey': 'cpp:fixture'}])
+    monkeypatch.setattr(sonar, 'sensor_evidence', lambda *_args: {'compilationUnits': 1, 'completion': True})
+    findings, evidence = sonar.analyze_files(
+        tmp_path, {'profile': str(tmp_path / 'profile'), 'port': 64120}, {}, paths,
+        SimpleNamespace(timeout=1, startup_timeout=1),
+        lambda current, proofs: checkpoints.append((len(current), len(proofs))))
+    assert len(findings) == 2
+    assert len(evidence) == 2
+    assert checkpoints == [(1, 1), (2, 2)]
+
+
+def test_sonar_provider_preserves_partial_failure_and_checkpoint(tmp_path, monkeypatch):
+    root = tmp_path / 'root'
+    root.mkdir()
+    paths = [root / name for name in ('first.cpp', 'second.cpp')]
+    for path in paths:
+        path.write_text('int value;\n')
+    database = root / 'compile_commands.json'
+    database.write_text('[]')
+    cache = tmp_path / 'cache'
+    record = {'profile': str(tmp_path / 'profile'), 'port': 64120, 'pid': 42, 'started': 'fixture',
+              'extension': str(tmp_path / 'extension'), 'extensionVersion': 'fixture', 'bindingReady': True}
+
+    class Pool:
+        def __init__(self, *_args):
+            self.directory = tmp_path / 'sessions'
+
+        def lease(self):
+            from contextlib import nullcontext
+            return nullcontext((0, {}))
+
+        def open(self, *_args):
+            return dict(record)
+
+    def failed(_root, _record, _contexts, _files, _args, _checkpoint):
+        raise sonar.FileAnalysisError(paths[1], AnalysisError('missing sensor evidence'),
+                                       [{'filePath': str(paths[0]), 'ruleKey': 'cpp:verified'}],
+                                       [{'path': 'first.cpp', 'compilationUnits': 1, 'activeCppRules': True, 'completion': True,
+                                         'branchMatching': 'no_error_reported'}],
+                                       [{'filePath': str(paths[1]), 'ruleKey': 'cpp:unverified'}])
+
+    monkeypatch.setattr(sonar, 'prepare', lambda *_args: (database, {}))
+    monkeypatch.setattr(sonar, 'write_workspace', lambda *_args: root / 'fixture.code-workspace')
+    monkeypatch.setattr(sonar, 'SessionPool', Pool)
+    monkeypatch.setattr(sonar, 'analyze_files', failed)
+    args = SimpleNamespace(compile_commands=database, timeout=1, startup_timeout=1, connection_id='fixture',
+                           project_key='fixture', code_user_data=tmp_path, extensions_directory=tmp_path)
+    result = sonar.sonar_check(root, cache, tmp_path / 'repository-cache', paths, args)
+    assert result['status'] == 'incomplete'
+    assert result['findings'][0]['ruleKey'] == 'cpp:verified'
+    assert result['unverifiedFindings'][0]['ruleKey'] == 'cpp:unverified'
+    assert result['notAnalyzed'] == ['second.cpp']
+    checkpoint = support.read_json(Path(result['progressReport']))
+    assert checkpoint['status'] == 'incomplete'
+    assert checkpoint['evidence'] == result['evidence']
+    assert set(checkpoint['inputHashes']) == {'first.cpp', 'second.cpp'}

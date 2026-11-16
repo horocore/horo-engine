@@ -263,6 +263,7 @@ def test_stop_explicitly_releases_every_native_slot_lock(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("mismatch", [None, "missing", "path", "version", "new_source"])
 def test_session_reuse_requires_exact_selected_extension_identity(monkeypatch, tmp_path, mismatch):
+    monkeypatch.setattr(sessions, 'sys', SimpleNamespace(platform="win32"))
     source, extensions, _ = profile_inputs(tmp_path)
     package = next(extensions.glob('*/package.json'))
     package.write_text('{"version":"6.1.1"}', encoding="utf-8")
@@ -309,6 +310,7 @@ def test_sonar_report_names_only_the_active_extension_not_stale_cached_versions(
     (active / "package.json").write_text('{"version":"6.2.0"}', encoding="utf-8")
     database = tmp_path / "compile_commands.json"
     database.write_text('[]', encoding="utf-8")
+    (tmp_path / "x.cpp").write_text('int fixture;\n', encoding="utf-8")
     record = dict(profile=str(profile), extension=str(active), extensionVersion="6.2.0", bindingReady=True,
                   pid=10, started="100", port=min(sessions.BRIDGE_PORTS))
     monkeypatch.setattr(sessions, 'prepare', lambda *args: (database, {}))
@@ -321,6 +323,8 @@ def test_sonar_report_names_only_the_active_extension_not_stale_cached_versions(
                                   [tmp_path / "x.cpp"], args)
     assert result["versions"] == ["6.2.0"]
     assert result["extension"] == {"path": str(active), "version": "6.2.0"}
+    assert result["status"] == "incomplete"
+    assert result["notAnalyzed"] == ["x.cpp"]
 
 
 def test_legacy_trust_disabled_session_is_not_reused(monkeypatch, tmp_path):

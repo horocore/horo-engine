@@ -50,6 +50,9 @@ def test_native_paths_and_support(monkeypatch, tmp_path):
         monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
         assert api.cache_home() == tmp_path / "local/horo-quality"
         assert api.default_code_user_data() == tmp_path / "roaming/Code"
+    elif sys.platform == "darwin":
+        assert api.cache_home() == Path.home() / "Library/Caches/horo-quality"
+        assert api.default_code_user_data() == Path.home() / "Library/Application Support/Code"
     else:
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
@@ -119,6 +122,13 @@ def test_timeout_and_cancel_remove_entire_owned_tree(tmp_path, cancel, leader_ex
         finally:
             for handle in handles:
                 api._windows().close(handle)
+    elif sys.platform == "darwin":
+        psutil = api._psutil()
+        for pid in pids:
+            try:
+                assert psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+            except psutil.NoSuchProcess:
+                pass
     else:
         for pid in pids:
             status = Path(f"/proc/{pid}/stat")
@@ -139,6 +149,33 @@ def test_cancelled_command_never_spawns(tmp_path):
     with pytest.raises(AnalysisError, match="cancelled"):
         api.native_run([sys.executable, "-c", f"open({str(marker)!r},'w').close()"], tmp_path, 2, None, cancelled)
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("member_state", ["zombie", "running", "inaccessible", "gone"])
+def test_macos_denied_group_signal_requires_all_members_exited(monkeypatch, member_state):
+    from types import SimpleNamespace
+    api = platform()
+    psutil = api._psutil()
+
+    def denied(*_args):
+        raise PermissionError(1, "Operation not permitted")
+
+    def status():
+        if member_state == "inaccessible":
+            raise psutil.AccessDenied(42)
+        if member_state == "gone":
+            raise psutil.NoSuchProcess(42)
+        return psutil.STATUS_ZOMBIE if member_state == "zombie" else psutil.STATUS_RUNNING
+
+    monkeypatch.setattr(api.sys, "platform", "darwin")
+    monkeypatch.setattr(api.os, "killpg", denied, raising=False)
+    monkeypatch.setattr(api.os, "getpgid", lambda _pid: 42, raising=False)
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter([SimpleNamespace(pid=42, status=status)]))
+    if member_state in ("running", "inaccessible"):
+        with pytest.raises(PermissionError):
+            api._signal_command_group(42, api.signal.SIGKILL)
+    else:
+        api._signal_command_group(42, api.signal.SIGKILL)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows job and batch contracts")
@@ -230,7 +267,7 @@ def test_native_process_table_exposes_only_quality_markers():
     api = platform()
     process = api.native_processes()[os.getpid()]
     assert process["parent"] == os.getppid()
-    assert process["started"].isdigit()
+    assert all(part.isdigit() for part in process["started"].split(":"))
     assert process["argv"]
     expected_executable = sys._base_executable if sys.platform == "win32" else sys.executable
     assert Path(process["executable"]).resolve() == Path(expected_executable).resolve()
@@ -431,7 +468,105 @@ def test_job_cleanup_failure_is_typed_and_always_closes_job(tmp_path, monkeypatc
 
 def test_unknown_platform_fails_closed(monkeypatch):
     api = platform()
-    monkeypatch.setattr(api.sys, 'platform', "darwin")
+    monkeypatch.setattr(api.sys, 'platform', "unsupported-os")
     AnalysisError = platform().AnalysisError
     with pytest.raises(AnalysisError, match="Linux.*Windows"):
         api.ensure_supported()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS audit-token contract")
+def test_macos_generation_mismatch_never_signals_replacement():
+    import signal
+    import subprocess
+    api = platform()
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        started = api._macos_identity(process.pid)
+        api._macos_send_signal(process.pid, started.split(":")[0] + ":0", signal.SIGKILL)
+        assert process.poll() is None
+        api._macos_send_signal(process.pid, started, signal.SIGKILL)
+        assert process.wait(timeout=5) == -signal.SIGKILL
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS generation contract")
+@pytest.mark.parametrize("failure", ["reuse", "permission", "gone", "success"])
+def test_macos_termination_validates_every_identity_before_signalling(monkeypatch, failure):
+    api = platform()
+    calls = []
+    def read(pid):
+        if pid == 12:
+            if failure == "permission":
+                raise PermissionError("denied")
+            if failure == "gone":
+                raise ProcessLookupError(pid)
+            if failure == "reuse":
+                return "99:42"
+        return "77:31"
+    monkeypatch.setattr(api, "_macos_identity", read)
+    monkeypatch.setattr(api, "_macos_send_signal", lambda *args: calls.append(args))
+    table = {11: {"started": "77:31"}, 12: {"started": "77:31"}}
+    if failure == "permission":
+        with pytest.raises(api.AnalysisError, match="Cannot terminate"):
+            api.terminate_processes({11, 12}, table)
+    else:
+        assert api.terminate_processes({11, 12}, table) is (failure != "reuse")
+    if failure in {"reuse", "permission"}:
+        assert not calls
+    else:
+        assert {call[0] for call in calls} == ({11} if failure == "gone" else {11, 12})
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS Code main contract")
+def test_macos_discovers_electron_gui_without_accepting_cli(tmp_path):
+    api = platform()
+    profile, extension, workspace = (tmp_path / name for name in ("profile", "extension", "workspace"))
+    executable = "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
+    markers = {"HORO_QUALITY_SESSION": "nonce", "HORO_QUALITY_PROFILE": str(profile)}
+    gui = {"parent": 1, "started": "10:1", "executable": executable,
+           "argv": [executable, "--user-data-dir", str(profile)], "markers": markers}
+    host = {"parent": 10, "started": "11:1", "executable": "Code Helper (Plugin)",
+            "argv": ["Code Helper (Plugin)", "--type=utility"], "markers": markers}
+    assert [item[0] for item in api.discover_main({10: gui, 11: host}, profile, extension, workspace, "nonce")] == [10]
+    gui["argv"].append("--type=renderer")
+    assert not api.discover_main({10: gui, 11: host}, profile, extension, workspace, "nonce")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS Unix socket length")
+def test_macos_profile_uses_short_path_and_rejects_oversized_socket(tmp_path, monkeypatch):
+    api = platform()
+    pool = api.SessionPool(tmp_path / "registry", tmp_path / "worktree")
+    captured = []
+    monkeypatch.setattr(api, "cache_home", lambda: tmp_path / "cache")
+    def capture(_root, profile, *_args):
+        captured.append(profile)
+        raise api.AnalysisError("launch fixture")
+    monkeypatch.setattr(api, "launch_profile", capture)
+    # pytest temporary paths are long on macOS: model an ordinary short home.
+    monkeypatch.setattr(api, "cache_home", lambda: Path("/Users/test/Library/Caches/horo-quality"))
+    with pytest.raises(api.AnalysisError, match="launch fixture"):
+        pool.open(0, {}, tmp_path / "workspace", tmp_path / "source", tmp_path / "extensions", 1, tmp_path / "file.cpp")
+    assert captured == [Path("/Users/test/Library/Caches/horo-quality/p") / api.identity(pool.root) / "u"]
+    monkeypatch.setattr(api, "cache_home", lambda: tmp_path / ("x" * 104))
+    with pytest.raises(api.AnalysisError, match="socket path limit"):
+        pool.open(0, {}, tmp_path / "workspace", tmp_path / "source", tmp_path / "extensions", 1, tmp_path / "file.cpp")
+    assert len(captured) == 1
+
+
+@pytest.mark.parametrize("address,expected", [
+    ("::127.0.0.1", True), ("::127.0.0.2", True), ("::192.0.2.1", False),
+    ("::ffff:127.0.0.1", True), ("::ffff:192.0.2.1", False), ("::", False),
+])
+def test_macos_java_compatible_loopback_addresses(monkeypatch, address, expected):
+    from types import SimpleNamespace
+    api = platform()
+    connection = SimpleNamespace(status="LISTEN", laddr=SimpleNamespace(ip=address, port=64121))
+    process = SimpleNamespace(net_connections=lambda **_: [connection])
+    fake = SimpleNamespace(Process=lambda _: process, CONN_LISTEN="LISTEN", NoSuchProcess=ProcessLookupError,
+                           Error=RuntimeError)
+    monkeypatch.setattr(api, "_psutil", lambda: fake)
+    monkeypatch.setattr(api, "_macos_identity", lambda _: "77:31")
+    assert api._macos_listener_matches({42}, range(64120, 64131)) == ({(42, 64121)} if expected else set())

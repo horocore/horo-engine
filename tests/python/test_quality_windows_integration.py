@@ -147,7 +147,7 @@ def test_large_windows_codacy_scan_checks_each_batch_and_keeps_late_failures(tmp
         return payload, 2 if later_failure and len(calls) == 2 else 0
 
     monkeypatch.setattr(tools, 'json_command', analyze)
-    result = tools.codacy_check(tmp_path, tmp_path, selected,
+    result = tools.codacy_check(tmp_path, selected,
                                {'tools': [{'toolId': 'Cpp'}, {'toolId': 'Python'}]},
                                {'Cpp': {'languages': ['CPP']}, 'Python': {'languages': ['Python']}}, 30)
     assert len(calls) > 1
