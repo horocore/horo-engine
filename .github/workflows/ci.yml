@@ -63,8 +63,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install tooling
+        # Linux tooling tests also exercise the macOS psutil ownership adapter.
         run: >-
-          pip install --no-cache-dir --only-binary=:all: pytest==8.3.4 clang-format==19.1.7 defusedxml==0.7.1
+          pip install --no-cache-dir --only-binary=:all: pytest==8.3.4 clang-format==19.1.7 defusedxml==0.7.1 psutil==7.2.2
 
       - name: Check C++ formatting
         run: python3 scripts/dev.py format --check
