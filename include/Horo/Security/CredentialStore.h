@@ -112,6 +112,7 @@ namespace Horo::Security {
      * @param provider Borrowed lifecycle authority that outlives this synchronous call, or null when unavailable.
      * @param nowMillis Explicit host observation time in the same monotonic domain as provider expiry.
      * @return Move-only secret, or a safe typed failure with provider diagnostic text removed.
+     * Provider exceptions are reported as credential backend unavailable without their text.
      * @note The caller owns the returned secret only for the consuming operation and must not cache or publish it.
      * Calls follow the provider's thread contract. The provider retains expiry and revocation authority.
      */

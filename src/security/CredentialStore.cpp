@@ -24,16 +24,20 @@ namespace Horo::Security {
             return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialNotFound));
         if (provider == nullptr)
             return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialBackendUnavailable));
-        auto resolved = provider->Resolve(*reference, nowMillis);
-        if (resolved.HasValue()) {
-            if (resolved.Value().Empty())
-                return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialNotFound));
-            return resolved;
-        }
-        for (const auto *failure : {&SecurityErrors::CredentialBackendUnavailable, &SecurityErrors::CredentialExpired,
-                                    &SecurityErrors::CredentialRevoked, &SecurityErrors::CredentialNotFound}) {
-            if (resolved.ErrorValue().code.Value() == failure->code.Value())
-                return Result<SecureBytes>::Failure(MakeError(*failure));
+        try {
+            auto resolved = provider->Resolve(*reference, nowMillis);
+            if (resolved.HasValue()) {
+                if (resolved.Value().Empty())
+                    return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialNotFound));
+                return resolved;
+            }
+            for (const auto *failure : {&SecurityErrors::CredentialBackendUnavailable, &SecurityErrors::CredentialExpired,
+                                        &SecurityErrors::CredentialRevoked, &SecurityErrors::CredentialNotFound}) {
+                if (resolved.ErrorValue().code.Value() == failure->code.Value())
+                    return Result<SecureBytes>::Failure(MakeError(*failure));
+            }
+        } catch (...) {
+            // Provider exceptions may contain protected data. Keep them inside the credential boundary.
         }
         return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialBackendUnavailable));
     }
