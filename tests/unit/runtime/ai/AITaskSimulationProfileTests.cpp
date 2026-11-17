@@ -73,10 +73,12 @@ namespace Horo::AI {
             CHECK(EvaluateTick(scheduler, 5) == 0);
             CHECK(Tier(scheduler, agent) == AiSimulationTier::Reduced);
 
+            REQUIRE(scheduler.Wake(agent, {.polling = true}).HasValue());
             REQUIRE(
                 scheduler.SetRelevanceAtSafePoint(agent, {.anchorDistanceMillimeters = 31'000, .activeSimulationRegion = true}).HasValue());
             CHECK(EvaluateTick(scheduler, 6) == 0);
             CHECK(EvaluateTick(scheduler, 7) == 1);
+            CHECK(probe->reasons.polling);
             CHECK(EvaluateTick(scheduler, 8) == 0);
             CHECK(Tier(scheduler, agent) == AiSimulationTier::EventOnly);
             REQUIRE(scheduler.Wake(agent, {.polling = true}).HasValue());

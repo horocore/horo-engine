@@ -3012,7 +3012,7 @@ cadence. The camera and renderer are outside the input contract.
 | Admitted tier | Work and retained state |
 | --- | --- |
 | Full | Runs the registered cadence and accepts owner wakes. Gameplay pins and urgent stimuli select this tier regardless of distance. |
-| Reduced | Uses the slower of the registered cadence and the profile interval. Owner events can advance evaluation. |
+| Reduced | Uses the slower of the registered cadence and the profile interval. Gameplay events can advance evaluation. Routine polling follows the reduced cadence. |
 | Event-only | Suppresses periodic evaluation and admits gameplay wakes. Retained intents can finish publishing under the existing command budget. |
 | Suspended | Drops uncommitted intents, cancels optional workers, and suppresses pending worker publication before mailbox pumping. The agent registration, schema, blackboard, and canonical controller state remain owned by the Scene. |
 

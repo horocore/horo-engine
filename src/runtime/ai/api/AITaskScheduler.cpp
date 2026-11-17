@@ -200,7 +200,7 @@ namespace Horo::AI {
             return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
         if (entry->tier == AiSimulationTier::Suspended) {
             reasons = {.perception = reasons.perception, .explicitRequest = reasons.explicitRequest};
-        } else if (entry->tier == AiSimulationTier::EventOnly) {
+        } else if (entry->tier == AiSimulationTier::Reduced || entry->tier == AiSimulationTier::EventOnly) {
             reasons.polling = false;
         }
         if (!reasons.Any())
