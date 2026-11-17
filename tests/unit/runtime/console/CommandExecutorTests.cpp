@@ -17,6 +17,7 @@ namespace {
         std::atomic<int> calls{};
         std::thread::id executedOn;
         bool worker{};
+        bool waitForCancellation{};
         std::optional<ConfigurationRevision> configurationRevision;
 
         Result<DebugCommandOutput> Execute(const DebugCommandContext &, std::span<const ArgumentValue>,
@@ -29,6 +30,11 @@ namespace {
                 (void)job->UpdateProgress("work", 0.5F);
                 if (job->Configuration())
                     configurationRevision = job->Configuration()->Revision();
+            }
+            if (waitForCancellation) {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                while (!cancellation.IsCancellationRequested() && std::chrono::steady_clock::now() < deadline)
+                    std::this_thread::yield();
             }
             if (cancellation.IsCancellationRequested())
                 return Result<DebugCommandOutput>::Failure(JobCancelled().ErrorValue());
@@ -274,6 +280,46 @@ TEST_CASE("Console worker jobs expose authoritative handles and queued cancellat
     const auto snapshot = operations->SnapshotIfChanged(0);
     REQUIRE(snapshot);
     CHECK(snapshot->operations.front().state == OperationState::Cancelled);
+}
+
+TEST_CASE("Running console worker progress and cancellation use the same operation identity", "[console][threads]") {
+    JobSystem jobs(JobSystemConfig{.workerCount = 1});
+    auto operations = std::make_shared<OperationStore>(8, 8);
+    auto handler = std::make_shared<Handler>();
+    handler->worker = true;
+    handler->waitForCancellation = true;
+    auto executor = Executor(CommandThreadPolicy::WorkerJob, jobs, operations, handler);
+    const auto submitted = executor->Submit("game.test", {});
+    REQUIRE(submitted.HasValue());
+    REQUIRE(submitted.Value().job);
+    REQUIRE(submitted.Value().operation);
+    const auto job = *submitted.Value().job;
+    const auto operation = *submitted.Value().operation;
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (jobs.Query(job).progress.value != 0.5F && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    REQUIRE(executor->DrainOwner(0).HasValue());
+    const auto running = operations->SnapshotIfChanged(0);
+    REQUIRE(running);
+    REQUIRE(running->operations.size() == 1);
+    const auto &record = running->operations.front();
+    CHECK(record.id == operation);
+    CHECK(record.state == OperationState::Running);
+    CHECK(record.phase == "work");
+    CHECK(record.progress == 0.5F);
+    CHECK(record.cancellable);
+
+    REQUIRE(operations->RequestCancel(operation));
+    jobs.Shutdown(ShutdownPolicy::Drain);
+    REQUIRE(executor->DrainOwner(0).HasValue());
+    const auto terminal = operations->SnapshotIfChanged(0);
+    REQUIRE(terminal);
+    REQUIRE(terminal->operations.size() == 1);
+    CHECK(terminal->operations.front().id == operation);
+    CHECK(terminal->operations.front().state == OperationState::Cancelled);
+    CHECK(jobs.Query(job).state == JobState::Cancelled);
+    CHECK(handler->calls == 1);
 }
 
 TEST_CASE("Console worker completion is nonblocking and retains bound capability lifetime", "[console]") {
