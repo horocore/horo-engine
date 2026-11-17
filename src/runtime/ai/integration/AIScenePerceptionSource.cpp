@@ -97,61 +97,72 @@ namespace Horo::AI {
         return Result<std::size_t>::Success(std::min(sourceCapacity.Value(), positionCapacity.Value()));
     }
 
+    /** @copydoc PerceptionPublication::PrepareAtSafePoint */
+    Result<PerceptionPublication> PerceptionPublication::PrepareAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                            const Runtime::EntityRef listener,
+                                                                            const BlackboardInstance &blackboard,
+                                                                            const PerceptionBlackboardProjection projection) {
+        if (!scene.IsCurrent() || scene.Get(listener).HasError() || !blackboard.IsActive())
+            return Result<PerceptionPublication>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        auto schema = blackboard.SchemaAtSafePoint();
+        const auto capacity = projection.Validate(*schema);
+        if (capacity.HasError())
+            return Result<PerceptionPublication>::Failure(capacity.ErrorValue());
+        return Result<PerceptionPublication>::Success({listener, blackboard.Binding(), std::move(schema), projection, capacity.Value()});
+    }
+
+    /** @copydoc PerceptionPublication::PerceptionPublication */
+    PerceptionPublication::PerceptionPublication(const Runtime::EntityRef listener, const BlackboardInstanceBinding binding,
+                                                 std::shared_ptr<const BlackboardSchema> schema,
+                                                 const PerceptionBlackboardProjection projection, const std::size_t capacity) noexcept
+        : listener_(listener), binding_(binding), schema_(std::move(schema)), projection_(projection), capacity_(capacity) {}
+
     /** @copydoc PerceptionPublication::MatchesBinding */
-    bool PerceptionPublication::MatchesBinding(const Runtime::EntityRef listener, const std::uint64_t simulationTick,
-                                               const BlackboardInstanceBinding &binding,
-                                               const PerceptionBlackboardProjection &projection) const noexcept {
-        return !current_ || (current_->agent == binding.agent && current_->listener == listener && binding_ == binding &&
-                             projection_.sources == projection.sources && projection_.positions == projection.positions &&
-                             simulationTick >= current_->simulationTick && current_->revision != std::numeric_limits<std::uint64_t>::max());
+    bool PerceptionPublication::MatchesBinding(const Runtime::RuntimeSceneView &scene, const BlackboardInstance &blackboard) const {
+        return scene.IsCurrent() && scene.RuntimeId() == listener_.runtime && scene.Get(listener_).HasValue() && blackboard.IsActive() &&
+               blackboard.Binding() == binding_ && blackboard.SchemaAtSafePoint() == schema_;
     }
 
     /** @copydoc PerceptionPublication::PublishAtBlackboardSync */
-    Result<PerceptionPublicationSnapshot> PerceptionPublication::PublishAtBlackboardSync(
-        Runtime::RuntimeScene &scene, const PerceptionSpatialBroadphase &filtering, const Runtime::EntityRef listener,
-        AIPerceptionMemory &memory, BlackboardInstance &blackboard, const PerceptionBlackboardProjection projection,
-        const std::uint64_t simulationTick) {
+    Result<PerceptionPublicationSnapshot> PerceptionPublication::PublishAtBlackboardSync(Runtime::RuntimeScene &scene,
+                                                                                         const PerceptionSpatialBroadphase &filtering,
+                                                                                         AIPerceptionMemory &memory,
+                                                                                         BlackboardInstance &blackboard,
+                                                                                         const std::uint64_t simulationTick) {
         using PublicationResult = Result<PerceptionPublicationSnapshot>;
         const auto spatial = filtering.Current();
         const auto view = scene.View();
-        if (!spatial || !view.IsCurrent() || spatial->Scene() != view.RuntimeId() || listener.runtime != view.RuntimeId() ||
-            view.Get(listener).HasError() || memory.SceneIncarnation() != view.RuntimeId().value || !blackboard.IsActive() ||
-            blackboard.Binding().agent != memory.Agent() || !projection.sources.IsValid() || !projection.positions.IsValid() ||
-            projection.sources == projection.positions)
+        if (!spatial || spatial->Scene() != view.RuntimeId() || !MatchesBinding(view, blackboard) ||
+            memory.SceneIncarnation() != view.RuntimeId().value || binding_.agent != memory.Agent())
             return PublicationResult::Failure(MakeError(AIErrors::PerceptionSpatialStale));
-        if (!MatchesBinding(listener, simulationTick, blackboard.Binding(), projection))
+        if (current_ && (simulationTick < current_->simulationTick || current_->revision == std::numeric_limits<std::uint64_t>::max()))
             return PublicationResult::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
         if (current_ && filtering_ == spatial && simulationTick == current_->simulationTick)
             return Current(view, filtering, blackboard);
-        const auto capacity = projection.Validate(*blackboard.SchemaAtSafePoint());
-        if (capacity.HasError())
-            return PublicationResult::Failure(capacity.ErrorValue());
+        auto createdBatch = blackboard.BeginWriteBatch();
+        if (createdBatch.HasError())
+            return PublicationResult::Failure(createdBatch.ErrorValue());
         const auto remembered = memory.Snapshot(simulationTick, PerceptionSceneLiveness(scene));
         if (remembered.HasError())
             return PublicationResult::Failure(remembered.ErrorValue());
         const PerceptionPublicationSnapshot identity{.agent = memory.Agent(),
-                                                     .listener = listener,
+                                                     .listener = listener_,
                                                      .revision = current_ ? current_->revision + 1 : 1,
                                                      .spatialRevision = spatial->Revision(),
                                                      .simulationTick = simulationTick};
-        auto next = BuildProjection(view, *spatial, remembered.Value(), identity, capacity.Value());
-        if (next.admittedCount > capacity.Value()) {
+        auto next = BuildProjection(view, *spatial, remembered.Value(), identity, capacity_);
+        if (next.admittedCount > capacity_) {
             rejectedByCapacity_ = next.admittedCount;
             return PublicationResult::Failure(MakeError(AIErrors::PerceptionDescriptorLimitExceeded));
         }
-        auto createdBatch = blackboard.BeginWriteBatch();
-        if (createdBatch.HasError())
-            return PublicationResult::Failure(createdBatch.ErrorValue());
         auto batch = std::move(createdBatch).Value();
-        if (const auto staged = next.Stage(batch, projection, spatial->ReadAuthorization()); staged.HasError())
+        if (const auto staged = next.Stage(batch, projection_, spatial->ReadAuthorization()); staged.HasError())
             return PublicationResult::Failure(staged.ErrorValue());
         const auto committed = blackboard.CommitAtBlackboardSync(std::move(batch));
         if (committed.HasError())
             return PublicationResult::Failure(committed.ErrorValue());
         next.snapshot.blackboardRevision = committed.Value().revision;
         filtering_ = spatial;
-        binding_ = blackboard.Binding();
-        projection_ = projection;
         current_ = next.snapshot;
         rejectedByCapacity_ = 0;
         return PublicationResult::Success(next.snapshot);
@@ -161,8 +172,7 @@ namespace Horo::AI {
     Result<PerceptionPublicationSnapshot> PerceptionPublication::Current(const Runtime::RuntimeSceneView &scene,
                                                                          const PerceptionSpatialBroadphase &filtering,
                                                                          const BlackboardInstance &blackboard) const {
-        if (!current_ || filtering.Current() != filtering_ || !scene.IsCurrent() || scene.RuntimeId() != current_->listener.runtime ||
-            scene.Get(current_->listener).HasError() || !blackboard.IsActive() || blackboard.Binding() != binding_)
+        if (!current_ || filtering.Current() != filtering_ || !MatchesBinding(scene, blackboard))
             return Result<PerceptionPublicationSnapshot>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         if (blackboard.RevisionAtSafePoint() != current_->blackboardRevision)
             return Result<PerceptionPublicationSnapshot>::Failure(MakeError(AIErrors::PerceptionSpatialStale));

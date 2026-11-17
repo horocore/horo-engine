@@ -205,10 +205,10 @@ spatial publication is replaced. Reappearing slots with a new generation must
 pass fresh gain samples. A streamed source with no current Scene entity has no
 eligible memory or LOS result until it is registered again.
 
-The `PerceptionBlackboardProjection` contract lets composition validate the
-paired source and position collections against the admitted blackboard schema
-before sensing. `PerceptionPublication` rechecks the active schema at publication
-and commits the pair in one batch. The smaller key capacity bounds the pair.
+`PerceptionPublication::PrepareAtSafePoint` validates the paired source and
+position collections against the admitted listener's blackboard schema before
+sensing. Publication verifies the exact binding and commits the pair in one batch.
+The smaller key capacity bounds the pair.
 A capacity rejection preserves the previous committed values and exposes the
 count of rejected, policy-admitted facts on the owner lane. Revoked policy
 authorizations still invalidate reads of the previous values.

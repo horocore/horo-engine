@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -103,14 +104,25 @@ namespace Horo::AI {
             PerceptionSpatialSource source;
             std::vector<PerceptionSpatialSource> additional;
             std::vector<PerceptionSpatialListener> additionalListeners;
-            PerceptionPublication publication;
+            std::optional<PerceptionPublication> preparedPublication;
             PerceptionBlackboardProjection keys{MakeIdentity<BlackboardKeyId>(1), MakeIdentity<BlackboardKeyId>(2)};
 
             explicit PublicationFixture(const std::size_t sourceCount = 1) {
                 InitializeParticipants(sourceCount);
                 Publish(1);
                 InitializeBlackboard();
+                auto prepared = Prepare(keys);
+                REQUIRE(prepared.HasValue());
+                preparedPublication.emplace(std::move(prepared).Value());
                 SeedMemory();
+            }
+
+            [[nodiscard]] Result<PerceptionPublication> Prepare(PerceptionBlackboardProjection projection) const {
+                return PerceptionPublication::PrepareAtSafePoint(scene->View(), listener.entity, *blackboard, projection);
+            }
+
+            [[nodiscard]] PerceptionPublication &Publication() {
+                return *preparedPublication;
             }
 
             void InitializeParticipants(const std::size_t sourceCount) {
@@ -189,7 +201,7 @@ namespace Horo::AI {
             }
 
             [[nodiscard]] Result<PerceptionPublicationSnapshot> Sync(std::uint64_t tick = 1) {
-                return publication.PublishAtBlackboardSync(*scene, broadphase, listener.entity, memory, *blackboard, keys, tick);
+                return Publication().PublishAtBlackboardSync(*scene, broadphase, memory, *blackboard, tick);
             }
 
             [[nodiscard]] BlackboardCollectionValue Read(BlackboardKeyId key) const {
@@ -228,7 +240,7 @@ namespace Horo::AI {
                 fixture.listener.admission.teams = PerceptionTeamFilter::Same;
             }
             fixture.Publish(2);
-            ExpectError(fixture.publication.Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard),
+            ExpectError(fixture.Publication().Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard),
                         AIErrors::PerceptionSpatialStale);
             const auto denied = fixture.Sync();
             REQUIRE(denied.HasValue());
@@ -263,7 +275,7 @@ namespace Horo::AI {
             const auto published = fixture.Sync();
             REQUIRE(published.HasValue());
             REQUIRE(published.Value().memory.count == 3);
-            const QueryPerceivedEntitySource source{view, fixture.publication, fixture.broadphase, *fixture.blackboard};
+            const QueryPerceivedEntitySource source{view, fixture.Publication(), fixture.broadphase, *fixture.blackboard};
             std::array<QueryGeneratedItem, 3> items;
             const QueryGeneratorOutput output{{MakeIdentity<QueryStageId>(1), MakeIdentity<QueryGeneratorId>(2),
                                                MakeIdentity<QueryProviderId>(3), published.Value().revision},
@@ -290,7 +302,7 @@ namespace Horo::AI {
             const auto published = fixture.Sync(2);
             REQUIRE(published.HasValue());
             const auto view = fixture.scene->View();
-            const QueryPerceivedEntitySource source{view, fixture.publication, fixture.broadphase, *fixture.blackboard};
+            const QueryPerceivedEntitySource source{view, fixture.Publication(), fixture.broadphase, *fixture.blackboard};
             QueryPerceptionTest test{MakeIdentity<QueryStageId>(3), fixture.agent, published.Value().revision,
                                      QueryPerceptionMatch::Remembered, SenseTypeIds::Sight};
             const auto remembered = EvaluateQueryPerception(source, test, target);
@@ -326,7 +338,7 @@ namespace Horo::AI {
                 auto &state = *static_cast<Probe *>(context);
                 ++state.calls;
                 state.changedKeys = batch.Changes().size();
-                const auto recursive = state.fixture->Sync();
+                const auto recursive = state.fixture->Sync(1000);
                 state.rejected =
                     recursive.HasError() && recursive.ErrorValue().code.Value() == AIErrors::BlackboardReentrantMutation.code.Value();
             };
@@ -339,6 +351,40 @@ namespace Horo::AI {
             CHECK(probe.changedKeys == 2);
             CHECK(probe.rejected);
             REQUIRE(fixture.blackboard->RemoveObserverAtBlackboardSync(observer.Value()).Value());
+            const auto next = fixture.Sync(2);
+            REQUIRE(next.HasValue());
+            CHECK(next.Value().memory.count == 1);
+        }
+
+        TEST_CASE("Staged perception refreshes and forgetting publish once per listener tick", "[unit][ai][perception][filter]") {
+            PublicationFixture fixture;
+            const auto first = fixture.Sync();
+            REQUIRE(first.HasValue());
+            REQUIRE(first.Value().memory.count == 1);
+            const auto key = first.Value().memory.entries[0].key;
+            const auto lastPosition = Math::WorldCoordinate64::FromMillimeters(3000, 0, 0);
+            REQUIRE(fixture.memory.Observe({.key = key, .position = {}}, 2).HasValue());
+            REQUIRE(fixture.memory.Observe({.key = key, .position = lastPosition}, 2).HasValue());
+            CHECK(fixture.blackboard->RevisionAtSafePoint() == first.Value().blackboardRevision);
+            const auto refreshed = fixture.Sync(2);
+            REQUIRE(refreshed.HasValue());
+            CHECK(refreshed.Value().revision == first.Value().revision + 1);
+            CHECK(refreshed.Value().blackboardRevision == first.Value().blackboardRevision + 1);
+            REQUIRE(refreshed.Value().memory.count == 1);
+            REQUIRE(fixture.Read(fixture.keys.positions).count == 1);
+            CHECK(std::get<Math::WorldCoordinate64>(fixture.Read(fixture.keys.positions).elements[0]) == lastPosition);
+            const auto repeated = fixture.Sync(2);
+            REQUIRE(repeated.HasValue());
+            CHECK(repeated.Value().revision == refreshed.Value().revision);
+
+            REQUIRE(fixture.memory.ForgetSource(key.source).HasValue());
+            const auto forgotten = fixture.Sync(3);
+            REQUIRE(forgotten.HasValue());
+            CHECK(forgotten.Value().revision == refreshed.Value().revision + 1);
+            CHECK(forgotten.Value().blackboardRevision == refreshed.Value().blackboardRevision + 1);
+            CHECK(forgotten.Value().memory.count == 0);
+            CHECK(fixture.Read(fixture.keys.positions).count == 0);
+            CHECK(fixture.Read(fixture.keys.sources).count == 0);
         }
 
         TEST_CASE("17 through 32 admitted records fail without partial blackboard or debug publication", "[unit][ai][perception][filter]") {
@@ -346,18 +392,18 @@ namespace Horo::AI {
                 INFO("memory entries: " << count);
                 PublicationFixture fixture(count);
                 ExpectError(fixture.Sync(), AIErrors::PerceptionDescriptorLimitExceeded);
-                CHECK(fixture.publication.RejectedByCapacity() == count);
+                CHECK(fixture.Publication().RejectedByCapacity() == count);
                 CHECK(fixture.Read(fixture.keys.sources).count == 0);
                 CHECK(fixture.Read(fixture.keys.positions).count == 0);
                 CHECK(fixture.blackboard->CaptureCanonical().HasValue());
-                CHECK(fixture.publication.Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
+                CHECK(fixture.Publication().Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
                 for (auto &extra : fixture.additional)
                     extra.visibility = PerceptionGameplayVisibility::Hidden;
                 fixture.Publish(2);
                 const auto first = fixture.Sync();
                 REQUIRE(first.HasValue());
                 REQUIRE(first.Value().memory.count == 1);
-                CHECK(fixture.publication.RejectedByCapacity() == 0);
+                CHECK(fixture.Publication().RejectedByCapacity() == 0);
                 for (auto &extra : fixture.additional)
                     extra.visibility = PerceptionGameplayVisibility::Everyone;
                 fixture.Publish(3);
@@ -365,7 +411,7 @@ namespace Horo::AI {
                 ExpectError(fixture.blackboard->Snapshot().Value().Read(fixture.keys.sources), AIErrors::BlackboardInstanceStale);
                 ExpectError(fixture.blackboard->Snapshot().Value().Read(fixture.keys.positions), AIErrors::BlackboardInstanceStale);
                 CHECK(fixture.blackboard->Snapshot().Value().Revision().Value() == first.Value().blackboardRevision);
-                CHECK(fixture.publication.Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
+                CHECK(fixture.Publication().Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
                 for (auto &extra : fixture.additional)
                     extra.visibility = PerceptionGameplayVisibility::Hidden;
                 fixture.Publish(4);
@@ -398,7 +444,7 @@ namespace Horo::AI {
             REQUIRE(current.Read(MakeIdentity<BlackboardKeyId>(3)).HasValue());
             CHECK_FALSE(std::get<bool>(std::get<BlackboardScalarValue>(*current.Read(MakeIdentity<BlackboardKeyId>(3)).Value())));
             ExpectError(fixture.blackboard->CaptureCanonical(), AIErrors::BlackboardInstanceStale);
-            CHECK(fixture.publication.Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
+            CHECK(fixture.Publication().Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
             for (auto &extra : fixture.additional)
                 extra.visibility = PerceptionGameplayVisibility::Hidden;
             fixture.Publish(4);
@@ -415,18 +461,15 @@ namespace Horo::AI {
             const auto retained = fixture.blackboard->Snapshot().Value();
             fixture.source.visibility = PerceptionGameplayVisibility::Hidden;
             fixture.Publish(2);
-            PerceptionPublication wrongProjection;
             const PerceptionBlackboardProjection wrong{fixture.keys.sources, MakeIdentity<BlackboardKeyId>(3)};
             CHECK(fixture.keys.Validate(*fixture.schema).Value() == MaximumBlackboardCollectionElements);
-            ExpectError(wrong.Validate(*fixture.schema), AIErrors::BlackboardValueTypeMismatch);
-            ExpectError(wrongProjection.PublishAtBlackboardSync(*fixture.scene, fixture.broadphase, fixture.listener.entity, fixture.memory,
-                                                                *fixture.blackboard, wrong, 1),
-                        AIErrors::BlackboardValueTypeMismatch);
+            ExpectError(fixture.Prepare(wrong), AIErrors::BlackboardValueTypeMismatch);
             ExpectError(retained.Read(fixture.keys.sources), AIErrors::BlackboardInstanceStale);
             auto replacement = fixture.blackboard->Binding();
             ++replacement.instanceGeneration;
             ++replacement.schemaGeneration;
             REQUIRE(fixture.blackboard->ReplaceAtBlackboardSync(replacement, fixture.schema).HasValue());
+            ExpectError(fixture.Sync(2), AIErrors::PerceptionSpatialStale);
             ExpectError(fixture.blackboard->Snapshot().Value().Read(fixture.keys.sources), AIErrors::BlackboardInstanceStale);
             ExpectError(fixture.blackboard->CaptureCanonical(), AIErrors::BlackboardInstanceStale);
             REQUIRE(fixture.blackboard->ResetAtBlackboardSync().HasValue());
@@ -488,17 +531,17 @@ namespace Horo::AI {
             const AgentHandle secondAgent{AiRuntimeIncarnation::Create(7).Value(), {2, 1}};
             auto secondBoard =
                 std::move(BlackboardInstance::Create({secondAgent, fixture.schema->Identity(), 1, 1, 1}, fixture.schema)).Value();
+            auto prepared =
+                PerceptionPublication::PrepareAtSafePoint(fixture.scene->View(), secondListener.entity, *secondBoard, fixture.keys);
+            REQUIRE(prepared.HasValue());
+            auto secondPublisher = std::move(prepared).Value();
             auto secondMemory = std::move(AIPerceptionMemory::Create(77, secondAgent)).Value();
             REQUIRE(secondMemory
                         .Observe({.key = {MakeIdentity<PerceptionListenerTypeId>(1), SenseTypeIds::Sight, StimulusTypeIds::Visual,
                                           ProjectPerceptionSource(fixture.source.entity)}},
                                  1)
                         .HasValue());
-            PerceptionPublication secondPublisher;
-            REQUIRE(secondPublisher
-                        .PublishAtBlackboardSync(*fixture.scene, fixture.broadphase, secondListener.entity, secondMemory, *secondBoard,
-                                                 fixture.keys, 1)
-                        .HasValue());
+            REQUIRE(secondPublisher.PublishAtBlackboardSync(*fixture.scene, fixture.broadphase, secondMemory, *secondBoard, 1).HasValue());
             const auto first = fixture.blackboard->Snapshot().Value();
             const auto second = secondBoard->Snapshot().Value();
             fixture.source.visibility = PerceptionGameplayVisibility::Hidden;
@@ -529,15 +572,15 @@ namespace Horo::AI {
             CHECK(fixture.broadphase.Current()->Revision() == 1);
             REQUIRE(retained.Read(fixture.keys.sources).HasValue());
             CHECK(std::get<BlackboardCollectionValue>(*retained.Read(fixture.keys.sources).Value()).count == 1);
-            CHECK(fixture.publication.Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).Value().revision ==
+            CHECK(fixture.Publication().Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).Value().revision ==
                   first.Value().revision);
-            fixture.keys.positions = MakeIdentity<BlackboardKeyId>(999);
-            CHECK(fixture.Sync(2).HasError());
+            ExpectError(fixture.Prepare({fixture.keys.sources, MakeIdentity<BlackboardKeyId>(999)}),
+                        AIErrors::BlackboardUnknownValueRejected);
             CHECK(fixture.Read(fixture.keys.sources).count == 1);
             REQUIRE(fixture.blackboard->TeardownAtBlackboardSync().HasValue());
-            CHECK(fixture.publication.Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
-            fixture.publication.Reset();
-            CHECK(fixture.publication.Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
+            CHECK(fixture.Publication().Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
+            fixture.Publication().Reset();
+            CHECK(fixture.Publication().Current(fixture.scene->View(), fixture.broadphase, *fixture.blackboard).HasError());
         }
     }  // namespace
 }  // namespace Horo::AI

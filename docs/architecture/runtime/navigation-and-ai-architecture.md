@@ -1377,8 +1377,12 @@ typed stale after revocation. Accepted policy changes followed by capacity/type/
 write failure therefore cannot expose old denied facts through ordinary readers.
 Other unleased keys retain their usual read behavior. Rejected policy proposals
 never revoke the old lease, preserving the genuinely valid old publication.
-Hosts choose a memory profile of at most 16 for this projection. General multi-sense
-scheduler/batch orchestration remains the separate GAI-002.9 owner.
+Hosts choose a memory profile of at most 16 for this projection. Each listener owns
+one prepared publisher. All senses stage their observations in the same listener
+memory before BlackboardSync, where the publisher coalesces the changes into a
+single revisioned transaction. Preparation rejects incompatible projection keys
+before sensing. A recursive sync cannot mutate memory because it must first open
+a blackboard write batch while the original notification is still active.
 
 Debug reads require current Scene, filter and blackboard fences. After policy
 replacement, entity recycling, blackboard replacement/teardown or another blackboard
@@ -1410,9 +1414,12 @@ semantics.
 Migration: Gameplay event hosts pass their Scene's filter owner to Capture and
 project all declared event listeners, subjects and provenance senders with enabled
 sense sets. Sight hosts stage completed observations with the current publication,
-then invoke PublishAtBlackboardSync after all senses have staged, using distinct
-writable EntityReference and WorldCoordinate collection keys. Both keys need the
-admitted profile capacity. Generated public-header consumers and AI/sight regressions
+then invoke PublishAtBlackboardSync after all senses have staged. C++ integrations
+must rebuild and replace direct PerceptionPublication construction with
+PrepareAtSafePoint, passing the live listener, blackboard and distinct writable
+EntityReference and WorldCoordinate collection keys at composition. Both keys need
+the admitted profile capacity. Reprepare after schema or instance replacement.
+Generated public-header consumers and AI/sight regressions
 cover the added core policy and integration boundary; no native/backend dependency
 is added to HoroAI.
 
