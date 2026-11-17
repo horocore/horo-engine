@@ -35,7 +35,7 @@ namespace Horo::Application::Internal {
         };
 
         struct Candidate final : Runtime::SceneActivationCandidate {
-            Candidate(std::shared_ptr<State> owner, std::shared_ptr<Slot> slot, Runtime::RuntimeSceneView scene)
+            Candidate(std::shared_ptr<State> owner, std::shared_ptr<Slot> slot, const Runtime::RuntimeSceneView &scene)
                 : owner(std::move(owner)), slot(std::move(slot)), scene(scene) {}
 
             Result<void> ValidatePublication() const override {
@@ -104,8 +104,7 @@ namespace Horo::Application::Internal {
         }
 
         Result<void> CheckActive() const {
-            const auto scene = scenes.ActiveScene();
-            if (!active || !scene || scene->RuntimeId() != active->scene)
+            if (const auto scene = scenes.ActiveScene(); !active || !scene || scene->RuntimeId() != active->scene)
                 return Unavailable<void>();
             return Result<void>::Success();
         }

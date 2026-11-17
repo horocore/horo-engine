@@ -48,9 +48,15 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<PlaySavePhysicsCaptureCoverage> CaptureCoverage(const Runtime::CanonicalCaptureContext &);
         [[nodiscard]] Result<Runtime::CanonicalCaptureDisposition> Capture(const Runtime::CanonicalCaptureContext &,
                                                                            Runtime::ICanonicalCaptureSink &);
+        /** @brief Copies the context and Scene view before accessing native or content providers.
+         * @param source Exact decoded chunk owner. @param contextInput Caller restore descriptor copied synchronously.
+         * @param sceneInput Scene-view descriptor copied synchronously; the receipt retains its own copy.
+         * @return Receipt retaining its existing restore-bundle identity borrow, or typed admission/native failure.
+         */
         [[nodiscard]] Result<std::unique_ptr<Runtime::IStagedRestoreParticipant>> StageRestore(
-            std::shared_ptr<const std::vector<std::byte>> source, Runtime::StagedRestoreContext, Runtime::RuntimeSceneView,
-            const Runtime::PersistentEntityIdentityMap &, const CancellationToken &, std::shared_ptr<PlaySavePhysicsRestoreFence>);
+            std::shared_ptr<const std::vector<std::byte>> source, const Runtime::StagedRestoreContext &contextInput,
+            const Runtime::RuntimeSceneView &sceneInput, const Runtime::PersistentEntityIdentityMap &, const CancellationToken &,
+            std::shared_ptr<PlaySavePhysicsRestoreFence>);
         void CloseCapture() noexcept;
         [[nodiscard]] std::size_t RetainedPayloadBytes() const noexcept;
 

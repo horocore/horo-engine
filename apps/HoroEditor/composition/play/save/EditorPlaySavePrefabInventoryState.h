@@ -14,35 +14,33 @@
 #include <thread>
 
 namespace Horo::Application::Internal {
-    using namespace Runtime;
-    using namespace Prefab;
 
     /** @brief Actual owner-lane metadata and cooked pins; detached captures never retain this mutable state. */
     struct PlaySavePrefabInventory::State final {
         /** @brief Preserves the prefab admission error at the private state boundary. */
         template <typename T> static Result<T> Invalid(std::string message) {
-            return Result<T>::Failure(MakeError(PrefabErrors::AdmissionRejected, std::move(message)));
+            return Result<T>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected, std::move(message)));
         }
 
         /** @brief Reserved complete identity recipe; pending entries are never captured as existing entities. */
         struct Entry final {
-            PrefabTemplateLease source;
-            PrefabPersistentInstance recipe;
-            std::vector<EntityRef> runtime;
+            Prefab::PrefabTemplateLease source;
+            Prefab::PrefabPersistentInstance recipe;
+            std::vector<Runtime::EntityRef> runtime;
             bool published{};
             bool cancelled{};
             bool invalid{};
         };
 
         /** @brief Actual structural-receipt publication uses only storage reserved before queue admission. */
-        struct Publication final : IPrefabPersistencePublication {
+        struct Publication final : Prefab::IPrefabPersistencePublication {
             explicit Publication(std::shared_ptr<Entry> entry) noexcept : entry(std::move(entry)) {}
 
-            SavePrefabInstanceId InstanceIdentity() const noexcept override {
+            Runtime::SavePrefabInstanceId InstanceIdentity() const noexcept override {
                 return entry->recipe.identity;
             }
 
-            void PublishSpawn(std::span<const EntityRef> entities) noexcept override {
+            void PublishSpawn(std::span<const Runtime::EntityRef> entities) noexcept override {
                 if (entry->published || entry->cancelled)
                     return;
                 if (entities.size() != entry->runtime.size()) {
@@ -56,9 +54,9 @@ namespace Horo::Application::Internal {
             void PublishDespawn() noexcept override {
                 if (!entry->published || entry->cancelled)
                     return;
-                entry->recipe.disposition = PersistentEntityDisposition::Tombstone;
+                entry->recipe.disposition = Runtime::PersistentEntityDisposition::Tombstone;
                 for (auto &member : entry->recipe.members)
-                    member.record.disposition = PersistentEntityDisposition::Tombstone;
+                    member.record.disposition = Runtime::PersistentEntityDisposition::Tombstone;
             }
 
             void Cancel() noexcept override {
@@ -69,39 +67,39 @@ namespace Horo::Application::Internal {
             std::shared_ptr<Entry> entry;
         };
 
-        RuntimeSceneService &scenes;
-        SaveWorldId world;
-        SceneRuntimeId scene;
-        std::vector<PersistentEntityRecord> authored;
+        Runtime::RuntimeSceneService &scenes;
+        Runtime::SaveWorldId world;
+        Runtime::SceneRuntimeId scene;
+        std::vector<Runtime::PersistentEntityRecord> authored;
         std::shared_ptr<Security::SecureRandomSource> entropy;
-        PrefabPersistenceLimits limits;
-        PrefabLimitProfile profile;
-        std::shared_ptr<const PrefabValueSchemaSnapshot> schemas;
+        Prefab::PrefabPersistenceLimits limits;
+        Prefab::PrefabLimitProfile profile;
+        std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas;
         std::thread::id owner{std::this_thread::get_id()};
         std::vector<std::shared_ptr<Entry>> entries;
         std::vector<std::shared_ptr<Publication>> publicationLeases;
         bool closed{};
 
         /** @brief Checks the exact live owner before borrowing any Scene or requesting entropy. */
-        Result<RuntimeSceneView> Current() const {
+        Result<Runtime::RuntimeSceneView> Current() const {
             if (owner != std::this_thread::get_id() || closed)
-                return Invalid<RuntimeSceneView>("The Play prefab identity owner is closed or used from a foreign lane.");
+                return Invalid<Runtime::RuntimeSceneView>("The Play prefab identity owner is closed or used from a foreign lane.");
             const auto active = scenes.ActiveScene();
             if (!active || active->RuntimeId() != scene)
-                return Invalid<RuntimeSceneView>("The Play prefab inventory belongs to a different Scene incarnation.");
-            return Result<RuntimeSceneView>::Success(*active);
+                return Invalid<Runtime::RuntimeSceneView>("The Play prefab inventory belongs to a different Scene incarnation.");
+            return Result<Runtime::RuntimeSceneView>::Success(*active);
         }
 
         /** @brief Binds current authored identities without issuing replacements for missing objects. */
-        Result<void> Authored(RuntimeSceneView view, std::vector<PersistentEntityRecord> &records,
-                              std::vector<PersistentEntityRuntimeBinding> &bindings) const {
+        Result<void> Authored(const Runtime::RuntimeSceneView &view, std::vector<Runtime::PersistentEntityRecord> &records,
+                              std::vector<Runtime::PersistentEntityRuntimeBinding> &bindings) const {
             for (const auto &original : authored) {
-                const auto *source = std::get_if<AuthoredPersistentEntityProvenance>(&original.provenance);
+                const auto *source = std::get_if<Runtime::AuthoredPersistentEntityProvenance>(&original.provenance);
                 if (!source || source->scene != view.DefinitionId())
                     return Invalid<void>("The authored identity inventory no longer matches this Play Scene.");
                 auto record = original;
                 const auto entity = view.Find(source->object);
-                record.disposition = entity ? PersistentEntityDisposition::Live : PersistentEntityDisposition::Tombstone;
+                record.disposition = entity ? Runtime::PersistentEntityDisposition::Live : Runtime::PersistentEntityDisposition::Tombstone;
                 records.push_back(record);
                 if (entity)
                     bindings.emplace_back(record.identity, record.generation, *entity);
@@ -110,8 +108,8 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Reads exact committed dynamic entity incarnations; generation mismatch is deletion, never slot reuse. */
-        Result<void> Dynamic(RuntimeSceneView view, std::vector<PersistentEntityRecord> &records,
-                             std::vector<PersistentEntityRuntimeBinding> &bindings) const {
+        Result<void> Dynamic(const Runtime::RuntimeSceneView &view, std::vector<Runtime::PersistentEntityRecord> &records,
+                             std::vector<Runtime::PersistentEntityRuntimeBinding> &bindings) const {
             using enum Horo::Runtime::PersistentEntityDisposition;
             for (const auto &entry : entries) {
                 if (entry->invalid)
@@ -140,29 +138,30 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Builds the same complete identity authority used by capture and actual Gameplay binding. */
-        Result<PersistentEntityIdentityMap> Map(RuntimeSceneView view) const {
-            std::vector<PersistentEntityRecord> records;
-            std::vector<PersistentEntityRuntimeBinding> bindings;
+        Result<Runtime::PersistentEntityIdentityMap> Map(const Runtime::RuntimeSceneView &view) const {
+            std::vector<Runtime::PersistentEntityRecord> records;
+            std::vector<Runtime::PersistentEntityRuntimeBinding> bindings;
             const auto count = RecordCount();
             records.reserve(count);
             bindings.reserve(count);
             if (auto captured = Authored(view, records, bindings); captured.HasError())
-                return Result<PersistentEntityIdentityMap>::Failure(captured.ErrorValue());
+                return Result<Runtime::PersistentEntityIdentityMap>::Failure(captured.ErrorValue());
             if (auto captured = Dynamic(view, records, bindings); captured.HasError())
-                return Result<PersistentEntityIdentityMap>::Failure(captured.ErrorValue());
-            return PersistentEntityIdentityMap::Create(scene, records, bindings, limits.maximumMembers);
+                return Result<Runtime::PersistentEntityIdentityMap>::Failure(captured.ErrorValue());
+            return Runtime::PersistentEntityIdentityMap::Create(scene, records, bindings, limits.maximumMembers);
         }
 
         /** @brief Resolves a real current parent/binding through the canonical complete identity map. */
-        Result<PrefabPersistentEntityReference> Reference(const PersistentEntityIdentityMap &map, EntityRef runtime) const {
+        Result<Prefab::PrefabPersistentEntityReference> Reference(const Runtime::PersistentEntityIdentityMap &map,
+                                                                  Runtime::EntityRef runtime) const {
             const auto identity = map.Find(runtime);
             if (identity.HasError())
-                return Result<PrefabPersistentEntityReference>::Failure(identity.ErrorValue());
+                return Result<Prefab::PrefabPersistentEntityReference>::Failure(identity.ErrorValue());
             const auto records = map.Records();
-            const auto record = std::ranges::lower_bound(records, identity.Value(), {}, &PersistentEntityRecord::identity);
+            const auto record = std::ranges::lower_bound(records, identity.Value(), {}, &Runtime::PersistentEntityRecord::identity);
             if (record == records.end() || record->identity != identity.Value())
-                return Invalid<PrefabPersistentEntityReference>("A prefab relationship has no admitted durable identity.");
-            return Result<PrefabPersistentEntityReference>::Success({{world, record->identity}, record->generation});
+                return Invalid<Prefab::PrefabPersistentEntityReference>("A prefab relationship has no admitted durable identity.");
+            return Result<Prefab::PrefabPersistentEntityReference>::Success({{world, record->identity}, record->generation});
         }
 
         /** @brief Reserves all retained record/lease capacity before admitting the next actual structural queue. */
@@ -174,23 +173,23 @@ namespace Horo::Application::Internal {
                 return publication->entry->cancelled;
             });
             if (entries.size() >= limits.maximumInstances)
-                return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
             std::size_t occupied = authored.size();
             for (const auto &entry : entries) {
                 if (entry->recipe.members.size() > limits.maximumMembers - occupied)
-                    return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
+                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
                 occupied += entry->recipe.members.size();
             }
             if (members > limits.maximumMembers - occupied)
-                return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
             entries.reserve(limits.maximumInstances);
             publicationLeases.reserve(limits.maximumInstances);
             return Result<void>::Success();
         }
 
         /** @brief Copies only declared external interfaces through actual durable relationships. */
-        Result<void> Relationships(PrefabPersistentInstance &recipe, const PrefabSpawnRequest &request,
-                                   const PersistentEntityIdentityMap &map) const {
+        Result<void> Relationships(Prefab::PrefabPersistentInstance &recipe, const Prefab::PrefabSpawnRequest &request,
+                                   const Runtime::PersistentEntityIdentityMap &map) const {
             if (request.parent) {
                 auto parent = Reference(map, *request.parent);
                 if (parent.HasError())
@@ -208,8 +207,8 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Captures only actual projected attachment identity against exact source type/schema occurrence. */
-        Result<void> Behaviors(PrefabPersistentMember &member, const CookedPrefabEntity &source,
-                               const RuntimeComponentSet &projected) const {
+        Result<void> Behaviors(Prefab::PrefabPersistentMember &member, const Prefab::CookedPrefabEntity &source,
+                               const Runtime::RuntimeComponentSet &projected) const {
             std::size_t index{};
             member.behaviors.reserve(projected.behaviors.size());
             for (const auto &value : source.members) {
@@ -229,12 +228,12 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Issues opaque dynamic identities from the SAME host entropy and rejects any actual inventory collision. */
-        Result<void> Members(Entry &entry, const PersistentEntityIdentityMap &map, std::span<const RuntimeComponentSet> projected,
-                             const CookedPrefabData &effective) const {
-            auto asset = SaveAssetId::FromBytes(entry.recipe.source.asset.Bytes());
+        Result<void> Members(Entry &entry, const Runtime::PersistentEntityIdentityMap &map,
+                             std::span<const Runtime::RuntimeComponentSet> projected, const Prefab::CookedPrefabData &effective) const {
+            auto asset = Runtime::SaveAssetId::FromBytes(entry.recipe.source.asset.Bytes());
             if (asset.HasError())
                 return Result<void>::Failure(asset.ErrorValue());
-            std::set<PersistentEntityId> issued;
+            std::set<Runtime::PersistentEntityId> issued;
             for (const auto &record : map.Records())
                 issued.insert(record.identity);
             for (const auto &reserved : entries)
@@ -246,15 +245,15 @@ namespace Horo::Application::Internal {
             entry.recipe.members.reserve(entities.size());
             entry.runtime.resize(entities.size());
             for (const auto &source : entities) {
-                auto identity = IssuePlaySaveIdentity<PersistentEntityId>(*entropy);
+                auto identity = IssuePlaySaveIdentity<Runtime::PersistentEntityId>(*entropy);
                 if (identity.HasError())
                     return Result<void>::Failure(identity.ErrorValue());
                 if (!issued.insert(identity.Value()).second)
-                    return Result<void>::Failure(MakeError(PrefabErrors::IdentityCollision));
+                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::IdentityCollision));
                 entry.recipe.members.push_back({{identity.Value(),
                                                  {1},
-                                                 SpawnedPersistentEntityProvenance{asset.Value(), entry.recipe.identity},
-                                                 PersistentEntityDisposition::Live},
+                                                 Runtime::SpawnedPersistentEntityProvenance{asset.Value(), entry.recipe.identity},
+                                                 Runtime::PersistentEntityDisposition::Live},
                                                 source.provenance,
                                                 {}});
                 const auto index = entry.recipe.members.size() - 1;
@@ -265,37 +264,39 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Transfers actual final root placement once and prepares child TRS intent through the same canonical core. */
-        Result<PrefabValueOverrideSet> Transforms(const Entry &entry, RuntimeSceneView view, PrefabPersistentInstance &recipe) const {
-            auto objects = PrepareCookedPrefabOverrideBaseline(*entry.source.Template(), profile);
+        Result<Prefab::PrefabValueOverrideSet> Transforms(const Entry &entry, const Runtime::RuntimeSceneView &view,
+                                                          Prefab::PrefabPersistentInstance &recipe) const {
+            auto objects = Prefab::PrepareCookedPrefabOverrideBaseline(*entry.source.Template(), profile);
             if (objects.HasError())
-                return Result<PrefabValueOverrideSet>::Failure(objects.ErrorValue());
-            const PrefabOverrideBaseline baseline{recipe.source.asset, recipe.rootSourceRevision, objects.Value()};
+                return Result<Prefab::PrefabValueOverrideSet>::Failure(objects.ErrorValue());
+            const Prefab::PrefabOverrideBaseline baseline{recipe.source.asset, recipe.rootSourceRevision, objects.Value()};
             const auto root = view.Get(entry.runtime.front());
             if (root.HasError() || !root.Value().localTransform)
-                return Invalid<PrefabValueOverrideSet>("The saved prefab root has no current canonical local transform.");
+                return Invalid<Prefab::PrefabValueOverrideSet>("The saved prefab root has no current canonical local transform.");
             recipe.placement = *root.Value().localTransform;
-            const PrefabValueEdit revertRoot{PrefabValueEditKind::Revert, objects.Value().front().key.object, {}};
-            auto clean = PreparePrefabValueEdit(baseline, recipe.overrides, revertRoot, schemas.get(), profile);
+            const Prefab::PrefabValueEdit revertRoot{Prefab::PrefabValueEditKind::Revert, objects.Value().front().key.object, {}};
+            auto clean = Prefab::PreparePrefabValueEdit(baseline, recipe.overrides, revertRoot, schemas.get(), profile);
             if (clean.HasError())
-                return Result<PrefabValueOverrideSet>::Failure(clean.ErrorValue());
+                return Result<Prefab::PrefabValueOverrideSet>::Failure(clean.ErrorValue());
             auto intent = std::move(clean).Value().rebased;
             for (std::size_t index = 1; index < entry.runtime.size(); ++index) {
-                if (recipe.members[index].record.disposition == PersistentEntityDisposition::Tombstone)
+                if (recipe.members[index].record.disposition == Runtime::PersistentEntityDisposition::Tombstone)
                     continue;
                 const auto entity = view.Get(entry.runtime[index]);
                 if (entity.HasError() || !entity.Value().localTransform)
-                    return Invalid<PrefabValueOverrideSet>("A live saved prefab member has no current canonical transform.");
-                const PrefabValueEdit edit{PrefabValueEditKind::Assign, objects.Value()[index].key.object, *entity.Value().localTransform};
-                auto applied = PreparePrefabValueEdit(baseline, intent, edit, schemas.get(), profile);
+                    return Invalid<Prefab::PrefabValueOverrideSet>("A live saved prefab member has no current canonical transform.");
+                const Prefab::PrefabValueEdit edit{Prefab::PrefabValueEditKind::Assign, objects.Value()[index].key.object,
+                                                   *entity.Value().localTransform};
+                auto applied = Prefab::PreparePrefabValueEdit(baseline, intent, edit, schemas.get(), profile);
                 if (applied.HasError())
-                    return Result<PrefabValueOverrideSet>::Failure(applied.ErrorValue());
+                    return Result<Prefab::PrefabValueOverrideSet>::Failure(applied.ErrorValue());
                 intent = std::move(applied).Value().rebased;
             }
-            return Result<PrefabValueOverrideSet>::Success(std::move(intent));
+            return Result<Prefab::PrefabValueOverrideSet>::Success(std::move(intent));
         }
 
         /** @brief Captures exact current member incarnations and retains explicit deletion without flattening component memory. */
-        Result<PrefabPersistentInstance> CaptureEntry(const Entry &entry, RuntimeSceneView view) const {
+        Result<Prefab::PrefabPersistentInstance> CaptureEntry(const Entry &entry, const Runtime::RuntimeSceneView &view) const {
             using enum Horo::Runtime::PersistentEntityDisposition;
             auto recipe = entry.recipe;
             for (std::size_t index = 0; index < entry.runtime.size(); ++index) {
@@ -304,24 +305,24 @@ namespace Horo::Application::Internal {
             }
             if (recipe.members.front().record.disposition == Tombstone) {
                 recipe.disposition = Tombstone;
-                return Result<PrefabPersistentInstance>::Success(std::move(recipe));
+                return Result<Prefab::PrefabPersistentInstance>::Success(std::move(recipe));
             }
             auto transforms = Transforms(entry, view, recipe);
             if (transforms.HasError())
-                return Result<PrefabPersistentInstance>::Failure(transforms.ErrorValue());
+                return Result<Prefab::PrefabPersistentInstance>::Failure(transforms.ErrorValue());
             recipe.overrides = std::move(transforms).Value();
-            return Result<PrefabPersistentInstance>::Success(std::move(recipe));
+            return Result<Prefab::PrefabPersistentInstance>::Success(std::move(recipe));
         }
 
         /** @brief Stable creator authorization is checked before any member is exposed. */
         static bool AvailableTo(const Entry &entry, std::string_view creator) noexcept {
             return entry.published && !entry.cancelled && entry.recipe.creator == creator &&
-                   entry.recipe.disposition == PersistentEntityDisposition::Live;
+                   entry.recipe.disposition == Runtime::PersistentEntityDisposition::Live;
         }
 
         /** @brief Authorizes the stable creator before exposing any current member or publication lease. */
-        Result<PrefabPersistentLookup> Lookup(SavePrefabInstanceId instance, std::string_view creator) const {
-            using Outcome = Result<PrefabPersistentLookup>;
+        Result<Prefab::PrefabPersistentLookup> Lookup(Runtime::SavePrefabInstanceId instance, std::string_view creator) const {
+            using Outcome = Result<Prefab::PrefabPersistentLookup>;
             auto view = Current();
             if (view.HasError())
                 return Outcome::Failure(view.ErrorValue());
@@ -329,28 +330,28 @@ namespace Horo::Application::Internal {
                 return publication->entry->recipe.identity == instance;
             });
             if (found == publicationLeases.end())
-                return Invalid<PrefabPersistentLookup>("Unknown durable prefab occurrence.");
+                return Invalid<Prefab::PrefabPersistentLookup>("Unknown durable prefab occurrence.");
             const auto &entry = *(*found)->entry;
             if (!AvailableTo(entry, creator))
-                return Invalid<PrefabPersistentLookup>("Durable prefab occurrence is unavailable to this creator grant.");
-            PrefabPersistentLookup result;
+                return Invalid<Prefab::PrefabPersistentLookup>("Durable prefab occurrence is unavailable to this creator grant.");
+            Prefab::PrefabPersistentLookup result;
             result.entities.reserve(entry.runtime.size());
             for (std::size_t index = 0; index < entry.runtime.size(); ++index) {
-                if (entry.recipe.members[index].record.disposition == PersistentEntityDisposition::Tombstone)
+                if (entry.recipe.members[index].record.disposition == Runtime::PersistentEntityDisposition::Tombstone)
                     continue;
                 if (view.Value().Get(entry.runtime[index]).HasError())
-                    return Invalid<PrefabPersistentLookup>("Durable prefab member incarnation is no longer live.");
+                    return Invalid<Prefab::PrefabPersistentLookup>("Durable prefab member incarnation is no longer live.");
                 result.entities.push_back(entry.runtime[index]);
             }
             if (result.entities.empty())
-                return Invalid<PrefabPersistentLookup>("Durable prefab occurrence has no live root.");
+                return Invalid<Prefab::PrefabPersistentLookup>("Durable prefab occurrence has no live root.");
             result.publication = *found;
             return Outcome::Success(std::move(result));
         }
 
         /** @brief Adopts exact private reconstruction receipts using preallocated bounded inventory only. */
-        Result<void> Adopt(const PrefabPersistentState &saved, std::span<const PrefabRestoredInstance> restored,
-                           RuntimeSceneView candidate) {
+        Result<void> Adopt(const Prefab::PrefabPersistentState &saved, std::span<const Prefab::PrefabRestoredInstance> restored,
+                           const Runtime::RuntimeSceneView &candidate) {
             if (restored.size() != saved.instances.size())
                 return Invalid<void>("Incomplete private prefab occurrence receipts.");
             entries.reserve(limits.maximumInstances);
@@ -380,7 +381,7 @@ namespace Horo::Application::Internal {
             auto map = Map(view.Value());
             if (map.HasError())
                 return Result<PlaySavePrefabCapture>::Failure(map.ErrorValue());
-            PrefabPersistentState captured{world, {}};
+            Prefab::PrefabPersistentState captured{world, {}};
             captured.instances.reserve(entries.size());
             for (const auto &entry : entries) {
                 if (!entry->published || entry->cancelled)
@@ -390,7 +391,7 @@ namespace Horo::Application::Internal {
                     return Result<PlaySavePrefabCapture>::Failure(recipe.ErrorValue());
                 captured.instances.push_back(std::move(recipe).Value());
             }
-            if (auto valid = ValidatePrefabPersistentState(captured, limits, profile); valid.HasError())
+            if (auto valid = Prefab::ValidatePrefabPersistentState(captured, limits, profile); valid.HasError())
                 return Result<PlaySavePrefabCapture>::Failure(valid.ErrorValue());
             return Result<PlaySavePrefabCapture>::Success({std::move(map).Value(), std::move(captured)});
         }
@@ -399,18 +400,18 @@ namespace Horo::Application::Internal {
          * This private serialization measures/admit metadata only; it is never published as committed world state.
          */
         Result<void> Budget(const Entry &candidate) const {
-            PrefabPersistentState bounded{world, {}};
+            Prefab::PrefabPersistentState bounded{world, {}};
             bounded.instances.reserve(entries.size() + 1);
             for (const auto &entry : entries)
                 if (!entry->cancelled)
                     bounded.instances.push_back(entry->recipe);
             bounded.instances.push_back(candidate.recipe);
-            const auto encoded = EncodePrefabPersistentState(bounded, limits, profile);
+            const auto encoded = Prefab::EncodePrefabPersistentState(bounded, limits, profile);
             return encoded.HasError() ? Result<void>::Failure(encoded.ErrorValue()) : Result<void>::Success();
         }
 
         /** @brief Requires exact actual content authority before any new durable identity is issued. */
-        Result<void> ValidateCreationSource(const PrefabTemplateLease &source, const PrefabSpawnRequest &request) const {
+        Result<void> ValidateCreationSource(const Prefab::PrefabTemplateLease &source, const Prefab::PrefabSpawnRequest &request) const {
             if (!source.Template() || source.Scene() != scene || source.Template()->Data().assetId != request.source.asset ||
                 source.Artifact().Digest() != request.source.artifactDigest || !source.Target() ||
                 *source.Target() != request.source.target || !source.Template()->Data().rootSourceRevision)
@@ -419,19 +420,20 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Allocates and charges the complete recipe/publication payload before structural admission. */
-        Result<std::shared_ptr<IPrefabPersistencePublication>> Reserve(const PreparedPrefabSpawn &prepared,
-                                                                       const PrefabSpawnRequest &request,
-                                                                       std::span<const RuntimeComponentSet> projected,
-                                                                       std::span<const Assets::AssetId> lineage, std::string_view creator,
-                                                                       const PersistentEntityIdentityMap &map) {
-            using Outcome = Result<std::shared_ptr<IPrefabPersistencePublication>>;
+        Result<std::shared_ptr<Prefab::IPrefabPersistencePublication>> Reserve(const Prefab::PreparedPrefabSpawn &prepared,
+                                                                               const Prefab::PrefabSpawnRequest &request,
+                                                                               std::span<const Runtime::RuntimeComponentSet> projected,
+                                                                               std::span<const Assets::AssetId> lineage,
+                                                                               std::string_view creator,
+                                                                               const Runtime::PersistentEntityIdentityMap &map) {
+            using Outcome = Result<std::shared_ptr<Prefab::IPrefabPersistencePublication>>;
             const auto &source = prepared.Source();
-            auto identity = IssuePlaySaveIdentity<SavePrefabInstanceId>(*entropy);
+            auto identity = IssuePlaySaveIdentity<Runtime::SavePrefabInstanceId>(*entropy);
             if (identity.HasError())
                 return Outcome::Failure(identity.ErrorValue());
             for (const auto &entry : entries)
                 if (entry->recipe.identity == identity.Value())
-                    return Outcome::Failure(MakeError(PrefabErrors::IdentityCollision));
+                    return Outcome::Failure(MakeError(Prefab::PrefabErrors::IdentityCollision));
             auto entry = std::make_shared<Entry>();
             entry->source = source;
             entry->recipe.identity = identity.Value();
@@ -441,12 +443,13 @@ namespace Horo::Application::Internal {
             entry->recipe.placement = request.placement;
             entry->recipe.creationLineage.assign(lineage.begin(), lineage.end());
             entry->recipe.initialization = request.initialization;
-            entry->recipe.overrides = request.overrides.value_or(PrefabValueOverrideSet{request.source.asset,
-                                                                                        entry->recipe.rootSourceRevision,
-                                                                                        schemas ? schemas->Revision() : Sha256Digest{},
-                                                                                        {},
-                                                                                        {},
-                                                                                        {}});
+            entry->recipe.overrides =
+                request.overrides.value_or(Prefab::PrefabValueOverrideSet{request.source.asset,
+                                                                          entry->recipe.rootSourceRevision,
+                                                                          schemas ? schemas->Revision() : Sha256Digest{},
+                                                                          {},
+                                                                          {},
+                                                                          {}});
             if (auto linked = Relationships(entry->recipe, request, map); linked.HasError())
                 return Outcome::Failure(linked.ErrorValue());
             if (auto issued = Members(*entry, map, projected, prepared.Data()); issued.HasError())
@@ -460,11 +463,12 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Stages one complete exact cooked recipe before allowing structural publication. */
-        Result<std::shared_ptr<IPrefabPersistencePublication>> Prepare(const PreparedPrefabSpawn &prepared,
-                                                                       const PrefabSpawnRequest &request,
-                                                                       std::span<const RuntimeComponentSet> projected,
-                                                                       std::span<const Assets::AssetId> lineage, std::string_view creator) {
-            using Outcome = Result<std::shared_ptr<IPrefabPersistencePublication>>;
+        Result<std::shared_ptr<Prefab::IPrefabPersistencePublication>> Prepare(const Prefab::PreparedPrefabSpawn &prepared,
+                                                                               const Prefab::PrefabSpawnRequest &request,
+                                                                               std::span<const Runtime::RuntimeComponentSet> projected,
+                                                                               std::span<const Assets::AssetId> lineage,
+                                                                               std::string_view creator) {
+            using Outcome = Result<std::shared_ptr<Prefab::IPrefabPersistencePublication>>;
             const auto &source = prepared.Source();
             auto current = Current();
             if (current.HasError())

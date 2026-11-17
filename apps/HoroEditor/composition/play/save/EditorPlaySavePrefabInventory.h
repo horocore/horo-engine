@@ -8,6 +8,8 @@
 #include "Horo/Prefab/PrefabRestoreEntities.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 
+#include <type_traits>
+
 namespace Horo::Application::Internal {
     /** @brief One coherent owner capture; workers receive copied values and never read this inventory. */
     struct PlaySavePrefabCapture final {
@@ -32,7 +34,20 @@ namespace Horo::Application::Internal {
     class PlaySavePrefabInventory final : public Prefab::IPrefabPersistenceOwner {
         struct State;
 
+        /** @brief Only the validated factories can create this construction key. */
+        class ConstructionKey final {
+            friend class PlaySavePrefabInventory;
+            ConstructionKey() noexcept = default;
+        };
+
+        static_assert(!std::is_aggregate_v<ConstructionKey>);
+
     public:
+        /** @brief Adopts a validated cold state using the private factory key.
+         * @param state Fully validated inventory state retained by this owner.
+         * @details The key cannot be constructed by callers; shared allocation retains factory-only admission.
+         */
+        explicit PlaySavePrefabInventory(const ConstructionKey &, std::shared_ptr<State> state) noexcept;
         /** @brief Adopts actual host-issued authored records without changing their identities.
          * @param scenes Actual existing Play Scene service. @param world Existing sandbox world identity.
          * @param authored Complete genuine activation inventory, including retained tombstones.
@@ -60,7 +75,7 @@ namespace Horo::Application::Internal {
          * @return Unpublished inventory, inaccessible through Current until the Scene itself publishes.
          */
         [[nodiscard]] static Result<std::shared_ptr<PlaySavePrefabInventory>> PrepareForScene(
-            Runtime::RuntimeSceneService &scenes, Runtime::RuntimeScene &candidate, PlaySavePrefabRestoreInput input,
+            Runtime::RuntimeSceneService &scenes, const Runtime::RuntimeScene &candidate, PlaySavePrefabRestoreInput input,
             std::shared_ptr<Security::SecureRandomSource> entropy, Prefab::PrefabPersistenceLimits limits,
             Prefab::PrefabLimitProfile profile, std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> schemas = {});
         /** @brief Captures the real current Scene's complete identities and canonical recipe deltas at the safe point.
@@ -75,8 +90,6 @@ namespace Horo::Application::Internal {
         void Close() const noexcept;
 
     private:
-        /** @brief Adopts only a completely validated cold inventory state. */
-        explicit PlaySavePrefabInventory(std::shared_ptr<State> state) noexcept;
         std::shared_ptr<State> state_;
     };
 }  // namespace Horo::Application::Internal

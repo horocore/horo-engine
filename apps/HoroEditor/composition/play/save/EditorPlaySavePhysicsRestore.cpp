@@ -6,9 +6,12 @@
 namespace Horo::Application::Internal {
     /** @copydoc PlaySavePhysicsServices::StageRestore */
     Result<std::unique_ptr<Runtime::IStagedRestoreParticipant>> PlaySavePhysicsServices::StageRestore(
-        std::shared_ptr<const std::vector<std::byte>> source, Runtime::StagedRestoreContext context, Runtime::RuntimeSceneView scene,
-        const Runtime::PersistentEntityIdentityMap &identities, const CancellationToken &cancellation,
-        std::shared_ptr<PlaySavePhysicsRestoreFence> fence) {
+        std::shared_ptr<const std::vector<std::byte>> source, const Runtime::StagedRestoreContext &contextInput,
+        const Runtime::RuntimeSceneView &sceneInput, const Runtime::PersistentEntityIdentityMap &identities,
+        const CancellationToken &cancellation, std::shared_ptr<PlaySavePhysicsRestoreFence> fence) {
+        // Copy both descriptors before native/provider access; the receipt retains its own copies.
+        const auto context = contextInput;
+        const auto scene = sceneInput;
         using Outcome = Result<std::unique_ptr<Runtime::IStagedRestoreParticipant>>;
         if (owner_ != std::this_thread::get_id())
             return Outcome::Failure(MakeError(Runtime::SaveErrors::ThreadAffinityViolation));

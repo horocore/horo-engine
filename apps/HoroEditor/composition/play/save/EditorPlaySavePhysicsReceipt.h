@@ -20,7 +20,8 @@ namespace Horo::Application::Internal {
      */
     class PlaySavePhysicsReceipt final : public Runtime::IStagedRestoreParticipant, public Runtime::IStagedRestoreTransientRetirement {
     public:
-        PlaySavePhysicsReceipt(Physics::Detail::PhysicsSceneStateTarget, PlaySavePhysicsPolicy,
+        using Runtime::IStagedRestoreParticipant::FixupReferences;
+        PlaySavePhysicsReceipt(Physics::Detail::PhysicsSceneStateTarget, const PlaySavePhysicsPolicy &,
                                std::shared_ptr<const PlaySavePhysicsContent>, std::shared_ptr<const std::vector<std::byte>>,
                                const PlaySavePhysicsRestoreScene &, CancellationToken, std::shared_ptr<PlaySavePhysicsRestoreFence>);
         [[nodiscard]] const Runtime::StagedRestoreParticipantRequirement &Requirement() const noexcept override;

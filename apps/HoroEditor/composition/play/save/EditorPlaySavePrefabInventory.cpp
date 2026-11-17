@@ -21,7 +21,8 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     /** @copydoc PlaySavePrefabInventory::PlaySavePrefabInventory */
-    PlaySavePrefabInventory::PlaySavePrefabInventory(std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
+    PlaySavePrefabInventory::PlaySavePrefabInventory(const ConstructionKey &, std::shared_ptr<State> state) noexcept
+        : state_(std::move(state)) {}
 
     namespace {
         /** @brief Trusted bounds are checked before any inventory allocation or subtraction. */
@@ -46,7 +47,7 @@ namespace Horo::Application::Internal {
                                                  std::move(profile), std::move(schemas));
             if (auto map = state->Map(*scene); map.HasError())
                 return Outcome::Failure(map.ErrorValue());
-            return Outcome::Success(std::shared_ptr<PlaySavePrefabInventory>(new PlaySavePrefabInventory(std::move(state))));
+            return Outcome::Success(std::make_shared<PlaySavePrefabInventory>(ConstructionKey{}, std::move(state)));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
         }
@@ -74,7 +75,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PlaySavePrefabInventory::PrepareForScene */
     Result<std::shared_ptr<PlaySavePrefabInventory>> PlaySavePrefabInventory::PrepareForScene(
-        RuntimeSceneService &scenes, RuntimeScene &candidate, PlaySavePrefabRestoreInput input,
+        RuntimeSceneService &scenes, const RuntimeScene &candidate, PlaySavePrefabRestoreInput input,
         std::shared_ptr<Security::SecureRandomSource> entropy, PrefabPersistenceLimits limits, PrefabLimitProfile profile,
         std::shared_ptr<const PrefabValueSchemaSnapshot> schemas) {
         using Outcome = Result<std::shared_ptr<PlaySavePrefabInventory>>;
@@ -88,7 +89,7 @@ namespace Horo::Application::Internal {
                                                  std::move(entropy), limits, std::move(profile), std::move(schemas));
             if (auto adopted = state->Adopt(input.saved, input.restored, candidate.View()); adopted.HasError())
                 return Outcome::Failure(adopted.ErrorValue());
-            return Outcome::Success(std::shared_ptr<PlaySavePrefabInventory>(new PlaySavePrefabInventory(std::move(state))));
+            return Outcome::Success(std::make_shared<PlaySavePrefabInventory>(ConstructionKey{}, std::move(state)));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
         }

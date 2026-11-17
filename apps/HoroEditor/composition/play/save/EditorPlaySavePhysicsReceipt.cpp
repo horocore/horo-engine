@@ -5,7 +5,7 @@
 
 namespace Horo::Application::Internal {
     /** @copydoc PlaySavePhysicsReceipt::PlaySavePhysicsReceipt */
-    PlaySavePhysicsReceipt::PlaySavePhysicsReceipt(Physics::Detail::PhysicsSceneStateTarget target, PlaySavePhysicsPolicy policy,
+    PlaySavePhysicsReceipt::PlaySavePhysicsReceipt(Physics::Detail::PhysicsSceneStateTarget target, const PlaySavePhysicsPolicy &policy,
                                                    std::shared_ptr<const PlaySavePhysicsContent> content,
                                                    std::shared_ptr<const std::vector<std::byte>> source,
                                                    const PlaySavePhysicsRestoreScene &restore, CancellationToken cancellation,
