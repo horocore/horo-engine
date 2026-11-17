@@ -1,4 +1,9 @@
+#include "Horo/PlatformServices/PlatformServicesFrontend.h"
 #include "PlatformProviderLifecycleTestSupport.h"
+
+using namespace Horo;
+using namespace Horo::PlatformServices;
+using namespace Horo::PlatformServices::Tests;
 
 namespace {
     /** @brief Launches one synthetic native request and drains its successful copied completion. */

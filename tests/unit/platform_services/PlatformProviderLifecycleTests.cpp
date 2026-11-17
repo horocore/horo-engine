@@ -1,5 +1,9 @@
 #include "PlatformProviderLifecycleTestSupport.h"
 
+using namespace Horo;
+using namespace Horo::PlatformServices;
+using namespace Horo::PlatformServices::Tests;
+
 TEST_CASE("Configuration cannot reuse a provider admitted under another host profile", "[platform-services][lifecycle]") {
     Rig rig;
     rig.Publish();
@@ -508,4 +512,3 @@ TEST_CASE("Repeated start and stop releases every native and module lease", "[pl
     CHECK(rig.admission.FinalizeOnOwnerThread() == PlatformProviderRetirementDisposition::Complete);
     CHECK(code.expired());
 }
-}  // namespace Horo::PlatformServices::Tests

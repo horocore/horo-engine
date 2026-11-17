@@ -153,3 +153,4 @@ namespace Horo::PlatformServices::Tests {
             }
         };
     }  // namespace
+}  // namespace Horo::PlatformServices::Tests
