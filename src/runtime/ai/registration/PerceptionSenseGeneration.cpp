@@ -119,7 +119,7 @@ namespace Horo::AI {
                                                                       AllCapabilities);
                 if (registry.HasValue())
                     return Result<void>::Success();
-                if (registry.ErrorValue().code == AIErrors::PerceptionRegistryStorageUnavailable.code)
+                if (registry.ErrorValue().code.Value() == AIErrors::PerceptionRegistryStorageUnavailable.code.Value())
                     return Result<void>::Failure(StorageFailure());
                 return Result<void>::Failure(registry.ErrorValue());
             } catch (const std::bad_alloc &) {
