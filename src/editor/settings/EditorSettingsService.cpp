@@ -98,9 +98,14 @@ namespace Horo::Editor {
             return Result<EditorSettingsSnapshot>::Failure(bindings.ErrorValue());
         }
 
-        auto appearanceDraft = MakeEditorAppearanceConfigurationDraft(m_configuration.Snapshot(), candidate);
+        const auto activeConfiguration = m_configuration.Snapshot();
+        auto appearanceDraft = MakeEditorAppearanceConfigurationDraft(activeConfiguration, candidate);
         appearanceDraft.baseRevision = draft.baseConfigurationRevision.value_or(m_configurationRevision);
-        const auto previousAppearance = MakeEditorAppearanceConfigurationDraft(m_configuration.Snapshot(), Snapshot().settings);
+        if (appearanceDraft.baseRevision != activeConfiguration.Revision()) {
+            const auto stale = m_configuration.Validate(appearanceDraft);
+            return Result<EditorSettingsSnapshot>::Failure(stale.ErrorValue());
+        }
+        const auto previousAppearance = MakeEditorAppearanceConfigurationDraft(activeConfiguration, Snapshot().settings);
         std::erase_if(appearanceDraft.proposedValues, [&](const auto &entry) {
             return previousAppearance.proposedValues.at(entry.first) == entry.second;
         });
@@ -108,9 +113,6 @@ namespace Horo::Editor {
             if (configurationDraft->source != ConfigurationSource::User)
                 return Result<EditorSettingsSnapshot>::Failure(MakeError(SettingsErrors::ValidationFailed));
             if (configurationDraft->baseRevision != appearanceDraft.baseRevision) {
-                const auto legacy = m_configuration.Validate(appearanceDraft);
-                if (legacy.HasError())
-                    return Result<EditorSettingsSnapshot>::Failure(legacy.ErrorValue());
                 const auto generic = m_configuration.Validate(*configurationDraft);
                 if (generic.HasError())
                     return Result<EditorSettingsSnapshot>::Failure(generic.ErrorValue());
