@@ -271,6 +271,14 @@ def test_dependency_only_checkpoint_avoids_flush_without_hiding_compiler_failure
                          {"inputs.compiler-ready": compiler, "inputs.dependency-ready": dependency})
     assert selected is flush
     host_bash = shutil.which("bash")
+    if os.name == "nt":
+        # GitHub's native Windows Bash shell belongs to the Git for Windows installation.
+        host_git = shutil.which("git")
+        assert host_git is not None
+        git_roots = [parent for parent in Path(host_git).resolve(strict=True).parents
+                     if (parent / "cmd/git.exe").is_file()]
+        assert git_roots, "Git for Windows is required for the Windows cache shell fixture"
+        host_bash = str(git_roots[0] / "bin/bash.exe")
     assert host_bash is not None
     bash = Path(host_bash).resolve(strict=True)
     assert bash.is_absolute()

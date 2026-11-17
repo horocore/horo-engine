@@ -167,6 +167,7 @@ def test_macos_denied_group_signal_requires_all_members_exited(monkeypatch, memb
             raise psutil.NoSuchProcess(42)
         return psutil.STATUS_ZOMBIE if member_state == "zombie" else psutil.STATUS_RUNNING
 
+    monkeypatch.setattr(api.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(api.sys, "platform", "darwin")
     monkeypatch.setattr(api.os, "killpg", denied, raising=False)
     monkeypatch.setattr(api.os, "getpgid", lambda _pid: 42, raising=False)
