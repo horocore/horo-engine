@@ -307,10 +307,11 @@ namespace Horo::AI {
                 fixture.executor->AdvanceQuery(tick, {budget, budget, budget});
             }
             fixture.executor->SyncQuery(7);
-            REQUIRE(fixture.Evaluate(*tree, 7) == AiTaskState::Succeeded);
+            REQUIRE(fixture.Evaluate(*tree, 7) == AiTaskState::Running);
             const auto view = fixture.scene->View();
             CHECK_FALSE(fixture.executor->CommitOutput(7, view, *fixture.blackboard).Value());
             REQUIRE(fixture.executor->CommitOutput(8, view, *fixture.blackboard).Value());
+            REQUIRE(fixture.Evaluate(*tree, 8) == AiTaskState::Succeeded);
             CHECK_FALSE(fixture.executor->CommitOutput(9, view, *fixture.blackboard).Value());
             const auto value = fixture.blackboard->Snapshot().Value().Read(fixture.output);
             REQUIRE(value.HasValue());
@@ -328,9 +329,10 @@ namespace Horo::AI {
             AiWorkBudget budget{64};
             fixture.executor->AdvanceQuery(5, {budget, budget, budget});
             fixture.executor->SyncQuery(6);
-            REQUIRE(fixture.Evaluate(*tree, 6) == AiTaskState::Succeeded);
+            REQUIRE(fixture.Evaluate(*tree, 6) == AiTaskState::Running);
             SECTION("current actor is written") {
                 REQUIRE(fixture.executor->CommitOutput(7, fixture.scene->View(), *fixture.blackboard).Value());
+                REQUIRE(fixture.Evaluate(*tree, 7) == AiTaskState::Succeeded);
                 const auto value = fixture.blackboard->Snapshot().Value().Read(fixture.output);
                 REQUIRE(value.HasValue());
                 REQUIRE(value.Value().has_value());
@@ -344,6 +346,11 @@ namespace Horo::AI {
                 ExpectError(fixture.executor->CommitOutput(7, fixture.scene->View(), *fixture.blackboard),
                             AIErrors::EnvironmentQueryContextStale);
                 CHECK_FALSE(fixture.blackboard->Snapshot().Value().Read(fixture.output).Value());
+            }
+            SECTION("abort wins after result publication and before BlackboardSync") {
+                REQUIRE(tree->AbortSubtree(fixture.node).HasValue());
+                CHECK_FALSE(fixture.executor->CommitOutput(7, fixture.scene->View(), *fixture.blackboard).Value());
+                REQUIRE(fixture.Evaluate(*tree, 7) == AiTaskState::Cancelled);
             }
         }
 

@@ -105,6 +105,7 @@ namespace Horo::AI {
         operation_ = {};
         resolvedTick_ = 0;
         ready_ = false;
+        outputCommitted_ = false;
     }
 
     /** @copydoc DecisionQueryTask::Start */
@@ -115,7 +116,7 @@ namespace Horo::AI {
         if (query_ || !Accepts(context) || operation.taskDefinition != descriptor_.task || !operation.task.IsValid() ||
             !operation.agent.IsValid() || operation.task.incarnation != operation.agent.incarnation ||
             context.blackboard.Binding().agent != operation.agent ||
-            descriptor_.timeoutTicks > std::numeric_limits<std::uint64_t>::max() - context.tick)
+            descriptor_.timeoutTicks >= std::numeric_limits<std::uint64_t>::max() - context.tick)
             return Failure<AiTaskState>(AIErrors::EnvironmentQueryContextInvalid);
         try {
             const auto deadline = context.tick + descriptor_.timeoutTicks;
@@ -142,8 +143,19 @@ namespace Horo::AI {
             return Result<AiTaskState>::Success(AiTaskState::Cancelled);
         const auto *result = query_->Published();
         if (operation.IsCancellationRequested() || !Accepts(context) || context.blackboard.Binding() != destination_ ||
-            !query_->InputsAreCurrent() || context.tick > deadline_ ||
-            (context.tick == deadline_ && (!result || result->status == QueryExecutionStatus::TimedOut))) {
+            !query_->InputsAreCurrent()) {
+            Discard();
+            return Result<AiTaskState>::Success(AiTaskState::Cancelled);
+        }
+        if (outputCommitted_)
+            return Result<AiTaskState>::Success(AiTaskState::Succeeded);
+        if (ready_) {
+            if (context.tick == resolvedTick_)
+                return Result<AiTaskState>::Success(AiTaskState::Running);
+            Discard();
+            return Result<AiTaskState>::Success(AiTaskState::Cancelled);
+        }
+        if (context.tick > deadline_ || (context.tick == deadline_ && (!result || result->status == QueryExecutionStatus::TimedOut))) {
             Discard();
             return Result<AiTaskState>::Success(AiTaskState::Cancelled);
         }
@@ -165,7 +177,8 @@ namespace Horo::AI {
         if (point != (kind_ == BlackboardValueKind::WorldCoordinate))
             return Failure<AiTaskState>(AIErrors::BlackboardValueTypeMismatch);
         resolvedTick_ = context.tick;
-        return Result<AiTaskState>::Success(AiTaskState::Succeeded);
+        ready_ = true;
+        return Result<AiTaskState>::Success(AiTaskState::Running);
     }
 
     /** @copydoc DecisionQueryTask::Abort */
@@ -175,14 +188,9 @@ namespace Horo::AI {
     }
 
     /** @copydoc DecisionQueryTask::Cleanup */
-    void DecisionQueryTask::Cleanup(const AiTaskOperationContext &operation, const AiTaskTerminalResult &result) noexcept {
-        if (!Matches(operation))
-            return;
-        if (result.state != AiTaskState::Succeeded || resolvedTick_ == 0 || operation.IsCancellationRequested()) {
+    void DecisionQueryTask::Cleanup(const AiTaskOperationContext &operation, const AiTaskTerminalResult &) noexcept {
+        if (Matches(operation))
             Discard();
-            return;
-        }
-        ready_ = true;
     }
 
     /** @copydoc DecisionQueryTask::Check */
@@ -217,7 +225,7 @@ namespace Horo::AI {
         if (!ready_ || tick <= resolvedTick_)
             return Result<bool>::Success(false);
         const auto &result = *query_->Published();
-        if (operation_.IsCancellationRequested() || !query_->InputsAreCurrent() || !scene.IsCurrent() ||
+        if (tick != resolvedTick_ + 1 || operation_.IsCancellationRequested() || !query_->InputsAreCurrent() || !scene.IsCurrent() ||
             scene.RuntimeId() != result.scene || blackboard.Binding() != destination_) {
             Discard();
             return Failure<bool>(AIErrors::EnvironmentQueryContextStale);
@@ -227,17 +235,21 @@ namespace Horo::AI {
             Discard();
             return Result<bool>::Failure(std::move(value).ErrorValue());
         }
-        // Clear the receipt before the commit notifies observers, which may synchronously call back.
         auto batch = blackboard.BeginWriteBatch();
         if (batch.HasError())
             return Result<bool>::Failure(std::move(batch).ErrorValue());
         auto write = std::move(batch).Value();
         if (auto staged = write.Stage({descriptor_.output, BlackboardValue{std::move(value).Value()}}); staged.HasError())
             return Result<bool>::Failure(std::move(staged).ErrorValue());
-        Discard();
+        // Hide the pending output while notifying observers, which may synchronously call back.
+        const auto task = operation_.task;
+        ready_ = false;
         auto committed = blackboard.CommitAtBlackboardSync(std::move(write));
-        if (committed.HasError())
+        if (committed.HasError()) {
+            ready_ = query_ && operation_.task == task;
             return Result<bool>::Failure(std::move(committed).ErrorValue());
+        }
+        outputCommitted_ = query_ && operation_.task == task;
         return Result<bool>::Success(true);
     }
 }  // namespace Horo::AI

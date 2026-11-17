@@ -36,7 +36,7 @@ namespace Horo::AI {
 
     /** @brief One authored EQS task executor. All methods use the simulation owner lane.
      * @details The host advances existing EQS owner phases. Behavior-tree evaluation only observes publication.
-     * A write is eligible after successful lifecycle cleanup, and commits at the next BlackboardSync.
+     * The task stays running until its result commits at BlackboardSync and is visible to the next decision.
      */
     class DecisionQueryTask final : public IBehaviorTreeExecutor {
     public:
@@ -70,7 +70,7 @@ namespace Horo::AI {
         void AdvanceQuery(std::uint64_t tick, QueryExecutionBudget budget);
         /** @brief Collects already available provider completion at BlackboardSync. */
         void SyncQuery(std::uint64_t tick);
-        /** @brief Applies one successful result to the exact active destination.
+        /** @brief Applies one eligible result to the exact active destination before the task succeeds.
          * @param tick Current BlackboardSync tick. @param scene Fresh destination Scene.
          * @param blackboard Exact destination admitted by the decision node.
          * @return True once on commit, false when no output is ready, or typed stale/write failure.
@@ -95,5 +95,6 @@ namespace Horo::AI {
         std::uint64_t deadline_{};
         std::uint64_t resolvedTick_{};
         bool ready_{};
+        bool outputCommitted_{};
     };
 }  // namespace Horo::AI

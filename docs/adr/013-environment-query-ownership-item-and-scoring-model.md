@@ -225,10 +225,11 @@ authored task in the compiled behavior tree. Its first complete winner can
 write a scalar WorldCoordinate or EntityReference key with a compatible
 write binding. Hosts admit an existing staged query under the exact task
 generation and tick deadline. The executor observes published results in
-AiDecisionEvaluate. At the following BlackboardSync, the host commits a
-successfully cleaned-up task's output after checking the blackboard binding,
-provider inputs and any winning entity generation. Aborting the task
-cancels the owned query and discards its output.
+AiDecisionEvaluate. At the following BlackboardSync, the host commits the
+output after checking the blackboard binding, provider inputs and any
+winning entity generation. The task succeeds only once that write is
+visible to the next decision. Aborting the task cancels the owned query
+and discards its pending output.
 
 `QueryResultCache` is composed per Scene. A host supplies the canonical
 dynamic inputs and a complete ordered dependency footprint, and the cache
