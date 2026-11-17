@@ -191,7 +191,8 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        Result<Runtime::EntityRef> AuthoredTarget(const Runtime::PersistentEntityRecord &record, Runtime::RuntimeSceneView scene) const {
+        Result<Runtime::EntityRef> AuthoredTarget(const Runtime::PersistentEntityRecord &record,
+                                                  const Runtime::RuntimeSceneView &scene) const {
             const auto *authored = std::get_if<Runtime::AuthoredPersistentEntityProvenance>(&record.provenance);
             if (!authored || authored->scene != scene.DefinitionId())
                 return Invalid<Runtime::EntityRef>("Saved relationship lacks an exact authored or admitted spawned target.");
@@ -203,7 +204,7 @@ namespace Horo::Prefab {
 
         Result<Detail::PrefabRestoredBinding> ResolveBinding(const PrefabPersistentBinding &binding,
                                                              const CookedPrefabBindingDeclaration &declaration,
-                                                             Runtime::RuntimeSceneView scene) const {
+                                                             const Runtime::RuntimeSceneView &scene) const {
             auto record = ReferenceRecord(binding.target);
             if (record.HasError())
                 return Result<Detail::PrefabRestoredBinding>::Failure(record.ErrorValue());
@@ -241,7 +242,7 @@ namespace Horo::Prefab {
                 {slot, Runtime::RuntimeGroupExternalEntitySlot{{*node.dense}, declaration.componentType}});
         }
 
-        Result<std::vector<Detail::PrefabRestoredBinding>> Bindings(std::size_t index, Runtime::RuntimeSceneView scene) const {
+        Result<std::vector<Detail::PrefabRestoredBinding>> Bindings(std::size_t index, const Runtime::RuntimeSceneView &scene) const {
             std::vector<Detail::PrefabRestoredBinding> output;
             const auto &data = prepared[index]->Data();
             for (const auto &binding : saved.instances[index].bindings) {
@@ -334,7 +335,7 @@ namespace Horo::Prefab {
         }
 
         Result<void> RemapEntry(Runtime::RuntimeEntityGroupEntry &entry, std::size_t instance, std::size_t local,
-                                Runtime::RuntimeSceneView scene) const {
+                                const Runtime::RuntimeSceneView &scene) const {
             if (entry.parentInGroup.has_value()) {
                 auto parent = Dense(instance, *entry.parentInGroup);
                 if (parent.HasError())
@@ -370,7 +371,7 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
-        Result<void> AppendInstance(std::size_t index, Runtime::RuntimeSceneView scene,
+        Result<void> AppendInstance(std::size_t index, const Runtime::RuntimeSceneView &scene,
                                     std::vector<Runtime::RuntimeEntityGroupEntry> &entries) {
             auto bindings = Bindings(index, scene);
             if (bindings.HasError())
@@ -437,8 +438,8 @@ namespace Horo::Prefab {
             return Result<std::vector<Runtime::RuntimeGroupAssetLease>>::Success(std::move(resources));
         }
 
-        Result<void> InitializePreparation(Runtime::RuntimeSceneView scene, std::span<const Runtime::PersistentEntityRecord> incoming,
-                                           std::size_t maximumEntities) {
+        Result<void> InitializePreparation(const Runtime::RuntimeSceneView &scene,
+                                           std::span<const Runtime::PersistentEntityRecord> incoming, std::size_t maximumEntities) {
             if (auto valid = ValidateRecords(incoming); valid.HasError())
                 return valid;
             for (const auto &record : incoming)
