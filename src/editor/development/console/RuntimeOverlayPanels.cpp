@@ -169,7 +169,7 @@ namespace Horo::Editor {
                                                             Debug::OverlayDescriptor{JobsId, "jobs", Debug::OverlaySource::Jobs}};
         std::size_t count = 2;
         if (scene)
-            descriptors[count++] = {SceneId, "scene", Debug::OverlaySource::Scene};
+            descriptors[count++] = {SceneId, "scene", Debug::OverlaySource::Scene, Debug::CommandAvailability::DevelopmentOnly};
         if (network)
             descriptors[count++] = {NetworkId, "network", Debug::OverlaySource::Network};
         Debug::RegistryPolicy policy;

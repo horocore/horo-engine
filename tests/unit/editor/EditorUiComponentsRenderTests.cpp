@@ -139,8 +139,7 @@ namespace {
                                                                    std::this_thread::get_id(), 128, nullptr, variables);
             REQUIRE(dispatched.HasValue());
             executor = std::move(dispatched).Value();
-            input.BeginFrame(1);
-            static_cast<void>(input.CommitFrame());
+            AdvanceInputFrame();
             view =
                 std::make_unique<Horo::Editor::RuntimeConsoleView>(Horo::Editor::RuntimeConsoleViewPorts{input.Router(), *executor,
                                                                                                          *history, *registry,
@@ -150,6 +149,15 @@ namespace {
                                                                    Horo::Editor::RuntimeConsoleViewPresentation{terminal, overlays,
                                                                                                                 panels});
         }
+
+        /** @brief Advances the real router across a presentation-frame input barrier. */
+        void AdvanceInputFrame() {
+            input.BeginFrame(nextFrame++);
+            static_cast<void>(input.CommitFrame());
+        }
+
+    private:
+        Horo::Input::FrameNumber nextFrame{1};
     };
 
     std::string gClipboardText;
@@ -1620,6 +1628,9 @@ TEST_CASE("Runtime console view does not steal existing or newer modal leases an
     CHECK(console.input.Router().IsContextActive(modal));
     modal.Reset();
     console.view->SynchronizeFocus(false);
+    CHECK_FALSE(console.view->Interactive());
+    console.AdvanceInputFrame();
+    console.view->SynchronizeFocus(false);
     CHECK(console.view->Interactive());
     CHECK_FALSE(console.input.Router().IsContextActive(gameplay));
     auto child = console.input.Router().PushContext(Horo::Input::InputContextId("later.modal"), Horo::Input::InputContextKind::ModalRoot);
@@ -1627,12 +1638,12 @@ TEST_CASE("Runtime console view does not steal existing or newer modal leases an
     CHECK_FALSE(console.view->Interactive());
     CHECK(console.input.Router().IsContextActive(child));
     child.Reset();
+    console.AdvanceInputFrame();
     console.view->SynchronizeFocus(false);
     CHECK(console.view->Interactive());
     console.view->SynchronizeFocus(true);
     CHECK_FALSE(console.view->Interactive());
-    console.input.BeginFrame(2);
-    static_cast<void>(console.input.CommitFrame());
+    console.AdvanceInputFrame();
     CHECK(console.input.Router().IsContextActive(gameplay));
     CHECK(console.view->Visible());
     console.view->SetVisible(false);
@@ -1687,6 +1698,7 @@ TEST_CASE("Runtime log and operation panels use real visible sources and explici
     CHECK(console.logs.queries == 1);
     CHECK(console.operationQuery.queries == 1);
     blocked = false;
+    console.AdvanceInputFrame();
     RenderImGuiFrame(draw);
     CHECK(console.logs.queries == 2);
     CHECK(console.operationQuery.queries == 2);
@@ -1746,6 +1758,7 @@ TEST_CASE("Accepted panel variables project to real source queries under the ind
     CHECK(console.logs.queries == 1);
     CHECK(console.operationQuery.queries == 2);
     console.view->SetOverlaysVisible(true);
+    console.AdvanceInputFrame();
     RenderImGuiFrame(draw);
     CHECK(console.logs.queries == 2);
     CHECK(console.operationQuery.queries == 3);
@@ -1843,6 +1856,7 @@ TEST_CASE("Scene development panel requires an explicit owner capability and fol
     REQUIRE(console.view->PublishScene(&*sceneView).HasValue());
     REQUIRE(console.view->SetPanelVisibility(Horo::Debug::OverlaySource::Scene, true).HasValue());
     now += std::chrono::seconds{1};
+    console.AdvanceInputFrame();
     RenderImGuiFrame(draw);
     CHECK(window->Active);
     REQUIRE(console.view->PublishScene(nullptr).HasValue());
@@ -1900,6 +1914,7 @@ TEST_CASE("Network panel uses the actual query only while visible and keeps unre
         RenderImGuiFrame(draw);
         CHECK(network->queries == 2);
         console.view->SetOverlaysVisible(true);
+        console.AdvanceInputFrame();
         RenderImGuiFrame(draw);
         CHECK(window->Active);
         CHECK(network->queries == 3);
