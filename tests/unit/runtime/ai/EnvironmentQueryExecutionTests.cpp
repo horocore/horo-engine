@@ -46,6 +46,8 @@ namespace Horo::AI {
             int cancelled{};
             QueryStageId lastStage;
             std::optional<Runtime::EntityRef> actor;
+            std::size_t pointCount{2};
+            std::optional<bool> filter;
         };
 
         class ExecutionSource final : public IQueryExecutionSource {
@@ -64,9 +66,10 @@ namespace Horo::AI {
                     output.items[0] = *probe_.actor;
                     return Result<QueryGenerationResult>::Success({.provenance = output.provenance, .itemCount = 1});
                 }
-                const std::array points{Math::WorldCoordinate64::FromMillimeters(1, 0, 0),
-                                        Math::WorldCoordinate64::FromMillimeters(2, 0, 0)};
-                return GenerateQueryPoints(points, output);
+                REQUIRE(probe_.pointCount <= output.items.size());
+                for (std::size_t index = 0; index < probe_.pointCount; ++index)
+                    output.items[index] = Math::WorldCoordinate64::FromMillimeters(static_cast<std::int64_t>(index + 1), 0, 0);
+                return Result<QueryGenerationResult>::Success({.provenance = output.provenance, .itemCount = probe_.pointCount});
             }
 
             Result<bool> StartTest(const QueryExecutionInputs &, const QueryStageId stage, const QueryGeneratedItem &item) override {
@@ -79,7 +82,9 @@ namespace Horo::AI {
                 if (probe_.backpressure)
                     return Result<bool>::Success(false);
                 const auto *point = std::get_if<Math::WorldCoordinate64>(&item);
-                sample_ = {.stage = stage, .metric = point ? static_cast<double>(point->Millimeters()[0]) / 2.0 : 1.0};
+                sample_ = {.stage = stage,
+                           .filter = probe_.filter,
+                           .metric = point ? static_cast<double>(point->Millimeters()[0]) / 2.0 : 1.0};
                 return Result<bool>::Success(true);
             }
 
@@ -166,7 +171,8 @@ namespace Horo::AI {
 
         [[nodiscard]] std::unique_ptr<QueryExecution> MakeExecution(ExecutionProbe &probe, Runtime::RuntimeScene &scene,
                                                                     bool reverseStages = false, bool deterministic = false,
-                                                                    QueryExecutionInputs *capturedInputs = nullptr) {
+                                                                    QueryExecutionInputs *capturedInputs = nullptr,
+                                                                    QueryDebugCaptureSettings debugCapture = {}) {
             QueryFixture fixture;
             if (probe.actor)
                 fixture.items.front().kind = QueryItemKind::Actor;
@@ -175,7 +181,9 @@ namespace Horo::AI {
             const auto plan = fixture.Plan(registry, test.id, reverseStages);
             std::vector<QueryScoreRule> rules;
             for (const auto &stage : plan.Stages().subspan(1))
-                rules.push_back({.stage = stage.id, .score = QueryScoreRange{}});
+                rules.push_back({.stage = stage.id,
+                                 .requiredFilterValue = probe.filter.has_value() ? std::optional{true} : std::nullopt,
+                                 .score = QueryScoreRange{}});
             auto scoring = QueryScoringPlan::Capture(plan, registry, rules, QueryScoreTieBreak::StableIndex);
             REQUIRE(scoring.HasValue());
             const auto providers = QueryContextProviderRegistry::Capture({}, registry);
@@ -190,10 +198,10 @@ namespace Horo::AI {
             const QueryGeneratorProvenance provenance{plan.Stages()[0].id, fixture.generator.id, fixture.generator.origin.provider, 1};
             const auto admit = [&]() {
                 if (deterministic)
-                    return QueryExecution::AdmitDeterministic(inputs, provenance, std::move(scoring).Value(), {4, 8, 2, 2, 2, true},
-                                                              std::make_unique<OwnerSource>(probe));
-                return QueryExecution::Admit(inputs, provenance, std::move(scoring).Value(), {4, 8, 2, 2, 1, true},
-                                             std::make_unique<ExecutionSource>(probe));
+                    return QueryExecution::AdmitDeterministic(inputs, provenance, std::move(scoring).Value(),
+                                                              {4, 8, 2, 2, 2, true, debugCapture}, std::make_unique<OwnerSource>(probe));
+                return QueryExecution::Admit(inputs, provenance, std::move(scoring).Value(),
+                                             {4, 8, probe.pointCount, 2, 1, true, debugCapture}, std::make_unique<ExecutionSource>(probe));
             };
             auto execution = admit();
             REQUIRE(execution.HasValue());
@@ -658,6 +666,95 @@ namespace Horo::AI {
             CHECK(query->Published()->winners[0].score.itemIndex == 1);
             CHECK(query->Published()->winners[1].score.itemIndex == 0);
             CHECK(probe.cancelled == 0);
+            CHECK_FALSE(query->ReadDebugSnapshot(scene->View()));
+        }
+
+        TEST_CASE("EQS debug explains a sampled stage and ranks winners independently of sampling", "[unit][ai][eqs][debug]") {
+            auto scene = MakeScene();
+            ExecutionProbe probe;
+            auto query = MakeExecution(probe, *scene, false, false, nullptr, {1, true});
+            AiWorkBudget first{9}, second{2};
+            CHECK_FALSE(query->Sync(5));
+            query->Advance(5, {first, first, first});
+            CHECK_FALSE(query->Sync(6));
+            query->Advance(6, {second, second, second});
+            REQUIRE(query->Sync(7));
+            const auto captured = query->ReadDebugSnapshot(scene->View());
+            REQUIRE(captured);
+            CHECK(captured->terminalStatus == QueryExecutionStatus::Completed);
+            CHECK(captured->evaluated == 2);
+            REQUIRE(captured->candidates.size() == 1);
+            CHECK(captured->candidates[0].index == 0);
+            REQUIRE(captured->candidates[0].point);
+            CHECK(captured->candidates[0].point->Millimeters()[0] == 1);
+            REQUIRE(captured->stages.size() == 1);
+            CHECK(captured->stages[0].candidateIndex == 0);
+            CHECK(captured->stages[0].score.contribution == 0.5);
+            CHECK(captured->winnerCount == 2);
+            REQUIRE(captured->winners.size() == 1);
+            CHECK(captured->winners[0].itemIndex == 1);
+            CHECK(captured->winners[0].scoreKey == QueryScoringPlan::ScoreKeyScale);
+
+            probe.current = false;
+            const auto stale = query->ReadDebugSnapshot(scene->View());
+            REQUIRE(stale);
+            CHECK(stale->stale);
+            CHECK_FALSE(stale->candidates[0].point);
+        }
+
+        TEST_CASE("EQS debug samples large sets evenly and redacts provider values", "[unit][ai][eqs][debug]") {
+            auto scene = MakeScene();
+            ExecutionProbe probe{.pointCount = 129, .filter = false};
+            auto query = MakeExecution(probe, *scene, false, false, nullptr, {3});
+            AiWorkBudget first{2'000};
+            CHECK_FALSE(query->Sync(5));
+            query->Advance(5, {first, first, first});
+            CHECK_FALSE(query->Sync(6));
+            const auto captured = query->ReadDebugSnapshot(scene->View());
+            REQUIRE(captured);
+            CHECK(captured->generated == 129);
+            CHECK(captured->evaluated == 1);
+            REQUIRE(captured->candidates.size() == 3);
+            CHECK(captured->candidates[0].index == 0);
+            CHECK(captured->candidates[1].index == 64);
+            CHECK(captured->candidates[2].index == 128);
+            for (const auto &candidate : captured->candidates)
+                CHECK_FALSE(candidate.point);
+            REQUIRE(captured->stages.size() == 1);
+            CHECK(captured->stages[0].score.status == QueryScoreStatus::Filtered);
+            CHECK(captured->stages[0].score.contribution == 0);
+            CHECK(captured->winners.empty());
+        }
+
+        TEST_CASE("EQS debug detects a replaced actor from the actual scene generation", "[unit][ai][eqs][debug]") {
+            auto scene = MakeScene();
+            const auto actor = scene->View().Find({2});
+            REQUIRE(actor);
+            ExecutionProbe probe{.actor = *actor};
+            auto query = MakeExecution(probe, *scene, false, false, nullptr, {2, true});
+            AiWorkBudget first{9};
+            CHECK_FALSE(query->Sync(5));
+            query->Advance(5, {first, first, first});
+            REQUIRE(query->Sync(6));
+            const auto current = query->ReadDebugSnapshot(scene->View());
+            REQUIRE(current);
+            CHECK_FALSE(current->stale);
+            REQUIRE(current->candidates.size() == 1);
+            CHECK(current->candidates[0].actor);
+            CHECK_FALSE(current->candidates[0].point);
+
+            Runtime::SceneCommandBuffer commands;
+            commands.Destroy(*actor);
+            REQUIRE(commands.Create({}).IsValid());
+            const auto committed = scene->Commit(commands);
+            REQUIRE(committed.HasValue());
+            REQUIRE(committed.Value().created.size() == 1);
+            const auto replacement = committed.Value().created[0].entity;
+            CHECK(replacement != *actor);
+            const auto stale = query->ReadDebugSnapshot(scene->View());
+            REQUIRE(stale);
+            CHECK(stale->stale);
+            CHECK_FALSE(stale->candidates[0].point);
         }
 
         TEST_CASE("EQS dispatches authored stage order and scores by stable stage identity", "[unit][ai][eqs][execution]") {

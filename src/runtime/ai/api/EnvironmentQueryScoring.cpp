@@ -220,6 +220,15 @@ namespace Horo::AI {
                 .status = QueryScoreStatus::Eligible};
     }
 
+    /** @copydoc QueryScoringPlan::DescribeStage */
+    QueryStageScore QueryScoringPlan::DescribeStage(const std::size_t stageIndex, const QueryTestSample &sample) const noexcept {
+        const auto &rule = stages_[stageIndex].rule;
+        const auto status = Status(sample, rule);
+        const auto contribution =
+            status == QueryScoreStatus::Eligible && rule.score ? WeightedScore(*rule.score, *sample.metric) / totalWeight_ : 0;
+        return {rule.stage, status, contribution};
+    }
+
     /** @copydoc QueryScoringPlan::SelectBest */
     Result<std::span<const QueryCandidateScore>> QueryScoringPlan::SelectBest(const std::span<QueryCandidateScore> candidates,
                                                                               const std::size_t bestCount) const {

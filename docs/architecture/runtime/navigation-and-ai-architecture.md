@@ -2824,6 +2824,14 @@ worker leases and outstanding intent batches are transient and never serialized.
 
 ## Debugging And Visualization
 
+The owner can opt an admitted EQS execution into a bounded preview. The preview
+samples stable generator indices across the generated list and reports completed
+test decisions, normalized contributions, and the ranked winner prefix. It omits
+raw provider readings, context values, actor handles, and provider error text.
+An explicit owner grant allows generated world points to be drawn. Reads mark
+retired authority as stale and suppress point geometry in that state. The copied
+snapshot is presentation data and carries no authority to navigate an entity.
+
 [ADR-110](../../adr/110-navigation-editor-surface-and-command-ownership.md)
 maps navigation tooling onto the shared editor architecture. A persistent
 `NavigationDefinitionDocument` and ordinary `SceneDocument` commands own authored

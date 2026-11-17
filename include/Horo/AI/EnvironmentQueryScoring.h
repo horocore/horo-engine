@@ -108,6 +108,13 @@ namespace Horo::AI {
         QueryProviderId failedProvider;
     };
 
+    /** @brief Redacted outcome and normalized contribution of one completed test. */
+    struct QueryStageScore final {
+        QueryStageId stage;
+        QueryScoreStatus status{};
+        double contribution{}; /**< Weighted share of the unit interval, before total-score quantization. */
+    };
+
     /** @brief Immutable policy joined to the exact descriptor-admitted tests of an EQS plan. */
     class QueryScoringPlan final {
     public:
@@ -158,6 +165,9 @@ namespace Horo::AI {
                                                        const QueryScoreRule &rule);
         /** @brief Validates the sorted stage inventory and measures its total scoring weight. */
         [[nodiscard]] static Result<double> MeasureWeight(std::span<const Stage> stages);
+
+        /** @brief Projects the already evaluated stage without exposing its raw metric or filter value. */
+        [[nodiscard]] QueryStageScore DescribeStage(std::size_t stageIndex, const QueryTestSample &sample) const noexcept;
 
         QueryScoringPlan() = default;
         std::vector<Stage> stages_;

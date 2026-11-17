@@ -100,6 +100,13 @@ namespace Horo::AI {
         std::optional<Result<QueryTestSample>> completion_;
     };
 
+    /** @brief Explicit owner opt-in to a bounded debug projection for one query. */
+    struct QueryDebugCaptureSettings final {
+        static constexpr std::size_t MaximumSamples = 64;
+        std::size_t maximumSamples{}; /**< Zero disables capture. */
+        bool includeWorldPoints{};    /**< Enable only when the debug recipient may see generated positions. */
+    };
+
     /** @brief Finite settings for one tactical query. */
     struct QueryExecutionSettings final {
         std::uint64_t submittedTick{};
@@ -108,6 +115,7 @@ namespace Horo::AI {
         std::size_t bestCount{};
         std::size_t generatorWorkUnits{};
         bool allowPartial{};
+        QueryDebugCaptureSettings debugCapture;
     };
 
     /** @brief Caller-issued per-tick allowances. Sharing the same allowance charges it once. */
@@ -153,6 +161,37 @@ namespace Horo::AI {
         std::size_t invalidCoordinates{};
         std::vector<QueryExecutionWinner> winners;
         std::optional<Error> error;
+    };
+
+    /** @brief One sampled candidate, without a live actor reference or custom provider state. */
+    struct QueryDebugCandidate final {
+        std::uint32_t index{};
+        bool actor{};
+        std::optional<Math::WorldCoordinate64> point; /**< Present only when the owner explicitly enabled position disclosure. */
+        std::optional<QueryCandidateScore> score;     /**< Present once all required stages for this candidate complete. */
+    };
+
+    /** @brief Ready-to-display evidence of a sampled candidate's completed test. */
+    struct QueryDebugStage final {
+        std::uint32_t candidateIndex{};
+        QueryStageScore score;
+    };
+
+    /** @brief Owned backend-neutral preview of one query, safe to retain for historical inspection. */
+    struct QueryDebugSnapshot final {
+        QueryId query;
+        QueryStageId generator;
+        std::uint64_t submittedTick{};
+        std::uint64_t observedTick{};
+        bool stale{};
+        std::optional<QueryExecutionStatus> terminalStatus;
+        std::size_t generated{};
+        std::size_t evaluated{};
+        std::size_t invalidCoordinates{};
+        std::size_t winnerCount{};
+        std::vector<QueryDebugCandidate> candidates; /**< Even sample in stable generator order. */
+        std::vector<QueryDebugStage> stages;         /**< Completed test rows in execution order for sampled candidates. */
+        std::vector<QueryCandidateScore> winners;    /**< Ranking prefix up to the configured sample bound. */
     };
 
     /** @brief Scene-owner execution of one admitted tactical query with at most one retained provider result.
@@ -207,6 +246,13 @@ namespace Horo::AI {
         void Cancel() noexcept;
         /** @brief Reads the immutable terminal result. @return Null until publication. */
         [[nodiscard]] const QueryExecutionResult *Published() const noexcept;
+        /** @brief Copies the current preview on the owner lane and marks stale source authority at read time.
+         * @param scene Current scene view used to validate captured actor generations.
+         * @return Owned snapshot, or empty when capture was disabled.
+         * @details No actor handle, raw metric, context value or provider error text is projected. Stale previews
+         * expose no point geometry. The snapshot carries historical evidence only and grants no navigation authority.
+         */
+        [[nodiscard]] std::optional<QueryDebugSnapshot> ReadDebugSnapshot(const Runtime::RuntimeSceneView &scene) const;
         /** @brief Checks the exact query/task owner and timing supplied at admission. */
         [[nodiscard]] bool MatchesAdmission(QueryId query, AgentHandle agent, std::uint64_t submittedTick,
                                             std::uint64_t deadlineTick) const noexcept;
@@ -227,6 +273,10 @@ namespace Horo::AI {
         /** @brief Enforces the consecutive owner-tick contract before any deterministic completion can be consumed. */
         void ValidateTickSequence(std::uint64_t tick);
         void Generate();
+        /** @brief Samples the generated list in stable index order using the admitted preview capacity. */
+        void CaptureDebugCandidates();
+        /** @brief Returns the active sample slot when the next candidate being scored was sampled. */
+        [[nodiscard]] QueryDebugCandidate *CurrentDebugCandidate() noexcept;
         void ScoreCandidate();
         void Poll();
         void StopTest() noexcept;
@@ -241,6 +291,8 @@ namespace Horo::AI {
         std::vector<std::size_t> testOrder_;
         std::vector<QueryCandidateScore> scores_;
         QueryExecutionResult result_;
+        std::unique_ptr<QueryDebugSnapshot> debug_;
+        std::size_t debugSample_{};
         std::uint64_t lastSync_{};
         std::uint64_t lastAdvance_{};
         std::size_t nextTest_{};

@@ -75,7 +75,8 @@ namespace Horo::AI {
         [[nodiscard]] bool WithinLimits(const QueryExecutionSettings &settings, const std::size_t maximumResults) noexcept {
             return settings.maximumCandidates > 0 && settings.maximumCandidates <= EnvironmentQuerySchemaLimits::MaximumResults &&
                    settings.bestCount > 0 && settings.bestCount <= maximumResults && settings.generatorWorkUnits > 0 &&
-                   settings.generatorWorkUnits <= EnvironmentQuerySchemaLimits::MaximumResults * 16U;
+                   settings.generatorWorkUnits <= EnvironmentQuerySchemaLimits::MaximumResults * 16U &&
+                   settings.debugCapture.maximumSamples <= QueryDebugCaptureSettings::MaximumSamples;
         }
 
         /** @brief Rejects a generator that returns a different publication or more than its admitted capacity. */
@@ -84,6 +85,12 @@ namespace Horo::AI {
             const auto &expected = output.provenance;
             return generation.itemCount <= output.maximumItems && actual.stage == expected.stage &&
                    actual.generator == expected.generator && actual.provider == expected.provider && actual.revision == expected.revision;
+        }
+
+        /** @brief Checks only the exact captured generation. Replacement actors cannot satisfy this read. */
+        [[nodiscard]] bool RetiredActor(const QueryGeneratedItem &item, const Runtime::RuntimeSceneView &scene) {
+            const auto *actor = std::get_if<Runtime::EntityRef>(&item);
+            return actor && scene.Get(*actor).HasError();
         }
     }  // namespace
 
@@ -102,6 +109,15 @@ namespace Horo::AI {
         });
         scores_.reserve(settings.maximumCandidates);
         result_.winners.reserve(std::min(settings.maximumCandidates, settings.bestCount));
+        if (settings.debugCapture.maximumSamples != 0) {
+            const auto count = std::min(settings.debugCapture.maximumSamples, settings.maximumCandidates);
+            debug_ = std::make_unique<QueryDebugSnapshot>();
+            debug_->query = inputs_.contexts->Query();
+            debug_->generator = provenance.stage;
+            debug_->submittedTick = settings.submittedTick;
+            debug_->candidates.reserve(count);
+            debug_->stages.reserve(count * scoring_.stages_.size());
+        }
     }
 
     /** @copydoc QueryExecution::Admit */
@@ -178,11 +194,39 @@ namespace Horo::AI {
         result_.generated = generation.Value().itemCount;
         result_.invalidCoordinates = generation.Value().invalidCoordinateCount;
         generated_ = true;
+        if (debug_)
+            CaptureDebugCandidates();
+    }
+
+    /** @copydoc QueryExecution::CaptureDebugCandidates */
+    void QueryExecution::CaptureDebugCandidates() {
+        const auto count = std::min(result_.generated, settings_.debugCapture.maximumSamples);
+        for (std::size_t sample = 0; sample < count; ++sample) {
+            const auto index = sample * (result_.generated - 1) / std::max<std::size_t>(1, count - 1);
+            const auto *point = std::get_if<Math::WorldCoordinate64>(&items_[index]);
+            QueryDebugCandidate candidate{.index = static_cast<std::uint32_t>(index), .actor = point == nullptr};
+            if (point && settings_.debugCapture.includeWorldPoints)
+                candidate.point = *point;
+            debug_->candidates.push_back(candidate);
+        }
+    }
+
+    /** @copydoc QueryExecution::CurrentDebugCandidate */
+    QueryDebugCandidate *QueryExecution::CurrentDebugCandidate() noexcept {
+        if (!debug_ || debugSample_ >= debug_->candidates.size())
+            return nullptr;
+        auto &candidate = debug_->candidates[debugSample_];
+        return candidate.index == scores_.size() ? &candidate : nullptr;
     }
 
     /** @brief Scores one completed candidate against its reserved work allowance. */
     void QueryExecution::ScoreCandidate() {
-        scores_.push_back(scoring_.Evaluate(static_cast<std::uint32_t>(scores_.size()), 0, samples_));
+        const auto score = scoring_.Evaluate(static_cast<std::uint32_t>(scores_.size()), 0, samples_);
+        if (auto *candidate = CurrentDebugCandidate()) {
+            candidate->score = score;
+            ++debugSample_;
+        }
+        scores_.push_back(score);
         nextTest_ = 0;
         scoringReserved_ = false;
     }
@@ -253,6 +297,8 @@ namespace Horo::AI {
                 return;
             }
             samples_[slot] = sample;
+            if (const auto *candidate = CurrentDebugCandidate())
+                debug_->stages.push_back({candidate->index, scoring_.DescribeStage(slot, sample)});
             if (++nextTest_ == testOrder_.size())
                 ScoreCandidate();
         } catch (...) {
@@ -337,6 +383,36 @@ namespace Horo::AI {
     /** @copydoc QueryExecution::Published */
     const QueryExecutionResult *QueryExecution::Published() const noexcept {
         return published_ ? &result_ : nullptr;
+    }
+
+    /** @copydoc QueryExecution::ReadDebugSnapshot */
+    std::optional<QueryDebugSnapshot> QueryExecution::ReadDebugSnapshot(const Runtime::RuntimeSceneView &scene) const {
+        if (!debug_)
+            return std::nullopt;
+        auto snapshot = *debug_;
+        snapshot.observedTick = std::max(lastSync_, settings_.submittedTick);
+        snapshot.generated = result_.generated;
+        snapshot.evaluated = scores_.size();
+        snapshot.invalidCoordinates = result_.invalidCoordinates;
+        snapshot.stale = stale_ || !scene.IsCurrent() || scene.RuntimeId() != result_.scene || !InputsAreCurrent() ||
+                         (published_ && result_.status == QueryExecutionStatus::StaleInputs);
+        snapshot.stale = snapshot.stale || std::ranges::any_of(snapshot.candidates, [&](const QueryDebugCandidate &candidate) {
+            return RetiredActor(items_[candidate.index], scene);
+        });
+        if (published_) {
+            snapshot.terminalStatus = result_.status;
+            snapshot.winnerCount = result_.winners.size();
+            const auto count = std::min(snapshot.winnerCount, settings_.debugCapture.maximumSamples);
+            snapshot.winners.reserve(count);
+            for (const auto &winner : std::span{result_.winners}.first(count)) {
+                snapshot.stale = snapshot.stale || RetiredActor(winner.item, scene);
+                snapshot.winners.push_back(winner.score);
+            }
+        }
+        if (snapshot.stale)
+            for (auto &candidate : snapshot.candidates)
+                candidate.point.reset();
+        return snapshot;
     }
 
     /** @copydoc QueryExecution::MatchesAdmission */
