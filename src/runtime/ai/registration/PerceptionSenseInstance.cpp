@@ -5,6 +5,7 @@
 #include <new>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Horo::AI {
     namespace {
@@ -32,13 +33,22 @@ namespace Horo::AI {
             return {text, length};
         }
 
-        /** @brief Keeps diagnostic allocation failure inside the same sense-local exception boundary. */
+        /** @brief Falls back to identity-only diagnostics when text allocation fails; identity storage remains fallible. */
         Error SenseFailure(const ErrorCodeDescriptor &descriptor, const std::exception *error = nullptr) noexcept {
             try {
                 return MakeError(descriptor, error ? std::string{ExceptionText(*error)} : std::string{});
             } catch (const std::bad_alloc &) {
                 // MakeError fills an empty message from the summary, which would allocate again here.
-                return {.code = descriptor.code, .domain = descriptor.domain, .severity = descriptor.defaultSeverity};
+                try {
+                    return {.code = descriptor.code,
+                            .domain = descriptor.domain,
+                            .severity = descriptor.defaultSeverity,
+                            .message = std::string{""},
+                            .diagnostics = std::vector<Diagnostic>(std::size_t{0})};
+                } catch (const std::bad_alloc &) {
+                    // Owned identities cannot be represented; Foundation permits the fatal OOM path.
+                    std::terminate();
+                }
             }
         }
 

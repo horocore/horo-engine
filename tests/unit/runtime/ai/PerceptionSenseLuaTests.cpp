@@ -144,21 +144,18 @@ namespace Horo::AI {
                       .HasError());
         }
 
-        TEST_CASE("Lua custom sense compilation reports storage failure without allocating its diagnostic", "[unit][ai][sense-lua]") {
+        TEST_CASE("Lua custom sense compilation reports typed storage failure", "[unit][ai][sense-lua]") {
             Fixture fixture;
             std::string source{"return function() return true end"};
             auto contract = fixture.contract;
-            Tests::AllocationProbe::Measurement observed;
             auto failed = [&] {
-                Tests::AllocationProbe::ScopedMeasurement measurement;
                 Tests::AllocationProbe::ScopedFailure allocation;
                 auto result = Gameplay::LuaPerceptionSenseProgram::Compile(std::move(source), std::move(contract), fixture.parent);
-                observed = measurement.Snapshot();
                 return result;
             }();
             ExpectError(failed, AIErrors::PerceptionRegistryStorageUnavailable);
             CHECK(failed.ErrorValue().message.empty());
-            CHECK(observed.requests == 1);
+            CHECK(failed.ErrorValue().domain.Value() == AIErrors::PerceptionRegistryStorageUnavailable.domain.Value());
             CHECK(fixture.parent->CanAdmit());
             auto healthy = fixture.Program("return function() return true end");
             CHECK(healthy->Acquire().HasValue());
@@ -168,17 +165,14 @@ namespace Horo::AI {
             Fixture fixture;
             fixture.contract.sense.displayName = "A custom script sense name requiring owned metadata storage";
             auto program = fixture.Program("return function() return true end");
-            Tests::AllocationProbe::Measurement observed;
             auto failed = [&] {
-                Tests::AllocationProbe::ScopedMeasurement measurement;
                 Tests::AllocationProbe::ScopedFailure allocation;
                 auto result = program->Acquire();
-                observed = measurement.Snapshot();
                 return result;
             }();
             ExpectError(failed, AIErrors::PerceptionRegistryStorageUnavailable);
             CHECK(failed.ErrorValue().message.empty());
-            CHECK(observed.requests == 1);
+            CHECK(failed.ErrorValue().domain.Value() == AIErrors::PerceptionRegistryStorageUnavailable.domain.Value());
             CHECK(fixture.parent->CanAdmit());
             auto instance = fixture.Instance(fixture.Generation(*program));
             AiWorkBudget budget{6};

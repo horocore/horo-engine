@@ -4,17 +4,29 @@
 #include "LuaDecisionNodeBoundary.h"
 
 #include <initializer_list>
+#include <exception>
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace Horo::Gameplay {
     namespace {
         using Detail::DecisionScript::Protected;
 
-        /** @brief Keeps failure translation inside its boundary without allocating a replacement diagnostic. */
+        /** @brief Omits diagnostic text while allowing owned error identity storage to report exhaustion. */
         Error BoundaryFailure(const ErrorCodeDescriptor &descriptor) noexcept {
-            return {.code = descriptor.code, .domain = descriptor.domain, .severity = descriptor.defaultSeverity};
+            try {
+                return {.code = descriptor.code,
+                        .domain = descriptor.domain,
+                        .severity = descriptor.defaultSeverity,
+                        .message = std::string{""},
+                        .diagnostics = std::vector<Diagnostic>(std::size_t{0})};
+            } catch (const std::bad_alloc &) {
+                // Owned identities cannot be represented; Foundation permits the fatal OOM path.
+                std::terminate();
+            }
         }
 
         /** @brief Existing allocator accounting plus owner-only instruction and no-allocation callback fences. */

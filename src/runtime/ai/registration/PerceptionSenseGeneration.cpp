@@ -1,16 +1,28 @@
 #include "Horo/AI/PerceptionSenseProvider.h"
 
 #include <algorithm>
+#include <exception>
 #include <new>
+#include <string>
+#include <vector>
 
 namespace Horo::AI {
     namespace {
         constexpr PerceptionCapabilitySet AllCapabilities{(1U << static_cast<unsigned>(PerceptionCapability::Count)) - 1U};
 
-        /** @brief Reports exhausted registry storage without allocating another diagnostic in the failure handler. */
+        /** @brief Omits diagnostic text; owned error identities can still require fallible storage. */
         Error StorageFailure() noexcept {
             const auto &descriptor = AIErrors::PerceptionRegistryStorageUnavailable;
-            return {.code = descriptor.code, .domain = descriptor.domain, .severity = descriptor.defaultSeverity};
+            try {
+                return {.code = descriptor.code,
+                        .domain = descriptor.domain,
+                        .severity = descriptor.defaultSeverity,
+                        .message = std::string{""},
+                        .diagnostics = std::vector<Diagnostic>(std::size_t{0})};
+            } catch (const std::bad_alloc &) {
+                // Owned identities cannot be represented; Foundation permits the fatal OOM path.
+                std::terminate();
+            }
         }
 
         /** @brief Native and package metadata retain actual native-owner admission; raw script callbacks are not admitted. */

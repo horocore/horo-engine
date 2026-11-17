@@ -135,61 +135,50 @@ namespace Horo::AI {
             CHECK(fixture.counters[0] == 1);
         }
 
-        TEST_CASE("Custom perception metadata copy failure reports storage exhaustion without another allocation",
-                  "[unit][ai][sense-provider]") {
+        TEST_CASE("Custom perception metadata copy failure preserves the typed storage error", "[unit][ai][sense-provider]") {
             Fixture fixture;
             fixture.registration.contract.sense.displayName = "A custom native sense name requiring owned metadata storage";
-            Tests::AllocationProbe::Measurement observed;
             auto failed = [&] {
-                Tests::AllocationProbe::ScopedMeasurement measurement;
                 Tests::AllocationProbe::ScopedFailure allocation{1};
                 auto result = ValidatePerceptionSenseRegistration(fixture.registration);
-                observed = measurement.Snapshot();
                 return result;
             }();
             ExpectError(failed, AIErrors::PerceptionRegistryStorageUnavailable);
             CHECK(failed.ErrorValue().message.empty());
-            CHECK(observed.requests == 2);
+            CHECK(failed.ErrorValue().domain.Value() == AIErrors::PerceptionRegistryStorageUnavailable.domain.Value());
             CHECK(fixture.counters[0] == 0);
             REQUIRE(ValidatePerceptionSenseRegistration(fixture.registration).HasValue());
         }
 
-        TEST_CASE("Custom perception capture storage failure allocates no replacement diagnostic", "[unit][ai][sense-provider]") {
+        TEST_CASE("Custom perception capture reports a typed storage error after allocation failure", "[unit][ai][sense-provider]") {
             Fixture fixture;
             std::shared_ptr<const std::atomic_bool> admission{fixture.owner, &fixture.owner->admission};
-            Tests::AllocationProbe::Measurement observed;
             auto failed = [&] {
-                Tests::AllocationProbe::ScopedMeasurement measurement;
                 Tests::AllocationProbe::ScopedFailure allocation;
                 auto result = PerceptionSenseGeneration::Capture(std::span{&fixture.registration, 1}, admission);
-                observed = measurement.Snapshot();
                 return result;
             }();
             ExpectError(failed, AIErrors::PerceptionRegistryStorageUnavailable);
             CHECK(failed.ErrorValue().message.empty());
-            CHECK(observed.requests == 1);
+            CHECK(failed.ErrorValue().domain.Value() == AIErrors::PerceptionRegistryStorageUnavailable.domain.Value());
             CHECK(fixture.counters[0] == 0);
             auto healthy = fixture.Instance(fixture.Generation());
             CHECK(healthy->CanEvaluate());
         }
 
-        TEST_CASE("Custom perception instance storage failure preserves the generation without diagnostic allocation",
-                  "[unit][ai][sense-provider]") {
+        TEST_CASE("Custom perception instance allocation failure preserves its generation", "[unit][ai][sense-provider]") {
             Fixture fixture;
             auto generation = fixture.Generation();
             auto registry = fixture.Registry();
-            Tests::AllocationProbe::Measurement observed;
             auto failed = [&] {
-                Tests::AllocationProbe::ScopedMeasurement measurement;
                 Tests::AllocationProbe::ScopedFailure allocation;
                 auto result = generation->Create(generation, fixture.registration.contract.sense.identity, registry, fixture.capabilities,
                                                  fixture.binding);
-                observed = measurement.Snapshot();
                 return result;
             }();
             ExpectError(failed, AIErrors::PerceptionRegistryStorageUnavailable);
             CHECK(failed.ErrorValue().message.empty());
-            CHECK(observed.requests == 1);
+            CHECK(failed.ErrorValue().domain.Value() == AIErrors::PerceptionRegistryStorageUnavailable.domain.Value());
             CHECK(fixture.counters[0] == 0);
             CHECK(generation->CanAdmit());
             auto healthy = fixture.Instance(generation);

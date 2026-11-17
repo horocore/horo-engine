@@ -171,7 +171,9 @@ namespace Horo::AI {
          * @details The spatial owner revalidates its publication and every entity before applying samples at PerceptionSensePoll.
          * Module revocation and cancellation are checked before and after callbacks. Insufficient budgets invoke no provider.
          * Exceptions, invalid output and exceeded local bounds retire this instance; original typed errors remain retryable by its owner.
-         * If exception diagnostic storage is unavailable, the provider-failure code is retained with an empty message.
+         * If exception diagnostic text cannot be allocated, identity-only failure construction is attempted.
+         * Error identities own strings; the fallback may allocate. If identity storage cannot be obtained,
+         * unrecoverable exhaustion follows Foundation's fatal out-of-memory policy.
          */
         [[nodiscard]] Result<PerceptionSenseResult> Evaluate(const PerceptionSenseInput &input, AiWorkBudget &agentBudget,
                                                              AiWorkBudget &globalBudget);
