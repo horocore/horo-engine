@@ -426,7 +426,13 @@ namespace Horo::XR::OpenXRInternal {
         admitted = EnableExtension(bindingName);
         if (admitted.HasError())
             return admitted;
+        return AdmitRequestedExtensions(requested, bindingName, publication);
+    }
 
+    /** @copydoc OpenXRNativeSession::AdmitRequestedExtensions */
+    Result<void> OpenXRNativeSession::AdmitRequestedExtensions(std::span<const NativeExtensionRequest> requested,
+                                                               std::string_view bindingName,
+                                                               std::span<const XrExtensionProperties> publication) {
         std::array<PlannedExtension, MaximumEnabledExtensions> plan{};
         for (std::size_t index = 0; index < requested.size(); ++index) {
             const auto &request = requested[index];

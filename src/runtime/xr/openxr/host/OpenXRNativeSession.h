@@ -240,6 +240,9 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> EnableLayer(std::string_view name, std::span<const XrApiLayerProperties> available);
         /** @brief Combines runtime/layer publications and admits host graphics before optional feature extensions. */
         [[nodiscard]] Result<void> NegotiateExtensions(std::span<const NativeExtensionRequest> requested);
+        /** @brief Resolves validated feature requests against the census and retains the resulting policy evidence. */
+        [[nodiscard]] Result<void> AdmitRequestedExtensions(std::span<const NativeExtensionRequest> requested, std::string_view bindingName,
+                                                            std::span<const XrExtensionProperties> publication);
         /** @brief Copies one unique, admitted name into the native instance request. */
         [[nodiscard]] Result<void> EnableExtension(std::string_view name);
         /** @brief Enumerates one bounded global/layer extension publication without truncation. */
