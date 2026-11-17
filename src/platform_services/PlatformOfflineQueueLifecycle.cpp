@@ -277,6 +277,6 @@ namespace Horo::PlatformServices {
             }
         } commit{operations_, retained, retainedIntentCount_, compacted.size()};
 
-        return Result<std::vector<PlatformOfflineIntentId>>::SuccessInPlace(std::move(compacted), compacted.get_allocator());
+        return Result<std::vector<PlatformOfflineIntentId>>::SuccessInPlace(compacted);
     }
 }  // namespace Horo::PlatformServices
