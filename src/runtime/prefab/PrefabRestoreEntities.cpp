@@ -11,6 +11,8 @@
 #include <memory>
 #include <new>
 #include <set>
+#include <type_traits>
+#include <variant>
 
 namespace Horo::Prefab {
     namespace {
@@ -301,19 +303,26 @@ namespace Horo::Prefab {
             return Result<std::size_t>::Success(*localNodes[instance][local]->dense);
         }
 
-        Result<void> RemapReference(Runtime::RuntimeGroupReference &reference, std::size_t instance) const {
-            if (auto *entity = std::get_if<Runtime::RuntimeGroupEntitySlot>(&reference.target)) {
-                auto slot = Dense(instance, entity->index);
-                if (slot.HasError())
-                    return Result<void>::Failure(slot.ErrorValue());
-                entity->index = slot.Value();
-            } else if (auto *member = std::get_if<Runtime::RuntimeGroupMemberSlot>(&reference.target)) {
-                auto slot = Dense(instance, member->entity.index);
-                if (slot.HasError())
-                    return Result<void>::Failure(slot.ErrorValue());
-                member->entity.index = slot.Value();
-            }
+        Result<void> RemapLocalSlot(std::size_t &index, std::size_t instance) const {
+            auto slot = Dense(instance, index);
+            if (slot.HasError())
+                return Result<void>::Failure(slot.ErrorValue());
+            index = slot.Value();
             return Result<void>::Success();
+        }
+
+        Result<void> RemapReference(Runtime::RuntimeGroupReference &reference, std::size_t instance) const {
+            // As with get_if, an empty variant carries no local slot to rewrite.
+            if (reference.target.valueless_by_exception())
+                return Result<void>::Success();
+            return std::visit([this, instance]<typename Target>(Target &target) -> Result<void> {
+                if constexpr (std::is_same_v<Target, Runtime::RuntimeGroupEntitySlot>)
+                    return RemapLocalSlot(target.index, instance);
+                else if constexpr (std::is_same_v<Target, Runtime::RuntimeGroupMemberSlot>)
+                    return RemapLocalSlot(target.entity.index, instance);
+                else
+                    return Result<void>::Success();
+            }, reference.target);
         }
 
         Result<void> RemapReferences(Runtime::RuntimeEntityGroupEntry &entry, std::size_t instance, std::size_t local) const {

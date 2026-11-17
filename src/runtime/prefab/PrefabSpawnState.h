@@ -270,6 +270,30 @@ namespace Horo::Prefab::Detail {
             return Result<PrefabInstance>::Success(std::move(handle));
         }
 
+        /** @brief Retains the admitted request only after its real asynchronous load is accepted. */
+        Result<PrefabOperation> QueueSpawn(const PrefabSpawnRequest &request, const std::uint64_t scopeId, const CancellationToken &scope,
+                                           const CancellationToken &cancellation, const std::span<const Assets::AssetId> lineage,
+                                           std::string_view creator, PrefabMetricOperation &attempt) {
+            auto operation = std::make_shared<PrefabSpawnOperation>(cancellation);
+            operation->creator = creator;
+            operation->scope = scopeId;
+            operation->scopeCancellation = scope;
+            operation->due = request.notBeforeTick;
+            operation->request = request;
+            operation->lineage.assign(lineage.begin(), lineage.end());
+            operation->lineage.push_back(operation->request.source.asset);
+            auto load = provider->LoadAsync(operation->request.source, operation->cancellation.Token());
+            if (load.HasError())
+                return Result<PrefabOperation>::Failure(load.ErrorValue());
+            operation->load.emplace(std::move(load).Value());
+            pending.push_back(operation);
+            retained.push_back(operation);
+            operation->measurement = std::move(attempt);
+            PrefabOperation handle;
+            handle.operation_ = std::move(operation);
+            return Result<PrefabOperation>::Success(std::move(handle));
+        }
+
         /** @brief Admits copied initialization identities without inspecting source
          * data or queuing structural work. */
         [[nodiscard]] Result<PrefabOperation> Spawn(const PrefabSpawnRequest &request, const std::uint64_t scopeId,
@@ -286,24 +310,7 @@ namespace Horo::Prefab::Detail {
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
                 if (auto valid = ValidateSpawnInputs(request); valid.HasError())
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
-                auto operation = std::make_shared<PrefabSpawnOperation>(cancellation);
-                operation->creator = creator;
-                operation->scope = scopeId;
-                operation->scopeCancellation = scope;
-                operation->due = request.notBeforeTick;
-                operation->request = request;
-                operation->lineage.assign(lineage.begin(), lineage.end());
-                operation->lineage.push_back(operation->request.source.asset);
-                auto load = provider->LoadAsync(operation->request.source, operation->cancellation.Token());
-                if (load.HasError())
-                    return Result<PrefabOperation>::Failure(load.ErrorValue());
-                operation->load.emplace(std::move(load).Value());
-                pending.push_back(operation);
-                retained.push_back(operation);
-                operation->measurement = std::move(attempt);
-                PrefabOperation handle;
-                handle.operation_ = std::move(operation);
-                return Result<PrefabOperation>::Success(std::move(handle));
+                return QueueSpawn(request, scopeId, scope, cancellation, lineage, creator, attempt);
             }();
             if (result.HasError()) {
                 if (overflow)
