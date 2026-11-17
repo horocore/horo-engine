@@ -92,7 +92,8 @@ namespace Horo::Navigation::SceneLifecycleTestSupport {
         std::unique_ptr<NavigationSceneAgentLifecycle> lifecycle;
         std::unique_ptr<NavigationAgentSceneCandidate> replacement;
 
-        explicit Fixture(const unsigned workers = 0, const bool holdProvider = false) : jobs{{.workerCount = workers}} {
+        explicit Fixture(const unsigned workers = 0, const bool holdProvider = false, CancellationToken ownerCancellation = {})
+            : jobs{{.workerCount = workers}} {
             fence->held = holdProvider;
             REQUIRE(scene.AddActivationParticipant(std::make_unique<NavigationSceneActivationParticipant>(registry)).HasValue());
             REQUIRE(scene.Startup(cancellation.Token()).HasValue());
@@ -112,8 +113,8 @@ namespace Horo::Navigation::SceneLifecycleTestSupport {
             agent = registry.Snapshot().Value().Agents().front().handle;
             REQUIRE(world.Stage(activation, std::make_unique<FencedProvider>(MakeGroundedProvider(binding.world), fence)).HasValue());
             REQUIRE(world.CommitAtSafePoint(binding.scene, binding.sceneGeneration).HasValue());
-            auto created =
-                NavigationSceneAgentLifecycle::Create(registry, world, coordinator, *scene.ActiveScene(), {entity, agent, caller, 1});
+            auto created = NavigationSceneAgentLifecycle::Create(registry, world, coordinator, *scene.ActiveScene(),
+                                                                 {entity, agent, caller, 1, std::move(ownerCancellation)});
             REQUIRE(created.HasValue());
             lifecycle = std::move(created).Value();
         }

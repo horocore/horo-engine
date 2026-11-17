@@ -1,4 +1,5 @@
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "PrefabAtomicOwnerTestSupport.h"
@@ -190,6 +191,60 @@ namespace Horo::Application::PrefabAtomicTest {
             fixture.Tick(2);
             fixture.Reach(1);
             CHECK(fixture.ai.Find(unavailable->handle).HasError());
+        }
+
+        TEST_CASE("A retained perception publication drops the despawned prefab source and listener before recapture",
+                  "[prefab][integration][atomic][ai][perception]") {
+            Fixture fixture;
+            fixture.Tick(1);
+            fixture.Reach(3);
+            const auto prefab = fixture.SpawnOperation().Spawned();
+            REQUIRE(prefab.HasValue());
+            const auto root = prefab.Value().Root();
+            const auto snapshot = fixture.ai.Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const auto agents = snapshot.Value().Agents();
+            const auto spawned = std::ranges::find(agents, root, &AI::AiAgentRuntimeRecord::owner);
+            const auto resident = std::ranges::find(agents, fixture.controller.owner, &AI::AiAgentRuntimeRecord::owner);
+            REQUIRE(spawned != agents.end());
+            REQUIRE(resident != agents.end());
+            const auto capability = fixture.ai.CapabilityAtSafePoint();
+            const auto spawnedLifetime = capability.CaptureAgentLifetime(spawned->handle);
+            const auto residentLifetime = capability.CaptureAgentLifetime(resident->handle);
+            REQUIRE(spawnedLifetime.HasValue());
+            REQUIRE(residentLifetime.HasValue());
+
+            const auto sense = AI::SenseTypeIds::Sight;
+            const std::array listeners{AI::PerceptionSpatialListener{.entity = root,
+                                                                     .senses = {sense},
+                                                                     .senseCount = 1,
+                                                                     .ownerCancellation = spawnedLifetime.Value()},
+                                       AI::PerceptionSpatialListener{.entity = resident->owner,
+                                                                     .senses = {sense},
+                                                                     .senseCount = 1,
+                                                                     .ownerCancellation = residentLifetime.Value()}};
+            const std::array sources{AI::PerceptionSpatialSource{.entity = root,
+                                                                 .layers = 1,
+                                                                 .senses = {sense},
+                                                                 .senseCount = 1,
+                                                                 .ownerCancellation = spawnedLifetime.Value()}};
+            AI::PerceptionSpatialBroadphase broadphase;
+            const auto spatial = broadphase.Publish(*fixture.scenes.ActiveScene(), 1, listeners, sources);
+            REQUIRE(spatial.HasValue());
+            REQUIRE(spatial.Value()->Allows(resident->owner, root, sense));
+            REQUIRE(spatial.Value()->ListenerPosition(root).HasValue());
+
+            fixture.Tick(2);
+            fixture.Reach(1);
+            CHECK(spawnedLifetime.Value().IsCancellationRequested());
+            CHECK_FALSE(residentLifetime.Value().IsCancellationRequested());
+            CHECK(capability.CaptureAgentLifetime(spawned->handle).HasError());
+            CHECK(broadphase.Current() == spatial.Value());
+            CHECK_FALSE(spatial.Value()->Allows(resident->owner, root, sense));
+            CHECK(spatial.Value()->ListenerPosition(root).HasError());
+            const auto remaining = spatial.Value()->Query({.listener = resident->owner, .sense = sense, .visibleLayers = 1});
+            REQUIRE(remaining.HasValue());
+            CHECK(remaining.Value().count == 0);
         }
 
         /** @brief Observes whether aggregate retirement revokes the actual owner token before scheduler callbacks. */

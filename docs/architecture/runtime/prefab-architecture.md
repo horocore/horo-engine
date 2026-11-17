@@ -1301,6 +1301,14 @@ Despawn revokes the actor's AI lifetime and dependent decision reservations at
 the aggregate fence. After publication the AI owner unregisters its scheduler
 entry, cancels owned work and tears down blackboard reads and observers. Resident
 agents outside the destroyed group retain their generations and state.
+Host-owned optional work captures the exact agent lifetime through
+`AiRuntimeCapability::CaptureAgentLifetime`. Captured Perception endpoints
+exclude revoked listeners and sources even before the next spatial publication.
+EQS observes revocation before another provider poll. A configured Navigation
+agent lifecycle removes its registration and retires its query at the next
+Navigation owner reconciliation. These scopes retain no Scene or provider
+borrow. A host still supplies the actual Perception and Navigation descriptors
+and owners.
 
 ### Selection Physics endpoint codec domain
 

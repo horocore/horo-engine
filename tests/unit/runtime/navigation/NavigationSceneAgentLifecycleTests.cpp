@@ -66,6 +66,29 @@ namespace Horo::Navigation {
         REQUIRE(fixture.lifecycle->Update(*fixture.scene.ActiveScene(), fixture.Now(2)).HasError());
     }
 
+    TEST_CASE("Gameplay owner retirement cancels its live Navigation request without unloading the world",
+              "[unit][navigation][scene][lifecycle][jobs][provider]") {
+        CancellationSource owner;
+        Fixture fixture{1, true, owner.Token()};
+        fixture.StartQuery();
+        REQUIRE(fixture.coordinator.Dispatch(0) == 1);
+        REQUIRE(fixture.fence->WaitEntered());
+
+        owner.RequestCancellation();
+        REQUIRE(fixture.scene.ActiveScene()->Get(fixture.entity).HasValue());
+        const auto retired = fixture.lifecycle->ReconcileAtSafePoint(fixture.scene.ActiveScene());
+        REQUIRE(retired.HasError());
+        CHECK(retired.ErrorValue().code.Value() == NavigationErrors::AgentRegistryStale.code.Value());
+        CHECK(fixture.registry.Find(fixture.agent).HasError());
+        CHECK(fixture.coordinator.Commit({.tick = 1}) == 0);
+        CHECK_FALSE(fixture.coordinator.IsDrained());
+        fixture.FinishHeldProvider();
+        CHECK(fixture.coordinator.Commit({.tick = 2}) == 0);
+        CHECK(fixture.coordinator.IsDrained());
+        CHECK(fixture.world.Acquire(fixture.binding.world).HasValue());
+        CHECK(fixture.lifecycle->Update(*fixture.scene.ActiveScene(), fixture.Now(2)).HasError());
+    }
+
     TEST_CASE("Scene teleport discards old corridor and never converts displacement into crowd velocity",
               "[unit][navigation][scene][lifecycle][teleport]") {
         Fixture fixture;

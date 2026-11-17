@@ -172,7 +172,8 @@ namespace Horo::AI {
         [[nodiscard]] std::unique_ptr<QueryExecution> MakeExecution(ExecutionProbe &probe, Runtime::RuntimeScene &scene,
                                                                     bool reverseStages = false, bool deterministic = false,
                                                                     QueryExecutionInputs *capturedInputs = nullptr,
-                                                                    QueryDebugCaptureSettings debugCapture = {}) {
+                                                                    QueryDebugCaptureSettings debugCapture = {},
+                                                                    CancellationToken ownerCancellation = {}) {
             QueryFixture fixture;
             if (probe.actor)
                 fixture.items.front().kind = QueryItemKind::Actor;
@@ -192,7 +193,9 @@ namespace Horo::AI {
             const auto view = scene.View();
             const auto contexts = capture.Capture(plan, registry, providers.Value(), view, Source(view));
             REQUIRE(contexts.HasValue());
-            const QueryExecutionInputs inputs{{AiRuntimeIncarnation::Create(7).Value(), {1, 1}}, contexts.Value()};
+            const QueryExecutionInputs inputs{{AiRuntimeIncarnation::Create(7).Value(), {1, 1}},
+                                              contexts.Value(),
+                                              std::move(ownerCancellation)};
             if (capturedInputs)
                 *capturedInputs = inputs;
             const QueryGeneratorProvenance provenance{plan.Stages()[0].id, fixture.generator.id, fixture.generator.origin.provider, 1};
@@ -617,7 +620,8 @@ namespace Horo::AI {
         TEST_CASE("EQS retains pending work and retires it exactly once on cancellation or staleness", "[unit][ai][eqs][execution]") {
             auto scene = MakeScene();
             ExecutionProbe probe{.ready = false};
-            auto query = MakeExecution(probe, *scene);
+            CancellationSource owner;
+            auto query = MakeExecution(probe, *scene, false, false, nullptr, {}, owner.Token());
             AiWorkBudget budget{9};
             CHECK_FALSE(query->Sync(5));
             query->Advance(5, {budget, budget, budget});
@@ -628,9 +632,14 @@ namespace Horo::AI {
             CHECK(probe.attempts == 1);
             CHECK(probe.polls == 1);
             QueryExecutionStatus expected{};
-            SECTION("owner cancellation") {
+            SECTION("explicit cancellation") {
                 query->Cancel();
                 query->Cancel();
+                expected = QueryExecutionStatus::Cancelled;
+            }
+            SECTION("scene owner retirement cancels before the next provider poll") {
+                owner.RequestCancellation();
+                CHECK_FALSE(query->InputsAreCurrent());
                 expected = QueryExecutionStatus::Cancelled;
             }
             SECTION("generation replacement") {

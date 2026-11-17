@@ -54,6 +54,17 @@ namespace Horo::AI {
         return Result<AgentHandle>::Failure(MakeError(AIErrors::HandleInvalid));
     }
 
+    /** @copydoc AiRuntimeCapability::CaptureAgentLifetime */
+    Result<CancellationToken> AiRuntimeCapability::CaptureAgentLifetime(const AgentHandle agent) const {
+        const auto state = Lock();
+        if (state.HasError())
+            return Result<CancellationToken>::Failure(state.ErrorValue());
+        const auto slot = RequireAgent(*state.Value(), agent);
+        if (slot.HasError())
+            return Result<CancellationToken>::Failure(slot.ErrorValue());
+        return Result<CancellationToken>::Success(slot.Value()->cancellation.Token());
+    }
+
     /** @copydoc AiRuntimeCapability::StartTask */
     Result<TaskHandle> AiRuntimeCapability::StartTask(AgentHandle agent, const AiCapabilityTaskDescriptor &task,
                                                       CancellationToken cancellation,

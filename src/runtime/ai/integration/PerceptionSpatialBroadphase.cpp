@@ -44,7 +44,8 @@ namespace Horo::AI {
         template <typename Record> [[nodiscard]] Result<void> ValidateRecord(const Runtime::RuntimeSceneView &scene, const Record &record) {
             if (!record.entity.IsValid() || record.senseCount == 0 || record.senseCount > record.senses.size())
                 return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
-            if (record.entity.runtime != scene.RuntimeId() || scene.Get(record.entity).HasError())
+            if (record.ownerCancellation.IsCancellationRequested() || record.entity.runtime != scene.RuntimeId() ||
+                scene.Get(record.entity).HasError())
                 return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
             for (std::size_t index = 0; index < record.senseCount; ++index) {
                 if (!record.senses[index].IsValid())
@@ -88,7 +89,7 @@ namespace Horo::AI {
         /** @brief Filters a source before the exact range check. */
         [[nodiscard]] bool Matches(const PerceptionSpatialSource &source, const PerceptionSpatialListener &listener,
                                    const PerceptionSpatialQuery &query, const PerceptionFilteringPolicy &filtering) noexcept {
-            if (!query.includeSelf && source.entity == listener.entity)
+            if (source.ownerCancellation.IsCancellationRequested() || (!query.includeSelf && source.entity == listener.entity))
                 return false;
             if ((source.layers & query.visibleLayers) == 0 || !Supports(source, query.sense))
                 return false;
@@ -230,6 +231,8 @@ namespace Horo::AI {
         const auto found = std::ranges::lower_bound(listeners_, listener, {}, &PerceptionSpatialListener::entity);
         if (found == listeners_.end() || found->entity != listener)
             return Result<Math::WorldCoordinate64>::Failure(MakeError(AIErrors::PerceptionSpatialListenerMissing));
+        if (found->ownerCancellation.IsCancellationRequested())
+            return Result<Math::WorldCoordinate64>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         return Result<Math::WorldCoordinate64>::Success(found->position);
     }
 
@@ -245,11 +248,15 @@ namespace Horo::AI {
         const auto listener = std::ranges::lower_bound(listeners_, query.listener, {}, &PerceptionSpatialListener::entity);
         if (listener == listeners_.end() || listener->entity != query.listener)
             return Result<PerceptionSpatialResult>::Failure(MakeError(AIErrors::PerceptionSpatialListenerMissing));
+        if (listener->ownerCancellation.IsCancellationRequested())
+            return Result<PerceptionSpatialResult>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         if (!Supports(*listener, query.sense))
             return Result<PerceptionSpatialResult>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
         PerceptionSpatialResult result;
         if (!nodes_.empty())
             Visit(0, *listener, query, result);
+        if (listener->ownerCancellation.IsCancellationRequested())
+            return Result<PerceptionSpatialResult>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
         return Result<PerceptionSpatialResult>::Success(std::move(result));
     }
 
@@ -259,10 +266,11 @@ namespace Horo::AI {
         if (!authorization_->IsCurrent())
             return false;
         const auto endpoint = std::ranges::lower_bound(listeners_, listener, {}, &PerceptionSpatialListener::entity);
-        if (endpoint == listeners_.end() || endpoint->entity != listener || !Supports(*endpoint, sense))
+        if (endpoint == listeners_.end() || endpoint->entity != listener || endpoint->ownerCancellation.IsCancellationRequested() ||
+            !Supports(*endpoint, sense))
             return false;
         const auto candidate = std::ranges::find(sources_, source, &PerceptionSpatialSource::entity);
-        return candidate != sources_.end() && Supports(*candidate, sense) &&
+        return candidate != sources_.end() && !candidate->ownerCancellation.IsCancellationRequested() && Supports(*candidate, sense) &&
                AllowsPerception(filtering_, endpoint->filtering,
                                 PerceptionParticipantFilter{candidate->team, candidate->layers, candidate->listenerMask,
                                                             candidate->visibility},

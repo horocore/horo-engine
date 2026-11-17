@@ -8,6 +8,7 @@
 #include "Horo/AI/BlackboardInstance.h"
 #include "Horo/AI/PerceptionDescriptorRegistry.h"
 #include "Horo/AI/PerceptionFiltering.h"
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Math/WorldCoordinate64.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -39,6 +40,7 @@ namespace Horo::AI {
         PerceptionTeamId team;                                                      /**< Gameplay-owned source team. */
         std::uint64_t listenerMask{~std::uint64_t{}};                               /**< Source disclosure to listener layers. */
         PerceptionGameplayVisibility visibility{PerceptionGameplayVisibility::Everyone};
+        CancellationToken ownerCancellation; /**< Optional exact gameplay-owner lifetime captured at publication. */
     };
 
     /** @brief Owner-supplied listener position and exact generation captured at the same safe point. */
@@ -49,6 +51,7 @@ namespace Horo::AI {
         std::size_t senseCount{};                                                   /**< Active non-empty prefix of senses. */
         PerceptionParticipantFilter filtering;                                      /**< Listener layers, source mask and team. */
         PerceptionListenerFilter admission;                                         /**< Typed affiliation and team admission. */
+        CancellationToken ownerCancellation;                                        /**< Optional exact gameplay-owner lifetime. */
     };
 
     /** @brief Affiliation test applied to a source's host-defined stable affiliation identity. */

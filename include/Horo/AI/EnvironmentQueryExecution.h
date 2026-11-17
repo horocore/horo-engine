@@ -8,6 +8,7 @@
 #include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQueryScoring.h"
+#include "Horo/Foundation/CancellationToken.h"
 
 #include <memory>
 
@@ -16,6 +17,7 @@ namespace Horo::AI {
     struct QueryExecutionInputs final {
         AgentHandle agent;
         std::shared_ptr<const QueryContextSnapshot> contexts;
+        CancellationToken ownerCancellation; /**< Optional exact agent lifetime issued by its Scene owner. */
     };
 
     /** @brief One query's host-composed generator and asynchronous test adapter.

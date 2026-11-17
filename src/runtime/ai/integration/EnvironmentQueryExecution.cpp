@@ -140,6 +140,8 @@ namespace Horo::AI {
         using Admission = Result<std::unique_ptr<QueryExecution>>;
         if (!source || !ValidInputs(inputs, provenance, settings))
             return Admission::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        if (inputs.ownerCancellation.IsCancellationRequested())
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         if (inputs.contexts->query_ != scoring.query_ || provenance.stage != scoring.generatorStage_ ||
             provenance.generator != scoring.generator_ || provenance.provider != scoring.generatorProvider_ ||
             scoring.tieBreak_ != QueryScoreTieBreak::StableIndex)
@@ -249,6 +251,10 @@ namespace Horo::AI {
         if (!CanAdvance(tick))
             return;
         lastAdvance_ = tick;
+        if (inputs_.ownerCancellation.IsCancellationRequested()) {
+            Cancel();
+            return;
+        }
         if (!source_->IsCurrent(inputs_)) {
             stale_ = true;
             return;
@@ -326,7 +332,7 @@ namespace Horo::AI {
             return false;
         ValidateTickSequence(tick);
         lastSync_ = tick;
-        if (cancelled_)
+        if (cancelled_ || inputs_.ownerCancellation.IsCancellationRequested())
             Publish(QueryExecutionStatus::Cancelled);
         else if (stale_ || !source_->IsCurrent(inputs_))
             Publish(QueryExecutionStatus::StaleInputs);
@@ -429,6 +435,6 @@ namespace Horo::AI {
 
     /** @copydoc QueryExecution::InputsAreCurrent */
     bool QueryExecution::InputsAreCurrent() const noexcept {
-        return source_->IsCurrent(inputs_);
+        return !inputs_.ownerCancellation.IsCancellationRequested() && source_->IsCurrent(inputs_);
     }
 }  // namespace Horo::AI

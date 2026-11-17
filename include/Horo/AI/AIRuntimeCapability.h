@@ -41,6 +41,13 @@ namespace Horo::AI {
         /** @brief Resolves a durable ID in the exact bound publication. @param agent Authored identity. @return Exact handle or typed
          * failure. */
         [[nodiscard]] Result<AgentHandle> ResolveAgent(AgentId agent) const;
+        /** @brief Captures the exact admitted agent's cancellation ancestry for host-owned work.
+         * @param agent Exact active generation.
+         * @return Detached read-only cancellation token, or a typed stale/owner failure.
+         * @details Capture on the Scene owner lane. The token does not own the Scene or any provider and
+         * is revoked on disable, despawn, restore and shutdown before old work can publish.
+         */
+        [[nodiscard]] Result<CancellationToken> CaptureAgentLifetime(AgentHandle agent) const;
         /** @brief Starts an admitted definition. @param agent Exact agent. @param task Inert registered metadata. @param cancellation Grant
          * lifetime.
          * @param diagnostics Copied operation lineage. @return Exact task or typed failure. */
