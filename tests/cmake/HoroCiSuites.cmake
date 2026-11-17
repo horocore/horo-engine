@@ -441,6 +441,9 @@ function(horo_ci_catch_properties target)
             set(suite_locks "horo-suite-${target}")
             set(suite_environment "TMPDIR=set:${runtime_root}/tmp;TMP=set:${runtime_root}/tmp;TEMP=set:${runtime_root}/tmp;HOME=set:${runtime_root}/home;USERPROFILE=set:${runtime_root}/home")
             string(APPEND isolation
+                # Host temporary cleanup can run between configure and CTest.
+                # Restore only this suite's already isolated directories on each invocation.
+                "    file(MAKE_DIRECTORY [==[${runtime_root}/work]==] [==[${runtime_root}/tmp]==] [==[${runtime_root}/home]==])\n"
                 "    set_tests_properties(\${${target}_TESTS} PROPERTIES WORKING_DIRECTORY [==[${runtime_root}/work]==])\n"
                 "    set_tests_properties(\${${target}_TESTS} PROPERTIES RESOURCE_LOCK [==[${suite_locks}]==])\n"
                 "    set_tests_properties(\${${target}_TESTS} PROPERTIES ENVIRONMENT_MODIFICATION [==[${suite_environment}]==])\n")
