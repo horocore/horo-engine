@@ -646,8 +646,8 @@ class WindowsNative:
             return
         if not self.kernel.TerminateProcess(handle, 1):
             code = c.get_last_error()
-            # A pinned process can exit after the first wait; Windows then reports access denied.
-            if code == 5 and self.kernel.WaitForSingleObject(handle, 0) == 0:
+            # Concurrent termination can report access denied before the pinned handle signals completion.
+            if code == 5 and self.kernel.WaitForSingleObject(handle, 5000) == 0:
                 return
             raise c.WinError(code)
         if self.kernel.WaitForSingleObject(handle, 5000) != 0:

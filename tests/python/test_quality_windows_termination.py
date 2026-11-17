@@ -75,3 +75,37 @@ def test_windows_termination_denied_for_live_pinned_process():
             native.terminate(handle)
         assert failure.value.winerror == 5
         assert child.is_alive()
+
+
+def test_windows_termination_waits_for_concurrent_exit_after_access_denied(monkeypatch):
+    native = importlib.import_module("analyze")._windows()
+    with _pinned_waiting_child(native, terminate=False) as (child, handle, release):
+        terminate = native.kernel.TerminateProcess
+        wait = native.kernel.WaitForSingleObject
+        denied = []
+
+        def deny_before_exit(requested, code):
+            assert requested == handle
+            result = terminate(requested, code)
+            assert not result and ctypes.get_last_error() == 5
+            denied.append(True)
+            return result
+
+        def complete_exit_during_wait(requested, milliseconds):
+            assert requested == handle
+            if denied:
+                if milliseconds == 0:
+                    # Observe the real pending state before allowing the fixture to settle.
+                    result = wait(requested, milliseconds)
+                    assert result == 258
+                    release.set()
+                    return result
+                release.set()
+            return wait(requested, milliseconds)
+
+        monkeypatch.setattr(native.kernel, "TerminateProcess", deny_before_exit)
+        monkeypatch.setattr(native.kernel, "WaitForSingleObject", complete_exit_during_wait)
+        native.terminate(handle)
+        assert denied == [True]
+        child.join(timeout=5)
+        assert child.exitcode == 0
