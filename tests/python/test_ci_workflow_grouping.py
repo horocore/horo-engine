@@ -341,7 +341,7 @@ def test_ai_scheduler_qualification_has_build_discovery_and_single_source_owners
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     for target in ("HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer"):
         assert target in targets("HORO_CI_WINDOWS_TARGETS")
-        assert f"add_executable({target} " in tests_cmake
+        assert re.search(rf"(?m)^\s*add_executable\(\s*{re.escape(target)}\s+", tests_cmake)
         assert f"target_link_libraries({target} PRIVATE HoroEngine::AISceneIntegration)" in tests_cmake
     assert tests_cmake.count("unit/runtime/ai/AITaskSchedulerTests.cpp") == 1
     assert 'horo_register_catch_test(HoroAITaskSchedulerTests LABELS "unit;ai;headless")' in tests_cmake
