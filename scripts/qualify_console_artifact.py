@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 
 PROFILES = ("Editor", "Development", "Profile", "Shipping", "Diagnostics", "Server")
 CORE = {"help", "find", "version", "clear"}
@@ -113,7 +112,17 @@ def verify_manifest(profile: str, manifest: str) -> dict[str, str]:
     return execution
 
 
-def qualify(profile: str, binary: Path, archive: Path) -> dict:
+def read_manifest(path: Path) -> str:
+    """Read bounded UTF-8 output from the build-owned fixture."""
+    with path.open("rb") as source:
+        data = source.read(MAX_MANIFEST_BYTES + 1)
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise QualificationError("Fixture manifest exceeds the output budget")
+    return data.decode("utf-8", errors="strict")
+
+
+def qualify(profile: str, binary: Path, archive: Path, manifest: Path,
+            binary_sha256: str, archive_sha256: str, execution_result: str) -> dict:
     commands, variables = expected_inventory(profile)
     # Optional application adapters are outside this catalog/Core fixture in every profile.
     universe: set[str] = {"net.debug_status"}
@@ -134,15 +143,13 @@ def qualify(profile: str, binary: Path, archive: Path) -> dict:
     archive_controls = (commands - (CORE | {"sys.metrics", "game.scene_tree", "game.inspect"})) | (variables - core_controls)
     if not archive_controls <= set(files["catalogArchive"]["present"]):
         raise QualificationError("Catalog archive lacks required positive metadata controls")
-    result = subprocess.run([files["binary"]["path"]], cwd=binary.resolve().parent,
-                            capture_output=True, text=True, encoding="utf-8", errors="strict", timeout=30, check=False)
-    if result.returncode:
-        raise QualificationError(f"Native fixture exited with {result.returncode}")
-    execution = verify_manifest(profile, result.stdout)
-    for kind, path in (("binary", binary), ("catalogArchive", archive)):
-        fresh = scan_artifact(path, universe)
-        if fresh["sha256"] != files[kind]["sha256"] or fresh["size"] != files[kind]["size"]:
-            raise QualificationError("Artifact changed between inspection and native execution")
+    if execution_result == "unavailable":
+        raise OSError("Native fixture could not be observed")
+    if execution_result != "0":
+        raise QualificationError("Native fixture did not exit successfully")
+    if files["binary"]["sha256"] != binary_sha256 or files["catalogArchive"]["sha256"] != archive_sha256:
+        raise QualificationError("Artifact changed between inspection and native execution")
+    execution = verify_manifest(profile, read_manifest(manifest))
     return {"schemaVersion": 1, "status": "passed", "profile": profile,
             "observedAt": datetime.now(timezone.utc).isoformat(), "scope": "catalog-and-core-fixture",
             "execution": execution, "artifacts": files}
@@ -153,15 +160,20 @@ def main() -> int:
     parser.add_argument("--profile", required=True, choices=PROFILES)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--archive", required=True, type=Path)
+    parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--binary-sha256", required=True)
+    parser.add_argument("--archive-sha256", required=True)
+    parser.add_argument("--execution-result", required=True)
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args()
     try:
-        report = qualify(args.profile, args.binary, args.archive)
+        report = qualify(args.profile, args.binary, args.archive, args.manifest,
+                         args.binary_sha256, args.archive_sha256, args.execution_result)
         code = 0
     except QualificationError as error:
         report = {"schemaVersion": 1, "status": "failed", "profile": args.profile, "error": str(error)}
         code = 1
-    except (OSError, UnicodeError, subprocess.TimeoutExpired) as error:
+    except (OSError, UnicodeError) as error:
         report = {"schemaVersion": 1, "status": "incomplete", "profile": args.profile,
                   "error": f"Artifact observation unavailable ({type(error).__name__})"}
         code = 2

@@ -732,12 +732,13 @@ catalog metadata from the four actually bound core commands. This is a test
 fixture, not the packaged `horo-engine`/Editor product or qualification of the
 remaining default command adapters.
 
-`HoroRuntimeConsoleArtifactContract` runs
-`scripts/qualify_console_artifact.py` with the configured profile, exact linked
-executable and exact Defaults archive. It requires an exact profile/catalog and
+`HoroRuntimeConsoleArtifactContract` hashes the exact linked executable and
+Defaults archive, then runs the CMake-selected native test fixture with a
+30-second timeout. `scripts/qualify_console_artifact.py` reads its captured
+manifest and verifies the configured profile and both artifacts. It requires an exact profile/catalog and
 core/history execution manifest, positive metadata controls and absence of every
 known unavailable command/variable name in both files. Artifact scans stream
-bounded chunks; SHA-256 identities are checked again after native execution.
+bounded chunks and compare their SHA-256 identities with the pre-run values.
 The report records the actual file paths, hashes, observed time and fixture-only
 scope. Missing files, encoding failures and observation timeouts are incomplete
 (exit 2), while contradictory catalogs/metadata/execution fail (exit 1). Neither

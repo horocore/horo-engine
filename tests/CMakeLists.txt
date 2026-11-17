@@ -297,12 +297,14 @@ add_executable(HoroRuntimeConsoleArtifact support/RuntimeConsoleArtifact.cpp)
 target_compile_features(HoroRuntimeConsoleArtifact PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeConsoleArtifact PRIVATE HoroEngine::RuntimeConsoleDefaults)
 add_dependencies(HoroRuntimeConsoleProductTests HoroRuntimeConsoleArtifact)
-add_test(NAME HoroRuntimeConsoleArtifactContract COMMAND "${Python3_EXECUTABLE}"
-    "${PROJECT_SOURCE_DIR}/scripts/qualify_console_artifact.py"
-    --profile "${HORO_RUNTIME_CONSOLE_PROFILE}"
-    --binary "$<TARGET_FILE:HoroRuntimeConsoleArtifact>"
-    --archive "$<TARGET_FILE:HoroRuntimeConsoleDefaults>"
-    --report "${CMAKE_CURRENT_BINARY_DIR}/runtime-console-artifact-${HORO_RUNTIME_CONSOLE_PROFILE}-$<CONFIG>.json")
+add_test(NAME HoroRuntimeConsoleArtifactContract COMMAND "${CMAKE_COMMAND}"
+    "-Dpython=${Python3_EXECUTABLE}"
+    "-Dverifier=${PROJECT_SOURCE_DIR}/scripts/qualify_console_artifact.py"
+    "-Dprofile=${HORO_RUNTIME_CONSOLE_PROFILE}"
+    "-Dbinary=$<TARGET_FILE:HoroRuntimeConsoleArtifact>"
+    "-Darchive=$<TARGET_FILE:HoroRuntimeConsoleDefaults>"
+    "-Dreport=${CMAKE_CURRENT_BINARY_DIR}/runtime-console-artifact-${HORO_RUNTIME_CONSOLE_PROFILE}-$<CONFIG>.json"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunRuntimeConsoleArtifactContract.cmake")
 set_tests_properties(HoroRuntimeConsoleArtifactContract PROPERTIES
     LABELS "runtime;console;profile;binary;headless;ci-windows" RUN_SERIAL TRUE TIMEOUT 60)
 if(HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Editor" OR HORO_RUNTIME_CONSOLE_PROFILE STREQUAL "Development")
