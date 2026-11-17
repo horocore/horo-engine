@@ -196,6 +196,8 @@ def signal_owned_windows_console(pid, birth, event):
     try:
         if windows_birth(kernel, process) != birth or kernel.WaitForSingleObject(process, 0) != 258:
             raise RuntimeError("Owned CLI process identity is no longer live")
+        # The signal helper may have a hidden console of its own.
+        windows_check(kernel.FreeConsole())
         windows_check(kernel.AttachConsole(pid))
         attached = True
         windows_check(kernel.SetConsoleCtrlHandler(None, False))
