@@ -50,6 +50,7 @@ target_link_libraries(HoroXRSimulatorSample PRIVATE HoroXRSimulatorProjectWorkfl
 add_executable(horo-engine
     horo-engine/main.cpp
     horo-engine/cli_host/CliHost.cpp
+    horo-engine/cli_host/CliHostProgressPump.cpp
     horo-engine/cli_host/CliHostErrorTranslation.cpp
     horo-engine/cli_host/CliHostInterrupts.cpp
     horo-engine/cli_host/PackageCliHost.cpp

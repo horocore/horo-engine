@@ -314,6 +314,12 @@ namespace Horo::Cli {
                 diagnostics.Add("cli.option_unknown", "Unknown option.", index);
                 return;
             }
+            if (descriptor->sensitive) {
+                diagnostics.Add("cli.sensitive_argument_forbidden", "Sensitive values require a protected credential channel.", index);
+                if (!inlineValue.has_value() && index + 1 < arguments.size() && arguments[index + 1] != "--")
+                    ++index;
+                return;
+            }
             ParseOptionValue(arguments, index, inlineValue, *FindState(states, descriptor), diagnostics, normalizer);
         }
 
@@ -417,6 +423,17 @@ namespace Horo::Cli {
         [[nodiscard]] bool OptionHasValue(const std::span<const OptionState> states, const std::string_view name) noexcept {
             const OptionState *state = FindOptionState(states, name);
             return state != nullptr && !state->values.empty();
+        }
+
+        /** @brief Checks the parsed explicit deadline against command policy before any input or application work. */
+        void ValidateRequestedTimeout(const CliCommandDescriptor &command, const std::span<const OptionState> states,
+                                      DiagnosticCollector &diagnostics) {
+            const auto *timeout = FindOptionState(states, "timeout-ms");
+            if (timeout == nullptr || timeout->values.empty())
+                return;
+            const auto milliseconds = static_cast<std::uint64_t>(std::get<std::int64_t>(timeout->values.front().value));
+            if (milliseconds > command.timeout.maximumMilliseconds)
+                diagnostics.Add("cli.timeout_not_admitted", "Requested timeout exceeds the command's admitted deadline policy.", 0);
         }
 
         [[nodiscard]] bool IsInputModeAdmitted(const CliCommandDescriptor &command, const CliParserContext &context) noexcept {
@@ -533,6 +550,7 @@ namespace Horo::Cli {
         CliCommandRequest request{.command = command->path};
         ParsePositionals(positionals, *command, request, diagnostics, context.pathNormalizer);
         ResolveFallbacks(states, context.configuration, diagnostics, context.pathNormalizer);
+        ValidateRequestedTimeout(*command, states, diagnostics);
         if (const Result<void> interaction = ApplyInteractionPolicy(*command, states, context, request); interaction.HasError())
             return Result<CliCommandRequest>::Failure(interaction.ErrorValue());
         if (!diagnostics.Empty())

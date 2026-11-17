@@ -153,13 +153,74 @@ namespace Horo {
             arguments.push_back(nullptr);
         }
 
+        /** @brief Owns partially initialized spawn attributes through argument preparation and launch failures. */
+        class SpawnAttributes final {
+        public:
+            SpawnAttributes() = default;
+
+            ~SpawnAttributes() {
+                if (initialization_ == 0)
+                    posix_spawnattr_destroy(&attributes_);
+            }
+
+            SpawnAttributes(const SpawnAttributes &) = delete;
+            SpawnAttributes &operator=(const SpawnAttributes &) = delete;
+
+            /** @brief Establishes child-owned control signals independently of the host's presentation policy.
+             * @return Zero or the native setup error; a failure must prevent spawning.
+             */
+            [[nodiscard]] int Configure() noexcept {
+                if (initialization_ != 0)
+                    return initialization_;
+                sigset_t defaults{};
+                sigset_t unblocked{};
+                if (sigemptyset(&defaults) != 0 || sigemptyset(&unblocked) != 0)
+                    return errno;
+                for (const int controlSignal : {SIGINT, SIGTERM, SIGPIPE})
+                    if (sigaddset(&defaults, controlSignal) != 0)
+                        return errno;
+                int status = posix_spawnattr_setflags(&attributes_, static_cast<short>(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK |
+                                                                                       POSIX_SPAWN_SETSIGDEF));
+                if (status == 0)
+                    status = posix_spawnattr_setpgroup(&attributes_, 0);
+                if (status == 0)
+                    status = posix_spawnattr_setsigmask(&attributes_, &unblocked);
+                if (status == 0)
+                    status = posix_spawnattr_setsigdefault(&attributes_, &defaults);
+                return status;
+            }
+
+            /** @brief Borrows the initialized native attributes for the synchronous spawn call. */
+            [[nodiscard]] const posix_spawnattr_t *Get() const noexcept {
+                return &attributes_;
+            }
+
+        private:
+            posix_spawnattr_t attributes_{};
+            const int initialization_{posix_spawnattr_init(&attributes_)};
+        };
+
         Result<pid_t> SpawnProcess(const ExternalProcessRequest &request, const std::array<int, 2> &stdoutPipe,
                                    const std::array<int, 2> &stderrPipe, const std::optional<int> maintenanceDescriptor) {
+            // Finish allocating borrowed argv/environment storage before acquiring native staging resources.
+            std::vector<std::string> argumentStorage;
+            std::vector<char *> arguments;
+            BuildSpawnArguments(request, argumentStorage, arguments);
+            std::vector<std::string> environmentStorage = BuildEnvironment(request.environment, maintenanceDescriptor.has_value());
+            std::vector<char *> environment;
+            for (std::string &entry : environmentStorage)
+                environment.push_back(entry.data());
+            environment.push_back(nullptr);
+
             const int probeSource = maintenanceDescriptor.has_value() ? fcntl(*maintenanceDescriptor, F_DUPFD_CLOEXEC, 64) : -1;
             if (maintenanceDescriptor.has_value() && probeSource < 0)
                 return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
             posix_spawn_file_actions_t actions;
-            posix_spawn_file_actions_init(&actions);
+            if (const int initialized = posix_spawn_file_actions_init(&actions); initialized != 0) {
+                if (probeSource >= 0)
+                    close(probeSource);
+                return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed, std::strerror(initialized)));
+            }
             posix_spawn_file_actions_adddup2(&actions, stdoutPipe[1], STDOUT_FILENO);
             posix_spawn_file_actions_adddup2(&actions, stderrPipe[1], STDERR_FILENO);
             posix_spawn_file_actions_addclose(&actions, stdoutPipe[0]);
@@ -180,25 +241,13 @@ namespace Horo {
             }
 #endif
 
-            posix_spawnattr_t attributes;
-            posix_spawnattr_init(&attributes);
-            posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);
-            posix_spawnattr_setpgroup(&attributes, 0);
-
-            std::vector<std::string> argumentStorage;
-            std::vector<char *> arguments;
-            BuildSpawnArguments(request, argumentStorage, arguments);
-
-            std::vector<std::string> environmentStorage = BuildEnvironment(request.environment, probeSource >= 0);
-            std::vector<char *> environment;
-            for (std::string &entry : environmentStorage)
-                environment.push_back(entry.data());
-            environment.push_back(nullptr);
+            SpawnAttributes attributes;
+            const int configured = attributes.Configure();
 
             pid_t process{};
-            const int spawned =
-                posix_spawnp(&process, request.executable.c_str(), &actions, &attributes, arguments.data(), environment.data());
-            posix_spawnattr_destroy(&attributes);
+            const int spawned = configured == 0 ? posix_spawnp(&process, request.executable.c_str(), &actions, attributes.Get(),
+                                                               arguments.data(), environment.data())
+                                                : configured;
             posix_spawn_file_actions_destroy(&actions);
             if (probeSource >= 0)
                 close(probeSource);

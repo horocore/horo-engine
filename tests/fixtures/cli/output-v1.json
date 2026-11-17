@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "recordVersion": 1,
+  "requiredEnvelopeFields": ["schemaVersion", "command", "invocationId", "outputSchema", "status", "exitCode", "result", "diagnostics", "error", "metadata"],
+  "exitCategories": {
+    "success": 0,
+    "host_failure": 1,
+    "usage": 2,
+    "validation": 3,
+    "capability": 4,
+    "operation": 5,
+    "permission": 6,
+    "cancelled": 7,
+    "timeout": 8,
+    "invariant": 10
+  },
+  "commandSchemas": {
+    "horo.cli.invocation": {"command": "cli.invocation", "version": 1, "fields": {}},
+    "horo.cli.host-inspection": {"command": "host.inspect", "version": 1, "fields": {"initialized": "boolean"}},
+    "horo.cli.help": {"command": "host.help", "version": 1, "fields": {"help": "string"}},
+    "horo.cli.observability-smoke": {"command": "observability.smoke", "version": 1, "fields": {"completed": "boolean"}},
+    "horo.cli.diagnostic-bundle": {"command": "diagnostics.bundle", "version": 1, "fields": {"outputPath": "string", "fileCount": "integer", "missingOptionalCount": "integer"}},
+    "horo.cli.mcp-service": {"command": "mcp.serve", "version": 1, "fields": {}},
+    "horo.cli.extension-script": {"command": "extension.script-run", "version": 1, "fields": {"value": "integer", "extension": "string"}},
+    "horo.cli.module-script": {"command": "extension.module-run", "version": 1, "fields": {"codec": "string", "extension": "string", "runtime": "string", "chunk-count": "integer", "result-0": "string"}},
+    "horo.package.restore": {"command": "package.restore", "version": 1, "fields": {"operationId": "string", "revision": "string", "installedRevision": "string", "activeGeneration": "string", "kind": "integer", "phase": "integer", "outcome": "integer", "completion": "number", "completedPackages": "integer", "totalPackages": "integer"}},
+    "horo.package.install": {"command": "package.install", "version": 1, "fields": {"operationId": "string", "revision": "string", "installedRevision": "string", "activeGeneration": "string", "kind": "integer", "phase": "integer", "outcome": "integer", "completion": "number", "completedPackages": "integer", "totalPackages": "integer"}},
+    "horo.package.activate": {"command": "package.activate", "version": 1, "fields": {"operationId": "string", "revision": "string", "installedRevision": "string", "activeGeneration": "string", "kind": "integer", "phase": "integer", "outcome": "integer", "completion": "number", "completedPackages": "integer", "totalPackages": "integer"}},
+    "horo.package.disable": {"command": "package.disable", "version": 1, "fields": {"operationId": "string", "revision": "string", "installedRevision": "string", "activeGeneration": "string", "kind": "integer", "phase": "integer", "outcome": "integer", "completion": "number", "completedPackages": "integer", "totalPackages": "integer"}},
+    "horo.navigation.bake": {"command": "navigation.bake", "version": 1, "fields": {"operationId": "string", "revision": "string", "validated": "boolean", "published": "boolean", "surfaceCount": "integer", "tileCount": "integer", "inputFingerprint": "string"}, "publicationFields": {"manifestDigest": "string", "target": "string", "rebuiltTiles": "integer", "reusedTiles": "integer"}}
+  },
+  "successCases": [
+    {"arguments": ["host", "inspect"], "command": "host.inspect", "schema": "horo.cli.host-inspection", "result": {"initialized": true}},
+    {"arguments": ["observability", "smoke"], "command": "observability.smoke", "schema": "horo.cli.observability-smoke", "result": {"completed": true}}
+  ]
+}
