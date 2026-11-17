@@ -1471,11 +1471,13 @@ namespace Horo::Input {
                                const ModifierState sticky, Detail::InputAccessibilityRouter::Transaction *transaction) {
             const bool accessible = binding.accessibility.IsEnabled();
             const bool chordEligible = IsBindingChordActive(binding, snapshot);
-            const bool eligible = chordEligible && ModifiersMatch(binding.accessibility.stickyModifiers ? sticky : snapshot.modifiers,
-                                                                  binding.requiredModifiers);
+            const bool ownsKeyboard = !player || impl.keyboardMousePlayer == player;
+            const ModifierState modifiers =
+                ownsKeyboard ? (binding.accessibility.stickyModifiers ? sticky : snapshot.modifiers) : ModifierState{};
+            const bool eligible = chordEligible && ModifiersMatch(modifiers, binding.requiredModifiers);
             if (!accessible && !eligible)
                 return;
-            if (player && impl.keyboardMousePlayer != player && (binding.chordSize != 0 || binding.requiredModifiers != ModifierState{}))
+            if (!ownsKeyboard && (binding.chordSize != 0 || binding.requiredModifiers != ModifierState{}))
                 return;
 
             const Detail::AccessibilityMappingKey mappingKey{context, impl.accessibilityActions[actionIndex], bindingIndex, player};
