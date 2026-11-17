@@ -221,13 +221,25 @@ namespace Horo::Prefab {
 
     TEST_CASE("Prefab nested composition serializes and parses as typed AssetId data", "[unit][prefab][serialization]") {
         PrefabDocumentData data = CanonicalData();
-        data.composition = PrefabComposition{.nestedPlacements = {{.placementLocalId = {99},
-                                                                   .parentLocalId = LocalObjectId{},
-                                                                   .sourcePrefab = PrefabAssetReference::Create(Asset(2)).Value(),
-                                                                   .authoredAgainst = Revision()}}};
+        const NestedPrefabPlacement first{.placementLocalId = {7},
+                                          .parentLocalId = LocalObjectId{2},
+                                          .sourcePrefab = PrefabAssetReference::Create(Asset(2)).Value(),
+                                          .authoredAgainst = Revision(),
+                                          .localRootTransform = Math::Transform{{1.0F, 2.0F, 3.0F}}};
+        const NestedPrefabPlacement second{.placementLocalId = {99},
+                                           .sourcePrefab = PrefabAssetReference::Create(Asset(2)).Value(),
+                                           .authoredAgainst = Revision(),
+                                           .localRootTransform = Math::Transform{{-4.0F, 0.0F, 0.0F}}};
+        data.composition = PrefabComposition{.nestedPlacements = {second, first}};
+        const auto original = SerializeDocument(data);
+        REQUIRE(original.HasValue());
+        std::ranges::reverse(data.composition->nestedPlacements);
+        const auto reordered = SerializeDocument(data);
+        REQUIRE(reordered.HasValue());
+        CHECK(original.Value() == reordered.Value());
         const auto parsed = ParsedDocument(std::move(data));
         REQUIRE(parsed.Data().composition.has_value());
-        REQUIRE(parsed.Data().composition->nestedPlacements.front().sourcePrefab.Asset() == Asset(2));
+        CHECK(parsed.Data().composition->nestedPlacements == std::vector{first, second});
     }
 
     TEST_CASE("Prefab variant composition serializes and parses its exact parent revision", "[unit][prefab][serialization]") {

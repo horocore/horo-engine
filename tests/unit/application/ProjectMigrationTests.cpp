@@ -1,5 +1,7 @@
 #include "ProjectMigrationUnitFixture.h"
 
+#include <nlohmann/json.hpp>
+
 namespace project_migration_tests {
     TEST_CASE("Pipeline Requires Terminal Validation", "[unit][application]") {
         auto builder = Horo::Application::ProjectMigrationPipelineBuilder::Begin({"test.invalid"});
@@ -260,6 +262,40 @@ namespace project_migration_tests {
         REQUIRE((scene.find("\"unknown\": \"kept\"") != std::string::npos));
         REQUIRE((project.Read("assets/prefabs/player.prefab") == sourcePrefab));
         REQUIRE((project.Read("assets/scenes/main.horo") == sourceScene));
+    }
+
+    TEST_CASE("Production prefab adoption preserves nested placement IDs after a source move and reorder", "[unit][application][prefab]") {
+        ProductionMigrationFixture fixture;
+        TemporaryProject project;
+        project.Write(".horo/project.json", R"({"projectId":"nested-prefab-adoption","settings":{}})");
+        constexpr std::string_view parentPath = "assets/prefabs/assembly.prefab";
+        constexpr std::string_view movedPath = "assets/props/renamed.prefab";
+        project.Write("assets/prefabs/assembly.prefab.horo",
+                      R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})");
+        project.Write("assets/props/renamed.prefab.horo",
+                      R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddee01","assetType":"core.prefab"})");
+        project.Write(movedPath, R"({"projectVersion":"0.0.1","objects":[]})");
+        const auto legacyParent = nlohmann::json::parse(R"({
+            "projectVersion":"0.0.1","objects":[],
+            "composition":{"nestedPlacements":[
+              {"placementLocalId":99,"parentLocalId":null,"sourceAsset":"00112233-4455-6677-8899-aabbccddee01"},
+              {"placementLocalId":7,"parentLocalId":2,"sourceAsset":"00112233-4455-6677-8899-aabbccddee01"}
+            ]}
+        })");
+        project.Write(parentPath, legacyParent.dump());
+
+        const auto prepared = fixture.Prepare(project);
+        REQUIRE(prepared.HasValue());
+        const auto parentBytes = prepared.Value().ReadCandidateDocument(parentPath);
+        const auto movedBytes = prepared.Value().ReadCandidateDocument(movedPath);
+        REQUIRE(parentBytes.HasValue());
+        REQUIRE(movedBytes.HasValue());
+        const auto parent = nlohmann::json::parse(Text(parentBytes.Value()));
+        const auto moved = nlohmann::json::parse(Text(movedBytes.Value()));
+        CHECK(parent.at("projectVersion") == "0.1.0");
+        CHECK(parent.at("composition") == legacyParent.at("composition"));
+        CHECK(moved.at("assetId") == parent.at("composition").at("nestedPlacements").at(0).at("sourceAsset"));
+        CHECK(moved.at("assetId") == parent.at("composition").at("nestedPlacements").at(1).at("sourceAsset"));
     }
 
     TEST_CASE("Prefab migration exposes source adoption before references and a read only barrier", "[unit][application][prefab]") {

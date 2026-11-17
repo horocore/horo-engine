@@ -141,6 +141,39 @@ namespace Horo::Prefab {
             REQUIRE(candidate.Value().Objects()[2].key.object.SourceObject() == LocalObjectId{4});
         }
 
+        TEST_CASE("Nested placement identities survive moving and renaming the referenced asset", "[unit][prefab][resolver][lifecycle]") {
+            const auto outer = ResolverAsset(1);
+            const auto nested = ResolverAsset(2);
+            const auto instance = PrefabInstanceId::Create(11).Value();
+            Assets::AssetRegistry registry;
+            const auto containing =
+                ResolverDocument(outer, {ResolverObject(0)}, ResolverFanoutComposition(nested, ResolverRevision(2), 2), {nested});
+            const std::vector<PrefabDependencySource> sources{{containing, ResolverRevision(1)},
+                                                              {ResolverDocument(nested, {ResolverObject(0)}), ResolverRevision(2)}};
+            PublishResolverRegistry(registry, {ResolverRecord(outer, "assets/prefabs/outer.prefab"),
+                                               ResolverRecord(nested, "assets/prefabs/nested.prefab")});
+            const auto originalSnapshot = BuildPrefabSourceResolverSnapshot(registry.Snapshot(), sources, ResolverLimits());
+            REQUIRE(originalSnapshot.HasValue());
+            const auto original = originalSnapshot.Value().Resolve(outer, instance, ResolverLimits());
+            REQUIRE(original.HasValue());
+            const auto objects = original.Value().Objects();
+            REQUIRE(objects.size() == 3);
+            REQUIRE(objects[1].key.object.NestedInstanceScope().size() == 1);
+            REQUIRE(objects[2].key.object.NestedInstanceScope().size() == 1);
+            CHECK(objects[1].key.object.NestedInstanceScope().front() == LocalObjectId{1});
+            CHECK(objects[2].key.object.NestedInstanceScope().front() == LocalObjectId{2});
+
+            PublishResolverRegistry(registry, {ResolverRecord(outer, "assets/prefabs/outer.prefab"),
+                                               ResolverRecord(nested, "assets/props/renamed.prefab")});
+            const auto movedSnapshot = BuildPrefabSourceResolverSnapshot(registry.Snapshot(), sources, ResolverLimits());
+            REQUIRE(movedSnapshot.HasValue());
+            const auto moved = movedSnapshot.Value().Resolve(outer, instance, ResolverLimits());
+            REQUIRE(moved.HasValue());
+            CHECK(moved.Value().Revision().registry != original.Value().Revision().registry);
+            CHECK(moved.Value().Revision().rootSource == original.Value().Revision().rootSource);
+            CHECK(std::ranges::equal(moved.Value().Objects(), objects));
+        }
+
         TEST_CASE("Prefab source resolver enforces aggregate object and recursion boundaries transactionally",
                   "[unit][prefab][resolver][boundary]") {
             const auto outer = ResolverAsset(1);
