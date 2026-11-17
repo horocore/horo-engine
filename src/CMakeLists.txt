@@ -2091,6 +2091,7 @@ target_link_libraries(HoroTerrainImport PUBLIC HoroEngine::TerrainApi HoroEngine
 add_library(HoroTerrainAuthoring STATIC
         editor/terrain/TerrainAuthoringDocument.cpp
         editor/terrain/TerrainAuthoringDocumentState.cpp
+        editor/terrain/TerrainBrushTools.cpp
 )
 add_library(HoroEngine::TerrainAuthoring ALIAS HoroTerrainAuthoring)
 target_compile_features(HoroTerrainAuthoring PUBLIC cxx_std_20)

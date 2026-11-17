@@ -969,6 +969,7 @@ horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroTerrainAuthoring PUBLIC_HEADERS
     Horo/Editor/TerrainAuthoringDocument.h
+    Horo/Editor/TerrainBrushTools.h
 )
 horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
     Horo/Terrain/TerrainPayloadManifest.h

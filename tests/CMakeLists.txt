@@ -1541,9 +1541,15 @@ target_link_libraries(HoroTerrainProducerSnapshotPublicHeaderConsumer PRIVATE Ho
 add_test(NAME HoroTerrainProducerSnapshotPublicHeaderConsumer COMMAND HoroTerrainProducerSnapshotPublicHeaderConsumer)
 set_tests_properties(HoroTerrainProducerSnapshotPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;headless;ci-windows")
 
-add_executable(HoroTerrainAuthoringTests unit/editor/TerrainAuthoringDocumentTests.cpp)
+add_executable(HoroTerrainAuthoringTests
+        unit/editor/TerrainAuthoringDocumentTests.cpp
+        unit/editor/TerrainBrushToolsTests.cpp
+        unit/editor/TerrainBrushAdmissionCompileTests.cpp
+)
 target_compile_features(HoroTerrainAuthoringTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainAuthoringTests PRIVATE HoroEngine::TerrainAuthoring)
+# Narrow, non-installed implementation seam for compile-time brush admission tests.
+target_include_directories(HoroTerrainAuthoringTests PRIVATE "${PROJECT_SOURCE_DIR}/src/editor/terrain")
 horo_register_catch_test(HoroTerrainAuthoringTests LABELS "unit;editor;terrain;headless;lifecycle")
 target_sources(HoroTerrainAuthoringPublicHeaderConsumer PRIVATE support/TerrainAuthoringPublicHeaderConsumer.cpp)
 add_executable(HoroTerrainTileCookTests
