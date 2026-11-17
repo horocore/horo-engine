@@ -47,8 +47,7 @@ namespace Horo::Editor::Theme {
                 inspected.unchanged = true;
                 return inspected;
             }
-            ThemeEntry candidate;
-            if (LoadThemeFromJson(source.c_str(), candidate) && inspected.stamp == InspectStamp(source))
+            if (ThemeEntry candidate; LoadThemeFromJson(source.c_str(), candidate) && inspected.stamp == InspectStamp(source))
                 inspected.candidate = std::move(candidate);
             return inspected;
         }
@@ -82,10 +81,10 @@ namespace Horo::Editor::Theme {
             return;
         const auto &themes = GetThemeList();
         const int index = GetActiveThemeIndex();
-        const std::string_view source = index >= 0 && static_cast<std::size_t>(index) < themes.size()
-                                            ? std::string_view{themes[static_cast<std::size_t>(index)].sourcePath}
-                                            : std::string_view{};
-        if (source != state.source) {
+        if (const std::string_view source = index >= 0 && static_cast<std::size_t>(index) < themes.size()
+                                                ? std::string_view{themes[static_cast<std::size_t>(index)].sourcePath}
+                                                : std::string_view{};
+            source != state.source) {
             state.source = source;
             ++state.generation;
             state.observed.reset();
@@ -93,8 +92,7 @@ namespace Horo::Editor::Theme {
             state.elapsed = 0.5;
         }
         if (state.job) {
-            const auto snapshot = state.job->Snapshot();
-            if (!snapshot || !snapshot->terminalResult)
+            if (const auto snapshot = state.job->Snapshot(); !snapshot || !snapshot->terminalResult)
                 return;
             std::optional<Inspection> completed;
             {

@@ -7,8 +7,7 @@ namespace Horo::Editor::Offline {
         constexpr std::string_view CandidatePrefix{".clustered-lighting-package-"};
 
         Result<void> ValidateWritten(const std::filesystem::path &path, const void *) {
-            auto decoded = LoadPackagedMetalClusteredLighting(path);
-            if (decoded.HasError())
+            if (auto decoded = LoadPackagedMetalClusteredLighting(path); decoded.HasError())
                 return Result<void>::Failure(decoded.ErrorValue());
             return Result<void>::Success();
         }

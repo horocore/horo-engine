@@ -74,16 +74,14 @@ namespace Horo::Editor {
                 if (found == snapshot.authoredEntities.end() || found->object != preview.object)
                     return Result<void>::Failure(MakeError(ViewportSceneErrors::ObjectNotFound));
                 const auto entity = found->entity;
-                const auto current = scene.Get(entity);
-                if (current.HasError())
+                if (const auto current = scene.Get(entity); current.HasError())
                     return Result<void>::Failure(current.ErrorValue());
                 if (entity.entity.index >= snapshot.stagedTransformOverrides.size())
                     return InvalidPreview();
                 auto &slot = snapshot.stagedTransformOverrides[entity.entity.index];
                 if (slot.present)
                     return Result<void>::Failure(MakeError(ViewportSceneErrors::InvalidObjectId));
-                const auto validated = preview.localTransform.TryToMatrix();
-                if (validated.HasError())
+                if (const auto validated = preview.localTransform.TryToMatrix(); validated.HasError())
                     return Result<void>::Failure(validated.ErrorValue());
                 slot = {entity, preview.localTransform, true};
             }
@@ -216,8 +214,7 @@ namespace Horo::Editor {
             return InvalidPreview();
         if (const auto transforms = StageTransforms(scene, previews, snapshot); transforms.HasError())
             return transforms;
-        const auto instances = StageInstances(scene, snapshot);
-        if (instances.HasError())
+        if (const auto instances = StageInstances(scene, snapshot); instances.HasError())
             return instances;
         auto *bank = AvailableBank(snapshot);
         if (bank == nullptr)

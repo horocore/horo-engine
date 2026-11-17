@@ -240,8 +240,7 @@ namespace Horo::Editor::Proposals {
                 throw InvalidWire{};
             const auto &body = root.at("payload");
             Shape(body, {"project", "policyRevision", "policy", "id", "revision", "provenance", "files"});
-            const auto bytes = body.dump();
-            if (ComputeSha256(std::as_bytes(std::span{bytes})) != Digest(root.at("commitment")))
+            if (const auto bytes = body.dump(); ComputeSha256(std::as_bytes(std::span{bytes})) != Digest(root.at("commitment")))
                 throw InvalidWire{};
             return body;
         }

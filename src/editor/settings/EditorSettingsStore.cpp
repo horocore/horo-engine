@@ -506,8 +506,8 @@ namespace Horo::Editor {
             }
         };
 
-        const auto bindings = Input::ValidateBindingProfile(EditorKeymapActions(settings.keymap.profile), settings.keymap.profile);
-        if (!bindings.IsValid()) {
+        if (const auto bindings = Input::ValidateBindingProfile(EditorKeymapActions(settings.keymap.profile), settings.keymap.profile);
+            !bindings.IsValid()) {
             markInvalid("Editor keymap contains an invalid or conflicting shortcut.");
             settings.keymap = {};
         }
@@ -532,8 +532,7 @@ namespace Horo::Editor {
         if (std::error_code ec; !std::filesystem::exists(out.path, ec)) {
             LOG_DEBUG("editor.settings", "editor_settings.json not found at '%s' — using defaults.", out.path.string().c_str());
             ImportLegacyKeymap(out);
-            std::string validationError;
-            if (!ValidateEditorSettings(out.settings, &validationError))
+            if (std::string validationError; !ValidateEditorSettings(out.settings, &validationError))
                 out.error = std::move(validationError);
             return out;
         }

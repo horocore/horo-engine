@@ -62,8 +62,7 @@ namespace Horo::Editor {
 
         Result<std::vector<std::uint8_t>> Read(const std::filesystem::path &path, std::size_t maximum) {
             using Bytes = Result<std::vector<std::uint8_t>>;
-            std::error_code error;
-            if (std::filesystem::is_symlink(std::filesystem::symlink_status(path, error)))
+            if (std::error_code error; std::filesystem::is_symlink(std::filesystem::symlink_status(path, error)))
                 return Bytes::Failure(MakeError(ClusteredLightingAssetErrors::Unavailable));
             std::ifstream input(path, std::ios::binary | std::ios::ate);
             if (!input)
