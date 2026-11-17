@@ -585,7 +585,7 @@ TEST_CASE("Identical editor profile activation preserves routing generations and
     Input::InputBindingProfile profile;
     profile.overrides.push_back(
         {Input::ActionId{"sample.extension.command"},
-         {{.kind = Input::BindingControlKind::Key, .key = Input::Key::F11, .requiredModifiers = {.control = true, .shift = true}}}});
+         {{.kind = Input::BindingControlKind::Key, .key = Input::Key::F9, .requiredModifiers = {.control = true, .shift = true}}}});
     REQUIRE(ActivateEditorInputProfile(router, profile).HasValue());
     const auto before = router.RoutingState({}).configurationRevision;
     REQUIRE(ActivateEditorInputProfile(router, profile).HasValue());
@@ -616,7 +616,7 @@ TEST_CASE("Global binding authoring validates active project conflicts before pe
                                            home.directory.Path() / ".horo/input/editor.json",
                                            home.directory.Path() / ".horo/input/projects/project.json"};
     const Input::InputBinding trigger{.kind = Input::BindingControlKind::Key,
-                                      .key = Input::Key::F11,
+                                      .key = Input::Key::F9,
                                       .requiredModifiers = {.shift = true, .command = true}};
     REQUIRE(Input::SaveBindingProfileAtomically(paths.projectUser, {.profileId = "project-user",
                                                                     .overrides = {{Input::ActionId{kActionSourceZoomOut}, {trigger}}}})
