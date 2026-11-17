@@ -35,6 +35,7 @@ namespace Horo::Audio::Backend {
 
         struct Trace final {
             std::atomic<std::size_t> calls{};
+            std::atomic<std::size_t> renderingCalls{};
             std::atomic<bool> invalidResponse{};
             std::atomic<bool> safetyHooks{};
         };
@@ -42,6 +43,8 @@ namespace Horo::Audio::Backend {
         RenderResult Render(void *context, const RenderInvocation &invocation) noexcept {
             auto &trace = *static_cast<Trace *>(context);
             trace.calls.fetch_add(1, std::memory_order_relaxed);
+            if (invocation.phase == RenderPhase::Rendering)
+                trace.renderingCalls.fetch_add(1, std::memory_order_relaxed);
             if (trace.safetyHooks.load(std::memory_order_relaxed)) {
                 AudioCallbackWatchdog::OnAllocationAttempt();
                 AudioCallbackWatchdog::OnLockAttempt();
@@ -131,6 +134,34 @@ namespace Horo::Audio::Backend {
         void StartRendering(Sdl3AudioBackend &backend, const AudioDeviceEpoch &epoch, Trace &trace) {
             REQUIRE(std::holds_alternative<Started>(Complete(backend, Start{epoch, {&trace, Render}}).outcome));
             REQUIRE(WaitForEvent(backend, ExpectedCallbackEvent::Ready));
+        }
+
+        TEST_CASE("SDL3 explicitly closes discovery-only resources and accepts repeated Close", "[unit][audio][sdl3]") {
+            auto created = CreateSdl3AudioBackend(Config());
+            REQUIRE(created.HasValue());
+            auto backend = std::move(created).Value();
+            REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
+            // Discovery may report unavailable on this host; its native initialization still needs explicit retirement.
+            (void)Complete(*backend, Enumerate{});
+            REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
+            REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
+            CHECK(backend->State() == Sdl3AudioBackendState::Closed);
+        }
+
+        TEST_CASE("SDL3 quiesces priming without a rendering commit or waiting for Ready", "[unit][audio][sdl3]") {
+            Trace trace;
+            auto [backend, epoch] = CreateOpenedBackend();
+            REQUIRE(std::holds_alternative<Started>(Complete(*backend, Start{epoch, {&trace, Render}}).outcome));
+            REQUIRE(backend->State() == Sdl3AudioBackendState::Priming);
+            const auto quiesce = Begin(*backend, Quiesce{epoch});
+            REQUIRE(backend->AdvanceControl().HasValue());
+            REQUIRE(WaitForEvent(*backend, ExpectedCallbackEvent::Quiesced));
+            REQUIRE(backend->AdvanceControl().HasValue());
+            REQUIRE(std::holds_alternative<Quiesced>(backend->Poll(quiesce).Value()->outcome));
+            REQUIRE(backend->AcknowledgeCompletion(quiesce).HasValue());
+            REQUIRE(std::holds_alternative<Stopped>(Complete(*backend, Stop{epoch}).outcome));
+            REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
+            CHECK(trace.renderingCalls.load() == 0);
         }
 
         TEST_CASE("SDL3 audio drives the Horo render port and detaches before close", "[unit][audio][sdl3]") {

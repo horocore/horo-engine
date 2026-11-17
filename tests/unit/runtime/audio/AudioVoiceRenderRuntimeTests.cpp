@@ -1,6 +1,81 @@
 #include "AudioVoiceRenderTestFixture.h"
+#include "Horo/Audio/Internal/AudioPlaybackEpoch.h"
 
 namespace Horo::Tests::VoiceRenderFixture {
+    TEST_CASE("Detached same-format epoch adoption preserves actual voice and mixer state but rejects old commands",
+              "[audio][voice_render][epoch]") {
+        using Internal::AudioPlaybackEpoch;
+        using Internal::AudioPlaybackEpochStatus;
+        Rig rig;
+        const auto oldGraph = rig.plan->Identity();
+        const auto publication = rig.Publish();
+        REQUIRE(rig.voice->Apply(publication) == nullptr);
+        rig.Start();
+        auto mixer = Runtime();
+        const auto graphRecord = Publish(*mixer, rig.staging, rig.plan);
+        Block output;
+        const auto first = rig.voice->Render(16);
+        REQUIRE(first.error == nullptr);
+        const std::array firstInput{first.input};
+        REQUIRE(mixer->Render(Scope, &graphRecord, firstInput, output.View()).status == MixerRenderStatus::Rendered);
+        rig.voice->EndBlock();
+        REQUIRE(rig.voice->Reconcile().applied);
+        REQUIRE(mixer->Reconcile().status == MixerRenderStatus::Active);
+        const auto cursor = rig.voice->Cursor();
+        const auto voice = rig.voice->Voice();
+        const auto sample = output.left.back();
+        REQUIRE(rig.staging.Close() == AudioCommandStagingStatus::Ok);
+        (void)rig.staging.Pump(0);
+        REQUIRE(rig.staging.IsDrained());
+        // This fixture has never attached a native callback; all old direct processing calls have returned.
+        auto nextScope = Scope;
+        ++nextScope.epoch;
+        auto transport = AudioPlaybackEpoch::PrepareTransport(rig.staging, Scope, nextScope,
+                                                              {{Owner, IdOf<AudioMemoryPoolId>(131), nextScope.epoch, 4, 1, 32'768},
+                                                               IdOf<AudioMemoryPoolId>(132),
+                                                               4,
+                                                               1,
+                                                               2,
+                                                               32'768});
+        REQUIRE(transport.HasValue());
+        auto nextStaging = std::move(transport).Value();
+        auto newGraph = oldGraph;
+        const auto allocations = AllocationProbe::Count();
+        const auto frees = AllocationProbe::FreeCount();
+        const auto mixed = AudioPlaybackEpoch::RebindMixer(*mixer, Scope, nextScope, newGraph);
+        const auto voiced = AudioPlaybackEpoch::RebindVoice(*rig.voice, Scope, nextScope, oldGraph, newGraph);
+        const auto allocationEnd = AllocationProbe::Count();
+        const auto freeEnd = AllocationProbe::FreeCount();
+        REQUIRE(mixed == AudioPlaybackEpochStatus::Rebound);
+        REQUIRE(voiced == AudioPlaybackEpochStatus::Rebound);
+        CHECK(allocationEnd == allocations);
+        CHECK(freeEnd == frees);
+        CHECK(rig.voice->Voice() == voice);
+        CHECK(rig.voice->Cursor().frame == cursor.frame);
+        CHECK(rig.voice->Cursor().fraction == cursor.fraction);
+        CHECK(newGraph.epoch == nextScope.epoch);
+        auto stale = publication;
+        stale.sequence = 100;
+        REQUIRE(rig.voice->Apply(stale) == &AudioErrors::HandleOwnerMismatch);
+        REQUIRE(mixer->Render(Scope, nullptr, {}, output.View()).status == MixerRenderStatus::InvalidEpoch);
+        const auto resumed = rig.voice->Render(16);
+        REQUIRE(resumed.error == nullptr);
+        const std::array resumedInput{resumed.input};
+        REQUIRE(mixer->Render(nextScope, nullptr, resumedInput, output.View()).status == MixerRenderStatus::Rendered);
+        rig.voice->EndBlock();
+        CHECK(rig.voice->Cursor().frame == cursor.frame + 16);
+        CHECK(std::abs(output.left.back() - sample) < 2e-6F);
+        const auto pause = nextStaging.Submit({nextScope, AudioVoiceControlRequest{voice, AudioVoiceControl::Pause}});
+        REQUIRE(pause.status == AudioCommandStagingStatus::Ok);
+        REQUIRE(pause.sequence == 1);
+        REQUIRE(rig.voice->Apply(ConsumePublished(nextStaging)) == nullptr);
+        REQUIRE(rig.voice->Render(16).error == nullptr);
+        rig.voice->EndBlock();
+        CHECK(rig.voice->Cursor().frame == cursor.frame + 16);
+        mixer->Close();
+        REQUIRE(mixer->CompleteShutdown(nextScope, true) == MixerRenderStatus::Quiesced);
+    }
+
     TEST_CASE("Voice render publication copies source state and executes actual resident PCM and mixer", "[audio][voice_render]") {
         Rig rig;
         auto request = Request();

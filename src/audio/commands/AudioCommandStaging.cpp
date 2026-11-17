@@ -1,6 +1,7 @@
 #include "Horo/Audio/AudioCommandStaging.h"
 
 #include "Horo/Audio/Internal/AudioCallbackSafetyHooks.h"
+#include "Horo/Audio/Internal/AudioPlaybackEpoch.h"
 
 #include <algorithm>
 #include <array>
@@ -130,6 +131,49 @@ namespace Horo::Audio {
             }
         }
     };
+
+    /** @copydoc Internal::AudioPlaybackEpoch::PrepareTransport */
+    Result<AudioCommandStaging> Internal::AudioPlaybackEpoch::PrepareTransport(const AudioCommandStaging &transport,
+                                                                               const AudioCommandScope &previous,
+                                                                               const AudioCommandScope &replacement,
+                                                                               const AudioCommandStagingDescriptor &descriptor) {
+        using Prepared = Result<AudioCommandStaging>;
+        const auto *state = transport.state_.get();
+        if (!state)
+            return Prepared::Failure(MakeError(AudioErrors::RuntimeInactive));
+        const std::array retired{state->closing, state->count == 0, state->output.IsDrained()};
+        if (!std::ranges::all_of(retired, std::identity{}))
+            return Prepared::Failure(MakeError(AudioErrors::RuntimeInactive));
+        const auto &old = state->descriptor;
+        const std::array identities{previous.scene.IsValid(),
+                                    previous.scene.owner == previous.owner,
+                                    previous.scene.slot <= old.sceneSlots,
+                                    previous.owner == old.callback.owner,
+                                    previous.epoch == old.callback.epoch,
+                                    replacement.owner == previous.owner,
+                                    replacement.scene == previous.scene,
+                                    replacement.scene.slot <= descriptor.sceneSlots,
+                                    replacement.epoch > previous.epoch,
+                                    descriptor.callback.owner == replacement.owner,
+                                    descriptor.callback.epoch == replacement.epoch};
+        if (!std::ranges::all_of(identities, std::identity{}))
+            return Prepared::Failure(MakeError(AudioErrors::IdentityInvalid));
+        const auto &context = state->scenes[previous.scene.slot - 1];
+        const std::array contextAndStorage{context.generation == previous.scene.generation,
+                                           context.phase == ScenePhase::Open,
+                                           descriptor.callback.storageIdentity != old.callback.storageIdentity,
+                                           descriptor.callback.storageIdentity != old.ingressIdentity,
+                                           descriptor.ingressIdentity != old.callback.storageIdentity,
+                                           descriptor.ingressIdentity != old.ingressIdentity};
+        if (!std::ranges::all_of(contextAndStorage, std::identity{}))
+            return Prepared::Failure(MakeError(AudioErrors::IdentityInvalid));
+        auto prepared = AudioCommandStaging::Create(descriptor);
+        if (prepared.HasError())
+            return prepared;
+        if (prepared.Value().RegisterScene(replacement.scene) != AudioCommandStagingStatus::Ok)
+            return Prepared::Failure(MakeError(AudioErrors::IdentityInvalid));
+        return prepared;
+    }
 
     /** @copydoc AudioCommandStaging::Create */
     Result<AudioCommandStaging> AudioCommandStaging::Create(const AudioCommandStagingDescriptor &descriptor) {

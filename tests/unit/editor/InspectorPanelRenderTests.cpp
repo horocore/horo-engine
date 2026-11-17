@@ -396,6 +396,22 @@ TEST_CASE("Audio preview phases remain localized read-only status", "[unit][edit
     CHECK(frame.model.objects.front().components == original);
 }
 
+TEST_CASE("Queued audio preparation is localized without inventing an opened frontend", "[unit][editor][audio]") {
+    using namespace Horo::Editor;
+    const bool pending = GENERATE(false, true);
+    AudioInspectorFrame frame;
+    frame.model.audioPreviewAvailable = true;
+    auto &snapshot = frame.model.audioPreview.emplace();
+    snapshot.preparation = pending ? AudioComponentPreviewPreparation::Pending : AudioComponentPreviewPreparation::None;
+    REQUIRE_FALSE(snapshot.output);
+    const auto original = frame.model.objects.front().components;
+    frame.Draw();
+    frame.localization.ClearRequests();
+    CHECK(frame.Draw().command == EditorWorkspaceViewCommand::None);
+    CHECK(frame.localization.Requested("workspace.inspector.audio.preview_opening") == pending);
+    CHECK(frame.model.objects.front().components == original);
+}
+
 TEST_CASE("Audio source reset preserves disabled admission and restores authored defaults", "[unit][editor][audio]") {
     using namespace Horo;
     using namespace Horo::Editor;

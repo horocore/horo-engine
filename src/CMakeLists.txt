@@ -1323,6 +1323,27 @@ target_include_directories(HoroAudioBackendContract INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/include>")
 target_link_libraries(HoroAudioBackendContract INTERFACE HoroEngine::AudioApi)
 
+add_library(HoroAudioOutputPolicy STATIC
+        audio/backend/control/AudioOutputPolicy.cpp
+        audio/backend/control/AudioRuntimeOwnerIssuer.cpp
+        audio/backend/control/AudioDeviceSwitch.cpp)
+target_compile_features(HoroAudioOutputPolicy PUBLIC cxx_std_20)
+target_include_directories(HoroAudioOutputPolicy PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/control/include>")
+target_link_libraries(HoroAudioOutputPolicy PUBLIC HoroAudioBackendContract)
+
+add_library(HoroAudioOffline STATIC audio/backend/offline/OfflineAudioRender.cpp)
+target_compile_features(HoroAudioOffline PUBLIC cxx_std_20)
+target_include_directories(HoroAudioOffline PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/offline/include>")
+target_link_libraries(HoroAudioOffline PUBLIC HoroAudioBackendContract)
+
+add_library(HoroApplicationAudioExport STATIC application/audio_export/OfflineAudioExport.cpp)
+target_compile_features(HoroApplicationAudioExport PUBLIC cxx_std_20)
+target_include_directories(HoroApplicationAudioExport PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/application/audio_export/include>")
+target_link_libraries(HoroApplicationAudioExport PUBLIC HoroAudioOffline HoroEngine::Foundation PRIVATE HoroEngine::Platform)
+
 # Build-tree-only hook boundary shared by backend callback scopes and Horo-owned audio operations.
 add_library(HoroAudioSafetyHooks STATIC
         audio/safety/AudioCallbackSafetyHooks.cpp
@@ -1336,6 +1357,54 @@ add_library(HoroAudioWatchdog STATIC
 )
 target_compile_features(HoroAudioWatchdog PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioWatchdog PUBLIC HoroAudioBackendContract HoroAudioSafetyHooks)
+
+add_library(HoroAudioNativeRuntime STATIC
+        audio/backend/native/NativeAudioBackend.cpp
+        audio/backend/native/NativeAudioBackendImpl.h
+        audio/backend/native/include/Horo/Audio/Internal/NativeAudioFacts.h
+        audio/backend/native/NativeAudioNegotiation.cpp)
+target_compile_features(HoroAudioNativeRuntime PUBLIC cxx_std_20)
+target_include_directories(HoroAudioNativeRuntime PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/native/include>")
+target_link_libraries(HoroAudioNativeRuntime PUBLIC HoroAudioBackendContract PRIVATE HoroAudioWatchdog)
+
+if(HORO_BUILD_AUDIO_WASAPI)
+    add_library(HoroAudioWasapi STATIC
+            audio/backend/wasapi/WasapiAudioBackend.cpp
+            audio/backend/wasapi/WasapiNativeOwners.h)
+    target_compile_features(HoroAudioWasapi PUBLIC cxx_std_20)
+    target_include_directories(HoroAudioWasapi PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/wasapi/include>")
+    target_link_libraries(HoroAudioWasapi PUBLIC HoroAudioNativeRuntime PRIVATE ole32 uuid avrt propsys)
+endif()
+
+if(HORO_BUILD_AUDIO_COREAUDIO)
+    find_library(HORO_AUDIO_COREAUDIO_FRAMEWORK CoreAudio REQUIRED)
+    find_library(HORO_AUDIO_AUDIOTOOLBOX_FRAMEWORK AudioToolbox REQUIRED)
+    find_library(HORO_AUDIO_AUDIOUNIT_FRAMEWORK AudioUnit REQUIRED)
+    find_library(HORO_AUDIO_COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+    add_library(HoroAudioCoreAudio STATIC audio/backend/coreaudio/CoreAudioBackend.cpp)
+    target_compile_features(HoroAudioCoreAudio PUBLIC cxx_std_20)
+    target_compile_options(HoroAudioCoreAudio PRIVATE -fblocks)
+    target_include_directories(HoroAudioCoreAudio PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/coreaudio/include>")
+    target_link_libraries(HoroAudioCoreAudio PUBLIC HoroAudioNativeRuntime PRIVATE
+            ${HORO_AUDIO_COREAUDIO_FRAMEWORK} ${HORO_AUDIO_AUDIOTOOLBOX_FRAMEWORK} ${HORO_AUDIO_AUDIOUNIT_FRAMEWORK}
+            ${HORO_AUDIO_COREFOUNDATION_FRAMEWORK})
+endif()
+
+if(HORO_BUILD_AUDIO_PIPEWIRE)
+    find_package(Threads REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(HORO_PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3>=1.0)
+    add_library(HoroAudioPipeWire STATIC audio/backend/pipewire/PipeWireAudioBackend.cpp)
+    target_compile_features(HoroAudioPipeWire PUBLIC cxx_std_20)
+    target_compile_definitions(HoroAudioPipeWire PRIVATE _GNU_SOURCE)
+    target_include_directories(HoroAudioPipeWire PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/pipewire/include>")
+    target_link_libraries(HoroAudioPipeWire PUBLIC HoroAudioNativeRuntime PRIVATE
+            PkgConfig::HORO_PIPEWIRE nlohmann_json::nlohmann_json Threads::Threads)
+endif()
 
 add_library(HoroAudioNull STATIC
         audio/backend/null/NullAudioBackend.cpp
@@ -1407,6 +1476,13 @@ add_library(HoroEngine::AudioCommands ALIAS HoroAudioCommands)
 target_compile_features(HoroAudioCommands PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioCommands PUBLIC HoroEngine::AudioMemory PRIVATE HoroAudioSafetyHooks)
 
+# Narrow non-installed declarations only: owning implementations retain their private state layouts.
+add_library(HoroAudioPlaybackEpochContract INTERFACE)
+target_compile_features(HoroAudioPlaybackEpochContract INTERFACE cxx_std_20)
+target_include_directories(HoroAudioPlaybackEpochContract INTERFACE
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/epoch/include>")
+target_link_libraries(HoroAudioCommands PRIVATE HoroAudioPlaybackEpochContract)
+
 add_library(HoroAudioMixer STATIC
         audio/mixer/MixerAutomationProjection.cpp
         audio/mixer/MixerSnapshot.cpp
@@ -1418,7 +1494,7 @@ add_library(HoroAudioMixer STATIC
 )
 add_library(HoroEngine::AudioMixer ALIAS HoroAudioMixer)
 target_compile_features(HoroAudioMixer PUBLIC cxx_std_20)
-target_link_libraries(HoroAudioMixer PUBLIC HoroEngine::AudioDsp HoroEngine::AudioCommands)
+target_link_libraries(HoroAudioMixer PUBLIC HoroEngine::AudioDsp HoroEngine::AudioCommands PRIVATE HoroAudioPlaybackEpochContract)
 
 add_library(HoroAudioVoiceRender STATIC
         audio/playback/AudioVoiceRenderRuntime.cpp
@@ -1426,10 +1502,11 @@ add_library(HoroAudioVoiceRender STATIC
         audio/playback/AudioVoiceRenderState.h)
 add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
 target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
-target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer)
+target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer PRIVATE HoroAudioPlaybackEpochContract)
 
 add_library(HoroAudioFrontend STATIC
         audio/frontend/AudioFrontend.cpp
+        audio/frontend/AudioFrontendPlaybackHold.cpp
         audio/frontend/AudioFrontendLifecycle.cpp)
 add_library(HoroEngine::AudioFrontend ALIAS HoroAudioFrontend)
 target_compile_features(HoroAudioFrontend PUBLIC cxx_std_20)
@@ -1443,7 +1520,7 @@ add_library(HoroAudioFrontendComposition INTERFACE)
 target_include_directories(HoroAudioFrontendComposition INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/frontend/include>")
 target_link_libraries(HoroAudioFrontendComposition INTERFACE
-        HoroEngine::AudioFrontend HoroEngine::AudioVoiceRender HoroAudioBackendContract)
+        HoroEngine::AudioFrontend HoroEngine::AudioVoiceRender HoroAudioBackendContract HoroAudioPlaybackEpochContract)
 
 add_library(HoroAudioMetrics STATIC
         audio/metrics/AudioMetricExtraction.cpp

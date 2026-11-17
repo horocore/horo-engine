@@ -1,5 +1,6 @@
 #include "AudioCommandTestProbe.h"
 #include "Horo/Audio/AudioCommandStaging.h"
+#include "Horo/Audio/Internal/AudioPlaybackEpoch.h"
 
 #include <algorithm>
 #include <array>
@@ -7,8 +8,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <functional>
+#include <optional>
 #include <ranges>
 #include <thread>
+#include <utility>
 
 namespace Horo::Audio {
     namespace {
@@ -58,6 +61,31 @@ namespace Horo::Audio {
                                                        .value = value};
             return command;
         }
+
+        /** @brief Explicit fresh pool reservations retain dimensions while changing only the callback epoch and storage identities. */
+        AudioCommandStagingDescriptor ReplacementDescriptor() {
+            auto descriptor = Descriptor();
+            descriptor.callback.epoch = 6;
+            descriptor.callback.storageIdentity = AudioMemoryPoolId::Create(31).Value();
+            descriptor.ingressIdentity = AudioMemoryPoolId::Create(32).Value();
+            return descriptor;
+        }
+
+        /** @brief This fixture never attaches participants or external resources; drain normalized records as explicit fixture
+         * cancellation. */
+        struct RetireDetachedTransport final {
+            AudioCommandStaging &transport;
+
+            ~RetireDetachedTransport() {
+                (void)transport.Close();
+                AudioCommandRecord record;
+                for (std::size_t step = 0; step <= MaximumAudioCommandSlots && !transport.IsDrained(); ++step) {
+                    (void)transport.Pump(64);
+                    while (transport.TryConsume(record)) {
+                    }
+                }
+            }
+        };
 
         struct JoinWorkers {
             std::span<std::thread> workers;
@@ -154,6 +182,192 @@ namespace Horo::Audio {
                 Pump();
             }
         };
+
+        TEST_CASE("Detached epoch handoff prepares separate transport and rejects old-epoch commands",
+                  "[unit][audio][commands][device-handoff]") {
+            auto old = Staging();
+            const RetireDetachedTransport retireOld{old};
+            REQUIRE(old.RegisterScene(Scene()) == AudioCommandStagingStatus::Ok);
+            REQUIRE(old.Close() == AudioCommandStagingStatus::Ok);
+            REQUIRE(old.IsDrained());
+            const AudioCommandScope previous{Owner(), 5, Scene()};
+            const AudioCommandScope replacement{Owner(), 6, Scene()};
+            auto prepared = Internal::AudioPlaybackEpoch::PrepareTransport(old, previous, replacement, ReplacementDescriptor());
+            REQUIRE(prepared.HasValue());
+            auto next = std::move(prepared).Value();
+            const RetireDetachedTransport retireNext{next};
+            REQUIRE_FALSE(next.IsDrained());
+            REQUIRE(next.Stats().has_value());
+            REQUIRE(next.Stats()->ingressDepth == 0);
+            REQUIRE(next.Stats()->callbackDepth == 0);
+            REQUIRE(next.Submit(Start()).status == AudioCommandStagingStatus::InvalidCommand);
+            auto command = Start();
+            command.scope = replacement;
+            auto foreignContext = command;
+            ++foreignContext.scope.scene.generation;
+            REQUIRE(next.Submit(foreignContext).status == AudioCommandStagingStatus::InvalidScene);
+            const auto admitted = next.Submit(command);
+            REQUIRE(admitted.status == AudioCommandStagingStatus::Ok);
+            REQUIRE(admitted.sequence == 1);
+            REQUIRE(next.Pump(4).published == 1);
+            AudioCommandRecord record;
+            REQUIRE(next.TryConsume(record));
+            REQUIRE(record.sequence == 1);
+            REQUIRE(record.command.scope == replacement);
+            REQUIRE(old.IsDrained());
+            REQUIRE(old.Submit(Start()).status == AudioCommandStagingStatus::Closed);
+        }
+
+        TEST_CASE("Detached transport preparation waits for actual old admission closure and queue draining",
+                  "[unit][audio][commands][device-handoff]") {
+            auto old = Staging();
+            const RetireDetachedTransport retire{old};
+            REQUIRE(old.RegisterScene(Scene()) == AudioCommandStagingStatus::Ok);
+            std::optional<AudioCommandStaging> moved;
+            SECTION("open even when empty") {}
+            SECTION("moved-from owner") {
+                REQUIRE(old.Close() == AudioCommandStagingStatus::Ok);
+                moved.emplace(std::move(old));
+            }
+            SECTION("accepted ingress") {
+                REQUIRE(old.Submit(Start()).status == AudioCommandStagingStatus::Ok);
+                REQUIRE(old.Close() == AudioCommandStagingStatus::Ok);
+            }
+            SECTION("published callback record") {
+                REQUIRE(old.Submit(Start()).status == AudioCommandStagingStatus::Ok);
+                REQUIRE(old.Pump(4).published == 1);
+                REQUIRE(old.Close() == AudioCommandStagingStatus::Ok);
+            }
+            const auto prepared =
+                Internal::AudioPlaybackEpoch::PrepareTransport(old, {Owner(), 5, Scene()}, {Owner(), 6, Scene()}, ReplacementDescriptor());
+            REQUIRE(prepared.HasError());
+            REQUIRE(prepared.ErrorValue().code.Value() == AudioErrors::RuntimeInactive.code.Value());
+        }
+
+        TEST_CASE("Detached transport preparation rejects stale context scope and cross-lane storage aliasing",
+                  "[unit][audio][commands][device-handoff]") {
+            auto old = Staging();
+            const RetireDetachedTransport retire{old};
+            REQUIRE(old.RegisterScene(Scene()) == AudioCommandStagingStatus::Ok);
+            REQUIRE(old.Close() == AudioCommandStagingStatus::Ok);
+            AudioCommandScope previous{Owner(), 5, Scene()};
+            AudioCommandScope replacement{Owner(), 6, Scene()};
+            auto descriptor = ReplacementDescriptor();
+            SECTION("stale old epoch") {
+                previous.epoch = 4;
+            }
+            SECTION("same new epoch") {
+                replacement.epoch = 5;
+                descriptor.callback.epoch = 5;
+            }
+            SECTION("different context") {
+                replacement.scene = Scene(2);
+            }
+            SECTION("stale context generation") {
+                previous.scene.generation = 2;
+                replacement.scene = previous.scene;
+            }
+            SECTION("invalid context slot") {
+                previous.scene.slot = 0;
+                replacement.scene = previous.scene;
+            }
+            SECTION("context outside old reservation") {
+                previous.scene.slot = Descriptor().sceneSlots + 1;
+                replacement.scene = previous.scene;
+            }
+            SECTION("foreign runtime") {
+                replacement.owner = AudioRuntimeId::Create(18).Value();
+                replacement.scene.owner = replacement.owner;
+                descriptor.callback.owner = replacement.owner;
+            }
+            SECTION("descriptor epoch") {
+                descriptor.callback.epoch = 7;
+            }
+            SECTION("callback aliases old callback") {
+                descriptor.callback.storageIdentity = Descriptor().callback.storageIdentity;
+            }
+            SECTION("callback aliases old ingress") {
+                descriptor.callback.storageIdentity = Descriptor().ingressIdentity;
+            }
+            SECTION("ingress aliases old callback") {
+                descriptor.ingressIdentity = Descriptor().callback.storageIdentity;
+            }
+            SECTION("ingress aliases old ingress") {
+                descriptor.ingressIdentity = Descriptor().ingressIdentity;
+            }
+            REQUIRE(Internal::AudioPlaybackEpoch::PrepareTransport(old, previous, replacement, descriptor).HasError());
+            REQUIRE(old.IsDrained());
+            REQUIRE(old.Submit(Start()).status == AudioCommandStagingStatus::Closed);
+        }
+
+        TEST_CASE("Detached transport preparation preserves a non-default context and requires its new reservation",
+                  "[unit][audio][commands][device-handoff]") {
+            auto old = Staging();
+            const RetireDetachedTransport retireOld{old};
+            const auto scene = Scene(3, 7);
+            REQUIRE(old.RegisterScene(scene) == AudioCommandStagingStatus::Ok);
+            REQUIRE(old.Close() == AudioCommandStagingStatus::Ok);
+            const AudioCommandScope previous{Owner(), 5, scene};
+            const AudioCommandScope replacement{Owner(), 6, scene};
+            auto descriptor = ReplacementDescriptor();
+            descriptor.sceneSlots = 2;
+            REQUIRE(Internal::AudioPlaybackEpoch::PrepareTransport(old, previous, replacement, descriptor).HasError());
+            REQUIRE(old.IsDrained());
+            descriptor.sceneSlots = 3;
+            auto prepared = Internal::AudioPlaybackEpoch::PrepareTransport(old, previous, replacement, descriptor);
+            REQUIRE(prepared.HasValue());
+            auto next = std::move(prepared).Value();
+            const RetireDetachedTransport retireNext{next};
+            auto command = Start(scene);
+            command.scope = replacement;
+            REQUIRE(next.Submit(command).status == AudioCommandStagingStatus::Ok);
+            REQUIRE(next.Pump(4).published == 1);
+            AudioCommandRecord record;
+            REQUIRE(next.TryConsume(record));
+            REQUIRE(record.command.scope == replacement);
+            REQUIRE(record.sequence == 1);
+        }
+
+        TEST_CASE("Detached transport preparation cannot revive an unregistered or unloading context",
+                  "[unit][audio][commands][device-handoff]") {
+            auto old = Staging();
+            const RetireDetachedTransport retire{old};
+            SECTION("unregistered context") {}
+            SECTION("queued unload") {
+                REQUIRE(old.RegisterScene(Scene()) == AudioCommandStagingStatus::Ok);
+                REQUIRE(old.StageSceneUnload(Scene()).status == AudioCommandStagingStatus::Ok);
+            }
+            REQUIRE(old.Close() == AudioCommandStagingStatus::Ok);
+            (void)old.Pump(4);
+            AudioCommandRecord cancelled;
+            while (old.TryConsume(cancelled)) {
+                // This never-attached fixture has no external resources; unload remains unacknowledged in its gate.
+            }
+            REQUIRE(old.IsDrained());
+            REQUIRE(
+                Internal::AudioPlaybackEpoch::PrepareTransport(old, {Owner(), 5, Scene()}, {Owner(), 6, Scene()}, ReplacementDescriptor())
+                    .HasError());
+        }
+
+        TEST_CASE("Detached transport preparation propagates budget failure without consuming the retired owner",
+                  "[unit][audio][commands][device-handoff]") {
+            auto old = Staging();
+            const RetireDetachedTransport retire{old};
+            REQUIRE(old.RegisterScene(Scene()) == AudioCommandStagingStatus::Ok);
+            REQUIRE(old.Close() == AudioCommandStagingStatus::Ok);
+            auto descriptor = ReplacementDescriptor();
+            descriptor.callback.budgetBytes = 1;
+            const auto rejected =
+                Internal::AudioPlaybackEpoch::PrepareTransport(old, {Owner(), 5, Scene()}, {Owner(), 6, Scene()}, descriptor);
+            REQUIRE(rejected.HasError());
+            REQUIRE(rejected.ErrorValue().code.Value() == AudioErrors::MemoryBudgetExceeded.code.Value());
+            REQUIRE(old.IsDrained());
+            auto prepared =
+                Internal::AudioPlaybackEpoch::PrepareTransport(old, {Owner(), 5, Scene()}, {Owner(), 6, Scene()}, ReplacementDescriptor());
+            REQUIRE(prepared.HasValue());
+            auto next = std::move(prepared).Value();
+            const RetireDetachedTransport retireNext{next};
+        }
 
         TEST_CASE("Audio staging rejects invalid dimensions and allocation failure", "[unit][audio][commands]") {
             auto descriptor = Descriptor();

@@ -6,6 +6,7 @@
 #include "Horo/Audio/AudioFrontend.h"
 #include "Horo/Audio/AudioSpatialModel.h"
 
+#include <cstdint>
 #include <filesystem>
 
 namespace Horo::Editor {
@@ -29,6 +30,12 @@ namespace Horo::Editor {
         std::optional<Audio::AudioSpatialListener> listener;
     };
 
+    /** @brief Request preparation before a frontend/device identity exists; None alone never proves native retirement. */
+    enum class AudioComponentPreviewPreparation : std::uint8_t {
+        None,
+        Pending
+    };
+
     /** @brief Owned UI status; Active means admitted Audio output, not proof of human audibility. */
     struct AudioComponentPreviewSnapshot final {
         Assets::AssetId workspace;
@@ -36,6 +43,7 @@ namespace Horo::Editor {
         std::uint64_t object{};
         std::optional<Audio::AudioFrontendSnapshot> output;
         std::optional<Error> failure;
+        AudioComponentPreviewPreparation preparation{AudioComponentPreviewPreparation::None}; /**< Pending requires output to be absent. */
     };
 
     /** @brief Borrowed application capability; the host outlives workspaces and retains closing output.
@@ -47,12 +55,18 @@ namespace Horo::Editor {
     public:
         virtual ~IAudioComponentPreview() = default;
         /** @brief Prepares an isolated production Audio lane for an immutable scene capture.
-         * @param request Exact workspace/object/revision and source data. @return Admission or typed missing/busy/error outcome. */
+         * @param request Exact workspace/object/revision and source data.
+         * @return Admission or typed missing/busy/error outcome. Success may admit asynchronous
+         * preparation; it never proves activation. Pump/Snapshot retain later preparation failures.
+         * The host copies values before returning and never borrows caller scene/document storage.
+         */
         [[nodiscard]] virtual Result<void> Start(const AudioComponentPreviewRequest &request) = 0;
         /** @brief Revokes the matching workspace preview and requests asynchronous native retirement.
          * @param workspace Exact owner; a foreign owner cannot stop another workspace. */
         virtual void Stop(Assets::AssetId workspace) noexcept = 0;
-        /** @brief Advances bounded native/control work outside widget drawing. @return Original failure or progress. */
+        /** @brief Advances bounded control work or harvests a dedicated control owner's progress outside widget drawing.
+         * @return Original failure or progress; an owner-thread bridge never waits for native work here.
+         */
         [[nodiscard]] virtual Result<void> Pump() = 0;
         /** @brief Copies retained status. @return Values without mutable runtime/native borrows. */
         [[nodiscard]] virtual AudioComponentPreviewSnapshot Snapshot() const = 0;

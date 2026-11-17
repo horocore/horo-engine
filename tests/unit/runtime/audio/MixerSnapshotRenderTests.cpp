@@ -1,4 +1,5 @@
 #include "Horo/Audio/CoreAudioDSPNode.h"
+#include "Horo/Audio/Internal/AudioPlaybackEpoch.h"
 #include "Horo/Audio/MixerSnapshot.h"
 #include "MixerTestFixture.h"
 
@@ -276,4 +277,21 @@ TEST_CASE("Sealed automation selectors reject another engine and close without c
     CHECK(first.automation.Value(selector, value) == AudioAutomationStatus::Closed);
     CHECK_FALSE(first.automation.ResolveValue(first.bindings[0].address, selector));
     CHECK(value == 1);
+}
+
+TEST_CASE("Detached epoch adoption cannot inherit an old sealed mixer automation binding", "[audio][mixer][snapshot][epoch]") {
+    Fixture fixture;
+    const auto *retained = fixture.plan.get();
+    fixture.Publish();
+    REQUIRE(fixture.Render(0, 16, nullptr, true).status == MixerRenderStatus::Rendered);
+    REQUIRE(fixture.runtime->Reconcile().status == MixerRenderStatus::Active);
+    auto next = MF::Scope;
+    ++next.epoch;
+    auto graph = retained->Identity();
+    const auto previous = graph;
+    REQUIRE(Internal::AudioPlaybackEpoch::RebindMixer(*fixture.runtime, MF::Scope, next, graph) ==
+            Internal::AudioPlaybackEpochStatus::UnsupportedAutomation);
+    CHECK(graph == previous);
+    CHECK(retained->Identity() == previous);
+    REQUIRE(fixture.Render(16, 16).status == MixerRenderStatus::Rendered);
 }

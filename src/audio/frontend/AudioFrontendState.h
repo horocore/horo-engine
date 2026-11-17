@@ -26,14 +26,25 @@ namespace Horo::Audio {
         std::optional<Error> failure;
         bool closing{};
         bool opened{};
+        bool activationRequested{};
         bool started{};
         bool rendering{};
         bool ready{};
         bool quiesced{};
         bool detached{true};
         std::uint32_t maximumFrames{};
+        AudioProcessingFormat processingFormat;
         AudioVoiceHandle voiceIdentity;
         std::atomic<const ErrorCodeDescriptor *> callbackFailure{};
+        // Control owns holdSequence and publishes one request. Callback alone writes heldPlayback
+        // and processingHeld, publishing the completed block with holdAcknowledged release. The
+        // control owner copies only a matching current acknowledgement; no live voice read occurs.
+        // New request generations cannot overwrite a record while its old control copy is in use.
+        std::uint64_t holdSequence{};
+        std::atomic<std::uint64_t> holdRequested{};
+        std::atomic<std::uint64_t> holdAcknowledged{};
+        Internal::AudioFrontendHeldPlayback heldPlayback;
+        bool processingHeld{};
         enum class OperationStatus : std::uint8_t {
             Pending,
             Applied,
@@ -45,16 +56,22 @@ namespace Horo::Audio {
         /** @brief Sequence release publishes immutable slot input; terminal release publishes its error after last block use. */
         struct Receipt final {
             std::atomic<std::uint64_t> sequence{};
+            // Control publishes the epoch-local command mapping before sequence release. Atomic
+            // scanning is required because unrelated terminal slots may be recycled concurrently.
+            std::atomic<std::uint64_t> commandSequence{};
             std::atomic<OperationStatus> status{OperationStatus::Pending};
             const ErrorCodeDescriptor *error{};
         };
 
         std::array<Receipt, MaximumAudioFrontendOperations> receipts;
+        std::uint64_t operationSequence{}; /**< Control-only external identity, never reset by epoch/queue replacement. */
 
         /** @brief Fixed callback entry; resource owners and format are pinned before Start. */
         static Backend::RenderResult Process(void *context, const Backend::RenderInvocation &invocation) noexcept;
         /** @brief Executes bounded production command dispatch and mixing for an admitted rendering block. */
         Backend::RenderResult RenderBlock(const Backend::RenderInvocation &invocation) noexcept;
+        /** @brief Execute a final faded block or held silence; ownership/state stay pinned through native retirement. */
+        Backend::RenderResult RenderPlayback(const Backend::RenderInvocation &invocation) noexcept;
         /** @brief Reconciles output facts while preserving the first lifecycle failure. */
         Result<void> ReconcileOutput();
         /** @brief Advances startup and ordinary control publication while admission remains open. */
@@ -75,6 +92,9 @@ namespace Horo::Audio {
         Result<void> InvalidCompletion();
         /** @brief Validates negotiated output against both host intent and the prepared graph. */
         Result<void> AdmitOpened(const Backend::Opened &value);
+        /** @brief Validate an actual candidate against preserved intent and exclusively prepared graph facts. */
+        static bool AcceptOpened(const Internal::AudioFrontendOutput &output, const AudioProcessingFormat &processing,
+                                 std::uint32_t maximumFrames, const Backend::Opened &value) noexcept;
         /** @brief Validates lifecycle facts and commits readiness only on matching epochs. */
         Result<void> Drain();
         /** @brief Validates and retains one backend fact independently of Start completion ordering. */

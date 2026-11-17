@@ -10,6 +10,10 @@ set(HORO_CI_AUDIO_TARGETS
     HoroAudioRealtimeSafetyHarnessTests
     HoroAudioWatchdogTests
     HoroAudioNullTests
+    HoroAudioOutputPolicyTests
+    HoroAudioDeviceSwitchTests
+    HoroAudioOfflineTests
+    HoroAudioNativeBackendTests
     HoroAudioDspTests
     HoroCoreAudioDspTests
     HoroAudioCommandTests

@@ -221,6 +221,14 @@ identity for clips and sound definitions through distinct `AudioClipId` and
 `AudioSoundId` wrappers. `AudioBusId`, `AudioParameterId`, and `AudioEventId` are
 distinct stable numeric identities resolved before real-time processing.
 
+Process composition owns one explicit `AudioRuntimeOwnerIssuer`, shared by game
+and preview control owners and retained through their shutdown. Frontend, workspace
+and preview-host replacement do not reset this authority. Issued runtime identities
+are never recycled, including failed preparation attempts; exhaustion rejects new
+runtimes. This control-only numeric authority publishes no resources and implies
+no shared device/sample clock, even when outputs use the same host monotonic clock
+domain. Concrete backend factories receive an issued owner rather than minting one.
+
 Malformed, foreign-owner, stale, capacity-exhausted, and generation-exhausted
 handles produce distinct `horo.audio` errors. Operation-specific error messages
 carry bounded owner/slot/generation context; callers branch only on the stable
@@ -2081,6 +2089,40 @@ does not bypass real-time thread rules.
 through existing voice execution, mixer and command staging with one explicitly
 selected output adapter. Its non-installed host composition interface consumes
 detached resources; features see only the backend-neutral control/transport API.
+Graphical preview clients may submit copied values to a dedicated Audio control
+owner when native apartment affinity differs from the GUI thread. All actual
+frontend/backend operations, completion acknowledgement and resource destruction
+remain on that one declared control owner. Render callbacks never acquire the
+client exchange lock. Queued preparation is explicit status before a real frontend
+identity exists, and shutdown joins the owner only after native retirement proof;
+UI progress or a timeout cannot release the ownership island.
+
+The host-only frontend composition boundary can request a sequence-identified
+playback hold before device migration. It admits no new ordinary transport while
+the hold is pending or active and first requires previously accepted transport to
+finish. The processing owner renders one final voice/mixer block, fades it to zero
+and publishes the actual source cursor and completed output-frame boundary. Later
+callbacks write silence without consuming voice, stream or DSP state. Control copies
+only the matching completed-block record, never live processing-owned state.
+Silent native callbacks may keep advancing the output clock; this playback hold
+does not pause hardware time or prove native reader retirement. A missing callback
+cannot be replaced by control pumping or elapsed time. Releasing the hold on the
+same active epoch retains processing state and fades the first resumed block in.
+Device migration still requires actual native Quiesce/Stop/Close, new-format
+admission, voice/graph preparation and explicit clock discontinuity handling.
+
+Command transport remains bound to its exact callback epoch. Same-format playback
+preservation may use the non-installed `AudioPlaybackEpoch` authority only after
+actual native Stop/join (or a never-attached synchronous processing lane), accepted
+command reconciliation and completed publication reclamation. This detached
+adoption preserves voice cursor/converter/stream/spatial state and mixer DSP bytes
+while advancing scope/graph epoch and clearing epoch-local command receipts. It
+does not recycle slot generations or reinterpret old commands as new work. The
+host retires the old queue and prepares a new queue with fresh storage identities
+before attachment. Old graph-identity borrows end at adoption; the graph remains
+immutable while published. An old sealed automation binding cannot transfer by
+relabeling: explicit new preparation is required. No rate/layout/capacity change
+or native lifecycle proof is supplied by detached metadata adoption itself.
 `AudioEditorDocument` in EditorServices owns Asset document identity, authoring/
 preview revision fences, interaction focus and an isolated frontend. It cannot
 persist preview state or access native output. Close retains ownership through
@@ -2092,6 +2134,11 @@ composition, device recovery, middleware authoring or the later audio inspector
 surfaces. See [Audio editor preview](../../guides/audio-editor-preview.md).
 
 ## Device Lifecycle
+
+The [AUD-007 delivery and qualification ledger](audio-device-delivery.md) records
+concrete adapter/control implementation boundaries and outstanding evidence.
+[Future platform paths](audio-future-platforms.md) reserve Android, Web and XR
+compatibility without expanding the desktop 1.0 implementation commitment.
 
 [AUD-007](https://github.com/HoroCore/horo-engine/issues/594) delivers the
 qualified desktop backend/device baseline for M5 — 1.0.
@@ -2150,9 +2197,20 @@ for control to revalidate before an asynchronous open commits. Explicit stale or
 missing selections never fall back to a default or the first enumerated endpoint.
 Null endpoints are explicitly headless and make no physical-hardware claim.
 
-This is an additive public contract with no existing callers to migrate. The
-generated `AudioApi` public-header consumer and headless discovery tests cover the
-new boundary. `AudioDeviceFormatRequest` preserves the preferred complete
+Endpoint class is evidence, not backend identity. A native or SDL3 catalog entry
+without evidence distinguishing physical from virtual routing reports `Unknown`;
+it remains eligible for explicit and default selection. Neither an endpoint name
+nor successful enumeration establishes a physical route. Null still requires
+`Headless`. The additive `Unknown` enumerator retains the existing underlying type
+and numeric values; default-constructed endpoint metadata now makes no physical
+claim. Callers handling class exhaustively must handle `Unknown` without inferring
+virtual routing or rejecting an otherwise available device. See the
+[discovery classification migration](../../guides/audio-device-classification.md).
+
+The initial discovery slice is additive; the classification extension and its
+affected callers follow the migration above. The generated `AudioApi`
+public-header consumer and headless discovery tests cover this boundary.
+`AudioDeviceFormatRequest` preserves the preferred complete
 rate/layout tuple, at most eight explicit alternatives and a bounded callback
 period interval. `AudioNegotiatedDeviceFormat` reports effective planar and native
 signal/PCM values separately. Admission rejects stale discovery/device identity,

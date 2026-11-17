@@ -478,6 +478,7 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
     assert "Test Release audio checks" in audio_job
     assert targets("HORO_CI_AUDIO_TARGETS") == {
         "HoroAudioRealtimeSafetyHarnessTests", "HoroAudioWatchdogTests", "HoroAudioNullTests",
+        "HoroAudioOutputPolicyTests", "HoroAudioDeviceSwitchTests", "HoroAudioOfflineTests", "HoroAudioNativeBackendTests",
         "HoroAudioDspTests", "HoroCoreAudioDspTests", "HoroAudioCommandTests", "HoroAudioMixerTests",
         "HoroAudioEditorPreviewTests", "HoroAudioComponentPreviewHostTests", "HoroAudioFrontendPublicHeaderConsumer",
     }

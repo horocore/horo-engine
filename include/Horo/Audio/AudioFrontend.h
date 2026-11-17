@@ -38,7 +38,7 @@ namespace Horo::Audio {
     /** @brief One retained terminal transport result, identified across replacement runtimes. */
     struct AudioFrontendOperationResult final {
         AudioRuntimeId owner;
-        std::uint64_t acceptedSequence{};
+        std::uint64_t acceptedSequence{}; /**< Frontend-lifetime operation identity, independent of epoch-local command sequences. */
         AudioFrontendOperationDisposition disposition{AudioFrontendOperationDisposition::Cancelled};
         const ErrorCodeDescriptor *error{}; /**< Static Audio failure identity; populated only for Rejected. */
     };
@@ -68,7 +68,8 @@ namespace Horo::Audio {
     class AudioFrontend final {
     public:
         /** @brief Destroys a closed or never-attached owner on control.
-         * @pre Host has pumped Close to Closed; a never-started candidate may retire directly.
+         * @pre Host has pumped Close to Closed. A never-started candidate may retire directly
+         * only when composition did not adopt an already-open output; that output requires Close/Pump.
          */
         ~AudioFrontend();
         AudioFrontend(const AudioFrontend &) = delete;
@@ -76,7 +77,7 @@ namespace Horo::Audio {
         AudioFrontend(AudioFrontend &&) = delete;
         AudioFrontend &operator=(AudioFrontend &&) = delete;
 
-        /** @brief Starts explicit selected-output acquisition.
+        /** @brief Starts explicit selected-output acquisition, or attaches an output already opened during host preparation.
          * @param deadline Host monotonic deadline, in the composition's clock domain.
          * @return Success or preserved startup failure; no implicit fallback.
          */
@@ -89,6 +90,10 @@ namespace Horo::Audio {
         /** @brief Admits one typed control for this lane's exact voice.
          * @param control Typed operation copied at admission; foreign voices and inactive output fail.
          * @return Exact admission or explicit retry/rejection. Application occurs on the callback.
+         * Admission is also closed while the host's completed-block playback hold is pending or active.
+         * Successful sequence values identify frontend operations, never internal command-buffer positions.
+         * They increase across command-queue/epoch replacement and are not reused after result acknowledgement.
+         * Sequence exhaustion rejects before command admission. Failed admissions consume no operation identity.
          */
         [[nodiscard]] Result<AudioCommandAdmission> Transport(const AudioVoiceControlRequest &control);
         /** @brief Copies and acknowledges completed operations on control, without allocation.

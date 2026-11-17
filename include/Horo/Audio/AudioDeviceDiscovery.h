@@ -29,11 +29,12 @@ namespace Horo::Audio {
         Communications
     };
 
-    /** @brief Reported endpoint class; virtual/headless endpoints do not qualify physical hardware. */
+    /** @brief Evidence-based endpoint class; only Physical may describe verified physical routing. */
     enum class AudioDeviceClass : std::uint8_t {
         Physical,
         Virtual,
-        Headless
+        Headless,
+        Unknown /**< Native evidence does not establish physical or virtual routing; never a hardware qualification. */
     };
 
     /** @brief Maximum number of output endpoints in one complete discovery snapshot. */
@@ -43,7 +44,7 @@ namespace Horo::Audio {
     struct AudioDiscoveredDevice final {
         AudioDeviceId id;
         std::string displayName; /**< At most 256 bytes; adapters must not expose private native identifiers here. */
-        AudioDeviceClass deviceClass{AudioDeviceClass::Physical};
+        AudioDeviceClass deviceClass{AudioDeviceClass::Unknown};
     };
 
     /** @brief Independent default bindings; absence means unavailable, never the first enumerated device. */

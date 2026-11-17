@@ -9,7 +9,8 @@ namespace {
     struct AudioWorkspace final {
         ClipProject project;
         std::shared_ptr<OutputEvidence> evidence{std::make_shared<OutputEvidence>()};
-        EditorAudioPreviewHost host{ObservedOutput(evidence)};
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, ObservedOutput(evidence)};
         CancellationSource cancellation;
         Runtime::RuntimeSceneService runtime;
         std::unique_ptr<EditorWorkspaceController> controller;

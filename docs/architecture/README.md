@@ -199,6 +199,8 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Audio Architecture](./runtime/audio-architecture.md): ADR-backed ownership,
   clocks, formats, assets, mixer, spatial, devices, tooling and explicit 1.0 versus
   Post-1.0 product boundaries.
+- [Future Audio Platform Paths](./runtime/audio-future-platforms.md): Post-1.0
+  Android, Web and XR adapter, capability, lifecycle and packaging boundaries.
 - [Audio Runtime Ownership and Update Order](../adr/062-audio-runtime-ownership-and-update-order.md):
   process/control/callback authority, runtime and device states, scene-context
   barriers, suspend/recovery, fatal failure, and teardown.

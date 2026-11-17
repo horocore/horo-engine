@@ -155,6 +155,26 @@ namespace Horo::Audio {
             REQUIRE_FALSE(ValidateAudioDeviceSnapshot(nullSnapshot));
         }
 
+        TEST_CASE("Unclassified output remains selectable without making a physical or virtual claim", "[audio][discovery]") {
+            REQUIRE(AudioDiscoveredDevice{}.deviceClass == AudioDeviceClass::Unknown);
+            for (const auto backend :
+                 {AudioBackendKind::WASAPI, AudioBackendKind::CoreAudio, AudioBackendKind::PipeWire, AudioBackendKind::SDL3Audio}) {
+                auto snapshot = Snapshot(backend);
+                snapshot.devices[0].deviceClass = AudioDeviceClass::Unknown;
+                snapshot.devices[1].deviceClass = AudioDeviceClass::Unknown;
+                REQUIRE(ValidateAudioDeviceSnapshot(snapshot));
+                const auto explicitDevice = ResolveAudioDevice(snapshot, snapshot.devices[0].id);
+                REQUIRE(explicitDevice.status == AudioDeviceResolutionStatus::Resolved);
+                REQUIRE(explicitDevice.device == snapshot.devices[0].id);
+                const auto defaultDevice = ResolveAudioDevice(snapshot, AudioDefaultDeviceRole::Multimedia);
+                REQUIRE(defaultDevice.status == AudioDeviceResolutionStatus::Resolved);
+                REQUIRE(defaultDevice.device == snapshot.devices[1].id);
+            }
+            auto headless = Snapshot(AudioBackendKind::NullAudio);
+            headless.devices[0].deviceClass = AudioDeviceClass::Unknown;
+            REQUIRE_FALSE(ValidateAudioDeviceSnapshot(headless));
+        }
+
         TEST_CASE("Audio discovery owns metadata and preserves selection intent across default changes", "[audio][discovery]") {
             const auto original = Snapshot();
             auto changed = original;

@@ -63,6 +63,56 @@ namespace {
         CHECK_FALSE(after.failure);
     }
 
+    TEST_CASE("Independent preview hosts retain separate owners and sample progress across host replacement",
+              "[audio][editor][preview][headless][identity]") {
+        ClipProject project;
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        // Reserve another family's identity from the same authority without assuming a device clock.
+        const auto otherFamily = owners.Issue();
+        REQUIRE(otherFamily.HasValue());
+        const auto firstCapture = std::make_shared<OutputEvidence>();
+        const auto secondCapture = std::make_shared<OutputEvidence>();
+        Audio::AudioRuntimeId retiredOwner;
+        {
+            EditorAudioPreviewHost first{owners, ObservedOutput(firstCapture)};
+            EditorAudioPreviewHost second{owners, ObservedOutput(secondCapture)};
+            REQUIRE(first.Start(project.Request()).HasValue());
+            REQUIRE(second.Start(project.Request()).HasValue());
+            Pump(first);
+            Pump(second);
+            const auto firstActive = first.Snapshot();
+            const auto secondActive = second.Snapshot();
+            REQUIRE(firstActive.output);
+            REQUIRE(secondActive.output);
+            REQUIRE(firstActive.output->phase == Audio::AudioFrontendPhase::Active);
+            REQUIRE(secondActive.output->phase == Audio::AudioFrontendPhase::Active);
+            retiredOwner = firstActive.output->owner;
+            CHECK(retiredOwner != otherFamily.Value());
+            CHECK(secondActive.output->owner != otherFamily.Value());
+            CHECK(retiredOwner != secondActive.output->owner);
+            const auto heldFrame = firstCapture->lastSampleFrame;
+            const auto advancingFrame = secondCapture->lastSampleFrame;
+            Pump(second, 9);
+            CHECK(firstCapture->lastSampleFrame == heldFrame);
+            CHECK(secondCapture->lastSampleFrame > advancingFrame);
+            second.Stop(project.workspace);
+            Pump(second);
+            REQUIRE(second.Snapshot().output->phase == Audio::AudioFrontendPhase::Closed);
+            Pump(first, 3);
+            CHECK(firstCapture->lastSampleFrame > heldFrame);
+            CHECK(first.Snapshot().output->phase == Audio::AudioFrontendPhase::Active);
+        }
+        CHECK(firstCapture->closedAtDestruction);
+        CHECK(secondCapture->closedAtDestruction);
+        const auto replacementCapture = std::make_shared<OutputEvidence>();
+        EditorAudioPreviewHost replacement{owners, ObservedOutput(replacementCapture)};
+        REQUIRE(replacement.Start(project.Request()).HasValue());
+        Pump(replacement);
+        REQUIRE(replacement.Snapshot().output);
+        CHECK(replacement.Snapshot().output->owner != retiredOwner);
+        CHECK(replacement.Snapshot().output->owner != otherFamily.Value());
+    }
+
     /** @brief Requires callback processing to stay active while no native control request is pending. */
     void RequireSteadyPreview(EditorAudioPreviewHost &host, const OutputEvidence &capture) {
         const auto blocksBeforeIdle = capture.renderingBlocks;
@@ -81,9 +131,12 @@ namespace {
               "[audio][editor][preview][headless]") {
         ClipProject project;
         const auto capture = std::make_shared<OutputEvidence>();
-        EditorAudioPreviewHost host{ObservedOutput(capture)};
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, ObservedOutput(capture)};
         auto request = project.Request();
         REQUIRE(host.Start(request).HasValue());
+        CHECK(capture->closeRequests == 0);
+        CHECK(capture->requestedMultimediaDefault);
         Pump(host);
         REQUIRE(host.Snapshot().output);
         CHECK(host.Snapshot().output->phase == Audio::AudioFrontendPhase::Active);
@@ -117,9 +170,55 @@ namespace {
         Pump(host);
     }
 
+    TEST_CASE("Inspector prepares actual admitted rate and period while preserving preference and opening once",
+              "[audio][editor][preview][headless]") {
+        ClipProject project;
+        const auto capture = std::make_shared<OutputEvidence>();
+        std::uint32_t rate = 48'000;
+        std::uint32_t frames = 256;
+        SECTION("allowed alternative rate") {
+            rate = 44'100;
+        }
+        SECTION("native callback period") {
+            frames = 512;
+        }
+        SECTION("alternative rate and larger period together") {
+            rate = 44'100;
+            frames = 512;
+        }
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, [&](Audio::AudioRuntimeId owner) -> Result<EditorAudioPreviewBackend> {
+            auto output = std::make_unique<ObservedNull>(owner, capture);
+            output->selectedRate = rate;
+            output->selectedFrames = frames;
+            auto *driver = output.get();
+            return Result<EditorAudioPreviewBackend>::Success({std::move(output), [driver] {
+                return driver->AdvanceControl();
+            }, [driver] {
+                return driver->AdvanceCallback();
+            }});
+        }};
+        REQUIRE(host.Start(project.Request()).HasValue());
+        Pump(host);
+        REQUIRE(host.Snapshot().output);
+        CHECK(host.Snapshot().output->phase == Audio::AudioFrontendPhase::Active);
+        CHECK(capture->openRequests == 1);
+        CHECK(capture->preferredRate == 48'000);
+        CHECK(capture->preferredFrames == 256);
+        CHECK(capture->actualRate == rate);
+        CHECK(capture->actualFrames == frames);
+        CHECK(capture->renderedFrames == frames);
+        CHECK(capture->finite);
+        CHECK(capture->peak > 0.01F);
+        host.Stop(project.workspace);
+        Pump(host);
+        CHECK(capture->closedAtDestruction);
+    }
+
     TEST_CASE("Inspector preview reports missing assets listeners providers and buses explicitly", "[audio][editor][preview][headless]") {
         ClipProject project;
-        EditorAudioPreviewHost host{MakeNullAudioPreviewOutput};
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, MakeNullAudioPreviewOutput};
         auto request = project.Request();
         const ErrorCodeDescriptor *expected = nullptr;
         SECTION("missing registered asset") {
@@ -150,7 +249,8 @@ namespace {
         ClipProject project;
         const auto capture = std::make_shared<OutputEvidence>();
         {
-            EditorAudioPreviewHost host{ObservedOutput(capture)};
+            Audio::Backend::AudioRuntimeOwnerIssuer owners;
+            EditorAudioPreviewHost host{owners, ObservedOutput(capture)};
             REQUIRE(host.Start(project.Request()).HasValue());
             Pump(host);
             CHECK(capture->peak > 0.01F);
@@ -161,7 +261,8 @@ namespace {
 
     TEST_CASE("Unavailable explicit preview output selection never becomes Null implicitly", "[audio][editor][preview][headless]") {
         ClipProject project;
-        EditorAudioPreviewHost host{EditorAudioPreviewOutputFactory{}};
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, EditorAudioPreviewOutputFactory{}};
         auto result = host.Start(project.Request());
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == AudioComponentPreviewErrors::ProviderUnavailable.code.Value());
@@ -177,10 +278,14 @@ namespace {
             failAdvance = true;
         }
         SECTION("incomplete discovery is cancelled instead of discarded") {}
-        EditorAudioPreviewHost host{[capture, failAdvance](Audio::AudioRuntimeId owner) -> Result<EditorAudioPreviewBackend> {
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, [capture, failAdvance](Audio::AudioRuntimeId owner) -> Result<EditorAudioPreviewBackend> {
             auto backend = std::make_unique<ObservedNull>(owner, capture);
+            auto *driver = backend.get();
             // Leave actual accepted Enumerate pending; the host must reconcile the real operation.
-            return Result<EditorAudioPreviewBackend>::Success({std::move(backend), [failAdvance] {
+            return Result<EditorAudioPreviewBackend>::Success({std::move(backend), [capture, driver, failAdvance] {
+                if (capture->cancellations != 0)
+                    return driver->AdvanceControl();  // Cancellation is acknowledged before explicit native discovery Close.
                 return failAdvance ? Result<void>::Failure(MakeError(Audio::AudioErrors::BackendFailed)) : Result<void>::Success();
             }});
         }};
@@ -193,10 +298,75 @@ namespace {
         CHECK(host.Snapshot().failure->code.Value() == expected);
         CHECK_FALSE(host.Snapshot().output);
         CHECK(capture->cancellations == 1);
-        CHECK(capture->acknowledgements == 1);
+        CHECK(capture->acknowledgements == 2);
+        CHECK(capture->closeRequests == 1);
         CHECK(capture->closedAtDestruction);
         CHECK(capture->destroyed);
         CHECK(capture->renderingBlocks == 0);
+    }
+
+    TEST_CASE("Rejected preview preparation explicitly closes discovery resources before destroying the selected peer",
+              "[audio][editor][preview][headless]") {
+        ClipProject project;
+        const auto capture = std::make_shared<OutputEvidence>();
+        bool omitDefaults{};
+        bool mismatchBackend{};
+        std::optional<Error> discoveryFailure;
+        std::size_t pendingCloseAdvances{};
+        std::size_t closeAdvances{};
+        std::size_t callbackClockSteps{};
+        std::uint32_t unofferedRate{};
+        SECTION("default role is unavailable after successful discovery") {
+            omitDefaults = true;
+        }
+        SECTION("preparation rejects mismatched discovery identity") {
+            mismatchBackend = true;
+        }
+        SECTION("failed discovery retains native resources until Close") {
+            discoveryFailure = WithCause(MakeError(Audio::AudioErrors::BackendFailed, "Discovery still owns native resources"),
+                                         MakeError(Audio::AudioErrors::DeviceUnavailable));
+        }
+        SECTION("native discovery retirement needs multiple bounded control pumps") {
+            omitDefaults = true;
+            pendingCloseAdvances = 2;
+        }
+        SECTION("an unoffered actual rate is rejected and its open output is closed") {
+            unofferedRate = 96'000;
+        }
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, [&](Audio::AudioRuntimeId owner) -> Result<EditorAudioPreviewBackend> {
+            auto backend = std::make_unique<ObservedNull>(owner, capture);
+            backend->omitDefaults = omitDefaults;
+            backend->mismatchBackend = mismatchBackend;
+            backend->discoveryFailure = discoveryFailure;
+            backend->selectedRate = unofferedRate;
+            auto *driver = backend.get();
+            return Result<EditorAudioPreviewBackend>::Success({std::move(backend), [&, driver] {
+                if (capture->closeRequests != 0 && closeAdvances++ < pendingCloseAdvances)
+                    return Result<void>::Success();  // The real Close stays pending; no fake terminal proof.
+                return driver->AdvanceControl();
+            }, [&] {
+                ++callbackClockSteps;
+                return Result<void>::Success();
+            }});
+        }};
+        const auto result = host.Start(project.Request());
+        REQUIRE(result.HasError());
+        if (discoveryFailure)
+            RequireOriginalError(result.ErrorValue(), *discoveryFailure);
+        if (unofferedRate != 0) {
+            CHECK(result.ErrorValue().code.Value() == Audio::AudioErrors::DeviceFormatUnsupported.code.Value());
+            CHECK(capture->openRequests == 1);
+        }
+        CHECK_FALSE(host.Snapshot().output);
+        CHECK(capture->destroyed);
+        CHECK(capture->closedAtDestruction);
+        CHECK(capture->closeRequests == 1);
+        CHECK(capture->acknowledgements == 2 + capture->openRequests);
+        CHECK(capture->cancellations == 0);
+        CHECK(capture->renderingBlocks == 0);
+        CHECK(closeAdvances == pendingCloseAdvances + 1);
+        CHECK(callbackClockSteps == 1);  // Only discovery advanced it; retirement never drives a headless render clock.
     }
 
     TEST_CASE("Inspector Pump returns current driver failure and preserves its original cause through clean retirement",
@@ -206,7 +376,8 @@ namespace {
         const auto armed = std::make_shared<bool>(false);
         const auto failure = WithCause(MakeError(Audio::AudioErrors::BackendFailed, "One-shot callback driver failure"),
                                        MakeError(Audio::AudioErrors::DeviceUnavailable, "Original device cause"));
-        EditorAudioPreviewHost host{OneShotFailingOutput(capture, armed, failure)};
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, OneShotFailingOutput(capture, armed, failure)};
         REQUIRE(host.Start(project.Request()).HasValue());
         Pump(host);
         REQUIRE(host.Snapshot().output->phase == Audio::AudioFrontendPhase::Active);
@@ -246,7 +417,8 @@ namespace {
             expected = &Audio::AudioErrors::SourceInvalid;
         }
         std::size_t factories{};
-        EditorAudioPreviewHost host{[&](Audio::AudioRuntimeId owner) {
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, [&](Audio::AudioRuntimeId owner) {
             ++factories;
             return MakeNullAudioPreviewOutput(owner);
         }};
@@ -276,7 +448,8 @@ namespace {
             request.object = 0;
         }
         std::size_t factories{};
-        EditorAudioPreviewHost host{[&](Audio::AudioRuntimeId owner) {
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, [&](Audio::AudioRuntimeId owner) {
             ++factories;
             return MakeNullAudioPreviewOutput(owner);
         }};
@@ -308,7 +481,8 @@ namespace {
             request.source.playback.pitch = 0;
         }
         std::size_t factories{};
-        EditorAudioPreviewHost host{[&](Audio::AudioRuntimeId owner) {
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, [&](Audio::AudioRuntimeId owner) {
             ++factories;
             return MakeNullAudioPreviewOutput(owner);
         }};
@@ -337,7 +511,8 @@ namespace {
             missingDriver = true;
         }
         std::size_t factories{};
-        EditorAudioPreviewHost host{[&](Audio::AudioRuntimeId owner) -> Result<EditorAudioPreviewBackend> {
+        Audio::Backend::AudioRuntimeOwnerIssuer owners;
+        EditorAudioPreviewHost host{owners, [&](Audio::AudioRuntimeId owner) -> Result<EditorAudioPreviewBackend> {
             ++factories;
             if (typedFailure)
                 return Result<EditorAudioPreviewBackend>::Failure(original);

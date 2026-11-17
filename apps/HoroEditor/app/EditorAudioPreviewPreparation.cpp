@@ -8,17 +8,16 @@ namespace Horo::Editor::AudioPreviewHostDetail {
             return Id::Create(value).Value();
         }
 
-        constexpr std::uint32_t Frames = 256;
-
         /** @brief Builds the real prepared resident voice; factory copies every sample before this borrow ends. */
         Result<std::unique_ptr<Audio::AudioVoiceRenderRuntime>> Voice(const AudioComponentPreviewRequest &request,
-                                                                      const DecodedSource &decoded, const Audio::AudioCommandScope &scope) {
+                                                                      const DecodedSource &decoded, const Audio::AudioCommandScope &scope,
+                                                                      const std::uint32_t rate, const std::uint32_t frames) {
             using namespace Audio;
             auto plan = AudioResamplerPlan::Prepare({.quality = AudioResamplerQuality::Linear,
                                                      .inputRate = decoded.format.sampleRate,
-                                                     .outputRate = 48'000,
+                                                     .outputRate = rate,
                                                      .channels = static_cast<std::uint32_t>(decoded.planes.size()),
-                                                     .maximumOutputFrames = Frames},
+                                                     .maximumOutputFrames = frames},
                                                     {1U << 20U, 1U << 20U, 4096});
             if (plan.HasError())
                 return Result<std::unique_ptr<AudioVoiceRenderRuntime>>::Failure(plan.ErrorValue());
@@ -36,7 +35,7 @@ namespace Horo::Editor::AudioPreviewHostDetail {
                                                             40U << 20U,
                                                             64U << 10U,
                                                             1.0F},
-                                                           {scope, Identity<AudioMemoryPoolId>(58), Identity<AudioParameterId>(59), Frames,
+                                                           {scope, Identity<AudioMemoryPoolId>(58), Identity<AudioParameterId>(59), frames,
                                                             1U << 20U});
         }
     }  // namespace
@@ -63,12 +62,17 @@ namespace Horo::Editor::AudioPreviewHostDetail {
 
     /** @copydoc Prepare */
     Result<Audio::Internal::AudioFrontendResources> Prepare(const AudioComponentPreviewRequest &request, const DecodedSource &decoded,
-                                                            const Audio::AudioRuntimeId owner) {
+                                                            const Audio::AudioRuntimeId owner,
+                                                            const Audio::AudioProcessingFormat &processing,
+                                                            const std::uint32_t maximumFrames) {
         using namespace Audio;
+        if (!ValidateAudioProcessingFormat(processing) || processing.layout != MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo) ||
+            maximumFrames == 0 || maximumFrames > MaximumAudioCallbackFrames)
+            return Result<Internal::AudioFrontendResources>::Failure(MakeError(AudioErrors::DeviceFormatUnsupported));
         const AudioCommandScope scope{owner, 1, {owner, 1, 1}};
-        const MixerCompileProfile profile{.sampleRate = 48'000,
-                                          .outputLayout = MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo),
-                                          .maximumFrames = Frames,
+        const MixerCompileProfile profile{.sampleRate = processing.sampleRate,
+                                          .outputLayout = processing.layout,
+                                          .maximumFrames = maximumFrames,
                                           .maximumVoices = 1};
         auto plan = CompileMixerGraph(MakeDefaultMixerAsset(), {owner, 1, 1, 1, 1, 1}, profile);
         if (plan.HasError())
@@ -86,7 +90,7 @@ namespace Horo::Editor::AudioPreviewHostDetail {
         auto mixer = MixerGraphRuntime::Create({scope, Identity<AudioMemoryPoolId>(33), profile});
         if (mixer.HasError())
             return Result<Internal::AudioFrontendResources>::Failure(mixer.ErrorValue());
-        auto voice = Voice(request, decoded, scope);
+        auto voice = Voice(request, decoded, scope, processing.sampleRate, maximumFrames);
         if (voice.HasError())
             return Result<Internal::AudioFrontendResources>::Failure(voice.ErrorValue());
         AudioVoiceRenderRequest initial{bus, request.source, request.listener, {}};

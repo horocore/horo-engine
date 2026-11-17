@@ -565,11 +565,26 @@ jobs:
       # Debug audio is already in the build above. Release verifies NDEBUG
       # behavior using only the real-time audio group, on this same runner.
       - name: Configure Release audio checks
-        run: cmake --preset ci-audio-release
+        run: >-
+          cmake --preset ci-audio-release
+          -DHORO_BUILD_AUDIO_WASAPI=${{ runner.os == 'Windows' && 'ON' || 'OFF' }}
+          -DHORO_BUILD_AUDIO_COREAUDIO=${{ runner.os == 'macOS' && 'ON' || 'OFF' }}
+          -DHORO_BUILD_AUDIO_PIPEWIRE=${{ runner.os == 'Linux' && 'ON' || 'OFF' }}
 
       - name: Build Release audio checks
         id: release_build
         run: cmake --build --preset ci-audio-release --parallel ${{ runner.os == 'Windows' && 4 || 2 }}
+
+      # Compile/link the actual OS adapter, preview composition and core handoff fixture. These checks do not qualify
+      # physical devices, hotplug, callback deadlines or end-to-end latency.
+      - name: Build native audio adapter boundary checks
+        run: cmake --build build/ci-audio-release --target HoroAudioNativeFactoryTests HoroAudioComponentPreviewHostTests HoroAudioEditorPreviewTests --parallel 2
+
+      - name: Test native audio adapter boundaries
+        run: >-
+          ctest --test-dir build/ci-audio-release --output-on-failure --no-tests=error
+          -R '^(HoroAudioNativeFactoryTests|HoroAudioComponentPreviewHostTests|HoroAudioEditorPreviewTests)::' --timeout 90
+          --output-junit build/ci-audio-release/native-audio-ctest.xml
 
       # MSVC Debug container moves may allocate iterator proxies inside noexcept.
       # Keep the complete admission/callback allocation sweep mandatory in Release.
@@ -985,6 +1000,7 @@ jobs:
             build/ci-metal/tests/ui-paint-fixture/
             build/ci-metal/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
+            build/ci-audio-release/native-audio-ctest.xml
             build/ci-audio-release/restore-ctest.xml
             build/ci-audio-release/prefab-metrics-ctest.xml
             build/ci-audio-release/collision-allocation-ctest.xml
