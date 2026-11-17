@@ -1,11 +1,105 @@
 #include "Horo/Prefab/PrefabDebugSnapshot.h"
+#include "Horo/Prefab/PrefabValueSnapshot.h"
+#include "PrefabLayerOverrideTestSupport.h"
 #include "PrefabValueOverrideTestSupport.h"
 
+#include <algorithm>
 #include <type_traits>
 
 namespace Horo::Prefab {
     namespace {
         using namespace ValueTestSupport;
+
+        /** @brief Reorders source documents and their variant operations while publishing moved asset paths. */
+        PrefabSourceResolverSnapshot ReorderedVariantSnapshot(LayerTest::Graph &graph) {
+            const auto prefabType = Assets::AssetTypeId::Parse("core.prefab").Value();
+            auto sources = graph.sources;
+            std::ranges::reverse(sources);
+            std::vector<Assets::AssetRecord> records;
+            for (auto &source : sources) {
+                auto data = source.document.Data();
+                const auto asset = data.assetId;
+                if (data.composition && data.composition->variantOverrides) {
+                    std::ranges::reverse(data.composition->variantOverrides->records);
+                    source.document = LayerTest::Take(PrefabDocument::Create(std::move(data), Limits()));
+                }
+                const std::string path = "assets/moved/" + std::to_string(records.size()) + ".prefab";
+                records.push_back({asset, prefabType, ProjectPath::Parse(path).Value(), ProjectPath::Parse(path + ".horo").Value()});
+            }
+            REQUIRE(graph.registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
+            return LayerTest::Take(
+                BuildPrefabSourceResolverSnapshot(graph.registry.Snapshot(), std::move(sources), Limits(), {}, graph.schemas));
+        }
+
+        TEST_CASE("Prefab variant cascade keeps applied layers and registered defaults inspectable after path changes",
+                  "[unit][prefab][variant][debug]") {
+            LayerTest::Graph graph;
+            const auto base = Asset();
+            const auto parent = LayerTest::Id(92);
+            const auto derived = LayerTest::Id(93);
+            const auto leaf = LayerTest::Id(94);
+            const auto movedRoot = Math::Transform{{1, 2, 3}};
+            const auto parentLayer =
+                LayerTest::Take(PreparePrefabValueEdit(graph.Resolve(base), graph.Assign(base, Property(), 3.0),
+                                                       {PrefabValueEditKind::Assign, Object(), movedRoot}, graph.schemas.get(), Limits()));
+            graph.AddVariant(92, 91, LayerTest::Revision(1), parentLayer.rebased);
+            graph.AddVariant(93, 92, LayerTest::Revision(92), graph.Assign(parent, Property(), 5.0));
+            graph.AddParent(94, 93, LayerTest::Revision(93));
+            const auto instance = PrefabInstanceId::Create(9).Value();
+            const auto snapshot = graph.Snapshot();
+            const auto original = LayerTest::Take(snapshot.ResolveOverrides(leaf, instance, Limits()));
+            REQUIRE(original.effective);
+            CHECK(original.effective->RootAsset() == leaf);
+            CHECK(LayerTest::Speed(*original.effective, Object()) == 5.0);
+            REQUIRE(original.layers.size() == 2);
+            REQUIRE(original.layers[0].rebased.records.size() == 2);
+            REQUIRE(original.layers[1].rebased.records.size() == 1);
+            CHECK(original.layers[0].owner == parent);
+            CHECK(original.layers[0].rebased.sourcePrefab == base);
+            CHECK(original.effective->Objects()[0].object.localTransform == movedRoot);
+            CHECK(original.layers[1].owner == derived);
+            CHECK(original.layers[1].rebased.sourcePrefab == parent);
+            CHECK(original.layers[1].rebased.records[0].value == PrefabOverrideValue{5.0});
+
+            const auto moved = ReorderedVariantSnapshot(graph);
+            const auto reordered = LayerTest::Take(moved.ResolveOverrides(leaf, instance, Limits()));
+            REQUIRE(reordered.effective);
+            CHECK(reordered.revision.registry != original.revision.registry);
+            CHECK(moved.ValidateRevisionPublication(leaf, original.revision, {}, Limits()).HasValue());
+            CHECK(std::ranges::equal(reordered.effective->Objects(), original.effective->Objects()));
+            REQUIRE(reordered.layers.size() == original.layers.size());
+            for (std::size_t index = 0; index < original.layers.size(); ++index) {
+                CHECK(reordered.layers[index].owner == original.layers[index].owner);
+                CHECK(reordered.layers[index].occurrence == original.layers[index].occurrence);
+                CHECK(reordered.layers[index].rebased == original.layers[index].rebased);
+            }
+        }
+
+        TEST_CASE("Prefab variant value inspection separates the schema default from inherited and instance values",
+                  "[unit][prefab][variant][debug]") {
+            LayerTest::Graph graph;
+            const auto parent = LayerTest::Id(92);
+            const auto derived = LayerTest::Id(93);
+            graph.AddVariant(92, 91, LayerTest::Revision(1), graph.Assign(Asset(), Property(), 3.0));
+            graph.AddVariant(93, 92, LayerTest::Revision(92), graph.Assign(parent, Property(), 5.0));
+            const auto inherited = graph.Resolve(derived);
+            const auto instance = graph.Assign(derived, Property(), 7.0);
+            const auto inspected = LayerTest::Take(PrefabValueSnapshot::Prepare(inherited, instance, graph.schemas.get(), Limits()));
+            REQUIRE(inspected.snapshot);
+            REQUIRE(inspected.resolution.effective);
+            const auto values = inspected.snapshot->Values();
+            const auto property = std::ranges::find(values, PrefabValueOverrideTarget{Property()}, &PrefabValueProvenance::target);
+            REQUIRE(property != values.end());
+            CHECK(property->schemaDefault == PrefabOverrideValue{1.0});
+            CHECK(property->sourceValue == PrefabOverrideValue{5.0});
+            CHECK(property->effectiveValue == PrefabOverrideValue{7.0});
+            CHECK(property->origin == PrefabValueOrigin::Instance);
+            CHECK(property->sourcePrefab == Asset());
+            const std::vector expected{PrefabCompositionOriginStep{PrefabCompositionOrigin::Variant, derived, parent},
+                                       PrefabCompositionOriginStep{PrefabCompositionOrigin::Variant, parent, Asset()}};
+            CHECK(property->originChain == expected);
+            CHECK(LayerTest::Speed(inherited, Object()) == 5.0);
+        }
 
         TEST_CASE("Prefab debug snapshot retains exact source graph and configured budgets", "[unit][prefab][debug]") {
             const auto source = Source();
