@@ -71,6 +71,8 @@ namespace Horo::Editor {
         void DrawSourceChoice(std::size_t index, const ILocalizationService &localization, const Theme::Fonts &fonts);
         /** @brief Draws one bounded panel and publishes its user layout intent on release. */
         void DrawPanel(const Debug::OverlayPanelSnapshot &panel, const ILocalizationService &localization, const Theme::Fonts &fonts);
+        /** @brief Draws the existing log or job projection after the panel admits its body. */
+        void DrawStorePanel(bool logs, const ILocalizationService &localization, const Theme::Fonts &fonts);
         /** @brief Edits display-only severity/category/text/repeat filtering through the shared controls. */
         void DrawLogFilter(const ILocalizationService &localization, const Theme::Fonts &fonts);
         /** @brief Draws/copies only bounded visible fields from the selected real source row. */

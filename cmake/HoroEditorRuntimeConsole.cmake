@@ -8,6 +8,7 @@ configure_file(editor/design_system/components/RuntimeConsoleRecordList.h
 add_library(HoroEditorRuntimeConsoleViewInternal STATIC
     editor/development/console/RuntimeConsoleView.cpp
     editor/development/console/RuntimeOverlayPanels.cpp
+    editor/development/console/RuntimeOverlayPanelDrawing.cpp
     editor/design_system/components/RuntimeConsoleRecordList.cpp)
 target_compile_features(HoroEditorRuntimeConsoleViewInternal PUBLIC cxx_std_20)
 target_include_directories(HoroEditorRuntimeConsoleViewInternal PUBLIC "${HORO_EDITOR_RUNTIME_CONSOLE_HEADERS}"
