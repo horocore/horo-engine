@@ -1,4 +1,4 @@
-#include "D3D12ResourceInternals.h"
+#include "D3D12CommandInternals.h"
 
 #if defined(_WIN32) && defined(_M_X64)
 namespace Horo::Render::D3D12Detail {
@@ -16,6 +16,9 @@ namespace Horo::Render::D3D12Detail {
         HORO_INVARIANT_MSG(owner_ == std::this_thread::get_id(), "Destroy D3D12 resources on their owner thread.");
         // A real removed device can no longer execute outstanding work. Otherwise the host must drain.
         HORO_INVARIANT_MSG(transfers_.empty() || FAILED(device_->GetDeviceRemovedReason()), "Drain D3D12 transfers before destruction.");
+        HORO_INVARIANT_MSG(!commands_ || !commands_->HasSubmitted() || FAILED(device_->GetDeviceRemovedReason()),
+                           "Drain D3D12 commands before destruction.");
+        commands_.reset();
         // Records retain each heap until their native resources disappear, before their final lease releases.
         heapAllocations_.clear();
     }
@@ -39,7 +42,15 @@ namespace Horo::Render::D3D12Detail {
         const HRESULT status = device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence_));
         if (FAILED(status))
             return Result<void>::Failure(ResourceError("render.d3d12.fence_failed", "Create transfer completion fence.", status));
-        return Result<void>::Success();
+        if (testHooks_.initialFenceValue != 0)
+            nextFence_ = testHooks_.initialFenceValue;
+        commands_ = std::make_unique<CommandService>(*this);
+        return commands_->Initialize();
+    }
+
+    /** @copydoc Resources::Commands */
+    ID3D12Commands *Resources::Commands() noexcept {
+        return owner_ == std::this_thread::get_id() ? commands_.get() : nullptr;
     }
 
     /** @copydoc Resources::DestroyBuffer */
@@ -76,6 +87,10 @@ namespace Horo::Render::D3D12Detail {
     Result<void> Resources::Poll() {
         if (auto checked = Check(false); checked.HasError())
             return checked;
+        if (commands_) {
+            if (auto retried = commands_->RetrySignals(); retried.HasError())
+                return retried;
+        }
         for (auto &transfer : transfers_) {
             if (transfer.signalPending) {
                 const HRESULT status = queue_->Signal(fence_.Get(), transfer.fence);
@@ -92,6 +107,8 @@ namespace Horo::Render::D3D12Detail {
         std::erase_if(transfers_, [&](const Transfer &entry) {
             return entry.fence <= completed && (!entry.readback || entry.cancelled);
         });
+        if (commands_)
+            commands_->Reclaim(completed);
         Reclaim();
         return Result<void>::Success();
     }
@@ -100,6 +117,8 @@ namespace Horo::Render::D3D12Detail {
     void Resources::StopAdmission() noexcept {
         HORO_INVARIANT_MSG(owner_ == std::this_thread::get_id(), "Stop resource admission on the render owner thread.");
         accepting_ = false;
+        if (commands_)
+            commands_->StopAdmission();
         for (auto &entry : transfers_)
             entry.cancelled = true;
     }
@@ -113,7 +132,7 @@ namespace Horo::Render::D3D12Detail {
         auto result = Poll();
         if (result.HasError())
             return Result<bool>::Failure(result.ErrorValue());
-        return Result<bool>::Success(transfers_.empty());
+        return Result<bool>::Success(transfers_.empty() && (!commands_ || !commands_->HasSubmitted()));
     }
 
     /** @copydoc Resources::QueryResidency */

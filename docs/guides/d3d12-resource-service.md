@@ -8,6 +8,10 @@ method lends the service on the render owner thread. It implements the existing
 canonical descriptor, placement and resource-generation authority. This does not
 advertise a complete interactive D3D12 renderer or register a backend implicitly.
 
+The first [native command recording checkpoint](d3d12-command-recording-checkpoint.md)
+borrows this same context, queue, incarnation, fence and shutdown authority. It
+provides bounded recording/submission primitives, not graph/resource-state lowering.
+
 ## Ownership and preparation
 
 Resource allocation and transfer preparation are load/preparation operations,
@@ -121,7 +125,7 @@ aligned shared placement/overlap rejection and whole-heap accounting, descriptor
 composite dependency retention, sampled depth, samplers/raw/constant buffers,
 resource/transfer backpressure, cancellation, owner-thread rejection and drain.
 `HoroD3D12InitializationTests` covers resource-stage failure/cancellation rollback.
-Both targets consume only the three staged startup/resource test headers through
+The resource/startup targets consume only deliberately staged private test headers through
 the non-installed `HoroRenderD3D12TestingInternal` interface; neither publishes or
 receives a repository-wide source include root. Production internals remain
 private. Build both targets and run their tests on Windows; Linux/macOS cover

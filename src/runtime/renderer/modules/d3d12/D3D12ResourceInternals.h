@@ -21,6 +21,7 @@
 #include <wrl/client.h>
 
 namespace Horo::Render::D3D12Detail {
+    class CommandService;
     using Microsoft::WRL::ComPtr;
     Error ResourceError(const char *stage, const char *message, HRESULT cause = S_OK);
     DXGI_FORMAT NativeFormat(RenderTextureFormat format);
@@ -213,8 +214,12 @@ namespace Horo::Render::D3D12Detail {
         Result<D3D12ResidencyObservation> QueryResidency() const override;
 
         D3D12ResourceSnapshot Snapshot() const noexcept override;
+        /** @copydoc ID3D12Resources::Commands */
+        ID3D12Commands *Commands() noexcept override;
 
     private:
+        friend class CommandService;
+
         template <typename T> static Result<T> Failure(const char *code, const char *message) {
             return Result<T>::Failure(ResourceError(code, message));
         }
@@ -320,6 +325,7 @@ namespace Horo::Render::D3D12Detail {
         std::vector<std::shared_ptr<HeapAllocation>> heapAllocations_;
         std::vector<std::shared_ptr<Resource>> resources_;
         std::vector<Transfer> transfers_;
+        std::unique_ptr<CommandService> commands_;
     };
 }  // namespace Horo::Render::D3D12Detail
 #endif

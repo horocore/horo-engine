@@ -94,6 +94,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroMaterialBindingPublicHeaderConsumer
     HoroD3D12InitializationTests
     HoroD3D12ResourceTests
+    HoroD3D12CommandTests
     HoroPlayTopologyTests
     HoroPlayTopologyPublicHeaderConsumer
     HoroNetworkDebuggerTests

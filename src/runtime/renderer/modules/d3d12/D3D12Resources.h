@@ -4,6 +4,7 @@
  * @brief Backend-private resource service over the canonical Horo allocation contracts.
  */
 
+#include "D3D12Commands.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Render/RenderBackend.h"
 
@@ -18,13 +19,14 @@ namespace Horo::Render {
         std::uint32_t maximumResources{4096};
         std::uint32_t maximumDescriptors{2048};
         std::uint32_t maximumTransfers{64};
+        std::uint32_t maximumCommandBatches{16};
         std::size_t maximumTransferBytes{32U * 1024U * 1024U};
 
         /** @brief Validates finite practical bounds before native acquisition. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             return maximumResources > 0 && maximumResources <= 65536 && maximumDescriptors > 0 && maximumDescriptors <= 2048 &&
-                   maximumTransfers > 0 && maximumTransfers <= 1024 && maximumTransferBytes > 0 &&
-                   maximumTransferBytes <= 1024U * 1024U * 1024U;
+                   maximumTransfers > 0 && maximumTransfers <= 1024 && maximumCommandBatches > 0 && maximumCommandBatches <= 128 &&
+                   maximumTransferBytes > 0 && maximumTransferBytes <= 1024U * 1024U * 1024U;
         }
     };
 
@@ -77,6 +79,11 @@ namespace Horo::Render {
      */
     class ID3D12Resources : public IRenderResourceBackend {
     public:
+        /** @brief Borrows the owner-thread native command service, or null on a foreign thread/resource-only implementation. */
+        [[nodiscard]] virtual ID3D12Commands *Commands() noexcept {
+            return nullptr;
+        }
+
         /** @brief Schedules a buffer range or complete tightly packed texture base-level upload.
          * @param instance Exact backend instance. @param bytes Borrowed bytes copied synchronously.
          * @param offset Buffer byte offset; zero for textures. @param cancellation Checked before submission.

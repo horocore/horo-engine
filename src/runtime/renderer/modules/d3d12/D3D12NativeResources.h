@@ -5,6 +5,8 @@
  */
 #include "D3D12Resources.h"
 
+#include <cstdint>
+
 #if defined(_WIN32) && defined(_M_X64)
 struct ID3D12Device;
 struct ID3D12CommandQueue;
@@ -16,6 +18,9 @@ namespace Horo::Render {
     struct D3D12ResourceTestHooks {
         void (*afterExecute)(ID3D12Device *) noexcept {nullptr};
         void (*beforeReadbackCompletion)(ID3D12Device *) noexcept {nullptr};
+        std::uint64_t initialFenceValue{0};     /**< Test-only nonzero exhaustion seed; production leaves zero. */
+        std::uint64_t initialCommandId{0};      /**< Test-only nonzero recording seed; production leaves zero. */
+        std::uint32_t commandSignalFailures{0}; /**< Test-only skipped Signal attempts returning E_FAIL after real Execute. */
     };
 
     /** @brief Retains the exact initialized device/direct queue; creates bounded descriptor/fence storage.
