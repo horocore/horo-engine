@@ -104,6 +104,12 @@ namespace Horo::Editor {
         [[nodiscard]] bool Interactive() const noexcept;
 
     private:
+        /** @brief Tracks whether the synchronous input callback changed history navigation in this draw. */
+        struct NavigationFrame {
+            RuntimeConsoleView &view;
+            bool invoked{};
+        };
+
         /** @brief Records a local close intent without changing effective presentation or variable authority. */
         void RequestVisible(bool visible);
         /** @brief Handles only synchronous native completion/history requests; replacement bytes belong to this surface. */
@@ -121,6 +127,8 @@ namespace Horo::Editor {
         static void DrawBackdrop();
         /** @brief Draws one localized editor/control frame after the host admitted presentation. */
         void DrawContents(const ILocalizationService &localization, const Theme::Fonts &fonts);
+        /** @brief Draws the command input and handles completion, history navigation and submission. */
+        void DrawCommand(const ILocalizationService &localization, const Theme::Fonts &fonts);
         /** @brief Draws bounded reverse-search controls without retaining source row pointers. */
         void DrawSearch(const ILocalizationService &localization, const Theme::Fonts &fonts);
         /** @brief Draws/copies the selected safe result, invalidated on history mutation. */
@@ -142,6 +150,6 @@ namespace Horo::Editor {
         std::optional<bool> visibilityRequest_;
         std::uint64_t revision_{};
         std::string errorCode_, completion_;
-        bool visible_{}, lease_{}, requestFocus_{}, navigating_{}, searchVisible_{};
+        bool visible_{}, lease_{}, requestFocus_{}, searchVisible_{};
     };
 }  // namespace Horo::Editor

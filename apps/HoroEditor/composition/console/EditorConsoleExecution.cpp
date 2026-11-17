@@ -19,6 +19,75 @@ namespace Horo::Application::Internal {
                 return Debug::ConsoleNetworkOverlayVariableName;
             return source == Debug::OverlaySource::Jobs ? Debug::ConsoleJobsOverlayVariableName : std::string_view{};
         }
+
+        using VariablesResult = Result<std::shared_ptr<Debug::ConsoleVariableSet>>;
+
+        /** @brief Creates the editor variable inventory and seeds host-owned overlay visibility. */
+        VariablesResult PrepareVariables(const EditorConsolePreparation &preparation,
+                                         const std::shared_ptr<ConfigurationService> &configuration,
+                                         const std::span<const Debug::OverlaySource> panels, const bool network) {
+            Debug::RegistryPolicy policy;
+            policy.profile = Debug::ProductProfile::Editor;
+            std::vector variableDescriptors{Debug::ConsoleHistoryVariableDescriptor(), Debug::ConsoleVisibilityVariableDescriptor(),
+                                            Debug::ConsoleLogOverlayVariableDescriptor(), Debug::ConsoleJobsOverlayVariableDescriptor(),
+                                            Debug::ConsoleSceneOverlayVariableDescriptor()};
+            if (network)
+                variableDescriptors.push_back(Debug::ConsoleNetworkOverlayVariableDescriptor());
+            const auto commands = preparation.registry->Discover({}, {15, true, true});
+            auto createdVariables = Debug::ConsoleVariableSet::Create(variableDescriptors, commands, policy, configuration);
+            if (createdVariables.HasError())
+                return VariablesResult::Failure(createdVariables.ErrorValue());
+            auto variables = std::make_shared<Debug::ConsoleVariableSet>(std::move(createdVariables).Value());
+            const auto seeded = variables->Set(Debug::ConsoleVisibleVariableName, preparation.consoleVisible, {});
+            if (seeded.HasError())
+                return VariablesResult::Failure(seeded.ErrorValue());
+            for (const auto source : {Debug::OverlaySource::Logs, Debug::OverlaySource::Jobs, Debug::OverlaySource::Scene}) {
+                const auto initialized =
+                    variables->Set(StoreOverlayName(source), std::ranges::find(panels, source) != panels.end(), {3, false, false});
+                if (initialized.HasError())
+                    return VariablesResult::Failure(initialized.ErrorValue());
+            }
+            if (network) {
+                const auto initialized =
+                    variables->Set(Debug::ConsoleNetworkOverlayVariableName,
+                                   std::ranges::find(panels, Debug::OverlaySource::Network) != panels.end(), {3, false, false});
+                if (initialized.HasError())
+                    return VariablesResult::Failure(initialized.ErrorValue());
+            }
+            return VariablesResult::Success(std::move(variables));
+        }
+
+        using BindingsResult = Result<std::vector<Debug::CommandBinding>>;
+
+        /** @brief Binds the editor's command families to their existing scene, network and variable owners. */
+        BindingsResult PrepareBindings(const EditorConsolePreparation &preparation, std::string version,
+                                       const std::shared_ptr<Debug::ConsoleVariableSet> &variables,
+                                       const std::shared_ptr<Debug::Internal::ConsoleSceneInspection> &scene,
+                                       std::shared_ptr<const INetworkDebuggerQuery> network) {
+            auto bindings = Debug::BindCoreConsoleCommands(preparation.registry, preparation.history, std::move(version), variables);
+            if (bindings.HasError())
+                return BindingsResult::Failure(bindings.ErrorValue());
+            auto metricBindings = Debug::Internal::BindMetricCommand(preparation.registry);
+            if (metricBindings.HasError())
+                return BindingsResult::Failure(metricBindings.ErrorValue());
+            auto ownedBindings = std::move(bindings).Value();
+            auto ownedMetricBindings = std::move(metricBindings).Value();
+            for (auto &binding : ownedMetricBindings)
+                ownedBindings.push_back(std::move(binding));
+            auto sceneBindings = Debug::Internal::BindSceneInspectionCommands(preparation.registry, scene);
+            if (sceneBindings.HasError())
+                return BindingsResult::Failure(sceneBindings.ErrorValue());
+            auto ownedSceneBindings = std::move(sceneBindings).Value();
+            for (auto &binding : ownedSceneBindings)
+                ownedBindings.push_back(std::move(binding));
+            auto networkBindings = BindNetworkConsoleInspection(preparation.registry, std::move(network));
+            if (networkBindings.HasError())
+                return BindingsResult::Failure(networkBindings.ErrorValue());
+            auto ownedNetworkBindings = std::move(networkBindings).Value();
+            for (auto &binding : ownedNetworkBindings)
+                ownedBindings.push_back(std::move(binding));
+            return BindingsResult::Success(std::move(ownedBindings));
+        }
     }  // namespace
 
     /** @copydoc EditorConsoleExecution::EditorConsoleExecution */
@@ -54,58 +123,15 @@ namespace Horo::Application::Internal {
         const auto resized = preparation.history->SetEntryLimit(historyLimit.Value());
         if (resized.HasError())
             return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(resized.ErrorValue());
-        Debug::RegistryPolicy policy;
-        policy.profile = Debug::ProductProfile::Editor;
-        std::vector variableDescriptors{Debug::ConsoleHistoryVariableDescriptor(), Debug::ConsoleVisibilityVariableDescriptor(),
-                                        Debug::ConsoleLogOverlayVariableDescriptor(), Debug::ConsoleJobsOverlayVariableDescriptor(),
-                                        Debug::ConsoleSceneOverlayVariableDescriptor()};
-        if (network)
-            variableDescriptors.push_back(Debug::ConsoleNetworkOverlayVariableDescriptor());
-        const auto commands = preparation.registry->Discover({}, {15, true, true});
-        auto createdVariables = Debug::ConsoleVariableSet::Create(variableDescriptors, commands, policy, configuration);
-        if (createdVariables.HasError())
-            return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(createdVariables.ErrorValue());
-        auto variables = std::make_shared<Debug::ConsoleVariableSet>(std::move(createdVariables).Value());
-        const auto seeded = variables->Set(Debug::ConsoleVisibleVariableName, preparation.consoleVisible, {});
-        if (seeded.HasError())
-            return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(seeded.ErrorValue());
-        for (const auto source : {Debug::OverlaySource::Logs, Debug::OverlaySource::Jobs, Debug::OverlaySource::Scene}) {
-            const auto initialized =
-                variables->Set(StoreOverlayName(source), std::ranges::find(panels, source) != panels.end(), {3, false, false});
-            if (initialized.HasError())
-                return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(initialized.ErrorValue());
-        }
-        if (network) {
-            const auto initialized =
-                variables->Set(Debug::ConsoleNetworkOverlayVariableName,
-                               std::ranges::find(panels, Debug::OverlaySource::Network) != panels.end(), {3, false, false});
-            if (initialized.HasError())
-                return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(initialized.ErrorValue());
-        }
-        auto bindings = Debug::BindCoreConsoleCommands(preparation.registry, preparation.history, std::move(version), variables);
+        auto preparedVariables = PrepareVariables(preparation, configuration, panels, static_cast<bool>(network));
+        if (preparedVariables.HasError())
+            return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(preparedVariables.ErrorValue());
+        auto variables = std::move(preparedVariables).Value();
+        auto scene = std::make_shared<Debug::Internal::ConsoleSceneInspection>();
+        auto bindings = PrepareBindings(preparation, std::move(version), variables, scene, std::move(network));
         if (bindings.HasError())
             return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(bindings.ErrorValue());
-        auto metricBindings = Debug::Internal::BindMetricCommand(preparation.registry);
-        if (metricBindings.HasError())
-            return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(metricBindings.ErrorValue());
-        auto ownedBindings = std::move(bindings).Value();
-        auto ownedMetricBindings = std::move(metricBindings).Value();
-        for (auto &binding : ownedMetricBindings)
-            ownedBindings.push_back(std::move(binding));
-        auto scene = std::make_shared<Debug::Internal::ConsoleSceneInspection>();
-        auto sceneBindings = Debug::Internal::BindSceneInspectionCommands(preparation.registry, scene);
-        if (sceneBindings.HasError())
-            return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(sceneBindings.ErrorValue());
-        auto ownedSceneBindings = std::move(sceneBindings).Value();
-        for (auto &binding : ownedSceneBindings)
-            ownedBindings.push_back(std::move(binding));
-        auto networkBindings = BindNetworkConsoleInspection(preparation.registry, std::move(network));
-        if (networkBindings.HasError())
-            return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(networkBindings.ErrorValue());
-        auto ownedNetworkBindings = std::move(networkBindings).Value();
-        for (auto &binding : ownedNetworkBindings)
-            ownedBindings.push_back(std::move(binding));
-        auto created = Debug::CommandExecutor::Create(preparation.registry, ownedBindings, jobs, operations, std::this_thread::get_id(),
+        auto created = Debug::CommandExecutor::Create(preparation.registry, bindings.Value(), jobs, operations, std::this_thread::get_id(),
                                                       std::this_thread::get_id(), 128, Debug::CreateConsoleTelemetryAudit(), variables);
         if (created.HasError())
             return Result<std::unique_ptr<EditorConsoleExecution>>::Failure(created.ErrorValue());

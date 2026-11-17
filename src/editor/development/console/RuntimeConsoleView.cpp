@@ -200,8 +200,9 @@ namespace Horo::Editor {
     /** @copydoc RuntimeConsoleView::Navigate */
     std::optional<std::string_view> RuntimeConsoleView::Navigate(void *context, const Ui::InputTextNavigationAction action,
                                                                  const std::string_view text, const std::size_t cursor) {
-        auto &view = *static_cast<RuntimeConsoleView *>(context);
-        view.navigating_ = true;
+        auto &frame = *static_cast<NavigationFrame *>(context);
+        frame.invoked = true;
+        auto &view = frame.view;
         view.errorCode_.clear();
         switch (action) {
             case Ui::InputTextNavigationAction::Complete:
@@ -362,19 +363,30 @@ namespace Horo::Editor {
         if (list.activated)
             selected_ = list.activated;
         DrawDetails(localization, fonts);
-        Ui::InputTextNavigation navigation{this, Navigate};
+        DrawCommand(localization, fonts);
+        if (Ui::Button({.label = LocalizedText(localization, "history").c_str(),
+                        .variant = Ui::ButtonVariant::Secondary,
+                        .style = {.width = Ui::StyleWidth::FillAvailable}}))
+            searchVisible_ = !searchVisible_;
+        DrawSearch(localization, fonts);
+        Ui::Hint(LocalizedText(localization, "shortcuts").c_str(), fonts);
+    }
+
+    /** @copydoc RuntimeConsoleView::DrawCommand */
+    void RuntimeConsoleView::DrawCommand(const ILocalizationService &localization, const Theme::Fonts &fonts) {
+        NavigationFrame frame{*this};
+        Ui::InputTextNavigation navigation{&frame, Navigate};
         if (requestFocus_) {
             ImGui::SetKeyboardFocusHere();
             requestFocus_ = false;
         }
-        navigating_ = false;
         const bool entered = Ui::InputTextControl("##runtime.command", line_.data(), capacity_, fonts,
                                                   {.error = !errorCode_.empty(),
                                                    .hint = LocalizedText(localization, "hint").c_str(),
                                                    .componentSize = Ui::ComponentSize::Medium,
                                                    .submitOnEnter = true,
                                                    .navigation = &navigation});
-        if (ImGui::IsItemEdited() && !navigating_) {
+        if (ImGui::IsItemEdited() && !frame.invoked) {
             recallOffset_.reset();
             completion_.clear();
             errorCode_.clear();
@@ -390,12 +402,6 @@ namespace Horo::Editor {
         }
         if (!completion_.empty())
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, completion_, Theme::Muted(), fonts);
-        if (Ui::Button({.label = LocalizedText(localization, "history").c_str(),
-                        .variant = Ui::ButtonVariant::Secondary,
-                        .style = {.width = Ui::StyleWidth::FillAvailable}}))
-            searchVisible_ = !searchVisible_;
-        DrawSearch(localization, fonts);
-        Ui::Hint(LocalizedText(localization, "shortcuts").c_str(), fonts);
     }
 
     /** @copydoc RuntimeConsoleView::Draw */
