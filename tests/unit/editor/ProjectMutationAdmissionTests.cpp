@@ -3,6 +3,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <new>
 
 namespace {
@@ -60,4 +61,18 @@ TEST_CASE("Mutation admission retains held owners and rolls back native busy res
     }
     const auto afterRelease = coordinator.TryAcquire({project.Path(), Save, "after-owned-release"});
     REQUIRE(afterRelease.HasValue());
+}
+
+TEST_CASE("Migration directory sync consumes a throwing injection exactly once", "[unit][editor][mutation]") {
+    OwnedTestDirectory project{"mutation sync failure"};
+    FailingFilesystem files(project.Path());
+    std::size_t calls{};
+    files.onSyncDirectory = [&calls] {
+        ++calls;
+        throw std::bad_alloc{};
+    };
+    REQUIRE_THROWS_AS(files.SyncDirectory(project.Path()), std::bad_alloc);
+    REQUIRE(calls == 1);
+    REQUIRE(files.SyncDirectory(project.Path()).HasValue());
+    REQUIRE(calls == 1);
 }

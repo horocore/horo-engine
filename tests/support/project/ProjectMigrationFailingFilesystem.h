@@ -61,7 +61,7 @@ namespace Horo::Tests::MigrationFailure {
 
         Result<void> SyncDirectory(const std::filesystem::path &path) override {
             if (onSyncDirectory) {
-                auto callback = std::move(onSyncDirectory);
+                auto callback = std::exchange(onSyncDirectory, {});
                 callback();
             }
             return native_.SyncDirectory(path);
