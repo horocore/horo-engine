@@ -1,4 +1,5 @@
 #include "AudioVoiceRenderState.h"
+#include "Horo/Audio/Internal/AudioPlaybackEpoch.h"
 
 #include <algorithm>
 #include <array>
@@ -8,6 +9,36 @@
 #include <type_traits>
 
 namespace Horo::Audio {
+    /** @copydoc Internal::AudioPlaybackEpoch::RebindVoice */
+    Internal::AudioPlaybackEpochStatus Internal::AudioPlaybackEpoch::RebindVoice(AudioVoiceRenderRuntime &voice,
+                                                                                 const AudioCommandScope &previous,
+                                                                                 const AudioCommandScope &replacement,
+                                                                                 const MixerPlanIdentity &previousGraph,
+                                                                                 const MixerPlanIdentity &replacementGraph) noexcept {
+        using enum AudioPlaybackEpochStatus;
+        auto &state = *voice.state_;
+        auto expectedGraph = previousGraph;
+        expectedGraph.epoch = replacement.epoch;
+        if (state.descriptor.scope != previous || replacement.owner != previous.owner || replacement.scene != previous.scene ||
+            replacement.epoch <= previous.epoch || previousGraph.owner != previous.owner || previousGraph.epoch != previous.epoch ||
+            replacementGraph != expectedGraph)
+            return InvalidScope;
+        if (state.released || state.publications.closed.load() || state.publications.retainedSlot == -1 || !state.callback.active)
+            return Unprepared;
+        if (state.publications.pendingSlot != -1 || state.publications.candidate.load() != nullptr)
+            return PendingPublication;
+        if (state.callback.active->graph != previousGraph)
+            return InvalidScope;
+        state.descriptor.scope = replacement;
+        state.callback.active->graph = replacementGraph;
+        state.callback.active->sequence = 0;
+        state.callback.callbackSequence = 0;
+        state.publications.completed.store(0);
+        state.publications.resolvedPublication.store(0);
+        state.publications.applied.store(false);
+        return Rebound;
+    }
+
     /** @copydoc AudioVoiceRenderRuntime::State::Valid */
     bool AudioVoiceRenderRuntime::State::Valid(const AudioVoiceRenderDescriptor &descriptor, const AudioResamplerDescriptor &conversion,
                                                const std::uint64_t coefficientBytes) noexcept {

@@ -13,6 +13,10 @@
 #include <optional>
 
 namespace Horo::Audio {
+    namespace Internal {
+        struct AudioPlaybackEpoch;
+    }
+
     /** @brief Immutable host composition; storage is prepared before callback entry. */
     struct AudioVoiceRenderDescriptor final {
         AudioCommandScope scope;
@@ -144,6 +148,7 @@ namespace Horo::Audio {
         [[nodiscard]] bool CompleteShutdown(bool callbackDetached) noexcept;
 
     private:
+        friend struct Internal::AudioPlaybackEpoch;
         std::unique_ptr<State> state_;
     };
 }  // namespace Horo::Audio

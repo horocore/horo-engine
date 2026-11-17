@@ -628,7 +628,8 @@ target_compile_features(HoroNetworkTransportCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkTransportCompositionTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
 add_dependencies(HoroNetworkTransportCompositionTests HoroNetworkDisabledLinkProbe HoroNetworkNullLinkProbe)
 horo_register_catch_test(HoroNetworkTransportCompositionTests LABELS "unit;network;headless")
-target_sources(HoroAudioApiPublicHeaderConsumer PRIVATE support/AudioStreamingFactoryPublicContract.cpp support/AudioSpatialPublicContract.cpp)
+target_sources(HoroAudioApiPublicHeaderConsumer PRIVATE support/AudioStreamingFactoryPublicContract.cpp support/AudioSpatialPublicContract.cpp
+        support/AudioDeviceDiscoveryPublicContract.cpp)
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioAcousticQueryTests.cpp
@@ -683,6 +684,40 @@ add_executable(HoroAudioBackendContractTests
 target_compile_features(HoroAudioBackendContractTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioBackendContractTests PRIVATE HoroAudioBackendContract)
 horo_register_catch_test(HoroAudioBackendContractTests LABELS "unit;audio;headless")
+
+add_executable(HoroAudioOutputPolicyTests unit/runtime/audio/AudioOutputPolicyTests.cpp)
+target_link_libraries(HoroAudioOutputPolicyTests PRIVATE HoroAudioOutputPolicy)
+horo_register_catch_test(HoroAudioOutputPolicyTests LABELS "unit;audio;headless")
+
+add_executable(HoroAudioDeviceSwitchTests unit/runtime/audio/AudioDeviceSwitchTests.cpp)
+target_link_libraries(HoroAudioDeviceSwitchTests PRIVATE HoroAudioOutputPolicy HoroAudioNull)
+horo_register_catch_test(HoroAudioDeviceSwitchTests LABELS "unit;audio;headless")
+
+add_executable(HoroAudioOfflineTests unit/runtime/audio/OfflineAudioRenderTests.cpp unit/runtime/audio/OfflineMixerRenderTests.cpp
+        unit/application/audio_export/OfflineAudioExportTests.cpp
+        support/AllocationProbe.cpp)
+target_include_directories(HoroAudioOfflineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroAudioOfflineTests PRIVATE HoroAudioOffline HoroAudioMixer HoroApplicationAudioExport HoroEngine::Platform)
+horo_register_catch_test(HoroAudioOfflineTests LABELS "unit;audio;headless")
+
+add_executable(HoroAudioNativeBackendTests unit/runtime/audio/NativeAudioBackendTests.cpp support/AllocationProbe.cpp)
+target_include_directories(HoroAudioNativeBackendTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroAudioNativeBackendTests PRIVATE HoroAudioNativeRuntime HoroAudioOutputPolicy)
+horo_register_catch_test(HoroAudioNativeBackendTests LABELS "unit;audio;headless")
+
+if(TARGET HoroAudioWasapi OR TARGET HoroAudioCoreAudio OR TARGET HoroAudioPipeWire)
+    add_executable(HoroAudioNativeFactoryTests unit/runtime/audio/NativeAudioFactoryTests.cpp)
+    foreach(peer Wasapi CoreAudio PipeWire)
+        if(TARGET HoroAudio${peer})
+            target_link_libraries(HoroAudioNativeFactoryTests PRIVATE HoroAudio${peer})
+        endif()
+    endforeach()
+    target_compile_definitions(HoroAudioNativeFactoryTests PRIVATE
+            HORO_TEST_WASAPI=$<BOOL:${HORO_BUILD_AUDIO_WASAPI}>
+            HORO_TEST_COREAUDIO=$<BOOL:${HORO_BUILD_AUDIO_COREAUDIO}>
+            HORO_TEST_PIPEWIRE=$<BOOL:${HORO_BUILD_AUDIO_PIPEWIRE}>)
+    horo_register_catch_test(HoroAudioNativeFactoryTests LABELS "unit;audio;headless")
+endif()
 add_executable(HoroAudioWatchdogTests
         unit/runtime/audio/AudioCallbackWatchdogTests.cpp
 )
@@ -745,27 +780,43 @@ add_executable(HoroAudioVoiceRenderTests
     unit/runtime/audio/AudioVoiceRenderTestFixture.h)
 target_include_directories(HoroAudioVoiceRenderTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_features(HoroAudioVoiceRenderTests PRIVATE cxx_std_20)
-target_link_libraries(HoroAudioVoiceRenderTests PRIVATE HoroEngine::AudioVoiceRender HoroEngine::AudioNull)
+target_link_libraries(HoroAudioVoiceRenderTests PRIVATE HoroEngine::AudioVoiceRender HoroEngine::AudioNull HoroAudioPlaybackEpochContract)
 horo_register_catch_test(HoroAudioVoiceRenderTests LABELS "unit;audio;headless;realtime-safety")
 
 add_executable(HoroAudioEditorPreviewTests
     support/AllocationProbe.cpp
-    unit/runtime/audio/AudioFrontendTests.cpp)
+    unit/runtime/audio/AudioFrontendTests.cpp
+    unit/runtime/audio/NativeAudioFrontendHandoffTests.cpp)
 target_include_directories(HoroAudioEditorPreviewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_features(HoroAudioEditorPreviewTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioEditorPreviewTests PRIVATE
-    HoroEngine::EditorServices HoroAudioFrontendComposition HoroEngine::AudioNull)
+    HoroEngine::EditorServices HoroAudioFrontendComposition HoroEngine::AudioNull HoroAudioNativeRuntime)
 horo_register_catch_test(HoroAudioEditorPreviewTests LABELS "unit;audio;editor;headless;lifecycle")
 add_executable(HoroAudioComponentPreviewHostTests
     unit/editor/AudioComponentPreviewHostTests.cpp
+    unit/editor/EditorAudioPreviewSelectionTests.cpp
+    unit/editor/EditorAudioPreviewControlHostTests.cpp
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewHost.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewControlHost.cpp"
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewDecode.cpp"
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewPreparation.cpp")
 target_compile_features(HoroAudioComponentPreviewHostTests PRIVATE cxx_std_20)
+find_package(Threads REQUIRED)
+target_link_libraries(HoroAudioComponentPreviewHostTests PRIVATE Threads::Threads)
 target_compile_definitions(HoroAudioComponentPreviewHostTests PRIVATE HORO_EDITOR_AUDIO_SDL3=0)
+foreach(audio_peer_target IN ITEMS HoroAudioWasapi HoroAudioCoreAudio HoroAudioPipeWire)
+    string(REPLACE "HoroAudio" "" audio_peer_name "${audio_peer_target}")
+    string(TOUPPER "${audio_peer_name}" audio_peer_macro)
+    if(TARGET ${audio_peer_target})
+        target_link_libraries(HoroAudioComponentPreviewHostTests PRIVATE ${audio_peer_target})
+        target_compile_definitions(HoroAudioComponentPreviewHostTests PRIVATE HORO_EDITOR_AUDIO_${audio_peer_macro}=1)
+    else()
+        target_compile_definitions(HoroAudioComponentPreviewHostTests PRIVATE HORO_EDITOR_AUDIO_${audio_peer_macro}=0)
+    endif()
+endforeach()
 target_include_directories(HoroAudioComponentPreviewHostTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app")
 target_link_libraries(HoroAudioComponentPreviewHostTests PRIVATE HoroEngine::EditorServices HoroAudioFrontendComposition
-    HoroEngine::AudioImport HoroEngine::AudioNull)
+    HoroAudioOutputPolicy HoroEngine::AudioImport HoroEngine::AudioNull)
 horo_register_catch_test(HoroAudioComponentPreviewHostTests LABELS "unit;audio;editor;headless;lifecycle")
 target_sources(HoroAudioFrontendPublicHeaderConsumer PRIVATE support/AudioFrontendPublicContract.cpp)
 target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE
@@ -803,7 +854,7 @@ add_executable(HoroAudioMixerTests
         support/AllocationProbe.cpp)
 target_include_directories(HoroAudioMixerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_features(HoroAudioMixerTests PRIVATE cxx_std_20)
-target_link_libraries(HoroAudioMixerTests PRIVATE HoroEngine::AudioMixer HoroEngine::Platform Threads::Threads)
+target_link_libraries(HoroAudioMixerTests PRIVATE HoroEngine::AudioMixer HoroEngine::Platform Threads::Threads HoroAudioPlaybackEpochContract)
 target_compile_definitions(HoroAudioMixerTests PRIVATE
         HORO_MIXER_ALLOCATION_WORKER="$<TARGET_FILE:HoroMixerAllocationFailureWorker>")
 add_dependencies(HoroAudioMixerTests HoroMixerAllocationFailureWorker)
@@ -828,7 +879,7 @@ add_executable(HoroAudioCommandTests
     unit/runtime/audio/ScheduledAudioCommandBatchTests.cpp
 )
 target_compile_features(HoroAudioCommandTests PRIVATE cxx_std_20)
-target_link_libraries(HoroAudioCommandTests PRIVATE HoroEngine::AudioCommands)
+target_link_libraries(HoroAudioCommandTests PRIVATE HoroEngine::AudioCommands HoroAudioPlaybackEpochContract)
 horo_register_catch_test(HoroAudioCommandTests LABELS "unit;audio;headless")
 add_executable(HoroAudioMetricsTests
     support/AllocationProbe.cpp
@@ -3640,7 +3691,7 @@ if (HORO_BUILD_EDITOR_GUI)
             HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
     )
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::Gui nlohmann_json::nlohmann_json
-        HoroAudioFrontendComposition HoroEngine::AudioImport HoroAudioNull HoroEngine::PlatformProjectReadFiles)
+        HoroAudioFrontendComposition HoroAudioOutputPolicy HoroEngine::AudioImport HoroAudioNull HoroEngine::PlatformProjectReadFiles)
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEditorPlaySaveHostInternal HoroEngine::Platform)
     add_dependencies(HoroEditorWorkspaceControllerTests HoroTestGameModule)
     add_executable(HoroCameraCutEditorIntegrationTests unit/runtime/cinematic/CameraCutEditorIntegrationTests.cpp)

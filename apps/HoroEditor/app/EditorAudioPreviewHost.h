@@ -1,5 +1,6 @@
 #pragma once
 #include "Horo/Audio/Internal/AudioBackend.h"
+#include "Horo/Audio/Internal/AudioRuntimeOwnerIssuer.h"
 #include "Horo/Editor/AudioComponentPreview.h"
 
 #include <functional>
@@ -20,10 +21,25 @@ namespace Horo::Editor {
     /** @brief Selects the actual deterministic Null peer explicitly for headless hosts. */
     [[nodiscard]] Result<EditorAudioPreviewBackend> MakeNullAudioPreviewOutput(Audio::AudioRuntimeId owner);
 
-    /** @brief Application composition root for an explicitly selected SDL3 inspector preview peer. */
+    /** @brief Capture one peer explicitly at process composition; never probe or substitute another peer.
+     * @param backend Fixed process preview selection, independent of game output and renderer selection.
+     * @return Retained factory or typed unavailable/invalid failure. PipeWire selection explicitly initializes
+     * one process library lease; the factory shares it across all of its output generations.
+     * SDL retains its existing deferred ProviderUnavailable result when omitted from the build, so the
+     * default optional preview does not prevent a GUI build without audio from starting.
+     * @pre Call once on process composition for this output family. All calls on each returned output stay on
+     * its declared control owner; WASAPI currently requires MTA control, including in a graphical host.
+     */
+    [[nodiscard]] Result<EditorAudioPreviewOutputFactory> SelectEditorAudioPreviewOutput(Audio::AudioBackendKind backend);
+
+    /** @brief Application composition root for one explicitly selected inspector preview peer. */
     class EditorAudioPreviewHost final : public IAudioComponentPreview {
     public:
-        explicit EditorAudioPreviewHost(EditorAudioPreviewOutputFactory outputFactory);
+        /** @brief Borrow the process identity authority and own the explicitly selected preview policy.
+         * @param owners Process-root authority shared with all independent Audio output families; outlives this host.
+         * @param outputFactory Fixed output policy; receives a fresh identity for each attempted runtime generation.
+         */
+        EditorAudioPreviewHost(Audio::Backend::AudioRuntimeOwnerIssuer &owners, EditorAudioPreviewOutputFactory outputFactory);
         ~EditorAudioPreviewHost() override;
         [[nodiscard]] Result<void> Start(const AudioComponentPreviewRequest &request) override;
         void Stop(Assets::AssetId workspace) noexcept override;

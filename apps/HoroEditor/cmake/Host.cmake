@@ -12,6 +12,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/EditorNavigationBakeHost.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
+        HoroEditor/app/EditorAudioPreviewControlHost.cpp
         HoroEditor/app/EditorAudioPreviewDecode.cpp
         HoroEditor/app/EditorAudioPreviewPreparation.cpp
         HoroEditor/app/RenderGraphInspectionPane.cpp
@@ -19,6 +20,8 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
         HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp
     )
+    find_package(Threads REQUIRED)
+    target_link_libraries(HoroEditor PRIVATE Threads::Threads)
 
     if(APPLE)
         target_sources(HoroEditor PRIVATE HoroEditor/app/EditorWindowChromeMac.mm)
@@ -186,7 +189,7 @@ if(HORO_BUILD_EDITOR_GUI)
             nlohmann_json::nlohmann_json
     )
 
-    target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroEngine::AudioImport HoroEngine::AudioNull)
+    target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroAudioOutputPolicy HoroEngine::AudioImport HoroEngine::AudioNull)
     if(HORO_BUILD_XR_OPENXR)
         set(HORO_EDITOR_XR_BOOTSTRAP_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_xr_bootstrap_headers")
         file(MAKE_DIRECTORY "${HORO_EDITOR_XR_BOOTSTRAP_HEADERS}")
@@ -212,6 +215,17 @@ if(HORO_BUILD_EDITOR_GUI)
     else()
         target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_SDL3=0)
     endif()
+
+    foreach(audio_peer_target IN ITEMS HoroAudioWasapi HoroAudioCoreAudio HoroAudioPipeWire)
+        string(REPLACE "HoroAudio" "" audio_peer_name "${audio_peer_target}")
+        string(TOUPPER "${audio_peer_name}" audio_peer_macro)
+        if(TARGET ${audio_peer_target})
+            target_link_libraries(HoroEditor PRIVATE ${audio_peer_target})
+            target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_${audio_peer_macro}=1)
+        else()
+            target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_${audio_peer_macro}=0)
+        endif()
+    endforeach()
 
 
     # Development composition: concrete backends are linked explicitly at the

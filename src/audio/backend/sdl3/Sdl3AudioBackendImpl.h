@@ -130,7 +130,9 @@ namespace Horo::Audio::Backend {
             }
 
             bool operator()(const Quiesce &request) const noexcept {
-                return backend.callback.lifecycle.load() == Sdl3AudioBackendState::Rendering && request.epoch == backend.epoch;
+                const auto current = backend.callback.lifecycle.load();
+                return (current == Sdl3AudioBackendState::Priming || current == Sdl3AudioBackendState::Rendering) &&
+                       request.epoch == backend.epoch;
             }
 
             bool operator()(const Stop &request) const noexcept {
@@ -139,7 +141,8 @@ namespace Horo::Audio::Backend {
 
             bool operator()(const Close &) const noexcept {
                 const auto current = backend.callback.lifecycle.load();
-                return current == Sdl3AudioBackendState::Opened || current == Sdl3AudioBackendState::Stopped;
+                return current == Sdl3AudioBackendState::Closed || current == Sdl3AudioBackendState::Opened ||
+                       current == Sdl3AudioBackendState::Stopped;
             }
         };
 
@@ -290,7 +293,7 @@ namespace Horo::Audio::Backend {
                 return Sdl3Detail::Failure(AudioErrors::HandleGenerationExhausted);
             const AudioDeviceId identity = existing != devices.end() ? existing->horo : AudioDeviceId{config.owner, nextDeviceSlot++, 1};
             const char *name = SDL_GetAudioDeviceName(native);
-            discovered.emplace_back(identity, name ? std::string{name}.substr(0, 256) : "SDL3 playback device", AudioDeviceClass::Physical);
+            discovered.emplace_back(identity, name ? std::string{name}.substr(0, 256) : "SDL3 playback device", AudioDeviceClass::Unknown);
             next.emplace_back(identity, native);
             return Result<void>::Success();
         }
@@ -527,7 +530,8 @@ namespace Horo::Audio::Backend {
         }
 
         Result<void> Apply(const Close &, const OperationId &operation) {
-            SDL_CloseAudioDevice(logicalDevice);
+            if (logicalDevice)
+                SDL_CloseAudioDevice(logicalDevice);
             logicalDevice = 0;
             planarStorage.clear();
             planes.clear();

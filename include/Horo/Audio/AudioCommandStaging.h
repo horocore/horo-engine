@@ -9,6 +9,9 @@
 #include <optional>
 
 namespace Horo::Audio {
+    namespace Internal {
+        struct AudioPlaybackEpoch;
+    }
     /** @brief Fixed-size ingress/control outcomes; failed admission retains work with its caller. */
     enum class AudioCommandStagingStatus : std::uint8_t {
         Ok,
@@ -127,6 +130,7 @@ namespace Horo::Audio {
         [[nodiscard]] std::optional<AudioCommandStagingStats> Stats() const noexcept;
 
     private:
+        friend struct Internal::AudioPlaybackEpoch;
         struct State;
         /** @brief Publish fully prepared state. */
         explicit AudioCommandStaging(std::unique_ptr<State> state);

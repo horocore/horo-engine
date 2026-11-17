@@ -13,6 +13,10 @@
 #include <optional>
 
 namespace Horo::Audio {
+    namespace Internal {
+        struct AudioPlaybackEpoch;
+    }
+
     /** @brief Pinned build identity; revisions and generations are nonzero and never wrap. */
     struct MixerPlanIdentity final {
         AudioRuntimeId owner;
@@ -90,7 +94,9 @@ namespace Horo::Audio {
         ~MixerRenderPlan();
         MixerRenderPlan(const MixerRenderPlan &) = delete;
         MixerRenderPlan &operator=(const MixerRenderPlan &) = delete;
-        /** @brief Return the pinned compilation identity. @return Immutable identity. */
+        /** @brief Return the current epoch's pinned compilation identity.
+         * @return Identity immutable while published; detached host epoch adoption ends old identity borrows.
+         */
         [[nodiscard]] const MixerPlanIdentity &Identity() const noexcept;
         /** @brief Read immutable admitted mix rate on control. @return Frames per second. */
         [[nodiscard]] std::uint32_t SampleRate() const noexcept;
@@ -121,6 +127,7 @@ namespace Horo::Audio {
 
     private:
         friend class MixerGraphRuntime;
+        friend struct Internal::AudioPlaybackEpoch;
         std::unique_ptr<State> state_;
     };
 
@@ -266,6 +273,7 @@ namespace Horo::Audio {
         [[nodiscard]] MixerRenderResult RenderCore(const AudioCommandScope &scope, const AudioCommandRecord *swap,
                                                    std::span<const MixerVoiceInput> voices, const AudioPlanarBlockView &output,
                                                    const MixerAutomationRenderContext *automation) noexcept;
+        friend struct Internal::AudioPlaybackEpoch;
         std::unique_ptr<State> state_;
     };
 }  // namespace Horo::Audio

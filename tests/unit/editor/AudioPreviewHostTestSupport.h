@@ -18,11 +18,16 @@ namespace Horo::Editor::AudioPreviewTest {
         float peak{};
         bool finite{true};
         std::size_t renderingBlocks{};
+        std::uint64_t lastSampleFrame{};
         bool destroyed{};
         bool closedAtDestruction{};
         std::size_t cancellations{};
         std::size_t acknowledgements{};
         std::size_t idleControlRejections{};
+        std::size_t closeRequests{};
+        bool requestedMultimediaDefault{};
+        std::size_t openRequests{};
+        std::uint32_t preferredRate{}, preferredFrames{}, actualRate{}, actualFrames{}, renderedFrames{};
     };
 
     class ObservedNull final : public Audio::Backend::AudioBackend {
@@ -30,6 +35,10 @@ namespace Horo::Editor::AudioPreviewTest {
         std::unique_ptr<Audio::Backend::NullAudioBackend> output;
         std::shared_ptr<OutputEvidence> evidence;
         Audio::Backend::RenderPort port;
+        bool omitDefaults{};
+        bool mismatchBackend{};
+        std::optional<Error> discoveryFailure;
+        std::uint32_t selectedRate{}, selectedFrames{};
 
         ObservedNull(Audio::AudioRuntimeId owner, std::shared_ptr<OutputEvidence> capture)
             : output(std::move(Audio::Backend::CreateNullAudioBackend({owner, 1, 1, 1})).Value()), evidence(std::move(capture)) {}
@@ -53,7 +62,28 @@ namespace Horo::Editor::AudioPreviewTest {
                 port = start->render;
                 return output->Begin(Audio::Backend::Start{start->epoch, {this, Render}}, deadline);
             }
-            return output->Begin(request, deadline);
+            if (const auto *open = std::get_if<Audio::Backend::Open>(&request)) {
+                const auto *role = std::get_if<Audio::AudioDefaultDeviceRole>(&open->format.device);
+                evidence->requestedMultimediaDefault = role && *role == Audio::AudioDefaultDeviceRole::Multimedia;
+                evidence->preferredRate = open->format.preferred.sampleRate;
+                evidence->preferredFrames = open->format.period.preferredFrames;
+                // Deterministic adapter selection; the actual Null output and clock use this admitted tuple/period.
+                auto selected = *open;
+                if (selectedRate != 0) {
+                    selected.format.preferred.sampleRate = selectedRate;
+                    selected.format.allowedAlternatives.clear();
+                }
+                if (selectedFrames != 0)
+                    selected.format.period.preferredFrames = selectedFrames;
+                auto result = output->Begin(selected, deadline);
+                if (result.HasValue())
+                    ++evidence->openRequests;
+                return result;
+            }
+            auto result = output->Begin(request, deadline);
+            if (result.HasValue() && std::holds_alternative<Audio::Backend::Close>(request))
+                ++evidence->closeRequests;
+            return result;
         }
 
         Result<void> CommitRendering(const Audio::AudioDeviceEpoch &epoch) override {
@@ -68,7 +98,32 @@ namespace Horo::Editor::AudioPreviewTest {
         }
 
         Result<std::optional<Audio::Backend::Completion>> Poll(const Audio::Backend::OperationId &operation) override {
-            return output->Poll(operation);
+            auto result = output->Poll(operation);
+            if (result.HasError())
+                return result;
+            auto captured = std::move(result).Value();
+            if (captured) {
+                auto &outcome = captured->outcome;
+                if (auto *catalog = std::get_if<Audio::AudioDeviceSnapshot>(&outcome)) {
+                    if (omitDefaults)
+                        catalog->defaults = {};
+                    if (mismatchBackend)
+                        catalog->backend = Audio::AudioBackendKind::PipeWire;
+                    if (discoveryFailure)
+                        outcome = Audio::Backend::Failed{*discoveryFailure, Audio::Backend::ResourceDisposition::Retained};
+                }
+                if (auto *opened = std::get_if<Audio::Backend::Opened>(&outcome)) {
+                    evidence->actualRate = opened->format.effective.sampleRate;
+                    evidence->actualFrames = opened->format.callbackFrames;
+                    opened->format.deviations.sampleRate = evidence->actualRate == evidence->preferredRate
+                                                               ? Audio::AudioFormatDeviationReason::None
+                                                               : Audio::AudioFormatDeviationReason::DeviceConstraint;
+                    opened->format.deviations.callbackPeriod = evidence->actualFrames == evidence->preferredFrames
+                                                                   ? Audio::AudioFormatDeviationReason::None
+                                                                   : Audio::AudioFormatDeviationReason::DeviceConstraint;
+                }
+            }
+            return Result<std::optional<Audio::Backend::Completion>>::Success(std::move(captured));
         }
 
         Result<void> AcknowledgeCompletion(const Audio::Backend::OperationId &operation) override {
@@ -92,6 +147,8 @@ namespace Horo::Editor::AudioPreviewTest {
             const auto result = self.port.process(self.port.context, invocation);
             if (invocation.phase == Audio::Backend::RenderPhase::Rendering) {
                 ++self.evidence->renderingBlocks;
+                self.evidence->lastSampleFrame = invocation.sampleFrame;
+                self.evidence->renderedFrames = invocation.output.validFrames;
                 for (const auto *plane : invocation.output.planes)
                     for (std::uint32_t i = 0; i < invocation.output.validFrames; ++i) {
                         self.evidence->finite = self.evidence->finite && std::isfinite(plane[i]);

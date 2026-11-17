@@ -5,13 +5,34 @@
 #if HORO_EDITOR_AUDIO_SDL3
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
 #endif
+#if defined(HORO_EDITOR_AUDIO_WASAPI) && HORO_EDITOR_AUDIO_WASAPI
+#include "Horo/Audio/Internal/WasapiAudioBackend.h"
+#endif
+#if defined(HORO_EDITOR_AUDIO_COREAUDIO) && HORO_EDITOR_AUDIO_COREAUDIO
+#include "Horo/Audio/Internal/CoreAudioBackend.h"
+#endif
+#if defined(HORO_EDITOR_AUDIO_PIPEWIRE) && HORO_EDITOR_AUDIO_PIPEWIRE
+#include "Horo/Audio/Internal/PipeWireAudioBackend.h"
+#endif
 #include <array>
 #include <chrono>
-#include <limits>
 #include <thread>
 
 namespace Horo::Editor {
     namespace {
+#if (defined(HORO_EDITOR_AUDIO_WASAPI) && HORO_EDITOR_AUDIO_WASAPI) ||                                                                     \
+    (defined(HORO_EDITOR_AUDIO_COREAUDIO) && HORO_EDITOR_AUDIO_COREAUDIO) ||                                                               \
+    (defined(HORO_EDITOR_AUDIO_PIPEWIRE) && HORO_EDITOR_AUDIO_PIPEWIRE)
+        /** @brief Retain a concrete native peer and its explicit control driver together, before any native output acquisition. */
+        Result<EditorAudioPreviewBackend> NativeOutput(Result<std::unique_ptr<Audio::Backend::NativeAudioBackend>> created) {
+            if (created.HasError())
+                return Result<EditorAudioPreviewBackend>::Failure(created.ErrorValue());
+            auto *driver = created.Value().get();
+            return Result<EditorAudioPreviewBackend>::Success({std::move(created).Value(), [driver] {
+                return driver->AdvanceControl();
+            }});
+        }
+#endif
         /** @brief Uses the one host monotonic domain; wall-clock time never enters Audio deadlines. */
         Audio::AudioMonotonicTimestamp Deadline() {
             return {1,
@@ -73,7 +94,7 @@ namespace Horo::Editor {
                 return selected_.output->DrainSafetyViolations(violations);
             }
 
-            Result<void> Advance() {
+            Result<void> AdvanceControl() {
                 if (operation_) {
                     const auto completion = selected_.output->Poll(*operation_);
                     if (completion.HasError())
@@ -84,6 +105,12 @@ namespace Horo::Editor {
                             return advanced;
                     }
                 }
+                return Result<void>::Success();
+            }
+
+            Result<void> Advance() {
+                if (auto advanced = AdvanceControl(); advanced.HasError())
+                    return advanced;
                 return selected_.advanceCallback ? selected_.advanceCallback() : Result<void>::Success();
             }
 
@@ -92,20 +119,20 @@ namespace Horo::Editor {
             std::optional<Audio::Backend::OperationId> operation_;
         };
 
-        /** @brief Reconciles an accepted closed-peer discovery operation before its backend can be destroyed.
-         * @details Enumerate has no Open/render port or lifecycle events. AudioBackend requires every
-         * operation acknowledged even when the original query fails. Unproven/Retained cancellation
-         * follows ADR-062 process-fatal retention; terminating here does not unwind the owned peer.
+        /** @brief Reconciles an accepted pre-callback preparation operation before its backend can be destroyed.
+         * @details Enumerate/Open have no attached render port. AudioBackend requires every
+         * operation acknowledged even when the original query fails. The preparation owner then
+         * drives explicit Close; a query completion never proves discovery resources were retired.
          */
-        class DiscoveryOperation final {
+        class PreparationOperation final {
         public:
-            DiscoveryOperation(Audio::Backend::AudioBackend &backend, Audio::Backend::OperationId operation)
+            PreparationOperation(Audio::Backend::AudioBackend &backend, Audio::Backend::OperationId operation)
                 : backend_(backend), operation_(operation) {}
 
-            DiscoveryOperation(const DiscoveryOperation &) = delete;
-            DiscoveryOperation &operator=(const DiscoveryOperation &) = delete;
+            PreparationOperation(const PreparationOperation &) = delete;
+            PreparationOperation &operator=(const PreparationOperation &) = delete;
 
-            ~DiscoveryOperation() {
+            ~PreparationOperation() {
                 try {
                     if (acknowledged_)
                         return;
@@ -123,16 +150,16 @@ namespace Horo::Editor {
             }
 
             Result<void> Acknowledge(const Audio::Backend::Completion &completion) {
-                using Audio::Backend::ResourceDisposition;
-                if (const auto *failure = std::get_if<Audio::Backend::Failed>(&completion.outcome);
-                    failure && failure->resources == ResourceDisposition::Retained)
-                    std::terminate();
-                if (const auto *cancelled = std::get_if<Audio::Backend::Cancelled>(&completion.outcome);
-                    cancelled && cancelled->resources == ResourceDisposition::Retained)
-                    std::terminate();
+                if (completion.operation != operation_)
+                    return Result<void>::Failure(MakeError(Audio::AudioErrors::IdentityInvalid));
                 auto result = backend_.AcknowledgeCompletion(operation_);
                 acknowledged_ = result.HasValue();
                 return result;
+            }
+
+            /** @brief Disarm only after successful frontend composition acknowledged and adopted this exact Open. */
+            void Adopted() noexcept {
+                acknowledged_ = true;
             }
 
         private:
@@ -141,12 +168,72 @@ namespace Horo::Editor {
             bool acknowledged_{};
         };
 
+        /** @brief Owns discovery resources until successful frontend adoption or exact Close completion.
+         * @details No render port was attached during preparation. Native discovery may still own a
+         * thread loop, apartment or listeners, including after failed/cancelled enumeration. Cleanup
+         * pumps only control with one absolute deadline. Unproven retirement terminates without
+         * unwinding this owner, matching the host's existing active-lane shutdown policy.
+         */
+        class PreparedOutput final {
+        public:
+            explicit PreparedOutput(std::unique_ptr<DrivenOutput> backend) : driver_(*backend) {
+                output.backend = std::move(backend);
+            }
+
+            PreparedOutput(const PreparedOutput &) = delete;
+            PreparedOutput &operator=(const PreparedOutput &) = delete;
+
+            ~PreparedOutput() {
+                if (output.backend)
+                    RetireDiscovery();
+            }
+
+            /** @brief Close a rejected discovery/preparation prefix before releasing its selected backend. */
+            void RetireDiscovery() noexcept {
+                try {
+                    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                    const auto deadline = Deadline();
+                    const auto close = driver_.Begin(Audio::Backend::Close{}, deadline);
+                    if (close.HasError())
+                        std::terminate();
+                    while (std::chrono::steady_clock::now() < end) {
+                        auto completion = driver_.Poll(close.Value());
+                        if (completion.HasError())
+                            std::terminate();
+                        if (completion.Value()) {
+                            if (completion.Value()->operation != close.Value() ||
+                                !std::holds_alternative<Audio::Backend::Closed>(completion.Value()->outcome) ||
+                                driver_.AcknowledgeCompletion(close.Value()).HasError())
+                                std::terminate();
+                            return;
+                        }
+                        if (driver_.AdvanceControl().HasError())
+                            std::terminate();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                    std::terminate();
+                } catch (...) {
+                    std::terminate();
+                }
+            }
+
+            /** @brief Borrow the driver pinned by output until adoption. @return Selected driver. */
+            DrivenOutput &Driver() noexcept {
+                return driver_;
+            }
+
+            Audio::Internal::AudioFrontendOutput output;
+
+        private:
+            DrivenOutput &driver_;
+        };
+
         /** @brief Captures one closed-peer catalog through the actual bounded native protocol. */
         Result<Audio::AudioDeviceSnapshot> Discover(DrivenOutput &backend) {
             auto operation = backend.Begin(Audio::Backend::Enumerate{}, Deadline());
             if (operation.HasError())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(operation.ErrorValue());
-            DiscoveryOperation pending{backend, operation.Value()};
+            PreparationOperation pending{backend, operation.Value()};
             if (auto advanced = backend.Advance(); advanced.HasError())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(advanced.ErrorValue());
             auto completion = backend.Poll(operation.Value());
@@ -164,13 +251,32 @@ namespace Horo::Editor {
             return Result<Audio::AudioDeviceSnapshot>::Failure(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
         }
 
+        /** @brief Complete one pre-callback Open with a bounded control-only pump; caller retains and acknowledges the receipt. */
+        Result<Audio::Backend::Completion> CompletePreparation(DrivenOutput &backend, const Audio::Backend::OperationId operation,
+                                                               const Audio::AudioMonotonicTimestamp deadline) {
+            const auto end = std::chrono::steady_clock::time_point{
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::nanoseconds(deadline.nanoseconds))};
+            while (std::chrono::steady_clock::now() < end) {
+                auto polled = backend.Poll(operation);
+                if (polled.HasError())
+                    return Result<Audio::Backend::Completion>::Failure(polled.ErrorValue());
+                if (polled.Value())
+                    return Result<Audio::Backend::Completion>::Success(*polled.Value());
+                if (auto advanced = backend.AdvanceControl(); advanced.HasError())
+                    return Result<Audio::Backend::Completion>::Failure(advanced.ErrorValue());
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return Result<Audio::Backend::Completion>::Failure(
+                MakeError(Audio::AudioErrors::BackendFailed, "Preview Open deadline expired"));
+        }
+
         /** @brief Detached prepared output and its control driver, adopted together only after composition succeeds. */
         struct PreparedLane final {
             std::unique_ptr<Audio::AudioFrontend> frontend;
             std::function<Result<void>()> advance;
         };
 
-        /** @brief Performs bounded file/device preparation on control, before any native output opens. */
+        /** @brief Opens the selected output on control, then prepares actual-format playback before any callback attaches. */
         template <typename Factory>
         Result<PreparedLane> PrepareLane(const AudioComponentPreviewRequest &request, Audio::AudioRuntimeId owner, const Factory &factory) {
             auto decoded = AudioPreviewHostDetail::Decode(request);
@@ -182,34 +288,61 @@ namespace Horo::Editor {
             auto selectedOutput = std::move(selectedBackend).Value();
             if (!selectedOutput.output || !selectedOutput.advanceControl)
                 return Result<PreparedLane>::Failure(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
-            auto backend = std::make_unique<DrivenOutput>(std::move(selectedOutput));
-            auto catalog = Discover(*backend);
+            PreparedOutput candidate{std::make_unique<DrivenOutput>(std::move(selectedOutput))};
+            auto catalog = Discover(candidate.Driver());
             if (catalog.HasError())
                 return Result<PreparedLane>::Failure(catalog.ErrorValue());
+            if (!Audio::ValidateAudioDeviceSnapshot(catalog.Value()) || catalog.Value().owner != owner ||
+                catalog.Value().backend != candidate.Driver().Kind())
+                return Result<PreparedLane>::Failure(MakeError(Audio::AudioErrors::PlaybackRequestInvalid));
             const auto selected = Audio::ResolveAudioDevice(catalog.Value(), Audio::AudioDefaultDeviceRole::Multimedia);
             if (selected.status != Audio::AudioDeviceResolutionStatus::Resolved)
                 return Result<PreparedLane>::Failure(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
-            auto preparation = AudioPreviewHostDetail::Prepare(request, decoded.Value(), owner);
+            const Audio::AudioDeviceEpoch epoch{selected.device, 1, 1};
+            auto *driver = &candidate.Driver();
+            std::function<Result<void>()> advance = [driver] {
+                return driver->Advance();
+            };
+            candidate.output.open = {epoch,
+                                     {Audio::AudioDefaultDeviceRole::Multimedia,
+                                      {48'000, Audio::MakeAudioSpeakerLayout(Audio::AudioSpeakerPreset::Stereo)},
+                                      {{44'100, Audio::MakeAudioSpeakerLayout(Audio::AudioSpeakerPreset::Stereo)}},
+                                      {16, 256, 4096}}};
+            candidate.output.devices = std::move(catalog).Value();
+            candidate.output.clockDomain = 1;
+            const auto deadline = Deadline();
+            auto opened = driver->Begin(candidate.output.open, deadline);
+            if (opened.HasError())
+                return Result<PreparedLane>::Failure(opened.ErrorValue());
+            PreparationOperation pending{*driver, opened.Value()};
+            auto completion = CompletePreparation(*driver, opened.Value(), deadline);
+            if (completion.HasError())
+                return Result<PreparedLane>::Failure(completion.ErrorValue());
+            if (const auto *failed = std::get_if<Audio::Backend::Failed>(&completion.Value().outcome))
+                return Result<PreparedLane>::Failure(failed->error);
+            const auto *actual = std::get_if<Audio::Backend::Opened>(&completion.Value().outcome);
+            if (!actual || completion.Value().operation != opened.Value())
+                return Result<PreparedLane>::Failure(MakeError(Audio::AudioErrors::EventQueueInvalid));
+            if (Audio::ValidateAudioDeviceNegotiation(candidate.output.open.format, candidate.output.devices, actual->format).status !=
+                    Audio::AudioDeviceNegotiationStatus::Accepted ||
+                actual->access != candidate.output.open.access || actual->timing.epoch != epoch ||
+                actual->timing.capturedAt.clockDomain != candidate.output.clockDomain ||
+                actual->format.formatRevision != epoch.formatRevision ||
+                !Audio::ValidateAudioDeviceTimingReport(actual->timing, epoch, driver->Kind()))
+                return Result<PreparedLane>::Failure(MakeError(Audio::AudioErrors::DeviceFormatUnsupported));
+            auto preparation =
+                AudioPreviewHostDetail::Prepare(request, decoded.Value(), owner, actual->format.effective, actual->format.callbackFrames);
             if (preparation.HasError())
                 return Result<PreparedLane>::Failure(preparation.ErrorValue());
             auto prepared = std::move(preparation).Value();
-            const Audio::AudioDeviceEpoch epoch{selected.device, 1, 1};
-            auto *driver = backend.get();
-            const auto advance = [driver] {
-                return driver->Advance();
-            };
-            Audio::Internal::AudioFrontendOutput
-                output{std::move(backend),
-                       {epoch,
-                        {selected.device, {48'000, Audio::MakeAudioSpeakerLayout(Audio::AudioSpeakerPreset::Stereo)}, {}, {256, 256, 256}}},
-                       std::move(catalog).Value(),
-                       1};
-            auto frontend = Audio::Internal::AudioFrontendComposition::Create(prepared, output);
+            candidate.output.openOperation = opened.Value();
+            auto frontend = Audio::Internal::AudioFrontendComposition::Create(prepared, candidate.output);
             if (frontend.HasError()) {
                 AudioPreviewHostDetail::RetireDetached(prepared);
                 return Result<PreparedLane>::Failure(frontend.ErrorValue());
             }
-            return Result<PreparedLane>::Success({std::move(frontend).Value(), advance});
+            pending.Adopted();
+            return Result<PreparedLane>::Success({std::move(frontend).Value(), std::move(advance)});
         }
     }  // namespace
 
@@ -248,16 +381,66 @@ namespace Horo::Editor {
         }});
     }
 
+    /** @copydoc SelectEditorAudioPreviewOutput */
+    Result<EditorAudioPreviewOutputFactory> SelectEditorAudioPreviewOutput(const Audio::AudioBackendKind backend) {
+        using FactoryResult = Result<EditorAudioPreviewOutputFactory>;
+        using enum Audio::AudioBackendKind;
+        switch (backend) {
+            case SDL3Audio:
+                // Preserve the existing optional-preview contract when SDL audio is disabled in a GUI build.
+                return FactoryResult::Success(MakeSdl3AudioPreviewOutput);
+            case NullAudio:
+                return FactoryResult::Success(MakeNullAudioPreviewOutput);
+            case WASAPI:
+#if defined(HORO_EDITOR_AUDIO_WASAPI) && HORO_EDITOR_AUDIO_WASAPI
+                return FactoryResult::Success([](const Audio::AudioRuntimeId owner) {
+                    return NativeOutput(Audio::Backend::CreateWasapiAudioBackend({owner, 1}));
+                });
+#else
+                break;
+#endif
+            case CoreAudio:
+#if defined(HORO_EDITOR_AUDIO_COREAUDIO) && HORO_EDITOR_AUDIO_COREAUDIO
+                return FactoryResult::Success([](const Audio::AudioRuntimeId owner) {
+                    return NativeOutput(Audio::Backend::CreateCoreAudioBackend({owner, 1}));
+                });
+#else
+                break;
+#endif
+            case PipeWire:
+#if defined(HORO_EDITOR_AUDIO_PIPEWIRE) && HORO_EDITOR_AUDIO_PIPEWIRE
+            {
+                auto initialized = Audio::Backend::InitializePipeWireAudioLibrary();
+                if (initialized.HasError())
+                    return FactoryResult::Failure(initialized.ErrorValue());
+                return FactoryResult::Success([library = std::move(initialized).Value()](const Audio::AudioRuntimeId owner) {
+                    return NativeOutput(Audio::Backend::CreatePipeWireAudioBackend({owner, 1}, library));
+                });
+            }
+#else
+                break;
+#endif
+            default:
+                return FactoryResult::Failure(MakeError(Audio::AudioErrors::IdentityInvalid));
+        }
+        return FactoryResult::Failure(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
+    }
+
     struct EditorAudioPreviewHost::State final {
-        std::uint64_t nextRuntime{1};  // Host-owned, never reused across workspace/document switches.
+        Audio::Backend::AudioRuntimeOwnerIssuer &owners;
         AudioComponentPreviewSnapshot snapshot;
         std::unique_ptr<Audio::AudioFrontend> frontend;
         EditorAudioPreviewOutputFactory factory;
         std::function<Result<void>()> advance;  // Borrows only the backend retained by frontend; cleared after Closed.
         bool startVoice{};
+
+        explicit State(Audio::Backend::AudioRuntimeOwnerIssuer &issuer) : owners(issuer) {}
     };
 
-    EditorAudioPreviewHost::EditorAudioPreviewHost(EditorAudioPreviewOutputFactory outputFactory) : state_(std::make_unique<State>()) {
+    /** @copydoc EditorAudioPreviewHost::EditorAudioPreviewHost */
+    EditorAudioPreviewHost::EditorAudioPreviewHost(Audio::Backend::AudioRuntimeOwnerIssuer &owners,
+                                                   EditorAudioPreviewOutputFactory outputFactory)
+        : state_(std::make_unique<State>(owners)) {
         state_->factory = std::move(outputFactory);
     }
 
@@ -298,10 +481,10 @@ namespace Horo::Editor {
             return fail(valid.ErrorValue());
         if (!state_->factory)
             return fail(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
-        if (state_->nextRuntime == std::numeric_limits<std::uint64_t>::max())
-            return fail(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
-        const auto owner = Audio::AudioRuntimeId::Create(state_->nextRuntime++).Value();
-        auto prepared = PrepareLane(request, owner, state_->factory);
+        const auto owner = state_->owners.Issue();
+        if (owner.HasError())
+            return fail(owner.ErrorValue());
+        auto prepared = PrepareLane(request, owner.Value(), state_->factory);
         if (prepared.HasError())
             return fail(prepared.ErrorValue());
         auto lane = std::move(prepared).Value();

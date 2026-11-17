@@ -31,13 +31,13 @@ namespace Horo::Audio {
             return !id || Contains(snapshot, *id);
         }
 
-        /** @brief Null endpoints cannot make physical claims; physical peers cannot masquerade as Null. */
+        /** @brief Null requires Headless; other peers may explicitly lack endpoint-class evidence. */
         bool ValidClass(const AudioBackendKind backend, const AudioDeviceClass deviceClass) noexcept {
             using enum AudioBackendKind;
             using enum AudioDeviceClass;
             if (backend == NullAudio)
                 return deviceClass == Headless;
-            return deviceClass == Physical || deviceClass == Virtual;
+            return deviceClass == Physical || deviceClass == Virtual || deviceClass == Unknown;
         }
 
         /** @brief Resolves a role without inventing cross-role or enumeration-order fallback. */

@@ -215,6 +215,8 @@ namespace Horo::Editor {
             message = PreviewFailureMessage(*model.audioPreviewFailure);
         if (!message && model.audioPreview && model.audioPreview->output)
             ImGui::TextWrapped("%s", Label(context, PreviewPhaseMessage(model.audioPreview->output->phase)));
+        else if (!message && model.audioPreview && model.audioPreview->preparation == AudioComponentPreviewPreparation::Pending)
+            ImGui::TextWrapped("%s", Label(context, "workspace.inspector.audio.preview_opening"));
         if (message)
             DrawValidationMessageIfInvalid(false, context.localization.Get("editor", message), context.theme.fonts, 8.0F);
     }

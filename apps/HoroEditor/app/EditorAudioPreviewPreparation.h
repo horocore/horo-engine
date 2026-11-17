@@ -12,9 +12,18 @@ namespace Horo::Editor::AudioPreviewHostDetail {
 
     /** @brief Resolves the exact registered clip and decodes supported source PCM outside drawing/callbacks. */
     [[nodiscard]] Result<DecodedSource> Decode(const AudioComponentPreviewRequest &request);
-    /** @brief Creates detached real voice, mixer and FIFO owners in one runtime scope. */
+    /** @brief Creates detached voice, mixer and FIFO owners for the admitted device format.
+     * @param request Copied preview intent and bus/source values.
+     * @param decoded Retained decoded source; its original rate remains distinct from the device rate.
+     * @param owner Fixed lane runtime identity.
+     * @param processing Validated actual stereo format, never the requested preference substituted for it.
+     * @param maximumFrames Admitted callback block bound used for every converter, voice and graph reservation.
+     * @return Complete detached owners or a typed unsupported/preparation failure, before any callback attaches.
+     */
     [[nodiscard]] Result<Audio::Internal::AudioFrontendResources> Prepare(const AudioComponentPreviewRequest &request,
-                                                                          const DecodedSource &decoded, Audio::AudioRuntimeId owner);
+                                                                          const DecodedSource &decoded, Audio::AudioRuntimeId owner,
+                                                                          const Audio::AudioProcessingFormat &processing,
+                                                                          std::uint32_t maximumFrames);
     /** @brief Releases rejected factory candidates only with the host's never-attached callback proof. */
     void RetireDetached(Audio::Internal::AudioFrontendResources &resources) noexcept;
 }  // namespace Horo::Editor::AudioPreviewHostDetail

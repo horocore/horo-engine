@@ -24,16 +24,22 @@ namespace Horo::Audio {
     /** @copydoc AudioFrontend::State::AdmitOpened */
     Result<void> AudioFrontend::State::AdmitOpened(const Backend::Opened &value) {
         opened = true;
-        if (const auto &request = output->open;
-            ValidateAudioDeviceNegotiation(request.format, output->devices, value.format).status !=
-                AudioDeviceNegotiationStatus::Accepted ||
-            value.access != request.access || value.timing.epoch != request.plannedEpoch ||
-            !ValidateAudioDeviceTimingReport(value.timing, request.plannedEpoch, output->backend->Kind()) ||
-            value.format.formatRevision != request.plannedEpoch.formatRevision ||
-            value.format.effective.sampleRate != request.format.preferred.sampleRate ||
-            value.format.effective.layout != request.format.preferred.layout || value.format.callbackFrames > maximumFrames)
+        if (!AcceptOpened(*output, processingFormat, maximumFrames, value))
             return Failure(AudioErrors::DeviceFormatUnsupported);
         return Result<void>::Success();
+    }
+
+    /** @copydoc AudioFrontend::State::AcceptOpened */
+    bool AudioFrontend::State::AcceptOpened(const Internal::AudioFrontendOutput &output, const AudioProcessingFormat &processing,
+                                            const std::uint32_t maximumFrames, const Backend::Opened &value) noexcept {
+        const auto &request = output.open;
+        return ValidateAudioDeviceNegotiation(request.format, output.devices, value.format).status ==
+                   AudioDeviceNegotiationStatus::Accepted &&
+               value.access == request.access && value.timing.epoch == request.plannedEpoch &&
+               value.timing.capturedAt.clockDomain == output.clockDomain &&
+               ValidateAudioDeviceTimingReport(value.timing, request.plannedEpoch, output.backend->Kind()) &&
+               value.format.formatRevision == request.plannedEpoch.formatRevision && value.format.effective == processing &&
+               value.format.callbackFrames <= maximumFrames;
     }
 
     /** @copydoc AudioFrontend::State::Poll */
@@ -169,10 +175,13 @@ namespace Horo::Audio {
         const auto count = output->backend->DrainEvents(events);
         if (count > events.size())
             return Failure(AudioErrors::EventQueueInvalid);
+        std::optional<Error> firstFailure;
         for (std::size_t index = 0; index < count; ++index)
-            if (const auto observed = Observe(events[index]); observed.HasError())
-                return observed;
-        if (ready && started && !rendering) {
+            if (const auto observed = Observe(events[index]); observed.HasError() && !firstFailure)
+                firstFailure = observed.ErrorValue();
+        if (firstFailure)
+            return Result<void>::Failure(*firstFailure);
+        if (ready && started && !rendering && !closing) {
             if (const auto committed = output->backend->CommitRendering(output->open.plannedEpoch); committed.HasError())
                 return committed;
             rendering = true;
@@ -232,8 +241,6 @@ namespace Horo::Audio {
         if (pending.has_value() || phase == AudioFrontendPhase::Retained)
             return Result<void>::Success();
         if (started) {
-            if (!rendering)
-                return Result<void>::Success();  // Wait for the exact priming Ready fact before Quiesce.
             if (!quiesced)
                 return Begin(Operation::Quiesce, Backend::Quiesce{output->open.plannedEpoch}, deadline);
             return Begin(Operation::Stop, Backend::Stop{output->open.plannedEpoch}, deadline);

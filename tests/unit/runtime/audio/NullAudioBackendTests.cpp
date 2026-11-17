@@ -149,6 +149,33 @@ namespace Horo::Audio::Backend {
             REQUIRE(backend.State() == NullAudioBackendState::Priming);
         }
 
+        TEST_CASE("Null audio explicitly closes discovery-only and already-closed outputs", "[unit][audio][null_backend]") {
+            auto created = CreateNullAudioBackend(Config());
+            REQUIRE(created.HasValue());
+            auto backend = std::move(created).Value();
+            REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
+            REQUIRE(std::holds_alternative<AudioDeviceSnapshot>(Complete(*backend, Enumerate{}).outcome));
+            REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
+            REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
+            CHECK(backend->State() == NullAudioBackendState::Closed);
+        }
+
+        TEST_CASE("Null audio quiesces priming before any Ready or rendering commit", "[unit][audio][null_backend]") {
+            auto backend = Backend();
+            auto trace = Trace();
+            OpenAndStart(*backend, trace);
+            const auto quiesce = Begin(*backend, Quiesce{Epoch()});
+            REQUIRE(backend->AdvanceControl().HasValue());
+            REQUIRE(backend->AdvanceCallback().HasValue());
+            REQUIRE(backend->State() == NullAudioBackendState::Quiesced);
+            CHECK(trace.count == 1);
+            CHECK(trace.phases[0] == RenderPhase::Quiescing);
+            REQUIRE(std::holds_alternative<Quiesced>(backend->Poll(quiesce).Value()->outcome));
+            REQUIRE(backend->AcknowledgeCompletion(quiesce).HasValue());
+            REQUIRE(std::holds_alternative<Stopped>(Complete(*backend, Stop{Epoch()}).outcome));
+            REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
+        }
+
         TEST_CASE("Null audio callback safety hooks drain only on control without reading wall time",
                   "[unit][audio][null_backend][watchdog]") {
             auto backend = Backend();

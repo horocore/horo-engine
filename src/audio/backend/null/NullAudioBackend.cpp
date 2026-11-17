@@ -95,8 +95,9 @@ namespace Horo::Audio::Backend {
     }
 
     Result<void> NullAudioBackend::ValidateQuiesceRequest(const Quiesce &request) const {
-        return state_ == NullAudioBackendState::Rendering && request.epoch == epoch_ ? Result<void>::Success()
-                                                                                     : Failure(AudioErrors::RuntimeInactive);
+        return (state_ == NullAudioBackendState::Priming || state_ == NullAudioBackendState::Rendering) && request.epoch == epoch_
+                   ? Result<void>::Success()
+                   : Failure(AudioErrors::RuntimeInactive);
     }
 
     Result<void> NullAudioBackend::ValidateStopRequest(const Stop &request) const {
@@ -111,8 +112,10 @@ namespace Horo::Audio::Backend {
             return ValidateQuiesceRequest(*quiesce);
         if (const auto *stop = std::get_if<Stop>(&request))
             return ValidateStopRequest(*stop);
-        return state_ == NullAudioBackendState::Opened || state_ == NullAudioBackendState::Stopped ? Result<void>::Success()
-                                                                                                   : Failure(AudioErrors::RuntimeInactive);
+        return state_ == NullAudioBackendState::Closed || state_ == NullAudioBackendState::Opened ||
+                       state_ == NullAudioBackendState::Stopped
+                   ? Result<void>::Success()
+                   : Failure(AudioErrors::RuntimeInactive);
     }
 
     Result<void> NullAudioBackend::ValidateRequest(const Request &request) const {

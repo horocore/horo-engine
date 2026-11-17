@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "commit": null,
+    "dirtyInputManifestDigest": null,
+    "binaryDigest": null
+  },
+  "host": {
+    "osAndBuild": null,
+    "architecture": null,
+    "buildConfiguration": null,
+    "compilerAndSdk": null,
+    "nativeApiOrLibraryVersion": null
+  },
+  "composition": {
+    "hostApplication": null,
+    "selectedBackend": null,
+    "endpointClass": null,
+    "privacySafeEndpointDescription": null,
+    "defaultOrExplicitSelection": null,
+    "requestedFormatAndPeriods": null,
+    "actualFormatAndPeriods": null,
+    "workload": null
+  },
+  "observation": {
+    "startedAtUtc": null,
+    "completedAtUtc": null,
+    "sampleCount": null,
+    "windowNanoseconds": null
+  },
+  "families": {
+    "discoveryAndSelection": { "result": "Missing", "reason": null, "evidence": [] },
+    "negotiationAndDiagnostics": { "result": "Missing", "reason": null, "evidence": [] },
+    "steadyPlayback": { "result": "Missing", "reason": null, "evidence": [] },
+    "migrationAndRecovery": { "result": "Missing", "reason": null, "evidence": [] },
+    "focusAndSuspension": { "result": "Missing", "reason": null, "evidence": [] },
+    "retirementAndRollback": { "result": "Missing", "reason": null, "evidence": [] }
+  },
+  "switchObservations": [],
+  "timingObservations": [],
+  "retirementObservations": [],
+  "diagnosticArtifacts": [],
+  "qualification": "Unqualified",
+  "verifiedBy": null,
+  "verificationNotes": null
+}

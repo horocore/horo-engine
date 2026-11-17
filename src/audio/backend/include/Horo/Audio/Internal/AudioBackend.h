@@ -95,7 +95,11 @@ namespace Horo::Audio::Backend {
         RenderPort render;
     };
 
-    /** @brief Publishes Quiescing intent; completion requires the matching render-core acknowledgement. */
+    /**
+     * @brief Publishes Quiescing intent; completion requires the matching render-core acknowledgement.
+     * @details Native packet adaptation may first finish the bounded remainder of an already rendered block.
+     * The core acknowledgement proves neither native packet submission nor queued-device consumption.
+     */
     struct Quiesce final {
         AudioDeviceEpoch epoch;
     };
@@ -251,6 +255,8 @@ namespace Horo::Audio::Backend {
          * Start requires admitted format, render.process != nullptr, and any context required by
          * process retained through quiescence and native detachment.
          * Quiesce forwards control intent until core acknowledgement; Stop success proves native detachment.
+         * Quiesce is legal during Priming before Ready as well as Rendering; closing must not wait for
+         * readiness or activate ordinary rendering solely to retire a partially started output.
          * Close follows Stop (or an open that never started). Repeated Quiesce/Stop/Close return the recorded
          * safe outcome without repeating native destruction. Partial acquisition failures unwind in reverse
          * order; unproven cleanup reports Retained, never a false Closed/Stopped outcome.

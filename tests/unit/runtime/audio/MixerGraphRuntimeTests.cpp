@@ -1,6 +1,35 @@
+#include "Horo/Audio/Internal/AudioPlaybackEpoch.h"
 #include "MixerTestFixture.h"
 
 using namespace Horo::Tests::MixerFixture;
+
+TEST_CASE("Detached mixer epoch adoption rejects stale scopes and pending graph publication without mutation", "[audio][mixer][epoch]") {
+    using Internal::AudioPlaybackEpoch;
+    using Internal::AudioPlaybackEpochStatus;
+    auto runtime = Runtime();
+    auto staging = Staging();
+    auto plan = Plan(Asset());
+    auto identity = plan->Identity();
+    const auto oldIdentity = identity;
+    const auto record = Publish(*runtime, staging, plan);
+    Block output;
+    REQUIRE(runtime->Render(Scope, &record, {}, output.View()).status == MixerRenderStatus::Rendered);
+    REQUIRE(runtime->Reconcile().status == MixerRenderStatus::Active);
+    auto next = Scope;
+    ++next.epoch;
+    CHECK(AudioPlaybackEpoch::RebindMixer(*runtime, Scope, Scope, identity) == AudioPlaybackEpochStatus::InvalidScope);
+    auto foreign = next;
+    foreign.owner = IdOf<AudioRuntimeId>(998);
+    CHECK(AudioPlaybackEpoch::RebindMixer(*runtime, Scope, foreign, identity) == AudioPlaybackEpochStatus::InvalidScope);
+    auto pending = Plan(Asset(), 2);
+    REQUIRE(runtime->Publish(pending, pending->Identity(), staging).status == AudioCommandStagingStatus::Ok);
+    CHECK(AudioPlaybackEpoch::RebindMixer(*runtime, Scope, next, identity) == AudioPlaybackEpochStatus::PendingPublication);
+    CHECK(identity == oldIdentity);
+    CHECK(runtime->Render(Scope, nullptr, {}, output.View()).status == MixerRenderStatus::Rendered);
+    CHECK(ConsumePublished(staging).command.scope == Scope);
+    runtime->Close();
+    REQUIRE(runtime->CompleteShutdown(Scope, true) == MixerRenderStatus::Quiesced);
+}
 
 TEST_CASE("Mixer stale queued or malformed swaps preserve last good complete generation", "[audio][mixer]") {
     auto runtime = Runtime();

@@ -23,7 +23,9 @@
 #include "OpenXRPlayHost.h"
 #endif
 
+#include "EditorAudioPreviewControlHost.h"
 #include "EditorAudioPreviewHost.h"
+#include "EditorAudioPreviewOptions.h"
 #include "EditorFrameAdmission.h"
 #include "EditorGuiLiveReload.h"
 #include "EditorGuiLiveReloadBuildConfig.h"
@@ -330,6 +332,9 @@ namespace Horo::Editor {
             std::uint64_t exitAfterFrames = 0;
             std::uint32_t frameRateLimit = 0;
             std::string rendererBackend;
+            std::optional<Audio::AudioBackendKind> audioPreviewBackend{Audio::AudioBackendKind::SDL3Audio};
+            EditorAudioPreviewOutputFactory audioPreviewOutput;
+            std::shared_ptr<Audio::Backend::AudioRuntimeOwnerIssuer> audioRuntimeOwners;
             std::string projectRoot;
             std::optional<Physics::PhysicsRuntimeMode> physicsMode{Physics::PhysicsRuntimeMode::Null};
             std::string cookedRoot;
@@ -784,6 +789,7 @@ namespace Horo::Editor {
         opts.directionalShadows = Detail::ParseDirectionalShadowArguments(args);
         opts.lighting = Detail::ParseEditorLightingArguments(args);
         opts.color = Detail::ParseEditorColorArguments(args);
+        opts.audioPreviewBackend = Detail::ParseEditorAudioPreviewArguments(args);
         ParseEditorLightingRoot(opts, args);
         opts.xrSimulator = std::ranges::any_of(args, [](const char *value) {
             return std::string_view{value} == "--xr-simulator";
@@ -875,6 +881,8 @@ namespace Horo::Editor {
                                                "--physics",
                                                std::string{Application::Internal::ScenePhysicsHostModeName(options.physicsMode.value())}};
             arguments.insert(arguments.end(), {"--prefab", options.prefabGranted.value() ? "grant" : "deny"});
+            arguments.insert(arguments.end(), {"--audio-preview-backend",
+                                               std::string{Detail::AudioPreviewBackendName(options.audioPreviewBackend.value())}});
             if (!options.cookedRoot.empty()) {
                 arguments.insert(arguments.end(), {"--cooked-root", options.cookedRoot, "--cook-target", options.cookTarget});
             }
@@ -2969,7 +2977,16 @@ namespace Horo::Editor {
             const EditorPreviewCollisionReceiptSource previewCollisionReceipt{[&preview]() noexcept {
                 return preview.owners->CollisionReceipt();
             }};
-            EditorAudioPreviewHost audioPreview{MakeSdl3AudioPreviewOutput};
+            std::unique_ptr<IAudioComponentPreview> audioPreview;
+            if (p.options.audioPreviewBackend == Audio::AudioBackendKind::WASAPI) {
+                auto controlled = EditorAudioPreviewControlHost::Create(*p.options.audioRuntimeOwners, p.options.audioPreviewOutput);
+                if (controlled.HasError()) {
+                    LOG_ERROR("editor.audio", "Audio control owner creation failed: %s", controlled.ErrorValue().message.c_str());
+                    return std::nullopt;
+                }
+                audioPreview = std::move(controlled).Value();
+            } else
+                audioPreview = std::make_unique<EditorAudioPreviewHost>(*p.options.audioRuntimeOwners, p.options.audioPreviewOutput);
             Assets::AssetRegistry assetRegistry;
             CollisionInventoryEvidence collisionInventory;
             AssetRegistryProjectOpenContributor assetRegistryContributor{assetRegistry, collisionInventory};
@@ -3092,7 +3109,7 @@ namespace Horo::Editor {
             screenHost.Services().RegisterConst<Prefab::PrefabMetricHandles>(p.telemetry.prefab);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
             screenHost.Services().Register<UiInspectorResourcesFactory>(uiInspectorResourcesFactory);
-            screenHost.Services().Register<IAudioComponentPreview>(audioPreview);
+            screenHost.Services().Register<IAudioComponentPreview>(*audioPreview);
             screenHost.Services().RegisterConst<NavigationViewportAccess>(navigationOverlayAccess);
             screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);
             screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
@@ -3223,6 +3240,10 @@ namespace Horo::Editor {
 
     /** @brief Composes independent startup option validation without merging subsystem policy. */
     [[nodiscard]] static bool ValidateEditorStartupOptions(const EditorGuiOptions &options) {
+        if (!options.audioPreviewBackend) {
+            LOG_CRITICAL("editor.audio", "Select one --audio-preview-backend: sdl3, wasapi, coreaudio, pipewire or null.");
+            return false;
+        }
         return ValidateEditorColorOptions(options) && ValidateEditorPhysicsOptions(options) && ValidateEditorShadowOptions(options) &&
                ValidateEditorLightingOptions(options);
     }
@@ -3387,6 +3408,13 @@ namespace Horo::Editor {
                                                                                    const std::span<char *> arguments) {
         if (!ValidateEditorStartupOptions(options))
             return std::nullopt;
+        auto selectedAudio = SelectEditorAudioPreviewOutput(options.audioPreviewBackend.value());
+        if (selectedAudio.HasError()) {
+            LOG_CRITICAL("editor.audio", "Explicit preview backend selection failed: %s", selectedAudio.ErrorValue().message.c_str());
+            return std::nullopt;
+        }
+        options.audioPreviewOutput = std::move(selectedAudio).Value();
+        options.audioRuntimeOwners = std::make_shared<Audio::Backend::AudioRuntimeOwnerIssuer>();
         std::string projectName;
         if (!ConfigureStartupProject(options, projectName))
             return std::nullopt;

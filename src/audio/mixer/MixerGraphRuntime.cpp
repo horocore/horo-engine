@@ -1,3 +1,4 @@
+#include "Horo/Audio/Internal/AudioPlaybackEpoch.h"
 #include "MixerPlanState.h"
 
 #include <atomic>
@@ -238,5 +239,31 @@ namespace Horo::Audio {
         s.activeSlot = -1;
         s.pendingSlot = -1;
         return Quiesced;
+    }
+
+    /** @copydoc Internal::AudioPlaybackEpoch::RebindMixer */
+    Internal::AudioPlaybackEpochStatus Internal::AudioPlaybackEpoch::RebindMixer(MixerGraphRuntime &mixer,
+                                                                                 const AudioCommandScope &previous,
+                                                                                 const AudioCommandScope &replacement,
+                                                                                 MixerPlanIdentity &graph) noexcept {
+        using enum AudioPlaybackEpochStatus;
+        auto &state = *mixer.state_;
+        if (state.descriptor.scope != previous || replacement.owner != previous.owner || replacement.scene != previous.scene ||
+            replacement.epoch <= previous.epoch)
+            return InvalidScope;
+        if (state.closed.load() || state.quiesced.load() || state.activeSlot == -1 || !state.active)
+            return Unprepared;
+        if (state.pendingSlot != -1 || state.candidate.load() != nullptr)
+            return PendingPublication;
+        auto &plan = *state.active->state_;
+        if (plan.automationBound)
+            return UnsupportedAutomation;
+        state.descriptor.scope = replacement;
+        plan.identity.epoch = replacement.epoch;
+        plan.sequence = 0;
+        state.callbackSequence = 0;
+        state.completedSequence.store(0);
+        graph = plan.identity;
+        return Rebound;
     }
 }  // namespace Horo::Audio

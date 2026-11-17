@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <exception>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -31,12 +32,45 @@ namespace Horo::Audio {
         }
 
         /** @brief Validates explicitly selected output facts without probing or activating a peer. */
-        bool ValidOutput(const Internal::AudioFrontendResources &resources, const Internal::AudioFrontendOutput &output) noexcept {
+        bool ValidOutput(const Internal::AudioFrontendResources &resources, const Internal::AudioFrontendOutput &output,
+                         const AudioProcessingFormat &processing) noexcept {
             return output.backend && output.clockDomain != 0 && output.backend->Owner() == resources.scope.owner &&
                    output.open.plannedEpoch.device.owner == resources.scope.owner && output.devices.backend == output.backend->Kind() &&
                    output.devices.owner == resources.scope.owner && ValidateAudioDeviceSnapshot(output.devices) &&
-                   ValidateAudioDeviceFormatRequest(output.open.format) &&
-                   resources.plan->SampleRate() == output.open.format.preferred.sampleRate;
+                   ValidateAudioDeviceFormatRequest(output.open.format) && resources.plan->SampleRate() == processing.sampleRate;
+        }
+
+        /** @brief Poll only the supplied retained Open receipt; a rejected receipt is never consumed or replaced by caller facts. */
+        Result<std::optional<Backend::Completion>> ReadPreparedOpen(const Internal::AudioFrontendOutput &output) {
+            if (!output.openOperation)
+                return Result<std::optional<Backend::Completion>>::Success(std::nullopt);
+            if (!output.backend || output.openOperation->owner != output.backend->Owner())
+                return Result<std::optional<Backend::Completion>>::Failure(MakeError(AudioErrors::IdentityInvalid));
+            auto polled = output.backend->Poll(*output.openOperation);
+            if (polled.HasError())
+                return polled;
+            if (!polled.Value() || polled.Value()->operation != *output.openOperation ||
+                !std::holds_alternative<Backend::Opened>(polled.Value()->outcome))
+                return Result<std::optional<Backend::Completion>>::Failure(MakeError(AudioErrors::RuntimeInactive));
+            return polled;
+        }
+
+        /** @brief Match the compiled master bus to actual processing semantics without altering request preferences. */
+        bool MatchesMaster(const MixerRenderPlan &plan, const AudioChannelLayout &layout) noexcept {
+            for (const auto &bus : plan.Buses())
+                if (bus.role == MixerBusRole::MasterOutput)
+                    return bus.layout == layout;
+            return false;
+        }
+
+        /** @brief Acknowledge only after all detached graph/voice publications succeeded, before ownership transfer. */
+        Result<void> AcknowledgePreparedOpen(Internal::AudioFrontendOutput &output) {
+            if (!output.openOperation)
+                return Result<void>::Success();
+            const auto result = output.backend->AcknowledgeCompletion(*output.openOperation);
+            if (result.HasValue())
+                output.openOperation.reset();
+            return result;
         }
     }  // namespace
 
@@ -61,7 +95,7 @@ namespace Horo::Audio {
             return {Quiesced, None};
         if (invocation.phase != Rendering)
             return {Fault, InvalidEpoch};
-        return state.RenderBlock(invocation);
+        return state.RenderPlayback(invocation);
     }
 
     /** @copydoc AudioFrontend::State::RenderBlock */
@@ -98,7 +132,9 @@ namespace Horo::Audio {
     /** @copydoc AudioFrontend::State::CompleteOperation */
     void AudioFrontend::State::CompleteOperation(const std::uint64_t sequence, const ErrorCodeDescriptor *error) noexcept {
         for (auto &receipt : receipts) {
-            if (receipt.sequence.load(std::memory_order_acquire) != sequence)  // NOSONAR - Acquires initialized receipt input.
+            if (receipt.sequence.load(std::memory_order_acquire) == 0 ||
+                receipt.commandSequence.load(std::memory_order_relaxed) != sequence ||
+                receipt.status.load(std::memory_order_acquire) != OperationStatus::Pending)
                 continue;
             receipt.error = error;
             receipt.status.store(error == nullptr ? OperationStatus::Applied : OperationStatus::Rejected,
@@ -137,9 +173,13 @@ namespace Horo::Audio {
     Result<void> AudioFrontend::Start(const AudioMonotonicTimestamp deadline) {
         if (state_->phase != AudioFrontendPhase::Prepared || state_->closing)
             return Failure(AudioErrors::RuntimeInactive);
-        const auto begun = state_->Begin(State::Operation::Open, state_->output->open, deadline);
+        const auto begun = state_->opened
+                               ? state_->Begin(State::Operation::Start,
+                                               Backend::Start{state_->output->open.plannedEpoch, {state_.get(), &State::Process}}, deadline)
+                               : state_->Begin(State::Operation::Open, state_->output->open, deadline);
         if (begun.HasValue()) {
-            state_->phase = AudioFrontendPhase::Opening;
+            state_->activationRequested = true;
+            state_->phase = state_->opened ? AudioFrontendPhase::Starting : AudioFrontendPhase::Opening;
             state_->failure.reset();
         } else {
             state_->failure = begun.ErrorValue();
@@ -177,7 +217,7 @@ namespace Horo::Audio {
 
     /** @copydoc AudioFrontend::State::AdvanceActive */
     Result<void> AudioFrontend::State::AdvanceActive(const AudioMonotonicTimestamp deadline) {
-        if (opened && !started && !pending.has_value()) {
+        if (activationRequested && opened && !started && !pending.has_value()) {
             if (const auto begun =
                     Begin(State::Operation::Start, Backend::Start{output->open.plannedEpoch, {this, &State::Process}}, deadline);
                 begun.HasError()) {
@@ -202,21 +242,25 @@ namespace Horo::Audio {
 
     /** @copydoc AudioFrontend::Transport */
     Result<AudioCommandAdmission> AudioFrontend::Transport(const AudioVoiceControlRequest &control) {
-        if (state_->phase != AudioFrontendPhase::Active || state_->closing)
+        if (state_->phase != AudioFrontendPhase::Active || state_->closing || state_->holdRequested.load(std::memory_order_acquire) != 0)
             return Result<AudioCommandAdmission>::Failure(MakeError(AudioErrors::RuntimeInactive));
         if (control.voice != state_->resources->voice->Voice() || !ValidateAudioVoiceControlRequest(control))
             return Result<AudioCommandAdmission>::Failure(MakeError(AudioErrors::PlaybackRequestInvalid));
+        if (state_->operationSequence == std::numeric_limits<std::uint64_t>::max())
+            return Result<AudioCommandAdmission>::Success({AudioCommandStagingStatus::SequenceExhausted, 0, 0});
         for (auto &receipt : state_->receipts) {
             if (receipt.sequence.load(std::memory_order_acquire) != 0)  // NOSONAR - Owner alone observes/recycles released slots.
                 continue;
             const auto admitted = state_->resources->staging.Submit({state_->resources->scope, control});
             if (admitted.status == AudioCommandStagingStatus::Ok) {
+                const auto sequence = ++state_->operationSequence;
                 receipt.error = nullptr;
+                receipt.commandSequence.store(admitted.sequence, std::memory_order_relaxed);
                 receipt.status.store(State::OperationStatus::Pending,
                                      std::memory_order_relaxed);  // NOSONAR - Owner resets status before sequence release; the callback
                                                                   // cannot consume this record yet.
-                receipt.sequence.store(admitted.sequence, std::memory_order_release);  // NOSONAR - Publishes initialized receipt input
-                                                                                       // before the owner pumps command staging.
+                receipt.sequence.store(sequence, std::memory_order_release);  // Publishes the mapping before command staging is pumped.
+                return Result<AudioCommandAdmission>::Success({admitted.status, sequence, 0});
             }
             return Result<AudioCommandAdmission>::Success(admitted);
         }
@@ -279,19 +323,23 @@ namespace Horo::Audio {
     /** @copydoc Internal::AudioFrontendComposition::Create */
     Result<std::unique_ptr<AudioFrontend>> Internal::AudioFrontendComposition::Create(AudioFrontendResources &resources,
                                                                                       AudioFrontendOutput &output) {
-        if (!ValidResources(resources) || !ValidOutput(resources, output))
-            return Result<std::unique_ptr<AudioFrontend>>::Failure(MakeError(AudioErrors::PlaybackRequestInvalid));
-        bool masterMatches = false;
-        for (const auto &bus : resources.plan->Buses())
-            if (bus.role == MixerBusRole::MasterOutput)
-                masterMatches = bus.layout == output.open.format.preferred.layout;
-        if (!masterMatches)
-            return Result<std::unique_ptr<AudioFrontend>>::Failure(MakeError(AudioErrors::DeviceFormatUnsupported));
         try {
+            auto preparedOpen = ReadPreparedOpen(output);
+            if (preparedOpen.HasError())
+                return Result<std::unique_ptr<AudioFrontend>>::Failure(preparedOpen.ErrorValue());
+            const auto completion = std::move(preparedOpen).Value();
+            const auto *candidate = completion ? std::get_if<Backend::Opened>(&completion->outcome) : nullptr;
+            const auto &processing = candidate ? candidate->format.effective : output.open.format.preferred;
+            if (!ValidResources(resources) || !ValidOutput(resources, output, processing))
+                return Result<std::unique_ptr<AudioFrontend>>::Failure(MakeError(AudioErrors::PlaybackRequestInvalid));
+            if (!MatchesMaster(*resources.plan, processing.layout) ||
+                (candidate && !AudioFrontend::State::AcceptOpened(output, processing, resources.plan->MaximumFrames(), *candidate)))
+                return Result<std::unique_ptr<AudioFrontend>>::Failure(MakeError(AudioErrors::DeviceFormatUnsupported));
             auto state = std::make_unique<AudioFrontend::State>();
             // make_unique is outside the friend factory and cannot access the private constructor.
             std::unique_ptr<AudioFrontend> owner{new AudioFrontend(std::move(state))};  // NOSONAR - Friend-only construction.
             owner->state_->maximumFrames = resources.plan->MaximumFrames();
+            owner->state_->processingFormat = processing;
             owner->state_->voiceIdentity = resources.voice->Voice();
             const auto published = resources.voice->Publish(resources.initialVoice, *resources.plan, resources.staging);
             if (published.HasError())
@@ -301,6 +349,9 @@ namespace Horo::Audio {
             if (const auto identity = resources.plan->Identity();
                 resources.mixer->Publish(resources.plan, identity, resources.staging).status != AudioCommandStagingStatus::Ok)
                 return Result<std::unique_ptr<AudioFrontend>>::Failure(MakeError(AudioErrors::QueueSaturated));
+            if (const auto acknowledged = AcknowledgePreparedOpen(output); acknowledged.HasError())
+                return Result<std::unique_ptr<AudioFrontend>>::Failure(acknowledged.ErrorValue());
+            owner->state_->opened = candidate != nullptr;
             owner->state_->resources.emplace(std::move(resources));
             owner->state_->output.emplace(std::move(output));
             return Result<std::unique_ptr<AudioFrontend>>::Success(std::move(owner));
