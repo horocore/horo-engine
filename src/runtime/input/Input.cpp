@@ -656,7 +656,7 @@ namespace Horo::Input {
 
         InputBinding BindingFromJson(const nlohmann::json &json) {
             InputBinding binding;
-            binding.kind = static_cast<BindingControlKind>(ProfileInteger(json.at("kind"), Index(BindingControlKind::RawGamepadAxis)));
+            binding.kind = static_cast<BindingControlKind>(ProfileInteger(json.at("kind"), Index(BindingControlKind::GyroscopeAxis)));
             binding.key = static_cast<Key>(ProfileInteger(json, "key", Index(Key::Count) - 1));
             binding.pointerButton = static_cast<PointerButton>(ProfileInteger(json, "pointerButton", Index(PointerButton::Count) - 1));
             binding.gamepadButton = static_cast<GamepadButton>(ProfileInteger(json, "gamepadButton", Index(GamepadButton::Count) - 1));
