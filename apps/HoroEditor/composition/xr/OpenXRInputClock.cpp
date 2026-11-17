@@ -88,6 +88,11 @@ namespace Horo::Application::Internal {
             Duration &step;
             bool committed{};
 
+            /** @brief Retains the scheduler binding after native binding succeeds. */
+            void Commit() noexcept {
+                committed = true;
+            }
+
             ~SchedulerRollback() {
                 if (!committed) {
                     source = {};
@@ -99,7 +104,8 @@ namespace Horo::Application::Internal {
         SchedulerRollback rollback{source_, fixedStep_};
 
         auto bound = BindNative(dispatch);
-        rollback.committed = bound.HasValue();
+        if (bound.HasValue())
+            rollback.Commit();
         return bound;
     }
 

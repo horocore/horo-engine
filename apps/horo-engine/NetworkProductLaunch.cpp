@@ -380,6 +380,12 @@ namespace Horo::Application::Internal {
             return debugger;
         }
 
+        /** @brief Selects the roles and transport provider required by the admitted product role. */
+        [[nodiscard]] Net::NetworkTargetRequirements ProductRequirements(const Net::NetworkProjectRole role) {
+            return {.requiredRoles = RoleSet(role),
+                    .requiredProvider = role == Net::NetworkProjectRole::Standalone ? EmptyProvider() : GnsProvider()};
+        }
+
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
             std::shared_ptr<Clock> clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
@@ -390,10 +396,7 @@ namespace Horo::Application::Internal {
             const auto product = BuiltProduct(project);
             const auto inventory = LinkedPackageInventory(project);
             const auto hostFacts = HeadlessHostFacts(project);
-            const Net::NetworkTargetRequirements requirements{.requiredRoles = RoleSet(launch.role),
-                                                              .requiredProvider = launch.role == Net::NetworkProjectRole::Standalone
-                                                                                      ? EmptyProvider()
-                                                                                      : GnsProvider()};
+            const auto requirements = ProductRequirements(launch.role);
             Net::NetworkTargetSelection selection{.role = launch.role,
                                                   .expectedBuild = product.build,
                                                   .expectedProductRevision = product.revision,

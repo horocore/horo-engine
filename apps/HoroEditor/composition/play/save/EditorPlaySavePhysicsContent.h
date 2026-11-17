@@ -18,8 +18,12 @@ namespace Horo::Application::Internal {
      */
     class PlaySavePhysicsContent final {
     public:
-        [[nodiscard]] static Result<std::shared_ptr<const PlaySavePhysicsContent>> Capture(Runtime::RuntimeSceneView,
-                                                                                           PlaySavePhysicsContentLimits);
+        /** @brief Captures immutable material content using one owned copy of the requested bounds.
+         * @param scene Actual current Scene view. @param requested Bounds copied before any Scene/provider reads.
+         * @return Captured content or the original typed capacity/material failure.
+         */
+        [[nodiscard]] static Result<std::shared_ptr<const PlaySavePhysicsContent>> Capture(Runtime::RuntimeSceneView scene,
+                                                                                           const PlaySavePhysicsContentLimits &requested);
         [[nodiscard]] Sha256Digest Fingerprint() const noexcept;
         [[nodiscard]] Result<void> ValidateMaterials(const Physics::PhysicsStateConstructionManifest &) const;
         [[nodiscard]] std::size_t RetainedPayloadBytes() const noexcept;
@@ -33,7 +37,7 @@ namespace Horo::Application::Internal {
             Physics::PhysicsMaterialPayload bytes;
         };
 
-        [[nodiscard]] Result<void> Collect(Runtime::RuntimeSceneView, PlaySavePhysicsContentLimits);
+        [[nodiscard]] Result<void> Collect(Runtime::RuntimeSceneView, const PlaySavePhysicsContentLimits &);
         [[nodiscard]] Result<void> CollectColliders(Runtime::RuntimeSceneView, const Runtime::RuntimeComponentSet &,
                                                     std::size_t maximumMaterials);
         [[nodiscard]] Result<void> AddMaterial(Runtime::RuntimeSceneView, Assets::AssetId, std::size_t maximum);

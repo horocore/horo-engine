@@ -43,7 +43,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc PlaySavePhysicsContent::Collect */
-    Result<void> PlaySavePhysicsContent::Collect(Runtime::RuntimeSceneView scene, PlaySavePhysicsContentLimits limits) {
+    Result<void> PlaySavePhysicsContent::Collect(Runtime::RuntimeSceneView scene, const PlaySavePhysicsContentLimits &limits) {
         if (!scene.IsCurrent() || scene.SlotCount() > limits.maximumEntitySlots)
             return Result<void>::Failure(MakeError(Physics::PhysicsErrors::CapacityExceeded));
         definition_ = scene.DefinitionId();
@@ -63,7 +63,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PlaySavePhysicsContent::Capture */
     Result<std::shared_ptr<const PlaySavePhysicsContent>> PlaySavePhysicsContent::Capture(Runtime::RuntimeSceneView scene,
-                                                                                          PlaySavePhysicsContentLimits limits) {
+                                                                                          const PlaySavePhysicsContentLimits &requested) {
+        const auto limits = requested;
         using Outcome = Result<std::shared_ptr<const PlaySavePhysicsContent>>;
         if (limits.maximumRetainedBytes < sizeof(PlaySavePhysicsContent))
             return Outcome::Failure(MakeError(Physics::PhysicsErrors::CapacityExceeded));

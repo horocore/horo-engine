@@ -8,13 +8,14 @@
 namespace Horo::Application::Internal {
     /** @copydoc PlaySavePhysicsServices::PlaySavePhysicsServices */
     PlaySavePhysicsServices::PlaySavePhysicsServices(ScenePhysicsHost &native, Runtime::RuntimeSceneService &scenes,
-                                                     PlaySavePhysicsPolicy policy) noexcept
+                                                     const PlaySavePhysicsPolicy &policy) noexcept
         : native_(native), scenes_(scenes), policy_(policy) {}
 
     /** @copydoc PlaySavePhysicsServices::Create */
     Result<std::shared_ptr<PlaySavePhysicsServices>> PlaySavePhysicsServices::Create(ScenePhysicsHost &native,
                                                                                      Runtime::RuntimeSceneService &scenes,
-                                                                                     PlaySavePhysicsPolicy policy) {
+                                                                                     const PlaySavePhysicsPolicy &requested) {
+        const auto policy = requested;
         using Outcome = Result<std::shared_ptr<PlaySavePhysicsServices>>;
         if (!policy.maximumWireBytes || policy.maximumWireBytes > Physics::Detail::MaximumPhysicsStateSaveRecordBytes ||
             !policy.state.maximumRetainedBytes || !policy.state.snapshotSlots)

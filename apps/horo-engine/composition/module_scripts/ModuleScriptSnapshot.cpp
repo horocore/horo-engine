@@ -32,6 +32,11 @@ namespace Horo::Application::Internal {
             Candidate(const Candidate &) = delete;
             Candidate &operator=(const Candidate &) = delete;
 
+            /** @brief Transfers cleanup responsibility to the staged package owner. */
+            void Release() noexcept {
+                owned = false;
+            }
+
             ~Candidate() {
                 if (owned) {
                     std::error_code error;
@@ -83,7 +88,7 @@ namespace Horo::Application::Internal {
             for (const auto &artifact : packet.artifacts)
                 if (auto written = Write(files, candidate.path, artifact); written.HasError())
                     return Result<std::filesystem::path>::Failure(written.ErrorValue());
-            candidate.owned = false;
+            candidate.Release();
             return Result<std::filesystem::path>::Success(std::move(candidate.path));
         }
     }

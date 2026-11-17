@@ -34,8 +34,14 @@ namespace Horo::Application::Internal {
         friend class PlaySavePhysicsCaptureCoverage;
 
     public:
-        [[nodiscard]] static Result<std::shared_ptr<PlaySavePhysicsServices>> Create(ScenePhysicsHost &, Runtime::RuntimeSceneService &,
-                                                                                     PlaySavePhysicsPolicy);
+        /** @brief Admits one owned policy snapshot before constructing the Scene/native adapter.
+         * @param native Existing native Scene authority. @param scenes Existing canonical Scene owner.
+         * @param requested Policy copied before validation and retained independently by the service.
+         * @return The adapter or the original typed invalid-policy/allocation failure.
+         */
+        [[nodiscard]] static Result<std::shared_ptr<PlaySavePhysicsServices>> Create(ScenePhysicsHost &native,
+                                                                                     Runtime::RuntimeSceneService &scenes,
+                                                                                     const PlaySavePhysicsPolicy &requested);
         /** @brief Same-owner published tick readiness; never performs a tick or derives readiness from metadata. */
         [[nodiscard]] Result<bool> CaptureReady() const;
         [[nodiscard]] Result<void> PrepareCapture(const Runtime::PersistentEntityIdentityMap &);
@@ -49,7 +55,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::size_t RetainedPayloadBytes() const noexcept;
 
     private:
-        PlaySavePhysicsServices(ScenePhysicsHost &, Runtime::RuntimeSceneService &, PlaySavePhysicsPolicy) noexcept;
+        PlaySavePhysicsServices(ScenePhysicsHost &, Runtime::RuntimeSceneService &, const PlaySavePhysicsPolicy &) noexcept;
         [[nodiscard]] Result<void> ValidateCaptureScene(const Runtime::CanonicalCaptureContext &) const;
         [[nodiscard]] Result<void> EnsureCapture(const Runtime::CanonicalCaptureContext &);
         [[nodiscard]] bool MatchesCapture(Runtime::RuntimeSceneView, const Runtime::RuntimeSaveCaptureProvenance &) const noexcept;
