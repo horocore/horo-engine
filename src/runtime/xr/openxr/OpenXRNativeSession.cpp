@@ -127,11 +127,15 @@ namespace Horo::XR::OpenXRInternal {
                 if (!ValidExtensionPublication(entry))
                     return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Malformed native extension publication"));
                 const auto name = NativeName(entry.extensionName);
-                if (const auto end = available.begin() + availableCount;
-                    std::find_if(available.begin(), end, [name](const auto &extension) {
+                const auto end = available.begin() + availableCount;
+                if (const auto previous = std::find_if(available.begin(), end,
+                                                       [name](const auto &extension) {
                     return NativeName(extension.extensionName) == name;
-                }) != end)
-                    continue;  // Global and enabled layers may advertise the same extension.
+                });
+                    previous != end) {
+                    previous->extensionVersion = std::max(previous->extensionVersion, entry.extensionVersion);
+                    continue;
+                }
                 if (availableCount == available.size())
                     return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
                 available[availableCount++] = entry;
@@ -162,8 +166,16 @@ namespace Horo::XR::OpenXRInternal {
         Result<void> ValidateExtensionRequests(std::span<const NativeExtensionRequest> requests, std::string_view bindingName) {
             for (std::size_t index = 0; index < requests.size(); ++index) {
                 const auto name = requests[index].name;
-                if (!ValidName(name, XR_MAX_EXTENSION_NAME_SIZE))
+                const auto &request = requests[index];
+                if (!ValidName(name, XR_MAX_EXTENSION_NAME_SIZE) || request.minimumVersion == 0 ||
+                    (request.promotedToCore && !request.promotedToCore->IsValid()))
                     return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+                if (request.dependencies.size() >= MaximumEnabledExtensions)
+                    return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+                if (std::ranges::any_of(request.dependencies, [](const std::string_view dependency) {
+                    return !ValidName(dependency, XR_MAX_EXTENSION_NAME_SIZE);
+                }))
+                    return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Malformed native extension dependency"));
                 if (name == bindingName)
                     return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Graphics extension is already host-owned"));
                 for (std::size_t prior = 0; prior < index; ++prior)
@@ -171,6 +183,73 @@ namespace Horo::XR::OpenXRInternal {
                         return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Duplicate native extension request"));
             }
             return Result<void>::Success();
+        }
+
+        /** @brief Reads the highest version from the validated union of runtime and admitted layer records. */
+        std::uint32_t DiscoveredVersion(std::span<const XrExtensionProperties> available, const std::string_view name) noexcept {
+            const auto found = std::ranges::find(available, name, [](const XrExtensionProperties &extension) {
+                return NativeName(extension.extensionName);
+            });
+            return found == available.end() ? 0 : found->extensionVersion;
+        }
+
+        /** @brief Classifies version and core availability before resolving dependencies. */
+        NativeExtensionState VersionAdmission(const NativeExtensionRequest &request, const std::uint32_t discovered,
+                                              const XRLoaderApiVersion core) noexcept {
+            if (request.promotedToCore && core >= *request.promotedToCore)
+                return NativeExtensionState::PromotedToCore;
+            if (discovered == 0)
+                return NativeExtensionState::Absent;
+            return discovered >= request.minimumVersion ? NativeExtensionState::Enabled : NativeExtensionState::VersionIncompatible;
+        }
+
+        /** @brief Holds startup-only memoized dependency resolution state for one requested feature. */
+        struct PlannedExtension final {
+            NativeExtensionAdmission evidence;
+            bool decided{};
+            bool visiting{};
+        };
+
+        /** @brief Checks whether either the exact extension or its declared core route was admitted. */
+        bool Available(NativeExtensionState state) noexcept {
+            return state == NativeExtensionState::Enabled || state == NativeExtensionState::PromotedToCore;
+        }
+
+        /** @brief Resolves only host-requested dependencies. A repeated active index cannot admit a cycle. */
+        bool ResolveDependencies(std::span<const NativeExtensionRequest> requests, std::span<PlannedExtension> plan, std::size_t index,
+                                 std::string_view graphics) noexcept {
+            auto &entry = plan[index];
+            if (entry.decided)
+                return Available(entry.evidence.state);
+            if (entry.visiting)
+                return false;
+            entry.visiting = true;
+            if (Available(entry.evidence.state)) {
+                for (const auto name : requests[index].dependencies) {
+                    if (name == graphics)
+                        continue;
+                    const auto found = std::ranges::find(requests, name, &NativeExtensionRequest::name);
+                    if (found == requests.end() ||
+                        !ResolveDependencies(requests, plan, static_cast<std::size_t>(found - requests.begin()), graphics)) {
+                        entry.evidence.state = NativeExtensionState::DependencyMissing;
+                        break;
+                    }
+                }
+            }
+            entry.decided = true;
+            return Available(entry.evidence.state);
+        }
+
+        /** @brief Preserves distinct reasons for required extension rejection before native instance creation. */
+        Error RequiredExtensionError(NativeExtensionState state) {
+            switch (state) {
+                case NativeExtensionState::VersionIncompatible:
+                    return MakeError(XRErrors::OperationIncompatible, "Required native extension version is insufficient");
+                case NativeExtensionState::DependencyMissing:
+                    return MakeError(XRErrors::OperationUnavailable, "Required native extension dependencies are unavailable");
+                default:
+                    return MakeError(XRErrors::OperationUnsupported, "Required native extension is absent");
+            }
         }
 
         /** @brief Preserves the feature-plan admission category at the native activation boundary. */
@@ -322,13 +401,13 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::NegotiateExtensions */
     Result<void> OpenXRNativeSession::NegotiateExtensions(std::span<const NativeExtensionRequest> requested) {
-        std::array<XrExtensionProperties, MaximumNativeExtensions> available{};
-        std::uint32_t count{};
-        auto collected = CollectExtensions(nullptr, available, count);
+        discoveredExtensionCount_ = 0;
+        extensionEvidenceCount_ = 0;
+        auto collected = CollectExtensions(nullptr, discoveredExtensions_, discoveredExtensionCount_);
         if (collected.HasError())
             return collected;
         for (std::uint32_t index = 0; index < names_.layerCount; ++index) {
-            collected = CollectExtensions(names_.layers[index], available, count);
+            collected = CollectExtensions(names_.layers[index], discoveredExtensions_, discoveredExtensionCount_);
             if (collected.HasError())
                 return collected;
         }
@@ -341,26 +420,38 @@ namespace Horo::XR::OpenXRInternal {
         if (admitted.HasError())
             return admitted;
         names_.extensionCount = 0;
-        const std::span publication{available.data(), count};
-        admitted = EnableExtension(bindingName, true, publication);
+        const std::span publication{discoveredExtensions_.data(), discoveredExtensionCount_};
+        if (DiscoveredVersion(publication, bindingName) == 0)
+            return Result<void>::Failure(RequiredExtensionError(NativeExtensionState::Absent));
+        admitted = EnableExtension(bindingName);
         if (admitted.HasError())
             return admitted;
-        for (const auto &extension : requested) {
-            admitted = EnableExtension(extension.name, extension.required, publication);
-            if (admitted.HasError())
-                return admitted;
+
+        std::array<PlannedExtension, MaximumEnabledExtensions> plan{};
+        for (std::size_t index = 0; index < requested.size(); ++index) {
+            const auto &request = requested[index];
+            const auto discovered = DiscoveredVersion(publication, request.name);
+            plan[index].evidence = {VersionAdmission(request, discovered, discovery_->acceptedApi), discovered, request.minimumVersion};
+        }
+        const auto entries = std::span{plan}.first(requested.size());
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            const auto &request = requested[index];
+            if (!ResolveDependencies(requested, entries, index, bindingName) && request.required)
+                return Result<void>::Failure(RequiredExtensionError(entries[index].evidence.state));
+            auto &record = extensionEvidence_[extensionEvidenceCount_++];
+            if (!CopyPolicyName(request.name, record.name))
+                return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+            record.admission = entries[index].evidence;
+            if (record.admission.state == NativeExtensionState::Enabled) {
+                if (auto enabled = EnableExtension(request.name); enabled.HasError())
+                    return enabled;
+            }
         }
         return Result<void>::Success();
     }
 
     /** @copydoc OpenXRNativeSession::EnableExtension */
-    Result<void> OpenXRNativeSession::EnableExtension(std::string_view name, bool required,
-                                                      std::span<const XrExtensionProperties> available) {
-        if (std::ranges::none_of(available, [name](const auto &extension) {
-            return NativeName(extension.extensionName) == name;
-        }))
-            return required ? Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Required native extension is absent"))
-                            : Result<void>::Success();
+    Result<void> OpenXRNativeSession::EnableExtension(std::string_view name) {
         if (names_.extensionCount == names_.extensionNames.size())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (!CopyPolicyName(name, names_.extensionNames[names_.extensionCount]))
@@ -536,12 +627,48 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::HasExtension */
     bool OpenXRNativeSession::HasExtension(std::string_view name) const noexcept {
-        if (!owner_.IsValid())
+        if (controlThread_ != std::this_thread::get_id() || !owner_.IsValid())
             return false;
         for (std::uint32_t index = 0; index < names_.extensionCount; ++index)
             if (name == names_.extensions[index])
                 return true;
         return false;
+    }
+
+    /** @copydoc OpenXRNativeSession::ReadExtensionAdmission */
+    Result<NativeExtensionAdmission> OpenXRNativeSession::ReadExtensionAdmission(const XRLoaderPreflightAttempt attempt,
+                                                                                 const std::string_view name) const {
+        using Admission = Result<NativeExtensionAdmission>;
+        if (controlThread_ != std::this_thread::get_id())
+            return Admission::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (!discovery_ || discovery_->selection.attempt != attempt || instance_ == XR_NULL_HANDLE || system_ == XR_NULL_SYSTEM_ID ||
+            (discovery_->phase != DiscoveryPhase::Prepared && discovery_->phase != DiscoveryPhase::SessionPrepared &&
+             discovery_->phase != DiscoveryPhase::Active))
+            return Admission::Failure(MakeError(XRErrors::LoaderPreflightStale));
+        if (!ValidName(name, XR_MAX_EXTENSION_NAME_SIZE))
+            return Admission::Failure(MakeError(XRErrors::OperationInvalid));
+        const auto evidence = std::span{extensionEvidence_}.first(extensionEvidenceCount_);
+        const auto requested = std::ranges::find(evidence, name, [](const ExtensionEvidence &entry) {
+            return std::string_view{entry.name.data()};
+        });
+        if (requested != evidence.end())
+            return Admission::Success(requested->admission);
+        const auto discovered = DiscoveredVersion({discoveredExtensions_.data(), discoveredExtensionCount_}, name);
+        const auto native = std::span{names_.extensions}.first(names_.extensionCount);
+        const auto enabled = std::ranges::find(native, name, [](const char *extension) {
+            return std::string_view{extension};
+        }) != native.end();
+        return Admission::Success(
+            {enabled ? NativeExtensionState::Enabled : (discovered ? NativeExtensionState::Discovered : NativeExtensionState::Absent),
+             discovered, enabled ? 1U : 0U});
+    }
+
+    /** @copydoc OpenXRNativeSession::ReadExtensionAdmission */
+    Result<NativeExtensionAdmission> OpenXRNativeSession::ReadExtensionAdmission(const XRSessionId &session,
+                                                                                 const std::string_view name) const {
+        if (auto current = Validate(session); current.HasError())
+            return Result<NativeExtensionAdmission>::Failure(std::move(current).ErrorValue());
+        return ReadExtensionAdmission(discovery_->selection.attempt, name);
     }
 
     /** @copydoc OpenXRNativeSession::Borrow */

@@ -24,6 +24,26 @@ namespace Horo::XR::OpenXRInternal {
     struct NativeExtensionRequest final {
         std::string_view name;
         bool required{};
+        std::uint32_t minimumVersion{1};                    /**< Minimum version for the extension entry point. */
+        std::span<const std::string_view> dependencies{};   /**< Other explicitly admitted routes required by this request. */
+        std::optional<XRLoaderApiVersion> promotedToCore{}; /**< Earliest usable core API when the host implements that route. */
+    };
+
+    /** @brief Native extension evidence retained for the exact selected discovery attempt. */
+    enum class NativeExtensionState : std::uint8_t {
+        Absent,
+        Discovered,
+        Enabled,
+        PromotedToCore,
+        VersionIncompatible,
+        DependencyMissing,
+    };
+
+    /** @brief Value-only observation of native discovery and extension policy. */
+    struct NativeExtensionAdmission final {
+        NativeExtensionState state{};
+        std::uint32_t discoveredVersion{};
+        std::uint32_t minimumVersion{}; /**< Zero when the host did not request this extension. */
     };
 
     /** @brief Non-owning private native tuple; valid only during a fenced control-thread host operation before Close. */
@@ -191,6 +211,17 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] XRSessionId Session() const noexcept;
         /** @brief Returns whether negotiation enabled an exact extension; false while unpublished. */
         [[nodiscard]] bool HasExtension(std::string_view name) const noexcept;
+        /** @brief Copies extension evidence while the exact discovered owner is current on the control thread.
+         * @param attempt Exact discovery attempt. @param name Known extension policy name or advertised native name.
+         * @return Owned observation or typed invalid, stale or wrong-thread failure.
+         */
+        [[nodiscard]] Result<NativeExtensionAdmission> ReadExtensionAdmission(XRLoaderPreflightAttempt attempt,
+                                                                              std::string_view name) const;
+        /** @brief Revalidates the active session and copies its extension admission before binding a native provider.
+         * @param session Exact live session. @param name Extension route used by the provider.
+         * @return Evidence for that route or the typed session/extension inspection failure.
+         */
+        [[nodiscard]] Result<NativeExtensionAdmission> ReadExtensionAdmission(const XRSessionId &session, std::string_view name) const;
         /**
          * @brief Borrows the exact complete native tuple for explicitly composed downstream native adapters.
          * @param session Exact Horo identity; stale owner/capability/device evidence rejects the borrow.
@@ -209,8 +240,8 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> EnableLayer(std::string_view name, std::span<const XrApiLayerProperties> available);
         /** @brief Combines runtime/layer publications and admits host graphics before optional feature extensions. */
         [[nodiscard]] Result<void> NegotiateExtensions(std::span<const NativeExtensionRequest> requested);
-        /** @brief Enables one previously validated policy name only when its bounded publication contains it. */
-        [[nodiscard]] Result<void> EnableExtension(std::string_view name, bool required, std::span<const XrExtensionProperties> available);
+        /** @brief Copies one unique, admitted name into the native instance request. */
+        [[nodiscard]] Result<void> EnableExtension(std::string_view name);
         /** @brief Enumerates one bounded global/layer extension publication without truncation. */
         [[nodiscard]] Result<void> CollectExtensions(const char *layer,
                                                      std::array<XrExtensionProperties, MaximumNativeExtensions> &available,
@@ -296,6 +327,16 @@ namespace Horo::XR::OpenXRInternal {
         };
 
         NegotiatedNames names_;
+
+        struct ExtensionEvidence final {
+            std::array<char, XR_MAX_EXTENSION_NAME_SIZE> name{};
+            NativeExtensionAdmission admission;
+        };
+
+        std::array<XrExtensionProperties, MaximumNativeExtensions> discoveredExtensions_{};
+        std::array<ExtensionEvidence, MaximumEnabledExtensions> extensionEvidence_{};
+        std::uint32_t discoveredExtensionCount_{};
+        std::size_t extensionEvidenceCount_{};
 
         bool graphicsPrepared_{};
         bool retirementCall_{}; /**< Rejects reentrant native destruction while preserving explicit retry after return. */

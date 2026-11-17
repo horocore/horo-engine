@@ -121,7 +121,10 @@ namespace Horo::Application::Internal {
         auto native = native_->Borrow(selected);
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());
-        if (!native_->HasExtension(ConversionExtension))
+        const auto admission = native_->ReadExtensionAdmission(selected, ConversionExtension);
+        if (admission.HasError())
+            return Result<void>::Failure(admission.ErrorValue());
+        if (admission.Value().state != XR::OpenXRInternal::NativeExtensionState::Enabled)
             return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
         PFN_xrVoidFunction converter{};
         if (const auto result = getProc(native.Value().instance, ConversionFunction, &converter); result != XR_SUCCESS || !converter)

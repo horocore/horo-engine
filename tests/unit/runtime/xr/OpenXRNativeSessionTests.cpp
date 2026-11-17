@@ -100,6 +100,110 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.script.liveInstances == 0);
     }
 
+    TEST_CASE("OpenXR extension evidence separates discovery version compatibility and missing dependencies", "[unit][xr][native]") {
+        Fixture fixture;
+        constexpr std::string_view depth = "XR_KHR_composition_layer_depth";
+        fixture.script.depthExtension = true;
+        fixture.script.extensionCount = 2;
+        auto request = fixture.Request();
+        SECTION("discovered but unrequested") {
+            REQUIRE(fixture.owner.Create(request).HasValue());
+            const auto evidence = fixture.owner.ReadExtensionAdmission(request.activeAttempt, depth);
+            REQUIRE(evidence.HasValue());
+            CHECK(evidence.Value().state == NativeExtensionState::Discovered);
+            CHECK(evidence.Value().discoveredVersion == 1);
+            CHECK(evidence.Value().minimumVersion == 0);
+            CHECK_FALSE(fixture.owner.HasExtension(depth));
+        }
+        SECTION("optional request with a newer minimum version") {
+            const std::array extensions{NativeExtensionRequest{.name = depth, .minimumVersion = 2}};
+            request.extensions = extensions;
+            REQUIRE(fixture.owner.Create(request).HasValue());
+            const auto evidence = fixture.owner.ReadExtensionAdmission(request.activeAttempt, depth);
+            REQUIRE(evidence.HasValue());
+            CHECK(evidence.Value().state == NativeExtensionState::VersionIncompatible);
+            CHECK(evidence.Value().discoveredVersion == 1);
+            CHECK(evidence.Value().minimumVersion == 2);
+            CHECK_FALSE(fixture.owner.HasExtension(depth));
+        }
+        SECTION("required request with a newer minimum version") {
+            const std::array extensions{NativeExtensionRequest{.name = depth, .required = true, .minimumVersion = 2}};
+            request.extensions = extensions;
+            RequireFailureIdentity(fixture.owner.Create(request), XRErrors::OperationIncompatible);
+            CHECK(fixture.script.liveInstances == 0);
+        }
+        SECTION("the declared core route suppresses a duplicate advertised extension") {
+            const std::array extensions{
+                NativeExtensionRequest{.name = depth, .required = true, .promotedToCore = request.preflight.LoaderApiVersion()}};
+            request.extensions = extensions;
+            REQUIRE(fixture.owner.Create(request).HasValue());
+            const auto evidence = fixture.owner.ReadExtensionAdmission(request.activeAttempt, depth);
+            REQUIRE(evidence.HasValue());
+            CHECK(evidence.Value().state == NativeExtensionState::PromotedToCore);
+            CHECK(evidence.Value().discoveredVersion == 1);
+            CHECK(fixture.script.enabledExtensions.size() == 1);
+        }
+        SECTION("advertised feature depends on a missing request") {
+            constexpr std::array dependencies{std::string_view{"XR_TEST_missing"}};
+            const std::array extensions{NativeExtensionRequest{.name = depth, .dependencies = dependencies}};
+            request.extensions = extensions;
+            REQUIRE(fixture.owner.Create(request).HasValue());
+            CHECK(fixture.owner.ReadExtensionAdmission(request.activeAttempt, depth).Value().state ==
+                  NativeExtensionState::DependencyMissing);
+            CHECK_FALSE(fixture.owner.HasExtension(depth));
+        }
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.owner.ReadExtensionAdmission(request.activeAttempt, depth).HasError());
+    }
+
+    TEST_CASE("OpenXR core promotion admits a declared dependency without enabling its extension name", "[unit][xr][native]") {
+        Fixture fixture;
+        constexpr std::string_view depth = "XR_KHR_composition_layer_depth";
+        constexpr std::string_view promoted = "XR_TEST_promoted";
+        constexpr std::array needsCore{promoted};
+        fixture.script.depthExtension = true;
+        fixture.script.extensionCount = 2;
+        auto request = fixture.Request();
+        const std::array extensions{NativeExtensionRequest{.name = depth, .required = true, .dependencies = needsCore},
+                                    NativeExtensionRequest{.name = promoted,
+                                                           .required = true,
+                                                           .promotedToCore = request.preflight.LoaderApiVersion()}};
+        request.extensions = extensions;
+        REQUIRE(fixture.owner.Create(request).HasValue());
+        const auto core = fixture.owner.ReadExtensionAdmission(request.activeAttempt, promoted);
+        REQUIRE(core.HasValue());
+        CHECK(core.Value().state == NativeExtensionState::PromotedToCore);
+        CHECK(core.Value().discoveredVersion == 0);
+        CHECK_FALSE(fixture.owner.HasExtension(promoted));
+        CHECK(fixture.owner.HasExtension(depth));
+        CHECK(fixture.owner.ReadExtensionAdmission(request.candidate, depth).Value().state == NativeExtensionState::Enabled);
+        CHECK(std::ranges::find(fixture.script.enabledExtensions, promoted) == fixture.script.enabledExtensions.end());
+        CHECK(std::ranges::find(fixture.script.enabledExtensions, depth) != fixture.script.enabledExtensions.end());
+        REQUIRE(fixture.owner.RetireSession().HasValue());
+        CHECK_FALSE(fixture.owner.HasExtension(depth));
+        CHECK(fixture.owner.ReadExtensionAdmission(request.candidate, depth).HasError());
+        CHECK(fixture.owner.ReadExtensionAdmission(request.activeAttempt, promoted).Value().state == NativeExtensionState::PromotedToCore);
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.owner.ReadExtensionAdmission(request.activeAttempt, promoted).HasError());
+    }
+
+    TEST_CASE("OpenXR cannot admit optional dependency cycles", "[unit][xr][native]") {
+        Fixture fixture;
+        constexpr std::string_view first = "XR_TEST_first";
+        constexpr std::string_view second = "XR_TEST_second";
+        constexpr std::array firstNeeds{second};
+        constexpr std::array secondNeeds{first};
+        auto request = fixture.Request();
+        const auto core = request.preflight.LoaderApiVersion();
+        const std::array extensions{NativeExtensionRequest{.name = first, .dependencies = firstNeeds, .promotedToCore = core},
+                                    NativeExtensionRequest{.name = second, .dependencies = secondNeeds, .promotedToCore = core}};
+        request.extensions = extensions;
+        REQUIRE(fixture.owner.Create(request).HasValue());
+        CHECK(fixture.owner.ReadExtensionAdmission(request.activeAttempt, first).Value().state == NativeExtensionState::DependencyMissing);
+        CHECK(fixture.owner.ReadExtensionAdmission(request.activeAttempt, second).Value().state == NativeExtensionState::DependencyMissing);
+        CHECK(fixture.script.enabledExtensions.size() == 1);
+    }
+
     TEST_CASE("OpenXR invalid graphics binding and host exception roll back the instance", "[unit][xr][native]") {
         Fixture fixture;
         SECTION("native type mismatch") {

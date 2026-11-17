@@ -29,6 +29,7 @@ namespace Horo::Tests::OpenXR {
         std::string_view absent;
         std::string_view instanceDispatchAbsent;
         std::vector<std::string_view> calls;
+        std::vector<std::string> enabledExtensions;
         bool depthExtension{};
         bool legacyVulkan{};   /**< Selects the existing Vulkan-enable1 application bridge in real-loader fixtures. */
         bool clockExtension{}; /**< Optional official native clock extension for same-production-clock tests. */
@@ -106,6 +107,9 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL CreateInstance(const XrInstanceCreateInfo *info, XrInstance *instance) {
             active->enabledLayer = info->enabledApiLayerCount == 1 && std::string_view{info->enabledApiLayerNames[0]} == "XR_APILAYER_TEST";
+            active->enabledExtensions.clear();
+            for (std::uint32_t index = 0; index < info->enabledExtensionCount; ++index)
+                active->enabledExtensions.emplace_back(info->enabledExtensionNames[index]);
             const auto result = Record("instance");
             if (XR_SUCCEEDED(result)) {
                 *instance = NativeHandle<XrInstance>(++active->liveInstances);
