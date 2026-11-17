@@ -26,8 +26,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Preserves canonical cancellation evidence without assuming an optional snapshot exists. */
         Error CancelledPacketError(const SaveOperationHandle &operation) {
-            const auto observed = operation.Snapshot();
-            if (observed && observed->terminalError)
+            if (const auto observed = operation.Snapshot(); observed && observed->terminalError)
                 return *observed->terminalError;
             return MakeError(SaveErrors::OperationCancelled);
         }

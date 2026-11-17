@@ -27,7 +27,7 @@ namespace Horo::Application::Internal {
 
     namespace {
         /** @brief Mutates only the exact selected sandbox through ordinary lifecycle consent and cancellation checks. */
-        Result<void> ApplyStorageAction(PlaySaveStorageAction action, PlaySaveStorage &storage,
+        Result<void> ApplyStorageAction(PlaySaveStorageAction action, const PlaySaveStorage &storage,
                                         const std::optional<Runtime::SaveManagerCommand> &selection,
                                         const CancellationToken &cancellation) {
             if (action == PlaySaveStorageAction::Cleanup)

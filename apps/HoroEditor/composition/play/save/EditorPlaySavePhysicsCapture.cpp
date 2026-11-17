@@ -21,9 +21,9 @@ namespace Horo::Application::Internal {
     Result<void> PlaySavePhysicsServices::ValidateCaptureScene(const Runtime::CanonicalCaptureContext &context) const {
         if (owner_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::ThreadAffinityViolation));
-        const auto scene = scenes_.ActiveScene();
-        if (!scene || !scene->IsCurrent() || scene->RuntimeId().value != context.provenance.sceneIncarnation ||
-            scene->StructuralRevision() != context.provenance.sceneRevision)
+        if (const auto scene = scenes_.ActiveScene(); !scene || !scene->IsCurrent() ||
+                                                      scene->RuntimeId().value != context.provenance.sceneIncarnation ||
+                                                      scene->StructuralRevision() != context.provenance.sceneRevision)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::CaptureContextInvalid));
         return Result<void>::Success();
     }
@@ -57,7 +57,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc PlaySavePhysicsServices::MatchesCapture */
-    bool PlaySavePhysicsServices::MatchesCapture(Runtime::RuntimeSceneView scene,
+    bool PlaySavePhysicsServices::MatchesCapture(const Runtime::RuntimeSceneView &scene,
                                                  const Runtime::RuntimeSaveCaptureProvenance &provenance) const noexcept {
         if (owner_ != std::this_thread::get_id())
             return false;
@@ -66,7 +66,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc PlaySavePhysicsCaptureCoverage::Matches */
-    bool PlaySavePhysicsCaptureCoverage::Matches(Runtime::RuntimeSceneView scene) const noexcept {
+    bool PlaySavePhysicsCaptureCoverage::Matches(const Runtime::RuntimeSceneView &scene) const noexcept {
         const auto owner = owner_.lock();
         return owner && owner->MatchesCapture(scene, provenance_);
     }

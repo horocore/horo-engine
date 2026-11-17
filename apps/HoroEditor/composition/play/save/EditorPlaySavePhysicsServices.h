@@ -15,7 +15,10 @@ namespace Horo::Application::Internal {
         friend class PlaySavePhysicsServices;
 
     public:
-        [[nodiscard]] bool Matches(Runtime::RuntimeSceneView) const noexcept;
+        /** @brief Checks a Scene borrow synchronously without retaining Scene storage.
+         * @param scene Owner-thread view read only during this call. @return True for the exact current captured provenance.
+         */
+        [[nodiscard]] bool Matches(const Runtime::RuntimeSceneView &scene) const noexcept;
 
     private:
         std::weak_ptr<PlaySavePhysicsServices> owner_;
@@ -82,7 +85,7 @@ namespace Horo::Application::Internal {
     private:
         [[nodiscard]] Result<void> ValidateCaptureScene(const Runtime::CanonicalCaptureContext &) const;
         [[nodiscard]] Result<void> EnsureCapture(const Runtime::CanonicalCaptureContext &);
-        [[nodiscard]] bool MatchesCapture(Runtime::RuntimeSceneView, const Runtime::RuntimeSaveCaptureProvenance &) const noexcept;
+        [[nodiscard]] bool MatchesCapture(const Runtime::RuntimeSceneView &, const Runtime::RuntimeSaveCaptureProvenance &) const noexcept;
         ScenePhysicsHost &native_;
         Runtime::RuntimeSceneService &scenes_;
         PlaySavePhysicsPolicy policy_;
