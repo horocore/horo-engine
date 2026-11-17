@@ -515,7 +515,8 @@ namespace Horo::Editor::Theme {
             const auto encodedName = nativePath.stem().u8string();
             loaded.name = nameIt != document.end() && nameIt->is_string() ? nameIt->get<std::string>()
                                                                           : std::string{encodedName.begin(), encodedName.end()};
-            loaded.sourcePath = path;
+            const auto encodedSource = nativePath.generic_u8string();
+            loaded.sourcePath.assign(encodedSource.begin(), encodedSource.end());
             loaded.isBuiltIn = false;
             loaded.designTokens = DefaultDesignTokens();
             ReadThemeColors(document, loaded.colors);
