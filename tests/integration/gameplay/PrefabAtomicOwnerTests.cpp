@@ -152,6 +152,118 @@ namespace Horo::Application::PrefabAtomicTest {
                     CHECK(agent.agent.agent.Value() > highWater);
         }
 
+        TEST_CASE("Cooked prefab degraded AI preserves the unresolved authored controller without execution authority",
+                  "[prefab][integration][atomic][ai][degraded]") {
+            Fixture fixture{false, AiDescriptor, {.missingController = AI::AiMissingControllerPolicy::PreserveInactive}};
+            fixture.Tick(1);
+            fixture.Reach(3);
+            const auto snapshot = fixture.ai.Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const auto agents = snapshot.Value().Agents();
+            REQUIRE(agents.size() == 3);
+            CHECK(std::ranges::count(agents, AI::AiAgentActivationState::Active, &AI::AiAgentRuntimeRecord::state) == 2);
+            const auto unavailable = std::ranges::find(agents, AI::AiAgentActivationState::Degraded, &AI::AiAgentRuntimeRecord::state);
+            REQUIRE(unavailable != agents.end());
+            CHECK_FALSE(unavailable->hasBlackboard);
+            CHECK(unavailable->stagedCapabilities.bits == 0);
+            REQUIRE(unavailable->controller);
+            CHECK(unavailable->controller->enabled);
+            CHECK(unavailable->controller->controller == AI::TestSupport::MakeIdentity<AI::ControllerTypeId>(99));
+            CHECK(unavailable->controller->decisionAsset == fixture.controller.descriptor.decisionAsset);
+            const auto scene = fixture.scenes.ActiveScene();
+            REQUIRE(scene);
+            const auto entity = scene->Get(unavailable->owner);
+            REQUIRE(entity.HasValue());
+            CHECK(entity.Value().components->aiAgent == std::optional{unavailable->agent});
+            CHECK(entity.Value().components->aiController == unavailable->controller);
+            CHECK(fixture.ai.StartTaskAtSafePoint(unavailable->handle, AI::TestSupport::MakeIdentity<AI::TaskId>(31)).HasError());
+            CHECK(fixture.ai.CaptureDecisionSnapshotAtSafePoint(unavailable->handle).HasError());
+            const auto canonical = fixture.ai.CaptureCanonicalState(*scene);
+            REQUIRE(canonical.HasValue());
+            const auto durable = std::ranges::find_if(canonical.Value().agents, [&](const auto &entry) {
+                return entry.authored == unavailable->agent;
+            });
+            REQUIRE(durable != canonical.Value().agents.end());
+            REQUIRE(durable->controller);
+            CHECK(durable->controller->authored == *unavailable->controller);
+            CHECK_FALSE(durable->controller->blackboard);
+            fixture.Tick(2);
+            fixture.Reach(1);
+            CHECK(fixture.ai.Find(unavailable->handle).HasError());
+        }
+
+        /** @brief Observes whether aggregate retirement revokes the actual owner token before scheduler callbacks. */
+        struct RetirementProbe final : AI::IAiScheduledDecision {
+            CancellationToken owner;
+            bool revokedOnCancel{};
+            std::size_t cancellations{};
+
+            Result<AI::AiSliceOutcome> Evaluate(const AI::AiDecisionSliceContext &, AI::AiWorkBudget &) noexcept override {
+                return Result<AI::AiSliceOutcome>::Success(AI::AiSliceOutcome::Complete);
+            }
+
+            Result<bool> Commit(const AI::AiDecisionSliceContext &, AI::AiWorkBudget &) noexcept override {
+                return Result<bool>::Success(true);
+            }
+
+            void Cancel() noexcept override {
+                revokedOnCancel = owner.IsCancellationRequested();
+                ++cancellations;
+            }
+        };
+
+        TEST_CASE("Cooked prefab despawn fences live AI work and frozen blackboards before a replacement spawn",
+                  "[prefab][integration][atomic][ai][retirement]") {
+            Fixture fixture;
+            REQUIRE(fixture.ai.ConfigureTaskSchedulerAtSafePoint(fixture.jobs).HasValue());
+            const auto scheduler = fixture.ai.TaskSchedulerAtSafePoint();
+            REQUIRE(scheduler.HasValue());
+            const auto resident = fixture.ai.Snapshot().Value().Agents().front().handle;
+            const auto residentSnapshot = fixture.ai.CaptureDecisionSnapshotAtSafePoint(resident);
+            REQUIRE(residentSnapshot.HasValue());
+
+            fixture.Tick(1);
+            fixture.Reach(3);
+            const auto snapshot = fixture.ai.Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const auto agent = std::ranges::find_if(snapshot.Value().Agents(), [resident](const auto &entry) {
+                return entry.handle != resident;
+            });
+            REQUIRE(agent != snapshot.Value().Agents().end());
+            auto reserved = fixture.ai.ReserveDecisionTaskSlotsAtSafePoint(agent->handle, 1);
+            REQUIRE(reserved.HasValue());
+            const auto retained = fixture.ai.CaptureDecisionSnapshotAtSafePoint(agent->handle);
+            REQUIRE(retained.HasValue());
+            const auto task = fixture.ai.StartTaskAtSafePoint(agent->handle, AI::TestSupport::MakeIdentity<AI::TaskId>(31));
+            REQUIRE(task.HasValue());
+            const auto retainedCapability = fixture.ai.CapabilityAtSafePoint();
+            REQUIRE(retainedCapability.InspectTask(agent->handle, task.Value()).HasValue());
+            auto probe = std::make_shared<RetirementProbe>();
+            probe->owner = reserved.Value().Cancellation();
+            REQUIRE(fixture.ai.RegisterDecisionAtSafePoint(agent->handle, {}, std::make_shared<int>(1), probe).HasValue());
+            REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
+            REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
+
+            fixture.Tick(2);
+            fixture.Reach(1);
+            CHECK(probe->cancellations == 1);
+            CHECK(probe->revokedOnCancel);
+            CHECK_FALSE(reserved.Value().CanAdmit());
+            CHECK(retained.Value().Revision().HasError());
+            CHECK(retainedCapability.InspectTask(agent->handle, task.Value()).HasError());
+            CHECK(scheduler.Value()->Wake(agent->handle, {.perception = true}).HasError());
+            CHECK(residentSnapshot.Value().Revision().HasValue());
+
+            fixture.RestartGameplay();
+            fixture.Tick(3);
+            fixture.Reach(3);
+            const auto replacement = fixture.ai.Snapshot();
+            REQUIRE(replacement.HasValue());
+            CHECK(replacement.Value().Find(agent->handle).HasError());
+            CHECK(replacement.Value().Find(resident).HasValue());
+            CHECK(probe->cancellations == 1);
+        }
+
         TEST_CASE("Cancelling accepted prefab work or unloading its actual module never publishes a partial aggregate",
                   "[prefab][integration][atomic][cancel]") {
             Fixture fixture;

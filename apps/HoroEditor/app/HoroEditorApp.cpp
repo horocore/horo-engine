@@ -3057,6 +3057,7 @@ namespace Horo::Editor {
             auto scenePolicy = std::move(capturedPolicy).Value();
             scenePolicy.prefabMetrics = p.telemetry.prefab;
             scenePolicy.uiSources = std::move(uiSources);
+            scenePolicy.aiSettings.missingController = AI::AiMissingControllerPolicy::PreserveInactive;
             std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
             if (scenePolicy.cooked)
                 worldBakeDependencies.emplace(scenePolicy.cooked->targetRoot, scenePolicy.cooked->target,
@@ -3202,6 +3203,7 @@ namespace Horo::Editor {
             auto runtimeScene = std::move(preview.scenes);
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
             auto playPolicy = scenePolicy;
+            playPolicy.aiSettings.missingController = AI::AiMissingControllerPolicy::Reject;
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
             playPolicy.xrHost = SelectedEditorPlayHost(p.presentation.composition);

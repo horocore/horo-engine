@@ -63,6 +63,6 @@ namespace Horo::AI::Detail {
     [[nodiscard]] Result<std::vector<AgentRuntimeState>> PrepareStructuralAgents(AiSceneActivationBinding binding,
                                                                                  std::span<const AiSceneAgentDescriptor> agents,
                                                                                  std::span<const AiControllerDescriptor> descriptors,
-                                                                                 AiCapabilitySet capabilities,
+                                                                                 const AiSceneRuntimeSettings &settings,
                                                                                  std::span<const Horo::Handle<AgentHandleTag>> slots);
 }  // namespace Horo::AI::Detail

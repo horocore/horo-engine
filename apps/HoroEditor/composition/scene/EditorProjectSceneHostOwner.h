@@ -322,7 +322,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         /** @brief Registers the same canonical AI, selected XR and final UI participants in publication order. */
         Result<void> RegisterPresentationParticipants(const EditorProjectScenePolicy &policy) {
-            auto ai = AI::AiSceneRuntime::Create();
+            auto ai = AI::AiSceneRuntime::Create(policy.aiSettings);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             ai_ = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());

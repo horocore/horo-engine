@@ -149,8 +149,11 @@ namespace Horo::AI {
                     return Result<Detail::RestoreAgent>::Failure(generation.ErrorValue());
                 staged.replacementSchema.instanceGeneration = generation.Value();
             }
-            if (source.state == AiCanonicalAgentState::Disabled)
+            if (source.state == AiCanonicalAgentState::Disabled) {
+                if (destination.record.state == AiAgentActivationState::Degraded)
+                    staged.state = AiAgentActivationState::Degraded;
                 return Result<Detail::RestoreAgent>::Success(std::move(staged));
+            }
             if (!destination.schema || !staged.replacementSchema.IsValid())
                 return Result<Detail::RestoreAgent>::Failure(MakeError(AIErrors::CanonicalSchemaUnsupported));
             if ((source.controller->authored.requiredCapabilities.bits & ~available.bits) != 0)

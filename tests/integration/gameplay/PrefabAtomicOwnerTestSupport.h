@@ -188,7 +188,7 @@ namespace Horo::Application::PrefabAtomicTest {
             std::move(Physics::PhysicsRuntime::Create(Physics::PhysicsRuntimeMode::Canonical)).Value()};
         AI::TestSupport::ActivationFixture controller{AI::TestSupport::MakeFixture(1, 11, 1, 0)};
         std::array<AI::AiControllerDescriptor, 1> catalog{controller.descriptor};
-        AI::AiSceneRuntime ai{std::move(AI::AiSceneRuntime::Create()).Value()};
+        AI::AiSceneRuntime ai;
         Physics::PhysicsSceneActivationAuthority authority;
         ScenePhysicsHost native;
         Runtime::RuntimeSceneService scenes{registry, loads};
@@ -201,7 +201,8 @@ namespace Horo::Application::PrefabAtomicTest {
         Sha256Digest materialArtifact;
         std::uint64_t frame{};
 
-        explicit Fixture(bool aiFirst = false, Fault fault = Fault::None) {
+        explicit Fixture(bool aiFirst = false, Fault fault = Fault::None, const AI::AiSceneRuntimeSettings &aiSettings = {})
+            : ai(std::move(AI::AiSceneRuntime::Create(aiSettings)).Value()) {
             PublishRegistry();
             PublishMaterial(fault);
             artifact = PublishTemplate(fault);
@@ -371,17 +372,14 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(initial.HasValue());
             REQUIRE(scenes.AddActivationParticipant(std::move(initial).Value()).HasValue());
             REQUIRE(scenes.AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(ai, catalog)).HasValue());
-            const std::span<const AI::AiControllerDescriptor> structuralCatalog =
-                fault == Fault::AiDescriptor ? std::span<const AI::AiControllerDescriptor>{}
-                                             : std::span<const AI::AiControllerDescriptor>{catalog};
             if (aiFirst)
-                REQUIRE(scenes.AddStructuralParticipant(AiOwner(structuralCatalog, fault)).HasValue());
+                REQUIRE(scenes.AddStructuralParticipant(AiOwner(catalog, fault)).HasValue());
             auto structural = native.MakeStructuralParticipant();
             REQUIRE(structural.HasValue());
             REQUIRE(scenes.AddStructuralParticipant(std::move(structural).Value()).HasValue());
             REQUIRE(scenes.AddStructuralParticipant(MakeGameplayStructuralParticipant(activeGameplay)).HasValue());
             if (!aiFirst)
-                REQUIRE(scenes.AddStructuralParticipant(AiOwner(structuralCatalog, fault)).HasValue());
+                REQUIRE(scenes.AddStructuralParticipant(AiOwner(catalog, fault)).HasValue());
             if (fault == Fault::DuplicateProducer)
                 REQUIRE(scenes.AddStructuralParticipant(ai.MakeStructuralParticipant(catalog)).HasError());
         }

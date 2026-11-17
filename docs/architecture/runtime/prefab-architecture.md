@@ -1288,6 +1288,20 @@ providers and borrowed providers obey the same exact Scene identity fences.
 Public-header consumers and real multi-owner rollback/lifecycle tests qualify
 the two narrow headers and the application composition.
 
+The AI owner resolves controller, decision and blackboard bindings before the
+structural transaction publishes. Strict gameplay hosts reject a missing
+controller descriptor with the whole candidate still detached. Editor preview
+and prefab authoring can explicitly select
+`AiMissingControllerPolicy::PreserveInactive`. A well-formed unresolved
+controller then publishes as a degraded AI record with its authored fields
+preserved. The degraded record has no blackboard, task admission or execution
+capability. Malformed and incompatible bindings still reject the transaction.
+
+Despawn revokes the actor's AI lifetime and dependent decision reservations at
+the aggregate fence. After publication the AI owner unregisters its scheduler
+entry, cancels owned work and tears down blackboard reads and observers. Resident
+agents outside the destroyed group retain their generations and state.
+
 ### Selection Physics endpoint codec domain
 
 Selection creation rewrites internal collider and constraint body endpoints into

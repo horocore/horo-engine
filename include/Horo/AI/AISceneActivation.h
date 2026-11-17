@@ -50,6 +50,7 @@ namespace Horo::AI {
         Active,
         Disabled,
         Retired,
+        Degraded, /**< Host retained authored bindings without an available controller descriptor or execution authority. */
         Count,
     };
 
@@ -174,16 +175,25 @@ namespace Horo::AI {
         bool published_{};
     };
 
+    /** @brief Explicit product policy for a well-formed controller whose descriptor is unavailable. */
+    enum class AiMissingControllerPolicy : std::uint8_t {
+        Reject,
+        PreserveInactive,
+        Count,
+    };
+
     /** @brief Bounded host policy and staged capability evidence for one AI scene runtime. */
     struct AiSceneRuntimeSettings final {
         std::size_t maximumAgents{MaximumAiSceneAgents};
         AiCapabilitySet availableCapabilities{AiCapabilitySet::Of(AiCapability::Behavior)
                                                   .Union(AiCapabilitySet::Of(AiCapability::Navigation))
                                                   .Union(AiCapabilitySet::Of(AiCapability::Perception))};
+        AiMissingControllerPolicy missingController{AiMissingControllerPolicy::Reject};
 
         /** @brief Checks product limits and closed capability bits. @return True when the settings are usable. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return maximumAgents > 0 && maximumAgents <= MaximumAiSceneAgents && availableCapabilities.IsValid();
+            return maximumAgents > 0 && maximumAgents <= MaximumAiSceneAgents && availableCapabilities.IsValid() &&
+                   missingController < AiMissingControllerPolicy::Count;
         }
     };
 

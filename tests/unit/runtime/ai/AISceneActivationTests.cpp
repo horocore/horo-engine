@@ -40,6 +40,34 @@ namespace Horo::AI {
             CHECK(retained.Value().hasRunningTask);
         }
 
+        TEST_CASE("AI preview preserves only missing controller descriptors and still rejects incompatible bindings",
+                  "[unit][ai][scene][activation]") {
+            auto runtime = std::move(AiSceneRuntime::Create({.missingController = AiMissingControllerPolicy::PreserveInactive})).Value();
+            auto fixture = MakeFixture(21, 31, 17, 0);
+            SECTION("Missing descriptor publishes an inert record") {
+                auto prepared = runtime.PrepareScene(fixture.binding, std::array{fixture.agent}, {});
+                REQUIRE(prepared.HasValue());
+                auto candidate = std::move(prepared).Value();
+                REQUIRE(candidate->ValidatePublication().HasValue());
+                candidate->Publish();
+                const auto snapshot = runtime.Snapshot();
+                REQUIRE(snapshot.HasValue());
+                REQUIRE(snapshot.Value().Agents().size() == 1);
+                const auto &agent = snapshot.Value().Agents().front();
+                CHECK(agent.state == AiAgentActivationState::Degraded);
+                CHECK(agent.agent == fixture.agent.agent);
+                CHECK(agent.controller == fixture.agent.controller);
+                CHECK_FALSE(agent.hasBlackboard);
+                ExpectError(runtime.StartTaskAtSafePoint(agent.handle, MakeIdentity<TaskId>(41)), AIErrors::HandleInvalid);
+            }
+            SECTION("Existing descriptor with an incompatible authored plan is an error") {
+                fixture.agent.controller->decisionAsset = MakeIdentity<DecisionGraphAssetId>(999);
+                const auto prepared = runtime.PrepareScene(fixture.binding, std::array{fixture.agent}, std::array{fixture.descriptor});
+                ExpectError(prepared, AIErrors::ControllerDescriptorIncompatible);
+                ExpectError(runtime.Snapshot(), AIErrors::RuntimeUnavailable);
+            }
+        }
+
         TEST_CASE("Disabling an AI agent cancels owned task state before revoking capabilities", "[unit][ai][scene][activation]") {
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
             auto fixture = MakeFixture(51, 61, 27, 0);

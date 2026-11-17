@@ -176,7 +176,7 @@ namespace Horo::AI {
 
         [[nodiscard]] Result<void> PrepareAgentRuntimeState(const AiSceneActivationBinding binding, const AiSceneAgentDescriptor &input,
                                                             const std::span<const AiControllerDescriptor> descriptors,
-                                                            const AiCapabilitySet availableCapabilities, const std::uint32_t slotIndex,
+                                                            const AiSceneRuntimeSettings &settings, const std::uint32_t slotIndex,
                                                             std::optional<AgentRuntimeState> &prepared,
                                                             const std::uint32_t generation = 1) {
             prepared.reset();
@@ -186,24 +186,27 @@ namespace Horo::AI {
             const AgentHandle handle{binding.incarnation, Horo::Handle<AgentHandleTag>{slotIndex, generation}};
             const AiControllerDescriptor *descriptor =
                 input.controller ? FindDescriptor(descriptors, input.controller->controller) : nullptr;
+            const bool shouldStart = sceneStartup && controllerStartup;
+            const bool missing = shouldStart && descriptor == nullptr;
+            if (missing && settings.missingController == AiMissingControllerPolicy::Reject)
+                return Failure(AIErrors::ControllerDescriptorMissing,
+                               "An enabled AI controller has no matching immutable activation descriptor.");
             const auto schemaPublication = ResolveAgentSchema(descriptor, input.controller, handle);
-            if (!sceneStartup || !controllerStartup) {
+            if (!shouldStart || missing) {
                 prepared.emplace(AgentRuntimeState{.record = AiAgentRuntimeRecord{.handle = handle,
                                                                                   .owner = input.owner,
                                                                                   .agent = input.agent,
                                                                                   .controller = input.controller,
-                                                                                  .state = AiAgentActivationState::Disabled},
+                                                                                  .state = missing ? AiAgentActivationState::Degraded
+                                                                                                   : AiAgentActivationState::Disabled},
                                                    .schema = schemaPublication.schema,
                                                    .blackboardBinding = schemaPublication.binding});
                 return Result<void>::Success();
             }
 
-            if (descriptor == nullptr)
-                return Failure(AIErrors::ControllerDescriptorMissing,
-                               "An enabled AI controller has no matching immutable activation descriptor.");
             if (const Result<void> valid = ValidateAiControllerBinding(*input.controller, *descriptor); valid.HasError())
                 return Result<void>::Failure(valid.ErrorValue());
-            if (!HasCapabilities(availableCapabilities, input.controller->requiredCapabilities))
+            if (!HasCapabilities(settings.availableCapabilities, input.controller->requiredCapabilities))
                 return Failure(AIErrors::CapabilityUnavailable, "An enabled AI controller requires an unavailable host capability.");
 
             auto blackboard = BlackboardInstance::Create(schemaPublication.binding, schemaPublication.schema);
@@ -228,7 +231,7 @@ namespace Horo::AI {
 
         [[nodiscard]] Result<std::unique_ptr<Detail::AiSceneRuntimeState>> BuildSceneState(
             const AiSceneActivationBinding binding, const std::span<const AiSceneAgentDescriptor> agents,
-            const std::span<const AiControllerDescriptor> descriptors, const AiCapabilitySet availableCapabilities) {
+            const std::span<const AiControllerDescriptor> descriptors, const AiSceneRuntimeSettings &settings) {
             std::unique_ptr<Detail::AiSceneRuntimeState> state;
             try {
                 state = std::make_unique<Detail::AiSceneRuntimeState>();
@@ -239,7 +242,7 @@ namespace Horo::AI {
                     state->lastAgentIdentity = std::max(state->lastAgentIdentity, input.agent.agent.Value());
                     std::optional<AgentRuntimeState> prepared;
                     const std::size_t slotIndex = state->agents.size();
-                    if (const Result<void> ready = PrepareAgentRuntimeState(binding, input, descriptors, availableCapabilities,
+                    if (const Result<void> ready = PrepareAgentRuntimeState(binding, input, descriptors, settings,
                                                                             static_cast<std::uint32_t>(slotIndex), prepared);
                         ready.HasError()) {
                         ShutdownStateContents(*state);
@@ -264,7 +267,7 @@ namespace Horo::AI {
     /** @copydoc Detail::PrepareStructuralAgents */
     Result<std::vector<Detail::AgentRuntimeState>> Detail::PrepareStructuralAgents(
         const AiSceneActivationBinding binding, const std::span<const AiSceneAgentDescriptor> agents,
-        const std::span<const AiControllerDescriptor> descriptors, const AiCapabilitySet capabilities,
+        const std::span<const AiControllerDescriptor> descriptors, const AiSceneRuntimeSettings &settings,
         const std::span<const Horo::Handle<AgentHandleTag>> slots) {
         if (const auto valid = ValidateSceneInputs(agents, descriptors, binding); valid.HasError())
             return Result<std::vector<AgentRuntimeState>>::Failure(valid.ErrorValue());
@@ -272,7 +275,7 @@ namespace Horo::AI {
         result.reserve(agents.size());
         for (std::size_t index = 0; index < agents.size(); ++index) {
             std::optional<AgentRuntimeState> prepared;
-            if (const auto ready = PrepareAgentRuntimeState(binding, agents[index], descriptors, capabilities, slots[index].index, prepared,
+            if (const auto ready = PrepareAgentRuntimeState(binding, agents[index], descriptors, settings, slots[index].index, prepared,
                                                             slots[index].generation);
                 ready.HasError())
                 return Result<std::vector<AgentRuntimeState>>::Failure(ready.ErrorValue());
@@ -374,7 +377,7 @@ namespace Horo::AI {
         if (const Result<void> valid = ValidateSceneInputs(agents, descriptors, binding); valid.HasError())
             return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(valid.ErrorValue());
 
-        auto state = BuildSceneState(binding, agents, descriptors, settings_.availableCapabilities);
+        auto state = BuildSceneState(binding, agents, descriptors, settings_);
         if (state.HasError())
             return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(state.ErrorValue());
         std::unique_ptr<Detail::AiSceneRuntimeState> ownedState = std::move(state).Value();

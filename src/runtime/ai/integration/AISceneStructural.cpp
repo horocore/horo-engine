@@ -59,6 +59,8 @@ namespace Horo::AI::Detail {
                 for (std::size_t removed = 0; removed < removals.size(); ++removed) {
                     const auto index = removals[removed];
                     retired.push_back(std::move(state->agents[index]));
+                    // Cancellation only signals owned tokens here. Executor callbacks and storage teardown run after publication.
+                    retired.back().cancellation.RequestCancellation();
                     state->agents[index] = std::move(tombstones[removed]);
                 }
                 for (std::size_t index = 0; index < additions.size(); ++index) {
@@ -158,8 +160,7 @@ namespace Horo::AI::Detail {
                             "AI group conflicts with a resident agent identity.");
                 }
             }
-            auto prepared =
-                PrepareStructuralAgents(state.binding, agents, descriptors_, runtime_->settings_.availableCapabilities, candidate->slots);
+            auto prepared = PrepareStructuralAgents(state.binding, agents, descriptors_, runtime_->settings_, candidate->slots);
             if (prepared.HasError())
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(prepared.ErrorValue());
             candidate->additions = std::move(prepared).Value();
