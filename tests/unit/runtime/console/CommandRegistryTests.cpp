@@ -55,6 +55,23 @@ TEST_CASE("Console composition rejects collisions and owns all metadata", "[cons
     }
 }
 
+TEST_CASE("Console namespace ownership rejects duplicates and reserved prefixes before activation", "[console]") {
+    const std::array commands{Command(1, "project.inspect")};
+    RegistryPolicy policy;
+    policy.projectNamespaces = {"project"};
+    REQUIRE(CommandRegistry::Create(commands, policy).HasValue());
+
+    policy.projectNamespaces.push_back("project");
+    const auto duplicate = CommandRegistry::Create(commands, policy);
+    REQUIRE(duplicate.HasError());
+    CHECK(duplicate.ErrorValue().code.Value() == "console.duplicate");
+
+    policy.projectNamespaces.back() = "sys";
+    const auto reserved = CommandRegistry::Create(commands, policy);
+    REQUIRE(reserved.HasError());
+    CHECK(reserved.ErrorValue().code.Value() == "console.invalid_descriptor");
+}
+
 TEST_CASE("Console grammar converts complete typed arguments and rejects malformed input", "[console]") {
     const std::array<DebugArgumentDescriptor, 3> args{{{"text", {}, DebugArgumentType::String},
                                                        {"count", {}, DebugArgumentType::Int32},
