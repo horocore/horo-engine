@@ -120,19 +120,33 @@ namespace Horo::XR {
             }
         }
 
-        TEST_CASE("XR required feature failures preserve incompatible and denied categories", "[unit][xr][feature]") {
-            for (const auto [state, expected] :
-                 {std::pair{XRCapabilityState::Incompatible, XRFeatureNegotiationStatus::RequiredIncompatible},
-                  std::pair{XRCapabilityState::Denied, XRFeatureNegotiationStatus::RequiredUnavailable},
-                  std::pair{XRCapabilityState::PermissionRequired, XRFeatureNegotiationStatus::RequiredUnavailable}}) {
-                auto descriptor = Descriptor();
-                descriptor.states[static_cast<std::size_t>(XRCapability::PositionTracking)] = state;
-                const auto evidence = Snapshot(descriptor);
-                const auto rejected = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(), Request());
-                REQUIRE(rejected.status == expected);
-                REQUIRE(rejected.capability == XRCapability::PositionTracking);
-                REQUIRE(rejected.observed == state);
-                REQUIRE_FALSE(rejected.plan.has_value());
+        TEST_CASE("XR required capability plans retain every unavailable state across both profiles", "[unit][xr][feature]") {
+            using State = XRCapabilityState;
+            using Status = XRFeatureNegotiationStatus;
+            constexpr std::array unavailableStates{std::pair{State::Unsupported, Status::RequiredUnsupported},
+                                                   std::pair{State::Unavailable, Status::RequiredUnavailable},
+                                                   std::pair{State::PermissionRequired, Status::RequiredUnavailable},
+                                                   std::pair{State::Denied, Status::RequiredUnavailable},
+                                                   std::pair{State::DependencyMissing, Status::RequiredUnavailable},
+                                                   std::pair{State::Incompatible, Status::RequiredIncompatible},
+                                                   std::pair{State::TemporarilyUnavailable, Status::RequiredUnavailable},
+                                                   std::pair{State::Lost, Status::RequiredUnavailable},
+                                                   std::pair{State::DisabledByPolicy, Status::RequiredUnavailable}};
+            static_assert(unavailableStates.size() + 1 == static_cast<std::size_t>(State::Count));
+            constexpr std::array requiredFeatures{std::pair{XRFeatureProfile::Projection1_0, XRCapability::PositionTracking},
+                                                  std::pair{XRFeatureProfile::TrackedInteraction1_0, XRCapability::ControllerAimGrip}};
+            for (const auto [profile, feature] : requiredFeatures) {
+                for (const auto [state, expected] : unavailableStates) {
+                    auto descriptor = Descriptor(1, true);
+                    descriptor.states[static_cast<std::size_t>(feature)] = state;
+                    const auto evidence = Snapshot(descriptor);
+                    const auto rejected = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(), Request(profile));
+                    CAPTURE(profile, feature, state);
+                    REQUIRE(rejected.status == expected);
+                    REQUIRE(rejected.capability == feature);
+                    REQUIRE(rejected.observed == state);
+                    REQUIRE_FALSE(rejected.plan.has_value());
+                }
             }
         }
 

@@ -815,6 +815,10 @@ Physical-device evidence is required for every declared supported tuple. Missing
 hardware is reported as `NotRun`; deterministic fakes do not silently satisfy a
 device release gate.
 
+The [XR foundation qualification guide](../../guides/xr-foundation-qualification.md)
+maps foundation contracts to reproducible checks and identifies the owners of
+separate runtime and physical-device evidence.
+
 ## Related Documents
 
 - [XR Ownership, Runtime Composition and Capability Tier](../../adr/157-xr-ownership-runtime-composition-and-capability-tier.md)
