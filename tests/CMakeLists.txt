@@ -3634,6 +3634,13 @@ target_include_directories(HoroAndroidLifecycleTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/platform/android
 )
 target_link_libraries(HoroAndroidLifecycleTests PRIVATE HoroEngine::Platform)
+add_executable(HoroAndroidWindowBridgeTests
+        unit/platform/AndroidWindowBridgeTests.cpp
+        unit/platform/AndroidWindowErrorsTests.cpp
+        unit/platform/AndroidWindowBridgeLifetimeTests.cpp)
+target_compile_features(HoroAndroidWindowBridgeTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAndroidWindowBridgeTests PRIVATE HoroEngine::Platform HoroAndroidWindowInternal)
+horo_register_catch_test(HoroAndroidWindowBridgeTests LABELS "unit;platform;android;headless;lifecycle")
 add_executable(HoroAndroidStorageTests unit/platform/AndroidStorageTests.cpp)
 target_compile_features(HoroAndroidStorageTests PRIVATE cxx_std_20)
 target_include_directories(HoroAndroidStorageTests PRIVATE

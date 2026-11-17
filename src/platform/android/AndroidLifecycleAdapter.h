@@ -28,5 +28,6 @@ namespace Horo::Platform::Android {
         std::atomic<std::uint64_t> nextActivity_{1};
         std::atomic<std::uint64_t> nextWindow_{1};
         std::atomic<std::uint64_t> nextPresentation_{1};
+        friend class AndroidWindowBridge;  // Retention binds this exact controller, never a second generation authority.
     };
 }  // namespace Horo::Platform::Android
