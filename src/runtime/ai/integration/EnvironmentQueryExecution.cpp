@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace Horo::AI {
     namespace {
@@ -33,11 +34,15 @@ namespace Horo::AI {
                 } catch (const std::exception &error) {
                     return MakeError(descriptor, std::string{ExceptionText(error)});
                 } catch (...) {
-                    return MakeError(descriptor);
+                    return MakeError(descriptor, std::string{""});
                 }
             } catch (const std::bad_alloc &) {
                 // Filling MakeError's default summary here would attempt another allocation.
-                return {.code = descriptor.code, .domain = descriptor.domain, .severity = descriptor.defaultSeverity};
+                return {.code = descriptor.code,
+                        .domain = descriptor.domain,
+                        .severity = descriptor.defaultSeverity,
+                        .message = std::string{""},
+                        .diagnostics = std::vector<Diagnostic>(std::size_t{0})};
             }
         }
 
