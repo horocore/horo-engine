@@ -262,6 +262,10 @@ namespace Horo::Cli {
         REQUIRE(malformed.ErrorValue().diagnostics[0].code.Value() == "cli.stdin_malformed");
         REQUIRE(malformed.ErrorValue().diagnostics[0].location.source == "stdin");
 
+        input.payload = Bytes("{}");
+        input.payload.push_back(std::byte{});
+        RequireError(CliOptionParser::Parse(arguments, registry, context), CliErrors::ParseFailed);
+
         input.fail = true;
         auto readFailure = CliOptionParser::Parse(arguments, registry, context);
         RequireError(readFailure, CliErrors::ParseFailed);
@@ -280,6 +284,11 @@ namespace Horo::Cli {
         REQUIRE(CliOptionParser::Parse(arguments, registry, context).HasValue());
 
         input.payload = Bytes("{\"id\":1}\n\n");
+        RequireError(CliOptionParser::Parse(arguments, registry, context), CliErrors::ParseFailed);
+
+        input.payload = Bytes("{\"id\":1}");
+        input.payload.push_back(std::byte{});
+        input.payload.push_back(std::byte{'\n'});
         RequireError(CliOptionParser::Parse(arguments, registry, context), CliErrors::ParseFailed);
 
         descriptor.stdinPolicy = CliStdinPolicy::BinaryStream;

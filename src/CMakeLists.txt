@@ -83,6 +83,7 @@ add_library(HoroCliHost STATIC
         cli/CliExecutionLifecycle.cpp
         cli/CliErrors.cpp
         cli/CliOptionParser.cpp
+        cli/CliInputValidation.cpp
         cli/CliOutputPresenter.cpp
 )
 add_library(HoroEngine::CliHost ALIAS HoroCliHost)
