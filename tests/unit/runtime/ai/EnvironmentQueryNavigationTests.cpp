@@ -1,4 +1,5 @@
 #include "EnvironmentQueryTestSupport.h"
+#include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQueryNavigation.h"
 #include "Horo/Gameplay/TacticalCover.h"
 #include "navigation/NavigationCoordinatorTestFixtures.h"
@@ -169,6 +170,124 @@ namespace Horo::AI {
                 REQUIRE(coordinator.Commit(Current(callers)) == count);
             }
         };
+
+        /** @brief Composes the real query and Navigation reservation APIs against one retained scene authority. */
+        class RetirementSource final : public IQueryExecutionSource {
+        public:
+            RetirementSource(ConsumerFixture &owner, Runtime::RuntimeSceneView scene)
+                : owner_(owner), scene_(std::move(scene)), probe_(owner.coordinator) {}
+
+            bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
+                return scene_.IsCurrent() && scene_.RuntimeId() == inputs.contexts->Scene();
+            }
+
+            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &, const QueryGeneratorOutput &output) override {
+                const std::array points{Math::WorldCoordinate64::FromMillimeters(1'000, 2'000, 3'000)};
+                return GenerateQueryPoints(points, output);
+            }
+
+            Result<bool> StartTest(const QueryExecutionInputs &, const QueryStageId stage, const QueryGeneratedItem &) override {
+                return probe_.Start(owner_.world, stage, Input(), 0);
+            }
+
+            Result<std::optional<QueryTestSample>> PollTest() override {
+                const std::array callers{Caller()};
+                return probe_.Poll(Current(callers));
+            }
+
+            void CancelTest() noexcept override {
+                probe_.Cancel();
+            }
+
+        private:
+            ConsumerFixture &owner_;
+            Runtime::RuntimeSceneView scene_;
+            QueryNavigationProbe probe_;
+        };
+
+        /** @brief Builds one path-test plan with the normal immutable descriptor and context admission. */
+        std::unique_ptr<QueryExecution> AdmitRetirementQuery(ConsumerFixture &owner, const Runtime::RuntimeSceneView &scene) {
+            using namespace QueryTestSupport;
+            const QueryFixture fixture;
+            const QueryTestDescriptor test{MakeIdentity<QueryTestId>(17),
+                                           fixture.generator.origin,
+                                           fixture.items.front().id,
+                                           {1, 1},
+                                           {},
+                                           {}};
+            const auto registry = fixture.Registry(std::span{&test, 1});
+            const auto plan = fixture.Plan(registry, test.id);
+            const std::array rules{QueryScoreRule{.stage = plan.Stages()[1].id, .requiredFilterValue = true}};
+            auto scoring = QueryScoringPlan::Capture(plan, registry, rules, QueryScoreTieBreak::StableIndex);
+            REQUIRE(scoring.HasValue());
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry);
+            REQUIRE(providers.HasValue());
+            QueryContextCapture capture;
+            const auto contexts = capture.Capture(plan, registry, providers.Value(), scene, QueryTestSupport::Source(scene));
+            REQUIRE(contexts.HasValue());
+            const QueryExecutionInputs inputs{{MakeIdentity<AiRuntimeIncarnation>(7), {1, 1}}, contexts.Value()};
+            const QueryGeneratorProvenance provenance{plan.Stages()[0].id, fixture.generator.id, fixture.generator.origin.provider, 1};
+            auto result = QueryExecution::Admit(inputs, provenance, std::move(scoring).Value(), {0, 20, 1, 1, 1, false},
+                                                std::make_unique<RetirementSource>(owner, scene));
+            REQUIRE(result.HasValue());
+            return std::move(result).Value();
+        }
+
+        TEST_CASE("EQS retires dispatched Navigation work across query destruction and scene lifetime changes",
+                  "[unit][ai][navigation][eqs][qualification]") {
+            ConsumerFixture owner{1, std::make_shared<Gate>()};
+            Runtime::RuntimeSceneService scene;
+            REQUIRE(scene.Startup({}).HasValue());
+            REQUIRE(scene.QueuePreparation(QueryTestSupport::MakeSceneDefinition()).HasValue());
+            const auto commitScene = [&] {
+                REQUIRE(
+                    scene
+                        .OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Runtime::FrameContext{1, {}, 0.0, 0, {}, false, {}})
+                        .HasValue());
+            };
+            commitScene();
+            REQUIRE(scene.ActiveScene());
+            auto query = AdmitRetirementQuery(owner, *scene.ActiveScene());
+            CHECK_FALSE(query->Sync(1));
+            AiWorkBudget budget{8};
+            query->Advance(1, {budget, budget, budget});
+            REQUIRE(owner.coordinator.Dispatch(1) == 1);
+            REQUIRE(owner.gate->AwaitEntry());
+            CHECK_FALSE(owner.coordinator.IsDrained());
+
+            SECTION("query retirement abandons the live request") {
+                query.reset();
+            }
+            SECTION("committed scene unload makes the query stale") {
+                REQUIRE(scene.QueueUnload().HasValue());
+                commitScene();
+                CHECK_FALSE(scene.ActiveScene());
+            }
+            SECTION("structural target retirement invalidates the captured scene revision") {
+                Runtime::SceneCommandBuffer unload;
+                const auto target = scene.ActiveScene()->Find({2});
+                REQUIRE(target);
+                unload.Destroy(*target);
+                REQUIRE(scene.QueueStructuralCommands(std::move(unload)).HasValue());
+                commitScene();
+                REQUIRE(scene.ActiveScene());
+                CHECK_FALSE(scene.ActiveScene()->Find({2}));
+            }
+            if (query) {
+                REQUIRE(query->Sync(2));
+                REQUIRE(query->Published());
+                CHECK(query->Published()->status == QueryExecutionStatus::StaleInputs);
+                CHECK(query->Published()->winners.empty());
+            }
+
+            REQUIRE(owner.world.Unload(World()).HasValue());
+            CHECK(owner.world.RetiredCount() == 1);
+            owner.FinishWorker();
+            CHECK(owner.coordinator.Commit({.tick = 2}) == 0);
+            CHECK(owner.coordinator.IsDrained());
+            CHECK(owner.world.CollectRetired() == NavigationWorldLifecycleState::Empty);
+            scene.Shutdown();
+        }
 
         TEST_CASE("EQS Navigation preserves unavailable provider errors and consumes no inline result", "[unit][ai][navigation][eqs]") {
             ProbeOwner owner;

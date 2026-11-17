@@ -20,16 +20,20 @@ namespace Horo::AI::QueryTestSupport {
     using TestSupport::ExpectError;
     using TestSupport::MakeIdentity;
 
-    [[nodiscard]] inline std::unique_ptr<Runtime::RuntimeScene> MakeScene(const std::uint64_t incarnation = 77) {
+    [[nodiscard]] inline Runtime::RuntimeSceneDefinition MakeSceneDefinition() {
         Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
         for (const std::uint64_t id : {1ULL, 2ULL}) {
             Runtime::RuntimeEntityDefinition entity;
             entity.object = Runtime::SceneObjectId{id};
             builder.Add(entity);
         }
-        const auto definition = std::move(builder).Build();
+        auto definition = std::move(builder).Build();
         REQUIRE(definition.HasValue());
-        auto created = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{incarnation});
+        return std::move(definition).Value();
+    }
+
+    [[nodiscard]] inline std::unique_ptr<Runtime::RuntimeScene> MakeScene(const std::uint64_t incarnation = 77) {
+        auto created = Runtime::RuntimeScene::Create(MakeSceneDefinition(), Runtime::SceneRuntimeId{incarnation});
         REQUIRE(created.HasValue());
         return std::move(created).Value();
     }
