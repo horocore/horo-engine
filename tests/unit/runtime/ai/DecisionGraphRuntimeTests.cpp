@@ -31,7 +31,8 @@ namespace Horo::AI {
             REQUIRE(replayInput.HasValue());
             DecisionStepTrace replayed;
             REQUIRE(twin->StepWithTrace({1, replay.binding, replayInput.Value(), {}}, replayed).HasValue());
-            CHECK(replayed.Header().planDigest == retained.Header().planDigest);
+            CHECK(retained.Header().MatchesObservation(replayed.Header().planDigest, replayed.Header().tick, replayInput.Value().Binding(),
+                                                       replayInput.Value().CapturedRevision()));
             CHECK(std::ranges::equal(replayed.Records(), retained.Records()));
             CHECK(replay.probe.tasks == tracedTasks);
         }
@@ -129,10 +130,11 @@ namespace Horo::AI {
             const auto first = instance->StepWithTrace({1, fixture.binding, snapshot.Value(), {}}, trace);
             REQUIRE(first.HasValue());
             CHECK(first.Value() == AiTaskState::Running);
-            CHECK(trace.Header().version == 3);
+            CHECK(trace.Header().version == DecisionTraceHeader::CurrentVersion);
             CHECK(trace.Header().tick == 1);
             CHECK(trace.Header().root == plan->Root());
             CHECK(trace.Header().planDigest == plan->Digest());
+            CHECK(trace.Header().blackboard == fixture.binding);
             CHECK(trace.Header().blackboardRevision == snapshot.Value().Revision().Value());
             CHECK(trace.Header().outcome == first.Value());
             CHECK(trace.DroppedRecords() == 0);
@@ -273,7 +275,7 @@ namespace Horo::AI {
             }
             const auto rejected = instance->StepWithTrace({2, current, snapshot.Value(), {}}, trace);
             TestSupport::ExpectError(rejected, AIErrors::BlackboardInstanceStale);
-            CHECK(trace.Header().agent == retained.Header().agent);
+            CHECK(trace.Header().blackboard == retained.Header().blackboard);
             CHECK(trace.Header().tick == retained.Header().tick);
             CHECK(trace.Header().blackboardRevision == retained.Header().blackboardRevision);
             CHECK(std::ranges::equal(trace.Records(), retained.Records()));
@@ -284,11 +286,59 @@ namespace Horo::AI {
             auto cancelled = instance->StepWithTrace({2, fixture.binding, snapshot.Value(), {}}, trace);
             REQUIRE(cancelled.HasValue());
             CHECK(cancelled.Value() == AiTaskState::Cancelled);
-            CHECK(trace.Header().agent == fixture.binding.agent);
+            CHECK(trace.Header().blackboard == fixture.binding);
             CHECK(trace.Header().tick == 2);
             CHECK(trace.Header().blackboardRevision == snapshot.Value().CapturedRevision());
             CHECK(fixture.probe.aborts == 1);
             CHECK(fixture.probe.cleanups == 1);
+        }
+
+        TEST_CASE("Retained decision trace separates blackboard generations that reuse a revision number",
+                  "[ai][decision-graph-runtime][trace]") {
+            Fixture fixture;
+            const std::array sources{TaskTree(1)};
+            const auto plan = fixture.Compile(sources, 1);
+            auto instance = fixture.Instance(plan);
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            constexpr std::uint64_t tick = 1;
+            const auto revision = snapshot.Value().CapturedRevision();
+            DecisionStepTrace trace;
+            CHECK_FALSE(trace.Header().MatchesObservation(plan->Digest(), tick, fixture.binding, revision));
+            REQUIRE(instance->StepWithTrace({tick, fixture.binding, snapshot.Value(), {}}, trace).HasValue());
+            const auto retained = trace;
+
+            auto previousVersion = retained.Header();
+            --previousVersion.version;
+            CHECK_FALSE(previousVersion.MatchesObservation(plan->Digest(), tick, fixture.binding, revision));
+            auto write = fixture.blackboard->BeginWriteBatch();
+            REQUIRE(write.HasValue());
+            auto staged = std::move(write).Value();
+            REQUIRE(staged.Stage({MakeIdentity<BlackboardKeyId>(1), BlackboardScalarValue{false}}).HasValue());
+            const auto committed = fixture.blackboard->CommitAtBlackboardSync(std::move(staged));
+            REQUIRE(committed.HasValue());
+            CHECK_FALSE(retained.Header().MatchesObservation(plan->Digest(), tick, fixture.binding, committed.Value().revision));
+
+            REQUIRE(fixture.blackboard->TeardownAtBlackboardSync().HasValue());
+            CHECK(snapshot.Value().Revision().HasError());
+            CHECK(retained.Header().MatchesObservation(plan->Digest(), tick, fixture.binding, revision));
+            CHECK_FALSE(retained.Header().MatchesObservation(plan->Digest(), tick + 1, fixture.binding, revision));
+            CHECK_FALSE(retained.Header().MatchesObservation(Sha256Digest{}, tick, fixture.binding, revision));
+
+            auto newBinding = fixture.binding;
+            SECTION("Recreated blackboard uses a new instance generation") {
+                ++newBinding.instanceGeneration;
+            }
+            SECTION("A republished schema uses a new schema generation") {
+                ++newBinding.schemaGeneration;
+            }
+            const auto replacement = BlackboardInstance::Create(newBinding, fixture.schema);
+            REQUIRE(replacement.HasValue());
+            const auto newSnapshot = replacement.Value()->Snapshot();
+            REQUIRE(newSnapshot.HasValue());
+            REQUIRE(newSnapshot.Value().CapturedRevision() == revision);
+            CHECK_FALSE(retained.Header().MatchesObservation(plan->Digest(), tick, newSnapshot.Value().Binding(), revision));
+            CHECK(retained.Header().blackboard == fixture.binding);
         }
 
         TEST_CASE("Decision graph requires the actual captured immutable schema lease before executing a task",

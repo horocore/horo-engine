@@ -259,6 +259,13 @@ namespace Horo::AI {
         return StepImpl(input, &trace);
     }
 
+    /** @copydoc DecisionTraceHeader::MatchesObservation */
+    bool DecisionTraceHeader::MatchesObservation(const Sha256Digest &digest, const std::uint64_t expectedTick,
+                                                 const BlackboardInstanceBinding &binding, const std::uint64_t revision) const noexcept {
+        return version == CurrentVersion && tick != 0 && tick == expectedTick && planDigest == digest && blackboard == binding &&
+               blackboardRevision == revision;
+    }
+
     /** @copydoc DecisionGraphInstance::StepImpl */
     Result<AiTaskState> DecisionGraphInstance::StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace) {
         if (auto valid = ValidateStep(input); valid.HasError())
@@ -266,7 +273,7 @@ namespace Horo::AI {
         if (trace) {
             trace->header_ = {.root = plan_->Root(),
                               .planDigest = plan_->Digest(),
-                              .agent = input.current.agent,
+                              .blackboard = input.blackboard.Binding(),
                               .tick = input.tick,
                               .blackboardRevision = input.blackboard.CapturedRevision()};
             trace->count_ = 0;

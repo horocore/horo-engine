@@ -26,12 +26,13 @@ HSM actions are synchronous one-shot intents. Their actual task lifecycles must 
 
 ## Decision step evidence
 
-Use `DecisionGraphInstance::StepWithTrace` to collect one version-one frame in
+Use `DecisionGraphInstance::StepWithTrace` to collect one version-four frame in
 caller-owned `DecisionStepTrace` storage. The frame carries the cooked digest,
-root graph, agent, fixed tick, and frozen blackboard revision. Behavior tree
+root graph, fixed tick, and the exact frozen blackboard binding and revision. Behavior tree
 records describe the non-idle node state observed after evaluation. State
-machine records include the active state, last transition and total transitions
-reported by the step. Reused graphs have distinct occurrence addresses under
+machine records include the committed transition sequence and the active state
+summary. Utility records carry normalized score evidence keyed by stable option
+and consideration IDs. Reused graphs have distinct occurrence addresses under
 the same digest. Task handles correlate within the captured runtime incarnation.
 
 The trace retains up to 128 records and reports how many were omitted. Tracing
@@ -41,8 +42,13 @@ and external subsystem state stay outside the record format. A local replay
 must supply the same admitted plan, frozen inputs, and deterministic provider
 behavior. An evidence frame alone cannot reconstruct those inputs.
 
-The existing `Step` call requires no source migration. Rebuild consumers of
-`HoroEngine::AI` with the matching graph instance and trace headers.
+Replay and inspection consumers can call `DecisionTraceHeader::MatchesObservation`
+with the expected cooked digest, tick, blackboard binding and revision. The
+binding distinguishes schema publication and instance generations even when a
+replacement board reuses a revision number. Metadata comparison grants no
+authority to read or execute against retired input. Version-three consumers
+access the agent through `Header().blackboard.agent` and rebuild with the matching
+graph instance and trace headers. `Step` callers continue using the same inputs.
 
 ## Storage and limits
 

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/AI/AITaskLifecycle.h"
+#include "Horo/AI/BlackboardInstance.h"
 #include "Horo/AI/DecisionIdentity.h"
 #include "Horo/Foundation/Sha256.h"
 
@@ -52,13 +53,25 @@ namespace Horo::AI {
 
     /** @brief Correlation with the exact immutable plan and frozen blackboard input, without copying input values. */
     struct DecisionTraceHeader final {
-        std::uint32_t version{3};
+        static constexpr std::uint32_t CurrentVersion = 4;
+
+        std::uint32_t version{CurrentVersion};
         DecisionGraphAssetId root;
         Sha256Digest planDigest;
-        AgentHandle agent;
+        BlackboardInstanceBinding blackboard; /**< Exact agent, schema publication and blackboard instance. */
         std::uint64_t tick{};
         std::uint64_t blackboardRevision{};
         AiTaskState outcome{AiTaskState::Idle};
+
+        /** @brief Correlates retained evidence with a declared decision input using metadata only.
+         * @param digest Exact cooked plan identity used by the replay host.
+         * @param expectedTick Committed decision tick.
+         * @param binding Exact runtime, agent, schema and instance generation.
+         * @param revision Revision of the frozen blackboard.
+         * @return True if this recorded observation matches. This grants no value read or execution authority.
+         */
+        [[nodiscard]] bool MatchesObservation(const Sha256Digest &digest, std::uint64_t expectedTick,
+                                              const BlackboardInstanceBinding &binding, std::uint64_t revision) const noexcept;
     };
 
     /** @brief Caller-owned single-step buffer. Copy or retain it explicitly before reusing it for another step. */

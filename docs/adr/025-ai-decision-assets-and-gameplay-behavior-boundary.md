@@ -239,3 +239,17 @@ source-compatible. The kernel's existing measured instance storage includes the
 fixed evidence array; incompatible cooked storage declarations require recooking.
 All records share the existing caller-owned limit and dropped-record count;
 truncation cannot affect transition execution or independent child results.
+
+## Generation-fenced decision replay correlation
+
+DecisionStepTrace version 4 retains the complete `BlackboardInstanceBinding`
+used for step admission. A revision number can recur after Blackboard replacement
+for the same agent. Matching the binding, revision, plan digest and tick keeps
+that replacement distinct in retained observations. The version-four header
+exposes the owning agent through `blackboard.agent`. Readers must rebuild and
+use that field in place of the version-three header's standalone agent.
+Earlier observations without the full binding cannot establish this match.
+
+Matching retained observations uses metadata only and remains available after
+the original owner retires. An actual replay still runs through normal step
+admission with live frozen inputs and its own provider and scheduling authority.
