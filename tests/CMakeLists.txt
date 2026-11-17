@@ -4484,6 +4484,7 @@ add_executable(HoroSceneDocumentTests
         unit/editor/EditorXrGeometryTests.cpp
         unit/editor/SceneDocumentPrefabTests.cpp
         unit/editor/SceneDocumentPrefabValueTests.cpp
+        unit/editor/PrefabApplyTransactionTests.cpp
         unit/editor/PrefabHierarchyProjectionTests.cpp
         unit/editor/PrefabHierarchySourcesTests.cpp
         unit/editor/PrefabCreationTests.cpp

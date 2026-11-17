@@ -194,8 +194,7 @@ namespace Horo::Editor {
                 owner->document->m_prefabInstances.size() > limits.maximumSnapshotObjects - candidate.size())
                 return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
             auto candidateInstances = owner->document->m_prefabInstances;
-            if (delta.prefabCreation)
-                ApplyPrefabTypedDelta(candidateInstances, *delta.prefabCreation);
+            MutateReplacementPrefab<false>(candidateInstances, delta);
             if (candidateInstances.size() > limits.maximumSnapshotObjects - candidate.size())
                 return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
             SceneDocument validatedRoot;
@@ -219,9 +218,11 @@ namespace Horo::Editor {
             if (auto admitted = port.Admit(context); admitted.HasError())
                 return Result<void>::Failure(admitted.ErrorValue());
             preparedHistory.undo.back().coordinated = coordinated;
-            if (const auto &replacement = std::get<SceneObjectsReplacedDelta>(preparedHistory.undo.back().delta);
-                replacement.prefabCreation)
+            const auto &replacement = std::get<SceneObjectsReplacedDelta>(preparedHistory.undo.back().delta);
+            if (replacement.prefabCreation)
                 preparedHistory.undo.back().affectedPrefabInstances.push_back(replacement.prefabCreation->instance.instanceId);
+            for (const auto &value : replacement.prefabValues)
+                preparedHistory.undo.back().affectedPrefabInstances.push_back(value.instance);
             objects = std::move(candidate);
             instances = std::move(candidateInstances);
             this->validated = std::make_unique<SceneDocument>(std::move(validatedRoot));
@@ -359,6 +360,47 @@ namespace Horo::Editor {
         result.prepared_ = std::move(prepared);
         result.instance_ = instance.Value();
         return Return::Success(std::move(result));
+    }
+
+    /** @copydoc SceneDocumentTransactions::PreparePrefabValues */
+    Result<std::shared_ptr<SceneDocumentTransactions::Prepared>> SceneDocumentTransactions::PreparePrefabValues(
+        const SceneTransactionContext &context, const std::span<const ScenePrefabInstance> placements,
+        const std::uint64_t expectedReplacementEpoch, const SceneTransactionLimits limits) const {
+        using Return = Result<std::shared_ptr<Prepared>>;
+        if (auto admitted = Admit(context); admitted.HasError())
+            return Return::Failure(admitted.ErrorValue());
+        const auto budget = PreparationBudget({}, limits);
+        if (budget.HasError())
+            return Return::Failure(budget.ErrorValue());
+        const auto &current = state_->document->m_prefabInstances;
+        if (placements.size() != current.size() || state_->document->m_replacementEpoch != expectedReplacementEpoch)
+            return Return::Failure(Rejected(SceneTransactionFailure::Stale));
+
+        SceneObjectsReplacedDelta delta;
+        std::size_t retainedBytes{};
+        for (std::size_t index = 0; index < current.size(); ++index) {
+            const auto &before = current[index];
+            const auto &after = placements[index];
+            if (before.instanceId != after.instanceId || before.sourcePrefab != after.sourcePrefab || before.parent != after.parent ||
+                before.rootTransform != after.rootTransform)
+                return Return::Failure(Rejected(SceneTransactionFailure::Stale));
+            if (before.valueOverrides == after.valueOverrides)
+                continue;
+            const auto bytes = EstimateOverrideMemoryBytes(before.valueOverrides) + EstimateOverrideMemoryBytes(after.valueOverrides);
+            if (delta.prefabValues.size() == limits.maximumChanges || bytes > budget.Value() - retainedBytes)
+                return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
+            retainedBytes += bytes;
+            delta.prefabValues.push_back(
+                {before.instanceId, before.valueOverrides, after.valueOverrides, bytes, state_->document->m_replacementEpoch});
+        }
+        if (delta.prefabValues.empty())
+            return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
+        auto prepared = std::make_shared<Prepared>();
+        prepared->owner = state_.get();
+        prepared->context = context;
+        if (auto staged = prepared->StageRoot(*this, std::move(delta), limits, budget.Value(), true); staged.HasError())
+            return Return::Failure(staged.ErrorValue());
+        return Return::Success(std::move(prepared));
     }
 
     /** @copydoc SceneDocumentTransactions::CommitPrefabReplacement */

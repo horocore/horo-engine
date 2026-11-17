@@ -199,6 +199,7 @@ namespace Horo::Editor {
         friend class NavigationSettingsWorkflow;
         friend class NavigationSettingsReview;
         friend class NavigationProjectSettingsSession;
+        friend class PrefabApplyTransaction;
 
         struct Lifetime final {
             SceneDocumentTransactions *owner{};
@@ -211,6 +212,11 @@ namespace Horo::Editor {
                                                                 SceneTransactionLimits limits = {}, bool coordinated = false) const;
         /** @brief Stages canonical replay for an exclusively admitted multi-document coordinator. */
         [[nodiscard]] Result<std::shared_ptr<Prepared>> PrepareReplay(const SceneTransactionContext &context, bool redo);
+        /** @brief Reserves one coordinated history transition for exact value replacements of existing placements. */
+        [[nodiscard]] Result<std::shared_ptr<Prepared>> PreparePrefabValues(const SceneTransactionContext &context,
+                                                                            std::span<const SceneSource::ScenePrefabInstance> placements,
+                                                                            std::uint64_t expectedReplacementEpoch,
+                                                                            SceneTransactionLimits limits = {}) const;
         /** @brief Computes the post-publication fence from prepared owner state without copying a root. */
         [[nodiscard]] SceneTransactionContext PreparedContext(const Prepared &prepared) const noexcept;
         /** @brief Rechecks the exact prepared owner fence without mutation or callbacks. */

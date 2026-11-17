@@ -3552,6 +3552,7 @@ add_library(HoroEditorModel STATIC
         editor/document/SceneDocumentObjectCommands.cpp
         editor/document/SceneDocumentHistoryCommands.cpp
         editor/document/SceneDocumentPrefabValueCommands.cpp
+        editor/document/PrefabApplyPreparation.cpp
         editor/document/RuntimeSceneConversion.cpp
         editor/project_model/EditorModelErrors.cpp
         editor/project_model/EditorSelectionModel.cpp
@@ -3821,6 +3822,7 @@ add_library(HoroEditorServices STATIC
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/screens/workspace/prefab/PrefabCreation.cpp
         editor/screens/workspace/prefab/PrefabCreationPublication.cpp
+        editor/screens/workspace/prefab/PrefabApplyTransaction.cpp
         editor/screens/workspace/prefab/PrefabDocumentSession.cpp
         editor/screens/workspace/prefab/PrefabDocumentPersistence.cpp
         editor/screens/workspace/prefab/PrefabDocumentStage.cpp

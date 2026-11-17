@@ -170,6 +170,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Close(const PrefabDocumentFence &fence, bool discardDirty);
 
     private:
+        friend class PrefabApplyTransaction;
+
         /** @brief Materializes bounded parser characters from typed bytes; allocation failure is a typed error. */
         [[nodiscard]] static Result<std::string> ReadSourceText(std::span<const std::byte> bytes);
 
@@ -186,7 +188,8 @@ namespace Horo::Editor {
             std::optional<Prefab::PrefabValueOverrideSet> overrides;
         };
 
-        using Edit = std::variant<RenamePrefabObject, TransformPrefabObject, LayerReplacement>;
+        using SourceReplacement = std::shared_ptr<const Prefab::PrefabDocument>;
+        using Edit = std::variant<RenamePrefabObject, TransformPrefabObject, LayerReplacement, SourceReplacement>;
         [[nodiscard]] Result<LayerReplacement> Layer(std::optional<Prefab::LocalObjectId> placement) const;
         [[nodiscard]] Result<Edit> Before(const Edit &edit) const;
         [[nodiscard]] Result<std::size_t> EditBytes(const Edit &before, const Edit &after) const;
@@ -196,7 +199,20 @@ namespace Horo::Editor {
             Edit before;
             Edit after;
             std::size_t bytes{};
+            bool coordinated{};
         };
+
+        /** @brief Detached complete source and its already reserved semantic history. */
+        struct PreparedApply final {
+            SourceReplacement source;
+            Sha256Digest state;
+            std::unique_ptr<SemanticDocumentHistory<Delta>> history;
+        };
+
+        /** @brief Prepares the exact source-side state and history for a coordinated instance promotion. */
+        [[nodiscard]] Result<PreparedApply> PrepareApply(const PrefabDocumentFence &fence, Prefab::PrefabDocument source) const;
+        /** @brief Publishes durable source evidence and its previously reserved owner state without callbacks. */
+        void PublishApply(PreparedApply &prepared, Assets::AssetSourceIdentity durable) noexcept;
 
         [[nodiscard]] Result<void> Admit(const PrefabDocumentFence &fence) const;
         [[nodiscard]] Result<std::shared_ptr<const Prefab::PrefabDocument>> Apply(const Edit &edit) const;

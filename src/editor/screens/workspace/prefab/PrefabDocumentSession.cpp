@@ -115,6 +115,8 @@ namespace Horo::Editor {
 
     /** @copydoc PrefabDocumentSession::Apply */
     Result<std::shared_ptr<const Prefab::PrefabDocument>> PrefabDocumentSession::Apply(const Edit &edit) const {
+        if (const auto *replacement = std::get_if<SourceReplacement>(&edit))
+            return Result<SourceReplacement>::Success(*replacement);
         auto data = source_->Data();
         auto applied = std::visit([&]<typename T>(const T &value) {
             if constexpr (std::is_same_v<T, LayerReplacement>) {
@@ -131,7 +133,7 @@ namespace Horo::Editor {
                     found->authoredAgainst = value.revision;
                     found->valueOverrides = value.overrides;
                 }
-            } else {
+            } else if constexpr (!std::is_same_v<T, SourceReplacement>) {
                 auto found = std::ranges::find(data.objects, value.object, &Prefab::PrefabObjectNode::localId);
                 if (found == data.objects.end())
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
@@ -196,7 +198,7 @@ namespace Horo::Editor {
         if (conflict_)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
         const auto *delta = history_.Next(redo);
-        if (!delta)
+        if (!delta || delta->coordinated)
             return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
         auto candidate = Apply(redo ? delta->after : delta->before);
         if (candidate.HasError())
@@ -210,6 +212,41 @@ namespace Horo::Editor {
         ++revision_;
         ReleaseStage();
         return Result<void>::Success();
+    }
+
+    /** @copydoc PrefabDocumentSession::PrepareApply */
+    Result<PrefabDocumentSession::PreparedApply> PrefabDocumentSession::PrepareApply(const PrefabDocumentFence &fence,
+                                                                                     Prefab::PrefabDocument source) const {
+        using Return = Result<PreparedApply>;
+        if (auto admitted = Admit(fence); admitted.HasError())
+            return Return::Failure(admitted.ErrorValue());
+        if (conflict_ || saved_ != state_ || source.Data().assetId != source_->Data().assetId)
+            return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        auto replacement = std::make_shared<const Prefab::PrefabDocument>(std::move(source));
+        auto digest = Digest(*replacement);
+        if (digest.HasError())
+            return Return::Failure(std::move(digest).ErrorValue());
+        if (digest.Value() == state_)
+            return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideInvalid, "Selected intent already matches the Prefab source."));
+        const Edit before{source_};
+        const Edit after{replacement};
+        const auto bytes = EditBytes(before, after);
+        if (bytes.HasError())
+            return Return::Failure(bytes.ErrorValue());
+        auto history = history_.Prepare(Delta{before, after, bytes.Value(), true});
+        if (!history)
+            return Return::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+        return Return::Success({std::move(replacement), digest.Value(), std::move(history)});
+    }
+
+    /** @copydoc PrefabDocumentSession::PublishApply */
+    void PrefabDocumentSession::PublishApply(PreparedApply &prepared, const Assets::AssetSourceIdentity durable) noexcept {
+        source_.swap(prepared.source);
+        history_.Commit(*prepared.history);
+        state_ = prepared.state;
+        saved_ = state_;
+        accepted_ = durable;
+        ++revision_;
     }
 
     /** @copydoc PrefabDocumentSession::InspectExternal */

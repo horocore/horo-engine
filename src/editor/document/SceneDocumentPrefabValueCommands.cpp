@@ -1,4 +1,5 @@
 #include "Horo/Prefab/PrefabErrors.h"
+#include "editor/document/PrefabOverrideScope.h"
 #include "editor/document/SceneDocumentInternal.h"
 
 #include <new>
@@ -8,51 +9,51 @@ namespace Horo::Editor {
     static_assert(std::is_nothrow_move_constructible_v<HistoryRecord>);
     static_assert(std::is_nothrow_swappable_v<std::optional<Prefab::PrefabValueOverrideSet>>);
 
+    /** @copydoc MatchesPrefabOverrideScope(const ScenePrefabRevertTarget&,const Prefab::PrefabValueOverrideRecord&) */
+    bool MatchesPrefabOverrideScope(const ScenePrefabRevertTarget &selection, const Prefab::PrefabValueOverrideRecord &record) {
+        if (const auto *value = std::get_if<Prefab::PrefabValueOverrideTarget>(&selection))
+            return record.target == *value;
+        const auto *property = std::get_if<Prefab::PrefabPropertyAddress>(&record.target);
+        if (const auto *component = std::get_if<Prefab::PrefabComponentOverrideTarget>(&selection))
+            return property && property->Object() == component->object && property->ComponentType() == component->type &&
+                   property->ComponentInstance() == component->instance;
+        if (const auto *object = std::get_if<Prefab::PrefabObjectAddress>(&selection))
+            return *object == (property ? property->Object() : std::get<Prefab::PrefabObjectAddress>(record.target));
+        return std::holds_alternative<AllScenePrefabOverrides>(selection);
+    }
+
+    /** @copydoc MatchesPrefabOverrideScope(const ScenePrefabRevertTarget&,const Prefab::PrefabComponentOverrideRecord&) */
+    bool MatchesPrefabOverrideScope(const ScenePrefabRevertTarget &selection, const Prefab::PrefabComponentOverrideRecord &record) {
+        const auto *add = std::get_if<Prefab::PrefabAddComponentOverride>(&record);
+        const auto *remove = std::get_if<Prefab::PrefabRemoveComponentOverride>(&record);
+        const auto &object = add ? add->object : remove->target.object;
+        if (const auto *component = std::get_if<Prefab::PrefabComponentOverrideTarget>(&selection))
+            return object == component->object && component->type == (add ? add->payload.component.typeId : remove->target.type) &&
+                   component->instance == (add ? add->payload.instance : remove->target.instance);
+        if (const auto *target = std::get_if<Prefab::PrefabObjectAddress>(&selection))
+            return object == *target;
+        return std::holds_alternative<AllScenePrefabOverrides>(selection);
+    }
+
+    /** @copydoc ErasePrefabOverrideScope */
+    void ErasePrefabOverrideScope(Prefab::PrefabValueOverrideSet &set, const ScenePrefabRevertTarget &selection) {
+        const auto erase = [&selection](auto &records) {
+            std::erase_if(records, [&selection](const auto &record) {
+                if constexpr (requires { record.original; })
+                    return MatchesPrefabOverrideScope(selection, record.original);
+                else
+                    return MatchesPrefabOverrideScope(selection, record);
+            });
+        };
+        erase(set.records);
+        erase(set.conflicts);
+        erase(set.orphans);
+        erase(set.componentRecords);
+        erase(set.componentConflicts);
+        erase(set.componentOrphans);
+    }
+
     namespace {
-        /** @brief Matches values by stable identity, treating the transform as one atomic value. */
-        bool SelectsValue(const ScenePrefabRevertTarget &selection, const Prefab::PrefabValueOverrideRecord &record) {
-            if (const auto *value = std::get_if<Prefab::PrefabValueOverrideTarget>(&selection))
-                return record.target == *value;
-            const auto *property = std::get_if<Prefab::PrefabPropertyAddress>(&record.target);
-            if (const auto *component = std::get_if<Prefab::PrefabComponentOverrideTarget>(&selection))
-                return property && property->Object() == component->object && property->ComponentType() == component->type &&
-                       property->ComponentInstance() == component->instance;
-            if (const auto *object = std::get_if<Prefab::PrefabObjectAddress>(&selection))
-                return *object == (property ? property->Object() : std::get<Prefab::PrefabObjectAddress>(record.target));
-            return std::holds_alternative<AllScenePrefabOverrides>(selection);
-        }
-
-        /** @brief Matches component intent by the exact instance-local occurrence. */
-        bool SelectsComponent(const ScenePrefabRevertTarget &selection, const Prefab::PrefabComponentOverrideRecord &record) {
-            const auto *add = std::get_if<Prefab::PrefabAddComponentOverride>(&record);
-            const auto *remove = std::get_if<Prefab::PrefabRemoveComponentOverride>(&record);
-            const auto &object = add ? add->object : remove->target.object;
-            if (const auto *component = std::get_if<Prefab::PrefabComponentOverrideTarget>(&selection))
-                return object == component->object && component->type == (add ? add->payload.component.typeId : remove->target.type) &&
-                       component->instance == (add ? add->payload.instance : remove->target.instance);
-            if (const auto *target = std::get_if<Prefab::PrefabObjectAddress>(&selection))
-                return object == *target;
-            return std::holds_alternative<AllScenePrefabOverrides>(selection);
-        }
-
-        /** @brief Removes a selection without resolving or rebasing unrelated retained intent. */
-        void EraseSelectedRecords(Prefab::PrefabValueOverrideSet &set, const ScenePrefabRevertTarget &selection) {
-            const auto erase = [&selection](auto &records, auto matches) {
-                std::erase_if(records, [&selection, matches](const auto &record) {
-                    if constexpr (requires { record.original; })
-                        return matches(selection, record.original);
-                    else
-                        return matches(selection, record);
-                });
-            };
-            erase(set.records, SelectsValue);
-            erase(set.conflicts, SelectsValue);
-            erase(set.orphans, SelectsValue);
-            erase(set.componentRecords, SelectsComponent);
-            erase(set.componentConflicts, SelectsComponent);
-            erase(set.componentOrphans, SelectsComponent);
-        }
-
         /** @brief Stages explicit removal and verifies that the remaining persisted envelope is structurally admissible. */
         Result<Prefab::PrefabValueOverrideResolution> PrepareInstanceRevert(const ScenePrefabInstance &instance,
                                                                             const RevertScenePrefabOverridesCommand &command,
@@ -69,7 +70,7 @@ namespace Horo::Editor {
             Prefab::PrefabValueOverrideResolution prepared;
             if (instance.valueOverrides) {
                 prepared.rebased = *instance.valueOverrides;
-                EraseSelectedRecords(prepared.rebased, command.target);
+                ErasePrefabOverrideScope(prepared.rebased, command.target);
                 if (!prepared.rebased.IsEmpty() && prepared.rebased != *instance.valueOverrides)
                     if (auto valid = Prefab::ResolvePrefabValueOverrides(source, prepared.rebased, schemas, limits, cancellation);
                         valid.HasError())

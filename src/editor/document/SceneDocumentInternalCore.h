@@ -190,6 +190,7 @@ namespace Horo::Editor::SceneDocumentDetail {
     struct SceneObjectsReplacedDelta final {
         std::vector<SceneObjectReplacementDelta> objects;
         std::optional<CreatedPrefabInstanceDelta> prefabCreation;
+        std::vector<PrefabInstanceValuesDelta> prefabValues;
     };
 
     using SceneCommandDelta =
