@@ -42,28 +42,13 @@ namespace Horo::Prefab::Detail {
             }
         };
 
-        /** @brief Captures bounded canonical graph failure context without publishing any source hierarchy. */
-        Result<void> Fail(Inspection &inspection, const ErrorCodeDescriptor &error, std::optional<Assets::AssetId> next = {}) {
-            inspection.operation.failureChain = inspection.operation.active;
-            if (next)
-                inspection.operation.failureChain.push_back(*next);
-            auto failure = MakeError(error);
-            const auto appendEdge = [&failure](const PrefabCompositionOriginStep &edge) {
-                failure.message += edge.kind == PrefabCompositionOrigin::Variant ? " VariantParent " : " NestedPlacement ";
-                failure.message += edge.owner.ToString() + " -> " + edge.source.ToString();
-                if (edge.placement)
-                    failure.message += std::format(" placement={}", edge.placement->value);
-            };
-            for (const auto &edge : inspection.operation.originChain)
-                appendEdge(edge);
-            // Reserve space for the resolver's enclosing instance and source-chain context.
-            if (failure.message.size() > MaximumPrefabDiagnosticMessageBytes / 2 && !inspection.operation.originChain.empty()) {
-                failure.message = MakeError(error).message;
-                failure.message +=
-                    std::format(" ({} composition edges, intermediate edges omitted)", inspection.operation.originChain.size());
-                appendEdge(inspection.operation.originChain.back());
-            }
-            return Result<void>::Failure(std::move(failure));
+        /** @brief Renders one edge independently so a long path remains readable as ordered diagnostics. */
+        std::string DescribeEdge(const PrefabCompositionOriginStep &edge, const std::string &owner) {
+            const auto kind = edge.kind == PrefabCompositionOrigin::Variant ? "VariantParent" : "NestedPlacement";
+            auto message = std::format("{} {} -> {}", kind, owner, edge.source.ToString());
+            if (edge.placement)
+                message += std::format(" placement={}", edge.placement->value);
+            return message;
         }
 
         /** @brief Looks up only the sorted immutable source inventory admitted by the existing graph builder. */
@@ -85,19 +70,19 @@ namespace Horo::Prefab::Detail {
             path.push_back({PrefabCompositionOrigin::Variant, inspection.operation.active.back(), asset, {}});
             const PopEdge pop{path};
             if (variantEdges >= inspection.operation.limits.Policy().maximumVariantInheritanceDepth)
-                return Fail(inspection, PrefabErrors::HierarchyDepthExceeded, asset);
+                return FailSourceExpansion(inspection.operation, MakeError(PrefabErrors::HierarchyDepthExceeded), asset);
             const auto *parent = Find(inspection, asset);
             if (!parent)
-                return Fail(inspection, PrefabErrors::DependencyUnavailable, asset);
+                return FailSourceExpansion(inspection.operation, MakeError(PrefabErrors::DependencyUnavailable), asset);
             return Visit(inspection, *parent, nestedEdges, variantEdges + 1);
         }
 
         /** @brief Charges every repeated occurrence's actual local objects before an expanded object vector is allocated. */
         Result<void> CountObjects(Inspection &inspection, std::size_t count) {
             if (count > inspection.operation.limits.Policy().maximumObjectCount - inspection.expandedObjects)
-                return Fail(inspection, PrefabErrors::ObjectCountExceeded);
+                return FailSourceExpansion(inspection.operation, MakeError(PrefabErrors::ObjectCountExceeded));
             if (auto charged = inspection.operation.budget.Consume(count); charged.HasError())
-                return charged;
+                return FailSourceExpansion(inspection.operation, std::move(charged).ErrorValue());
             inspection.expandedObjects += count;
             return Result<void>::Success();
         }
@@ -115,10 +100,10 @@ namespace Horo::Prefab::Detail {
                 path.emplace_back(PrefabCompositionOrigin::Nested, document.assetId, asset, placement.placementLocalId);
                 const PopEdge pop{path};
                 if (nestedEdges >= inspection.operation.limits.Policy().maximumNestedPrefabDepth)
-                    return Fail(inspection, PrefabErrors::HierarchyDepthExceeded, asset);
+                    return FailSourceExpansion(inspection.operation, MakeError(PrefabErrors::HierarchyDepthExceeded), asset);
                 const auto *nested = Find(inspection, asset);
                 if (!nested)
-                    return Fail(inspection, PrefabErrors::DependencyUnavailable, asset);
+                    return FailSourceExpansion(inspection.operation, MakeError(PrefabErrors::DependencyUnavailable), asset);
                 if (auto visited = Visit(inspection, *nested, nestedEdges + 1, variantEdges); visited.HasError())
                     return visited;
             }
@@ -154,21 +139,52 @@ namespace Horo::Prefab::Detail {
             auto &operation = inspection.operation;
             const auto asset = source.document.Data().assetId;
             if (operation.cancellation.IsCancellationRequested())
-                return Fail(inspection, PrefabErrors::Cancelled);
+                return FailSourceExpansion(operation, MakeError(PrefabErrors::Cancelled), asset);
             if (std::ranges::find(operation.active, asset) != operation.active.end())
-                return Fail(inspection, PrefabErrors::DependencyGraphInvalid, asset);
-            if (auto charged = operation.budget.Consume(1); charged.HasError())
-                return charged;
-            if (auto admitted = AdmitSource(inspection, source); admitted.HasError())
-                return admitted;
+                return FailSourceExpansion(operation, MakeError(PrefabErrors::DependencyGraphInvalid), asset);
             operation.active.push_back(asset);
             const PopActive pop{operation.active};
+            if (auto charged = operation.budget.Consume(1); charged.HasError())
+                return FailSourceExpansion(operation, std::move(charged).ErrorValue());
+            if (auto admitted = AdmitSource(inspection, source); admitted.HasError())
+                return FailSourceExpansion(operation, std::move(admitted).ErrorValue());
             const auto &data = source.document.Data();
             if (data.composition && data.composition->variantParent)
                 return VisitVariant(inspection, *data.composition, nestedEdges, variantEdges);
             return VisitConcrete(inspection, data, nestedEdges, variantEdges);
         }
     }  // namespace
+
+    /** @copydoc FailSourceExpansion */
+    Result<void> FailSourceExpansion(SourceExpansionState &state, Error error, const std::optional<Assets::AssetId> next) {
+        state.failureChain = state.active;
+        if (next)
+            state.failureChain.push_back(*next);
+        const auto &edges = state.originChain;
+        if (edges.empty())
+            return Result<void>::Failure(std::move(error));
+
+        // The traversal checks each depth limit before following a rejected edge.
+        // The retained edge count is bounded by the two hard limits plus that edge.
+        error.diagnostics.reserve(error.diagnostics.size() + edges.size());
+        std::string summary;
+        for (std::size_t index = 0; index < edges.size(); ++index) {
+            auto owner = edges[index].owner.ToString();
+            auto message = DescribeEdge(edges[index], owner);
+            if (error.message.size() + summary.size() <= MaximumPrefabDiagnosticMessageBytes / 2)
+                summary += " " + message;
+            error.diagnostics.push_back({.code = DiagnosticCode{"prefab.composition.edge"},
+                                         .severity = DiagnosticSeverity::Note,
+                                         .message = std::move(message),
+                                         .location = {.source = std::move(owner)},
+                                         .path = std::format("/composition/edges/{}", index)});
+        }
+        // Reserve space for the resolver's enclosing instance and source context.
+        if (error.message.size() + summary.size() > MaximumPrefabDiagnosticMessageBytes / 2)
+            summary = std::format(" ({} composition edges) {}", edges.size(), error.diagnostics.back().message);
+        error.message += summary;
+        return Result<void>::Failure(std::move(error));
+    }
 
     /** @copydoc PreflightSourceExpansion */
     Result<void> PreflightSourceExpansion(SourceExpansionState &state, const PrefabDependencySource &root) {

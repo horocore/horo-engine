@@ -246,6 +246,10 @@ TEST_CASE("Mixed dependency cycles are rejected before any source expansion and 
         const auto rejected = graph.Snapshot().Resolve(Id(92), PrefabInstanceId::Create(9).Value(), Limits());
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::DependencyGraphInvalid.code.Value());
+        const auto &edges = rejected.ErrorValue().diagnostics;
+        REQUIRE(edges.size() == 2);
+        CHECK(edges[0].message == "VariantParent " + Id(92).ToString() + " -> " + Id(93).ToString());
+        CHECK(edges[1].message == "NestedPlacement " + Id(93).ToString() + " -> " + Id(92).ToString() + " placement=7");
     }
     SECTION("cancel") {
         CancellationSource cancellation;

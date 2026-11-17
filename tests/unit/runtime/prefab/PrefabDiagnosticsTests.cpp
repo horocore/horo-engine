@@ -1,5 +1,6 @@
 #include "Horo/Prefab/PrefabDiagnostics.h"
 #include "Horo/Prefab/PrefabErrors.h"
+#include "PrefabLayerOverrideTestSupport.h"
 #include "PrefabTestUtils.h"
 
 #include <array>
@@ -266,6 +267,67 @@ namespace Horo::Prefab {
             REQUIRE(retained.front().prefabAsset == Asset(1));
             REQUIRE(retained.front().message == "migration source text");
             REQUIRE(retained.front().DependencyChain().empty());
+        }
+
+        TEST_CASE("Prefab diagnostics retain every nested edge when the summary reaches its display limit", "[prefab][diagnostics]") {
+            constexpr std::uint8_t leaf = 91;
+            constexpr std::uint8_t root = leaf + PrefabHardLimits::NestedPrefabDepth + 1;
+            LayerTest::Graph graph;
+            graph.AddNested(leaf + 1, leaf, LayerTest::Revision(1));
+            for (std::uint8_t owner = leaf + 2; owner <= root; ++owner)
+                graph.AddNested(owner, owner - 1, LayerTest::Revision(owner - 1));
+            const auto snapshot = graph.Snapshot();
+            const auto instance = PrefabInstanceId::Create(1).Value();
+            const auto result = snapshot.Resolve(LayerTest::Id(root), instance, LayerTest::Limits());
+            REQUIRE(result.HasError());
+            const auto &edges = result.ErrorValue().diagnostics;
+            REQUIRE(edges.size() == root - leaf);
+            for (std::size_t index = 0; index < edges.size(); ++index) {
+                const auto id = static_cast<std::uint8_t>(root - index);
+                const auto owner = LayerTest::Id(id).ToString();
+                const auto target = LayerTest::Id(id - 1).ToString();
+                CHECK(edges[index].code.Value() == "prefab.composition.edge");
+                CHECK(edges[index].location.source == owner);
+                CHECK(edges[index].path == "/composition/edges/" + std::to_string(index));
+                CHECK(edges[index].message == "NestedPlacement " + owner + " -> " + target + " placement=7");
+            }
+            CHECK(result.ErrorValue().message.size() <= MaximumPrefabDiagnosticMessageBytes);
+
+            const auto accepted = LayerTest::Take(snapshot.Resolve(LayerTest::Id(root - 1), instance, LayerTest::Limits()));
+            REQUIRE(accepted.Objects().size() == root - leaf);
+            for (std::size_t index = 0; index < accepted.Objects().size(); ++index) {
+                CHECK(accepted.Objects()[index].key.object.NestedInstanceScope().size() == index);
+                CHECK(accepted.Objects()[index].key.object.SourceObject().IsRoot());
+            }
+        }
+
+        TEST_CASE("Prefab diagnostics retain the path to a source that exhausts its dependency allowance", "[prefab][diagnostics]") {
+            LayerTest::Graph graph;
+            graph.AddNested(92, 91, LayerTest::Revision(1));
+            graph.AddNested(93, 91, LayerTest::Revision(1));
+            auto middle = graph.sources.back().document.Data();
+            middle.composition->nestedPlacements.push_back(
+                {.placementLocalId = {8},
+                 .sourcePrefab = LayerTest::Take(PrefabAssetReference::Create(LayerTest::Id(92))),
+                 .authoredAgainst = LayerTest::Revision(92)});
+            middle.referencedAssets.push_back(LayerTest::Id(92));
+            graph.sources.back().document = LayerTest::Take(PrefabDocument::Create(std::move(middle), LayerTest::Limits()));
+            graph.AddNested(94, 93, LayerTest::Revision(93));
+            const auto snapshot = graph.Snapshot();
+            const auto instance = PrefabInstanceId::Create(1).Value();
+            PrefabProjectPolicy policy;
+            policy.maximumReferencedAssets = 1;
+            const auto limits = LayerTest::Take(PrefabLimitProfile::Create(policy));
+            const auto rejected = snapshot.Resolve(LayerTest::Id(94), instance, limits);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::ReferenceCountExceeded.code.Value());
+            REQUIRE(rejected.ErrorValue().diagnostics.size() == 1);
+            CHECK(rejected.ErrorValue().diagnostics.front().message ==
+                  "NestedPlacement " + LayerTest::Id(94).ToString() + " -> " + LayerTest::Id(93).ToString() + " placement=7");
+            policy.maximumReferencedAssets = 2;
+            const auto accepted = snapshot.Resolve(LayerTest::Id(94), instance, LayerTest::Take(PrefabLimitProfile::Create(policy)));
+            REQUIRE(accepted.HasValue());
+            CHECK(accepted.Value().Objects().size() == 5);
         }
 
         TEST_CASE("Prefab diagnostic descriptor table covers every stable prefab error", "[prefab][diagnostics]") {

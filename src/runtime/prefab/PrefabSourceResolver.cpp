@@ -61,14 +61,7 @@ namespace Horo::Prefab {
 
         using ExpansionState = Detail::SourceExpansionState;
 
-        /** @brief Records the complete source path that made a required expansion fail.
-         */
-        [[nodiscard]] Result<void> Fail(ExpansionState &state, Error error, const std::optional<Assets::AssetId> next = std::nullopt) {
-            state.failureChain = state.active;
-            if (next)
-                state.failureChain.push_back(*next);
-            return Result<void>::Failure(std::move(error));
-        }
+        using Detail::FailSourceExpansion;
 
         /** @brief Adds immutable operation context without changing the underlying
          * typed failure. */
@@ -90,15 +83,15 @@ namespace Horo::Prefab {
          * layer, with no outer placement mount. */
         Result<void> MaterializeVariantParent(ExpansionState &state, const PrefabDependencySource &source, std::size_t nestedDepth,
                                               std::size_t variantDepth) {
-            if (variantDepth >= state.limits.Policy().maximumVariantInheritanceDepth)
-                return Fail(state, MakeError(PrefabErrors::HierarchyDepthExceeded));
             const auto &document = source.document.Data();
             const auto asset = document.composition->variantParent->Asset();
-            const auto *parent = FindSource(state.sources, asset);
-            if (!parent)
-                return Fail(state, MakeError(PrefabErrors::DependencyUnavailable), asset);
             state.originChain.push_back({PrefabCompositionOrigin::Variant, document.assetId, asset, {}});
             const PopBackGuard guard{state.originChain};
+            if (variantDepth >= state.limits.Policy().maximumVariantInheritanceDepth)
+                return FailSourceExpansion(state, MakeError(PrefabErrors::HierarchyDepthExceeded), asset);
+            const auto *parent = FindSource(state.sources, asset);
+            if (!parent)
+                return FailSourceExpansion(state, MakeError(PrefabErrors::DependencyUnavailable), asset);
             const auto begin = state.objects.size();
             if (auto expanded = ExpandSource(state, *parent, nestedDepth, variantDepth + 1); expanded.HasError())
                 return expanded;
@@ -108,11 +101,11 @@ namespace Horo::Prefab {
         /** @brief Admits one object before identity allocation or output mutation. */
         Result<void> AdmitLocalObject(ExpansionState &state) {
             if (state.cancellation.IsCancellationRequested())
-                return Fail(state, MakeError(PrefabErrors::Cancelled));
+                return FailSourceExpansion(state, MakeError(PrefabErrors::Cancelled));
             if (state.objects.size() >= state.limits.Policy().maximumObjectCount)
-                return Fail(state, MakeError(PrefabErrors::ObjectCountExceeded));
+                return FailSourceExpansion(state, MakeError(PrefabErrors::ObjectCountExceeded));
             if (const auto charged = state.budget.Consume(1); charged.HasError())
-                return Fail(state, charged.ErrorValue());
+                return FailSourceExpansion(state, charged.ErrorValue());
             return Result<void>::Success();
         }
 
@@ -123,16 +116,16 @@ namespace Horo::Prefab {
                 if (auto admitted = AdmitLocalObject(state); admitted.HasError())
                     return admitted;
                 if (auto charged = state.budget.Consume(state.originChain.size()); charged.HasError())
-                    return Fail(state, charged.ErrorValue());
+                    return FailSourceExpansion(state, charged.ErrorValue());
                 auto address = PrefabObjectAddress::Create(state.scope, object.localId);
                 if (address.HasError())
-                    return Fail(state, address.ErrorValue());
+                    return FailSourceExpansion(state, address.ErrorValue());
                 const ExpandedPrefabObjectKey key{state.instance, address.Value()};
                 std::optional<ExpandedPrefabObjectKey> parent;
                 if (object.parentLocalId) {
                     auto target = PrefabObjectAddress::Create(state.scope, *object.parentLocalId);
                     if (target.HasError())
-                        return Fail(state, target.ErrorValue());
+                        return FailSourceExpansion(state, target.ErrorValue());
                     parent = ExpandedPrefabObjectKey{state.instance, target.Value()};
                 }
                 state.objects.emplace_back(document.assetId, key, parent, object, object.localTransform, Math::Transform{},
@@ -150,7 +143,7 @@ namespace Horo::Prefab {
             auto &root = state.objects[begin];
             const auto composed = ValueDetail::ComposePrefabPlacement(transform, root.object.localTransform);
             if (composed.HasError())
-                return Fail(state, composed.ErrorValue());
+                return FailSourceExpansion(state, composed.ErrorValue());
             root.parent = parent;
             root.placementTransform = transform;
             root.effectiveLocalTransform = composed.Value();
@@ -162,25 +155,25 @@ namespace Horo::Prefab {
         Result<void> MaterializeNestedPlacement(ExpansionState &state, const PrefabDocumentData &document,
                                                 const NestedPrefabPlacement &placement, std::size_t nestedDepth, std::size_t variantDepth,
                                                 const std::optional<ExpandedPrefabObjectKey> &sourceRoot) {
-            if (state.cancellation.IsCancellationRequested())
-                return Fail(state, MakeError(PrefabErrors::Cancelled));
-            if (nestedDepth >= state.limits.Policy().maximumNestedPrefabDepth)
-                return Fail(state, MakeError(PrefabErrors::HierarchyDepthExceeded));
             const auto asset = placement.sourcePrefab.Asset();
+            state.originChain.emplace_back(PrefabCompositionOrigin::Nested, document.assetId, asset, placement.placementLocalId);
+            const PopBackGuard originGuard{state.originChain};
+            if (state.cancellation.IsCancellationRequested())
+                return FailSourceExpansion(state, MakeError(PrefabErrors::Cancelled), asset);
+            if (nestedDepth >= state.limits.Policy().maximumNestedPrefabDepth)
+                return FailSourceExpansion(state, MakeError(PrefabErrors::HierarchyDepthExceeded), asset);
             const auto *nested = FindSource(state.sources, asset);
             if (!nested)
-                return Fail(state, MakeError(PrefabErrors::DependencyUnavailable), asset);
+                return FailSourceExpansion(state, MakeError(PrefabErrors::DependencyUnavailable), asset);
             auto mountParent = sourceRoot;
             if (placement.parentLocalId) {
                 auto parent = PrefabObjectAddress::Create(state.scope, *placement.parentLocalId);
                 if (parent.HasError())
-                    return Fail(state, parent.ErrorValue());
+                    return FailSourceExpansion(state, parent.ErrorValue(), asset);
                 mountParent = ExpandedPrefabObjectKey{state.instance, parent.Value()};
             }
             state.scope.push_back(placement.placementLocalId);
             const PopBackGuard scopeGuard{state.scope};
-            state.originChain.emplace_back(PrefabCompositionOrigin::Nested, document.assetId, asset, placement.placementLocalId);
-            const PopBackGuard originGuard{state.originChain};
             const auto begin = state.objects.size();
             if (auto expanded = ExpandSource(state, *nested, nestedDepth + 1, variantDepth); expanded.HasError())
                 return expanded;
@@ -211,12 +204,12 @@ namespace Horo::Prefab {
          * resolver-owned documents. */
         [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, const std::size_t nestedDepth,
                                                 const std::size_t variantDepth) {
+            const auto sourceAsset = source.document.Data().assetId;
             if (state.cancellation.IsCancellationRequested())
-                return Fail(state, MakeError(PrefabErrors::Cancelled));
-            if (const Assets::AssetId sourceAsset = source.document.Data().assetId;
-                std::ranges::find(state.active, sourceAsset) != state.active.end())
-                return Fail(state, MakeError(PrefabErrors::DependencyGraphInvalid), sourceAsset);
-            state.active.push_back(source.document.Data().assetId);
+                return FailSourceExpansion(state, MakeError(PrefabErrors::Cancelled), sourceAsset);
+            if (std::ranges::find(state.active, sourceAsset) != state.active.end())
+                return FailSourceExpansion(state, MakeError(PrefabErrors::DependencyGraphInvalid), sourceAsset);
+            state.active.push_back(sourceAsset);
             const PopBackGuard activeGuard{state.active};
 
             const PrefabDocumentData &document = source.document.Data();
@@ -226,7 +219,7 @@ namespace Horo::Prefab {
                 return local;
             const auto rootAddress = PrefabObjectAddress::Create(state.scope, LocalObjectId{});
             if (rootAddress.HasError())
-                return Fail(state, rootAddress.ErrorValue());
+                return FailSourceExpansion(state, rootAddress.ErrorValue());
             return MaterializeNestedPlacements(state, document, nestedDepth, variantDepth,
                                                ExpandedPrefabObjectKey{state.instance, rootAddress.Value()});
         }

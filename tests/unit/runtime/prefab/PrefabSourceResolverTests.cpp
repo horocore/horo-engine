@@ -184,6 +184,9 @@ namespace Horo::Prefab {
             auto result = snapshot.Resolve(outer, PrefabInstanceId::Create(1).Value(), ResolverLimits(policy));
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().code.Value() == PrefabErrors::ObjectCountExceeded.code.Value());
+            REQUIRE(result.ErrorValue().diagnostics.size() == 1);
+            CHECK(result.ErrorValue().diagnostics.front().message ==
+                  "NestedPlacement " + outer.ToString() + " -> " + ResolverAsset(2).ToString() + " placement=1");
 
             policy.maximumObjectCount = 2;
             policy.maximumNestedPrefabDepth = 1;
