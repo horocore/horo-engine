@@ -221,7 +221,7 @@ namespace Horo::Gameplay {
                     state.payload.size() > MaximumBehaviorReloadStateBytes ||
                     bytes > MaximumBehaviorReloadSnapshotBytes - state.payload.size())
                     return Result<ReloadIndex>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
-                if (!states.emplace(ReloadKey{state.entity, state.instanceId.value, state.typeId}, &state).second)
+                if (!states.try_emplace(ReloadKey{state.entity, state.instanceId.value, state.typeId}, &state).second)
                     return Result<ReloadIndex>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
                 bytes += state.payload.size();
             }
