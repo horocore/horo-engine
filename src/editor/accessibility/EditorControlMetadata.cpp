@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <limits>
@@ -21,7 +20,7 @@ namespace Horo::Editor::Detail {
         EditorControlMetadataCapture *BoundCapture(ImGuiContext *context) noexcept {
             if (!context || context->Hooks.Size > MaximumContextHooks)
                 return nullptr;
-            const auto callback = &GuiLive::HostSymbol<&EditorControlMetadataHook>();
+            const ImGuiContextHookCallback callback = GuiLive::HostSymbol<&EditorControlMetadataHook>();
             for (const auto &hook : context->Hooks)
                 if (hook.Type == ImGuiContextHookType_NewFramePre && hook.Callback == callback)
                     return static_cast<EditorControlMetadataCapture *>(hook.UserData);
@@ -81,8 +80,8 @@ namespace Horo::Editor::Detail {
 
             /** @brief Preflights every byte before copying any field. */
             bool HasCapacity(const std::string_view name, const UiAccessibilityValueInput &value) const noexcept {
-                return count < MaximumControls && value.text.text.size() <= MaximumFieldBytes &&
-                       name.size() + value.text.text.size() <= MaximumTextBytes - bytes;
+                return count < MaximumControls && name.size() <= MaximumFieldBytes && value.text.text.size() <= MaximumFieldBytes &&
+                       name.size() + value.text.text.size() <= text.size() - bytes;
             }
 
             /** @brief Rejects duplicate actual window/item identities using fixed, bounded open addressing. */
@@ -104,8 +103,7 @@ namespace Horo::Editor::Detail {
             /** @brief Copies one already-bounded field into reserved storage. */
             UiAccessibilityTextRef Copy(const std::string_view value, const UiAccessibilityTextSource source) noexcept {
                 const UiAccessibilityTextRef reference{static_cast<std::uint32_t>(bytes), static_cast<std::uint32_t>(value.size()), source};
-                if (!value.empty())
-                    std::memcpy(text.data() + bytes, value.data(), value.size());
+                std::ranges::copy(value, text.begin() + bytes);
                 bytes += value.size();
                 return reference;
             }
@@ -220,7 +218,7 @@ namespace Horo::Editor::Detail {
         for (std::size_t index = 0; index < types.size(); ++index) {
             ImGuiContextHook hook;
             hook.Type = types[index];
-            hook.Callback = &GuiLive::HostSymbol<&EditorControlMetadataHook>();
+            hook.Callback = GuiLive::HostSymbol<&EditorControlMetadataHook>();
             hook.UserData = this;
             storage_->hooks[index] = ImGui::AddContextHook(context, &hook);
         }
