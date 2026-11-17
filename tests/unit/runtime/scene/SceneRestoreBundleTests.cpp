@@ -49,7 +49,7 @@ namespace Horo::Runtime {
             Fixture fixture;
             const auto old = *fixture.service.ActiveScene();
             const auto oldEntity = *old.Find(SceneObjectId{1});
-            auto *bundle = fixture.Queue(fixture.Request());
+            const auto *bundle = fixture.Queue(fixture.Request());
             fixture.Pump();
             CHECK(fixture.service.ActiveScene()->RuntimeId() == old.RuntimeId());
             CHECK(fixture.project->state.prepared == 0);
@@ -76,7 +76,7 @@ namespace Horo::Runtime {
 
         TEST_CASE("Required missing or stale references roll back the real staged world before any publication",
                   "[unit][runtime][scene][save][restore][references]") {
-            for (const auto invalid : {Target(9), Target(2, 2)}) {
+            for (const auto &invalid : {Target(9), Target(2, 2)}) {
                 Fixture fixture;
                 const auto old = *fixture.service.ActiveScene();
                 auto request = fixture.Request();
@@ -107,7 +107,7 @@ namespace Horo::Runtime {
                 const auto owner = fixture.adapter->Descriptor().participant.participant;
                 for (std::uint8_t identity = 1; identity <= 8; ++identity) {
                     request.entities.push_back(Entity(identity));
-                    request.nodes.push_back(Target(identity));
+                    request.nodes.emplace_back(Target(identity));
                     if (identity > 1)
                         request.references.push_back({.identity = static_cast<std::uint64_t>(identity - 1),
                                                       .owner = owner,
@@ -143,7 +143,7 @@ namespace Horo::Runtime {
         }
 
         /** @brief Builds the same real component payload and reference declaration for publication and foreign-fault cases. */
-        SceneRestoreBundleRequest ComponentRequest(Fixture &fixture, ComponentState &component) {
+        SceneRestoreBundleRequest ComponentRequest(const Fixture &fixture, ComponentState &component) {
             Gameplay::ComponentRegistry types;
             REQUIRE(types.Register({.typeId = ComponentType(), .schemaVersion = 1, .displayName = "Links"}).HasValue());
             REQUIRE(types.Freeze().HasValue());
@@ -158,7 +158,7 @@ namespace Horo::Runtime {
             REQUIRE(writer.WriteUInt32(73).HasValue());
             const auto encoded = std::move(writer).Finalize().Value();
             const RestoreComponentReference source{Target(1), ComponentType()};
-            request.nodes.push_back(source);
+            request.nodes.emplace_back(source);
             request.references.push_back(
                 {.identity = 3, .owner = fixture.adapter->Descriptor().participant.participant, .source = source, .target = Target(2)});
             request.components.push_back({.record = {.entity = Id<PersistentEntityId>(1),
@@ -379,7 +379,9 @@ namespace Horo::Runtime {
                 const ICanonicalRestorePreparedState *Find(const SaveParticipantId &) const noexcept override {
                     return nullptr;
                 }
-            } dependencies;
+            };
+
+            NoDependencies dependencies;
 
             for (const bool allocationFault : {false, true}) {
                 Fixture fixture;
@@ -401,13 +403,17 @@ namespace Horo::Runtime {
                 state.throwNonStandard = !allocationFault;
                 state.failFailureTranslationAllocation = true;
                 std::optional<Result<void>> translated;
+                std::size_t allocationsAfterReturn{};
                 bool escaped{};
                 try {
-                    translated.emplace(receipt->FixupReferences(dependencies, {}));
+                    auto result = receipt->FixupReferences(dependencies, {});
+                    allocationsAfterReturn = Tests::AllocationProbe::Count();
+                    state.failureTranslation.reset();
+                    // MSVC Debug may allocate a string container proxy when the harness moves the returned error.
+                    translated.emplace(std::move(result));
                 } catch (...) {
                     escaped = true;
                 }
-                const auto allocationsAfterReturn = Tests::AllocationProbe::Count();
                 state.failureTranslation.reset();
                 REQUIRE_FALSE(escaped);
                 REQUIRE(translated);
