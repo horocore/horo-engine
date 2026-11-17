@@ -28,6 +28,7 @@ namespace Horo::Tests::OpenXR {
         XrResult failureResult{XR_ERROR_RUNTIME_FAILURE};
         std::string_view absent;
         std::string_view instanceDispatchAbsent;
+        PFN_xrGetInstanceProcAddr resolveExtra{};
         std::vector<std::string_view> calls;
         std::vector<std::string> enabledExtensions;
         bool depthExtension{};
@@ -177,7 +178,7 @@ namespace Horo::Tests::OpenXR {
                                       DispatchEntry{"xrDestroySession", reinterpret_cast<PFN_xrVoidFunction>(&DestroySession)}};
             const auto entry = std::ranges::find(dispatch, std::string_view{name}, &DispatchEntry::name);
             if (entry == dispatch.end())
-                return XR_ERROR_FUNCTION_UNSUPPORTED;
+                return active->resolveExtra ? active->resolveExtra(instance, name, function) : XR_ERROR_FUNCTION_UNSUPPORTED;
             *function = entry->function;
             return XR_SUCCESS;
         }

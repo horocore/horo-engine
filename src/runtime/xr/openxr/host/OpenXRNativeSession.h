@@ -13,12 +13,20 @@
 #include <optional>
 #include <span>
 #include <thread>
+#include <utility>
 
 namespace Horo::XR::OpenXRInternal {
     /** @brief Fixed native discovery limits; oversized publications fail, never truncate. */
     inline constexpr std::size_t MaximumNativeExtensions = 128;
     inline constexpr std::size_t MaximumNativeLayers = 32;
     inline constexpr std::size_t MaximumEnabledExtensions = 16;
+
+    /** @brief Host facts established before making a native extension eligible for discovery. */
+    enum class NativeExtensionEligibility : std::uint8_t {
+        Eligible,
+        Unsupported,
+        Denied
+    };
 
     /** @brief Private native extension policy; host construction copies names only during bounded activation. */
     struct NativeExtensionRequest final {
@@ -27,6 +35,7 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t minimumVersion{1};                    /**< Minimum version for the extension entry point. */
         std::span<const std::string_view> dependencies{};   /**< Other explicitly admitted routes required by this request. */
         std::optional<XRLoaderApiVersion> promotedToCore{}; /**< Earliest usable core API when the host implements that route. */
+        NativeExtensionEligibility eligibility{};           /**< Selected host/platform support and policy admission. */
     };
 
     /** @brief Native extension evidence retained for the exact selected discovery attempt. */
@@ -37,13 +46,17 @@ namespace Horo::XR::OpenXRInternal {
         PromotedToCore,
         VersionIncompatible,
         DependencyMissing,
+        Unsupported,
+        Denied,
+        ProviderFailed,
     };
 
     /** @brief Value-only observation of native discovery and extension policy. */
     struct NativeExtensionAdmission final {
         NativeExtensionState state{};
         std::uint32_t discoveredVersion{};
-        std::uint32_t minimumVersion{}; /**< Zero when the host did not request this extension. */
+        std::uint32_t minimumVersion{};                  /**< Zero when the host did not request this extension. */
+        std::optional<XRLoaderApiVersion> coreVersion{}; /**< Selected native API when the core route is admitted. */
     };
 
     /** @brief Non-owning private native tuple; valid only during a fenced control-thread host operation before Close. */
@@ -54,6 +67,38 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t maximumActions; /**< Zero for discovery-only borrows; negotiated bound after activation. */
         std::uint32_t maximumSpaces;  /**< Zero before activation; exact accepted feature-plan space capacity. */
         std::uint64_t incarnation;    /**< Native child creation receipt; never a Horo session/candidate identity or clock. */
+    };
+
+    class OpenXRNativeSession;
+    struct NativeFeatureProviderIssuer;
+
+    /** @brief Non-callable receipt for one admitted provider on an exact native owner and session. */
+    class NativeFeatureProviderHandle final {
+        friend class OpenXRNativeSession;
+
+        NativeFeatureProviderHandle(std::weak_ptr<const NativeFeatureProviderIssuer> issuer, XRSessionId session, std::uint64_t incarnation,
+                                    std::size_t slot, std::uint64_t generation) noexcept
+            : issuer_(std::move(issuer)), session_(session), incarnation_(incarnation), slot_(slot), generation_(generation) {}
+
+        std::weak_ptr<const NativeFeatureProviderIssuer> issuer_;
+        XRSessionId session_;
+        std::uint64_t incarnation_;
+        std::size_t slot_;
+        std::uint64_t generation_;
+    };
+
+    /** @brief Symbol alternatives for the same typed provider contract. */
+    struct NativeFeatureProviderRoute final {
+        std::string_view extension;       /**< Exact host-requested extension policy. */
+        std::string_view extensionSymbol; /**< Official ABI on the enabled extension route. */
+        std::string_view coreSymbol{};    /**< Equivalent ABI when the policy admits the core route. */
+    };
+
+    /** @brief Generation-fenced callable borrow, valid only for one serialized native operation. */
+    struct NativeFeatureProviderBorrow final {
+        NativeSessionBorrow native;
+        NativeExtensionAdmission admission;
+        PFN_xrVoidFunction function;
     };
 
     /** @brief Exact host publication fence, called before acquisition and before exposing a native candidate. */
@@ -222,6 +267,20 @@ namespace Horo::XR::OpenXRInternal {
          * @return Evidence for that route or the typed session/extension inspection failure.
          */
         [[nodiscard]] Result<NativeExtensionAdmission> ReadExtensionAdmission(const XRSessionId &session, std::string_view name) const;
+        /** @brief Resolves exactly one admitted symbol and publishes the versioned provider for this session.
+         * @param session Exact active session. @param route Requested extension and applicable symbol alternatives.
+         * @return Non-callable receipt, or a typed policy, stale or provider-resolution failure.
+         */
+        [[nodiscard]] Result<NativeFeatureProviderHandle> RegisterFeatureProvider(const XRSessionId &session,
+                                                                                  NativeFeatureProviderRoute route);
+        /** @brief Revalidates the complete owner before a bounded, allocation-free successful callable borrow.
+         * @param handle Exact provider receipt. @return Current tuple and function, or typed stale/owner failure.
+         */
+        [[nodiscard]] Result<NativeFeatureProviderBorrow> BorrowFeatureProvider(const NativeFeatureProviderHandle &handle) const;
+        /** @brief Revokes only the captured provider publication; stale or foreign receipts have no effect.
+         * @param handle Exact provider registration to retire on the owner lane.
+         */
+        void RevokeFeatureProvider(const NativeFeatureProviderHandle &handle) noexcept;
         /**
          * @brief Borrows the exact complete native tuple for explicitly composed downstream native adapters.
          * @param session Exact Horo identity; stale owner/capability/device evidence rejects the borrow.
@@ -232,6 +291,10 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<NativeSessionBorrow> Borrow(const XRSessionId &session) const;
 
     private:
+        /** @brief Finds the bounded host-requested policy slot for this exact extension name. */
+        [[nodiscard]] std::size_t ExtensionSlot(std::string_view name) const noexcept;
+        /** @brief Checks the exact generation before lending or revoking a provider. */
+        [[nodiscard]] bool OwnsFeatureProvider(const NativeFeatureProviderHandle &handle) const noexcept;
         [[nodiscard]] Result<void> ResolveGlobal();
         [[nodiscard]] Result<void> DiscoverAndNegotiate(const NativeDiscoveryRequest &request);
         /** @brief Validates a bounded layer publication and admits only explicitly approved requested layers. */
@@ -331,6 +394,12 @@ namespace Horo::XR::OpenXRInternal {
 
         NegotiatedNames names_;
 
+        struct FeatureProvider final {
+            PFN_xrVoidFunction function{};
+            std::uint64_t generation{};
+            bool failed{};
+        };
+
         struct ExtensionEvidence final {
             std::array<char, XR_MAX_EXTENSION_NAME_SIZE> name{};
             NativeExtensionAdmission admission;
@@ -338,6 +407,10 @@ namespace Horo::XR::OpenXRInternal {
 
         std::array<XrExtensionProperties, MaximumNativeExtensions> discoveredExtensions_{};
         std::array<ExtensionEvidence, MaximumEnabledExtensions> extensionEvidence_{};
+        std::array<FeatureProvider, MaximumEnabledExtensions> featureProviders_{};
+        std::shared_ptr<const NativeFeatureProviderIssuer> providerIssuer_;
+        std::uint64_t providerGeneration_{};
+        bool registeringProvider_{};
         std::uint32_t discoveredExtensionCount_{};
         std::size_t extensionEvidenceCount_{};
 

@@ -82,8 +82,8 @@ namespace Horo::Application::Internal {
 #else
         constexpr const char *timeExtension = "XR_KHR_convert_timespec_time";
 #endif
-        const std::array extensions{NativeExtensionRequest{timeExtension, true},
-                                    NativeExtensionRequest{"XR_KHR_composition_layer_depth", false}};
+        // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
+        const std::array extensions{NativeExtensionRequest{timeExtension, true}};
         const NativeDiscoveryRequest request{selection_,
                                              std::min(compiled, selection_.admittedLoaderVersions.maximum),
                                              extensions,

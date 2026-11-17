@@ -119,7 +119,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (auto bound = render_->compositor.Bind({getProc_}, {}); bound.HasError())
             return bound;
-        if (auto bound = clock_.BindNative({getProc_}); bound.HasError())
+        if (auto bound = clock_.BindNative(); bound.HasError())
             return bound;
         render_->clockBound = true;
         events_.emplace(native_, sessions_, frames_);

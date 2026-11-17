@@ -22,11 +22,9 @@ namespace Horo::Application::Internal {
         /** @brief Binds actual successful native/session and scheduler identities before interactive input.
          * @param source SAME RuntimeHost dispatch issuer, bound while it is idle.
          * @param fixedStep SAME immutable config value supplied to RuntimeHost::Create.
-         * @param dispatch Official resolver retained by the selected native instance/loader.
          * @return Success or original admission/native failure; failed binding leaves Read unavailable.
          */
-        [[nodiscard]] Result<void> Bind(Runtime::RuntimeDispatchSource source, Duration fixedStep,
-                                        XR::OpenXRInternal::NativeOpenXRDispatch dispatch);
+        [[nodiscard]] Result<void> Bind(Runtime::RuntimeDispatchSource source, Duration fixedStep);
         /** @brief Seals the SAME idle scheduler/config during actual App composition before ScreenStart.
          * @param source Canonical existing RuntimeHost issuer, idle on its owner lane.
          * @param fixedStep Exact immutable config supplied at its creation.
@@ -34,12 +32,11 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> PrepareScheduler(Runtime::RuntimeDispatchSource source, Duration fixedStep);
         /** @brief Binds the actual issued native session during the canonical Scene/resource preparation stage.
-         * @param dispatch Official resolver from the retained actual instance.
          * @return Original native/currentness failure; scheduler identity/config cannot be replaced here.
          * @pre PrepareScheduler succeeded while idle. This stage may occur inside that SAME scheduler's Scene phase;
          * it authorizes no cutoff by itself. Read still requires exact opaque BuildInputSnapshot evidence.
          */
-        [[nodiscard]] Result<void> BindNative(XR::OpenXRInternal::NativeOpenXRDispatch dispatch);
+        [[nodiscard]] Result<void> BindNative();
         /** @brief Drops one exact drained native binding while preserving the SAME scheduler and simulation epoch.
          * @param session Exact previously bound candidate; foreign/stale identities cannot unbind a replacement.
          * @return Success or typed owner/reentry/stale failure, with no native call or tick/config mutation.
@@ -71,14 +68,12 @@ namespace Horo::Application::Internal {
          * @return Positive same-instance XrTime, or original lane/currentness/native error without publication.
          */
         [[nodiscard]] Result<XR::XRRuntimeTime> PresentationSample() const;
-        [[nodiscard]] Result<XR::OpenXRInternal::NativeSessionBorrow> Current() const;
-        [[nodiscard]] Result<XR::XRRuntimeTime> NativeSample(XrInstance instance) const;
+        [[nodiscard]] static Result<XR::XRRuntimeTime> NativeSample(const XR::OpenXRInternal::NativeFeatureProviderBorrow &provider);
         XR::OpenXRInternal::OpenXRNativeSession *native_;
         Runtime::RuntimeDispatchSource source_;
         Duration fixedStep_;
         XR::XRSessionId session_;
-        std::uint64_t incarnation_{};
-        PFN_xrVoidFunction convert_{};
+        std::optional<XR::OpenXRInternal::NativeFeatureProviderHandle> provider_;
         const std::thread::id lane_{std::this_thread::get_id()};
         mutable bool reading_{};
     };

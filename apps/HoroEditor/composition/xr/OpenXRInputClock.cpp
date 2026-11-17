@@ -49,19 +49,6 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRInputClock::OpenXRInputClock */
     OpenXRInputClock::OpenXRInputClock(XR::OpenXRInternal::OpenXRNativeSession &native) noexcept : native_(&native) {}
 
-    /** @copydoc OpenXRInputClock::Current */
-    Result<XR::OpenXRInternal::NativeSessionBorrow> OpenXRInputClock::Current() const {
-        using Outcome = Result<XR::OpenXRInternal::NativeSessionBorrow>;
-        if (std::this_thread::get_id() != lane_)
-            return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-        auto native = native_->Borrow(session_);
-        if (native.HasError())
-            return native;
-        if (native.Value().incarnation != incarnation_)
-            return Outcome::Failure(MakeError(XR::XRErrors::IdentityStale));
-        return native;
-    }
-
     /** @copydoc OpenXRInputClock::PrepareScheduler */
     Result<void> OpenXRInputClock::PrepareScheduler(Runtime::RuntimeDispatchSource source, const Duration fixedStep) {
         if (std::this_thread::get_id() != lane_ || reading_ || source_.IsValid() || fixedStep.ToNanoseconds() <= 0 ||
@@ -73,8 +60,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRInputClock::Bind */
-    Result<void> OpenXRInputClock::Bind(Runtime::RuntimeDispatchSource source, const Duration fixedStep,
-                                        XR::OpenXRInternal::NativeOpenXRDispatch dispatch) {
+    Result<void> OpenXRInputClock::Bind(Runtime::RuntimeDispatchSource source, const Duration fixedStep) {
         if (auto prepared = PrepareScheduler(std::move(source), fixedStep); prepared.HasError())
             return prepared;
 
@@ -103,42 +89,29 @@ namespace Horo::Application::Internal {
 
         SchedulerRollback rollback{source_, fixedStep_};
 
-        auto bound = BindNative(dispatch);
+        auto bound = BindNative();
         if (bound.HasValue())
             rollback.Commit();
         return bound;
     }
 
     /** @copydoc OpenXRInputClock::BindNative */
-    Result<void> OpenXRInputClock::BindNative(XR::OpenXRInternal::NativeOpenXRDispatch dispatch) {
-        const auto getProc = dispatch.getProc;
+    Result<void> OpenXRInputClock::BindNative() {
         const auto status = source_.BindingStatus();
-        if (std::this_thread::get_id() != lane_ || reading_ || convert_ || !getProc || fixedStep_.ToNanoseconds() <= 0 ||
+        if (std::this_thread::get_id() != lane_ || reading_ || provider_ || fixedStep_.ToNanoseconds() <= 0 ||
             (status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Reentrant))
             return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         ReadScope scope{reading_};
         const auto selected = native_->Session();
-        auto native = native_->Borrow(selected);
-        if (native.HasError())
-            return Result<void>::Failure(native.ErrorValue());
-        const auto admission = native_->ReadExtensionAdmission(selected, ConversionExtension);
-        if (admission.HasError())
-            return Result<void>::Failure(admission.ErrorValue());
-        if (admission.Value().state != XR::OpenXRInternal::NativeExtensionState::Enabled)
-            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
-        PFN_xrVoidFunction converter{};
-        if (const auto result = getProc(native.Value().instance, ConversionFunction, &converter); result != XR_SUCCESS || !converter)
-            return Result<void>::Failure(
-                MakeError(XR::XRErrors::OperationUnavailable,
-                          std::format("{} unavailable (XrResult {})", ConversionFunction, static_cast<std::int32_t>(result))));
-        auto fenced = native_->Borrow(selected);
-        if (fenced.HasError())
-            return Result<void>::Failure(fenced.ErrorValue());
-        if (fenced.Value().incarnation != native.Value().incarnation || source_.BindingStatus() != status)
+        auto provider = native_->RegisterFeatureProvider(selected, {ConversionExtension, ConversionFunction});
+        if (provider.HasError())
+            return Result<void>::Failure(provider.ErrorValue());
+        if (source_.BindingStatus() != status) {
+            native_->RevokeFeatureProvider(provider.Value());
             return Result<void>::Failure(MakeError(XR::XRErrors::IdentityStale));
+        }
         session_ = selected;
-        incarnation_ = native.Value().incarnation;
-        convert_ = converter;
+        provider_.emplace(std::move(provider).Value());
         return Result<void>::Success();
     }
 
@@ -148,14 +121,14 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         if (!session.IsValid() || session != session_)
             return Result<void>::Failure(MakeError(XR::XRErrors::IdentityStale));
-        convert_ = {};
+        native_->RevokeFeatureProvider(*provider_);
+        provider_.reset();
         session_ = {};
-        incarnation_ = {};
         return Result<void>::Success();
     }
 
     /** @copydoc OpenXRInputClock::NativeSample */
-    Result<XR::XRRuntimeTime> OpenXRInputClock::NativeSample(const XrInstance instance) const {
+    Result<XR::XRRuntimeTime> OpenXRInputClock::NativeSample(const XR::OpenXRInternal::NativeFeatureProviderBorrow &provider) {
         using Outcome = Result<XR::XRRuntimeTime>;
         XrTime sample{};
 #if defined(_WIN32)
@@ -174,7 +147,8 @@ namespace Horo::Application::Internal {
         if (clock_gettime(CLOCK_MONOTONIC, &counter) != 0)
 #endif
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
-        if (const auto result = std::bit_cast<NativeCounterConversion>(convert_)(instance, &counter, &sample); result != XR_SUCCESS)
+        if (const auto result = std::bit_cast<NativeCounterConversion>(provider.function)(provider.native.instance, &counter, &sample);
+            result != XR_SUCCESS)
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable, std::format("{} failed (XrResult {})", ConversionFunction,
                                                                                               static_cast<std::int32_t>(result))));
         return XR::XRRuntimeTime::Create(sample);
@@ -183,7 +157,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRInputClock::Read */
     Result<XR::XRTimeEvidence> OpenXRInputClock::Read(const Runtime::FrameContext &context) const {
         using Outcome = Result<XR::XRTimeEvidence>;
-        if (std::this_thread::get_id() != lane_ || reading_ || !convert_)
+        if (std::this_thread::get_id() != lane_ || reading_ || !provider_)
             return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         ReadScope scope{reading_};
         Runtime::RuntimeDispatchFacts facts;
@@ -194,13 +168,13 @@ namespace Horo::Application::Internal {
         if (quantum <= 0 || (facts.committedTick && facts.committedDuration != fixedStep_) ||
             facts.committedTick > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)() / quantum))
             return Outcome::Failure(MakeError(XR::XRErrors::CapacityExceeded));
-        auto native = Current();
+        auto native = native_->BorrowFeatureProvider(*provider_);
         if (native.HasError())
             return Outcome::Failure(native.ErrorValue());
-        auto sample = NativeSample(native.Value().instance);
+        auto sample = NativeSample(native.Value());
         if (sample.HasError())
             return Outcome::Failure(sample.ErrorValue());
-        if (auto fence = Current(); fence.HasError())
+        if (auto fence = native_->BorrowFeatureProvider(*provider_); fence.HasError())
             return Outcome::Failure(fence.ErrorValue());
         if (Runtime::RuntimeDispatchFacts after; context.dispatchEvidence.Read(source_, Runtime::RuntimePhase::BuildInputSnapshot, after) !=
                                                      Runtime::RuntimeDispatchStatus::Valid ||
@@ -235,16 +209,16 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRInputClock::PresentationSample */
     Result<XR::XRRuntimeTime> OpenXRInputClock::PresentationSample() const {
         using Outcome = Result<XR::XRRuntimeTime>;
-        if (std::this_thread::get_id() != lane_ || reading_ || !convert_)
+        if (std::this_thread::get_id() != lane_ || reading_ || !provider_)
             return Outcome::Failure(MakeError(XR::XRErrors::OperationIncompatible));
         ReadScope scope{reading_};
-        auto native = Current();
+        auto native = native_->BorrowFeatureProvider(*provider_);
         if (native.HasError())
             return Outcome::Failure(native.ErrorValue());
-        auto sample = NativeSample(native.Value().instance);
+        auto sample = NativeSample(native.Value());
         if (sample.HasError())
             return Outcome::Failure(sample.ErrorValue());
-        if (auto fenced = Current(); fenced.HasError())
+        if (auto fenced = native_->BorrowFeatureProvider(*provider_); fenced.HasError())
             return Outcome::Failure(fenced.ErrorValue());
         return sample;
     }

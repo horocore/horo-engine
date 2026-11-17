@@ -62,12 +62,12 @@ namespace Horo::Tests::OpenXR {
             return active->result;
         }
 
-        static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance instance, const char *name, PFN_xrVoidFunction *output) {
+        static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance, const char *name, PFN_xrVoidFunction *output) {
             if (std::string_view{name} == ClockFunction) {
                 *output = active->missing ? nullptr : std::bit_cast<PFN_xrVoidFunction>(&Convert);
                 return *output ? XR_SUCCESS : XR_ERROR_FUNCTION_UNSUPPORTED;
             }
-            return Script::GetProc(instance, name, output);
+            return XR_ERROR_FUNCTION_UNSUPPORTED;
         }
     };
 

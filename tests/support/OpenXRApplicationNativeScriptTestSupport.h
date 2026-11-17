@@ -53,14 +53,15 @@ namespace Horo::Tests::OpenXRApplication {
                 return XR_ERROR_INITIALIZATION_FAILED;
             if (active->native.absent == name || (instance != XR_NULL_HANDLE && active->native.instanceDispatchAbsent == name))
                 return XR_ERROR_FUNCTION_UNSUPPORTED;
-            const std::array<PFN_xrGetInstanceProcAddr, 8> resolvers{&OpenXR::GraphicsScript::GetProc,
+            const std::array<PFN_xrGetInstanceProcAddr, 9> resolvers{&OpenXR::GraphicsScript::GetProc,
                                                                      &OpenXR::CensusScript::GetProc,
                                                                      &OpenXR::EventScript::GetProc,
                                                                      &OpenXR::FrameScript::GetProc,
                                                                      &OpenXR::ClockScript::Resolve,
                                                                      &OpenXR::SwapchainScript::GetProc,
                                                                      &OpenXRAction::ActionScript::GetProc,
-                                                                     &OpenXRAction::PresentationScript::GetProc};
+                                                                     &OpenXRAction::PresentationScript::GetProc,
+                                                                     &OpenXR::Script::GetProc};
             for (const auto resolver : resolvers) {
                 const auto result = resolver(instance, name, output);
                 if (result == XR_SUCCESS && *output)

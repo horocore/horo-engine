@@ -10,6 +10,9 @@
 #include <string>
 
 namespace Horo::XR::OpenXRInternal {
+    /** @brief Cold allocation distinguishes destroyed and recreated owners even at the same address. */
+    struct NativeFeatureProviderIssuer final {};
+
     namespace {
         /** @brief Maps native result categories without discarding phase or numeric evidence. */
         const ErrorCodeDescriptor &NativeErrorDescriptor(XrResult result) noexcept {
@@ -168,7 +171,8 @@ namespace Horo::XR::OpenXRInternal {
                 const auto name = requests[index].name;
                 const auto &request = requests[index];
                 if (!ValidName(name, XR_MAX_EXTENSION_NAME_SIZE) || request.minimumVersion == 0 ||
-                    (request.promotedToCore && !request.promotedToCore->IsValid()))
+                    (request.promotedToCore && !request.promotedToCore->IsValid()) ||
+                    request.eligibility > NativeExtensionEligibility::Denied)
                     return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
                 if (request.dependencies.size() >= MaximumEnabledExtensions)
                     return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
@@ -196,6 +200,10 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Classifies version and core availability before resolving dependencies. */
         NativeExtensionState VersionAdmission(const NativeExtensionRequest &request, const std::uint32_t discovered,
                                               const XRLoaderApiVersion core) noexcept {
+            if (request.eligibility == NativeExtensionEligibility::Denied)
+                return NativeExtensionState::Denied;
+            if (request.eligibility == NativeExtensionEligibility::Unsupported)
+                return NativeExtensionState::Unsupported;
             if (request.promotedToCore && core >= *request.promotedToCore)
                 return NativeExtensionState::PromotedToCore;
             if (discovered == 0)
@@ -241,14 +249,20 @@ namespace Horo::XR::OpenXRInternal {
         }
 
         /** @brief Preserves distinct reasons for required extension rejection before native instance creation. */
-        Error RequiredExtensionError(NativeExtensionState state) {
+        Error ExtensionRejection(NativeExtensionState state) {
             switch (state) {
                 case NativeExtensionState::VersionIncompatible:
-                    return MakeError(XRErrors::OperationIncompatible, "Required native extension version is insufficient");
+                    return MakeError(XRErrors::OperationIncompatible, "Native extension version is insufficient");
                 case NativeExtensionState::DependencyMissing:
-                    return MakeError(XRErrors::OperationUnavailable, "Required native extension dependencies are unavailable");
+                    return MakeError(XRErrors::OperationUnavailable, "Native extension dependencies are unavailable");
+                case NativeExtensionState::Denied:
+                    return MakeError(XRErrors::PermissionDenied, "Native extension is denied by the host");
+                case NativeExtensionState::Unsupported:
+                    return MakeError(XRErrors::OperationUnsupported, "Native extension is unsupported by the selected host");
+                case NativeExtensionState::Discovered:
+                    return MakeError(XRErrors::OperationUnsupported, "Native extension was discovered without provider admission");
                 default:
-                    return MakeError(XRErrors::OperationUnsupported, "Required native extension is absent");
+                    return MakeError(XRErrors::OperationUnsupported, "Native extension is absent");
             }
         }
 
@@ -422,7 +436,7 @@ namespace Horo::XR::OpenXRInternal {
         names_.extensionCount = 0;
         const std::span publication{discoveredExtensions_.data(), discoveredExtensionCount_};
         if (DiscoveredVersion(publication, bindingName) == 0)
-            return Result<void>::Failure(RequiredExtensionError(NativeExtensionState::Absent));
+            return Result<void>::Failure(ExtensionRejection(NativeExtensionState::Absent));
         admitted = EnableExtension(bindingName);
         if (admitted.HasError())
             return admitted;
@@ -437,17 +451,21 @@ namespace Horo::XR::OpenXRInternal {
         for (std::size_t index = 0; index < requested.size(); ++index) {
             const auto &request = requested[index];
             const auto discovered = DiscoveredVersion(publication, request.name);
-            plan[index].evidence = {VersionAdmission(request, discovered, discovery_->acceptedApi), discovered, request.minimumVersion};
+            const auto state = VersionAdmission(request, discovered, discovery_->acceptedApi);
+            plan[index].evidence = {state, discovered, request.minimumVersion,
+                                    state == NativeExtensionState::PromotedToCore ? std::optional{discovery_->acceptedApi} : std::nullopt};
         }
         const auto entries = std::span{plan}.first(requested.size());
         for (std::size_t index = 0; index < entries.size(); ++index) {
             const auto &request = requested[index];
             if (!ResolveDependencies(requested, entries, index, bindingName) && request.required)
-                return Result<void>::Failure(RequiredExtensionError(entries[index].evidence.state));
+                return Result<void>::Failure(ExtensionRejection(entries[index].evidence.state));
             auto &record = extensionEvidence_[extensionEvidenceCount_++];
             if (!CopyPolicyName(request.name, record.name))
                 return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
             record.admission = entries[index].evidence;
+            if (record.admission.state != NativeExtensionState::PromotedToCore)
+                record.admission.coreVersion.reset();
             if (record.admission.state == NativeExtensionState::Enabled) {
                 if (auto enabled = EnableExtension(request.name); enabled.HasError())
                     return enabled;
@@ -653,12 +671,9 @@ namespace Horo::XR::OpenXRInternal {
             return Admission::Failure(MakeError(XRErrors::LoaderPreflightStale));
         if (!ValidName(name, XR_MAX_EXTENSION_NAME_SIZE))
             return Admission::Failure(MakeError(XRErrors::OperationInvalid));
-        const auto evidence = std::span{extensionEvidence_}.first(extensionEvidenceCount_);
-        const auto requested = std::ranges::find(evidence, name, [](const ExtensionEvidence &entry) {
-            return std::string_view{entry.name.data()};
-        });
-        if (requested != evidence.end())
-            return Admission::Success(requested->admission);
+        const auto slot = ExtensionSlot(name);
+        if (slot < extensionEvidenceCount_)
+            return Admission::Success(extensionEvidence_[slot].admission);
         const auto discovered = DiscoveredVersion({discoveredExtensions_.data(), discoveredExtensionCount_}, name);
         const auto native = std::span{names_.extensions}.first(names_.extensionCount);
         const auto enabled = std::ranges::find(native, name, [](const char *extension) {
@@ -672,9 +687,119 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRNativeSession::ReadExtensionAdmission */
     Result<NativeExtensionAdmission> OpenXRNativeSession::ReadExtensionAdmission(const XRSessionId &session,
                                                                                  const std::string_view name) const {
+        using Outcome = Result<NativeExtensionAdmission>;
+        if (controlThread_ != std::this_thread::get_id())
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         if (auto current = Validate(session); current.HasError())
-            return Result<NativeExtensionAdmission>::Failure(std::move(current).ErrorValue());
-        return ReadExtensionAdmission(discovery_->selection.attempt, name);
+            return Outcome::Failure(std::move(current).ErrorValue());
+        if (owner_ != session || !discovery_)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        auto admission = ReadExtensionAdmission(discovery_->selection.attempt, name);
+        const auto slot = ExtensionSlot(name);
+        if (admission.HasError() || slot == extensionEvidenceCount_ || !featureProviders_[slot].failed)
+            return admission;
+        auto failed = std::move(admission).Value();
+        failed.state = NativeExtensionState::ProviderFailed;
+        return Result<NativeExtensionAdmission>::Success(failed);
+    }
+
+    /** @copydoc OpenXRNativeSession::ExtensionSlot */
+    std::size_t OpenXRNativeSession::ExtensionSlot(const std::string_view name) const noexcept {
+        const auto evidence = std::span{extensionEvidence_}.first(extensionEvidenceCount_);
+        const auto found = std::ranges::find(evidence, name, [](const ExtensionEvidence &entry) {
+            return std::string_view{entry.name.data()};
+        });
+        return static_cast<std::size_t>(found - evidence.begin());
+    }
+
+    /** @copydoc OpenXRNativeSession::RegisterFeatureProvider */
+    Result<NativeFeatureProviderHandle> OpenXRNativeSession::RegisterFeatureProvider(const XRSessionId &session,
+                                                                                     const NativeFeatureProviderRoute route) {
+        using Outcome = Result<NativeFeatureProviderHandle>;
+        if (controlThread_ != std::this_thread::get_id() || registeringProvider_)
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (!ValidName(route.extension, XR_MAX_EXTENSION_NAME_SIZE))
+            return Outcome::Failure(MakeError(XRErrors::OperationInvalid));
+        const auto slot = ExtensionSlot(route.extension);
+        if (slot == extensionEvidenceCount_)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported, "Native feature provider has no host-admitted route"));
+        const auto admission = extensionEvidence_[slot].admission;
+        if (!Available(admission.state))
+            return Outcome::Failure(ExtensionRejection(admission.state));
+        if (featureProviders_[slot].generation != 0)
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible, "Native feature provider is already registered"));
+        if (providerGeneration_ == std::numeric_limits<std::uint64_t>::max())
+            return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
+        std::array<char, XR_MAX_EXTENSION_NAME_SIZE> symbol{};
+        if (!CopyPolicyName(admission.coreVersion ? route.coreSymbol : route.extensionSymbol, symbol))
+            return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Selected native feature provider has no valid symbol"));
+
+        struct RegistrationScope final {
+            bool &registering;
+
+            explicit RegistrationScope(bool &active) noexcept : registering(active) {
+                registering = true;
+            }
+
+            ~RegistrationScope() {
+                registering = false;
+            }
+        };
+
+        const RegistrationScope scope{registeringProvider_};
+        const auto current = Borrow(session);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (owner_ != session || current.Value().instance == XR_NULL_HANDLE)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+
+        PFN_xrVoidFunction function{};
+        const auto result = dispatch_.getProc(current.Value().instance, symbol.data(), &function);
+        const auto fenced = Borrow(session);
+        if (fenced.HasError())
+            return Outcome::Failure(fenced.ErrorValue());
+        if (owner_ != session || nativeSessionIncarnation_ != current.Value().incarnation)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        const bool ready = result == XR_SUCCESS && function != nullptr;
+        auto &provider = featureProviders_[slot];
+        if (!ready) {
+            provider.failed = true;
+            return Outcome::Failure(result == XR_SUCCESS
+                                        ? MakeError(XRErrors::OperationUnavailable, "Native provider returned an empty dispatch")
+                                        : NativeFailure(symbol.data(), result));
+        }
+        if (!providerIssuer_)
+            providerIssuer_ = std::make_shared<const NativeFeatureProviderIssuer>();
+        provider = {function, ++providerGeneration_};
+        return Outcome::Success({providerIssuer_, session, current.Value().incarnation, slot, provider.generation});
+    }
+
+    /** @copydoc OpenXRNativeSession::OwnsFeatureProvider */
+    bool OpenXRNativeSession::OwnsFeatureProvider(const NativeFeatureProviderHandle &handle) const noexcept {
+        return providerIssuer_ && !handle.issuer_.owner_before(providerIssuer_) && !providerIssuer_.owner_before(handle.issuer_) &&
+               handle.session_ == owner_ && handle.incarnation_ == nativeSessionIncarnation_ && handle.slot_ < extensionEvidenceCount_ &&
+               featureProviders_[handle.slot_].generation == handle.generation_;
+    }
+
+    /** @copydoc OpenXRNativeSession::BorrowFeatureProvider */
+    Result<NativeFeatureProviderBorrow> OpenXRNativeSession::BorrowFeatureProvider(const NativeFeatureProviderHandle &handle) const {
+        using Outcome = Result<NativeFeatureProviderBorrow>;
+        if (controlThread_ != std::this_thread::get_id())
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (!OwnsFeatureProvider(handle))
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        auto current = Borrow(handle.session_);
+        if (current.HasError())
+            return Outcome::Failure(std::move(current).ErrorValue());
+        if (!OwnsFeatureProvider(handle))
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        return Outcome::Success({current.Value(), extensionEvidence_[handle.slot_].admission, featureProviders_[handle.slot_].function});
+    }
+
+    /** @copydoc OpenXRNativeSession::RevokeFeatureProvider */
+    void OpenXRNativeSession::RevokeFeatureProvider(const NativeFeatureProviderHandle &handle) noexcept {
+        if (controlThread_ == std::this_thread::get_id() && OwnsFeatureProvider(handle))
+            featureProviders_[handle.slot_] = {};
     }
 
     /** @copydoc OpenXRNativeSession::Borrow */

@@ -187,6 +187,107 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.owner.ReadExtensionAdmission(request.activeAttempt, promoted).HasError());
     }
 
+    TEST_CASE("OpenXR feature providers bind the admitted core route and fence every publication generation", "[unit][xr][native]") {
+        Fixture fixture;
+        constexpr std::string_view extension = "XR_TEST_core_provider";
+        const NativeFeatureProviderRoute route{extension, "xrAbsentExtensionSymbol", "xrGetSystem"};
+        auto request = fixture.Request();
+        const std::array extensions{NativeExtensionRequest{.name = extension, .promotedToCore = request.preflight.LoaderApiVersion()}};
+        request.extensions = extensions;
+        REQUIRE(fixture.owner.Create(request).HasValue());
+        const auto first = fixture.owner.RegisterFeatureProvider(request.candidate, route);
+        REQUIRE(first.HasValue());
+        REQUIRE_FALSE(fixture.owner.RegisterFeatureProvider(request.candidate, route).HasValue());
+        const auto borrowed = fixture.owner.BorrowFeatureProvider(first.Value());
+        REQUIRE(borrowed.HasValue());
+        CHECK(borrowed.Value().admission.state == NativeExtensionState::PromotedToCore);
+        CHECK(borrowed.Value().admission.coreVersion == request.preflight.LoaderApiVersion());
+        CHECK(borrowed.Value().function == reinterpret_cast<PFN_xrVoidFunction>(&Script::System));
+        CHECK_FALSE(fixture.owner.HasExtension(extension));
+
+        fixture.owner.RevokeFeatureProvider(first.Value());
+        CHECK(fixture.owner.BorrowFeatureProvider(first.Value()).HasError());
+        const auto second = fixture.owner.RegisterFeatureProvider(request.candidate, route);
+        REQUIRE(second.HasValue());
+        fixture.owner.RevokeFeatureProvider(first.Value());
+        CHECK(fixture.owner.BorrowFeatureProvider(first.Value()).HasError());
+        CHECK(fixture.owner.BorrowFeatureProvider(second.Value()).HasValue());
+
+        fixture.script.failRetirement = true;
+        CHECK(fixture.owner.RetireSession().HasError());
+        CHECK(fixture.owner.BorrowFeatureProvider(second.Value()).HasError());
+        CHECK(fixture.owner.RegisterFeatureProvider(request.candidate, route).HasError());
+        fixture.script.failRetirement = false;
+        REQUIRE(fixture.owner.RetireSession().HasValue());
+        REQUIRE(fixture.owner.PrepareSession({request.preflight, request.activeAttempt}).HasValue());
+        ++request.candidate.slot.generation;
+        REQUIRE(fixture.owner.Activate(request).HasValue());
+        const auto replacement = fixture.owner.RegisterFeatureProvider(request.candidate, route);
+        REQUIRE(replacement.HasValue());
+        fixture.owner.RevokeFeatureProvider(second.Value());
+        CHECK(fixture.owner.BorrowFeatureProvider(replacement.Value()).HasValue());
+        CHECK(fixture.owner.BorrowFeatureProvider(second.Value()).HasError());
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.owner.BorrowFeatureProvider(replacement.Value()).HasError());
+    }
+
+    TEST_CASE("OpenXR provider receipts reject a backend recreated at the same address", "[unit][xr][native]") {
+        Fixture fixture;
+        constexpr std::string_view extension = "XR_TEST_recreated_provider";
+        const NativeFeatureProviderRoute route{extension, {}, "xrGetSystem"};
+        auto request = fixture.Request();
+        const std::array extensions{NativeExtensionRequest{.name = extension, .promotedToCore = request.preflight.LoaderApiVersion()}};
+        request.extensions = extensions;
+
+        std::optional<OpenXRNativeSession> backend;
+        backend.emplace(fixture.library, fixture.graphics, fixture.fence);
+        REQUIRE(backend->Create(request).HasValue());
+        const auto first = backend->RegisterFeatureProvider(request.candidate, route);
+        REQUIRE(first.HasValue());
+        REQUIRE(backend->Close().HasValue());
+        backend.reset();
+
+        backend.emplace(fixture.library, fixture.graphics, fixture.fence);
+        REQUIRE(backend->Create(request).HasValue());
+        const auto replacement = backend->RegisterFeatureProvider(request.candidate, route);
+        REQUIRE(replacement.HasValue());
+        CHECK(backend->BorrowFeatureProvider(first.Value()).HasError());
+        backend->RevokeFeatureProvider(first.Value());
+        CHECK(backend->BorrowFeatureProvider(replacement.Value()).HasValue());
+        REQUIRE(backend->Close().HasValue());
+    }
+
+    TEST_CASE("OpenXR extension evidence distinguishes host rejection and optional provider failure", "[unit][xr][native]") {
+        Fixture fixture;
+        constexpr std::string_view depth = "XR_KHR_composition_layer_depth";
+        fixture.script.depthExtension = true;
+        fixture.script.extensionCount = 2;
+        auto request = fixture.Request();
+        auto eligibility = NativeExtensionEligibility::Eligible;
+        auto expected = NativeExtensionState::ProviderFailed;
+        SECTION("unsupported host leaves the discovered route disabled") {
+            eligibility = NativeExtensionEligibility::Unsupported;
+            expected = NativeExtensionState::Unsupported;
+        }
+        SECTION("host policy denial leaves the discovered route disabled") {
+            eligibility = NativeExtensionEligibility::Denied;
+            expected = NativeExtensionState::Denied;
+        }
+        SECTION("missing optional dispatch preserves the live baseline session") {}
+        const std::array extensions{NativeExtensionRequest{.name = depth, .eligibility = eligibility}};
+        request.extensions = extensions;
+        REQUIRE(fixture.owner.Create(request).HasValue());
+        const auto failed = fixture.owner.RegisterFeatureProvider(request.candidate, {depth, "xrAbsentFeatureProvider"});
+        REQUIRE(failed.HasError());
+        const auto evidence = fixture.owner.ReadExtensionAdmission(request.candidate, depth);
+        REQUIRE(evidence.HasValue());
+        CHECK(evidence.Value().state == expected);
+        CHECK(evidence.Value().discoveredVersion == 1);
+        CHECK(evidence.Value().minimumVersion == 1);
+        CHECK(fixture.owner.HasExtension(depth) == (eligibility == NativeExtensionEligibility::Eligible));
+        CHECK(fixture.owner.Borrow(request.candidate).HasValue());
+    }
+
     TEST_CASE("OpenXR cannot admit optional dependency cycles", "[unit][xr][native]") {
         Fixture fixture;
         constexpr std::string_view first = "XR_TEST_first";

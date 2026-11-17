@@ -48,6 +48,7 @@ namespace Horo::XR::OpenXRInternal {
         if (discovery_)
             discovery_->phase = DiscoveryPhase::Retiring;
         owner_ = {};
+        featureProviders_ = {};
         preparing_ = {};
         retainedPreflight_.reset();
         retainedPlan_.reset();
@@ -77,6 +78,7 @@ namespace Horo::XR::OpenXRInternal {
         const RetirementOperation operation{retirementCall_};
         discovery_->phase = RetiringSession;
         owner_ = {};
+        featureProviders_ = {};
         preparing_ = {};
         retainedPreflight_.reset();
         retainedPlan_.reset();

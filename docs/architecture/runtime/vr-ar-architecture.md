@@ -474,6 +474,16 @@ extensions disable the associated capability with an actionable reason; they do
 not prevent a baseline session unless the active project capability profile
 requires them.
 
+The native owner resolves a provider's selected extension or core symbol during
+session preparation. It retains the version evidence, callable and registration
+generation in fixed storage. A consumer holds a non-callable receipt and borrows
+the function only after verifying the exact owner, session and registration.
+Retiring or replacing that session revokes the receipt before destroying native
+objects. The editor uses this contract for the platform time conversion required
+by its projection profile. A color-only composition leaves native depth disabled
+even if the runtime advertises its extension, then applies the project feature
+plan's fallback or rejection.
+
 The Horo-facing version-one plan uses stable `XRCapability` IDs, never native
 extension strings. Product policy must name each extra capability once and mark it
 required, optional with an explicit disable/baseline-projection fallback, or disabled.

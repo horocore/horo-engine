@@ -85,9 +85,16 @@ namespace Horo::Tests::OpenXRApplication {
             bool admission{true};
             std::function<void()> onCheckAdmission;
 
-            explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5) {
+            explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5,
+                                        const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested) {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
+                if (depth != XR::XRProjectFeaturePolicy::Unrequested) {
+                    request.invocation.emplace(SettingKey{"xr.features.depth_composition"},
+                                               ConfigurationInputValue{static_cast<std::int64_t>(depth), std::nullopt});
+                    script.native.depthExtension = true;
+                    ++script.native.extensionCount;
+                }
                 REQUIRE(bindings->poses.empty());
                 // This zero-pose Play composition reserves five canonical spaces before native activation.
                 request.invocation.emplace(SettingKey{"xr.limits.spaces"}, ConfigurationInputValue{maximumSpaces, std::nullopt});
@@ -510,6 +517,35 @@ namespace Horo::Tests::OpenXRApplication {
             return candidate;
         }
     }  // namespace
+
+    TEST_CASE("Real installed Play degrades optional depth and rejects required depth on a color-only renderer",
+              "[xr][application][play][features]") {
+        auto depth = XR::XRProjectFeaturePolicy::OptionalProjection;
+        SECTION("optional depth uses the admitted color projection") {}
+        SECTION("required depth rejects the candidate before publication") {
+            depth = XR::XRProjectFeaturePolicy::Required;
+        }
+        ApplicationFixture fixture{true, 5, depth};
+        fixture.CreatePlay();
+        REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
+        REQUIRE(fixture.play->AttachInput(fixture.InputPort(), fixture.source.Port()).HasValue());
+        auto participant = fixture.play->MakeSceneParticipant();
+        auto candidate = participant->Prepare(fixture.definition, fixture.scene->View());
+        CHECK(std::ranges::find(fixture.script.native.enabledExtensions, "XR_KHR_composition_layer_depth") ==
+              fixture.script.native.enabledExtensions.end());
+        if (depth == XR::XRProjectFeaturePolicy::Required) {
+            REQUIRE(candidate.HasError());
+            CHECK(candidate.ErrorValue().code.Value() == XR::XRErrors::OperationUnsupported.code.Value());
+            CHECK_FALSE(fixture.play->UsesXrScene());
+        } else {
+            auto scene = RequireValue(std::move(candidate));
+            REQUIRE(scene->ValidatePublication().HasValue());
+            scene->Publish();
+            CHECK(fixture.play->UsesXrScene());
+            scene->Shutdown();
+        }
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
 
     TEST_CASE("Real installed Play suspends XR admission while the bounded event poll has unread work", "[xr][application][play][events]") {
         ApplicationFixture fixture{true};
