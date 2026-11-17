@@ -190,9 +190,19 @@ TEST_CASE("Progression unrelated targets may complete out of order without cross
 
 TEST_CASE("Progression allocation failure cannot publish a partially initialized owner",
           "[platform-services][progression][pls004-contract][coalescing]") {
-    for (std::size_t successfulAllocations = 0; successfulAllocations < 4; ++successfulAllocations) {
-        const Horo::Tests::AllocationProbe::ScopedFailure fail(successfulAllocations);
+    std::size_t allocations{};
+    {
+        Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
         const auto result = PlatformProgressionCoalescer::Create();
+        allocations = measurement.Snapshot().requests;
+        REQUIRE(result.HasValue());
+    }
+    REQUIRE(allocations > 0);
+    for (std::size_t successfulAllocations = 0; successfulAllocations < allocations; ++successfulAllocations) {
+        const auto result = [successfulAllocations] {
+            const Horo::Tests::AllocationProbe::ScopedFailure fail(successfulAllocations);
+            return PlatformProgressionCoalescer::Create();
+        }();
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == PlatformProgressionErrors::CapacityExceeded.code.Value());
     }

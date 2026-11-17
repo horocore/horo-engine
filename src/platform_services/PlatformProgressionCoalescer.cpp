@@ -86,8 +86,9 @@ namespace Horo::PlatformServices {
 
         PlatformProgressionCoalescerConfig config;
         mutable std::mutex mutex; /**< Protects all receipts, dispatch identity, monotonic clock and closed state. */
-        std::vector<Receipt> receipts;
-        std::vector<Batch> batches;
+        // Explicit count constructors expose checked-library allocation failures to the factory.
+        std::vector<Receipt> receipts = std::vector<Receipt>(std::size_t{0});
+        std::vector<Batch> batches = std::vector<Batch>(std::size_t{0});
         std::uint64_t tick{};
         std::uint64_t sequence{};
         bool closed{};
