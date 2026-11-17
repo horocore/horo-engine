@@ -220,7 +220,8 @@ namespace Horo::Cli {
                 "  --log-level <critical|debug|error|info|trace|warning>  Set the invocation log threshold.\n"
                 "  --non-interactive  Disable terminal prompts.\n"
                 "  -o, --output <human|json|jsonl>  Select the output encoding. (default: human)\n"
-                "  -p, --project <path>  Select the project root.\n\n"
+                "  -p, --project <path>  Select the project root.\n"
+                "  --timeout-ms <integer>  Bound this invocation in milliseconds.\n\n"
                 "Output: human, json, jsonl\n");
         REQUIRE(registry.GenerateHelp("horo-engine", {{"not", "accepted"}}).empty());
     }
@@ -299,6 +300,15 @@ namespace Horo::Cli {
         descriptor = Descriptor({"project", "validate"});
         descriptor.timeout.maximumMilliseconds = 1'000;
         RequireError(CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy()), CliErrors::DescriptorInvalid);
+    }
+
+    TEST_CASE("CLI registry admits opt-in deadlines while preserving the disabled default", "[unit][cli][registry][timeout]") {
+        auto descriptor = Descriptor({"project", "validate"});
+        descriptor.timeout = {.maximumMilliseconds = 5000};
+        const auto registry = CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy());
+        REQUIRE(registry.HasValue());
+        CHECK(registry.Value().Commands().front().timeout.defaultMilliseconds == 0);
+        CHECK(registry.Value().Commands().front().timeout.maximumMilliseconds == 5000);
     }
 
     TEST_CASE("CLI registry policy validates host contract and capability grants", "[unit][cli][registry]") {
@@ -384,6 +394,11 @@ namespace Horo::Cli {
         descriptor = Descriptor({"project", "validate"});
         descriptor.options.push_back(
             {.name = "project", .summary = "Conflicts with shared project.", .valueKind = CliOptionValueKind::Path});
+        RequireError(CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy()), CliErrors::OptionNameDuplicate);
+
+        descriptor = Descriptor({"project", "validate"});
+        descriptor.options.push_back(
+            {.name = "timeout-ms", .summary = "Conflicts with the shared deadline.", .valueKind = CliOptionValueKind::SignedInteger});
         RequireError(CliCommandRegistry::Create(std::span{&descriptor, 1}, Policy()), CliErrors::OptionNameDuplicate);
 
         descriptor = Descriptor({"project", "validate"});

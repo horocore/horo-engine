@@ -141,7 +141,7 @@ namespace Horo::Application {
 
         /** @brief Admits expanded bounds only for release profiles that explicitly freeze those same limits. */
         bool HasRegisteredExpandedProfile(const ParserState &state) {
-            if (state.release != "0.2.0" && state.release != "0.3.0")
+            if (state.release != "0.2.0" && state.release != "0.3.0" && state.release != "0.4.0")
                 return false;
             const auto *decision = BuiltInReleaseCompatibilityRegistry().Find({ParseHoroVersion(state.release).Value()});
             return decision != nullptr && state.contract == FormatPersistentContractHash(decision->persistentContract);
@@ -357,7 +357,15 @@ namespace Horo::Application {
             // inspection must not start rejecting previously ignored settings members.
             network = settings["network"].dump();
         }
-        return Result<ProjectSourceDocument>::Success({std::move(metadata).Value(), std::move(network)});
+        std::optional<std::string> platformSalt;
+        if (parsed.Value().contains("platformServicesIdSalt"))
+            platformSalt = parsed.Value()["platformServicesIdSalt"].dump();
+        std::optional<std::string> platformSettings;
+        if (const auto &settings = parsed.Value()["settings"]; settings.contains("platformServices"))
+            platformSettings = settings["platformServices"].dump();
+        return Result<ProjectSourceDocument>::Success({std::move(metadata).Value(), std::move(network), std::move(platformSalt),
+                                                       std::move(platformSettings),
+                                                       ComputeSha256(std::as_bytes(std::span{contents.data(), contents.size()}))});
     }
 
     /** @copydoc LoadProjectSourceDocument */
@@ -392,7 +400,7 @@ namespace Horo::Application {
 
     /** @copydoc ProjectCompatibilityInspector::Inspect */
     ProjectCompatibilitySnapshot ProjectCompatibilityInspector::Inspect(const std::filesystem::path &projectRoot) const {
-        auto loaded = LoadProjectMetadata(projectRoot);
+        auto loaded = LoadProjectSourceDocument(projectRoot);
         if (loaded.HasError()) {
             const bool inaccessible = loaded.ErrorValue().code.Value() == "project.metadata.not_found" ||
                                       loaded.ErrorValue().code.Value() == "project.metadata.read_failed";
@@ -400,13 +408,16 @@ namespace Horo::Application {
                                   inaccessible ? ProjectCompatibilityStatus::Inaccessible : ProjectCompatibilityStatus::Corrupt,
                                   loaded.ErrorValue());
         }
-        ProjectMetadata metadata = std::move(loaded).Value();
+        auto sourceDocument = std::move(loaded).Value();
+        ProjectMetadata metadata = std::move(sourceDocument.metadata);
         const ReleaseCompatibilityDecision *current = registry_.Find(currentRelease_);
         if (current == nullptr) {
             return FailedSnapshot(currentRelease_, ProjectCompatibilityStatus::Corrupt, MakeError(ProjectErrors::RegistryInvalid));
         }
 
-        ProjectCompatibilitySnapshot snapshot{.metadata = metadata, .targetVersion = currentRelease_};
+        ProjectCompatibilitySnapshot snapshot{.metadata = metadata,
+                                              .targetVersion = currentRelease_,
+                                              .sourceFingerprint = sourceDocument.sourceFingerprint};
         if (const ReleaseCompatibilityDecision *source = registry_.Find(metadata.horoVersion); source != nullptr) {
             using enum ProjectCompatibilityStatus;
             snapshot.sourceBaseline = source->contractBaseline;

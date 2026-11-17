@@ -181,9 +181,18 @@ namespace Horo::Editor {
                 } else if (snapshot->state == ProjectCreationOperationState::Failed) {
                     state_.hasFailed = true;
                     state_.canRetry = false;
-                    state_.statusText = snapshot->error.has_value()
-                                            ? snapshot->error->message
-                                            : ProjectLoadingScreen::kTextScope.Text(context_.localization, "status.failed");
+                    if (snapshot->publication == ProjectCreationPublicationState::ReconciliationRequired)
+                        state_.statusText = ProjectLoadingScreen::kTextScope.Text(context_.localization, "error.creation_durability");
+                    else if (snapshot->error && snapshot->error->code == ProjectCreationErrorCode::IdentityPreparationFailed)
+                        state_.statusText = ProjectLoadingScreen::kTextScope.Text(context_.localization, "error.platform_identity");
+                    else if (snapshot->error && snapshot->error->code == ProjectCreationErrorCode::UnexpectedFailure)
+                        state_.statusText = ProjectLoadingScreen::kTextScope.Text(context_.localization, "error.creation_unexpected");
+                    else if (snapshot->error && snapshot->error->code == ProjectCreationErrorCode::PromotionFailed)
+                        state_.statusText = ProjectLoadingScreen::kTextScope.Text(context_.localization, "error.creation_publication");
+                    else
+                        state_.statusText = snapshot->error.has_value()
+                                                ? snapshot->error->message
+                                                : ProjectLoadingScreen::kTextScope.Text(context_.localization, "status.failed");
                 }
             }
 

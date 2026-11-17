@@ -2,6 +2,7 @@
 #include "PlatformOfflineQueueImpl.h"
 
 #include <algorithm>
+#include <exception>
 #include <utility>
 
 namespace Horo::PlatformServices {
@@ -34,6 +35,11 @@ namespace Horo::PlatformServices {
         if (record->state != PlatformOfflineOperationState::Pending)
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
 
+        if (record->attempts >= config_.maximumAttempts || (record->nextEligibleAt.has_value() && now < *record->nextEligibleAt))
+            return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
+        if (record->attempts != 0 && !LiveReceiptsMatchOperation(*record))
+            return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
+
         for (const auto &candidate : operations_)
             if (candidate.lane == record->lane && candidate.handle.sequence <= record->handle.sequence &&
                 (candidate.state == PlatformOfflineOperationState::Pending ||
@@ -51,6 +57,8 @@ namespace Horo::PlatformServices {
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
 
         record->state = PlatformOfflineOperationState::Dispatching;
+        ++record->attempts;
+        record->nextEligibleAt.reset();
         for (auto &receipt : record->receipts)
             if (receipt.state == PlatformOfflineIntentState::Pending)
                 receipt.state = PlatformOfflineIntentState::Dispatching;
@@ -230,23 +238,44 @@ namespace Horo::PlatformServices {
         if (const auto observed = ObserveTime(now); observed.HasError())
             return Result<std::vector<PlatformOfflineIntentId>>::Failure(observed.ErrorValue());
 
+        const auto removable = [this, now](const State &operation) {
+            if (operation.state != PlatformOfflineOperationState::Terminal || !operation.terminalAt.has_value())
+                return false;
+            const auto retentionEndsAt = AddAge(*operation.terminalAt, config_.terminalRetention);
+            return retentionEndsAt.has_value() && now >= *retentionEndsAt;
+        };
+        const auto removedOperations = std::ranges::count_if(operations_, removable);
+        if (removedOperations == 0)
+            return Result<std::vector<PlatformOfflineIntentId>>::Success({});
+
         std::vector<PlatformOfflineIntentId> compacted;
-        auto operation = operations_.begin();
-        while (operation != operations_.end()) {
-            if (operation->state != PlatformOfflineOperationState::Terminal || !operation->terminalAt.has_value()) {
-                ++operation;
-                continue;
+        std::vector<State> retained;
+        retained.reserve(operations_.size() - static_cast<std::size_t>(removedOperations));
+        for (const auto &operation : operations_) {
+            if (removable(operation)) {
+                for (const auto &receipt : operation.receipts)
+                    compacted.push_back(receipt.intent.id);
+            } else {
+                retained.push_back(operation);
             }
-            if (const auto retentionEndsAt = AddAge(*operation->terminalAt, config_.terminalRetention);
-                !retentionEndsAt.has_value() || now < *retentionEndsAt) {
-                ++operation;
-                continue;
-            }
-            for (const auto &receipt : operation->receipts)
-                compacted.push_back(receipt.intent.id);
-            retainedIntentCount_ -= operation->receipts.size();
-            operation = operations_.erase(operation);
         }
+
+        // Checked-library copies and returned-vector moves can allocate; publish only after the Result is constructed.
+        struct Commit final {
+            std::vector<State> &current;
+            std::vector<State> &prepared;
+            std::size_t &retainedCount;
+            std::size_t removedCount;
+            int exceptions{std::uncaught_exceptions()};
+
+            ~Commit() noexcept {
+                if (std::uncaught_exceptions() == exceptions) {
+                    current.swap(prepared);
+                    retainedCount -= removedCount;
+                }
+            }
+        } commit{operations_, retained, retainedIntentCount_, compacted.size()};
+
         return Result<std::vector<PlatformOfflineIntentId>>::Success(std::move(compacted));
     }
 }  // namespace Horo::PlatformServices

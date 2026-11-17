@@ -1,11 +1,13 @@
-#include "AiTestSupport.h"
+#include "EnvironmentQueryTestSupport.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -14,78 +16,7 @@
 
 namespace Horo::AI {
     namespace {
-        using TestSupport::ExpectError;
-        using TestSupport::MakeIdentity;
-
-        [[nodiscard]] std::unique_ptr<Runtime::RuntimeScene> MakeScene(const std::uint64_t incarnation = 77) {
-            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
-            for (const std::uint64_t id : {1ULL, 2ULL}) {
-                Runtime::RuntimeEntityDefinition entity;
-                entity.object = Runtime::SceneObjectId{id};
-                builder.Add(entity);
-            }
-            const auto definition = std::move(builder).Build();
-            REQUIRE(definition.HasValue());
-            auto created = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{incarnation});
-            REQUIRE(created.HasValue());
-            return std::move(created).Value();
-        }
-
-        [[nodiscard]] QueryContextCaptureSource Source(const Runtime::RuntimeSceneView &view, const std::uint64_t revision = 1) {
-            const auto querier = view.Find(Runtime::SceneObjectId{1});
-            const auto target = view.Find(Runtime::SceneObjectId{2});
-            REQUIRE(querier.has_value());
-            REQUIRE(target.has_value());
-            return {.querier = *querier,
-                    .querierLocation = Math::WorldCoordinate64::FromMillimeters(1'000, 2'000, 3'000),
-                    .target = *target,
-                    .targetLocation = Math::WorldCoordinate64::FromMillimeters(4'000, 5'000, 6'000),
-                    .executionRevision = revision};
-        }
-
-        struct QueryFixture final {
-            std::array<QueryItemTypeDescriptor, 1> items{{{MakeIdentity<QueryItemTypeId>(10),
-                                                           {QueryDescriptorSourceKind::Native, MakeIdentity<QueryProviderId>(11), 1},
-                                                           QueryItemKind::Point,
-                                                           0}}};
-            std::array<QueryContextDescriptor, 6> builtins{BuiltinQueryContextDescriptors()};
-            QueryContextDescriptor custom{MakeIdentity<QueryContextId>(100),
-                                          {QueryDescriptorSourceKind::Native, MakeIdentity<QueryProviderId>(101), 1},
-                                          8};
-            std::vector<QueryContextDescriptor> contexts{builtins.begin(), builtins.end()};
-            QueryGeneratorDescriptor generator{MakeIdentity<QueryGeneratorId>(12),
-                                               {QueryDescriptorSourceKind::Native, MakeIdentity<QueryProviderId>(11), 1},
-                                               items[0].id,
-                                               {1, 1},
-                                               {},
-                                               {}};
-
-            QueryFixture() {
-                contexts.push_back(custom);
-            }
-
-            [[nodiscard]] QuerySchemaRegistry Registry() const {
-                auto result = QuerySchemaRegistry::Capture({items, contexts, std::span{&generator, 1}, {}});
-                REQUIRE(result.HasValue());
-                return std::move(result).Value();
-            }
-
-            [[nodiscard]] EnvironmentQueryPlan Plan(const QuerySchemaRegistry &registry) const {
-                QueryAssetSource source;
-                source.id = MakeIdentity<QueryId>(13);
-                source.result = {MakeIdentity<QueryResultSchemaId>(14), 1, items[0].id, {1, 1}, 8};
-                source.stages = {{.id = MakeIdentity<QueryStageId>(15),
-                                  .kind = QueryStageKind::Generator,
-                                  .executionOrder = 1,
-                                  .generator = generator.id,
-                                  .descriptorVersion = {1, 1}}};
-                const auto asset = EnvironmentQueryAsset::Capture(source);
-                REQUIRE(asset.HasValue());
-                auto plan = EnvironmentQueryPlan::Compile(asset.Value(), registry);
-                REQUIRE(plan.HasValue());
-                return std::move(plan).Value();
-            }
-        };
+        using namespace QueryTestSupport;
 
         struct ProviderState final {
             int calls{};
@@ -96,6 +27,65 @@ namespace Horo::AI {
             auto &provider = *static_cast<ProviderState *>(state);
             ++provider.calls;
             return Result<QueryContextValue>::Success(provider.value);
+        }
+
+        TEST_CASE("EQS lattice uses canonical ordering and rejects overflow without writing partial results",
+                  "[unit][ai][eqs][generator]") {
+            QueryFixture fixture;
+            const auto center = BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation);
+            fixture.generator.contexts = {{center, {1, 1}}};
+            const auto registry = fixture.Registry();
+            const auto plan = fixture.Plan(registry);
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry);
+            REQUIRE(providers.HasValue());
+            auto scene = MakeScene();
+            const auto view = scene->View();
+            auto source = Source(view);
+            const auto x = std::numeric_limits<std::int64_t>::max();
+            source.querierLocation = Math::WorldCoordinate64::FromMillimeters(x, 17, 0);
+            QueryContextCapture capture;
+            const auto contexts = capture.Capture(plan, registry, providers.Value(), view, source);
+            REQUIRE(contexts.HasValue());
+            std::array<QueryGeneratedItem, 9> items;
+            const auto untouched = items;
+            QueryGeneratorOutput output{{plan.Stages()[0].id, fixture.generator.id, fixture.generator.origin.provider, 1}, 5, items};
+            const QueryPointLattice grid{.stepMillimeters = 2, .outerSteps = 1};
+            ExpectError(GenerateQueryLattice(*contexts.Value(), center, grid, output), AIErrors::EnvironmentQueryLimitExceeded);
+            CHECK(items == untouched);
+            output.maximumItems = 9;
+            const auto generated = GenerateQueryLattice(*contexts.Value(), center, grid, output);
+            REQUIRE(generated.HasValue());
+            CHECK(generated.Value().provenance.stage == plan.Stages()[0].id);
+            CHECK(generated.Value().invalidCoordinateCount == 3);
+            REQUIRE(generated.Value().itemCount == 6);
+            CHECK(items[0] == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(x - 2, 17, -2)});
+            CHECK(items[5] == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(x, 17, 2)});
+            const auto ring = GenerateQueryLattice(*contexts.Value(), center, {2, 1, 1}, output);
+            REQUIRE(ring.HasValue());
+            CHECK(ring.Value().invalidCoordinateCount == 1);
+            CHECK(ring.Value().itemCount == 3);
+            CHECK(items[0] == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(x, 17, -2)});
+            CHECK(items[1] == QueryGeneratedItem{Math::WorldCoordinate64::FromMillimeters(x - 2, 17, 0)});
+            ++output.provenance.revision;
+            ExpectError(GenerateQueryLattice(*contexts.Value(), center, grid, output), AIErrors::EnvironmentQueryContextStale);
+        }
+
+        TEST_CASE("EQS copies bounded provider points in declared order", "[unit][ai][eqs][generator]") {
+            const std::array points{Math::WorldCoordinate64::FromMillimeters(123, 0, 0),
+                                    Math::WorldCoordinate64::FromMillimeters(-42, 0, 0)};
+            std::array<QueryGeneratedItem, 2> items;
+            QueryGeneratorOutput output{{MakeIdentity<QueryStageId>(1), MakeIdentity<QueryGeneratorId>(2), MakeIdentity<QueryProviderId>(3),
+                                         19},
+                                        1,
+                                        items};
+            ExpectError(GenerateQueryPoints(points, output), AIErrors::EnvironmentQueryLimitExceeded);
+            output.maximumItems = 2;
+            const auto generated = GenerateQueryPoints(points, output);
+            REQUIRE(generated.HasValue());
+            CHECK(generated.Value().itemCount == 2);
+            CHECK(generated.Value().provenance.revision == 19);
+            CHECK(items[0] == QueryGeneratedItem{points[0]});
+            CHECK(items[1] == QueryGeneratedItem{points[1]});
         }
 
         TEST_CASE("EQS contexts capture immutable built-ins once per execution revision", "[unit][ai][eqs][context]") {

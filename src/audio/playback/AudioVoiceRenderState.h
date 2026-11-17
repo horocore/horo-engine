@@ -70,6 +70,7 @@ namespace Horo::Audio {
         CallbackState callback;
 
         bool released{};
+        std::optional<AudioVoiceSnapshot> terminalVoice;
         bool streamVoice{};
         std::uint64_t sourceFrames{};
         bool seekable{};

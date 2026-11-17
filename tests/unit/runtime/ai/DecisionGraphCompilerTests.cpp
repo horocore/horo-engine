@@ -119,7 +119,8 @@ namespace Horo::AI {
             CHECK(fixture.probe.factories == 0);
         }
 
-        TEST_CASE("Decision compiler rejects actual future graph schemas and unsupported Utility calls", "[ai][decision-compiler]") {
+        TEST_CASE("Decision compiler rejects actual future graph schemas and incompatible Utility call targets",
+                  "[ai][decision-compiler]") {
             Fixture fixture;
             SECTION("graph schema skew") {
                 auto source = TaskTree(1);
@@ -129,7 +130,7 @@ namespace Horo::AI {
                 CHECK_FALSE(candidate.Value().plan);
                 CHECK(candidate.Value().validation.HasErrors());
             }
-            SECTION("Utility is not silently lowered as BT or HSM") {
+            SECTION("Utility call rejects an HSM target") {
                 const std::array sources{CallingMachine(1, 2, DecisionPlanKind::Utility), TerminalMachine(2)};
                 auto candidate = DecisionGraphCompiler::Compile(Graph(1), sources, fixture.Environment());
                 REQUIRE(candidate.HasValue());

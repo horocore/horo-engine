@@ -6,6 +6,7 @@
  */
 
 #include "Horo/AI/DecisionNodeRegistration.h"
+#include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Gameplay/Behavior.h"
 #include "Horo/Gameplay/GameAsset.h"
 #include "Horo/Gameplay/GameplayRegistration.h"
@@ -43,7 +44,7 @@ namespace Horo::Gameplay {
     class GameplayAiContext;
     class GameplayCharacterContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 29;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 30;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -173,6 +174,8 @@ namespace Horo::Gameplay {
         GameModuleLifecycleCallbacks lifecycle;
         const AI::DecisionNodeRegistration *decisionNodes{};
         std::size_t decisionNodeCount{};
+        const AI::PerceptionSenseRegistration *perceptionSenses{};
+        std::size_t perceptionSenseCount{};
     };
 
     using GetGameplayDescriptorBundleFunction = const GeneratedGameplayDescriptorBundle *(*)() noexcept;

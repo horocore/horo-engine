@@ -6,6 +6,7 @@ namespace Horo::AI {
         std::unique_ptr<BehaviorTreeInstance> tree;
         std::unique_ptr<StateMachineInstance> machine;
         std::unique_ptr<ActionAdapter> actions;
+        std::unique_ptr<UtilityAdapter> utility;
         std::uint32_t generation{1};
         std::uint64_t lastTick{};
         AiTaskState outcome{AiTaskState::Idle};
@@ -35,6 +36,12 @@ namespace Horo::AI {
         [[nodiscard]] bool SupportsSubplans() const noexcept override {
             return true;
         }
+    };
+
+    struct DecisionGraphInstance::UtilityAdapter final {
+        std::vector<std::unique_ptr<BehaviorTreeInstance>> actions;
+        std::optional<std::size_t> selected;
+        std::array<UtilityScoreRecord, DecisionStepTrace::MaximumRecords> evidence;
     };
 
     struct DecisionGraphInstance::ActionAdapter final : StateMachineActions {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/PlatformServices/PlatformServiceErrors.h"
 #include "Horo/PlatformServices/PlatformServicesBackend.h"
 
 #include <chrono>
@@ -20,6 +21,10 @@ namespace Horo::PlatformServices::TestSupport {
         WriteStat,
         ReadCloudObject,
         WriteCloudObject,
+        ListCloudObjects,
+        ReadCloudBlob,
+        DeleteCloudObject,
+        QueryCloudQuota,
         SetPresence,
         ClearPresence,
         QueryFriends,
@@ -63,8 +68,9 @@ namespace Horo::PlatformServices::TestSupport {
     /** @brief Scripted result and logical timing policy for one operation. */
     struct MockPlatformServicesResponse final {
         std::optional<MockPlatformServicesFailure> failure;
+        std::optional<PlatformProviderFailureCategory> providerFailure;
         std::variant<std::monostate, CloudReadResult, FriendsPage, PlatformSessionSnapshot, LeaderboardEntriesPage,
-                     LeaderboardAroundSubjectResult, CloudMutationResult>
+                     LeaderboardAroundSubjectResult, CloudMutationResult, CloudObjectPage, CloudBlobReadResult, CloudQuotaObservation>
             payload;
         std::chrono::milliseconds delay{};
         std::optional<std::chrono::milliseconds> timeoutAfter;
@@ -106,6 +112,11 @@ namespace Horo::PlatformServices::TestSupport {
         static constexpr std::size_t MaximumScheduledEvents = 2048;
         static constexpr std::uint64_t MaximumPayloadBytes = 64U * 1024U;
         static constexpr std::uint32_t MaximumPageEntries = 128;
+        static constexpr std::uint32_t MaximumCloudTransfers = 8;
+
+        /** @brief Replaces the authenticated test session; pending cloud completions are fenced at publication.
+         * @param subject Current subject or nullopt for sign-out. @return Success or StaleSession for another provider generation. */
+        [[nodiscard]] Result<void> SetCloudSubject(std::optional<PlatformSubjectHandle> subject);
 
         /** @brief Creates a deterministic backend with one provider capability generation. */
         explicit MockPlatformServicesBackend(PlatformProviderGeneration generation = {1});
@@ -160,6 +171,10 @@ namespace Horo::PlatformServices::TestSupport {
         [[nodiscard]] Result<PlatformRequestHandle<void>> ClearPresence(PlatformSubjectHandle subject) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest request) override;
         [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest &&request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<CloudObjectPage>> ListCloudObjects(CloudListRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest &&request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<CloudQuotaObservation>> QueryCloudQuota(PlatformSubjectHandle subject) override;
         [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) override;

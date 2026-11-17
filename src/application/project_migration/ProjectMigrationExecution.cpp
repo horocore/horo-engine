@@ -2,6 +2,8 @@
 #include "Horo/Application/ProjectMigration.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
+#include "Horo/Security/SecureMemory.h"
+#include "Horo/Security/SecurityErrors.h"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +30,7 @@ namespace Horo::Application {
         std::filesystem::path authoritativeRoot;
         std::filesystem::path candidateRoot;
         ProjectMigrationLimits limits;
+        std::shared_ptr<Security::SecureRandomSource> random;
         std::uint32_t generation{1};
         std::vector<Document> documents;
         std::uint64_t inputBytes{};
@@ -550,11 +553,25 @@ namespace Horo::Application {
         return Result<void>::Success();
     }
 
+    /** @copydoc ProjectMigrationContext::FillSecureRandom */
+    Result<void> ProjectMigrationContext::FillSecureRandom(const std::span<std::byte> destination) {
+        if (destination.empty() || destination.size() > 256 || !state_->random) {
+            std::ranges::fill(destination, std::byte{});
+            return Result<void>::Failure(MakeError(SecurityErrors::EntropyUnavailable));
+        }
+        auto filled = state_->random->Fill(destination);
+        if (filled.HasError())
+            std::ranges::fill(destination, std::byte{});
+        return filled;
+    }
+
+    /** @copydoc ProjectMigrationExecutor::Prepare */
     Result<PreparedProjectMigration> ProjectMigrationExecutor::Prepare(const std::filesystem::path &projectRoot,
                                                                        const std::filesystem::path &candidateRoot,
                                                                        const ProjectMigrationPlan &plan, JobSystem &jobs,
                                                                        const ProjectMigrationLimits &limits,
-                                                                       const CancellationToken cancellation) {
+                                                                       const CancellationToken cancellation,
+                                                                       const ProjectMigrationExecutionServices &services) {
         const std::string sourceText = FormatHoroVersion(plan.source.value);
         const std::string targetText = FormatHoroVersion(plan.target.value);
         LOG_INFO("application.project_migration.execute", "Preparing migration source=%s target=%s.", sourceText.c_str(),
@@ -566,6 +583,7 @@ namespace Horo::Application {
             return Result<PreparedProjectMigration>::Failure(built.ErrorValue());
         }
         auto state = built.Value();
+        state->random = services.random;
         LOG_DEBUG("application.project_migration.execute", "Inventory ready documents=%zu input_bytes=%llu.", state->documents.size(),
                   static_cast<unsigned long long>(state->inputBytes));
         ProjectMigrationContext context(state);
@@ -574,6 +592,7 @@ namespace Horo::Application {
             return Result<PreparedProjectMigration>::Failure(executed.ErrorValue());
         }
 
+        state->random.reset();
         if (const Result<void> materialized = MaterializeCandidate(state); materialized.HasError())
             return Result<PreparedProjectMigration>::Failure(materialized.ErrorValue());
         if (const Result<void> unchanged = VerifyAuthoritativeUnchanged(state); unchanged.HasError())
@@ -634,14 +653,16 @@ namespace Horo::Application {
         return Result<void>::Success();
     }
 
+    /** @copydoc ProjectMigrationExecutor::VerifiedDryRun */
     Result<ProjectMigrationDryRunResult> ProjectMigrationExecutor::VerifiedDryRun(const std::filesystem::path &projectRoot,
                                                                                   const ProjectMigrationPlan &plan, JobSystem &jobs,
                                                                                   const ProjectMigrationLimits &limits,
-                                                                                  const CancellationToken cancellation) {
+                                                                                  const CancellationToken cancellation,
+                                                                                  const ProjectMigrationExecutionServices &services) {
         static std::atomic<std::uint64_t> sequence{0};
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
         const auto candidateRoot = projectRoot / std::format("{}{}-{}", kMigrationDryRunRootPrefix, stamp, sequence.fetch_add(1));
-        auto prepared = Prepare(projectRoot, candidateRoot, plan, jobs, limits, cancellation);
+        auto prepared = Prepare(projectRoot, candidateRoot, plan, jobs, limits, cancellation, services);
         if (prepared.HasError())
             return Result<ProjectMigrationDryRunResult>::Failure(prepared.ErrorValue());
         PreparedProjectMigration candidate = std::move(prepared).Value();

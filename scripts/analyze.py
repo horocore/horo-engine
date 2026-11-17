@@ -1990,6 +1990,34 @@ def read_code_settings(path: Path) -> dict:
         raise AnalysisError(f"Cannot read VS Code JSONC settings at {path}") from error
 
 
+def ide_connections(profile: Path, source: Path) -> dict[str, list[dict]]:
+    """Read connection metadata with the same managed-login precedence used at launch."""
+    settings_path = source / "User/settings.json"
+    try:
+        settings = read_code_settings(settings_path) if settings_path.exists() else {}
+    except AnalysisError as error:
+        raise AnalysisError(f"A valid JSONC VS Code settings file is required at {settings_path}") from error
+    managed_path = profile / "User/settings.json"
+    managed = read_json(managed_path) if managed_path.exists() else {}
+    result = {}
+    for kind in ("sonarcloud", "sonarqube"):
+        key = f"sonarlint.connectedMode.connections.{kind}"
+        connections = managed.get(key) or settings.get(key, [])
+        if not isinstance(connections, list) or any(not isinstance(item, dict) for item in connections):
+            raise AnalysisError(f"Expected a list of connection objects for {key}")
+        result[key] = connections
+    return result
+
+
+def require_ide_connection(profile: Path, source: Path, connection_id: str) -> None:
+    """Reject missing metadata before native preparation; presence does not prove authentication."""
+    connections = ide_connections(profile, source)
+    if not any(item.get("connectionId") == connection_id for group in connections.values() for item in group):
+        raise AnalysisError(
+            f"SonarQube for IDE connection '{connection_id}' is not configured in the source or managed profile; "
+            "configure the IDE connection before retrying (CLI credentials do not establish IDE authentication)")
+
+
 def seed_profile(profile: Path, source: Path, extensions: Path) -> Path:
     """
     Copy connection metadata and only Sonar's encrypted SecretStorage records.
@@ -2001,11 +2029,7 @@ def seed_profile(profile: Path, source: Path, extensions: Path) -> Path:
     """
     user = profile / "User"
     user.mkdir(parents=True, exist_ok=True, mode=0o700)
-    settings_path = source / "User/settings.json"
-    try:
-        settings = read_code_settings(settings_path) if settings_path.exists() else {}
-    except AnalysisError as error:
-        raise AnalysisError(f"A valid JSONC VS Code settings file is required at {settings_path}") from error
+    connections = ide_connections(profile, source)
     # Trust stays enabled; only the user may approve the managed workspace.
     copied = {"security.workspace.trust.enabled": True, "extensions.autoUpdate": False,
               "extensions.autoCheckUpdates": False, "sonarlint.output.showVerboseLogs": True,
@@ -2020,15 +2044,10 @@ def seed_profile(profile: Path, source: Path, extensions: Path) -> Path:
     copied["files.exclude"] = exclusions
     copied["files.watcherExclude"] = exclusions
     copied["search.exclude"] = exclusions
-    managed_path = user / "settings.json"
-    managed_settings = read_json(managed_path) if managed_path.exists() else {}
-    for kind in ("sonarcloud", "sonarqube"):
-        key = f"sonarlint.connectedMode.connections.{kind}"
-        # A login performed in the managed window must survive the next launch.
-        connections = managed_settings.get(key) or settings.get(key, [])
+    for key, entries in connections.items():
         copied[key] = [{k: v for k, v in connection.items() if k in
                         {"connectionId", "organizationKey", "serverUrl", "region", "disableNotifications"}}
-                       for connection in connections]
+                       for connection in entries]
     write_json(user / "settings.json", copied)
     storage = user / "globalStorage"
     storage.mkdir(exist_ok=True, mode=0o700)
@@ -2794,6 +2813,8 @@ def sonar_check(root: Path, cache: Path, repository_cache: Path, files: list[Pat
     """Hold the session lease through all requests and retain all findings."""
     if not files:
         return {"status": "not_applicable", "findings": []}
+    profile = repository_cache / "sessions" / identity(root) / "profile"
+    require_ide_connection(profile, args.code_user_data, args.connection_id)
     database, contexts = prepare(root, cache, files, args.compile_commands, args.timeout)
     workspace = write_workspace(root, cache, database, args.connection_id, args.project_key)
     pool = SessionPool(repository_cache, root, args.timeout)

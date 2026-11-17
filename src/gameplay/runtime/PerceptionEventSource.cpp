@@ -3,13 +3,13 @@
 #include "Horo/AI/AIErrors.h"
 
 #include <cmath>
-#include <type_traits>
 
 namespace Horo::Gameplay {
     namespace {
         /** @brief Validates source generations against the current scene without granting a mutation capability. */
         struct EventValidation final {
             Runtime::RuntimeSceneView scene;
+            std::uint64_t tick;
 
             [[nodiscard]] Result<void> Source(const AI::PerceptionSourceRef source) const {
                 if (!source.IsValid() || source.sceneIncarnation != scene.RuntimeId().value)
@@ -35,6 +35,55 @@ namespace Horo::Gameplay {
                 if (const auto valid = Source(event.sender); valid.HasError())
                     return valid;
                 return Source(event.subject);
+            }
+
+            [[nodiscard]] Result<void> operator()(const AI::HearingPerceptionEvent &event) const {
+                if (!std::isfinite(event.intensity) || event.intensity <= 0 || event.intensity > 1 || !std::isfinite(event.radiusMeters) ||
+                    event.radiusMeters <= 0 || event.lifetimeTicks == 0 || tick < event.emittedTick)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventInvalid));
+                if (tick - event.emittedTick >= event.lifetimeTicks)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventStale));
+                return Source(event.source);
+            }
+        };
+
+        /** @brief Computes a distance from exact global positions, preserving nearby differences at extreme coordinates. */
+        [[nodiscard]] double DistanceMeters(const Math::WorldCoordinate64 &left, const Math::WorldCoordinate64 &right) {
+            const auto a = left.Millimeters();
+            const auto b = right.Millimeters();
+            const auto separation = [](const std::int64_t x, const std::int64_t y) {
+                const auto low = static_cast<std::uint64_t>(x < y ? x : y);
+                const auto high = static_cast<std::uint64_t>(x < y ? y : x);
+                return static_cast<double>(high - low) / 1000.0;
+            };
+            return std::hypot(separation(a[0], b[0]), separation(a[1], b[1]), separation(a[2], b[2]));
+        }
+
+        /** @brief Applies the captured recipient policy to each typed event's provenance. */
+        struct EventFilter final {
+            const AI::PerceptionSpatialSnapshot &snapshot;
+            Runtime::EntityRef listener;
+
+            [[nodiscard]] bool Allows(const AI::PerceptionSourceRef source, const AI::SenseTypeId sense) const {
+                return snapshot.Allows(listener, {listener.runtime, {source.slot, source.generation}}, sense);
+            }
+
+            [[nodiscard]] bool operator()(const AI::DamagePerceptionEvent &event) const {
+                return Allows(event.instigator, AI::SenseTypeIds::Damage);
+            }
+
+            [[nodiscard]] bool operator()(const AI::ProximityPerceptionEvent &event) const {
+                return Allows(event.other, AI::SenseTypeIds::Touch);
+            }
+
+            [[nodiscard]] bool operator()(const AI::TeamMessagePerceptionEvent &event) const {
+                return Allows(event.subject, AI::SenseTypeIds::Team) && Allows(event.sender, AI::SenseTypeIds::Team);
+            }
+
+            [[nodiscard]] bool operator()(const AI::HearingPerceptionEvent &event) const {
+                const auto position = snapshot.ListenerPosition(listener);
+                return Allows(event.source, AI::SenseTypeIds::Hearing) && position.HasValue() &&
+                       DistanceMeters(event.location, position.Value()) <= event.radiusMeters;
             }
         };
 
@@ -111,24 +160,13 @@ namespace Horo::Gameplay {
         const auto &record = deliveries_[index];
         if (const auto recipient = ValidateRecipient(record.delivery, memory); recipient.HasError())
             return recipient;
-        if (const auto event = std::visit(EventValidation{scene_->View()}, record.delivery.event); event.HasError())
+        if (const auto event = std::visit(EventValidation{scene_->View(), record.delivery.simulationTick}, record.delivery.event);
+            event.HasError())
             return event;
         if (record.filter != PerceptionFilterDecision::Accept)
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventFiltered));
         const auto listener = ai_->Find(record.delivery.recipient).Value().owner;
-        if (const auto allowed = std::visit(
-                [&]<typename Event>(const Event &event) {
-            const auto admits = [&](const AI::PerceptionSourceRef source, const AI::SenseTypeId sense) {
-                return filterSnapshot_->Allows(listener, {binding_.scene, {source.slot, source.generation}}, sense);
-            };
-            if constexpr (std::is_same_v<Event, AI::DamagePerceptionEvent>)
-                return admits(event.instigator, AI::SenseTypeIds::Damage);
-            else if constexpr (std::is_same_v<Event, AI::ProximityPerceptionEvent>)
-                return admits(event.other, AI::SenseTypeIds::Touch);
-            else
-                return admits(event.subject, AI::SenseTypeIds::Team) && admits(event.sender, AI::SenseTypeIds::Team);
-        }, record.delivery.event);
-            !allowed)
+        if (!std::visit(EventFilter{*filterSnapshot_, listener}, record.delivery.event))
             return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionEventFiltered));
         const AI::PerceptionEventAdmission admission{record.delivery, memory};
         return AI::RouteGameplayPerceptionEvent(record.delivery, *registry_, admission, memory);

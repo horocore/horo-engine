@@ -318,9 +318,15 @@ namespace Horo::Audio {
                   : record.command.scope != s.descriptor.scope)
             return &AudioErrors::HandleOwnerMismatch;
         if (reset || std::holds_alternative<AudioSceneUnloadCommand>(record.command.payload)) {
-            const auto *error = s.Control({s.voice, AudioVoiceControl::Cancel});
+            AudioVoiceState current{};
+            if (const auto *error = s.registry->CheckState(s.voice, current))
+                return error;
+            // A barrier retires the context, including voices that already published their terminal outcome.
+            const auto *error = IsTerminalAudioVoiceState(current) ? nullptr : s.Control({s.voice, AudioVoiceControl::Cancel});
+            if (error)
+                return error;
             s.callback.callbackSequence = record.sequence;
-            return error;
+            return nullptr;
         }
         if (const auto *publication = std::get_if<AudioPublishVoiceStateCommand>(&record.command.payload)) {
             return s.ApplyPublication(*publication, record.sequence);
@@ -476,13 +482,21 @@ namespace Horo::Audio {
             return false;
         if (s.released)
             return true;
+        AudioVoiceState terminal{};
+        if (s.registry->CheckState(s.voice, terminal))
+            return false;
+        if (!IsTerminalAudioVoiceState(terminal)) {
+            if (s.registry->TryCancel(s.voice))
+                return false;
+            terminal = AudioVoiceState::Cancelled;
+        }
+        s.terminalVoice = AudioVoiceSnapshot{s.voice, terminal, AudioVoiceTerminalReasonForState(terminal)};
         s.publications.candidate.store(nullptr);
         s.callback.active = nullptr;
         s.stream.reset();  // Releases the retirement pin on control, before the retained service can be destroyed.
         s.spatial.reset();
         s.resident.reset();
         if (s.streamVoice) {
-            (void)s.registry->TryCancel(s.voice);
             (void)s.registry->Release(s.voice);
             s.streamVoice = false;
         }
@@ -491,5 +505,10 @@ namespace Horo::Audio {
         s.publications.retainedSlot = -1;
         s.released = true;
         return true;
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::TerminalSnapshot */
+    std::optional<AudioVoiceSnapshot> AudioVoiceRenderRuntime::TerminalSnapshot() const noexcept {
+        return state_->terminalVoice;
     }
 }  // namespace Horo::Audio

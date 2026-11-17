@@ -1176,6 +1176,50 @@ TEST_CASE("Terminal operations forward persistent job history through structured
     REQUIRE(snapshot->records.front()->context.find("operation.id=") != std::string::npos);
 }
 
+TEST_CASE("Diagnostic destination admission creates no files and rejects occupied paths", "[foundation][observability][bundle][security]") {
+    TemporaryDirectory temporary;
+    const auto destination = temporary.path / "new directory" / "support.zip";
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(destination).HasValue());
+    REQUIRE_FALSE(std::filesystem::exists(destination.parent_path()));
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination("relative.zip").HasError());
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(temporary.path / "absent" / "..").HasError());
+    REQUIRE_FALSE(std::filesystem::exists(temporary.path / "absent"));
+    auto nulPath = destination.native();
+    nulPath.push_back(std::filesystem::path::value_type{});
+    nulPath += destination.filename().native();
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(std::filesystem::path{nulPath}).HasError());
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(temporary.path).HasError());
+    const auto occupied = temporary.path / "occupied";
+    std::ofstream(occupied) << "preserve";
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(occupied).HasError());
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(occupied / "support.zip").HasError());
+    const auto output = temporary.path / "support.zip";
+    std::ofstream(temporary.path / "support.zip.tmp") << "preserve temporary";
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(output).HasError());
+    REQUIRE(ReadText(occupied) == "preserve");
+    REQUIRE(ReadText(temporary.path / "support.zip.tmp") == "preserve temporary");
+}
+
+TEST_CASE("Diagnostic destination admission resolves parents and rejects dangling output links",
+          "[foundation][observability][bundle][security]") {
+    TemporaryDirectory temporary;
+    const auto link = temporary.path / "link";
+    std::error_code error;
+    std::filesystem::create_directory_symlink(temporary.path, link, error);
+    if (error) {
+        SKIP("Directory symlink fixture unavailable: " << error.message());
+    }
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(link / "support.zip").HasValue());
+    const auto dangling = temporary.path / "dangling.zip";
+    std::filesystem::create_symlink(temporary.path / "absent", dangling, error);
+    REQUIRE_FALSE(error);
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(dangling).HasError());
+    const auto output = temporary.path / "support.zip";
+    std::filesystem::create_symlink(temporary.path / "absent", temporary.path / "support.zip.tmp", error);
+    REQUIRE_FALSE(error);
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(output).HasError());
+}
+
 TEST_CASE("Diagnostic bundle contains only allowlisted files and a checksum manifest", "[foundation][observability][bundle]") {
     TemporaryDirectory temporary;
     const std::filesystem::path logPath = temporary.path / "engine.jsonl";

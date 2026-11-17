@@ -144,6 +144,31 @@ shared registry aliases and absent/wrong module realms fail closed. Hosts retain
 the realm through retirement; the application retains its normal owner-lane
 context and completion responsibilities.
 
+Platform provider packages use the same verified native handoff. Applications pass
+`PackageLifecycleConfiguration::platformProviderCommit` explicitly to publish the
+copied `platform.services.provider` claim into their Platform Services composition.
+Both `Activate` and `NativePackageModuleHost` forward this callback to the existing
+extension manager; an omitted callback rejects the provider before native load.
+PackageLifecycle checks the provider's copied permission requests against the exact
+package approval before invoking the application callback. A broader process policy
+cannot grant permissions absent from that package approval. PackageLifecycle
+acquires no Platform Services target dependency and never selects or initializes a
+provider. The application validates its additional provider policy and owns the
+publication registry, lifecycle host and owner-lane drain.
+
+This is an additive configuration field owned by the existing
+`HoroPackageLifecycle` public-header boundary. Existing applications keep their
+current behavior; provider applications set the callback before constructing the
+native role host. The callback's captured owners must outlive every package
+retirement. Exact product selection remains application-owned while a different
+contract version stages in the registry. A registry rejects a duplicate
+capability/version; the application must disable and drain before reusing that
+slot. Neither path permits silent fallback or premature unload.
+Mixed provider/importer contributions remain rejected under the current atomic
+provider-only ABI profile. A failed package attempt revokes its publication through
+the normal extension rollback owner, including cancellation and stale-install
+failures after native registration.
+
 `GameplayPackageModuleHost` is a dedicated application adapter target linking the
 PackageLifecycle and GameplayModuleHost contracts. PackageLifecycle does not depend
 on Gameplay. Runtime participants use the actual generated gameplay SDK exports,

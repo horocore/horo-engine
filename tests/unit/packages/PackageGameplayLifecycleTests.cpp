@@ -1,9 +1,12 @@
 #include "../runtime/ai/BehaviorTreeRuntimeTestSupport.h"
 #include "GameplayModuleTestSupport.h"
+#include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/PerceptionSenseScene.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 #include "PackageLifecycleTestSupport.h"
+#include "PerceptionSenseTestSupport.h"
 
 #include <cstdint>
 #include <thread>
@@ -23,6 +26,7 @@ namespace {
                                      {"requiredCapabilities", {"runtime.participate"}}}}}};
         std::vector<std::pair<std::string, std::string>> files;
         files.emplace_back("extensions/native/Node.horo_script", "return {role='condition',check=function() return true end}");
+        files.emplace_back("extensions/native/Sense.horo_script", "return function(x,y,z,lx,ly,lz) return x-lx < 500 end");
         if (withBackend) {
             const auto backend = "backend" + std::filesystem::path{HORO_PACKAGE_NATIVE_FIXTURE}.extension().string();
             descriptor["modules"].push_back({{"id", "fixture.backend"},
@@ -225,6 +229,43 @@ TEST_CASE("Verified package decision nodes retain exact locked version and real 
     CHECK(fixture.retirement->Close().HasValue());
 }
 
+TEST_CASE("Verified package custom senses preserve locked identity and revoke before native cleanup", "[packages][sense-provider]") {
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto generation = fixture.base.service->Active()->generation;
+    auto acquired = fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation);
+    REQUIRE(acquired.HasValue());
+    auto contribution = std::move(acquired).Value();
+    CHECK(contribution.package == fixture.enabled.package);
+    CHECK(contribution.version == fixture.base.install.ActiveGraph()->packages[0].lock.version);
+    CHECK(contribution.artifact == fixture.base.install.ActiveGraph()->packages[0].lock.artifactDigest);
+    CHECK(contribution.activationGeneration == generation);
+    REQUIRE(contribution.senses->Contracts().size() == 1);
+    CHECK(contribution.senses->Contracts()[0].sense.identity.Value() == 202);
+    CHECK(contribution.senses->Contracts()[0].sense.origin.kind == AI::PerceptionDescriptorSourceKind::Package);
+    CHECK(fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation + 1).HasError());
+    bool offOwnerRejected{};
+    std::thread offOwner([&] {
+        offOwnerRejected = fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation).HasError();
+    });
+    offOwner.join();
+    CHECK(offOwnerRejected);
+    AI::PerceptionSenseTestSupport::InputFixture inputs;
+    auto instance = inputs.Instance(contribution.senses);
+    AI::AiWorkBudget budget{6};
+    REQUIRE(instance->Evaluate(inputs.Input(), budget, budget).HasValue());
+    fixture.base.service->Shutdown();
+    CHECK_FALSE(contribution.senses->CanAdmit());
+    CHECK(fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation).HasError());
+    AI::AiWorkBudget revoked{6};
+    AI::TestSupport::ExpectError(instance->Evaluate(inputs.Input(2), revoked, revoked), AI::AIErrors::RuntimeUnavailable);
+    CHECK(fixture.retirement->Close().HasError());
+    instance.reset();
+    CHECK(fixture.retirement->Close().HasError());
+    contribution.senses.reset();
+    CHECK(fixture.retirement->Close().HasValue());
+}
+
 TEST_CASE("Verified package script nodes use actual declared bytes and inherit native activation retirement", "[packages][decision-node]") {
     GameplayFixture fixture;
     REQUIRE(fixture.Activate().HasValue());
@@ -269,6 +310,113 @@ TEST_CASE("Verified package script nodes use actual declared bytes and inherit n
     executor.reset();
     nodes.reset();
     program.reset();
+    CHECK(fixture.retirement->Close().HasValue());
+}
+
+TEST_CASE("Verified package script senses use declared bytes and retain their actual native parent", "[packages][sense-provider]") {
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto activation = fixture.base.service->Active()->generation;
+    AI::PerceptionSenseTestSupport::InputFixture inputs;
+    const AI::PerceptionDescriptorOrigin origin{AI::PerceptionDescriptorSourceKind::Script,
+                                                AI::TestSupport::MakeIdentity<AI::PerceptionProviderId>(702), 1};
+    AI::PerceptionSenseContract contract{{AI::TestSupport::MakeIdentity<AI::SenseTypeId>(302), origin, "package script sense",
+                                          inputs.capabilities},
+                                         {AI::TestSupport::MakeIdentity<AI::StimulusTypeId>(303), origin, "package script result", 1, {}},
+                                         0,
+                                         4,
+                                         2};
+    const auto source = Parse<PackagePath>("extensions/native/Sense.horo_script");
+    CHECK(fixture.gameplay->CompilePerceptionSense(fixture.enabled.package, "game.tests", activation + 1, source, contract).HasError());
+    CHECK(fixture.gameplay
+              ->CompilePerceptionSense(fixture.enabled.package, "game.tests", activation,
+                                       Parse<PackagePath>("extensions/native/Missing.horo_script"), contract)
+              .HasError());
+    auto compiled = fixture.gameplay->CompilePerceptionSense(fixture.enabled.package, "game.tests", activation, source, contract);
+    REQUIRE(compiled.HasValue());
+    auto program = std::move(compiled).Value();
+    auto acquired = program->Acquire();
+    REQUIRE(acquired.HasValue());
+    auto senses = std::move(acquired).Value();
+    CHECK(senses->Contracts()[0].source.source == source.Value());
+    auto instance = inputs.Instance(senses);
+    AI::AiWorkBudget budget{6};
+    const auto evaluated = instance->Evaluate(inputs.Input(), budget, budget);
+    REQUIRE(evaluated.HasValue());
+    REQUIRE(evaluated.Value().count == 2);
+    CHECK(evaluated.Value().samples[0].sensed);
+    CHECK_FALSE(evaluated.Value().samples[1].sensed);
+
+    Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
+    for (std::uint64_t index = 1; index <= 3; ++index) {
+        Runtime::RuntimeEntityDefinition entity;
+        entity.object = Runtime::SceneObjectId{index};
+        builder.Add(entity);
+    }
+    const auto definition = std::move(builder).Build();
+    REQUIRE(definition.HasValue());
+    auto created = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{77});
+    REQUIRE(created.HasValue());
+    auto scene = std::move(created).Value();
+    const auto view = scene->View();
+    AI::PerceptionSenseTestSupport::InputFixture sceneInputs;
+    const auto listener = *view.Find(Runtime::SceneObjectId{1});
+    sceneInputs.binding.listener = AI::ProjectPerceptionSource(listener);
+    auto sceneInstance = sceneInputs.Instance(senses);
+    AI::PerceptionSpatialListener spatialListener;
+    spatialListener.entity = listener;
+    spatialListener.position = Math::WorldCoordinate64::FromMillimeters(1000, 0, 0);
+    spatialListener.senses[0] = contract.sense.identity;
+    spatialListener.senseCount = 1;
+    std::array<AI::PerceptionSpatialSource, 2> sources;
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        auto &candidate = sources[index];
+        candidate.entity = *view.Find(Runtime::SceneObjectId{index + 2});
+        candidate.position = sceneInputs.candidates[index].position;
+        candidate.layers = 1;
+        candidate.senses[0] = contract.sense.identity;
+        candidate.senseCount = 1;
+    }
+    AI::PerceptionSpatialBroadphase spatial;
+    REQUIRE(spatial.Publish(view, 1, std::span{&spatialListener, 1}, sources).HasValue());
+    auto admittedMemory = AI::AIPerceptionMemory::Create(77, sceneInputs.binding.agent);
+    REQUIRE(admittedMemory.HasValue());
+    auto memory = std::move(admittedMemory).Value();
+    const AI::PerceptionSpatialQuery query{.listener = listener,
+                                           .sense = contract.sense.identity,
+                                           .radiusMillimeters = 10'000,
+                                           .visibleLayers = 1,
+                                           .maximumCandidates = 2};
+    AI::AiWorkBudget sceneBudget{100};
+    const auto staged = AI::RunPerceptionSenseAtSensePoll(view, spatial, *sceneInstance, query, 1, memory, sceneBudget, sceneBudget);
+    REQUIRE(staged.HasValue());
+    CHECK(staged.Value().candidates == 2);
+    CHECK(staged.Value().samples == 2);
+    CHECK(sceneBudget.Remaining() == 93);
+    const auto before = memory.Snapshot(1, AI::PerceptionSceneLiveness(*scene));
+    REQUIRE(before.HasValue());
+    REQUIRE(before.Value().count == 1);
+    CHECK(before.Value().entries[0].lastKnownPosition == sources[0].position);
+
+    fixture.base.service->Shutdown();
+    CHECK_FALSE(senses->CanAdmit());
+    CHECK(program->Acquire().HasError());
+    CHECK(fixture.retirement->Close().HasError());
+    AI::AiWorkBudget revoked{6};
+    AI::TestSupport::ExpectError(instance->Evaluate(inputs.Input(2), revoked, revoked), AI::AIErrors::RuntimeUnavailable);
+    AI::TestSupport::ExpectError(AI::RunPerceptionSenseAtSensePoll(view, spatial, *sceneInstance, query, 2, memory, sceneBudget,
+                                                                   sceneBudget),
+                                 AI::AIErrors::RuntimeUnavailable);
+    CHECK(sceneBudget.Remaining() == 93);
+    const auto after = memory.Snapshot(2, AI::PerceptionSceneLiveness(*scene));
+    REQUIRE(after.HasValue());
+    REQUIRE(after.Value().count == 1);
+    CHECK(after.Value().entries[0].lastSensedTick == 1);
+    instance.reset();
+    senses.reset();
+    program.reset();
+    CHECK(fixture.retirement->Close().HasError());
+    sceneInstance.reset();
     CHECK(fixture.retirement->Close().HasValue());
 }
 

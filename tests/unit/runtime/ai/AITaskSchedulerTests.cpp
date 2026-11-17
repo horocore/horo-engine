@@ -309,6 +309,46 @@ namespace Horo::AI {
             }
         };
 
+        TEST_CASE("Budgeted AI workers reject every revoked ancestor before and after their slice", "[unit][ai][scheduler][jobs]") {
+            struct Slice final : IAiBudgetedTaskJob {
+                CancellationSource &source;
+                mutable std::size_t calls{};
+
+                explicit Slice(CancellationSource &cancellation) : IAiBudgetedTaskJob(1), source(cancellation) {}
+
+                Result<void> RunSlice(const AiTaskOperationContext &, const CancellationToken &, AiWorkBudget &) const override {
+                    ++calls;
+                    source.RequestCancellation();
+                    return Result<void>::Success();
+                }
+            };
+
+            CancellationSource source;
+            AiTaskOperationContext operation;
+            CancellationToken job;
+            SECTION("operation") {
+                operation.cancellation = source.Token();
+            }
+            SECTION("capability") {
+                operation.capabilityCancellation = source.Token();
+            }
+            SECTION("owner") {
+                operation.ownerCancellation = source.Token();
+            }
+            SECTION("Foundation job") {
+                job = source.Token();
+            }
+            Slice work{source};
+            auto late = work.Run(operation, job);
+            REQUIRE(late.HasError());
+            CHECK(IsJobCancelled(late.ErrorValue()));
+            CHECK(work.calls == 1);
+            auto early = work.Run(operation, job);
+            REQUIRE(early.HasError());
+            CHECK(IsJobCancelled(early.ErrorValue()));
+            CHECK(work.calls == 1);
+        }
+
         TEST_CASE("AI workers consume the declared owner allowance and retain canonical task failure", "[unit][ai][scheduler][jobs]") {
             using namespace BehaviorTreeAsyncTestSupport;
             for (const auto mode : {AiSchedulingMode::Deterministic, AiSchedulingMode::BestEffort}) {

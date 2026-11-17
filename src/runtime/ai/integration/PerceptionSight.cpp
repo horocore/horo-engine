@@ -281,16 +281,19 @@ namespace Horo::AI {
     }
 
     /** @copydoc PerceptionSight::Revalidate */
-    void PerceptionSight::Revalidate(const Runtime::RuntimeSceneView &scene, const bool publicationCurrent) {
-        const bool listenerAlive =
-            scene.IsCurrent() && scene.RuntimeId() == frame_.listener.runtime && scene.Get(frame_.listener).HasValue();
+    bool PerceptionSight::Revalidate(const Runtime::RuntimeSceneView &scene, const bool publicationCurrent) {
+        const bool listenerCurrent = publicationCurrent && scene.IsCurrent() && scene.RuntimeId() == frame_.listener.runtime &&
+                                     scene.Get(frame_.listener).HasValue();
+        bool allCurrent = listenerCurrent;
         for (std::size_t index = 0; index < result_.count; ++index) {
-            if (!listenerAlive || !publicationCurrent || scene.Get(result_.observations[index].source).HasError()) {
+            if (!listenerCurrent || scene.Get(result_.observations[index].source).HasError()) {
                 result_.observations[index].evidence = PerceptionSightEvidence::Stale;
                 result_.observations[index].visible = false;
                 history_[index] = {};
+                allCurrent = false;
             }
         }
+        return allCurrent;
     }
 
     /** @copydoc PerceptionSight::Fail */
@@ -372,17 +375,18 @@ namespace Horo::AI {
     Result<PerceptionSightResult> PerceptionSight::Poll(const Runtime::RuntimeSceneView &scene, const std::uint64_t spatialRevision,
                                                         const PerceptionSightPhysicsPublication &physics) {
         const bool current = PublicationCurrent(spatialRevision, physics);
-        Revalidate(scene, current);
+        const bool endpointsCurrent = Revalidate(scene, current);
+        if (batch_ && !endpointsCurrent) {
+            (void)batch_->Cancel();
+            batch_.reset();
+            result_.pending = false;
+            if (current)
+                (void)Revalidate(scene, false);
+        }
         if (!current) {
             result_.observations = {};
             result_.count = 0;
             history_ = {};
-        }
-        if (!current || !scene.IsCurrent() || scene.Get(frame_.listener).HasError()) {
-            if (batch_)
-                (void)batch_->Cancel();
-            batch_.reset();
-            result_.pending = false;
         }
         if (failure_)
             return Result<PerceptionSightResult>::Failure(*failure_);

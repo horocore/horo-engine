@@ -31,6 +31,7 @@ namespace Horo::PlatformServices::TestSupport {
 
         [[nodiscard]] bool IsKnownOperation(MockPlatformServicesOperation operation) noexcept;
         [[nodiscard]] bool IsServiceOperation(MockPlatformServicesOperation operation) noexcept;
+        [[nodiscard]] bool IsCloudOperation(MockPlatformServicesOperation operation) noexcept;
         [[nodiscard]] std::size_t OperationIndex(MockPlatformServicesOperation operation) noexcept;
         [[nodiscard]] bool IsBoundedDelay(std::chrono::milliseconds duration) noexcept;
         [[nodiscard]] std::uint64_t ToMilliseconds(std::chrono::milliseconds duration) noexcept;
@@ -44,8 +45,9 @@ namespace Horo::PlatformServices::TestSupport {
     struct MockPlatformServicesBackend::Impl final {
         struct ScriptedResponse final {
             std::optional<Error> error;
+            std::optional<PlatformProviderFailureCategory> providerFailure;
             std::variant<std::monostate, CloudReadResult, FriendsPage, PlatformSessionSnapshot, LeaderboardEntriesPage,
-                         LeaderboardAroundSubjectResult, CloudMutationResult>
+                         LeaderboardAroundSubjectResult, CloudMutationResult, CloudObjectPage, CloudBlobReadResult, CloudQuotaObservation>
                 payload;
             std::uint64_t delayMilliseconds{};
             std::optional<std::uint64_t> timeoutAfterMilliseconds;
@@ -53,6 +55,10 @@ namespace Horo::PlatformServices::TestSupport {
             std::uint64_t cancellationDelayMilliseconds{};
             bool acknowledgeCancellation{};
         };
+
+        using CompletionValidation = std::function<Result<void>(const ScriptedResponse &)>;
+        [[nodiscard]] static CloudObjectContractLimits CloudLimits();
+        [[nodiscard]] static CloudMutationCapability CloudCapability();
 
         struct RequestRecord final {
             PlatformRequestId id;
@@ -112,7 +118,8 @@ namespace Horo::PlatformServices::TestSupport {
         template <typename T>
         [[nodiscard]] std::function<Result<PlatformRequestMutation>()> ProviderCompletion(PlatformRequestId id,
                                                                                           PlatformRequestGeneration generation,
-                                                                                          std::shared_ptr<const ScriptedResponse> response);
+                                                                                          std::shared_ptr<const ScriptedResponse> response,
+                                                                                          CompletionValidation validate);
         template <typename T>
         [[nodiscard]] std::function<Result<PlatformRequestMutation>()> TimeoutCompletion(PlatformRequestId id,
                                                                                          PlatformRequestGeneration generation);
@@ -123,9 +130,10 @@ namespace Horo::PlatformServices::TestSupport {
         template <typename T> [[nodiscard]] Result<PlatformRequestHandle<T>> AdmitAndStart(MockPlatformServicesOperation operation);
         template <typename T>
         void RegisterRequest(MockPlatformServicesOperation operation, std::shared_ptr<const ScriptedResponse> response,
-                             const PlatformRequestHandle<T> &handle);
+                             const PlatformRequestHandle<T> &handle, CompletionValidation validate);
         template <typename T>
-        [[nodiscard]] Result<PlatformRequestHandle<T>> Submit(MockPlatformServicesOperation operation, bool requestIsValid = true);
+        [[nodiscard]] Result<PlatformRequestHandle<T>> Submit(MockPlatformServicesOperation operation, bool requestIsValid = true,
+                                                              CompletionValidation validate = {});
 
         [[nodiscard]] Result<void> RequestCancel(PlatformRequestId id, PlatformRequestGeneration generation);
         [[nodiscard]] Result<void> VerifyExpectations();
@@ -137,6 +145,8 @@ namespace Horo::PlatformServices::TestSupport {
         [[nodiscard]] Result<void> Shutdown();
 
         PlatformProviderGeneration providerGeneration;
+        std::optional<PlatformSubjectHandle> cloudSubject;
+        PlatformSessionGeneration lastCloudSession;
         PlatformRequestStore requests;
         std::array<std::vector<ScriptedResponse>, static_cast<std::size_t>(MockPlatformServicesOperation::Count)> responses;
         std::array<std::size_t, static_cast<std::size_t>(MockPlatformServicesOperation::Count)> responseCursors{};

@@ -333,13 +333,16 @@ TEST_CASE("Timeout releases caller and observer despite unsupported native cance
     callbackOwner.reset();
     CHECK(!callbackLifetime.expired());
     const auto deadline = host->Query(request.Value()).Value().timing.admittedAt + std::chrono::seconds{5};
+    unsigned expectedObserved = 1;
+    SECTION("Session remains current at the deadline") {}
+    SECTION("Session invalidation cannot replace an expired admission deadline") {
+        expectedObserved = 0;
+        REQUIRE(horo_test_provider_session_changed(rig.audit.get(), 2, 3) == HORO_EXTENSION_SUCCESS);
+    }
     CHECK(host->DispatchCompletions(64, deadline + std::chrono::milliseconds{1}) == 0);
-    CHECK(observed == 1);
+    CHECK(observed == expectedObserved);
     CHECK(callbackLifetime.expired());
-    auto timedOut = host->Query(request.Value());
-    REQUIRE(timedOut.HasValue());
-    REQUIRE(timedOut.Value().terminal);
-    CHECK(timedOut.Value().terminal->ErrorValue()->code.Value() == RequestErrors::TimedOut.code.Value());
+    CheckTerminalFailure(*host, request.Value(), PlatformRequestState::TimedOut, RequestErrors::TimedOut);
     CHECK(std::ranges::count(Events(*rig.audit), 'X') == 1);
     REQUIRE(horo_test_provider_emit(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value + 1) ==
             HORO_EXTENSION_SUCCESS);
@@ -349,7 +352,7 @@ TEST_CASE("Timeout releases caller and observer despite unsupported native cance
             HORO_EXTENSION_SUCCESS);
     CHECK(host->DispatchCompletions(64) == 1);
     CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::TimedOut);
-    CHECK(observed == 1);
+    CHECK(observed == expectedObserved);
     REQUIRE(host->Close().HasValue());
     CHECK(std::ranges::count(Events(*rig.audit), 'X') == 1);
 }

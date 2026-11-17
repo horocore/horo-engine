@@ -72,6 +72,15 @@ namespace Horo::Audio {
         static_assert(std::is_same_v<decltype(AudioVariationEntry::clip), AudioClipId>);
     }
 
+    TEST_CASE("Audio asset duration is bounded before runtime arithmetic", "[unit][audio][asset-schema]") {
+        auto clip = ValidClip();
+        clip.payload.media.frameCount = (1ULL << 40U) + 1;
+        RequireError(ValidateAudioClipAssetSchema(clip), AudioErrors::AssetSchemaInvalid);
+        auto stream = ValidStream();
+        stream.payload.media.frameCount = std::numeric_limits<std::uint64_t>::max();
+        RequireError(ValidateAudioStreamAssetSchema(stream), AudioErrors::AssetSchemaInvalid);
+    }
+
     TEST_CASE("Audio asset schemas reject unsupported versions and invalid semantic media", "[unit][audio][asset-schema]") {
         AudioClipAssetSchema clip = ValidClip();
         const AudioClipAssetSchema original = clip;

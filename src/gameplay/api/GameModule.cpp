@@ -71,6 +71,24 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         }
 
+        /** @brief Validates inert custom-sense contributions before any provider or module factory can run. */
+        Result<void> ValidatePerceptionSenses(const GeneratedGameplayDescriptorBundle &bundle) {
+            if (!IsBoundedArray(bundle.perceptionSenseCount, AI::PerceptionSenseGeneration::MaximumSenses, bundle.perceptionSenses))
+                return Result<void>::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            for (std::size_t index = 0; index < bundle.perceptionSenseCount; ++index) {
+                const auto &registration = bundle.perceptionSenses[index];
+                if (auto valid = AI::ValidatePerceptionSenseRegistration(registration); valid.HasError())
+                    return valid;
+                for (std::size_t previous = 0; previous < index; ++previous) {
+                    const auto &other = bundle.perceptionSenses[previous].contract;
+                    if (other.sense.identity == registration.contract.sense.identity ||
+                        other.stimulus.identity == registration.contract.stimulus.identity)
+                        return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDescriptorConflict));
+                }
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateBundleIdentity(const GeneratedGameplayDescriptorBundle &bundle,
                                                           const GameModuleLoadExpectation &expectation) {
             const auto moduleId = BoundedText(bundle.moduleId, MaximumModuleIdentityBytes);
@@ -137,6 +155,8 @@ namespace Horo::Gameplay {
             return diagnostics;
         if (auto factories = ValidateFactoryBindings(bundle); factories.HasError())
             return factories;
-        return ValidateDecisionNodes(bundle);
+        if (auto nodes = ValidateDecisionNodes(bundle); nodes.HasError())
+            return nodes;
+        return ValidatePerceptionSenses(bundle);
     }
 }  // namespace Horo::Gameplay

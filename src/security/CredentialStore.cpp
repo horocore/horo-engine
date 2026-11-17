@@ -1,5 +1,6 @@
 #include "Horo/Security/CredentialStore.h"
 
+#include "Horo/Foundation/Configuration.h"
 #include "Horo/Security/SecurityErrors.h"
 
 #include <array>
@@ -12,11 +13,29 @@ namespace Horo::Security {
         constexpr char Hex[] = "0123456789abcdef";
     }  // namespace
 
-    CredentialReference::CredentialReference(std::string value) : value_(std::move(value)) {}
-
-    /** @copydoc CredentialReference::Value */
-    std::string_view CredentialReference::Value() const noexcept {
-        return value_;
+    /** @copydoc ResolveConfigurationCredential */
+    Result<SecureBytes> ResolveConfigurationCredential(const ConfigurationSnapshot &snapshot, const SettingKey &key,
+                                                       CredentialProvider *provider, const std::uint64_t nowMillis) {
+        const auto *setting = snapshot.FindResolved(key);
+        if (setting == nullptr || setting->sensitivity != SettingSensitivity::SecretReference)
+            return Result<SecureBytes>::Failure(MakeError(SecurityErrors::InvalidInput));
+        const auto *reference = std::get_if<CredentialReference>(&setting->value);
+        if (reference == nullptr || reference->Value().empty())
+            return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialNotFound));
+        if (provider == nullptr)
+            return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialBackendUnavailable));
+        auto resolved = provider->Resolve(*reference, nowMillis);
+        if (resolved.HasValue()) {
+            if (resolved.Value().Empty())
+                return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialNotFound));
+            return resolved;
+        }
+        for (const auto *failure : {&SecurityErrors::CredentialBackendUnavailable, &SecurityErrors::CredentialExpired,
+                                    &SecurityErrors::CredentialRevoked, &SecurityErrors::CredentialNotFound}) {
+            if (resolved.ErrorValue().code.Value() == failure->code.Value())
+                return Result<SecureBytes>::Failure(MakeError(*failure));
+        }
+        return Result<SecureBytes>::Failure(MakeError(SecurityErrors::CredentialBackendUnavailable));
     }
 
     /** @copydoc CredentialVault::CredentialVault */

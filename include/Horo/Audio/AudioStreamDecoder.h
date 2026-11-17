@@ -108,7 +108,7 @@ namespace Horo::Audio {
          * @param workingMemory Capacity for at least the declared scratch requirement.
          * @param requestedFrames Positive count within the declared per-call maximum.
          * @return Accepted block, including an idempotent empty terminal block at end, or a typed failure.
-         * @note Invalid call arguments leave the cursor unchanged. Provider error, malformed progress or cancellation
+         * @note Invalid call arguments leave the cursor unchanged. Provider error, malformed progress, non-finite PCM or cancellation
          * closes admission and the caller must discard any output written during that call.
          */
         [[nodiscard]] Result<AudioStreamDecodedBlock> Decode(std::span<AudioSample> output, std::span<std::byte> workingMemory,

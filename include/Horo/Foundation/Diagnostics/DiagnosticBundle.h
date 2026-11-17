@@ -43,6 +43,15 @@ namespace Horo::Diagnostics {
     };
 
     /**
+     * @brief Checks a new absolute bundle destination without collecting inputs or creating files.
+     * @param outputPath Destination whose existing ancestors must resolve to directories.
+     * @return Success or a stable invalid-request error for an occupied, linked, or uninspectable destination.
+     * @throws std::bad_alloc If path or error storage allocation fails.
+     * @note Generation repeats this check. This preflight does not reserve the destination against concurrent changes.
+     */
+    [[nodiscard]] Result<void> ValidateDiagnosticBundleDestination(const std::filesystem::path &outputPath);
+
+    /**
      * @brief Creates an atomic portable ZIP containing only explicitly allowlisted files and metadata.
      * @param request Validated bundle output, source entries, metadata, and aggregate size bound.
      * @return Committed bundle summary or a stable typed observability error.

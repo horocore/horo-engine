@@ -17,11 +17,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import analyze as preflight
-import analyze as support
-import analyze as tools
-import analyze as sonar
-import analyze as sessions
 from analyze import AnalysisError as AnalysisError
+
+# Fixture names identify responsibilities within the same canonical helper module.
+support = tools = sonar = sessions = preflight
 
 
 def git(root: Path, *args: str) -> str:
@@ -142,8 +141,7 @@ def test_ownership_rejects_pid_reuse_and_substring_profile():
 
 def test_terminate_never_signals_stale_or_unrelated_process(monkeypatch):
     monkeypatch.setattr(sessions, 'session_processes', lambda: {123: {"started": "new", "argv": ["code"]}})
-    import analyze as quality_platform
-    monkeypatch.setattr(quality_platform, 'terminate_processes', lambda *_: pytest.fail("must not signal unowned process"))
+    monkeypatch.setattr(sessions, 'terminate_processes', lambda *_: pytest.fail("must not signal unowned process"))
     assert not sessions.terminate({"pid": 123, "started": "old", "profile": "/cache/profile"})
 
 
@@ -259,6 +257,83 @@ def test_header_context_empty_selection_does_not_read_unrelated_sources(tmp_path
         reads.assert_not_called()
 
 
+def test_header_context_does_not_canonicalize_unresolved_search_paths(tmp_path: Path):
+    source = tmp_path / "source.cpp"
+    source.write_text('#include <nested/header.h>\n', encoding="utf-8")
+    missing = tmp_path / "missing search \u03a9"
+    not_directory = tmp_path / "regular-file"
+    not_directory.write_text("not an include directory", encoding="utf-8")
+    available = tmp_path / "available search \u03a9"
+    header = available / "nested/header.h"
+    header.parent.mkdir(parents=True)
+    header.write_text("int value;\n", encoding="utf-8")
+    entry = {"source": source, "includes": [missing, not_directory, available], "target": "source.o"}
+    with patch.object(Path, "resolve", autospec=True, side_effect=Path.resolve) as resolves:
+        assert sonar.header_context([entry], [header], tmp_path) == {header: entry}
+        resolved = [call.args[0] for call in resolves.call_args_list]
+    assert header in resolved
+    for directory in (tmp_path, missing, not_directory):
+        assert directory / "nested/header.h" not in resolved
+
+
+def test_header_context_keeps_first_existing_include_even_when_later_copy_is_selected(tmp_path: Path):
+    source = tmp_path / "source.cpp"
+    source.write_text('#include <header.h>\n', encoding="utf-8")
+    first, second = [tmp_path / name / "header.h" for name in ("first", "second")]
+    for header in (first, second):
+        header.parent.mkdir()
+        header.write_text("int value;\n", encoding="utf-8")
+    entry = {"source": source, "includes": [first.parent, second.parent], "target": "source.o"}
+    with pytest.raises(AnalysisError, match="No translation unit"):
+        sonar.header_context([entry], [second], tmp_path)
+    first.unlink()
+    assert sonar.header_context([entry], [second], tmp_path) == {second: entry}
+
+
+@pytest.mark.parametrize("error", [PermissionError("include probe denied"), OSError("include probe denied")])
+def test_header_context_does_not_hide_include_search_errors(tmp_path: Path, error: OSError):
+    source = tmp_path / "source.cpp"
+    source.write_text('#include <header.h>\n', encoding="utf-8")
+    inaccessible = tmp_path / "inaccessible" / "header.h"
+    header = tmp_path / "available" / "header.h"
+    header.parent.mkdir()
+    header.write_text("int value;\n", encoding="utf-8")
+    entry = {"source": source, "includes": [inaccessible.parent, header.parent], "target": "source.o"}
+    original = Path.lstat
+
+    def probe(path, *args, **kwargs):
+        if path == inaccessible:
+            raise error
+        return original(path, *args, **kwargs)
+
+    with patch.object(Path, "lstat", autospec=True, side_effect=probe):
+        with pytest.raises(type(error), match="include probe denied"):
+            sonar.header_context([entry], [header], tmp_path)
+        result = sonar.guarded(sonar.header_context, [entry], [header], tmp_path)
+    assert result["status"] == "incomplete"
+    assert "include probe denied" in result["error"]
+
+
+def test_header_context_resolves_existing_symlinks_and_rejects_loops(tmp_path: Path):
+    source = tmp_path / "source.cpp"
+    source.write_text('#include "alias.h"\n', encoding="utf-8")
+    header = tmp_path / "selected.h"
+    header.write_text("int value;\n", encoding="utf-8")
+    alias = tmp_path / "alias.h"
+    try:
+        alias.symlink_to(header)
+    except OSError as error:
+        if sys.platform == "win32" and getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows account lacks native symlink creation privilege")
+        raise
+    entry = {"source": source, "includes": [tmp_path], "target": "source.o"}
+    assert sonar.header_context([entry], [header], tmp_path) == {header: entry}
+    alias.unlink()
+    alias.symlink_to(alias)
+    with pytest.raises((RuntimeError, OSError)):
+        sonar.header_context([entry], [header], tmp_path)
+
+
 def test_header_context_prefers_public_header_counterparts(tmp_path: Path):
     public = tmp_path / "include"
     public.mkdir()
@@ -308,6 +383,59 @@ def test_wrong_worktree_compilation_database_is_rejected(tmp_path: Path):
     (build / "CMakeCache.txt").write_text("CMAKE_HOME_DIRECTORY:INTERNAL=/another/worktree\n")
     with pytest.raises(AnalysisError, match="different worktree"):
         sonar.prepare(tmp_path, tmp_path / "cache", [], database, 2)
+
+
+@pytest.mark.parametrize("generator", ["Ninja", "Unix Makefiles"])
+def test_cpp_preparation_uses_one_build_worker(tmp_path: Path, monkeypatch, generator: str):
+    build = tmp_path / "build"
+    build.mkdir()
+    database = build / "compile_commands.json"
+    database.write_text("[]")
+    (build / "CMakeCache.txt").write_text(
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={tmp_path}\nCMAKE_GENERATOR:INTERNAL={generator}\n")
+    source = tmp_path / "input.cpp"
+    source.write_text("int input;\n")
+    entry = {"source": source, "target": "src/CMakeFiles/Input.dir/input.cpp.o"}
+    commands = []
+
+    def record(command, *unused):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sonar, "quality_run", record)
+    monkeypatch.setattr(sonar, "validate_compile_commands", lambda *unused: None)
+    monkeypatch.setattr(sonar, "compiler_entries", lambda *unused: [entry])
+    sonar.prepare(tmp_path, tmp_path / "cache", [source], database, 2)
+    builds = [command for command in commands if "--build" in command]
+    assert len(builds) == 1
+    assert builds[0][builds[0].index("--parallel") + 1] == "1"
+
+
+@pytest.mark.parametrize("generator", ["Ninja", "Unix Makefiles"])
+@pytest.mark.parametrize("parallel", [None, "1", "2"])
+def test_compiler_context_build_stays_single_worker(tmp_path: Path, monkeypatch, generator, parallel):
+    build = tmp_path / "build"
+    build.mkdir()
+    database = build / "compile_commands.json"
+    database.write_text("[]", encoding="utf-8")
+    (build / "CMakeCache.txt").write_text(
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={tmp_path.resolve()}\nCMAKE_GENERATOR:INTERNAL={generator}\n", encoding="utf-8")
+    source = tmp_path / "source.cpp"
+    target = "CMakeFiles/Owner.dir/source.cpp.o"
+    commands = []
+    if parallel is None:
+        monkeypatch.delenv("CMAKE_BUILD_PARALLEL_LEVEL", raising=False)
+    else:
+        monkeypatch.setenv("CMAKE_BUILD_PARALLEL_LEVEL", parallel)
+    monkeypatch.setattr(sonar, "validate_compile_commands", lambda *_: None)
+    monkeypatch.setattr(sonar, "compiler_entries", lambda *_: [{"source": source, "target": target}])
+    monkeypatch.setattr(sonar, "quality_run", lambda argv, *_: commands.append(argv) or
+                        SimpleNamespace(returncode=0, stdout="", stderr=""))
+
+    sonar.prepare(tmp_path, tmp_path / "cache", [source], database, 2)
+
+    expected_target = "Owner" if generator == "Unix Makefiles" else target
+    assert commands[1] == ["cmake", "--build", str(build), "--parallel", "1", "--target", expected_target]
 
 
 def test_compiler_entries_require_in_build_object_target(tmp_path: Path):
@@ -560,6 +688,47 @@ def test_partial_codacy_file_execution_is_incomplete():
                for item in tools.execution_errors(payload, ["tool"]))
 
 
+@pytest.mark.parametrize("source_id,managed_id,accepted", [
+    (None, None, False), ("other", None, False), ("horocore", None, True),
+    (None, "horocore", True), ("other", "horocore", True), ("horocore", "other", False),
+])
+def test_ide_connection_admission_preserves_managed_login_precedence(
+        tmp_path: Path, source_id: str | None, managed_id: str | None, accepted: bool):
+    source, profile = tmp_path / "source", tmp_path / "managed"
+    key = "sonarlint.connectedMode.connections.sonarcloud"
+    for path, connection_id in ((source, source_id), (profile, managed_id)):
+        if connection_id:
+            support.write_json(path / "User/settings.json", {key: [{"connectionId": connection_id}]})
+    before = {path: path.read_bytes() for path in tmp_path.rglob("settings.json")}
+    if accepted:
+        preflight.require_ide_connection(profile, source, "horocore")
+    else:
+        with pytest.raises(AnalysisError, match="not configured"):
+            preflight.require_ide_connection(profile, source, "horocore")
+    assert {path: path.read_bytes() for path in tmp_path.rglob("settings.json")} == before
+
+
+@pytest.mark.parametrize("connections", ["invalid", ["invalid"], {}])
+def test_malformed_ide_connections_are_actionable(tmp_path: Path, connections):
+    source, profile = tmp_path / "source", tmp_path / "managed"
+    support.write_json(source / "User/settings.json", {
+        "sonarlint.connectedMode.connections.sonarqube": connections,
+    })
+    with pytest.raises(AnalysisError, match="Expected a list of connection objects"):
+        preflight.require_ide_connection(profile, source, "horocore")
+
+
+def test_missing_ide_connection_does_not_compile_or_acquire_a_session(tmp_path: Path):
+    root, repository_cache = tmp_path / "checkout", tmp_path / "cache"
+    args = SimpleNamespace(code_user_data=tmp_path / "source", connection_id="horocore")
+    with patch.object(preflight, "prepare") as prepare, patch.object(preflight, "SessionPool") as pool:
+        with pytest.raises(AnalysisError, match="CLI credentials do not establish IDE authentication"):
+            preflight.sonar_check(root, repository_cache / "worktree", repository_cache, [root / "sample.cpp"], args)
+    prepare.assert_not_called()
+    pool.assert_not_called()
+    assert not repository_cache.exists()
+
+
 def test_private_profile_preserves_user_settings_and_credentials(tmp_path: Path):
     import base64
     import sqlite3
@@ -739,6 +908,11 @@ def test_successful_files_checkpoint_only_verified_responses(tmp_path, monkeypat
 def test_sonar_provider_preserves_partial_failure_and_checkpoint(tmp_path, monkeypatch):
     root = tmp_path / 'root'
     root.mkdir()
+    user = tmp_path / 'User'
+    user.mkdir()
+    (user / 'settings.json').write_text(json.dumps({
+        'sonarlint.connectedMode.connections.sonarcloud': [{'connectionId': 'fixture'}]
+    }))
     paths = [root / name for name in ('first.cpp', 'second.cpp')]
     for path in paths:
         path.write_text('int value;\n')

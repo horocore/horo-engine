@@ -2,6 +2,7 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "PrefabTestUtils.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
@@ -320,6 +321,48 @@ namespace Horo::Prefab {
             auto exhausted = BuildPrefabDependencyGraph(boundedRegistry.Snapshot(), std::move(sources), limited);
             REQUIRE(exhausted.HasError());
             RequireCode(exhausted.ErrorValue(), PrefabErrors::WorkBudgetExceeded);
+        }
+
+        TEST_CASE("Prefab shared dependency stress deduplicates exact query admission in canonical order",
+                  "[unit][prefab][dependency][stress]") {
+            constexpr std::uint16_t roots = 64;
+            constexpr std::uint16_t resources = 128;
+            Assets::AssetRegistry registry;
+            std::vector<Assets::AssetRecord> records;
+            std::vector<Assets::AssetId> dependencies;
+            std::vector<Assets::AssetId> rootIds;
+            std::vector<PrefabDependencySource> sources;
+            for (std::uint16_t index = 1; index <= resources; ++index) {
+                const auto id = Asset(roots + index);
+                dependencies.push_back(id);
+                records.push_back(Record(id, "core.mesh", "assets/models/" + std::to_string(index) + ".obj"));
+            }
+            for (std::uint16_t index = 1; index <= roots; ++index) {
+                const auto id = Asset(index);
+                rootIds.push_back(id);
+                records.push_back(Record(id, "core.prefab", "assets/prefabs/" + std::to_string(index) + ".prefab"));
+                sources.push_back({Concrete(id, dependencies), Revision(static_cast<std::uint8_t>(index))});
+            }
+            PublishRegistry(registry, std::move(records));
+            const auto graph = BuildPrefabDependencyGraph(registry.Snapshot(), sources, Limits());
+            REQUIRE(graph.HasValue());
+            CHECK(graph.Value().Nodes().size() == roots + resources);
+            CHECK(graph.Value().Edges().size() == roots * resources);
+            REQUIRE(graph.Value().DependencyClosure(rootIds).HasValue());
+            CHECK(graph.Value().DependencyClosure(rootIds).Value() == dependencies);
+            const auto closure = BuildPrefabAssetDependencyClosure(registry.Snapshot(), graph.Value(), rootIds, {}, resources);
+            REQUIRE(closure.HasValue());
+            CHECK(closure.Value().RuntimeDependencies().size() == resources);
+            const auto rejected = BuildPrefabAssetDependencyClosure(registry.Snapshot(), graph.Value(), rootIds, {}, resources - 1);
+            REQUIRE(rejected.HasError());
+            RequireCode(rejected.ErrorValue(), PrefabErrors::DependencyClosureCapacityExceeded);
+            std::ranges::reverse(sources);
+            const auto reordered = BuildPrefabDependencyGraph(registry.Snapshot(), std::move(sources), Limits());
+            REQUIRE(reordered.HasValue());
+            CHECK(std::ranges::equal(reordered.Value().Nodes(), graph.Value().Nodes()));
+            CHECK(std::ranges::equal(reordered.Value().Edges(), graph.Value().Edges()));
+            CHECK(reordered.Value().InvalidatedPrefabs(std::array{dependencies.back()}) == rootIds);
+            CHECK(closure.Value().RuntimeDependencies().size() == resources);
         }
 
         TEST_CASE("Prefab asset dependency closure preserves canonical registry and source evidence",

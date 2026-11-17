@@ -10,6 +10,7 @@
 #include <fstream>
 #include <map>
 #include <stdexcept>
+#include <utility>
 
 namespace Horo::Packages::Detail {
     namespace {
@@ -34,6 +35,34 @@ namespace Horo::Packages::Detail {
             std::shared_ptr<const Security::NativeArtifactGate> gate_;
             std::map<std::filesystem::path, Sha256Digest> artifacts_;
         };
+
+        /** @brief Intersects native provider permissions with exact package approval before application publication. */
+        [[nodiscard]] Extensions::ExtensionPlatformProviderCommit BindProviderCommit(
+            const std::span<const PackageActivationCandidate> candidates, Extensions::ExtensionPlatformProviderCommit commit,
+            const std::uint64_t generation) {
+            if (!commit)
+                return {};
+            std::map<std::pair<std::string, std::string>, Extensions::ExtensionAdmissionPolicy> policies;
+            for (const auto &candidate : candidates)
+                for (const auto &module : candidate.plan.moduleIds)
+                    policies.emplace(std::make_pair(candidate.manifest.id, module), candidate.trust.policy);
+            return [policies = std::move(policies), commit = std::move(commit),
+                    generation](Extensions::ExtensionPlatformProviderCandidate provider) {
+                const auto policy = policies.find({provider.extensionId, provider.moduleId});
+                if (policy == policies.end())
+                    return Result<Extensions::ExtensionPlatformProviderPublication>::Failure(
+                        MakeError(PackageLifecycleErrors::TrustRequired));
+                Extensions::ExtensionAdmissionRequest request{provider.extensionId, provider.moduleId, generation, {}};
+                Extensions::ExtensionCapabilityRequest capability{{"platform.services.provider"}, {}};
+                for (const auto &permission : provider.permissions)
+                    capability.requiredPermissions.emplace_back(permission);
+                request.capabilities.push_back(std::move(capability));
+                auto admitted = Extensions::ExtensionCapabilityAdmission::Evaluate(request, policy->second);
+                if (admitted.HasError())
+                    return Result<Extensions::ExtensionPlatformProviderPublication>::Failure(admitted.ErrorValue());
+                return commit(std::move(provider));
+            };
+        }
 
     }  // namespace
 
@@ -114,7 +143,9 @@ namespace Horo::Packages::Detail {
         auto gate = std::make_shared<BoundArtifactGate>(configuration.artifactGate, std::move(artifacts));
         manager_ = std::make_unique<Extensions::ExtensionManager>(catalog_.get(), configuration.profile, configuration.capabilities,
                                                                   std::move(gate), configuration.libraryLoader,
-                                                                  Extensions::ExtensionPlatformProviderCommit{}, configuration.editorHosts);
+                                                                  BindProviderCommit(candidates, configuration.platformProviderCommit,
+                                                                                     snapshot_->generation),
+                                                                  configuration.editorHosts);
         retirements_.reserve(candidates.size());
         for (const auto &candidate : candidates) {
             if (cancellation.IsCancellationRequested())

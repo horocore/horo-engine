@@ -1,4 +1,5 @@
 #include "support/TypedIdentityTestSupport.h"
+#include "support/VfxGpuQualification.h"
 #include "support/VfxGpuTestSupport.h"
 
 #include <algorithm>
@@ -35,6 +36,28 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("GPU qualification policy rejects mismatches and nonfinite observations", "[renderer][vfx-gpu][qualification]") {
+    using namespace Horo::Vfx::Tests;
+    CHECK(GpuQualificationPolicyVersion == 1);
+    for (const auto tolerance : GpuPropertyTolerances) {
+        INFO(tolerance.name);
+        CHECK(GpuPropertyMatches(1.0F, 1.0F, tolerance));
+        CHECK_FALSE(GpuPropertyMatches(1.01F, 1.0F, tolerance));
+        CHECK_FALSE(GpuPropertyMatches(std::numeric_limits<float>::quiet_NaN(), 1.0F, tolerance));
+        CHECK_FALSE(GpuPropertyMatches(1.0F, std::numeric_limits<float>::infinity(), tolerance));
+        CHECK_FALSE(GpuPropertyMatches(std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(), tolerance));
+        CHECK_FALSE(GpuPropertyMatches(std::numeric_limits<float>::infinity(), 1.0F, tolerance));
+        const bool allowsRelativeError = tolerance.relative > 0.0F;
+        CHECK(GpuPropertyMatches(1000.1F, 1000.0F, tolerance) == allowsRelativeError);
+        CHECK(GpuPropertyMatches(-1000.1F, -1000.0F, tolerance) == allowsRelativeError);
+        CHECK_FALSE(GpuPropertyMatches(1000.4F, 1000.0F, tolerance));
+        CHECK_FALSE(GpuPropertyMatches(-1000.4F, -1000.0F, tolerance));
+        const float boundary = tolerance.absolute;
+        CHECK(GpuPropertyMatches(boundary, 0.0F, tolerance));
+        CHECK_FALSE(GpuPropertyMatches(std::nextafter(boundary, std::numeric_limits<float>::infinity()), 0.0F, tolerance));
+    }
+}
 
 TEST_CASE("GPU initialization identity binds actual seed force metadata and shared schema", "[renderer][vfx-gpu]") {
     Fixture f;

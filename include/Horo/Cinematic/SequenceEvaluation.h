@@ -77,12 +77,36 @@ namespace Horo::Cinematic {
         constexpr auto operator<=>(const SequenceFrameEventKey &) const noexcept = default;
     };
 
+    /** @brief Authored camera transition capability, independent of backend or product tier names. */
+    enum class CameraTransitionTier : std::uint8_t {
+        HardCut,
+        SingleViewBlend,
+        DualViewCrossFade,
+        Count
+    };
+    /** @brief Only an explicitly authored hard cut may replace a denied transition. */
+    enum class CameraTransitionFallback : std::uint8_t {
+        Fail,
+        HardCut,
+        Count
+    };
+    /** @brief Bounded deterministic camera transition curves. */
+    enum class CameraBlendCurve : std::uint8_t {
+        Linear,
+        SmoothStep,
+        Count
+    };
+
     /** @brief Immutable cooked camera-cut key delivered through the camera-owner seam. */
     struct SequenceFrameCameraCutKey final {
         TrackId track;
         KeyframeId key;
         SequenceCameraTargetId camera;
         SequenceTime time{};
+        CameraTransitionTier transitionTier{CameraTransitionTier::HardCut};
+        CameraTransitionFallback fallback{CameraTransitionFallback::Fail};
+        SequenceTime transitionDuration{};
+        CameraBlendCurve transitionCurve{CameraBlendCurve::Linear};
         constexpr auto operator<=>(const SequenceFrameCameraCutKey &) const noexcept = default;
     };
 
@@ -97,7 +121,7 @@ namespace Horo::Cinematic {
         constexpr auto operator<=>(const SequenceFrameEventOccurrence &) const noexcept = default;
     };
 
-    /** @brief Backend-neutral camera-cut request emitted after event staging. */
+    /** @brief Backend-neutral camera crossing with canonical authored transition metadata, emitted after event staging. */
     struct SequenceFrameCameraCutRequest final {
         SequencePlayerHandle player;
         TrackId track;
@@ -106,6 +130,10 @@ namespace Horo::Cinematic {
         SequenceTime time{};
         std::uint64_t traversal{};
         SequenceTraversalDirection direction{SequenceTraversalDirection::Forward};
+        CameraTransitionTier transitionTier{CameraTransitionTier::HardCut};
+        CameraTransitionFallback fallback{CameraTransitionFallback::Fail};
+        SequenceTime transitionDuration{};
+        CameraBlendCurve transitionCurve{CameraBlendCurve::Linear};
         constexpr auto operator<=>(const SequenceFrameCameraCutRequest &) const noexcept = default;
     };
 

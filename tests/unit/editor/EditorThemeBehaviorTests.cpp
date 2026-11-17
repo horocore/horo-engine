@@ -2,6 +2,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
+#include "support/OwnedTestDirectory.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -38,9 +39,42 @@ namespace {
     };
 }  // namespace
 
+TEST_CASE("Explicit Theme Roots Accept Unicode And Commented Resources But Reject Hostile JSON", "[unit][editor][gui][theme]") {
+    using namespace Horo::Editor;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Tests::OwnedTestDirectory directory{"theme unicode"};
+    const auto root = directory.Path() / std::filesystem::path{u8"Türkçe temalar"};
+    REQUIRE(std::filesystem::create_directory(root));
+    const auto path = root / std::filesystem::path{u8"Özel.json"};
+    const auto encodedRoot = root.u8string();
+    const auto encodedPath = path.u8string();
+    const std::string rootText{encodedRoot.begin(), encodedRoot.end()};
+    const std::string pathText{encodedPath.begin(), encodedPath.end()};
+    const auto write = [&](const std::string_view document) {
+        std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+        stream << document;
+        REQUIRE(stream.good());
+    };
+    write(R"({/* supported resource comment */ "colors":{"WindowBg":"#112233"}})");
+    Theme::RefreshThemeList(nullptr, rootText.c_str());
+    REQUIRE(Theme::GetThemeList().size() == 4);
+    Theme::ThemeEntry candidate;
+    REQUIRE(Theme::LoadThemeFromJson(pathText.c_str(), candidate));
+    CHECK(candidate.name == std::string{"\xc3\x96zel"});
+    const auto originalColors = candidate.colors;
+    write(R"({"colors":{"WindowBg":"#112233","WindowBg":"#445566"}})");
+    CHECK_FALSE(Theme::LoadThemeFromJson(pathText.c_str(), candidate));
+    CHECK(candidate.colors.size() == originalColors.size());
+    write(std::string{"{\"ignored\":"} + std::string(32, '[') + "0" + std::string(32, ']') + "}");
+    CHECK_FALSE(Theme::LoadThemeFromJson(pathText.c_str(), candidate));
+    Theme::RefreshThemeList();
+    CHECK(Theme::GetThemeList().size() == 3);
+    Theme::SelectThemeByIndex(0);
+}
+
 TEST_CASE("Theme candidates are fenced to the selected source and bounded before parsing", "[unit][editor][gui][theme][reload]") {
     using namespace Horo::Editor;
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     directory.Write("theme.json", R"({"colors":{"WindowBg":"#112233"}})");
     Theme::RefreshThemeList(directory.Path().string().c_str());
@@ -61,7 +95,7 @@ TEST_CASE("Theme watcher publishes valid replacements and retains the last good 
           "[unit][editor][gui][theme][reload]") {
     using namespace Horo;
     using namespace Horo::Editor;
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     const auto path = directory.Path() / "theme.json";
     directory.Write("theme.json", R"({"colors":{"WindowBg":"#112233"}})");
@@ -121,7 +155,7 @@ TEST_CASE("Theme watcher publishes valid replacements and retains the last good 
 TEST_CASE("Switching to a built-in theme fences a pending background candidate", "[unit][editor][gui][theme][reload]") {
     using namespace Horo;
     using namespace Horo::Editor;
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     directory.Write("theme.json", R"({"colors":{"WindowBg":"#112233"}})");
     Theme::RefreshThemeList(directory.Path().string().c_str());
@@ -144,7 +178,7 @@ TEST_CASE("Switching to a built-in theme fences a pending background candidate",
 TEST_CASE("Built-in themes update active style and design tokens", "[unit][editor][gui][theme]") {
     using namespace Horo::Editor;
 
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     Theme::RefreshThemeList();
     REQUIRE(Theme::GetThemeList().size() >= 3);
 
@@ -187,7 +221,7 @@ TEST_CASE("Custom theme parsing accepts supported colors and token overrides", "
     REQUIRE(Theme::FontPx::SansCompact == 18.0F);
     REQUIRE(Theme::FontPx::Icon == 20.0F);
 
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     directory.Write("custom.json", R"({
         "name": "Ocean",
@@ -254,7 +288,7 @@ TEST_CASE("Custom theme parsing accepts supported colors and token overrides", "
 
 TEST_CASE("Custom source roles inherit the palette and reject malformed overrides", "[unit][editor][gui][theme][source]") {
     using namespace Horo::Editor;
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     directory.Write("syntax.json", R"({"name":"Source", "tokens":{"sourceSyntax":{
         "text":"#eeeeee", "keyword":"#aabbcc", "type":"#112233", "string":"#ddeeff",

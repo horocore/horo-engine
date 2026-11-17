@@ -134,7 +134,8 @@ namespace Horo::AI {
          * @param spatialRevision Current candidate publication revision.
          * @param physics Current host-selected world/capability, scene generation, tick and publication.
          * @return Current copied result, pending while Physics has not processed it, or original typed Physics failure.
-         * @details Repeated Poll does not advance hysteresis. A replaced scene/listener invalidates all history.
+         * @details Repeated Poll does not advance hysteresis. Endpoint retirement cancels any pending batch
+         * and clears its confirmation history. A replaced scene/listener invalidates all history.
          */
         [[nodiscard]] Result<PerceptionSightResult> Poll(const Runtime::RuntimeSceneView &scene, std::uint64_t spatialRevision,
                                                          const PerceptionSightPhysicsPublication &physics);
@@ -154,8 +155,11 @@ namespace Horo::AI {
 
         /** @brief Applies exactly one confirmed sample; unknown/budget/stale results never call this helper. */
         void Confirm(std::size_t index, bool clear);
-        /** @brief Removes stale generation evidence even on repeated reads of already completed work. */
-        void Revalidate(const Runtime::RuntimeSceneView &scene, bool publicationCurrent);
+        /** @brief Removes stale generation evidence even on repeated reads of already completed work.
+         * @param scene Fresh owner-thread view. @param publicationCurrent Whether the provider fences still match.
+         * @return Whether the listener, publication and all captured sources are still current.
+         */
+        [[nodiscard]] bool Revalidate(const Runtime::RuntimeSceneView &scene, bool publicationCurrent);
         /** @brief Checks exact current Scene/listener binding without changing owned history. */
         [[nodiscard]] bool ListenerBindingCurrent(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialSnapshot &spatial,
                                                   const PerceptionSightFrame &frame) const;

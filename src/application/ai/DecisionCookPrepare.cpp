@@ -21,8 +21,8 @@ namespace Horo::Application::DecisionCookDetail {
                             calls.push_back(id.Value());
                     }
                 }
-            } else {
-                for (const auto &state : std::get<AI::StateMachineAssetDescriptor>(source.body).states)
+            } else if (const auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&source.body)) {
+                for (const auto &state : machine->states)
                     if (state.call)
                         calls.push_back(state.call->asset);
             }

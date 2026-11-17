@@ -110,6 +110,21 @@ namespace Horo::PlatformServices {
         CHECK(smallId.Value().value == 1);
     }
 
+    TEST_CASE("Registry fingerprints bind the exact canonical ledger document", "[platform-services][stable-id]") {
+        const auto empty = BuildPlatformStableIdRegistry(Candidate({}));
+        REQUIRE(empty.HasValue());
+        const auto document = empty.Value().CanonicalDocument();
+        REQUIRE(document.HasValue());
+        CHECK(document.Value() == "{\n"
+                                  "  \"schemaVersion\": 1,\n"
+                                  "  \"projectId\": \"project.stable-identities\",\n"
+                                  "  \"algorithm\": \"horo.platform-services.stable-id.v1\",\n"
+                                  "  \"entries\": []\n"
+                                  "}\n");
+        // Independently calculated with Python hashlib over the v2 domain, NUL and exact UTF-8 document.
+        CHECK(FormatSha256(empty.Value().Fingerprint()) == "sha256:28e0d8cc0351fe34ea1fdf2e2a477880d533b6df16acb563e1ab5e60eb5602ea");
+    }
+
     TEST_CASE("Platform stable ID parsing and derivation reject noncanonical or invalid input", "[platform-services][stable-id]") {
         CheckError(ParsePlatformServicesIdSalt("psid1:00000000000000000000000000000000"), StableIdErrors::InvalidSalt);
         CheckError(ParsePlatformServicesIdSalt("psid1:0102030405060708090A0b0c0d0e0f10"), StableIdErrors::InvalidSalt);
@@ -162,17 +177,33 @@ namespace Horo::PlatformServices {
         auto emptyProject = good;
         emptyProject.projectId.clear();
         CheckError(BuildPlatformStableIdRegistry(emptyProject), StableIdErrors::InvalidLedger);
+        auto zeroSalt = good;
+        zeroSalt.salt = {};
+        CheckError(BuildPlatformStableIdRegistry(zeroSalt), StableIdErrors::InvalidSalt);
+        auto invalidEncoding = good;
+        invalidEncoding.projectId.push_back(static_cast<char>(0xff));
+        CheckError(BuildPlatformStableIdRegistry(invalidEncoding), StableIdErrors::InvalidLedger);
         auto storedMismatch = good;
         ++storedMismatch.entries.front().storedId.value;
         CheckError(BuildPlatformStableIdRegistry(storedMismatch), StableIdErrors::StoredIdMismatch);
         auto collision = good;
         collision.entries.back().storedId = collision.entries.front().storedId;
-        CheckError(BuildPlatformStableIdRegistry(collision), StableIdErrors::HashCollision);
+        const auto collided = BuildPlatformStableIdRegistry(collision);
+        CheckError(collided, StableIdErrors::HashCollision);
+        CHECK(collided.ErrorValue().message.find("horo.platform-services.stable-id.v1") != std::string::npos);
+        CHECK(collided.ErrorValue().message.find(FormatPlatformServiceStableId(collision.entries.front().storedId)) != std::string::npos);
+        REQUIRE(collided.ErrorValue().diagnostics.size() == 2);
+        CHECK(collided.ErrorValue().diagnostics.front().path == "campaign.first_win");
+        CHECK(collided.ErrorValue().diagnostics.back().path == "player.level");
+        CHECK(collided.ErrorValue().diagnostics.front().location.source == ".horo/platform_services.ids.json");
         auto duplicateKey = good;
         duplicateKey.entries.back().kind = PlatformServiceIdKind::Achievement;
         duplicateKey.entries.back().canonicalKey = "campaign.first_win";
         duplicateKey.entries.back().storedId = duplicateKey.entries.front().storedId;
-        CheckError(BuildPlatformStableIdRegistry(duplicateKey), StableIdErrors::HashCollision);
+        CheckError(BuildPlatformStableIdRegistry(duplicateKey), StableIdErrors::DuplicateKey);
+        duplicateKey.entries.front().state = PlatformStableIdState::Tombstoned;
+        duplicateKey.entries.front().removalProvenance = "removed:qualification";
+        CheckError(BuildPlatformStableIdRegistry(duplicateKey), StableIdErrors::Tombstoned);
         auto duplicateAlias = good;
         duplicateAlias.entries.back().aliases = {"player.level"};
         CheckError(BuildPlatformStableIdRegistry(duplicateAlias), StableIdErrors::DuplicateKey);
@@ -203,6 +234,93 @@ namespace Horo::PlatformServices {
         candidate.entries.pop_back();
         candidate.entries.front().removalProvenance.clear();
         CheckError(BuildPlatformStableIdRegistry(candidate), StableIdErrors::InvalidLedger);
+    }
+
+    TEST_CASE("Validated ledger edits append aliases and retain explicit tombstones", "[platform-services][stable-id]") {
+        auto candidate = Candidate({Declaration(TestSalt(), PlatformServiceIdKind::Achievement, "campaign.first_win", {"campaign.victory"}),
+                                    Declaration(TestSalt(), PlatformServiceIdKind::Stat, "player.retired", {"player.legacy"})});
+        candidate.entries.back().state = PlatformStableIdState::Tombstoned;
+        candidate.entries.back().removalProvenance = "removed:qualification";
+        const auto previous = BuildPlatformStableIdRegistry(candidate);
+        REQUIRE(previous.HasValue());
+        const auto fingerprint = previous.Value().Fingerprint();
+        const auto replace = [&](const auto &next) {
+            return BuildPlatformStableIdRegistryReplacement(previous.Value(), fingerprint, next);
+        };
+        SECTION("Presentation-independent no-op and append preserve captured generation") {
+            CHECK(replace(candidate).Value().Fingerprint() == fingerprint);
+            candidate.entries.front().aliases.push_back("campaign.won");
+            candidate.entries.push_back(Declaration(TestSalt(), PlatformServiceIdKind::Leaderboard, "ranked.score"));
+            REQUIRE(replace(candidate).HasValue());
+            CHECK(previous.Value().Entries().size() == 2);
+            CHECK(previous.Value().Fingerprint() == fingerprint);
+        }
+        SECTION("Active removal requires a retained tombstone") {
+            candidate.entries.front().state = PlatformStableIdState::Tombstoned;
+            candidate.entries.front().removalProvenance = "removed:explicit-edit";
+            const auto removed = replace(candidate);
+            REQUIRE(removed.HasValue());
+            CheckError(removed.Value().ResolveAchievement("campaign.victory"), StableIdErrors::Tombstoned);
+            REQUIRE(previous.Value().ResolveAchievement("campaign.victory").HasValue());
+        }
+    }
+
+    TEST_CASE("Ordinary ledger replacements preserve identity history and reject stale editors", "[platform-services][stable-id]") {
+        auto candidate = Candidate({Declaration(TestSalt(), PlatformServiceIdKind::Achievement, "campaign.first_win", {"campaign.victory"}),
+                                    Declaration(TestSalt(), PlatformServiceIdKind::Stat, "player.retired", {"player.legacy"})});
+        candidate.entries.back().state = PlatformStableIdState::Tombstoned;
+        candidate.entries.back().removalProvenance = "removed:qualification";
+        const auto previous = BuildPlatformStableIdRegistry(candidate);
+        REQUIRE(previous.HasValue());
+        const auto fingerprint = previous.Value().Fingerprint();
+        const auto replace = [&](const auto &next) {
+            return BuildPlatformStableIdRegistryReplacement(previous.Value(), fingerprint, next);
+        };
+        SECTION("Neither active entries nor tombstones may disappear") {
+            for (std::size_t index = 0; index < candidate.entries.size(); ++index) {
+                auto erased = candidate;
+                erased.entries.erase(erased.entries.begin() + index);
+                CheckError(replace(erased), StableIdErrors::InvalidTransition);
+            }
+        }
+        SECTION("Aliases remain permanently reserved") {
+            candidate.entries.back().aliases.clear();
+            CheckError(replace(candidate), StableIdErrors::InvalidTransition);
+        }
+        SECTION("Restoration is never an ordinary edit") {
+            candidate.entries.back().state = PlatformStableIdState::Active;
+            candidate.entries.back().removalProvenance.clear();
+            CheckError(replace(candidate), StableIdErrors::Tombstoned);
+        }
+        SECTION("Removal evidence survives replacement") {
+            candidate.entries.back().removalProvenance = "rewritten-history";
+            CheckError(replace(candidate), StableIdErrors::Tombstoned);
+        }
+        SECTION("Namespace changes require migration even if all IDs were rederived") {
+            candidate.salt.bytes.front() ^= std::byte{1};
+            for (auto &entry : candidate.entries)
+                entry.storedId = DerivePlatformServiceStableId(candidate.salt, entry.kind, entry.canonicalKey).Value();
+            REQUIRE(BuildPlatformStableIdRegistry(candidate).HasValue());
+            CheckError(replace(candidate), StableIdErrors::InvalidTransition);
+        }
+        SECTION("Project owner cannot change") {
+            candidate.projectId = "other.project";
+            CheckError(replace(candidate), StableIdErrors::InvalidTransition);
+        }
+        SECTION("Stale drafts cannot replace newer history") {
+            auto stale = fingerprint;
+            stale.bytes.front() ^= 1U;
+            CheckError(BuildPlatformStableIdRegistryReplacement(previous.Value(), stale, candidate), StableIdErrors::StaleReplacement);
+        }
+    }
+
+    TEST_CASE("An empty ledger still fences salt changes at replacement", "[platform-services][stable-id]") {
+        auto candidate = Candidate({});
+        const auto previous = BuildPlatformStableIdRegistry(candidate);
+        REQUIRE(previous.HasValue());
+        candidate.salt.bytes.back() ^= std::byte{1};
+        CheckError(BuildPlatformStableIdRegistryReplacement(previous.Value(), previous.Value().Fingerprint(), candidate),
+                   StableIdErrors::InvalidTransition);
     }
 
     TEST_CASE("Provider mapping evidence is opaque, generation-bound, complete, and one-to-one", "[platform-services][stable-id]") {

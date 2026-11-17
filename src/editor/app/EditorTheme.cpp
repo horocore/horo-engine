@@ -1,5 +1,7 @@
 #include "Horo/Editor/EditorTheme.h"
 
+#include "JsonUtils.h"
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -321,35 +323,26 @@ namespace Horo::Editor::Theme {
             }
         }
 
-        /** @brief Returns the themes directory path. */
-        std::string GetThemesDir() {
-            const char *home = std::getenv("HOME");
-            if (home == nullptr)
-                home = std::getenv("USERPROFILE");
-            if (home == nullptr)
-                return ".horo/themes";
-
-            std::string dir{home};
-            dir += "/.horo/themes";
-            return dir;
-        }
-
-        void AppendCustomThemes(const char *additionalPath) {
-            std::vector<std::filesystem::path> scanPaths{GetThemesDir()};
+        void AppendCustomThemes(const char *additionalPath, const char *userThemesPath) {
+            std::vector<std::filesystem::path> scanPaths;
+            if (userThemesPath != nullptr && userThemesPath[0] != '\0')
+                scanPaths.emplace_back(std::filesystem::u8path(userThemesPath));
             if (additionalPath != nullptr && additionalPath[0] != '\0')
-                scanPaths.emplace_back(additionalPath);
+                scanPaths.emplace_back(std::filesystem::u8path(additionalPath));
 
             for (const auto &dir : scanPaths) {
                 std::error_code ec;
                 if (!std::filesystem::exists(dir, ec) || !std::filesystem::is_directory(dir, ec))
                     continue;
-                for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
-                    if (ec)
-                        break;
-                    if (!entry.is_regular_file() || entry.path().extension() != ".json")
+                auto cursor = std::filesystem::directory_iterator(dir, ec);
+                for (const auto end = std::filesystem::directory_iterator{}; !ec && cursor != end; cursor.increment(ec)) {
+                    const auto &entry = *cursor;
+                    if (!entry.is_regular_file(ec) || entry.path().extension() != ".json")
                         continue;
                     ThemeEntry theme;
-                    if (LoadThemeFromJson(entry.path().string().c_str(), theme))
+                    const auto encoded = entry.path().generic_u8string();
+                    const std::string path{encoded.begin(), encoded.end()};
+                    if (LoadThemeFromJson(path.c_str(), theme))
                         ThemeList().push_back(std::move(theme));
                 }
             }
@@ -402,17 +395,9 @@ namespace Horo::Editor::Theme {
         return ActiveTokens();
     }
 
-    void RefreshThemeList(const char *additionalPath) {
-        ThemeList().clear();
-
-        // Built-in themes
-        {
-            ThemeEntry e;
-            e.name = "Horo Dark";
-            e.isBuiltIn = true;
-            ThemeList().push_back(std::move(e));
-        }
-        {
+    namespace {
+        /** @brief Constructs the unchanged Midnight built-in palette without publishing it. */
+        ThemeEntry MakeMidnightTheme() {
             ThemeEntry e;
             e.name = "Midnight";
             e.isBuiltIn = true;
@@ -444,9 +429,11 @@ namespace Horo::Editor::Theme {
             e.colors["PlotHistogram"] = ImVec4{0.447F, 0.282F, 0.847F, 1.0F};
             e.colors["TableBorderStrong"] = ImVec4{0.149F, 0.169F, 0.216F, 1.0F};
             e.colors["TableBorderLight"] = ImVec4{0.149F, 0.169F, 0.216F, 0.5F};
-            ThemeList().push_back(std::move(e));
+            return e;
         }
-        {
+
+        /** @brief Constructs the unchanged Light built-in palette without publishing it. */
+        ThemeEntry MakeLightTheme() {
             ThemeEntry e;
             e.name = "Light";
             e.isBuiltIn = true;
@@ -478,14 +465,33 @@ namespace Horo::Editor::Theme {
             e.colors["PlotHistogram"] = ImVec4{0.016F, 0.647F, 0.988F, 1.0F};
             e.colors["TableBorderStrong"] = ImVec4{0.784F, 0.780F, 0.773F, 1.0F};
             e.colors["TableBorderLight"] = ImVec4{0.784F, 0.780F, 0.773F, 0.5F};
+            return e;
+        }
+    }  // namespace
+
+    /** @copydoc RefreshThemeList */
+    void RefreshThemeList(const char *additionalPath, const char *userThemesPath) {
+        ThemeList().clear();
+
+        // Built-in themes
+        {
+            ThemeEntry e;
+            e.name = "Horo Dark";
+            e.isBuiltIn = true;
             ThemeList().push_back(std::move(e));
         }
+        ThemeList().push_back(MakeMidnightTheme());
+        ThemeList().push_back(MakeLightTheme());
 
-        AppendCustomThemes(additionalPath);
+        AppendCustomThemes(additionalPath, userThemesPath);
     }
 
+    /** @copydoc LoadThemeFromJson */
     bool LoadThemeFromJson(const char *path, ThemeEntry &outEntry) {
-        std::ifstream file(path, std::ios::binary);  // NOSONAR(cpp:S2083)
+        if (path == nullptr)
+            return false;
+        const auto nativePath = std::filesystem::u8path(path);
+        std::ifstream file(nativePath, std::ios::binary);  // NOSONAR(cpp:S2083)
         if (!file.is_open())
             return false;
 
@@ -497,14 +503,18 @@ namespace Horo::Editor::Theme {
             return false;
         text.resize(size);
         try {
+            Foundation::JsonParseGuard guard{16};
+            if (!guard.Validate(text.begin(), text.end(), true))
+                return false;
             const nlohmann::json document = nlohmann::json::parse(text, nullptr, false, true);
             if (document.is_discarded() || !document.is_object())
                 return false;
 
             ThemeEntry loaded;
             const auto nameIt = document.find("name");
-            loaded.name =
-                nameIt != document.end() && nameIt->is_string() ? nameIt->get<std::string>() : std::filesystem::path(path).stem().string();
+            const auto encodedName = nativePath.stem().u8string();
+            loaded.name = nameIt != document.end() && nameIt->is_string() ? nameIt->get<std::string>()
+                                                                          : std::string{encodedName.begin(), encodedName.end()};
             loaded.sourcePath = path;
             loaded.isBuiltIn = false;
             loaded.designTokens = DefaultDesignTokens();
@@ -720,7 +730,8 @@ namespace Horo::Editor::Theme {
         }
     }  // namespace
 
-    void Apply(ImGuiStyle &style) {
+    /** @copydoc Apply */
+    void Apply(ImGuiStyle &style, const char *overridePath, const char *userThemesPath) {
         ImGui::StyleColorsDark();
         style.WindowRounding = 0;
         style.FrameRounding = Layout::Radius;
@@ -737,14 +748,12 @@ namespace Horo::Editor::Theme {
         style.ItemInnerSpacing = ImVec2{8, 4};
         style.ScrollbarSize = 10.0F;
 
-        RefreshThemeList(std::getenv("HORO_THEME_OVERRIDE"));
+        RefreshThemeList(overridePath, userThemesPath);
 
-        // If env var points to a specific JSON file, load it directly
-        const char *overridePath = std::getenv("HORO_THEME_OVERRIDE");
         bool selectedOverride = false;
         if (overridePath && overridePath[0] != '\0') {
             std::error_code ec;
-            if (std::filesystem::is_regular_file(overridePath, ec)) {
+            if (std::filesystem::is_regular_file(std::filesystem::u8path(overridePath), ec)) {
                 ThemeEntry theme;
                 if (LoadThemeFromJson(overridePath, theme)) {
                     ThemeList().push_back(std::move(theme));

@@ -79,7 +79,7 @@ namespace Horo::AI::Detail {
 
         Result<void> AddCall(LoweredDecisionGraph &graph, DecisionNodeId owner, const DecisionSubplanCall &call,
                              const SourceLocation &source) {
-            if (!call.asset.IsValid() || call.kind >= DecisionPlanKind::Utility || !call.schema.IsValid())
+            if (!call.asset.IsValid() || call.kind >= DecisionPlanKind::Count || !call.schema.IsValid())
                 return Invalid<void>(AIErrors::DecisionAssetSubtreeIncompatible);
             graph.metadata.subtrees.emplace_back(call.asset, call.kind, call.schema, owner, source);
             graph.calls.emplace_back(owner, call);
@@ -228,7 +228,8 @@ namespace Horo::AI::Detail {
         result.metadata = {.asset = source.asset,
                            .kind = std::holds_alternative<std::shared_ptr<const BehaviorTreeAsset>>(source.body)
                                        ? DecisionPlanKind::BehaviorTree
-                                       : DecisionPlanKind::StateMachine,
+                                       : (std::holds_alternative<StateMachineAssetDescriptor>(source.body) ? DecisionPlanKind::StateMachine
+                                                                                                           : DecisionPlanKind::Utility),
                            .schemaVersion = source.schemaVersion,
                            .blackboardSchema = source.blackboard,
                            .requiredBlackboardSchemaVersion = source.blackboardVersion,
@@ -238,8 +239,10 @@ namespace Horo::AI::Detail {
             using Body = std::decay_t<decltype(body)>;
             if constexpr (std::is_same_v<Body, std::shared_ptr<const BehaviorTreeAsset>>)
                 return LowerTree(result, source, body);
-            else
+            else if constexpr (std::is_same_v<Body, StateMachineAssetDescriptor>)
                 return LowerStateMachine(result, body, source.location);
+            else
+                return LowerUtility(result, body, source.location);
         }, source.body);
             lowered.HasError())
             return Result<LoweredDecisionGraph>::Failure(lowered.ErrorValue());

@@ -393,7 +393,7 @@ Rules:
 
 Common options such as project, output format, logging, and non-interactive mode
 use one shared descriptor inventory. The current shared names are `--project`
-(`-p`), `--output` (`-o`), `--log-level`, and `--non-interactive`; command
+(`-p`), `--output` (`-o`), `--log-level`, `--non-interactive` and `--timeout-ms`; command
 registration rejects any local long-name or short-name collision with that inventory.
 
 `CliOptionParser` performs a bounded, allocation-visible pre-dispatch pass. It
@@ -736,6 +736,46 @@ and job ID.
 Arguments are redacted before logging. Diagnostic bundles may include the safe
 effective command configuration but not credentials or arbitrary environment
 variables.
+
+The parser rejects ordinary argv values for any option marked `sensitive`.
+This closes the previous path that retained such values in a typed request.
+Production commands declare no sensitive argv options. Credential-consuming
+adapters must migrate to protected provider inputs when CFG-001.6 supplies the
+Configuration reference contract. Sensitive positionals, defaults and ordinary
+configuration bindings remain rejected at registry admission.
+
+Diagnostic export requires an invocation-owned output destination. The CLI
+calls Foundation's `ValidateDiagnosticBundleDestination` before reporting
+collection progress. HostObservability repeats that check before collecting
+summaries, and the existing producer checks again before filesystem mutation.
+An occupied output or temporary output is an invalid request. Callers retry
+with a fresh destination or resolve their owned staging artifact. This
+additive API preserves the existing Foundation header ownership and export
+allowlist. It performs no destination reservation against concurrent changes.
+
+An explicit `--timeout-ms` is a positive integer of at most one day and must
+also fit the command's declared maximum. Rejection occurs before stdin capture
+or host activation. A timeout policy with zero default and nonzero maximum
+supports opt-in deadlines. Omitting the option preserves that command's
+default. This extends the previously rejected opt-in policy state without
+changing existing disabled or finite-default policies.
+Contributions with a local `timeout-ms` option migrate to the shared option
+and `CliTimeoutPolicy`; registration rejects the reserved-name collision.
+No in-tree contribution used that local name before this addition.
+
+The native host starts its stop controller before startup and passes the same
+absolute deadline through `CliInvocationStopController::Deadline` into
+dispatch. Configuration, project acquisition and adapters cannot restart that
+deadline. An earlier descriptor deadline can further restrict it. Startup
+timeout retains its original diagnostic cause and uses the timeout category.
+MCP stdio retains exclusive protocol stdout during timeout and shutdown.
+
+During synchronous native dispatch, an owned progress worker samples the
+existing one-slot mailbox. Application ownership remains on the calling lane.
+Only that worker accesses the presenter until it joins, then the calling
+lane emits the terminal result. Human cadence and mailbox bounds remain in
+effect. Output failure requests cooperative stop and is returned after join.
+All borrowed owners outlive the worker, including during exception unwinding.
 
 ## Migration from Legacy Ad-Hoc Parsing
 

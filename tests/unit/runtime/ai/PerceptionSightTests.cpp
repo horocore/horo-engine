@@ -1,4 +1,5 @@
 #include "AllocationProbe.h"
+#include "Horo/AI/EnvironmentQueryPhysics.h"
 #include "PerceptionSightTestSupport.h"
 
 #include <limits>
@@ -113,7 +114,94 @@ namespace Horo::AI {
             CHECK(allocations == 0);
         }
 
+        TEST_CASE("EQS Physics probes reject a mismatched binding before enqueueing", "[unit][ai][sight][eqs]") {
+            const Physics::PhysicsQueryEventCapability absent;
+            const QueryPhysicsPublication publication{.identity = {.capabilityGeneration = 1},
+                                                      .sceneGeneration = 7,
+                                                      .revision = 1,
+                                                      .completedTick = 1};
+            QueryPhysicsProbe probe;
+            const auto outcome = probe.Start(absent, publication, QueryStageId::Create(1).Value(), Physics::PhysicsRayQuery{}, {});
+            REQUIRE(outcome.HasError());
+            CHECK(outcome.ErrorValue().code.Value() == Physics::PhysicsErrors::CapabilityStale.code.Value());
+            CHECK_FALSE(probe.Poll(publication).Value().has_value());
+        }
+
 #if HORO_TEST_PHYSICS_NATIVE
+        /** @brief Captures the exact Physics test world publication. */
+        QueryPhysicsPublication ProbePublication(const SightWorld &physics) {
+            const auto tick = physics.world->PublishedTick();
+            return {physics.capability.Identity(), 7, tick.publicationRevision, tick.completedTick};
+        }
+
+        TEST_CASE("EQS Physics ray and capsule probes preserve blocking evidence", "[unit][ai][sight][eqs]") {
+            SightWorld physics;
+            const auto fixture = physics.Box(-5);
+            physics.Advance();
+            const auto publication = ProbePublication(physics);
+            const auto stage = QueryStageId::Create(1).Value();
+            const Physics::PhysicsRayQuery ray{.origin = {0, 0, 0}, .maximumDistanceMeters = 10};
+            Physics::PhysicsQueryFilter filter{.channel = VisibilityChannel()};
+            QueryPhysicsProbe probe;
+            REQUIRE(probe.Start(physics.capability, publication, stage, ray, filter).Value());
+            REQUIRE_FALSE(probe.Poll(publication).Value().has_value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            const auto blocked = probe.Poll(publication);
+            REQUIRE(blocked.HasValue());
+            REQUIRE(blocked.Value().has_value());
+            CHECK(blocked.Value()->stage == stage);
+            CHECK(blocked.Value()->filter == false);
+            CHECK(blocked.Value()->metric == 0.0);
+            CHECK_FALSE(probe.Poll(publication).Value().has_value());
+
+            const Physics::PhysicsCapsuleOverlapQuery overlap{.capsule = {.radiusMeters = 0.25F, .cylindricalHalfHeightMeters = 0.5F},
+                                                              .position = {0, 0, -5}};
+            REQUIRE(probe.Start(physics.capability, publication, stage, overlap, filter).Value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            const auto occupied = probe.Poll(publication);
+            REQUIRE(occupied.HasValue());
+            REQUIRE(occupied.Value().has_value());
+            CHECK(occupied.Value()->filter == false);
+
+            filter.excludedBody = fixture.body;
+            REQUIRE(probe.Start(physics.capability, publication, stage, ray, filter).Value());
+            QueryPhysicsProbe competing;
+            CHECK_FALSE(competing.Start(physics.capability, publication, stage, ray, filter).Value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            const auto clear = probe.Poll(publication);
+            REQUIRE(clear.HasValue());
+            REQUIRE(clear.Value().has_value());
+            CHECK(clear.Value()->filter == true);
+            CHECK(clear.Value()->metric == 1.0);
+        }
+
+        TEST_CASE("EQS Physics probe releases backpressure and retires stale or cancelled work", "[unit][ai][sight][eqs]") {
+            SightWorld physics;
+            const auto publication = ProbePublication(physics);
+            const auto stage = QueryStageId::Create(1).Value();
+            const Physics::PhysicsRayQuery ray{.origin = {0, 0, 0}, .maximumDistanceMeters = 10};
+            const Physics::PhysicsQueryFilter filter{.channel = VisibilityChannel()};
+            QueryPhysicsProbe probe;
+            REQUIRE(probe.Start(physics.capability, publication, stage, ray, filter).Value());
+            QueryPhysicsProbe competing;
+            CHECK_FALSE(competing.Start(physics.capability, publication, stage, ray, filter).Value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            REQUIRE(probe.Poll(publication).Value().has_value());
+            REQUIRE(competing.Start(physics.capability, publication, stage, ray, filter).Value());
+            auto replaced = publication;
+            ++replaced.identity.capabilityGeneration;
+            const auto stale = competing.Poll(replaced);
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == Physics::PhysicsErrors::QuerySnapshotStale.code.Value());
+            CHECK_FALSE(competing.Poll(publication).Value().has_value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+
+            REQUIRE(probe.Start(physics.capability, publication, stage, ray, filter).Value());
+            probe.Cancel();
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            CHECK_FALSE(probe.Poll(publication).Value().has_value());
+        }
+
         TEST_CASE("Sight rays preserve local separation near signed global coordinate limits", "[unit][ai][sight][canonical]") {
             SightScene scene;
             SightWorld physics;

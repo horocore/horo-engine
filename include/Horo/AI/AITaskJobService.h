@@ -16,8 +16,9 @@ namespace Horo::AI {
     public:
         virtual ~IAiTaskJob() = default;
         /** @brief Runs bounded cooperative computation on the Foundation worker pool.
-         * @param operation Exact detached task identity; no live Scene or blackboard borrows.
-         * @param cancellation Job cancellation ancestry; check at bounded intervals.
+         * @param operation Exact detached task identity and all operation/module/Scene cancellation ancestors;
+         * check IsCancellationRequested at bounded intervals. No live Scene or blackboard borrows.
+         * @param cancellation Foundation job cancellation ancestry; also check at bounded intervals.
          * @return Success, original typed failure, or Foundation JobCancelled acknowledgement.
          */
         [[nodiscard]] virtual Result<void> Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const = 0;
@@ -43,9 +44,9 @@ namespace Horo::AI {
     private:
         friend class AiTaskJobService;
         struct State;
-        /** @brief Invokes the pinned work, after service admission validated the pair.
+        /** @brief Invokes pinned work with all cancellation ancestors checked before and after the callback.
          * @param operation Detached execution identity. @param cancellation Cooperative job token.
-         * @return Original typed worker result.
+         * @return Original typed worker result, or Foundation JobCancelled when an ancestor was revoked.
          */
         [[nodiscard]] Result<void> Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const;
         std::shared_ptr<const State> state_;

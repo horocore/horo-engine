@@ -2,9 +2,12 @@
 
 #include "Horo/Animation/AnimationCookedAssets.h"
 #include "Horo/Animation/AnimationErrors.h"
+#include "Horo/Application/PlatformServicesProjectCook.h"
+#include "Horo/Application/PlatformServicesProjectSources.h"
 #include "Horo/Application/ProjectErrorDomain.h"
 #include "Horo/Assets/AssetErrorDomain.h"
 #include "Horo/Cli/CliErrors.h"
+#include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Foundation/Diagnostics/DiagnosticBundle.h"
 #include "Horo/Foundation/FoundationErrorDomains.h"
@@ -302,9 +305,77 @@ namespace Horo::Application::Internal {
                                                  Entry{&Extensions::ExtensionErrors::ScriptInvocationContextRevoked, Cancelled},
                                                  Entry{&Extensions::ExtensionErrors::ScriptInvocationAbandoned, Operation}};
 
+        constexpr std::array PlatformIdentityEntries{Entry{&PlatformServices::StableIdErrors::InvalidSalt, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::InvalidKey, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::InvalidLedger, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::StoredIdMismatch, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::HashCollision, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::DuplicateKey, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::Tombstoned, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::UnknownIdentity, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::InvalidProviderMapping, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::StaleReplacement, Validation},
+                                                     Entry{&PlatformServices::StableIdErrors::InvalidTransition, Validation}};
+
+        constexpr std::array
+            PlatformAchievementEntries{Entry{&PlatformServices::AchievementDefinitionErrors::UnsupportedVersion, Validation},
+                                       Entry{&PlatformServices::AchievementDefinitionErrors::CapacityExceeded, Validation},
+                                       Entry{&PlatformServices::AchievementDefinitionErrors::InvalidDefinition, Validation},
+                                       Entry{&PlatformServices::AchievementDefinitionErrors::DuplicateDefinition, Validation},
+                                       Entry{&PlatformServices::AchievementDefinitionErrors::UnknownIdentity, Validation},
+                                       Entry{&PlatformServices::AchievementDefinitionErrors::IncompleteRegistry, Validation},
+                                       Entry{&PlatformServices::AchievementDefinitionErrors::StaleIdentityRegistry, Validation},
+                                       Entry{&PlatformServices::AchievementDefinitionErrors::ImmutableContractChanged, Validation}};
+
+        constexpr std::array PlatformDefinitionEntries{Entry{&PlatformServices::PlatformDefinitionErrors::UnsupportedVersion, Validation},
+                                                       Entry{&PlatformServices::PlatformDefinitionErrors::CapacityExceeded, Validation},
+                                                       Entry{&PlatformServices::PlatformDefinitionErrors::InvalidDefinition, Validation},
+                                                       Entry{&PlatformServices::PlatformDefinitionErrors::DuplicateDefinition, Validation},
+                                                       Entry{&PlatformServices::PlatformDefinitionErrors::UnknownIdentity, Validation},
+                                                       Entry{&PlatformServices::PlatformDefinitionErrors::IncompleteRegistry, Validation},
+                                                       Entry{&PlatformServices::PlatformDefinitionErrors::InvalidCrossReference,
+                                                             Validation},
+                                                       Entry{&PlatformServices::PlatformDefinitionErrors::StaleIdentityRegistry,
+                                                             Validation},
+                                                       Entry{&PlatformServices::PlatformDefinitionErrors::ImmutableContractChanged,
+                                                             Validation}};
+
+        constexpr std::array
+            PlatformConfigurationEntries{Entry{&PlatformServices::PlatformProjectConfigurationErrors::UnsupportedVersion, Validation},
+                                         Entry{&PlatformServices::PlatformProjectConfigurationErrors::CapacityExceeded, Validation},
+                                         Entry{&PlatformServices::PlatformProjectConfigurationErrors::InvalidConfiguration, Validation},
+                                         Entry{&PlatformServices::PlatformProjectConfigurationErrors::InvalidContribution, Validation},
+                                         Entry{&PlatformServices::PlatformProjectConfigurationErrors::DuplicateContribution, Validation},
+                                         Entry{&PlatformServices::PlatformProjectConfigurationErrors::UntrustedContribution, Permission},
+                                         Entry{&PlatformServices::PlatformProjectConfigurationErrors::ProviderNotFound, Capability},
+                                         Entry{&PlatformServices::PlatformProjectConfigurationErrors::ProfileDenied, Permission},
+                                         Entry{&PlatformServices::PlatformProjectConfigurationErrors::RequiredCapabilityUnsupported,
+                                               Capability},
+                                         Entry{&PlatformServices::PlatformProjectConfigurationErrors::StaleReplacement, Validation}};
+
+        constexpr std::array PlatformCookEntries{Entry{&PlatformServices::PlatformProviderManifestCookErrors::InvalidInput, Validation},
+                                                 Entry{&PlatformServices::PlatformProviderManifestCookErrors::StaleGeneration, Validation},
+                                                 Entry{&PlatformServices::PlatformProviderManifestCookErrors::MissingMapping, Capability},
+                                                 Entry{&PlatformServices::PlatformProviderManifestCookErrors::InvalidMapping, Validation},
+                                                 Entry{&PlatformServices::PlatformProviderManifestCookErrors::Cancelled, Cancelled}};
+
+        constexpr std::array PlatformSourceEntries{Entry{&Assets::AssetSourceErrors::InvalidPath, Validation},
+                                                   Entry{&Assets::AssetSourceErrors::ReadFailed, Operation},
+                                                   Entry{&Assets::AssetSourceErrors::Limit, Validation},
+                                                   Entry{&Assets::AssetSourceErrors::Conflict, Validation},
+                                                   Entry{&Assets::AssetSourceErrors::Authority, Permission},
+                                                   Entry{&Assets::AssetSourceErrors::Cancelled, Cancelled},
+                                                   Entry{&Assets::AssetSourceErrors::DurabilityUnconfirmed, Operation}};
+
         /** @brief Composes the exact peer producer tables without native backend activation. */
         bool AddHostDependencies(std::vector<ModuleDescriptor> &modules, std::vector<Hosts::ErrorMapping> &mappings) {
-            return AddEntries(modules, mappings, "horo.physics", PhysicsEntries) && AddEntries(modules, mappings, "horo.mcp", McpEntries) &&
+            return AddEntries(modules, mappings, "horo.platform.services", PlatformIdentityEntries) &&
+                   AddEntries(modules, mappings, "horo.platform.services", PlatformAchievementEntries) &&
+                   AddEntries(modules, mappings, "horo.platform.services", PlatformDefinitionEntries) &&
+                   AddEntries(modules, mappings, "horo.platform.services", PlatformConfigurationEntries) &&
+                   AddEntries(modules, mappings, "horo.platform.services", PlatformCookEntries) &&
+                   AddEntries(modules, mappings, "horo.assets", PlatformSourceEntries) &&
+                   AddEntries(modules, mappings, "horo.physics", PhysicsEntries) && AddEntries(modules, mappings, "horo.mcp", McpEntries) &&
                    AddEntries(modules, mappings, "horo.security", SecurityEntries) &&
                    AddEntries(modules, mappings, "horo.extensions", ScriptModuleEntries) &&
                    AddEntries(modules, mappings, "horo.animation", AnimationEntries) &&
@@ -332,6 +403,7 @@ namespace Horo::Application::Internal {
                               {"project_read.cancelled", Cancelled},
                               {"project_read.deadline", Timeout}}) &&
                    AddDomain(modules, mappings, "horo.platform", Platform::NativeFileSystemErrorDomain(), Operation) &&
+                   AddDomain(modules, mappings, "horo.project.mutation", Editor::ProjectMutationErrorDomain(), Operation) &&
                    AddDomain(modules, mappings, "horo.application", ProjectErrorDomain(), Validation,
                              {{"project.metadata.read_failed", Operation},
                               {"project.migration.cancelled", Cancelled},

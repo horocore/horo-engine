@@ -59,6 +59,10 @@ namespace Horo::Extensions {
 
 namespace Horo::Editor {
 
+    namespace Detail {
+        class EditorControlMetadataCapture;
+    }
+
     struct EditorGuiContext;
     class EditorModalHost;
     class EditorSettingsService;
@@ -287,6 +291,7 @@ namespace Horo::Editor {
         void ReleaseFixedAttempt() noexcept;
 
         const EditorGuiContext &context_;
+        std::unique_ptr<Detail::EditorControlMetadataCapture> controlMetadata_;
         EditorModalHost *modalHost_;
         Input::InputRouter *inputRouter_;
         EditorSettingsService *settingsService_;

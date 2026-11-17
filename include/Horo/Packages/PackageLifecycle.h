@@ -73,6 +73,8 @@ namespace Horo::Packages {
         Extensions::ExtensionEditorHosts editorHosts; /**< Explicit activity/page publication owners, never discovered. */
         std::shared_ptr<PackageModuleRetirementQueue> moduleRetirements;
         /**< Explicit drain owner required for mixed-role hosts. */ /**< Explicit owning hosts, selected before activation. */
+        Extensions::ExtensionPlatformProviderCommit platformProviderCommit;
+        /**< Explicit provider publication owner; omitted means unavailable. Captured owners outlive package retirement. */
     };
 
     /** @brief Immutable published graph, actual registrations and real activation-generation evidence. */

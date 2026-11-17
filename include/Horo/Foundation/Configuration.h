@@ -5,6 +5,7 @@
  * @brief Typed configuration schema, deterministic source resolution, and immutable snapshots.
  */
 
+#include "Horo/Foundation/CredentialReference.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Result.h"
 
@@ -50,7 +51,8 @@ namespace Horo {
     enum class SettingValueType : std::uint8_t {
         Boolean,
         Integer,
-        String
+        String,
+        CredentialReference
     };
     enum class SettingScope : std::uint8_t {
         Engine,
@@ -80,7 +82,7 @@ namespace Horo {
         Public,
         SecretReference
     };
-    using SettingValue = std::variant<bool, std::int64_t, std::string>;
+    using SettingValue = std::variant<bool, std::int64_t, std::string, CredentialReference>;
     using ConfigurationRevision = std::uint64_t;
     enum class ConfigurationDomain : std::uint8_t {
         Engine,
@@ -133,6 +135,7 @@ namespace Horo {
         std::size_t maximumSourceLocationBytes = 1024;
         std::size_t maximumDocumentBytes = 4 * 1024 * 1024;
         std::size_t maximumEnvironmentBindings = 256;
+        std::size_t maximumNestingDepth = 16;
     };
 
     /** @brief Bounded committed-change notification; consumers re-query the authoritative snapshot. */
@@ -141,6 +144,29 @@ namespace Horo {
         ConfigurationRevision revision = 0;
         ConfigurationDomain domain = ConfigurationDomain::All;
         std::vector<SettingKey> changedKeys;
+    };
+
+    /** @brief Inclusive descriptor-owned integer validation bounds. */
+    struct SettingIntegerRange {
+        std::int64_t minimum;
+        std::int64_t maximum;
+    };
+
+    /** @brief Bounded declarative string rules shared by every configuration ingress. */
+    struct SettingStringRules {
+        std::size_t minimumBytes = 0;
+        std::size_t maximumBytes = 64 * 1024;
+        std::string requiredPrefix;
+        std::string allowedCharacters;    /**< Empty admits all valid UTF-8 scalar sequences. */
+        std::vector<std::string> choices; /**< Empty admits all values satisfying the other rules. */
+    };
+
+    using SettingValidation = std::variant<std::monostate, SettingIntegerRange, SettingStringRules>;
+
+    /** @brief Inert owner-declared localization identity, interpreted by each host's presentation adapter. */
+    struct SettingLabelKey {
+        std::string namespaceId;
+        std::string key;
     };
 
     /** @brief Schema descriptor registered by a composition root before resolution begins. */
@@ -152,6 +178,9 @@ namespace Horo {
         ReloadPolicy reloadPolicy;
         SettingSensitivity sensitivity;
         std::optional<ConfigurationSourcePolicy> sourcePolicy;
+        bool readOnly = false; /**< Rejects draft edits while retaining explicit source resolution. */
+        SettingValidation validation;
+        std::optional<SettingLabelKey> label;
     };
 
     /** @brief One typed source candidate with safe provenance metadata. */
@@ -178,18 +207,50 @@ namespace Horo {
         std::string variable;
     };
 
+    /** @brief Validated supplied value retained to explain precedence without repeating source reads. */
+    class ConfigurationCandidate final {
+    public:
+        /** @brief Owns a source view without copying its captured value. @param source Canonical precedence source.
+         * @param input Non-null immutable input owner, including aliasing owners of a captured source set. */
+        ConfigurationCandidate(ConfigurationSource source, std::shared_ptr<const ConfigurationInputValue> input)
+            : source_(source), input_(std::move(input)) {
+            HORO_INVARIANT_MSG(input_ != nullptr, "A configuration candidate requires an immutable input owner.");
+        }
+
+        /** @brief Returns source precedence metadata. @return Canonical source. */
+        [[nodiscard]] ConfigurationSource Source() const noexcept {
+            return source_;
+        }
+
+        /** @brief Borrows the captured value for this owning view's lifetime. @return Immutable source value. */
+        [[nodiscard]] const SettingValue &Value() const noexcept {
+            return input_->value;
+        }
+
+        /** @brief Borrows the captured safe provenance. @return Immutable optional source location. */
+        [[nodiscard]] const std::optional<SourceLocation> &Location() const noexcept {
+            return input_->location;
+        }
+
+    private:
+        ConfigurationSource source_;
+        std::shared_ptr<const ConfigurationInputValue> input_;
+    };
+
     /** @brief Winning typed value and its safe source provenance. */
     struct ResolvedSetting {
         SettingValue value;
         ConfigurationSource source = ConfigurationSource::SchemaDefault;
         std::optional<SourceLocation> location;
         SettingSensitivity sensitivity = SettingSensitivity::Public;
+        std::vector<ConfigurationCandidate> candidates; /**< Precedence-ordered supplied values, including the schema default. */
     };
 
     /** @brief Draft transaction formed against one immutable configuration revision. */
     struct ConfigurationDraft {
         ConfigurationRevision baseRevision = 0;
         std::unordered_map<SettingKey, SettingValue, SettingKeyHash> proposedValues;
+        ConfigurationSource source = ConfigurationSource::Session;
     };
 
     /** @brief Immutable, cheap-to-copy reference to one resolved configuration revision. */
@@ -205,11 +266,15 @@ namespace Horo {
         [[nodiscard]] const ResolvedSetting *FindResolved(const SettingKey &key) const noexcept;
         /** @brief Serializes a deterministic versioned document without secret material. @return Canonical JSON text. */
         [[nodiscard]] std::string ToJson() const;
+        /** @brief Serializes only captured values from one source for host persistence. @param source Exact authored source.
+         * @return Deterministic versioned document, retaining opaque references and excluding unset defaults. */
+        [[nodiscard]] std::string SourceToJson(ConfigurationSource source) const;
 
     private:
         struct Data {
             ConfigurationRevision revision = 0;
             std::unordered_map<SettingKey, ResolvedSetting, SettingKeyHash> values;
+            std::shared_ptr<const ConfigurationResolutionRequest> inputs;
         };
         friend class ConfigurationResolver;
         friend class ConfigurationService;
@@ -232,8 +297,13 @@ namespace Horo {
         [[nodiscard]] const SettingDescriptor *FindDescriptor(const SettingKey &key) const noexcept;
         /** @brief Reports whether registration is complete. */
         [[nodiscard]] bool IsSealed() const noexcept;
+        /** @brief Copies descriptors in stable key order for an editing session. @return Owned immutable metadata copies. */
+        [[nodiscard]] std::vector<SettingDescriptor> Descriptors() const;
         /** @brief Tests a value against a primitive schema type. */
         [[nodiscard]] static bool MatchesType(SettingValueType type, const SettingValue &value);
+        /** @brief Tests descriptor source admission using the canonical compatibility mapping. @param descriptor Sealed metadata.
+         * @param source Candidate source. @return True when explicitly or compatibly admitted. */
+        [[nodiscard]] static bool AllowsSource(const SettingDescriptor &descriptor, ConfigurationSource source) noexcept;
 
     private:
         friend class ConfigurationResolver;
@@ -287,8 +357,53 @@ namespace Horo {
     /** @brief Composition-root-owned authority that atomically replaces validated configuration snapshots. */
     class ConfigurationService {
     public:
+        /** @brief Owner-thread prepared write retaining exclusive writer authority until commit or destruction.
+         * @details Snapshot reads remain available. The service must outlive the transaction. A transaction must be
+         * committed or destroyed on its creating thread before another write is attempted on that thread.
+         */
+        class PreparedCommit final {
+        public:
+            PreparedCommit(PreparedCommit &&) noexcept = default;
+            PreparedCommit &operator=(PreparedCommit &&) noexcept = default;
+            PreparedCommit(const PreparedCommit &) = delete;
+            PreparedCommit &operator=(const PreparedCommit &) = delete;
+            /** @brief Returns the completely validated candidate for host persistence. @return Captured immutable candidate. */
+            [[nodiscard]] ConfigurationSnapshot Candidate() const;
+            /** @brief Publishes the prepared state and releases writer authority before notifications. @return Success or invalid
+             * transaction. */
+            [[nodiscard]] Result<void> Commit();
+
+        private:
+            friend class ConfigurationService;
+            PreparedCommit(ConfigurationService &owner, std::unique_lock<std::mutex> lock, ConfigurationSnapshot candidate,
+                           ConfigurationChangedEvent event);
+            ConfigurationService *owner_;
+            std::unique_lock<std::mutex> lock_;
+            ConfigurationSnapshot candidate_;
+            ConfigurationChangedEvent event_;
+        };
+
         explicit ConfigurationService(ConfigurationSchema schema, EngineDataBus *events = nullptr);
+        /** @brief Constructs the authority from explicitly captured initial sources without a change notification.
+         * @param schema Valid sealed schema. @param events Borrowed optional process bus. @param initial Valid captured source inputs.
+         * @pre The composition root has validated the initial source request. */
+        ConfigurationService(ConfigurationSchema schema, EngineDataBus *events, const ConfigurationResolutionRequest &initial);
         [[nodiscard]] ConfigurationSnapshot Snapshot() const;
+        /** @brief Returns the service-owned sealed schema. @return Borrowed metadata valid for the service lifetime. */
+        [[nodiscard]] const ConfigurationSchema &Schema() const noexcept;
+        /**
+         * @brief Builds an immutable preview without changing active configuration or publishing events.
+         * @param draft Proposed source values against the active revision.
+         * @return Complete preview snapshot or typed validation/stale failure.
+         */
+        [[nodiscard]] Result<ConfigurationSnapshot> Preview(const ConfigurationDraft &draft) const;
+        /**
+         * @brief Validates and reserves one write so a host can durably prepare its domain without a stale publication race.
+         * @param draft Proposed source transaction and captured base revision.
+         * @return Owner-thread prepared commit. Destruction cancels without changing configuration or publishing events.
+         * @note All configuration writers share this gate. Persistence runs outside the snapshot/registry mutex.
+         */
+        [[nodiscard]] Result<PreparedCommit> Prepare(const ConfigurationDraft &draft);
         /** @brief Checks a draft against the current revision and schema without mutating the active snapshot. */
         [[nodiscard]] Result<void> Validate(const ConfigurationDraft &draft) const;
         /** @brief Atomically commits a draft if valid and matching baseRevision. */
@@ -329,6 +444,9 @@ namespace Horo {
         };
 
         ConfigurationSchema m_schema;
+        // Serializes writers across host persistence and publication. Prepared commits are same-thread RAII owners.
+        // Snapshot readers and source staging use m_mutex independently. Owners drain transactions before service shutdown.
+        std::mutex m_writerMutex;
         mutable std::mutex m_mutex;
         std::shared_ptr<const ConfigurationSnapshot::Data> m_active;
         std::optional<PendingReload> m_pendingReload;

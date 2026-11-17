@@ -306,6 +306,15 @@ namespace Horo::AI {
 
         /** @brief Returns the deepest active state or invalid when unstarted/terminal. @return Stable authored identity. */
         [[nodiscard]] DecisionNodeId ActiveState() const noexcept;
+
+        /** @brief Reads committed transitions from the last admitted step in execution order.
+         * @return Borrowed stable identities, valid until the next admitted Step or Restart.
+         * @details Rejected cycle edges and failed transition actions are excluded. Earlier commits survive a later failure.
+         */
+        [[nodiscard]] std::span<const DecisionNodeId> CommittedTransitions() const noexcept {
+            return std::span{committedTransitions_}.first(committedTransitionCount_);
+        }
+
         StateMachineInstance(const StateMachineInstance &) = delete;
         StateMachineInstance &operator=(const StateMachineInstance &) = delete;
 
@@ -346,6 +355,8 @@ namespace Horo::AI {
         Path path_{};
         std::size_t depth_{};
         std::optional<std::uint64_t> lastTick_;
+        std::array<DecisionNodeId, StateMachineLimits::TransitionsPerStep> committedTransitions_{};
+        std::size_t committedTransitionCount_{};
         std::array<AiTaskState, StateMachineLimits::States> childOutcomes_{};
         StateMachineActions *actions_{}; /**< Borrowed only while Step holds its scope guard. */
         bool evaluating_{};

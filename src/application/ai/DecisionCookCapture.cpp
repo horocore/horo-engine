@@ -1,6 +1,7 @@
 #include "DecisionCookState.h"
 
 #include <algorithm>
+#include <array>
 
 namespace Horo::Application::DecisionCookDetail {
     namespace {
@@ -43,6 +44,15 @@ namespace Horo::Application::DecisionCookDetail {
             }
         }
 
+        /** @brief Rebase the typed Utility root and provider diagnostics to the authoritative source path. */
+        void RebaseUtility(AI::UtilityDecisionSource &utility, const SourceLocation &location) {
+            RebaseRequirements(utility.requirements, location);
+            for (auto &option : utility.options) {
+                option.provider.source = location;
+                RebaseRequirements(option.provider.requirements, location);
+            }
+        }
+
         Result<AI::DecisionGraphSource> Decode(const Assets::AssetCookPinnedSource &file, const State &state) {
             AI::DecisionGraphAssetId root;
             auto decoded = AI::DecisionPlanCodec::DecodeSource(file.bytes, root, {.compilation = state.limits});
@@ -52,15 +62,18 @@ namespace Horo::Application::DecisionCookDetail {
                 return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
             auto graphs = std::move(decoded).Value();
             auto source = std::move(graphs.front());
-            const bool tree = std::holds_alternative<std::shared_ptr<const AI::BehaviorTreeAsset>>(source.body);
-            if (tree != (file.record.type.Value() == DecisionBehaviorTreeSourceType))
+            constexpr std::array types{DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType, DecisionUtilitySourceType};
+            const bool tree = source.body.index() == 0;
+            if (file.record.type.Value() != types[source.body.index()])
                 return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
             source.location = {std::string{file.record.sourcePath.String()}, 0, 0};
             if (tree) {
                 if (auto rebased = RebaseTree(source, source.location); rebased.HasError())
                     return Result<AI::DecisionGraphSource>::Failure(rebased.ErrorValue());
-            } else
-                RebaseMachine(std::get<AI::StateMachineAssetDescriptor>(source.body), source.location);
+            } else if (auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&source.body))
+                RebaseMachine(*machine, source.location);
+            else
+                RebaseUtility(std::get<AI::UtilityDecisionSource>(source.body), source.location);
             return Result<AI::DecisionGraphSource>::Success(std::move(source));
         }
 
@@ -97,7 +110,8 @@ namespace Horo::Application::DecisionCookDetail {
         if (registry.Records().size() > 16384)
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         for (const auto &record : registry.Records()) {
-            if (record.type.Value() != DecisionBehaviorTreeSourceType && record.type.Value() != DecisionStateMachineSourceType)
+            if (record.type.Value() != DecisionBehaviorTreeSourceType && record.type.Value() != DecisionStateMachineSourceType &&
+                record.type.Value() != DecisionUtilitySourceType)
                 continue;
             if (auto captured = CaptureRecord(state, record, cancellation); captured.HasError())
                 return captured;

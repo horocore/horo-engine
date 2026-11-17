@@ -37,6 +37,10 @@ namespace Horo::Extensions {
     struct EditorThemeFrame;
 }  // namespace Horo::Extensions
 
+namespace Horo::PlatformServices {
+    class IPlatformDiagnostics;
+}
+
 namespace Horo::Editor {
     struct NavigationViewportAccess;
     class EditorDataBus;
@@ -70,6 +74,7 @@ namespace Horo::Editor {
         std::weak_ptr<IXRSimulatorArtifacts>
             xrSimulatorArtifacts{};      /**< Same admitted project source/publication port, revoked before retirement. */
         XRSimulatorModel *xrSimulator{}; /**< Explicit application model; invalidated when panel detaches. */
+        PlatformServices::IPlatformDiagnostics *platformDiagnostics{}; /**< Host-owned owner-lane diagnostics capability. */
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

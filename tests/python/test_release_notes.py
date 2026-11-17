@@ -4,6 +4,7 @@
 import json
 import io
 import os
+import re
 from contextlib import redirect_stderr
 import sys
 import tarfile
@@ -57,6 +58,23 @@ def write_archive_fixture(root: Path, snapshot: bytes) -> tuple[Path, Path]:
 
 
 class ReleaseNotesTests(unittest.TestCase):
+    def test_repository_candidate_can_freeze_its_exact_release_notes(self):
+        repository = Path(__file__).resolve().parents[2]
+        cmake = (repository / "CMakeLists.txt").read_text(encoding="utf-8")
+        versions = re.findall(r'^set\(HORO_ENGINE_VERSION "([^"]+)"\)$', cmake, re.MULTILINE)
+        self.assertEqual(len(versions), 1, "Expected one authoritative engine version")
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            errors = io.StringIO()
+            with patch.object(Path, "cwd", return_value=output), redirect_stderr(errors):
+                result = parse_main(["--source", str(repository / "CHANGELOG.md"),
+                                     "--version", versions[0], "--product", "horo-editor"])
+            self.assertEqual(result, 0, errors.getvalue())
+            snapshot = (output / "generated" / "ReleaseNotesSnapshot.json").read_bytes()
+            decoded = json.loads(snapshot)
+            verify(snapshot, "v" + versions[0], cmake, decoded["markdown"])
+            self.assertIn("v" + versions[0], (output / "generated" / "GeneratedBuildInfo.h").read_text(encoding="utf-8"))
+
     def test_exact_version_and_unreleased_exclusion(self):
         entries = parse_changelog(SOURCE)
         self.assertEqual([entry["version"] for entry in entries], ["0.2.0", "0.1.0"])

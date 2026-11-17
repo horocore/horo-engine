@@ -103,7 +103,7 @@ namespace Horo::AI {
                 return false;
             if (!node.call)
                 return true;
-            return node.call->asset.IsValid() && node.call->kind < DecisionPlanKind::Utility && node.call->schema.IsValid();
+            return node.call->asset.IsValid() && node.call->kind < DecisionPlanKind::Count && node.call->schema.IsValid();
         }
 
         [[nodiscard]] bool ValidControlBounds(const BehaviorTreeNode &node) noexcept {

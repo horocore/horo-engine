@@ -1,189 +1,12 @@
-#include "AudioStreamingTestFixture.h"
-#include "AudioVoiceRenderTestFixture.h"
-#include "Horo/Audio/Internal/AudioFrontendComposition.h"
+#include "AudioFrontendTestFixture.h"
 #include "Horo/Editor/AudioEditorDocument.h"
 
 namespace Horo::Tests::VoiceRenderFixture {
     namespace {
-        /** @brief Records actual selected Null output while delegating every lifecycle rule to the production peer. */
-        class CapturingOutput final : public Audio::Backend::AudioBackend {
-        public:
-            std::unique_ptr<Audio::Backend::NullAudioBackend> null =
-                std::move(Audio::Backend::CreateNullAudioBackend({MixerFixture::Owner, 1, 1, 1}).Value());
-            std::array<float, 16> left{};
-            Audio::Backend::RenderPort port;
-            bool primingSilent{};
-            bool quiescingSilent{};
-            bool rejectOpenedFormat{};
-            std::size_t callbackEntries{};
-
-            AudioBackendKind Kind() const noexcept override {
-                return null->Kind();
-            }
-
-            AudioRuntimeId Owner() const noexcept override {
-                return null->Owner();
-            }
-
-            Result<Audio::Backend::OperationId> Begin(const Audio::Backend::Request &request,
-                                                      const AudioMonotonicTimestamp &deadline) override {
-                if (const auto *start = std::get_if<Audio::Backend::Start>(&request)) {
-                    port = start->render;
-                    return null->Begin(Audio::Backend::Start{start->epoch, {this, Process}}, deadline);
-                }
-                return null->Begin(request, deadline);
-            }
-
-            Result<void> CommitRendering(const AudioDeviceEpoch &epoch) override {
-                return null->CommitRendering(epoch);
-            }
-
-            Result<Audio::Backend::CancelDisposition> Cancel(const Audio::Backend::OperationId &operation) override {
-                return null->Cancel(operation);
-            }
-
-            Result<std::optional<Audio::Backend::Completion>> Poll(const Audio::Backend::OperationId &operation) override {
-                auto completion = null->Poll(operation);
-                if (!rejectOpenedFormat || completion.HasError())
-                    return completion;
-                auto captured = std::move(completion).Value();
-                if (captured.has_value())
-                    if (auto *opened = std::get_if<Audio::Backend::Opened>(&captured->outcome))
-                        opened->format.callbackFrames = 32;
-                return Result<std::optional<Audio::Backend::Completion>>::Success(std::move(captured));
-            }
-
-            Result<void> AcknowledgeCompletion(const Audio::Backend::OperationId &operation) override {
-                return null->AcknowledgeCompletion(operation);
-            }
-
-            std::size_t DrainEvents(const std::span<Audio::Backend::Event> events) noexcept override {
-                return null->DrainEvents(events);
-            }
-
-            Audio::Backend::AudioCallbackViolationDrain DrainSafetyViolations(
-                const std::span<Audio::Backend::AudioCallbackViolation> records) noexcept override {
-                return null->DrainSafetyViolations(records);
-            }
-
-            static Audio::Backend::RenderResult Process(void *context, const Audio::Backend::RenderInvocation &invocation) noexcept {
-                auto &self = *static_cast<CapturingOutput *>(context);
-                ++self.callbackEntries;
-                const auto rendered = self.port.process(self.port.context, invocation);
-                bool silent = true;
-                for (std::size_t index = 0; index < self.left.size(); ++index) {
-                    self.left[index] = invocation.output.planes[0][index];
-                    silent = silent && self.left[index] == 0.0F;
-                }
-                if (invocation.phase == Audio::Backend::RenderPhase::Priming)
-                    self.primingSilent = silent;
-                if (invocation.phase == Audio::Backend::RenderPhase::Quiescing)
-                    self.quiescingSilent = silent;
-                return rendered;
-            }
-        };
-
-        /** @brief Exact discovery facts belong to explicit host composition, not the editor document. */
-        Internal::AudioFrontendOutput Output(std::unique_ptr<CapturingOutput> backend) {
-            const AudioDeviceEpoch epoch{{MixerFixture::Owner, 1, 1}, 1, Scope.epoch};
-            AudioDeviceSnapshot devices{.owner = MixerFixture::Owner,
-                                        .backend = AudioBackendKind::NullAudio,
-                                        .revision = 1,
-                                        .devices = {{epoch.device, "Null Audio", AudioDeviceClass::Headless}},
-                                        .defaults = {epoch.device, epoch.device, epoch.device}};
-            Audio::Backend::Open open{epoch, {epoch.device, {48'000, MixerFixture::Profile().outputLayout}, {}, {16, 16, 16}}};
-            return {std::move(backend), std::move(open), std::move(devices), 1};
-        }
-
-        /** @brief Completes exact Open/Start/Ready progression for a host-owned preview or document. */
-        template <typename Owner> void CompleteOutputStart(Owner &owner, CapturingOutput &output) {
-            REQUIRE(output.null->AdvanceControl().HasValue());
-            REQUIRE(owner.Pump({1, 1'000'000'000}).HasValue());
-            REQUIRE(output.null->AdvanceControl().HasValue());
-            REQUIRE(owner.Pump({1, 1'000'000'000}).HasValue());
-            REQUIRE(output.null->AdvanceCallback().HasValue());
-            REQUIRE(owner.Pump({1, 1'000'000'000}).HasValue());
-        }
-
-        /** @brief Keeps production PCM preparation and all callback/storage owners in normal dependency order. */
-        struct PreviewRig final {
-            std::shared_ptr<AudioVoiceStateMachine> registry = Registry();
-            Audio::PlaybackTest::SampleBuffers samples;
-            CapturingOutput *output{};
-            std::unique_ptr<AudioFrontend> frontend;
-
-            PreviewRig() {
-                auto backend = std::make_unique<CapturingOutput>();
-                output = backend.get();
-                auto candidate = Output(std::move(backend));
-                auto voice = AudioVoiceRenderRuntime::CreateResident(registry, samples.Source(), Playback(), Descriptor());
-                REQUIRE(voice.HasValue());
-                Internal::AudioFrontendResources resources{Scope, Staging(), std::move(voice).Value(), Runtime(), Plan(Asset()), Request()};
-                auto created = Internal::AudioFrontendComposition::Create(resources, candidate);
-                REQUIRE(created.HasValue());
-                frontend = std::move(created).Value();
-            }
-
-            ~PreviewRig() {
-                if (!frontend)
-                    return;
-                frontend->Close();
-                for (std::size_t step = 0; step < 16 && frontend->Snapshot().phase != AudioFrontendPhase::Closed; ++step) {
-                    (void)frontend->Pump({1, 1'000'000'000});
-                    (void)output->null->AdvanceControl();
-                    const auto phase = output->null->State();
-                    if (phase == Audio::Backend::NullAudioBackendState::Priming ||
-                        phase == Audio::Backend::NullAudioBackendState::Quiescing)
-                        (void)output->null->AdvanceCallback();
-                }
-            }
-
-            void Activate() {
-                REQUIRE(frontend->Start({1, 1'000'000'000}).HasValue());
-                REQUIRE(output->null->AdvanceControl().HasValue());
-                REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
-                REQUIRE(output->null->AdvanceControl().HasValue());
-                REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
-                CHECK(frontend->Snapshot().phase == AudioFrontendPhase::Starting);
-                REQUIRE(output->null->AdvanceCallback().HasValue());
-                REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
-                REQUIRE(frontend->Snapshot().phase == AudioFrontendPhase::Active);
-            }
-
-            void Control(const AudioVoiceControl operation) {
-                const auto admitted = frontend->Transport({frontend->Snapshot().voice, operation});
-                REQUIRE(admitted.HasValue());
-                REQUIRE(admitted.Value().status == AudioCommandStagingStatus::Ok);
-                REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
-                REQUIRE(output->null->AdvanceCallback().HasValue());
-            }
-        };
-
         Editor::DocumentIdentity Document() {
             return {{Editor::DocumentKind::Asset, Editor::SourceDocumentId::Parse("audio/preview.horoaudio").Value()},
                     Editor::DocumentInstanceId::Create(1).Value()};
         }
-
-        /** @brief Completes asynchronous fixture teardown even when a fatal test assertion unwinds. */
-        template <typename Owner, typename Phase> struct RetireOnExit final {
-            Owner &owner;
-            CapturingOutput &output;
-            Phase closed;
-
-            ~RetireOnExit() {
-                owner.Close();
-                for (std::size_t step = 0; step < 16 && owner.Snapshot().phase != closed; ++step) {
-                    (void)owner.Pump({1, 1'000'000'000});
-                    if (owner.Snapshot().phase == closed)
-                        break;  // Document pumping may already have destroyed the output owner.
-                    (void)output.null->AdvanceControl();
-                    const auto phase = output.null->State();
-                    if (phase == Audio::Backend::NullAudioBackendState::Priming ||
-                        phase == Audio::Backend::NullAudioBackendState::Quiescing)
-                        (void)output.null->AdvanceCallback();
-                }
-            }
-        };
 
         TEST_CASE("AudioFrontend closes partial startup without activating a hidden replacement", "[audio][frontend][rollback]") {
             PreviewRig rig;
@@ -322,68 +145,6 @@ namespace Horo::Tests::VoiceRenderFixture {
             CHECK(moved.Reload(4, 5).HasError());
         }
 
-        /** @brief Pins real job/provider dependencies through every stream port and worker join. */
-        struct StreamHost final {
-            JobSystem jobs{{.workerCount = 1}};
-            Audio::StreamingTests::PackageFixture package;
-            std::shared_ptr<AudioStreamingService> service{Audio::StreamingTests::Service(jobs, package)};
-
-            ~StreamHost() {
-                (void)service->Shutdown();
-            }
-        };
-
-        TEST_CASE("AudioFrontend retires stream ports and workers only after native detachment", "[audio][frontend][stream]") {
-            auto host = std::make_shared<StreamHost>();
-            auto admitted = host->service->Admit(Audio::StreamingTests::Request());
-            REQUIRE(admitted.HasValue());
-            const auto stream = admitted.Value();
-            auto conversion = Playback().plan.Descriptor();
-            conversion.channels = 2;
-            auto registry = Registry();
-            auto createdVoice =
-                AudioVoiceRenderRuntime::CreateStream(registry, host->service, stream, conversion, CoefficientBytes, Descriptor());
-            REQUIRE(createdVoice.HasValue());
-            auto backend = std::make_unique<CapturingOutput>();
-            auto *output = backend.get();
-            auto candidate = Output(std::move(backend));
-            Internal::AudioFrontendResources resources{Scope,         Staging(),     std::move(createdVoice).Value(),
-                                                       Runtime(),     Plan(Asset()), Request(),
-                                                       host->service, stream,        host};
-            auto created = Internal::AudioFrontendComposition::Create(resources, candidate);
-            REQUIRE(created.HasValue());
-            auto frontend = std::move(created).Value();
-            RetireOnExit retirement{*frontend, *output, AudioFrontendPhase::Closed};
-            REQUIRE(Audio::StreamingTests::PumpUntil(*host->service, stream, 4));
-            REQUIRE(frontend->Start({1, 1'000'000'000}).HasValue());
-            CompleteOutputStart(*frontend, *output);
-            REQUIRE(frontend->Transport({frontend->Snapshot().voice, AudioVoiceControl::Start}).Value().status ==
-                    AudioCommandStagingStatus::Ok);
-            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
-            REQUIRE(output->null->AdvanceCallback().HasValue());
-            CHECK(std::any_of(output->left.begin(), output->left.end(), [](const float sample) {
-                return sample > 0.0F;
-            }));
-            frontend->Close();
-            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
-            REQUIRE(output->null->AdvanceControl().HasValue());
-            CHECK(host->service->Retire(stream).HasError());  // Retained voice port forbids early worker/ring retirement.
-            REQUIRE(output->null->AdvanceCallback().HasValue());
-            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
-            REQUIRE(output->null->AdvanceControl().HasValue());
-            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
-            REQUIRE(output->null->AdvanceControl().HasValue());
-            REQUIRE(frontend->Pump({1, 1'000'000'000}).HasValue());
-            CHECK(frontend->Snapshot().phase == AudioFrontendPhase::Closed);
-            CHECK(host->service->Snapshot(stream).HasError());
-            CHECK(registry->Snapshot(frontend->Snapshot().voice).HasError());
-            CHECK(host->package.opens.load() == 1);
-            CHECK(host->package.releases.load() == 1);
-            const std::weak_ptr<StreamHost> lease = host;
-            host.reset();
-            CHECK(lease.expired());
-        }
-
         TEST_CASE("AudioFrontend performs production PCM transport and native proven teardown", "[audio][frontend][preview]") {
             PreviewRig rig;
             rig.Activate();
@@ -424,6 +185,49 @@ namespace Horo::Tests::VoiceRenderFixture {
                 CHECK(result.disposition == AudioFrontendOperationDisposition::Applied);
             }
             CHECK(rig.frontend->DrainTransportResults(results) == 0);
+        }
+
+        TEST_CASE("Null device loss closes active playback and reconciles pending controls before releasing voice ownership",
+                  "[audio][frontend][lifecycle][qualification]") {
+            PreviewRig rig;
+            rig.Activate();
+            rig.Control(AudioVoiceControl::Start);
+            const auto handle = rig.frontend->Snapshot().voice;
+            const auto pending = rig.frontend->Transport({handle, AudioVoiceControl::Pause});
+            REQUIRE(pending.HasValue());
+            REQUIRE(pending.Value().status == AudioCommandStagingStatus::Ok);
+            REQUIRE(rig.output->null->InjectDeviceLoss(Audio::Backend::DeviceLossCause::Disconnected).HasValue());
+            const auto loss = rig.frontend->Pump({1, 1'000'000'000});
+            REQUIRE(loss.HasError());
+            CHECK(loss.ErrorValue().code.Value() == AudioErrors::DeviceLost.code.Value());
+            CHECK(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closing);
+            CHECK_FALSE(rig.frontend->Snapshot().terminalVoice.has_value());
+            CHECK(rig.registry->Snapshot(handle).HasValue());
+            CHECK(rig.frontend->Transport({handle, AudioVoiceControl::Resume}).HasError());
+            REQUIRE(rig.output->null->AdvanceControl().HasValue());
+            REQUIRE(rig.output->null->AdvanceCallback().HasValue());
+            CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasError());
+            CHECK(rig.registry->Snapshot(handle).HasValue());  // Silence/quiescence alone cannot release a voice.
+            CHECK_FALSE(rig.frontend->Snapshot().terminalVoice.has_value());
+            REQUIRE(rig.output->null->AdvanceControl().HasValue());
+            CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasError());
+            REQUIRE(rig.output->null->AdvanceControl().HasValue());
+            CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasError());
+            REQUIRE(rig.frontend->Snapshot().phase == AudioFrontendPhase::Closed);
+            REQUIRE(rig.frontend->Snapshot().terminalVoice.has_value());
+            CHECK(rig.frontend->Snapshot().terminalVoice->voice == handle);
+            CHECK(rig.frontend->Snapshot().terminalVoice->state == AudioVoiceState::Cancelled);
+            CHECK(rig.frontend->Snapshot().terminalVoice->terminalReason == AudioVoiceTerminalReason::Cancelled);
+            CHECK(rig.registry->Snapshot(handle).HasError());
+            CHECK(rig.frontend->Snapshot().pendingOperations == 0);
+            std::array<AudioFrontendOperationResult, 2> results;
+            REQUIRE(rig.frontend->DrainTransportResults(results) == 2);
+            CHECK(results[0].disposition == AudioFrontendOperationDisposition::Applied);
+            CHECK(results[1].acceptedSequence == pending.Value().sequence);
+            CHECK(results[1].disposition == AudioFrontendOperationDisposition::Cancelled);
+            CHECK(rig.frontend->DrainTransportResults(results) == 0);
+            CHECK(rig.output->null->AdvanceCallback().HasError());
+            CHECK(rig.frontend->Pump({1, 1'000'000'000}).HasValue());
         }
 
         TEST_CASE("Audio document fences source changes and retains asynchronous preview until close", "[editor][audio][document]") {

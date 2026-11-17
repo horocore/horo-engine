@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-set(HORO_ENGINE_VERSION "0.3.0")
+set(HORO_ENGINE_VERSION "0.4.0")
 
 project(HoroEngine VERSION ${HORO_ENGINE_VERSION} LANGUAGES CXX C)
 
@@ -23,7 +23,7 @@ if(NOT HORO_GIT_REVISION_RESULT EQUAL 0 OR HORO_SOURCE_REVISION STREQUAL "")
 endif()
 
 set(HORO_GAMEPLAY_SDK_FINGERPRINT
-    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk29-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
+    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk30-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
 )
 set(HORO_EXTENSION_SDK_VERSION "${HORO_ENGINE_VERSION}")
 set(HORO_EXTENSION_ABI_MAJOR_VERSION 1)
@@ -131,7 +131,11 @@ set_target_properties(HoroNetworkApi PROPERTIES EXPORT_NAME NetworkApi POSITION_
 set_target_properties(HoroSaveApi PROPERTIES EXPORT_NAME SaveApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroGameplayApi PROPERTIES EXPORT_NAME GameplayApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroAI PROPERTIES EXPORT_NAME AI POSITION_INDEPENDENT_CODE ON)
+set_target_properties(HoroVisualAccessibility PROPERTIES EXPORT_NAME VisualAccessibility POSITION_INDEPENDENT_CODE ON)
+set_target_properties(HoroCaptionTransport PROPERTIES EXPORT_NAME CaptionTransport)
+set_target_properties(HoroGameplayAccessibility PROPERTIES EXPORT_NAME GameplayAccessibility POSITION_INDEPENDENT_CODE ON)
 export(TARGETS HoroFoundation HoroSecurityEnvelope HoroNetworkApi HoroSaveApi HoroGameplayApi HoroAI
+       HoroVisualAccessibility HoroGameplayAccessibility HoroCaptionTransport
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayTargets.cmake")
 # Physics is an explicit SDK component. The minimal gameplay export remains solver-free;
@@ -152,6 +156,7 @@ set_target_properties(HoroPhysics PROPERTIES EXPORT_NAME Physics)
 set_target_properties(HoroPhysicsModel PROPERTIES EXPORT_NAME PhysicsModel)
 set_target_properties(HoroAssets PROPERTIES EXPORT_NAME Assets)
 set_target_properties(HoroRuntime PROPERTIES EXPORT_NAME Runtime)
+set_target_properties(HoroRuntimeConsole PROPERTIES EXPORT_NAME RuntimeConsole POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroGameplayVfxIntegration PROPERTIES EXPORT_NAME GameplayVfxIntegration)
 set_target_properties(HoroVfxApi PROPERTIES EXPORT_NAME VfxApi)
 set_target_properties(HoroVfxSimulationData PROPERTIES EXPORT_NAME VfxSimulationData)
@@ -178,6 +183,9 @@ export(TARGETS ${HORO_GAMEPLAY_COMMON_SDK_TARGETS}
 export(TARGETS ${HORO_GAMEPLAY_UI_SDK_TARGETS}
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayRuntimeUiTargets.cmake")
+export(TARGETS HoroRuntimeConsole
+       NAMESPACE HoroEngine::
+       FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayRuntimeConsoleTargets.cmake")
 export(TARGETS ${HORO_GAMEPLAY_PHYSICS_SDK_TARGETS}
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayPhysicsTargets.cmake")
@@ -224,6 +232,9 @@ horo_collect_directory_targets(HORO_DEPENDENCY_POLICY_TARGETS
 get_property(HORO_DEPENDENCY_POLICY_LIBRARY_TARGETS GLOBAL PROPERTY HORO_HEADER_BOUNDARY_TARGETS)
 list(APPEND HORO_DEPENDENCY_POLICY_TARGETS ${HORO_DEPENDENCY_POLICY_LIBRARY_TARGETS})
 horo_verify_dependency_direction(TARGETS ${HORO_DEPENDENCY_POLICY_TARGETS})
+include(HoroCliHeadlessPolicy)
+horo_verify_cli_headless_dependencies(horo-engine)
+horo_verify_cli_headless_dependencies(horopak)
 
 if(HORO_BUILD_EXAMPLES AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt")
     add_subdirectory(examples)

@@ -2,6 +2,7 @@
 
 #include "../modals/extension_pages/EditorPageModal.h"
 #include "../modals/extension_pages/EditorPageThemeCapture.h"
+#include "EditorControlMetadata.h"
 #include "EditorPageFileStore.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Editor/AssetImportModal.h"
@@ -183,12 +184,13 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::GuiScreenHost */
     GuiScreenHost::GuiScreenHost(const EditorGuiContext &context, GuiScreenHostComposition composition)
-        : context_(context), modalHost_(&composition.modalHost), inputRouter_(&composition.inputRouter),
-          settingsService_(&composition.settingsService), localization_(&composition.localization),
+        : context_(context), controlMetadata_(std::make_unique<Detail::EditorControlMetadataCapture>()), modalHost_(&composition.modalHost),
+          inputRouter_(&composition.inputRouter), settingsService_(&composition.settingsService), localization_(&composition.localization),
           engineEvents_(&composition.engineEvents), logoTexture_(composition.logoTexture),
           extensionInventory_(composition.extensionInventory), extensionMarketplace_(composition.extensionMarketplace),
           nativeDialogs_(composition.nativeDialogs), screenRegistry_(std::move(composition.screenRegistry)),
           workspacePanelRegistry_(std::move(composition.workspacePanelRegistry)), dispatchSource_(std::move(composition.dispatchSource)) {
+        static_cast<void>(controlMetadata_->Bind(ImGui::GetCurrentContext()));
         gameplayRetirements_ = composition.gameplayRetirements ? std::move(composition.gameplayRetirements)
                                                                : std::make_shared<Gameplay::GameModuleRetirementQueue>();
         RegisterApplicationServices(composition);
@@ -438,6 +440,7 @@ namespace Horo::Editor {
             return;
         }
         shutdown_ = true;
+        controlMetadata_->Unbind();
         if (activeScreen_) {
             activeScreen_->OnLeave();
             activeScreen_.reset();
@@ -760,6 +763,10 @@ namespace Horo::Editor {
                     actions.emplace_back(Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
                                          Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults));
                 }
+                const auto profile = inputRouter_->Profile();
+                if (const auto applied = ActivateEditorInputProfile(*inputRouter_, profile, actions); applied.HasError())
+                    LOG_ERROR("editor.input", "Keeping last valid input actions after module command update: %s",
+                              applied.ErrorValue().message.c_str());
                 settingsService_->SetContributedInputActions(std::move(actions));
                 extensionCommandRevision_ = revision;
             }
@@ -841,6 +848,8 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::Draw() {
+        if (!shutdown_)
+            static_cast<void>(controlMetadata_->Bind(ImGui::GetCurrentContext()));
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
         const bool showStatusBar = activeRoute_.kind != GuiRouteKind::ProjectCreation;
         const float contentHeight = std::max(0.0F, viewport->WorkSize.y - (showStatusBar ? EditorStatusBar::Height : 0.0F));
@@ -884,6 +893,8 @@ namespace Horo::Editor {
                                              MakeError(CollisionSettingsError(CollisionSettingsFailure::Unsupported)));
         const auto prefab =
             activeScreen_ ? activeScreen_->PrefabSettings() : Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
+        auto projectConfiguration =
+            activeScreen_ ? activeScreen_->ProjectConfiguration() : Result<std::shared_ptr<ConfigurationSettingsSession>>::Success(nullptr);
         auto modal =
             std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
                                             SettingsModalProjectOpening{
@@ -894,6 +905,10 @@ namespace Horo::Editor {
                                                     collision.HasError() ? std::optional<Error>{collision.ErrorValue()} : std::nullopt,
                                                 .prefab = prefab.HasValue() ? std::weak_ptr{prefab.Value()}
                                                                             : std::weak_ptr<PrefabProjectSettingsSession>{},
+                                                .configuration = projectConfiguration.HasValue() ? projectConfiguration.Value() : nullptr,
+                                                .configurationError = projectConfiguration.HasError()
+                                                                          ? std::optional<Error>{projectConfiguration.ErrorValue()}
+                                                                          : std::nullopt,
                                             },
                                             SettingsModalPagePresentation{editorPageHost_,
                                                                           extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr,

@@ -5,11 +5,24 @@
 
 static_assert(!std::is_copy_constructible_v<Horo::Runtime::CameraService>);
 static_assert(!std::is_copy_constructible_v<Horo::Cinematic::CinematicCameraPlayback>);
+static_assert(Horo::Cinematic::SequenceFrameCameraCutKey{}.transitionTier == Horo::Cinematic::CameraTransitionTier::HardCut);
+static_assert(Horo::Cinematic::SequenceFrameCameraCutKey{}.fallback == Horo::Cinematic::CameraTransitionFallback::Fail);
+static_assert(Horo::Cinematic::SequenceFrameCameraCutRequest{}.transitionTier == Horo::Cinematic::CameraTransitionTier::HardCut);
+static_assert(Horo::Runtime::CameraProposal{}.transitionResolution == Horo::Runtime::CameraTransitionResolution::Requested);
+static_assert(std::is_same_v<decltype(&Horo::Runtime::CameraService::Commit),
+                             Horo::Result<Horo::Runtime::CameraSelectionSnapshot> (Horo::Runtime::CameraService::*)(
+                                 std::uint64_t, Horo::Runtime::RuntimeSceneView, const std::optional<Horo::Runtime::CameraProposal> &)>);
 static_assert(
     std::is_same_v<Horo::Cinematic::SequenceCameraCutHook,
                    void (*)(const Horo::BorrowedCallbackContext &, const Horo::Cinematic::SequenceFrameCameraCutRequest &) noexcept>);
 
 int main() {
     const auto camera = Horo::Runtime::CameraService::Create({{1, 1}, {1}, Horo::Runtime::CameraViewDomain::Runtime});
-    return camera.HasValue() && !Horo::Runtime::CameraErrors::CameraUnavailable.code.Value().empty() ? 0 : 1;
+    const auto baseline = Horo::Runtime::CameraService::Create({{2, 1}, {1}, Horo::Runtime::CameraViewDomain::Runtime},
+                                                               Horo::Runtime::CameraTransitionSupport::HardCutOnly);
+    return camera.HasValue() && baseline.HasValue() &&
+                   baseline.Value().TransitionSupport() == Horo::Runtime::CameraTransitionSupport::HardCutOnly &&
+                   !Horo::Runtime::CameraErrors::CameraUnavailable.code.Value().empty()
+               ? 0
+               : 1;
 }

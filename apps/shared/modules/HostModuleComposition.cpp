@@ -47,6 +47,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] ModuleDescriptor DescribePlatformServices() {
             ModuleDescriptor descriptor = Describe("horo.platform.services", {"horo.foundation", "horo.platform"});
             descriptor.errorDomains.push_back(PlatformServices::PlatformServiceErrorDomain());
+            descriptor.errorDomains.push_back(PlatformServices::PlatformOfflineErrorDomain());
             return descriptor;
         }
 
@@ -95,7 +96,8 @@ namespace Horo::Application::Internal {
                          {"horo.foundation", "horo.application", "horo.platform", "horo.editor.model", "horo.gameplay.module_host",
                           "horo.gameplay.build", "horo.gameplay.lua", "horo.input", "horo.application.project_migrations", "horo.assets"}),
                 Describe("horo.extensions", {"horo.foundation", "horo.platform", "horo.assets"}),
-                Describe("horo.gui", {"horo.editor.services", "horo.foundation", "horo.editor.render_extraction", "horo.extensions"}),
+                Describe("horo.gui", {"horo.editor.services", "horo.foundation", "horo.editor.render_extraction", "horo.extensions",
+                                      "horo.platform.services"}),
             };
         }
     }  // namespace

@@ -1,9 +1,12 @@
+#include "AllocationProbe.h"
 #include "Horo/Agent/ModelProvider.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -171,6 +174,44 @@ TEST_CASE("Real adapters preserve cancellation and sanitized failures", "[agent]
             REQUIRE(limited.error->code == ModelErrorCode::RateLimited);
             REQUIRE(limited.error->message.find("private") == std::string::npos);
         }
+    }
+}
+
+TEST_CASE("HTTP response buffer allocation failure stays inside the C callback boundary", "[agent][model][http]") {
+    struct FailurePoint final {
+        std::optional<Horo::Tests::AllocationProbe::ScopedFailure> failure;
+        std::size_t bytes{};
+    };
+
+    for (const bool cloud : {false, true}) {
+        auto provider = Create(cloud);
+        auto request = Request("buffer-allocation");
+        FailurePoint point;
+        ModelOutcome outcome;
+        std::size_t completed{};
+        {
+            Horo::Tests::AllocationProbe::ScopedObserver observe{[](const std::size_t bytes, void *raw) noexcept {
+                auto &state = *static_cast<FailurePoint *>(raw);
+                if (state.bytes == 0 && bytes >= 8192) {
+                    state.bytes = bytes;
+                    state.failure.emplace(0);
+                }
+            }, &point};
+            outcome = provider->Stream(request, [&](const ModelEvent &event) {
+                if (event.kind == ModelEventKind::Completed)
+                    ++completed;
+                return true;
+            }, {});
+        }
+        REQUIRE(point.bytes >= 8192);
+        REQUIRE_FALSE(outcome.Succeeded());
+        REQUIRE(outcome.error);
+        CHECK(outcome.error->code == ModelErrorCode::Protocol);
+        CHECK(completed == 0);
+        auto recovered = provider->Stream(Request("normal"), [](const ModelEvent &) {
+            return true;
+        }, {});
+        CHECK(recovered.Succeeded());
     }
 }
 

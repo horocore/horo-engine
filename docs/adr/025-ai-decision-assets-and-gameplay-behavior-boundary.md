@@ -168,9 +168,74 @@ These post-1.0 capabilities will plug in via dedicated provider interfaces witho
 - **Extensibility**: Custom tasks, decorators, and considerations can be authored in native C++ or scripts through standard descriptor registration macros without modifying engine core.
 - **Clarity**: Future advanced planning architectures (GOAP/HTN/RL) have clear non-blocking extension seams without complicating the 1.0 release milestone.
 
+## Utility selector implementation
+
+`UtilitySelector` captures scalar blackboard considerations and bounded action
+options. Each input is clamped to its fixed range before applying the authored
+curve. The option priority multiplies weighted responses, with optional
+compensation for multiple considerations. Exact score ties use ascending
+stable option identity. Missing or non-finite inputs make the option ineligible.
+Evaluation reserves the full consideration and option allowance against both
+the agent and global budgets before reading the snapshot.
+
+Callers can capture normalized consideration and option scores in bounded
+storage. The selector returns a stable task identity. Cooked Utility graph
+composition and task dispatch require the corresponding decision runtime entry
+point.
+
 ## Rejected Alternatives
 
 - **Use `imgui-node-editor` data structs directly as the asset format**: Rejected because it introduces editor UI dependencies into headless servers/runtime builds and couples visual rendering to game logic.
 - **Make AI decision graphs a general-purpose visual scripting language**: Rejected because general visual scripting requires arbitrary dataflow and execution branching, whereas AI decision trees/state machines require hierarchical priority selection, reactive decorators, and periodic services.
 - **Create an independent AI thread pool / task manager**: Rejected because out-of-band AI task threads violate deterministic fixed-step simulation, complicate save/load state capture, and risk race conditions with ECS components.
 - **Include HTN and GOAP in the 1.0 milestone**: Rejected due to delivery risk and complexity; standard BTs, HSMs, and Utility scoring satisfy 95%+ of game AI requirements while leaving clean extension points for future planners.
+
+## Utility graph runtime and transport migration
+
+DecisionGraphSource now admits UtilityDecisionSource as family tag 2 alongside
+the existing BT tag 0 and HSM tag 1. Existing version-one source and cooked
+envelopes keep their family tags and wire fields. The Utility extension is
+rejected by older readers that do not recognize its family. The normal cooker
+regenerates compiled layout declarations and digests; an old cooked layout that
+differs from the current measured storage is rejected by canonical admission.
+
+Utility source declares its selector's scalar blackboard requirements and actual
+provider bindings. Compilation checks every consideration against those bindings,
+validates finite bounded policies and prepares one canonical task kernel per
+option. The task kernels retain the shared admitted binding/schema plan and
+reuse existing provider factories, continuation mailboxes, task generations,
+cancellation and exactly-once cleanup. Runtime selects once per activation;
+a running action keeps its selection until completion or owner cancellation.
+Independent or repeated graph calls receive disjoint task slots and runners.
+
+DecisionGraphStepInput carries borrowed agent/global Utility allowances for
+closures containing Utility. Existing BT/HSM callers keep their current inputs.
+Utility step admission rejects missing allowances before task callbacks or changing
+trace storage. Selection reserves its full allowance before reading values.
+A budget yield starts no task and can resume at a later decision tick.
+
+DecisionStepTrace version 2 adds UtilityScore records with stable option/key
+identities and optional normalized scores. The bounded caller trace retains the
+existing graph digest, occurrence and blackboard revision. Raw inputs remain in
+the blackboard owner. Trace capture uses the same selector and task path as an
+untraced step; it cannot change action order or scheduler admission.
+
+## Complete HSM transition evidence
+
+StateMachineInstance retains a fixed-size sequence of committed transition IDs
+for the last admitted step. The sequence follows execution order, includes a
+transition into a terminal state and preserves earlier commits if a later action
+fails. Cycle-rejected edges and failed transition actions are excluded; the
+existing step summary still identifies the last considered edge. Rejected tick or
+event admission leaves the prior evidence intact. The next admitted step or successful
+Restart clears it. No callback, allocation or second transition evaluator is added.
+
+DecisionStepTrace version 3 adds StateMachineTransition records before each HSM
+step summary, with the exact occurrence, task handle and one-based commit ordinal.
+The graph copies committed evidence even when that HSM step returns an error.
+Readers of earlier trace versions must reject version 3 or migrate to recognize
+the new record kind. Existing BT/HSM Step callers and step summary fields remain
+source-compatible. The kernel's existing measured instance storage includes the
+fixed evidence array; incompatible cooked storage declarations require recooking.
+All records share the existing caller-owned limit and dropped-record count;
+truncation cannot affect transition execution or independent child results.

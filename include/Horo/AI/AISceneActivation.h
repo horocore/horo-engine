@@ -9,6 +9,7 @@
 #include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/AITaskLifecycle.h"
 #include "Horo/AI/AITaskScheduler.h"
+#include "Horo/AI/AiDecisionTaskReservation.h"
 #include "Horo/AI/BlackboardInstance.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -274,6 +275,19 @@ namespace Horo::AI {
          * @return Generation-fenced task handle or a typed lifecycle/capacity error.
          */
         [[nodiscard]] Result<TaskHandle> StartTaskAtSafePoint(AgentHandle agent, TaskId taskDefinition) const;
+
+        /** @brief Reserves a disjoint logical task range from the same high-water used by native/script tasks.
+         * @param agent Exact active agent with a live blackboard. @param count Required exclusive slot count; zero is valid.
+         * @return Move-only reservation, or typed owner/agent/capacity/storage failure without consuming indices.
+         * @details Owner-thread activation/reload work; no task or provider is started. Successful indices are never reclaimed
+         * in this Scene incarnation, including after failed graph creation. Destruction/agent retirement cancels the scope.
+         */
+        [[nodiscard]] Result<AiDecisionTaskReservation> ReserveDecisionTaskSlotsAtSafePoint(AgentHandle agent, std::uint32_t count) const;
+        /** @brief Captures the actual agent blackboard for one frozen decision step.
+         * @param agent Exact active agent. @return Owned immutable snapshot or typed unavailable/stale/storage failure.
+         * @details Call on the simulation owner after BlackboardSync; no mutable blackboard or Scene pointer escapes.
+         */
+        [[nodiscard]] Result<BlackboardSnapshot> CaptureDecisionSnapshotAtSafePoint(AgentHandle agent) const;
 
         /**
          * @brief Disables one agent, cancelling its task before revoking its capabilities and blackboard.

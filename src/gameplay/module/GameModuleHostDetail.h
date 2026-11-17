@@ -107,6 +107,7 @@ namespace Horo::Gameplay {
         std::string buildFingerprint;
         std::uint64_t descriptorRevision{};
         std::vector<AI::DecisionNodeRegistration> decisionNodes;
+        std::vector<AI::PerceptionSenseRegistration> perceptionSenses;
         std::filesystem::path loadedArtifactPath;
         std::atomic_bool runtimeLeaseAdmission{true};
         std::thread::id ownerThread{std::this_thread::get_id()};

@@ -95,6 +95,21 @@ namespace Horo::PlatformServices {
         return NullProviderFailure<PlatformRequestHandle<CloudReadResult>>();
     }
 
+    /** @copydoc ICloudService::ListCloudObjects */
+    Result<PlatformRequestHandle<CloudObjectPage>> NullPlatformServicesBackend::ListCloudObjects(CloudListRequest) {
+        return NullProviderFailure<PlatformRequestHandle<CloudObjectPage>>();
+    }
+
+    /** @copydoc ICloudService::ReadCloudObject */
+    Result<PlatformRequestHandle<CloudBlobReadResult>> NullPlatformServicesBackend::ReadCloudObject(CloudBlobReadRequest) {
+        return NullProviderFailure<PlatformRequestHandle<CloudBlobReadResult>>();
+    }
+
+    /** @copydoc ICloudService::QueryCloudQuota */
+    Result<PlatformRequestHandle<CloudQuotaObservation>> NullPlatformServicesBackend::QueryCloudQuota(PlatformSubjectHandle) {
+        return NullProviderFailure<PlatformRequestHandle<CloudQuotaObservation>>();
+    }
+
     /** @copydoc ICloudService::WriteCloudObject */
     Result<PlatformRequestHandle<CloudMutationResult>> NullPlatformServicesBackend::WriteCloudObject(CloudBlobWriteRequest &&) {
         return NullProviderFailure<PlatformRequestHandle<CloudMutationResult>>();

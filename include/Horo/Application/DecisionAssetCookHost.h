@@ -14,6 +14,7 @@ namespace Horo::Application {
 
     inline constexpr std::string_view DecisionBehaviorTreeSourceType = "core.behavior_tree";
     inline constexpr std::string_view DecisionStateMachineSourceType = "core.state_machine";
+    inline constexpr std::string_view DecisionUtilitySourceType = "core.utility";
 
     struct DecisionAssetCookRequest final {
         Assets::AssetCookRequest assets; /**< Actual pinned registry/files, project lease/fence and durable publication authority. */

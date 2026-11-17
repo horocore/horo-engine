@@ -37,6 +37,11 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc ProjectMutationErrorDomain */
+    ModuleErrorDomainDescriptor ProjectMutationErrorDomain() {
+        return {.id = Domain, .descriptors = {&Locked}};
+    }
+
     struct ProjectMutationCoordinator::State {
         explicit State(DurableFileSystem &value) : files(value) {}
 

@@ -220,6 +220,7 @@ namespace Horo::AI {
 
         auto captured = std::make_shared<QueryContextSnapshot>();
         captured->scene_ = scene.RuntimeId();
+        captured->query_ = plan.Id();
         captured->revision_ = source.executionRevision;
         captured->values_.reserve(plan.RequiredContexts().size());
         for (const auto &requirement : plan.RequiredContexts()) {

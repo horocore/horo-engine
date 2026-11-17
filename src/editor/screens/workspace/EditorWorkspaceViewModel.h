@@ -16,6 +16,7 @@
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Editor/WorldStreamingPreview.h"
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Input.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "editor/document/SceneDocument.h"
 #include "editor/project_model/EditorTransformTool.h"
@@ -234,6 +235,7 @@ namespace Horo::Editor {
         TerrainTool,
         CreateTerrainLayerSet,
         CreateTerrainFoliageType,
+        OpenGyroscopeBinding,
     };
 
     enum class BottomDockMode {
@@ -367,8 +369,22 @@ namespace Horo::Editor {
         std::vector<ColliderTransformEdit> edits;
     };
 
+    /** @brief Optional exact binding replacement; absence in a request means append without replacing peers. */
+    struct GyroscopeBindingReplacement final {
+        std::size_t index{};
+        Input::InputBinding expected;
+    };
+
+    /** @brief Owned user intent for one revision-fenced gyro creation/edit modal. */
+    struct GyroscopeBindingEditRequest final {
+        Input::ActionId action;
+        std::uint64_t configurationRevision{};
+        std::optional<GyroscopeBindingReplacement> replacement;
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
+        std::optional<GyroscopeBindingEditRequest> gyroscopeBinding;
         std::optional<WorldBrowserQuery> worldBrowserQuery;
         std::optional<WorldDocumentFence> worldDocumentFence;
         std::optional<OperationId> worldBakeOperation; /**< Exact accepted operation targeted by a cancellation intent. */

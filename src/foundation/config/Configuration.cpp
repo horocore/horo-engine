@@ -1,13 +1,16 @@
 #include "Horo/Foundation/Configuration.h"
 
 #include "../FoundationErrors.h"
+#include "../json/JsonUtils.h"
 #include "Horo/Foundation/Assertions.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <limits>
+#include <locale>
 #include <nlohmann/json.hpp>
 #include <ranges>
 #include <sstream>
@@ -43,6 +46,18 @@ namespace Horo {
 
         using StringSet = std::unordered_set<std::string, TransparentStringHash, std::equal_to<>>;
 
+        /** @brief Allows host limits to tighten the canonical resource envelope. */
+        [[nodiscard]] ConfigurationLimits BoundedLimits(const ConfigurationLimits &requested) noexcept {
+            const ConfigurationLimits defaults;
+            return {.maximumKeysPerSource = std::min(requested.maximumKeysPerSource, defaults.maximumKeysPerSource),
+                    .maximumKeyBytes = std::min(requested.maximumKeyBytes, defaults.maximumKeyBytes),
+                    .maximumStringValueBytes = std::min(requested.maximumStringValueBytes, defaults.maximumStringValueBytes),
+                    .maximumSourceLocationBytes = std::min(requested.maximumSourceLocationBytes, defaults.maximumSourceLocationBytes),
+                    .maximumDocumentBytes = std::min(requested.maximumDocumentBytes, defaults.maximumDocumentBytes),
+                    .maximumEnvironmentBindings = std::min(requested.maximumEnvironmentBindings, defaults.maximumEnvironmentBindings),
+                    .maximumNestingDepth = std::min(requested.maximumNestingDepth, defaults.maximumNestingDepth)};
+        }
+
         [[nodiscard]] std::array<SourceView, 6> SourceViews(const ConfigurationResolutionRequest &request) noexcept {
             using enum ConfigurationSource;
             return {{{Invocation, &request.invocation},
@@ -51,6 +66,29 @@ namespace Horo {
                      {Project, &request.project},
                      {User, &request.user},
                      {PackagedProfile, &request.packagedProfile}}};
+        }
+
+        /** @brief Selects the explicitly authored source without changing source precedence. */
+        [[nodiscard]] ConfigurationSourceMap *DraftSource(ConfigurationResolutionRequest &request,
+                                                          const ConfigurationSource source) noexcept {
+            using enum ConfigurationSource;
+            switch (source) {
+                case Invocation:
+                    return &request.invocation;
+                case Environment:
+                    return &request.environment;
+                case Session:
+                    return &request.session;
+                case Project:
+                    return &request.project;
+                case User:
+                    return &request.user;
+                case PackagedProfile:
+                    return &request.packagedProfile;
+                case SchemaDefault:
+                    return nullptr;
+            }
+            return nullptr;
         }
 
         [[nodiscard]] std::string_view SettingTypeName(const SettingValueType type) noexcept {
@@ -62,6 +100,8 @@ namespace Horo {
                     return "integer";
                 case String:
                     return "string";
+                case CredentialReference:
+                    return "credential-reference";
             }
             return "unknown";
         }
@@ -71,6 +111,8 @@ namespace Horo {
                 return "boolean";
             if (std::holds_alternative<std::int64_t>(value))
                 return "integer";
+            if (std::holds_alternative<CredentialReference>(value))
+                return "credential-reference";
             return "string";
         }
 
@@ -139,12 +181,34 @@ namespace Horo {
             return descriptor.sourcePolicy.value_or(LegacyPolicy(descriptor.scope));
         }
 
+        /** @brief Rejects invalid enum and source-mask metadata before it reaches resolution or presentation. */
+        [[nodiscard]] bool ValidDescriptorPolicy(const SettingDescriptor &descriptor) noexcept {
+            constexpr auto allSources = ConfigurationSourceMask::Invocation | ConfigurationSourceMask::Environment |
+                                        ConfigurationSourceMask::Session | ConfigurationSourceMask::Project |
+                                        ConfigurationSourceMask::User | ConfigurationSourceMask::PackagedProfile;
+            return static_cast<std::uint8_t>(descriptor.scope) <= static_cast<std::uint8_t>(SettingScope::Invocation) &&
+                   static_cast<std::uint8_t>(descriptor.reloadPolicy) <= static_cast<std::uint8_t>(ReloadPolicy::ProcessRestart) &&
+                   static_cast<std::uint8_t>(descriptor.sensitivity) <= static_cast<std::uint8_t>(SettingSensitivity::SecretReference) &&
+                   (static_cast<std::uint16_t>(PolicyFor(descriptor).allowedSources) & ~static_cast<std::uint16_t>(allSources)) == 0;
+        }
+
         [[nodiscard]] bool Allows(const ConfigurationSourcePolicy &policy, const ConfigurationSource source) noexcept {
             return (static_cast<std::uint16_t>(policy.allowedSources) & static_cast<std::uint16_t>(SourceBit(source))) != 0U;
         }
 
+        /** @brief Keeps identities portable and unambiguous in diagnostics and native control IDs. */
+        [[nodiscard]] bool ValidSettingKey(const std::string_view key) noexcept {
+            return !key.empty() && key.front() != '.' && key.back() != '.' && key.find("..") == std::string_view::npos &&
+                   std::ranges::all_of(key, [](const char character) {
+                return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+                       (character >= '0' && character <= '9') || character == '_' || character == '-' || character == '.';
+            });
+        }
+
         [[nodiscard]] Error InvalidConfigurationValue(const SettingKey &key, const SettingValue &value,
                                                       const SettingDescriptor *descriptor) {
+            if (!ValidSettingKey(key.Value()))
+                return MakeError(ConfigurationErrors::ValueInvalid, "Configuration key identity is malformed.");
             if (descriptor == nullptr)
                 return MakeError(ConfigurationErrors::ValueInvalid,
                                  "Configuration key '" + key.Value() + "' is not registered in the active schema.");
@@ -213,6 +277,46 @@ namespace Horo {
             return text == nullptr || text->size() <= limits.maximumStringValueBytes;
         }
 
+        /** @brief Rejects invalid scalar encoding before strings can enter a snapshot or JSON serialization. */
+        [[nodiscard]] bool ValidStringEncoding(const SettingValue &value) noexcept {
+            const auto *text = std::get_if<std::string>(&value);
+            return text == nullptr || (text->find('\0') == std::string::npos && IsValidUtf8ScalarSequence(*text));
+        }
+
+        /** @brief Applies inert owner-declared validation equally to defaults, shadowed sources and draft previews. */
+        [[nodiscard]] bool MatchesValidation(const SettingDescriptor &descriptor, const SettingValue &value) {
+            if (const auto *range = std::get_if<SettingIntegerRange>(&descriptor.validation)) {
+                const auto *number = std::get_if<std::int64_t>(&value);
+                return number != nullptr && *number >= range->minimum && *number <= range->maximum;
+            }
+            if (const auto *rules = std::get_if<SettingStringRules>(&descriptor.validation)) {
+                const auto *text = std::get_if<std::string>(&value);
+                return text != nullptr && text->size() >= rules->minimumBytes && text->size() <= rules->maximumBytes &&
+                       text->starts_with(rules->requiredPrefix) &&
+                       (rules->allowedCharacters.empty() ||
+                        std::string_view{*text}.substr(rules->requiredPrefix.size()).find_first_not_of(rules->allowedCharacters) ==
+                            std::string::npos) &&
+                       (rules->choices.empty() || std::ranges::find(rules->choices, *text) != rules->choices.end());
+            }
+            return true;
+        }
+
+        /** @brief Bounds rule metadata before any descriptor is retained. */
+        [[nodiscard]] bool ValidValidation(const SettingDescriptor &descriptor) {
+            if (const auto *range = std::get_if<SettingIntegerRange>(&descriptor.validation))
+                return descriptor.type == SettingValueType::Integer && range->minimum <= range->maximum;
+            const auto *rules = std::get_if<SettingStringRules>(&descriptor.validation);
+            if (rules == nullptr)
+                return true;
+            return descriptor.type == SettingValueType::String && rules->minimumBytes <= rules->maximumBytes &&
+                   rules->maximumBytes <= ConfigurationLimits{}.maximumStringValueBytes && rules->requiredPrefix.size() <= 256 &&
+                   rules->allowedCharacters.size() <= 256 && rules->choices.size() <= 64 &&
+                   IsValidUtf8ScalarSequence(rules->requiredPrefix) && IsValidUtf8ScalarSequence(rules->allowedCharacters) &&
+                   std::ranges::all_of(rules->choices, [&](const std::string &choice) {
+                return choice.size() <= rules->maximumBytes && IsValidUtf8ScalarSequence(choice);
+            });
+        }
+
         using SourceEntry = ConfigurationSourceMap::value_type;
 
         [[nodiscard]] std::vector<const SourceEntry *> SortedEntries(const ConfigurationSourceMap &values, const std::size_t maximum) {
@@ -232,10 +336,12 @@ namespace Horo {
         [[nodiscard]] std::optional<Diagnostic> ValidateSourceEntry(const ConfigurationSchema &schema, const SourceView source,
                                                                     const SourceEntry &entry, const ConfigurationLimits &limits) {
             const auto &[key, input] = entry;
-            if (key.Value().size() > limits.maximumKeyBytes)
-                return Finding(kInputLimitDiagnostic, "Configuration key exceeds the permitted byte length.", source.source, &input);
             if (input.location.has_value() && input.location->source.size() > limits.maximumSourceLocationBytes)
                 return Finding(kInputLimitDiagnostic, "Configuration source location exceeds the permitted byte length.", source.source);
+            if (key.Value().size() > limits.maximumKeyBytes)
+                return Finding(kInputLimitDiagnostic, "Configuration key exceeds the permitted byte length.", source.source, &input);
+            if (!ValidSettingKey(key.Value()))
+                return Finding(kInvalidValueDiagnostic, "Configuration key identity is malformed.", source.source);
             const SettingDescriptor *descriptor = schema.FindDescriptor(key);
             if (descriptor == nullptr)
                 return Finding(kUnknownKeyDiagnostic, "Configuration key '" + key.Value() + "' is not declared.", source.source, &input);
@@ -243,10 +349,8 @@ namespace Horo {
                 return Finding(kForbiddenSourceDiagnostic,
                                "Configuration key '" + key.Value() + "' is not legal in " + std::string{SourceName(source.source)} + ".",
                                source.source, &input);
-            if (descriptor->sensitivity == SettingSensitivity::SecretReference)
-                return Finding(kSecretValueDiagnostic,
-                               "Configuration key '" + key.Value() +
-                                   "' cannot accept values until typed credential references are available.",
+            if (descriptor->sensitivity == SettingSensitivity::SecretReference && !std::holds_alternative<CredentialReference>(input.value))
+                return Finding(kSecretValueDiagnostic, "Configuration key '" + key.Value() + "' requires a typed credential reference.",
                                source.source, &input);
             if (!ConfigurationSchema::MatchesType(descriptor->type, input.value))
                 return Finding(kInvalidValueDiagnostic,
@@ -255,6 +359,11 @@ namespace Horo {
             if (!StringWithinLimit(input.value, limits))
                 return Finding(kInputLimitDiagnostic, "Configuration string value exceeds the permitted byte length.", source.source,
                                &input);
+            if (!ValidStringEncoding(input.value))
+                return Finding(kInvalidValueDiagnostic, "Configuration string has invalid UTF-8 encoding.", source.source, &input);
+            if (!MatchesValidation(*descriptor, input.value))
+                return Finding(kInvalidValueDiagnostic, "Configuration key '" + key.Value() + "' violates its declared validation rule.",
+                               source.source, &input);
             return std::nullopt;
         }
 
@@ -277,28 +386,37 @@ namespace Horo {
             return found == values.end() ? nullptr : &found->second;
         }
 
-        [[nodiscard]] ResolvedSetting ResolveSetting(const SettingDescriptor &descriptor, const ConfigurationResolutionRequest &request) {
+        [[nodiscard]] ResolvedSetting ResolveSetting(const SettingDescriptor &descriptor,
+                                                     const std::shared_ptr<const ConfigurationResolutionRequest> &request,
+                                                     const std::shared_ptr<const ConfigurationSourceMap> &defaults) {
             const ConfigurationSourcePolicy policy = PolicyFor(descriptor);
-            std::array<SourceView, 6> sources = SourceViews(request);
+            std::array<SourceView, 6> sources = SourceViews(*request);
             if (policy.sessionOverridesEnvironment)
                 std::swap(sources[1], sources[2]);
+            std::vector<ConfigurationCandidate> candidates;
             for (const SourceView source : sources) {
                 if (!Allows(policy, source.source))
                     continue;
                 if (const ConfigurationInputValue *input = FindInput(*source.values, descriptor.key); input != nullptr)
-                    return {.value = input->value,
-                            .source = source.source,
-                            .location = input->location,
-                            .sensitivity = descriptor.sensitivity};
+                    candidates.emplace_back(source.source, std::shared_ptr<const ConfigurationInputValue>{request, input});
             }
-            return {.value = descriptor.defaultValue,
-                    .source = ConfigurationSource::SchemaDefault,
-                    .location = std::nullopt,
-                    .sensitivity = descriptor.sensitivity};
+            candidates.emplace_back(ConfigurationSource::SchemaDefault,
+                                    std::shared_ptr<const ConfigurationInputValue>{defaults, &defaults->at(descriptor.key)});
+            return {.value = candidates.front().Value(),
+                    .source = candidates.front().Source(),
+                    .location = candidates.front().Location(),
+                    .sensitivity = descriptor.sensitivity,
+                    .candidates = std::move(candidates)};
         }
 
         [[nodiscard]] Result<SettingValue> ParseEnvironmentValue(const SettingDescriptor &descriptor, const std::string_view raw) {
-            if (raw.empty())
+            if (descriptor.type == SettingValueType::CredentialReference) {
+                auto reference = CredentialReference::Parse(raw);
+                if (reference.HasError())
+                    return Result<SettingValue>::Failure(reference.ErrorValue());
+                return Result<SettingValue>::Success(std::move(reference).Value());
+            }
+            if (raw.empty() || raw.find('\0') != std::string_view::npos)
                 return Result<SettingValue>::Failure(MakeError(ConfigurationErrors::ValueInvalid));
             if (descriptor.type == SettingValueType::Boolean) {
                 if (raw == "true")
@@ -314,6 +432,8 @@ namespace Horo {
                     return Result<SettingValue>::Failure(MakeError(ConfigurationErrors::ValueInvalid));
                 return Result<SettingValue>::Success(value);
             }
+            if (!IsValidUtf8ScalarSequence(raw))
+                return Result<SettingValue>::Failure(MakeError(ConfigurationErrors::ValueInvalid));
             return Result<SettingValue>::Success(std::string{raw});
         }
 
@@ -328,6 +448,13 @@ namespace Horo {
         }
 
         [[nodiscard]] Result<SettingValue> ValueFromJson(const Json &value) {
+            if (value.is_object() && value.size() == 1 && value.contains("credentialReference") &&
+                value["credentialReference"].is_string()) {
+                auto reference = CredentialReference::Parse(value["credentialReference"].get_ref<const std::string &>());
+                if (reference.HasError())
+                    return Result<SettingValue>::Failure(reference.ErrorValue());
+                return Result<SettingValue>::Success(std::move(reference).Value());
+            }
             if (value.is_boolean())
                 return Result<SettingValue>::Success(value.get<bool>());
             if (value.is_number_unsigned()) {
@@ -340,24 +467,6 @@ namespace Horo {
                 return Result<SettingValue>::Success(value.get<std::string>());
             }
             return Result<SettingValue>::Failure(MakeError(ConfigurationErrors::JsonParseError));
-        }
-
-        [[nodiscard]] Json ParseJsonRejectingDuplicateKeys(const std::string_view document, bool &duplicateKey) {
-            std::vector<StringSet> objectKeys;
-            const auto callback = [&objectKeys, &duplicateKey](const int depth, const Json::parse_event_t event, const Json &parsed) {
-                static_cast<void>(depth);
-                using enum Json::parse_event_t;
-                if (event == object_start) {
-                    objectKeys.emplace_back();
-                } else if (event == key) {
-                    if (objectKeys.empty() || !objectKeys.back().emplace(parsed.get<std::string>()).second)
-                        duplicateKey = true;
-                } else if (event == object_end && !objectKeys.empty()) {
-                    objectKeys.pop_back();
-                }
-                return true;
-            };
-            return Json::parse(document, callback, false, true);
         }
 
         [[nodiscard]] bool DocumentInputWithinLimits(const ConfigurationSchema &schema, const std::string_view document,
@@ -380,25 +489,34 @@ namespace Horo {
                                                                          const std::string &sourceName, const ConfigurationLimits &limits) {
             if (key.size() > limits.maximumKeyBytes)
                 return Result<ConfigurationInputValue>::Failure(MakeError(ConfigurationErrors::InputTooLarge));
+            if (!ValidSettingKey(key))
+                return Result<ConfigurationInputValue>::Failure(MakeError(ConfigurationErrors::ValueInvalid));
             Result<SettingValue> value = ValueFromJson(jsonValue);
             if (value.HasError())
                 return Result<ConfigurationInputValue>::Failure(value.ErrorValue());
             if (!StringWithinLimit(value.Value(), limits))
                 return Result<ConfigurationInputValue>::Failure(MakeError(ConfigurationErrors::InputTooLarge));
+            if (!ValidStringEncoding(value.Value()))
+                return Result<ConfigurationInputValue>::Failure(MakeError(ConfigurationErrors::ValueInvalid));
             return Result<ConfigurationInputValue>::Success(
                 {.value = std::move(value).Value(), .location = SourceLocation{.source = sourceName}});
         }
 
         [[nodiscard]] bool IsValidEnvironmentBinding(const EnvironmentVariableBinding &binding, const SettingDescriptor *descriptor,
-                                                     const ConfigurationSourceMap &captured, StringSet &variables,
-                                                     const ConfigurationLimits &limits) {
+                                                     StringSet &keys, StringSet &variables, const ConfigurationLimits &limits) {
             return binding.variable.size() <= limits.maximumSourceLocationBytes && binding.variable.starts_with("HORO_") &&
-                   descriptor != nullptr && variables.emplace(binding.variable).second && !captured.contains(binding.key);
+                   binding.variable.size() > 5 &&
+                   std::ranges::all_of(std::string_view{binding.variable}.substr(5),
+                                       [](const char character) {
+                return (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '_';
+            }) && descriptor != nullptr &&
+                   Allows(PolicyFor(*descriptor), ConfigurationSource::Environment) && variables.emplace(binding.variable).second &&
+                   keys.emplace(binding.key.Value()).second;
         }
 
         enum class EnvironmentCaptureFailure : std::uint8_t {
             None,
-            ForbiddenOrOversized,
+            Oversized,
             InvalidType
         };
 
@@ -414,10 +532,10 @@ namespace Horo {
             const std::optional<std::string> raw = processes.EnvironmentValue(binding.variable);
             if (!raw.has_value())
                 return {};
-            if (descriptor.sensitivity == SettingSensitivity::SecretReference || raw->size() > limits.maximumStringValueBytes)
-                return {.failure = EnvironmentCaptureFailure::ForbiddenOrOversized};
+            if (raw->size() > limits.maximumStringValueBytes)
+                return {.failure = EnvironmentCaptureFailure::Oversized};
             Result<SettingValue> parsed = ParseEnvironmentValue(descriptor, *raw);
-            if (parsed.HasError())
+            if (parsed.HasError() || !MatchesValidation(descriptor, parsed.Value()))
                 return {.failure = EnvironmentCaptureFailure::InvalidType};
             return {.input = ConfigurationInputValue{.value = std::move(parsed).Value(),
                                                      .location = SourceLocation{.source = binding.variable}}};
@@ -431,7 +549,12 @@ namespace Horo {
 
         [[nodiscard]] bool SameResolved(const ResolvedSetting &left, const ResolvedSetting &right) noexcept {
             return left.value == right.value && left.source == right.source && SameLocation(left.location, right.location) &&
-                   left.sensitivity == right.sensitivity;
+                   left.sensitivity == right.sensitivity &&
+                   std::ranges::equal(left.candidates, right.candidates,
+                                      [](const ConfigurationCandidate &first, const ConfigurationCandidate &second) {
+                return first.Source() == second.Source() && first.Value() == second.Value() &&
+                       SameLocation(first.Location(), second.Location());
+            });
         }
 
         [[nodiscard]] bool PermitsReload(const ReloadPolicy policy, const ConfigurationReloadPoint point) noexcept {
@@ -465,10 +588,20 @@ namespace Horo {
                 return Result<void>::Failure(MakeError(ConfigurationErrors::DraftStale));
             if (!DraftWithinLimits(draft))
                 return Result<void>::Failure(MakeError(ConfigurationErrors::InputTooLarge));
-            for (const auto &[key, value] : draft.proposedValues) {
+            using DraftEntry = decltype(draft.proposedValues)::value_type;
+            std::vector<const DraftEntry *> entries;
+            entries.reserve(draft.proposedValues.size());
+            for (const auto &entry : draft.proposedValues)
+                entries.push_back(&entry);
+            std::ranges::sort(entries, {}, [](const DraftEntry *entry) {
+                return entry->first.Value();
+            });
+            for (const auto *entry : entries) {
+                const auto &[key, value] = *entry;
                 const SettingDescriptor *descriptor = schema.FindDescriptor(key);
                 if (descriptor == nullptr || !ConfigurationSchema::MatchesType(descriptor->type, value) ||
-                    descriptor->sensitivity == SettingSensitivity::SecretReference)
+                    descriptor->sensitivity == SettingSensitivity::SecretReference || descriptor->readOnly ||
+                    !Allows(PolicyFor(*descriptor), draft.source))
                     return Result<void>::Failure(InvalidConfigurationValue(key, value, descriptor));
             }
             return Result<void>::Success();
@@ -481,6 +614,24 @@ namespace Horo {
                                    std::move(sourceName), tooLarge ? kInputLimitDiagnostic : kDocumentDiagnostic);
         }
     }  // namespace
+
+    /** @copydoc CredentialReference::Parse */
+    Result<CredentialReference> CredentialReference::Parse(const std::string_view value) {
+        constexpr std::string_view prefix = "cred:v1:";
+        if (value.size() != prefix.size() + 48 || !value.starts_with(prefix) ||
+            !std::ranges::all_of(value.substr(prefix.size()), [](const char digit) {
+            return (digit >= '0' && digit <= '9') || (digit >= 'a' && digit <= 'f');
+        }))
+            return Result<CredentialReference>::Failure(MakeError(ConfigurationErrors::ValueInvalid));
+        return Result<CredentialReference>::Success(CredentialReference{std::string{value}});
+    }
+
+    CredentialReference::CredentialReference(std::string value) : value_(std::move(value)) {}
+
+    /** @copydoc CredentialReference::Value */
+    std::string_view CredentialReference::Value() const noexcept {
+        return value_;
+    }
 
     /** @copydoc ConfigurationSnapshot::Revision */
     ConfigurationRevision ConfigurationSnapshot::Revision() const noexcept {
@@ -512,7 +663,8 @@ namespace Horo {
         std::vector<const SnapshotEntry *> sorted;
         sorted.reserve(m_data->values.size());
         for (const auto &entry : m_data->values) {
-            if (entry.second.sensitivity == SettingSensitivity::Public)
+            const auto *reference = std::get_if<CredentialReference>(&entry.second.value);
+            if (entry.second.sensitivity == SettingSensitivity::Public || (reference != nullptr && !reference->Value().empty()))
                 sorted.push_back(&entry);
         }
         std::ranges::sort(sorted, {}, [](const SnapshotEntry *entry) -> const std::string & {
@@ -520,6 +672,7 @@ namespace Horo {
         });
 
         std::ostringstream json;
+        json.imbue(std::locale::classic());
         json << "{\n  \"schemaVersion\": " << kConfigurationDocumentVersion << ",\n  \"values\": {\n";
         for (std::size_t index = 0; index < sorted.size(); ++index) {
             const auto &[key, resolved] = *sorted[index];
@@ -529,6 +682,8 @@ namespace Horo {
                     json << (value ? "true" : "false");
                 else if constexpr (std::is_same_v<Value, std::int64_t>)
                     json << value;
+                else if constexpr (std::is_same_v<Value, CredentialReference>)
+                    json << "{\"credentialReference\":\"" << value.Value() << "\"}";
                 else
                     json << "\"" << EscapeJsonString(value) << "\"";
             }, resolved.value);
@@ -538,12 +693,32 @@ namespace Horo {
         return json.str();
     }
 
+    /** @copydoc ConfigurationSnapshot::SourceToJson */
+    std::string ConfigurationSnapshot::SourceToJson(const ConfigurationSource source) const {
+        auto data = std::make_shared<Data>();
+        for (const auto &[key, resolved] : m_data->values) {
+            const auto candidate = std::ranges::find(resolved.candidates, source, &ConfigurationCandidate::Source);
+            if (candidate != resolved.candidates.end())
+                data->values.emplace(key, ResolvedSetting{.value = candidate->Value(),
+                                                          .source = source,
+                                                          .location = candidate->Location(),
+                                                          .sensitivity = resolved.sensitivity});
+        }
+        return ConfigurationSnapshot{std::move(data)}.ToJson();
+    }
+
     /** @copydoc ConfigurationSchema::MatchesType */
     bool ConfigurationSchema::MatchesType(const SettingValueType type, const SettingValue &value) {
         using enum SettingValueType;
         return (type == Boolean && std::holds_alternative<bool>(value)) ||
                (type == Integer && std::holds_alternative<std::int64_t>(value)) ||
-               (type == String && std::holds_alternative<std::string>(value));
+               (type == String && std::holds_alternative<std::string>(value)) ||
+               (type == SettingValueType::CredentialReference && std::holds_alternative<Horo::CredentialReference>(value));
+    }
+
+    /** @copydoc ConfigurationSchema::AllowsSource */
+    bool ConfigurationSchema::AllowsSource(const SettingDescriptor &descriptor, const ConfigurationSource source) noexcept {
+        return Allows(PolicyFor(descriptor), source);
     }
 
     /** @copydoc ConfigurationSchema::ErrorFor */
@@ -556,7 +731,13 @@ namespace Horo {
         if (const ConfigurationLimits limits;
             m_sealed || m_descriptors.size() >= limits.maximumKeysPerSource || descriptor.key.Value().empty() ||
             descriptor.key.Value().size() > limits.maximumKeyBytes || m_descriptors.contains(descriptor.key) ||
-            !MatchesType(descriptor.type, descriptor.defaultValue) || !StringWithinLimit(descriptor.defaultValue, limits))
+            !MatchesType(descriptor.type, descriptor.defaultValue) || !StringWithinLimit(descriptor.defaultValue, limits) ||
+            !ValidSettingKey(descriptor.key.Value()) || !ValidStringEncoding(descriptor.defaultValue) ||
+            (descriptor.label &&
+             (descriptor.label->namespaceId.size() > limits.maximumKeyBytes || descriptor.label->key.size() > limits.maximumKeyBytes ||
+              !ValidSettingKey(descriptor.label->namespaceId) || !ValidSettingKey(descriptor.label->key))) ||
+            !ValidDescriptorPolicy(descriptor) || !ValidValidation(descriptor) || !MatchesValidation(descriptor, descriptor.defaultValue) ||
+            ((descriptor.type == SettingValueType::CredentialReference) != (descriptor.sensitivity == SettingSensitivity::SecretReference)))
             return Result<void>::Failure(ErrorFor(ConfigurationErrors::SchemaInvalid));
         m_descriptors.try_emplace(descriptor.key, descriptor);
         return Result<void>::Success();
@@ -581,10 +762,26 @@ namespace Horo {
         return m_sealed;
     }
 
+    /** @copydoc ConfigurationSchema::Descriptors */
+    std::vector<SettingDescriptor> ConfigurationSchema::Descriptors() const {
+        std::vector<SettingDescriptor> descriptors;
+        descriptors.reserve(m_descriptors.size());
+        for (const auto &[key, descriptor] : m_descriptors) {
+            static_cast<void>(key);
+            descriptors.push_back(descriptor);
+        }
+        std::ranges::sort(descriptors, {}, [](const SettingDescriptor &descriptor) {
+            return descriptor.key.Value();
+        });
+        return descriptors;
+    }
+
     /** @copydoc ConfigurationResolver::Resolve */
     Result<ConfigurationSnapshot> ConfigurationResolver::Resolve(const ConfigurationSchema &schema,
                                                                  const ConfigurationResolutionRequest &request,
-                                                                 const ConfigurationRevision revision, const ConfigurationLimits &limits) {
+                                                                 const ConfigurationRevision revision,
+                                                                 const ConfigurationLimits &requestedLimits) {
+        const auto limits = BoundedLimits(requestedLimits);
         if (!schema.m_sealed)
             return Result<ConfigurationSnapshot>::Failure(ConfigurationSchema::ErrorFor(ConfigurationErrors::SchemaInvalid));
         std::vector<Diagnostic> findings;
@@ -595,9 +792,14 @@ namespace Horo {
 
         auto data = std::make_shared<ConfigurationSnapshot::Data>();
         data->revision = revision;
+        data->inputs = std::make_shared<const ConfigurationResolutionRequest>(request);
+        auto defaults = std::make_shared<ConfigurationSourceMap>();
+        defaults->reserve(schema.m_descriptors.size());
+        for (const auto &[key, descriptor] : schema.m_descriptors)
+            defaults->emplace(key, ConfigurationInputValue{.value = descriptor.defaultValue});
         data->values.reserve(schema.m_descriptors.size());
         for (const auto &[key, descriptor] : schema.m_descriptors)
-            data->values.try_emplace(key, ResolveSetting(descriptor, request));
+            data->values.try_emplace(key, ResolveSetting(descriptor, data->inputs, defaults));
         return Result<ConfigurationSnapshot>::Success(ConfigurationSnapshot{std::move(data)});
     }
 
@@ -605,7 +807,8 @@ namespace Horo {
     Result<ConfigurationSourceMap> ConfigurationResolver::CaptureEnvironment(const ConfigurationSchema &schema,
                                                                              const std::span<const EnvironmentVariableBinding> bindings,
                                                                              const ProcessService &processes,
-                                                                             const ConfigurationLimits &limits) {
+                                                                             const ConfigurationLimits &requestedLimits) {
+        const auto limits = BoundedLimits(requestedLimits);
         if (!schema.m_sealed || bindings.size() > limits.maximumEnvironmentBindings)
             return DocumentFailure("Environment binding set is invalid or exceeds its limit.", "environment",
                                    kEnvironmentBindingDiagnostic);
@@ -613,34 +816,55 @@ namespace Horo {
         ConfigurationSourceMap captured;
         captured.reserve(bindings.size());
         StringSet variables;
+        StringSet keys;
         variables.reserve(bindings.size());
-        for (const EnvironmentVariableBinding &binding : bindings) {
+        keys.reserve(bindings.size());
+        std::vector<const EnvironmentVariableBinding *> ordered;
+        ordered.reserve(bindings.size());
+        for (const auto &binding : bindings) {
+            if (binding.variable.size() > limits.maximumSourceLocationBytes || binding.key.Value().size() > limits.maximumKeyBytes)
+                return DocumentFailure("Environment binding exceeds its metadata limits.", "environment", kInputLimitDiagnostic);
+            ordered.push_back(&binding);
+        }
+        std::ranges::sort(ordered, {}, [](const EnvironmentVariableBinding *binding) {
+            return std::pair<std::string_view, std::string_view>{binding->variable, binding->key.Value()};
+        });
+        for (const auto *entry : ordered) {
+            const auto &binding = *entry;
             const SettingDescriptor *descriptor = schema.FindDescriptor(binding.key);
-            if (!IsValidEnvironmentBinding(binding, descriptor, captured, variables, limits)) {
-                return DocumentFailure("Environment binding is unknown, duplicate, unbounded, or lacks the HORO_ prefix.", binding.variable,
+            if (!IsValidEnvironmentBinding(binding, descriptor, keys, variables, limits)) {
+                return DocumentFailure("Environment binding is unknown, duplicate, forbidden, unbounded, or malformed.", "environment",
                                        kEnvironmentBindingDiagnostic);
             }
-            const EnvironmentCaptureOutcome outcome = CaptureEnvironmentValue(*descriptor, binding, processes, limits);
-            if (outcome.failure == EnvironmentCaptureFailure::ForbiddenOrOversized)
-                return DocumentFailure("Environment value is forbidden or exceeds its limit.", binding.variable, kSecretValueDiagnostic);
+            EnvironmentCaptureOutcome outcome = CaptureEnvironmentValue(*descriptor, binding, processes, limits);
+            if (outcome.failure == EnvironmentCaptureFailure::Oversized)
+                return DocumentFailure("Environment value exceeds its byte limit.", binding.variable, kInputLimitDiagnostic);
             if (outcome.failure == EnvironmentCaptureFailure::InvalidType)
-                return DocumentFailure("Environment value does not match the setting type.", binding.variable, kInvalidValueDiagnostic);
+                return DocumentFailure("Environment value violates the declared setting type or validation rule.", binding.variable,
+                                       kInvalidValueDiagnostic);
             if (outcome.input.has_value())
-                captured.try_emplace(binding.key, *outcome.input);
+                captured.try_emplace(binding.key, std::move(*outcome.input));
         }
         return Result<ConfigurationSourceMap>::Success(std::move(captured));
     }
 
     /** @copydoc ConfigurationResolver::ParseDocument */
     Result<ConfigurationSourceMap> ConfigurationResolver::ParseDocument(const ConfigurationSchema &schema, const std::string_view document,
-                                                                        std::string sourceName, const ConfigurationLimits &limits) {
+                                                                        std::string sourceName,
+                                                                        const ConfigurationLimits &requestedLimits) {
+        const auto limits = BoundedLimits(requestedLimits);
+        if (sourceName.size() > limits.maximumSourceLocationBytes)
+            return DocumentFailure("Configuration source name exceeds its byte limit.", "configuration-document", kInputLimitDiagnostic);
         if (!DocumentInputWithinLimits(schema, document, sourceName, limits))
             return DocumentFailure("Configuration document or source name exceeds its limit.", std::move(sourceName),
                                    kInputLimitDiagnostic);
 
-        bool duplicateKey = false;
-        const Json parsed = ParseJsonRejectingDuplicateKeys(document, duplicateKey);
-        if (duplicateKey || parsed.is_discarded() || !HasExpectedDocumentShape(parsed) || !HasSupportedDocumentVersion(parsed))
+        Foundation::JsonParseGuard guard{std::min(limits.maximumNestingDepth, ConfigurationLimits{}.maximumNestingDepth)};
+        if (!guard.Validate(document.begin(), document.end()))
+            return DocumentFailure("Configuration document has invalid syntax, duplicate keys, encoding, or nesting.",
+                                   std::move(sourceName), guard.IsTooDeep() ? kInputLimitDiagnostic : kDocumentDiagnostic);
+        const Json parsed = Json::parse(document, nullptr, false);
+        if (parsed.is_discarded() || !HasExpectedDocumentShape(parsed) || !HasSupportedDocumentVersion(parsed))
             return DocumentFailure("Configuration document must contain only schemaVersion 1 and an object-valued values member.",
                                    std::move(sourceName));
 
@@ -661,11 +885,16 @@ namespace Horo {
 
     /** @copydoc ConfigurationService::ConfigurationService */
     ConfigurationService::ConfigurationService(ConfigurationSchema schema, EngineDataBus *events)
+        : ConfigurationService(std::move(schema), events, {}) {}
+
+    /** @copydoc ConfigurationService::ConfigurationService */
+    ConfigurationService::ConfigurationService(ConfigurationSchema schema, EngineDataBus *events,
+                                               const ConfigurationResolutionRequest &initial)
         : m_schema(std::move(schema)), m_events(events) {
         HORO_INVARIANT_MSG(m_schema.m_sealed, "ConfigurationService requires a sealed schema.");
-        Result<ConfigurationSnapshot> initial = ConfigurationResolver::Resolve(m_schema, {});
-        HORO_INVARIANT_MSG(initial.HasValue(), "A sealed configuration schema must resolve its initial snapshot.");
-        m_active = std::move(initial).Value().m_data;
+        Result<ConfigurationSnapshot> resolved = ConfigurationResolver::Resolve(m_schema, initial);
+        HORO_INVARIANT_MSG(resolved.HasValue(), "A sealed configuration schema and validated sources must resolve their initial snapshot.");
+        m_active = std::move(resolved).Value().m_data;
     }
 
     /** @copydoc ConfigurationService::Snapshot */
@@ -674,50 +903,101 @@ namespace Horo {
         return ConfigurationSnapshot(m_active);
     }
 
+    /** @copydoc ConfigurationService::Schema */
+    const ConfigurationSchema &ConfigurationService::Schema() const noexcept {
+        return m_schema;
+    }
+
+    /** @copydoc ConfigurationService::Preview */
+    Result<ConfigurationSnapshot> ConfigurationService::Preview(const ConfigurationDraft &draft) const {
+        const auto before = Snapshot();
+        if (auto validation = ValidateDraftCandidate(m_schema, draft, before.Revision()); validation.HasError())
+            return Result<ConfigurationSnapshot>::Failure(validation.ErrorValue());
+        ConfigurationResolutionRequest inputs = *before.m_data->inputs;
+        auto *source = DraftSource(inputs, draft.source);
+        if (source == nullptr)
+            return Result<ConfigurationSnapshot>::Failure(MakeError(ConfigurationErrors::ValueInvalid));
+        for (const auto &[key, value] : draft.proposedValues) {
+            const auto previous = source->find(key);
+            const auto location = previous == source->end() ? std::optional<SourceLocation>{} : previous->second.location;
+            source->insert_or_assign(key, ConfigurationInputValue{.value = value, .location = location});
+        }
+        return ConfigurationResolver::Resolve(m_schema, inputs, before.Revision() + 1);
+    }
+
     /** @copydoc ConfigurationService::Validate */
     Result<void> ConfigurationService::Validate(const ConfigurationDraft &draft) const {
-        std::lock_guard lock(m_mutex);
-        return ValidateDraftCandidate(m_schema, draft, m_active->revision);
+        const auto preview = Preview(draft);
+        if (preview.HasError())
+            return Result<void>::Failure(preview.ErrorValue());
+        return Result<void>::Success();
+    }
+
+    ConfigurationService::PreparedCommit::PreparedCommit(ConfigurationService &owner, std::unique_lock<std::mutex> lock,
+                                                         ConfigurationSnapshot candidate, ConfigurationChangedEvent event)
+        : owner_(&owner), lock_(std::move(lock)), candidate_(std::move(candidate)), event_(std::move(event)) {}
+
+    /** @copydoc ConfigurationService::PreparedCommit::Candidate */
+    ConfigurationSnapshot ConfigurationService::PreparedCommit::Candidate() const {
+        return candidate_;
+    }
+
+    /** @copydoc ConfigurationService::PreparedCommit::Commit */
+    Result<void> ConfigurationService::PreparedCommit::Commit() {
+        if (!lock_.owns_lock())
+            return Result<void>::Failure(MakeError(ConfigurationErrors::ValueInvalid));
+        std::shared_ptr<const ConfigurationSnapshot::Data> retired;
+        std::optional<PendingReload> discarded;
+        {
+            std::lock_guard registryLock(owner_->m_mutex);
+            retired = std::move(owner_->m_active);
+            owner_->m_active = candidate_.m_data;
+            discarded = std::move(owner_->m_pendingReload);
+            owner_->m_pendingReload.reset();
+            ++owner_->m_reloadSequence;
+        }
+        lock_.unlock();
+        if (owner_->m_events != nullptr && !event_.changedKeys.empty())
+            owner_->m_events->Publish(event_);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ConfigurationService::Prepare */
+    Result<ConfigurationService::PreparedCommit> ConfigurationService::Prepare(const ConfigurationDraft &draft) {
+        std::unique_lock writerLock(m_writerMutex);
+        auto candidate = Preview(draft);
+        if (candidate.HasError())
+            return Result<PreparedCommit>::Failure(candidate.ErrorValue());
+        ConfigurationChangedEvent event{.revision = candidate.Value().Revision()};
+        const auto before = Snapshot();
+        for (const auto &[key, value] : candidate.Value().m_data->values) {
+            if (!SameResolved(before.m_data->values.at(key), value))
+                event.changedKeys.push_back(key);
+        }
+        std::ranges::sort(event.changedKeys, {}, [](const SettingKey &key) -> const std::string & {
+            return key.Value();
+        });
+        auto preparedCandidate = std::move(candidate).Value();
+        if (event.changedKeys.empty()) {
+            preparedCandidate = Snapshot();
+            event.revision = preparedCandidate.Revision();
+        }
+        return Result<PreparedCommit>::Success(
+            PreparedCommit{*this, std::move(writerLock), std::move(preparedCandidate), std::move(event)});
     }
 
     /** @copydoc ConfigurationService::Commit */
     Result<void> ConfigurationService::Commit(const ConfigurationDraft &draft) {
-        ConfigurationRevision revision{};
-        {
-            std::lock_guard lock(m_mutex);
-            if (Result<void> validation = ValidateDraftCandidate(m_schema, draft, m_active->revision); validation.HasError())
-                return validation;
-            auto candidate = std::make_shared<ConfigurationSnapshot::Data>(*m_active);
-            for (const auto &[key, value] : draft.proposedValues) {
-                const SettingDescriptor *descriptor = m_schema.FindDescriptor(key);
-                HORO_INVARIANT_MSG(descriptor != nullptr, "Validated configuration drafts must reference registered settings.");
-                candidate->values[key] = {.value = value,
-                                          .source = ConfigurationSource::Session,
-                                          .location = std::nullopt,
-                                          .sensitivity = descriptor->sensitivity};
-            }
-            candidate->revision = m_active->revision + 1;
-            revision = candidate->revision;
-            m_active = std::move(candidate);
-            m_pendingReload.reset();
-        }
-        if (m_events != nullptr) {
-            ConfigurationChangedEvent event{.revision = revision};
-            event.changedKeys.reserve(draft.proposedValues.size());
-            for (const auto &[key, unused] : draft.proposedValues) {
-                static_cast<void>(unused);
-                event.changedKeys.push_back(key);
-            }
-            std::ranges::sort(event.changedKeys, {}, [](const SettingKey &key) -> const std::string & {
-                return key.Value();
-            });
-            m_events->Publish(event);
-        }
-        return Result<void>::Success();
+        auto prepared = Prepare(draft);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        auto transaction = std::move(prepared).Value();
+        return transaction.Commit();
     }
 
     /** @copydoc ConfigurationService::ResolveAndCommit */
     Result<void> ConfigurationService::ResolveAndCommit(const ConfigurationResolutionRequest &request, const ConfigurationLimits &limits) {
+        std::unique_lock writerLock(m_writerMutex);
         const ConfigurationSnapshot before = Snapshot();
         Result<ConfigurationSnapshot> resolved = ConfigurationResolver::Resolve(m_schema, request, before.Revision() + 1, limits);
         if (resolved.HasError())
@@ -729,14 +1009,22 @@ namespace Horo {
             if (previous == before.m_data->values.end() || !SameResolved(previous->second, value))
                 changed.push_back(key);
         }
+        std::shared_ptr<const ConfigurationSnapshot::Data> retired;
+        std::optional<PendingReload> discarded;
         {
             std::lock_guard lock(m_mutex);
             if (m_active->revision != before.Revision())
                 return Result<void>::Failure(ConfigurationSchema::ErrorFor(ConfigurationErrors::DraftStale));
-            m_active = resolved.Value().m_data;
+            if (!changed.empty()) {
+                retired = std::move(m_active);
+                m_active = resolved.Value().m_data;
+            }
+            discarded = std::move(m_pendingReload);
             m_pendingReload.reset();
+            ++m_reloadSequence;
         }
-        if (m_events != nullptr) {
+        writerLock.unlock();
+        if (m_events != nullptr && !changed.empty()) {
             std::ranges::sort(changed, {}, [](const SettingKey &key) -> const std::string & {
                 return key.Value();
             });
@@ -752,13 +1040,16 @@ namespace Horo {
         ConfigurationRevision baseRevision{};
         std::uint64_t sequence{};
         std::shared_ptr<const ConfigurationSnapshot::Data> active;
+        std::optional<PendingReload> discarded;
         {
             std::lock_guard lock(m_mutex);
             baseRevision = m_active->revision;
             active = m_active;
             sequence = ++m_reloadSequence;
+            discarded = std::move(m_pendingReload);
             m_pendingReload.reset();
         }
+        discarded.reset();
 
         Result<ConfigurationSnapshot> resolved = ConfigurationResolver::Resolve(m_schema, request, baseRevision + 1, limits);
         if (resolved.HasError()) {
@@ -780,20 +1071,32 @@ namespace Horo {
         std::lock_guard lock(m_mutex);
         if (sequence != m_reloadSequence || baseRevision != m_active->revision)
             return Result<void>::Failure(ConfigurationSchema::ErrorFor(ConfigurationErrors::DraftStale));
+        if (changed.empty())
+            return Result<void>::Success();
         m_pendingReload = PendingReload{.snapshot = std::move(candidate), .changedKeys = std::move(changed), .baseRevision = baseRevision};
         return Result<void>::Success();
     }
 
     /** @copydoc ConfigurationService::CancelPendingReload */
     void ConfigurationService::CancelPendingReload() {
-        std::lock_guard lock(m_mutex);
-        ++m_reloadSequence;
-        m_pendingReload.reset();
+        std::optional<PendingReload> discarded;
+        {
+            std::lock_guard lock(m_mutex);
+            ++m_reloadSequence;
+            discarded = std::move(m_pendingReload);
+            m_pendingReload.reset();
+        }
     }
 
     /** @copydoc ConfigurationService::ActivateReload */
     Result<bool> ConfigurationService::ActivateReload(const ConfigurationReloadPoint point) {
+        if (static_cast<std::uint8_t>(point) > static_cast<std::uint8_t>(ConfigurationReloadPoint::ProcessRestart))
+            return Result<bool>::Failure(MakeError(ConfigurationErrors::ValueInvalid));
+        std::unique_lock writerLock(m_writerMutex, std::try_to_lock);
+        if (!writerLock.owns_lock())
+            return Result<bool>::Success(false);
         std::optional<ConfigurationChangedEvent> event;
+        std::shared_ptr<const ConfigurationSnapshot::Data> retired;
         {
             std::lock_guard lock(m_mutex);
             if (!m_pendingReload.has_value())
@@ -814,12 +1117,14 @@ namespace Horo {
             if (pending.changedKeys.empty())
                 return Result<bool>::Success(false);
 
+            retired = std::move(m_active);
             m_active = std::move(pending.snapshot);
             if (m_events != nullptr)
                 event = ConfigurationChangedEvent{.revision = m_active->revision,
                                                   .domain = ConfigurationDomain::All,
                                                   .changedKeys = std::move(pending.changedKeys)};
         }
+        writerLock.unlock();
         if (event.has_value())
             m_events->PublishAsync(std::move(*event));
         return Result<bool>::Success(true);

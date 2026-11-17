@@ -36,7 +36,7 @@ namespace Horo::Audio {
             bytes.insert(bytes.end(), value, value + 4);
         }
 
-        std::vector<std::uint8_t> WaveFixture() {
+        std::vector<std::uint8_t> WaveFixture(const bool loop = false) {
             constexpr std::array<std::int16_t, 8> samples{0, 16'384, 32'767, -32'768, -16'384, 8'192, 0, -8'192};
             std::vector<std::uint8_t> bytes;
             AppendFour(bytes, "RIFF");
@@ -50,10 +50,19 @@ namespace Horo::Audio {
             Append32(bytes, 48'000 * 4);
             Append16(bytes, 4);
             Append16(bytes, 16);
+            if (loop) {
+                AppendFour(bytes, "smpl");
+                Append32(bytes, 60);
+                for (const auto value : std::array<std::uint32_t, 15>{0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 2, 0, 0})
+                    Append32(bytes, value);
+            }
             AppendFour(bytes, "data");
             Append32(bytes, samples.size() * sizeof(std::int16_t));
             for (const auto sample : samples)
                 Append16(bytes, static_cast<std::uint16_t>(sample));
+            const auto riffBytes = static_cast<std::uint32_t>(bytes.size() - 8);
+            for (unsigned index = 0; index < 4; ++index)
+                bytes[4 + index] = static_cast<std::uint8_t>(riffBytes >> (index * 8));
             return bytes;
         }
 
@@ -279,6 +288,53 @@ namespace Horo::Audio {
         }
     }
 
+    TEST_CASE("Cooked package replacement keeps active PCM on its last verified generation", "[unit][audio][streaming][cook][reload]") {
+        CookedStreamFixture old;
+        CookedStreamFixture next;
+        JobSystem jobs({.workerCount = 1});
+        auto source = MakeCookedAudioStreamSource(old.Archive(), old.target, old.type, old.artifactLimit);
+        REQUIRE(source.HasValue());
+        auto created = AudioStreamingService::Create(jobs, std::move(source).Value());
+        REQUIRE(created.HasValue());
+        auto service = std::move(created).Value();
+        const auto previous = service->Admit(old.Request()).Value();
+        auto port = std::move(service->RenderPort(previous)).Value();
+        const auto prepare = [&service](const AudioStreamHandle handle) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (std::chrono::steady_clock::now() < deadline) {
+                service->Pump();
+                const auto snapshot = service->Snapshot(handle).Value();
+                if (snapshot.failed || snapshot.sourceEnded)
+                    return true;
+                std::this_thread::yield();
+            }
+            return false;
+        };
+        REQUIRE(prepare(previous));
+        bool corrupt = false;
+        SECTION("Verified replacement has an independent port") {}
+        SECTION("Corrupt replacement cannot displace old PCM") {
+            corrupt = true;
+            next.encoded.back() ^= 1;
+        }
+        auto binding =
+            MakeCookedAudioStreamSource(next.Filesystem(next.root.path / "new generation"), next.target, next.type, next.artifactLimit);
+        REQUIRE(binding.HasValue());
+        const auto candidate = service->StageReplacement(previous, std::move(binding).Value(), next.Request()).Value();
+        REQUIRE(prepare(candidate));
+        CHECK(service->CommitReplacement(previous, candidate).HasError() == corrupt);
+        REQUIRE(service->Retire(candidate).HasValue());
+        std::array<AudioSample, 4> left{}, right{};
+        std::array<AudioSample *, 2> planes{left.data(), right.data()};
+        const auto rendered = port.Render(planes, 4);
+        CHECK(rendered.availableFrames == 4);
+        CHECK(rendered.ended);
+        CHECK(left[1] == 32'767.0F / 32'768.0F);
+        CHECK(right[1] == -1.0F);
+        CHECK_FALSE(service->Snapshot(previous).Value().stopped);
+        REQUIRE(service->Retire(previous).HasValue());
+    }
+
     TEST_CASE("Audio cook produces identical PCM payload and compatibility manifest for exact inputs", "[unit][audio][cook]") {
         const auto source = WaveFixture();
         const auto target = Target("linux-desktop");
@@ -311,6 +367,45 @@ namespace Horo::Audio {
         REQUIRE(inspected.HasValue());
         CHECK(inspected.Value() == first.Value().manifest);
         CHECK(inspected.Value().analysis == first.Value().manifest.analysis);
+    }
+
+    TEST_CASE("Cooked PCM retains half-open loop metadata and rejects every truncated candidate", "[unit][audio][cook][gapless]") {
+        AudioCookProfile profile;
+        profile.defaults.residency = AudioCookResidency::Streamed;
+        profile.defaults.streamChunkFrames = 2;
+        const auto source = WaveFixture(true);
+        auto cooked = CookAudioSource(source, profile, Target("linux-desktop"), Toolchain());
+        REQUIRE(cooked.HasValue());
+        const auto inspected = InspectCookedAudio(cooked.Value().bytes);
+        REQUIRE(inspected.HasValue());
+        CHECK(inspected.Value() == cooked.Value().manifest);
+        REQUIRE(inspected.Value().loops.size() == 1);
+        CHECK(inspected.Value().loops.front() == AudioLoopRegion{{1}, 1, 3});
+        CHECK(inspected.Value().encoderDelayFrames == 0);
+        CHECK(inspected.Value().encoderPaddingFrames == 0);
+        CHECK(CookAudioSource(source, profile, Target("linux-desktop"), Toolchain()).Value().bytes == cooked.Value().bytes);
+        for (std::size_t size = 0; size < cooked.Value().bytes.size(); ++size) {
+            INFO("truncated cooked bytes=" << size);
+            CHECK(HasCode(InspectCookedAudio(std::span(cooked.Value().bytes).first(size)), AudioErrors::CookPayloadInvalid));
+        }
+        for (std::size_t size = 0; size < source.size(); ++size) {
+            INFO("truncated source bytes=" << size);
+            CHECK(CookAudioSource(std::span(source).first(size), profile, Target("linux-desktop"), Toolchain()).HasError());
+        }
+        const auto &manifest = cooked.Value().manifest;
+        const auto loopOffset = cooked.Value().bytes.size() - manifest.payloadByteCount - manifest.chunkCount * 12U - 24U;
+        for (const auto relativeOffset : {0U, 4U, 12U, 20U}) {
+            auto corrupt = cooked.Value().bytes;
+            // Count, identity, begin and end are independently hostile; no candidate may escape.
+            for (std::size_t byte = 0; byte < 4; ++byte)
+                corrupt[loopOffset + relativeOffset + byte] = relativeOffset == 4 ? 0 : 0xFF;
+            CHECK(HasCode(InspectCookedAudio(corrupt), AudioErrors::CookPayloadInvalid));
+        }
+        profile.defaults.preRollFrames = 1;
+        CHECK(HasCode(CookAudioSource(source, profile, Target("linux-desktop"), Toolchain()), AudioErrors::CookCombinationUnsupported));
+        profile.defaults.preRollFrames = 0;
+        profile.defaults.loopCrossfadeFrames = 1;
+        CHECK(HasCode(CookAudioSource(source, profile, Target("linux-desktop"), Toolchain()), AudioErrors::CookCombinationUnsupported));
     }
 
     TEST_CASE("Audio cook target override resolves streamed chunks without changing source identity", "[unit][audio][cook]") {
@@ -414,7 +509,8 @@ namespace Horo::Audio {
         bytes.pop_back();
         CHECK(HasCode(InspectCookedAudio(bytes), AudioErrors::CookPayloadInvalid));
         bytes = cooked.Value().bytes;
-        const auto lastAnalysisByte = bytes.size() - cooked.Value().manifest.payloadByteCount - cooked.Value().manifest.chunkCount * 12 - 1;
+        const auto lastAnalysisByte = bytes.size() - cooked.Value().manifest.payloadByteCount - cooked.Value().manifest.chunkCount * 12 -
+                                      4 - cooked.Value().manifest.loops.size() * 20 - 1;
         bytes[lastAnalysisByte] ^= 1;
         CHECK(HasCode(InspectCookedAudio(bytes), AudioErrors::CookPayloadInvalid));
         bytes = cooked.Value().bytes;
@@ -428,8 +524,10 @@ namespace Horo::Audio {
         bytes[payloadOffset + 2] = 0xC0;
         bytes[payloadOffset + 3] = 0x7F;
         const auto forgedDigest = ComputeSha256(std::as_bytes(std::span{bytes}.subspan(payloadOffset)));
-        const auto digestOffset = payloadOffset - cooked.Value().manifest.chunkCount * 12 - 8 - forgedDigest.bytes.size();
-        std::ranges::copy(forgedDigest.bytes, bytes.begin() + static_cast<std::ptrdiff_t>(digestOffset));
+        const auto &originalDigest = cooked.Value().manifest.payloadDigest.bytes;
+        const auto digestPosition = std::search(bytes.begin(), bytes.end(), originalDigest.begin(), originalDigest.end());
+        REQUIRE(digestPosition != bytes.end());
+        std::ranges::copy(forgedDigest.bytes, digestPosition);
         CHECK(HasCode(InspectCookedAudio(bytes), AudioErrors::CookPayloadInvalid));
     }
 

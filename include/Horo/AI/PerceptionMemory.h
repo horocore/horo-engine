@@ -123,7 +123,7 @@ namespace Horo::AI {
          * @param observation Typed weak source and last-known spatial facts.
          * @param simulationTick Current committed fixed simulation tick, not a frame or wall clock.
          * @return Success or a typed invalid observation/time failure. At a listener or profile cap the weakest, then oldest
-         * record within the exhausted scope is evicted. Team sense/stimulus observations require Gameplay event admission.
+         * record within the exhausted scope is evicted. Team and hearing observations require Gameplay event admission.
          */
         [[nodiscard]] Result<void> Observe(const PerceptionObservation &observation, std::uint64_t simulationTick);
 

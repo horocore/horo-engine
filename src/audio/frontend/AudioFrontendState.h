@@ -33,6 +33,7 @@ namespace Horo::Audio {
         bool detached{true};
         std::uint32_t maximumFrames{};
         AudioVoiceHandle voiceIdentity;
+        std::optional<AudioVoiceSnapshot> terminalVoice;
         std::atomic<const ErrorCodeDescriptor *> callbackFailure{};
         enum class OperationStatus : std::uint8_t {
             Pending,

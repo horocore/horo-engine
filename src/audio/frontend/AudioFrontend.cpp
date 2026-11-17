@@ -264,6 +264,7 @@ namespace Horo::Audio {
     AudioFrontendSnapshot AudioFrontend::Snapshot() const {
         AudioFrontendSnapshot snapshot{state_->phase, state_->resources->scope.owner, state_->voiceIdentity,
                                        state_->output->open.plannedEpoch, state_->failure};
+        snapshot.terminalVoice = state_->terminalVoice;
         for (const auto &receipt : state_->receipts) {
             if (receipt.sequence.load(std::memory_order_acquire) == 0)  // NOSONAR - Owner observes initialized admission identity.
                 continue;

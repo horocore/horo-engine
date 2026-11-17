@@ -1,6 +1,7 @@
 #include "AITaskMailbox.h"
 #include "BehaviorTreeInstanceState.h"
 #include "Horo/AI/BehaviorTreeRuntime.h"
+#include "Horo/AI/DecisionStepTrace.h"
 
 #include <algorithm>
 #include <limits>
@@ -28,8 +29,10 @@ namespace Horo::AI {
         }
 
         bool ValidInstanceTasks(const BehaviorTreeInstanceBinding &binding, const BehaviorTreeExecutionPlan &plan) noexcept {
-            return binding.firstTaskGeneration != 0 &&
-                   binding.firstTaskSlot <= std::numeric_limits<std::uint32_t>::max() - plan.TaskSlots();
+            const auto capacity = binding.availableTaskSlots.value_or(plan.TaskSlots());
+            return binding.firstTaskGeneration != 0 && capacity >= plan.TaskSlots() &&
+                   capacity <= std::numeric_limits<std::uint32_t>::max() &&
+                   binding.firstTaskSlot <= std::numeric_limits<std::uint32_t>::max() - capacity;
         }
 
         bool SupportsCalls(const BehaviorTreeExecutionPlan &plan, const IBehaviorTreeExecutor &executor) noexcept {
@@ -96,6 +99,7 @@ namespace Horo::AI {
             instance->services_ = std::make_unique<ServiceState[]>(plan->Services().size());
             instance->frames_ = std::make_unique<Frame[]>(plan->Depth());
             instance->mailbox_ = std::make_shared<Detail::AiTaskMailbox>(plan->TaskSlots());
+            binding.availableTaskSlots = binding.availableTaskSlots.value_or(plan->TaskSlots());
             instance->binding_ = std::move(binding);
             instance->nextGeneration_ = instance->binding_.firstTaskGeneration;
             instance->executor_ = std::move(executor);
@@ -136,13 +140,13 @@ namespace Horo::AI {
     }
 
     bool BehaviorTreeInstance::ValidEvaluation(std::uint64_t tick, AiTaskResumeReason reason) const noexcept {
-        return !shutdown_ && !evaluating_ && tick != 0 && tick >= tick_ && reason < AiTaskResumeReason::Count &&
+        return !shutdown_ && !evaluating_ && tick != 0 && tick >= tick_ && tick > replacementTick_ && reason < AiTaskResumeReason::Count &&
                evaluation_ != std::numeric_limits<std::uint64_t>::max();
     }
 
     bool BehaviorTreeInstance::EvaluationCancelled(AgentHandle activeAgent) const noexcept {
         return activeAgent != binding_.agent || !activeAgent.IsValid() || binding_.cancellation.IsCancellationRequested() ||
-               binding_.capabilityCancellation.IsCancellationRequested();
+               binding_.capabilityCancellation.IsCancellationRequested() || binding_.ownerCancellation.IsCancellationRequested();
     }
 
     Result<AiTaskState> BehaviorTreeInstance::CancelEvaluation(AgentHandle activeAgent) {
@@ -494,6 +498,23 @@ namespace Horo::AI {
             parent.nextChild = node.childCount;
     }
 
+    /** @copydoc BehaviorTreeInstance::AppendTrace */
+    void BehaviorTreeInstance::AppendTrace(const DecisionTraceOccurrence &occurrence, DecisionStepTrace &trace) const noexcept {
+        const auto nodes = plan_->Nodes();
+        for (std::size_t index = 0; index < nodes.size(); ++index) {
+            const auto &state = states_[index];
+            if (state.status == AiTaskState::Idle)
+                continue;
+            const auto &node = nodes[index].execution;
+            const auto *context = state.task ? state.task->Context() : nullptr;
+            trace.Append({.occurrence = occurrence,
+                          .node = node.id,
+                          .task = node.task,
+                          .handle = context ? context->task : TaskHandle{},
+                          .state = state.status});
+        }
+    }
+
     /** @copydoc BehaviorTreeInstance::Find */
     std::size_t BehaviorTreeInstance::Find(const DecisionNodeId node) const noexcept {
         for (std::size_t index = 0; index < plan_->Nodes().size(); ++index)
@@ -526,30 +547,55 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
-    /** @copydoc BehaviorTreeInstance::Replace */
+    /** @copydoc BehaviorTreeInstance::Replace(std::shared_ptr<const BehaviorTreeExecutionPlan>) */
     Result<bool> BehaviorTreeInstance::Replace(std::shared_ptr<const BehaviorTreeExecutionPlan> candidate) {
-        if (!candidate || shutdown_ || evaluating_)
-            return Failure<bool>(AIErrors::DecisionAssetActivationInvalid);
-        if (candidate->Bindings().BlackboardSchema() != plan_->Bindings().BlackboardSchema())
-            return Failure<bool>(AIErrors::DecisionAssetSchemaIncompatible);
+        return Replace(std::move(candidate), {});
+    }
+
+    /** @copydoc BehaviorTreeInstance::Replace(std::shared_ptr<const BehaviorTreeExecutionPlan>, std::unique_ptr<IBehaviorTreeExecutor>) */
+    Result<bool> BehaviorTreeInstance::Replace(std::shared_ptr<const BehaviorTreeExecutionPlan> candidate,
+                                               std::unique_ptr<IBehaviorTreeExecutor> replacementExecutor) {
+        if (auto admitted = AdmitReplacement(candidate, replacementExecutor.get()); admitted.HasError())
+            return Result<bool>::Failure(admitted.ErrorValue());
         EvaluationGuard guard(evaluating_);
-        if (plan_->IsCompatible(*candidate)) {
+        if (!replacementExecutor && plan_->IsCompatible(*candidate)) {
             plan_ = std::move(candidate);
+            replacementTick_ = tick_;
             return Result<bool>::Success(true);
         }
         try {
             auto states = std::make_unique<NodeState[]>(candidate->Nodes().size());
             auto services = std::make_unique<ServiceState[]>(candidate->Services().size());
             auto frames = std::make_unique<Frame[]>(candidate->Depth());
+            auto mailbox = std::make_shared<Detail::AiTaskMailbox>(candidate->TaskSlots());
             CancelRange(0, AiTaskCancellationReason::PlanReplaced);
             states_ = std::move(states);
             services_ = std::move(services);
             frames_ = std::move(frames);
+            mailbox_ = std::move(mailbox);
+            if (replacementExecutor)
+                executor_ = std::move(replacementExecutor);
             plan_ = std::move(candidate);
+            replacementTick_ = tick_;
             return Result<bool>::Success(false);
         } catch (const std::bad_alloc &) {
             return Failure<bool>(AIErrors::BehaviorTreeStorageUnavailable);
         }
+    }
+
+    /** @copydoc BehaviorTreeInstance::AdmitReplacement */
+    Result<void> BehaviorTreeInstance::AdmitReplacement(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate,
+                                                        const IBehaviorTreeExecutor *replacementExecutor) const {
+        if (!candidate || shutdown_ || evaluating_)
+            return Failure<void>(AIErrors::DecisionAssetActivationInvalid);
+        if (candidate->Bindings().BlackboardSchema() != plan_->Bindings().BlackboardSchema())
+            return Failure<void>(AIErrors::DecisionAssetSchemaIncompatible);
+        const auto &executor = replacementExecutor ? *replacementExecutor : *executor_;
+        if (!ValidInstanceTasks(binding_, *candidate) || !SupportsCalls(*candidate, executor))
+            return Failure<void>(AIErrors::TaskContextInvalid);
+        if (!replacementExecutor && !plan_->HasCompatibleBindings(*candidate))
+            return Failure<void>(AIErrors::DecisionAssetDescriptorIncompatible);
+        return Result<void>::Success();
     }
 
     /** @copydoc BehaviorTreeInstance::Shutdown */

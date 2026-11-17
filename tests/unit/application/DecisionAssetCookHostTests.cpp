@@ -20,10 +20,16 @@ namespace {
         AssetId child{Files::Id("00000000-0000-0000-0000-0000000000b1")};
         std::vector<AssetRecord> records;
 
-        Fixture() {
+        explicit Fixture(const bool utility = false) {
             std::filesystem::create_directories(source.path / "assets");
-            Add(root, "root.horo_sm", DecisionStateMachineSourceType, CallingMachine(1, 2, DecisionPlanKind::BehaviorTree));
-            Add(child, "task.horo_bt", DecisionBehaviorTreeSourceType, TaskTree(2));
+            if (utility)
+                PrepareUtilitySchema();
+            Add(root, "root.horo_sm", DecisionStateMachineSourceType,
+                CallingMachine(1, 2, utility ? DecisionPlanKind::Utility : DecisionPlanKind::BehaviorTree));
+            if (utility)
+                Add(child, "task.horo_utility", DecisionUtilitySourceType, UtilityGraph());
+            else
+                Add(child, "task.horo_bt", DecisionBehaviorTreeSourceType, TaskTree(2));
             REQUIRE(registry.Publish(records).status == AssetRegistryBuildStatus::Complete);
             request.assets.sourceRoot = source.path;
             request.assets.cacheFiles = Horo::TestSupport::NativeCacheFiles(cache.path);
@@ -41,6 +47,28 @@ namespace {
                 return Result<void>::Success();
             };
             Capture();
+        }
+
+        void PrepareUtilitySchema() {
+            const auto key = MakeIdentity<BlackboardKeyId>(1);
+            const std::array keys{BlackboardKeyDescriptor{.key = key,
+                                                          .kind = BlackboardValueKind::Scalar,
+                                                          .defaultValue = BlackboardValue{BlackboardScalarValue{0.5}}}};
+            auto captured = BlackboardSchema::Capture({SchemaId(), 1, BlackboardUnknownValuePolicy::Reject, keys});
+            REQUIRE(captured.HasValue());
+            ai.schema = std::make_shared<const BlackboardSchema>(std::move(captured).Value());
+            auto instance = BlackboardInstance::Create(ai.binding, ai.schema);
+            REQUIRE(instance.HasValue());
+            ai.blackboard = std::move(instance).Value();
+        }
+
+        DecisionGraphSource UtilityGraph() const {
+            UtilityDecisionSource body;
+            body.root = Node(1);
+            body.requirements = {{.key = MakeIdentity<BlackboardKeyId>(1), .kind = BlackboardValueKind::Scalar, .source = Location()}};
+            body.options = {{.option = {Node(2), MakeIdentity<TaskId>(5002), 1, 0, {{.key = MakeIdentity<BlackboardKeyId>(1)}}},
+                             .provider = {.id = Node(2), .type = Type(501), .descriptorVersion = {1, 1}, .source = Location()}}};
+            return {Graph(2), 1, SchemaId(), {1, 1}, Location(), {}, std::move(body)};
         }
 
         void Add(AssetId id, std::string_view name, std::string_view type, const DecisionGraphSource &graph) {
@@ -112,6 +140,36 @@ namespace {
         REQUIRE(reused.HasValue());
         CHECK(reused.Value().cacheHits == 2);
         CHECK(reused.Value().cookedAssets == 0);
+    }
+
+    TEST_CASE("Actual Utility sources cook and load through a mixed HSM closure without provider side effects",
+              "[native][decision-cook][utility]") {
+        Fixture fixture{true};
+        const auto cooked = fixture.Cook();
+        REQUIRE(cooked.HasValue());
+        CHECK(cooked.Value().cookedAssets == 2);
+        CHECK(fixture.ai.probe.factories == 0);
+        const auto artifacts = fixture.Read();
+        const auto root = std::ranges::find(artifacts, fixture.root, &AssetCookArtifact::id);
+        REQUIRE(root != artifacts.end());
+        const auto loaded = DecisionPlanCodec::DecodeCooked(root->payload, fixture.ai.Environment());
+        REQUIRE(loaded.HasValue());
+        REQUIRE(loaded.Value().plan);
+        auto instance = fixture.ai.Instance(loaded.Value().plan);
+        AiWorkBudget agent{8}, global{8};
+        for (std::uint64_t tick = 1; tick <= 3; ++tick) {
+            auto snapshot = fixture.ai.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const auto step = instance->Step({tick, fixture.ai.binding, snapshot.Value(), {}, &agent, &global});
+            REQUIRE(step.HasValue());
+            if (tick == 3)
+                CHECK(step.Value() == AiTaskState::Succeeded);
+        }
+        CHECK(fixture.ai.probe.starts == 1);
+        CHECK(fixture.ai.probe.cleanups == 1);
+        const auto reused = fixture.Cook();
+        REQUIRE(reused.HasValue());
+        CHECK(reused.Value().cacheHits == 2);
     }
 
     TEST_CASE("Invalid missing or future decision inputs preserve the actual prior published generation", "[native][decision-cook]") {

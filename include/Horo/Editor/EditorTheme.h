@@ -431,8 +431,10 @@ namespace Horo::Editor::Theme {
     /** @brief Returns the list of all discovered themes (built-in + custom). */
     [[nodiscard]] const std::vector<ThemeEntry> &GetThemeList();
 
-    /** @brief Scans `~/.horo/themes/` for JSON theme files. Call once at startup. */
-    void RefreshThemeList(const char *additionalPath = nullptr);
+    /** @brief Rebuilds builtin themes and scans explicitly supplied UTF-8 resource roots.
+     * @param additionalPath Optional additional theme directory. @param userThemesPath Optional captured user theme directory.
+     * @note Absent roots produce builtin themes only. The composition root supplies user-directory discovery. */
+    void RefreshThemeList(const char *additionalPath = nullptr, const char *userThemesPath = nullptr);
 
     /** @brief Publishes a package theme during owner startup; rejects missing/duplicate identities.
      * @param theme Owned parsed theme. @return Whether publication succeeded.
@@ -443,7 +445,8 @@ namespace Horo::Editor::Theme {
     /** @brief Selects a published stable package theme identity. @return False without changing appearance when absent. */
     [[nodiscard]] bool SelectThemeById(std::string_view id);
 
-    /** @brief Loads a single theme JSON from the given path. Returns true on success. */
+    /** @brief Loads one bounded theme JSON resource. @param path UTF-8 file path, or null for no resource.
+     * @param outEntry Validated theme assigned only on success. @return True when the resource was loaded. */
     [[nodiscard]] bool LoadThemeFromJson(const char *path, ThemeEntry &outEntry);
 
     /** @brief Installs a validated candidate only if its source still owns the active theme.
@@ -498,7 +501,10 @@ namespace Horo::Editor::Theme {
     /** @brief Returns the currently active theme index. */
     [[nodiscard]] int GetActiveThemeIndex();
 
-    void Apply(ImGuiStyle &style);
+    /** @brief Initializes both theme layers from an explicitly captured optional theme resource.
+     * @param style Native ImGui style. @param overridePath Optional UTF-8 theme file selected by host configuration.
+     * @param userThemesPath Optional UTF-8 directory captured by the host's user-directory adapter. */
+    void Apply(ImGuiStyle &style, const char *overridePath = nullptr, const char *userThemesPath = nullptr);
     void SetThemePreset(Preset preset);
     [[nodiscard]] Preset GetThemePreset();
     void ApplyCurrentTheme();

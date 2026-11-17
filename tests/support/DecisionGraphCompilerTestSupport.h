@@ -202,7 +202,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
         return {Graph(graph), 1, SchemaId(), {1, 1}, Location(), MakeIdentity<TaskId>(10000 + graph), std::move(machine)};
     }
 
-    struct Fixture final {
+    struct Fixture {
         struct ProviderOwner final {
             Probe probe;
             std::atomic_bool admission{true};

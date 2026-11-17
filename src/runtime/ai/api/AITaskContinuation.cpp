@@ -44,7 +44,7 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskContinuation::IsCurrent */
     bool AiTaskContinuation::IsCurrent() const noexcept {
-        return mailbox_ && !operation_.cancellation.IsCancellationRequested() && mailbox_->IsCurrent(slot_, operation_.task);
+        return mailbox_ && !operation_.IsCancellationRequested() && mailbox_->IsCurrent(slot_, operation_.task);
     }
 
     namespace Detail {

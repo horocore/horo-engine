@@ -142,11 +142,12 @@ TEST_CASE("Release service retains a completed job after its submitting scope en
     CHECK(snapshot->target == submitted.target);
     CHECK(snapshot->operation == submitted.operation);
     CHECK(service.List().size() == 1);
+    // The job terminal precedes its operation projection; join before comparing the two observations.
+    service.Shutdown();
     const auto projected = operations.SnapshotIfChanged(0);
     REQUIRE(projected.has_value());
     REQUIRE(projected->operations.size() == 1);
     CHECK(projected->operations.front().state == OperationState::Succeeded);
-    service.Shutdown();
 }
 
 TEST_CASE("Release service recovers durable job identities and terminal stage state", "[unit][application][release][service]") {

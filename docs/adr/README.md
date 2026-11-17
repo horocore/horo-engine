@@ -192,6 +192,7 @@ to the replacement.
 | [178](178-application-security-primitive-and-signature-baseline.md) | Application Security Primitive And Signature Baseline | Accepted | 2026-09-10 |
 | [179](179-device-loss-and-renderer-restart-lifecycle.md) | Device Loss and Renderer Restart Lifecycle | Proposed | 2026-09-20 |
 | [180](180-runtime-ui-interactive-control-state-machines-and-default-actions.md) | Runtime UI Interactive Control State Machines and Default Actions | Proposed | 2026-09-21 |
+| [182](182-advanced-gameplay-ai-provider-authority.md) | Advanced Gameplay AI Provider Authority | Proposed | 2026-11-10 |
 
 ## Conventions
 

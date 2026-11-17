@@ -9,6 +9,7 @@ namespace Horo::Editor::SettingsErrors {
 }  // namespace Horo::Editor::SettingsErrors
 
 namespace Horo::Editor::ProjectCreationErrors {
+    extern const ErrorCodeDescriptor UnexpectedFailure;
     extern const ErrorCodeDescriptor DestinationOccupied;
     extern const ErrorCodeDescriptor InvalidRequest;
     extern const ErrorCodeDescriptor JobSubmissionFailed;

@@ -1,5 +1,6 @@
 #include "EditorWorkspaceScreen.h"
 #include "Horo/Application/ProjectSourceDocument.h"
+#include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
@@ -15,6 +16,7 @@
 #include "Horo/Prefab/PrefabValueOverrides.h"
 #include "PCGPreviewWorkspace.h"
 #include "ScriptModuleHostServices.h"
+#include "editor/input/EditorInputActions.h"
 
 #include <array>
 #include <span>
@@ -123,6 +125,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
             .xrSimulatorArtifacts = simulatorArtifacts_,
             .xrSimulator = panelServices_.xrSimulator,
+            .platformDiagnostics = panelServices_.platformDiagnostics,
         };
         contributions_.panels.AttachAll(panelContext);
     }
@@ -307,41 +310,44 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::LoadProjectInputProfile */
     void EditorWorkspaceScreen::LoadProjectInputProfile(const std::filesystem::path &projectRoot) {
         input_.previousProfile = input_.router.Profile();
-        Input::InputBindingProfile merged{.profileId = "project-composed"};
-        const auto mergeProfile = [&](const Input::InputBindingProfile &profile, const std::string &source) {
-            Result<Input::InputBindingProfile> layered = Input::MergeBindingProfiles(merged, profile);
-            if (layered.HasError()) {
-                LOG_ERROR("editor.input", "Unable to layer input profile '%s': %s", source.c_str(), layered.ErrorValue().message.c_str());
-                return false;
-            }
-            merged = std::move(layered).Value();
-            return true;
-        };
-        const auto mergeFile = [&](const std::filesystem::path &path) {
-            if (std::error_code error; !std::filesystem::exists(path, error) || error) {
-                return true;
-            }
-            const Result<Input::InputBindingProfile> loaded = Input::LoadBindingProfile(path);
-            if (loaded.HasError()) {
-                LOG_ERROR("editor.input", "Keeping last valid input profile; '%s' is invalid: %s", path.string().c_str(),
-                          loaded.ErrorValue().message.c_str());
-                return false;
-            }
-            return mergeProfile(loaded.Value(), path.string());
-        };
-
-        // Defaults are resolved by the action descriptors. Profile layers then
-        // apply from project defaults to user-wide and project-user overrides.
-        if (!mergeFile(projectRoot / ".horo" / "input.json") || !mergeProfile(*input_.previousProfile, "editor-global")) {
+        input_.profilePaths.reset();
+        const auto metadata = Application::LoadProjectMetadata(projectRoot);
+        if (metadata.HasError()) {
+            LOG_ERROR("editor.input", "Keeping last valid input profile; project metadata is unavailable: %s",
+                      metadata.ErrorValue().message.c_str());
             return;
         }
-        if (const Result<Application::ProjectMetadata> metadata = Application::LoadProjectMetadata(projectRoot);
-            metadata.HasValue() &&
-            !mergeFile(ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "projects" / (metadata.Value().projectId + ".json"))) {
+        const auto paths = Input::ResolveBindingProfilePaths(projectRoot, ResolveEditorSettingsHomeDirectory(), metadata.Value().projectId);
+        if (paths.HasError()) {
+            LOG_ERROR("editor.input", "Keeping last valid input profile; project profile path is invalid: %s",
+                      paths.ErrorValue().message.c_str());
             return;
         }
-
-        const Result<void> applied = input_.router.SetProfile(std::move(merged));
+        const auto &editorProfile = paths.Value().editorUser;
+        input_.profilePaths = paths.Value();
+        std::error_code error;
+        const bool exists = std::filesystem::exists(editorProfile, error);
+        if (error) {
+            LOG_ERROR("editor.input", "Keeping last valid input profile; editor profile is inaccessible: %s", error.message().c_str());
+            return;
+        }
+        if (!exists) {
+            const auto migrated = Input::SaveBindingProfileAtomically(editorProfile, settings_.Snapshot().settings.keymap.profile);
+            if (migrated.HasError()) {
+                LOG_ERROR("editor.input", "Keeping last valid input profile; user profile migration failed: %s",
+                          migrated.ErrorValue().message.c_str());
+                return;
+            }
+        }
+        const std::array ordered{paths.Value().projectDefaults, paths.Value().editorUser, paths.Value().projectUser};
+        auto loaded = Input::LoadBindingProfileLayers(ordered);
+        if (loaded.HasError()) {
+            LOG_ERROR("editor.input", "Keeping last valid input profile; project profile layering failed: %s",
+                      loaded.ErrorValue().message.c_str());
+            return;
+        }
+        auto merged = std::move(loaded).Value();
+        const Result<void> applied = ActivateEditorInputProfile(input_.router, std::move(merged), settings_.ContributedInputActions());
         if (applied.HasError()) {
             LOG_ERROR("editor.input", "Keeping last valid input profile for project '%s': %s", projectRoot.string().c_str(),
                       applied.ErrorValue().message.c_str());

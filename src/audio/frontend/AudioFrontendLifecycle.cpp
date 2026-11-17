@@ -198,6 +198,7 @@ namespace Horo::Audio {
                 return retired;
             owned.streams.reset();
         }
+        terminalVoice = owned.voice->TerminalSnapshot();
         owned.voice.reset();
         owned.mixer.reset();
         owned.hostLease.reset();

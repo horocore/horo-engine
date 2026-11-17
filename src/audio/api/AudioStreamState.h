@@ -18,6 +18,21 @@ namespace Horo::Audio {
         std::uint64_t frames{};
         std::uint64_t callbacks{};
         std::uint64_t sampleFrame{};
+
+        /** @brief Coalesce both independently published monotonic counters, including saturated frame totals. */
+        std::optional<AudioStreamUnderrunReport> Take(const std::uint64_t observedFrames, const std::uint64_t observedCallbacks,
+                                                      const std::uint64_t observedSampleFrame, const std::uint64_t interval,
+                                                      const AudioStreamStarvationCause cause) noexcept {
+            if ((observedFrames == frames && observedCallbacks == callbacks) ||
+                (reported && observedSampleFrame >= sampleFrame && observedSampleFrame - sampleFrame < interval))
+                return std::nullopt;
+            const AudioStreamUnderrunReport report{observedFrames - frames, observedCallbacks - callbacks, observedSampleFrame, cause};
+            frames = observedFrames;
+            callbacks = observedCallbacks;
+            sampleFrame = observedSampleFrame;
+            reported = true;
+            return report;
+        }
     };
 
     /** @brief Ring publication and position handoff between the sole callback and serialized worker.
@@ -39,6 +54,9 @@ namespace Horo::Audio {
      */
     struct AudioStreamState final {
         AudioStreamRequest request;
+        AudioStreamPackageSource source;
+        AudioStreamHandle replacementOf;
+        bool staged{}; /**< Control gates candidate ports until prepared publication. */
         std::vector<AudioSample> ring;
         std::vector<AudioSample> decodeBuffer;
         std::vector<std::byte> scratch;
@@ -49,6 +67,9 @@ namespace Horo::Audio {
         AudioVoiceLoop workerLoop;
         std::atomic<std::uint64_t> underrunFrames{};
         std::atomic<std::uint64_t> underrunCallbacks{};
+        std::atomic<std::uint64_t> decodeNanoseconds{}; /**< Serialized worker writes; control observes atomically. */
+        std::uint64_t fillSubmissionRejections{};       /**< Control-owned scheduler rejection count. */
+        bool schedulerRejected{};
         std::atomic<bool> stopped{false};
         bool failed{};
         bool cancelled{};
@@ -60,8 +81,8 @@ namespace Horo::Audio {
         std::size_t chargedBytes{};
 
         // Copy bounded decoder facts inside admission's allocation boundary before publishing any slot.
-        explicit AudioStreamState(const AudioStreamRequest &value, const std::size_t bytes)
-            : request(value),
+        explicit AudioStreamState(const AudioStreamRequest &value, AudioStreamPackageSource binding, const std::size_t bytes)
+            : request(value), source(std::move(binding)),
               ring(static_cast<std::size_t>(request.ringFrames) * request.decoder.outputFormat.layout.orderedChannels.size()),
               decodeBuffer(static_cast<std::size_t>(request.decoder.maximumFramesPerDecode) *
                            request.decoder.outputFormat.layout.orderedChannels.size()),

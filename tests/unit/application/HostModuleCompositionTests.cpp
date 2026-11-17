@@ -1,4 +1,6 @@
 #include "Horo/Foundation/ErrorCodeRegistry.h"
+#include "Horo/PlatformServices/PlatformOfflineQueueErrors.h"
+#include "Horo/PlatformServices/PlatformOfflineQueueStorage.h"
 #include "Horo/PlatformServices/PlatformServiceErrors.h"
 #include "HostModuleComposition.h"
 
@@ -53,6 +55,10 @@ TEST_CASE("Headless host composition activates only its linked module set", "[un
     REQUIRE(composed.Value()->StateOf(ModuleId{"horo.runtime"}) == ModuleLifecycleState::Active);
     REQUIRE(composed.Value()->ErrorCodes()->Resolve(PlatformServices::PlatformServiceErrors::ProviderFailed.domain,
                                                     PlatformServices::PlatformServiceErrors::ProviderFailed.code) != nullptr);
+    REQUIRE(composed.Value()->ErrorCodes()->Resolve(MakeError(PlatformOfflineQueue::PlatformOfflineQueueErrors::RevisionConflict)) !=
+            nullptr);
+    REQUIRE(composed.Value()->ErrorCodes()->Resolve(MakeError(PlatformOfflineQueue::PlatformOfflineQueueErrors::Corrupt)) != nullptr);
+    REQUIRE(composed.Value()->ErrorCodes()->Resolve(MakeError(PlatformServices::OfflineQueueErrors::ClockMovedBackward)) != nullptr);
     REQUIRE_FALSE(composed.Value()->StateOf(ModuleId{"horo.gui"}).has_value());
     REQUIRE_FALSE(composed.Value()->StateOf(ModuleId{"horo.render.opengl"}).has_value());
     REQUIRE_FALSE(composed.Value()->StateOf(ModuleId{"horo.render.metal"}).has_value());

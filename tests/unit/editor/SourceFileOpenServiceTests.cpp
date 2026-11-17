@@ -115,6 +115,42 @@ TEST_CASE("UI canvas opening uses a distinct persistent document kind and focuse
     REQUIRE(registry.Size() == 2);
 }
 
+TEST_CASE("Prefab diagnostic paths use the existing document route and reject retired source hints",
+          "[unit][editor][source][prefab][qualification]") {
+    TemporaryProject project;
+    project.Write("assets/prefabs/Original.prefab", "{}");
+    DocumentIdentityRegistry registry;
+    SourceFileOpenService service{project.Root(), registry};
+    const SourceOpenRequest request{.path = "assets/prefabs/Original.prefab",
+                                    .origin = SourceOpenOrigin::DiagnosticNavigation,
+                                    .mode = SourceOpenMode::EmbeddedOnly};
+    const auto opened = service.Open(request);
+    REQUIRE(opened.HasValue());
+    CHECK(opened.Value().classification.kind == SourceFileKind::Prefab);
+    CHECK(opened.Value().route == SourceOpenRoute::EmbeddedWorkspace);
+    REQUIRE(opened.Value().document);
+    CHECK(opened.Value().document->identity.key.kind == DocumentKind::Prefab);
+    CHECK_FALSE(opened.Value().sourceSnapshot);
+    const auto focused = service.Open(request);
+    REQUIRE(focused.HasValue());
+    REQUIRE(focused.Value().document);
+    CHECK(focused.Value().document->identity == opened.Value().document->identity);
+    CHECK(focused.Value().document->disposition == DocumentOpenDisposition::FocusExisting);
+    std::filesystem::rename(project.Root() / request.path, project.Root() / "assets/prefabs/Moved.prefab");
+    const auto retired = service.Open(request);
+    REQUIRE(retired.HasError());
+    CHECK(ErrorCodeText(retired.ErrorValue()) == "editor.source_open.missing");
+    CHECK(registry.Size() == 1);
+    SourceFilePolicy policy = SourceFilePolicy::Default();
+    policy.prefabExtensions.clear();
+    SourceFileOpenService unavailable{project.Root(), registry, std::move(policy)};
+    const auto unsupported = unavailable.Open(
+        {.path = "assets/prefabs/Moved.prefab", .origin = SourceOpenOrigin::DiagnosticNavigation, .mode = SourceOpenMode::EmbeddedOnly});
+    REQUIRE(unsupported.HasError());
+    CHECK(ErrorCodeText(unsupported.ErrorValue()) == "editor.source_open.unsupported");
+    CHECK(registry.Size() == 1);
+}
+
 TEST_CASE("Source open service moves preserve borrowed and owned registry lifetimes", "[unit][editor][source][lifetime]") {
     TemporaryProject project;
     project.Write("source/gameplay/Player.cpp");

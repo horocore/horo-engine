@@ -86,6 +86,11 @@ namespace Horo::Gameplay {
          * Leases block native reload/finalization until all executor cleanup and factory destruction complete.
          */
         [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionNodes() const;
+        /** @brief Acquires generated custom senses with the actual native owner's executable lease and revocation.
+         * @return Inert contracts and revocable factories, or typed retired/off-owner admission failure.
+         * @details Final release belongs to the module owner thread. Retained leases prevent native finalization and reload.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const AI::PerceptionSenseGeneration>> AcquirePerceptionSenses() const;
         /** @brief Returns the artifact path actually loaded by the platform library loader. */
         [[nodiscard]] const std::filesystem::path &LoadedArtifactPath() const noexcept;
         /** @brief Returns the frozen descriptor registry while the module is loaded. */

@@ -162,7 +162,7 @@ namespace Horo::Editor {
         ImGui::PushID(static_cast<int>(identity >> 32));
         ImGui::PushID(static_cast<int>(identity & 0xffffffffU));
         std::optional<SourceEditingCommand> intent;
-        const auto &profile = context.settings.settings.keymap.profile;
+        const auto &profile = context.inputRouter ? context.inputRouter->Profile() : context.settings.settings.keymap.profile;
         const bool acceptsShortcuts = widget.OwnsInput() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
                                       !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         const auto pressed = [&](const char *action, const bool repeat = false) {

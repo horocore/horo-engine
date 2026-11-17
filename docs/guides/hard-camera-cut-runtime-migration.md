@@ -42,6 +42,19 @@ returns the same decision; late proposals apply to the next frame. The owner
 requires the current gameplay base proposal at each commit. With no eligible base
 or override it returns `CameraUnavailable`; it never picks an arbitrary entity.
 
+`Commit(frame, scene, base)` now requires the current `RuntimeSceneView` at that
+extraction safe point. `ResolveSceneCamera` stamps `CameraProposal::sceneRevision`
+with `scene.StructuralRevision()`. Manually composed editor authoring proposals
+must carry that same non-zero revision. Both endpoints of a geometric blend must
+come from the same revision. This fence prevents a rebase or other Scene mutation
+from pairing new model transforms with older camera values.
+
+An old pending proposal or an already committed frame from another Scene revision
+returns `CameraStaleFrame`. Republish from the current Scene and use a new rendered
+frame. The owner retains the earlier immutable decision for its original paired
+frame consumers. Runtime, PIE and editor callers migrate together to the required
+Scene argument; the previous two-argument commit contract is replaced.
+
 The adapter samples the final player position, including direct seek, reverse,
 loop and ping-pong traversal. Before the first key it withdraws its proposal. The
 default `HoldLastUntilPlayerEnd` retains the final camera until player completion;
@@ -51,16 +64,54 @@ the owner's current base or another eligible claim, never a saved camera pointer
 The session service retains terminal players until the host performs its existing
 restore/release protocol; camera lease release does not bypass scalar restoration.
 
-This target implements hard cuts only. Global playback blend windows do not delay
-or interpolate camera selection. A camera-only plan clears scalar blend windows
+Existing four-field `SequenceFrameCameraCutKey` initializers retain hard cuts.
+The appended fields declare `transitionTier`, `fallback`, `transitionDuration`
+and `transitionCurve`. Hard cuts require zero duration. Blends require a positive
+integer duration fitting inside the sequence. Required blends need an earlier
+source key and completion by the next key or track end. Unsupported overlapping
+windows and missing sources use an authored hard-cut fallback or fail typed
+activation before a lease or player is retained. Invalid vocabulary and malformed
+numeric durations fail frame-plan validation.
+Rebuild consumers of Cinematic Runtime and Camera Runtime together because the
+in-process key, crossing-request, proposal and owner layouts and the `Create`
+signature have changed. The additional fields make transition intent part of the canonical
+immutable key.
+No persisted sequence-asset encoding is changed by this frame-plan API extension.
+Frame camera hooks receive the same authored transition fields copied from the
+canonical key, preserving intent across staging and host adapter boundaries.
+
+`CameraService::Create` accepts the host's `CameraTransitionSupport`. Its default
+admits the implemented CPU `SingleViewBlend`; hosts selecting the baseline product
+policy pass `HardCutOnly`. Capability admission is independent of backend names.
+`SingleViewBlend` evaluates Linear or SmoothStep weight from final player time,
+then delegates quaternion slerp, position and compatible projection/lens
+interpolation to the camera owner. Both endpoints are resolved from the same
+current scene borrow on every publication, including seeks, reverse playback and
+origin changes. Published frames retain copied values.
+
+The current one-view composition returns `UnsupportedCameraTransition` for a
+required `DualViewCrossFade`. An explicitly authored `HardCut` fallback admits the
+destination cut. A denied one-view capability follows the same rule.
+Perspective/orthographic mixing returns `IncompatibleCameraTransition` unless
+that key explicitly permits a hard cut. The frontend currently has no admitted
+dual-view camera compositor or two-view budget contract. Enabling real cross-fade
+requires that frontend contract and native qualification before exposing support.
+
+Global playback blend windows remain scalar playback settings. A camera-only plan clears scalar blend windows
 before session admission, including looping playback. Mixed scalar plans retain
 their original blend windows and required restore evidence; all plans retain their
 explicit restore policy. Malformed blend settings still fail typed validation.
-No SingleViewBlend or DualViewCrossFade capability
-is admitted by this baseline path, and no implicit transition fallback is chosen.
-Successful selection performs no allocation and has fixed bounds: at most 64 keys,
+Hard cuts and compatible single-view selection perform no allocation and have
+fixed bounds of at most 64 keys,
 32 simultaneous view claims and a hierarchy depth of 64 entities. Activation may allocate;
 scene borrows and callback lifetimes follow the existing runtime plan contract.
+Exceptional interpolation/fallback diagnostics use the existing owned error
+representation. A finite camera pair whose intermediate pose cannot be represented
+returns `IncompatibleCameraTransition` and uses its authored fallback.
+`CameraProposal::transitionResolution` records the requested transition or its
+admitted hard-cut fallback. Changing the selected outcome increments the final owner's
+selection epoch, including a fallback inside one camera key. Repeated publication
+of the same outcome retains that epoch and the committed frame stays immutable.
 
 The editor viewport controller owns a distinct preview context and stable-address
 session state. Its programmatic Start/Advance/Seek/Stop camera-preview entry points

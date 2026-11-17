@@ -126,7 +126,8 @@ namespace Horo::Cli {
     /** @brief Invocation-owned cooperative/forced tokens; platform signal bridges call Interrupt, never signal handlers here. */
     class CliInvocationStopController final {
     public:
-        /** @brief Starts one finite deadline and optional parent cancellation chain. @param timeout Zero disables the deadline.
+        /** @brief Starts one finite deadline and optional parent cancellation chain.
+         * @param timeout Zero disables the deadline. Positive durations saturate at the steady clock's latest representable time.
          * @param parent Optional host/task-group cancellation ancestry. */
         explicit CliInvocationStopController(std::chrono::milliseconds timeout, CancellationToken parent = {});
         ~CliInvocationStopController() = default;
@@ -142,6 +143,10 @@ namespace Horo::Cli {
         [[nodiscard]] CancellationToken ForceToken() const noexcept;
         /** @brief Returns the first terminal stop trigger, including parent cancellation. */
         [[nodiscard]] CliStopReason Reason() const noexcept;
+        /** @brief Returns the original host deadline without extending it after startup or adapter acquisition.
+         * @return The invocation's absolute deadline, or no value when timeout is disabled.
+         */
+        [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> Deadline() const noexcept;
 
     private:
         void Request(CliStopReason reason) noexcept;
@@ -152,6 +157,7 @@ namespace Horo::Cli {
         std::atomic<unsigned> interrupts_{};
         std::condition_variable_any deadlineWake_;
         std::mutex deadlineMutex_;
+        std::optional<std::chrono::steady_clock::time_point> deadline_; /**< Immutable after construction. */
         std::jthread deadlineWorker_;
     };
 
