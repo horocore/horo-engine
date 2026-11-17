@@ -529,7 +529,10 @@ namespace Horo::Runtime::Ui {
                 const auto result = engine.Update(tree, candidate);
                 REQUIRE(result.HasError());
                 CHECK_FALSE(result.ErrorValue().code.Value().empty());
-                CHECK(engine.PublishedInteraction() == interaction);
+                const auto retained = engine.Update(tree, Request(evaluator));
+                REQUIRE(retained.HasValue());
+                CHECK(retained.Value().Descriptor().interaction == interaction);
+                CHECK(retained.Value().Records().data() == original.Value().Records().data());
             }
             const auto recovered = engine.Update(tree, Request(evaluator, 2));
             REQUIRE(recovered.HasValue());

@@ -326,7 +326,9 @@ namespace Horo::Runtime::Ui {
                 else
                     property.privacy = static_cast<UiBindingPrivacyClass>(128U + value);
                 const std::array malformed{property};
-                ExpectError(UiBindingProviderSchema::Create(Provider(malformed)), UiErrors::BindingSchemaInvalid);
+                const auto rejected = UiBindingProviderSchema::Create(Provider(malformed));
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == UiErrors::BindingSchemaInvalid.code.Value());
                 CHECK(baseline.Value().Find(initial.front().id) == retained);
             }
             CHECK(UiBindingProviderSchema::Create(Provider(initial)).Value().Version() == baseline.Value().Version());
