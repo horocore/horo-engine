@@ -41,6 +41,133 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
     };
 
+    /** @brief Pins registry, cooked payloads and dependent loaders in their original destruction order. */
+    struct ProjectSceneAssetOwners final {
+        Assets::AssetRegistry registry_;
+        std::unique_ptr<CommittedSceneAssets> assets_;
+        Assets::MemoryAssetProvider emptyProvider_;
+        std::unique_ptr<Assets::AssetLoadService> loads_;
+        std::unique_ptr<Assets::AssetLoadService> prefabLoads_;
+        std::unique_ptr<Assets::AssetLoadService> uiArtifactLoads_;
+        std::unique_ptr<Runtime::Ui::UiRuntimeAssetLoadService> uiLoads_;
+        std::shared_ptr<const ProjectCollisionSettings> collision_;
+        std::uint64_t capturedFilterGeneration_{};
+
+        /** @brief Captures immutable registry/cook payloads before constructing any Scene/native owner. */
+        Result<void> CaptureAssets(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
+                                   const Runtime::RuntimeSceneDefinition *definition);
+
+        /** @brief Publishes only the selected project's canonical registry; the welcome host keeps its empty registry. */
+        Result<void> CaptureProjectRegistry(const std::filesystem::path &root);
+
+        /** @brief Builds each existing loader over its exact captured view after cook admission succeeds. */
+        void CreateAssetLoaders(JobSystem &jobs, const EditorProjectScenePolicy &policy);
+
+        /** @brief Captures the selected project schema before any candidate/native-world staging. */
+        Result<Physics::PhysicsSceneActivationSettings> CaptureSettings(const std::filesystem::path &root,
+                                                                        const EditorProjectScenePolicy &policy,
+                                                                        const Physics::PhysicsSceneActivationAuthority &authority);
+
+        /** @brief Revokes all app-owned loaders; caller's existing jobs owner joins accepted work. */
+        void ShutdownLoadOwners() noexcept {
+            if (uiLoads_)
+                uiLoads_->Shutdown();
+            if (uiArtifactLoads_)
+                uiArtifactLoads_->Shutdown();
+            if (prefabLoads_)
+                prefabLoads_->Shutdown();
+            if (loads_)
+                loads_->Shutdown();
+        }
+    };
+
+    /** @brief Owns Save configuration and settlement independently of the Scene/native lifetime it borrows. */
+    struct ProjectSceneSaveOwners final {
+        std::optional<Error> saveError_;
+        EditorPlaySaveFactory saveFactory_;
+        std::shared_ptr<PlaySavePhysicsServices> physicsSave_;
+        Runtime::SaveProjectId saveProject_;
+        std::optional<Runtime::RuntimeSceneDefinition> saveBaseline_;
+        std::unique_ptr<EditorPlaySaveHost> save_;
+        bool saveMutation_{};
+
+        /** @brief Captures only actual project identity/baseline cold; workers and UI receive no project path authority. */
+        Result<void> CaptureSaveConfiguration(const std::filesystem::path &root, const EditorProjectScenePolicy &policy,
+                                              const Runtime::RuntimeSceneDefinition *definition) {
+            saveError_ = policy.saveError;
+            if (!definition || !policy.saveFactory)
+                return Result<void>::Success();
+            const auto metadata = LoadProjectMetadata(root);
+            if (metadata.HasError())
+                return Result<void>::Failure(metadata.ErrorValue());
+            const auto project = Runtime::SaveProjectId::Parse(metadata.Value().projectId);
+            if (project.HasError())
+                return Result<void>::Failure(project.ErrorValue());
+            saveProject_ = project.Value();
+            saveBaseline_ = *definition;
+            saveFactory_ = policy.saveFactory;
+            return Result<void>::Success();
+        }
+
+        /** @brief Explicit finite product Save storage policy; Runtime aggregate budget is admitted separately. */
+        static PlaySavePhysicsPolicy SavePhysicsPolicy() {
+            return {.state = {{65'536, 16U * 1024U * 1024U}, 2, 256U * 1024U * 1024U},
+                    .content = {16'384, 4'096, 8U * 1024U * 1024U},
+                    .maximumWireBytes = 8U * 1024U * 1024U};
+        }
+
+        /** @brief Uses only the real bound provider; absent source preserves existing typed-denied PhysicalState scope. */
+        Result<std::shared_ptr<PlaySavePhysicsServices>> SavePhysicsServices(const Physics::PhysicsRuntime &physics,
+                                                                             ScenePhysicsHost &native,
+                                                                             Runtime::RuntimeSceneService &scenes) {
+            using Outcome = Result<std::shared_ptr<PlaySavePhysicsServices>>;
+            if (physicsSave_)
+                return Outcome::Success(physicsSave_);
+            if (physics.Capability(Physics::PhysicsCapability::StateSnapshots) != Physics::PhysicsCapabilitySupport::Available)
+                return Outcome::Success(nullptr);
+            auto created = PlaySavePhysicsServices::Create(native, scenes, SavePhysicsPolicy());
+            if (created.HasError())
+                return created;
+            physicsSave_ = std::move(created).Value();
+            return Outcome::Success(physicsSave_);
+        }
+
+        /** @brief Closes real synchronous writes before invoking the actual shared runtime capture/restore boundary. */
+        Result<void> FinishSavePhase(const Runtime::FrameContext &frame) {
+            if (!save_)
+                return Result<void>::Success();
+            if (saveMutation_ && !save_->IsRetiring()) {
+                if (const auto ended = save_->EndMutation(); ended.HasError())
+                    return ended;
+                saveMutation_ = false;
+            }
+            return save_->CommitAtSafePoint(frame);
+        }
+
+        /** @brief Drops capture references only after actual Save settlement and before native Scene teardown. */
+        void ClosePhysicsSaveSource() noexcept {
+            if (physicsSave_)
+                physicsSave_->CloseCapture();
+            physicsSave_.reset();
+        }
+
+        /** @brief Refuses to unload Scene/module providers while an accepted save/delegate still owns callbacks. */
+        void ShutdownSave() noexcept {
+            if (!save_)
+                return;
+            save_->BeginRetirement();
+            if (!save_->IsSettled())
+                std::terminate();
+            save_.reset();
+        }
+    };
+
+    /** @brief Cold host identity and backend-neutral root admission, before creating any owner. */
+    inline bool ValidPreparation(Runtime::SceneRuntimeId identity, const std::filesystem::path &root,
+                                 const EditorProjectScenePolicy &policy) noexcept {
+        return identity.IsValid() && (!root.empty() || policy.physicsMode == Physics::PhysicsRuntimeMode::Null);
+    }
+
     /** @brief Pins every borrowed provider, request group and native authority behind one Scene service. */
     class ProjectPlaySceneHost final : public Editor::EditorPlaySceneHost {
     public:
@@ -65,7 +192,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         Result<void> Prepare(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
                              const Runtime::RuntimeSceneDefinition *definition) {
-            if (!ValidPreparation(root, policy))
+            if (!ValidPreparation(identity_, root, policy))
                 return Result<void>::Failure(MakeError(InvalidProjectScene));
             std::optional<Prefab::PrefabLimitProfile> prefabLimits;
             if (policy.prefabGranted) {
@@ -74,9 +201,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                     return Result<void>::Failure(captured.ErrorValue());
                 prefabLimits = captured.Value().settings->Limits();
             }
-            if (const auto saved = CaptureSaveConfiguration(root, policy, definition); saved.HasError())
+            if (const auto saved = saves_.CaptureSaveConfiguration(root, policy, definition); saved.HasError())
                 return saved;
-            if (auto captured = CaptureAssets(root, jobs, policy, definition); captured.HasError())
+            if (auto captured = resources_.CaptureAssets(root, jobs, policy, definition); captured.HasError())
                 return captured;
             if (const auto prepared = PrepareNativeOwners(root, policy); prepared.HasError())
                 return prepared;
@@ -87,11 +214,6 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                     return prepared;
             }
             return RegisterPresentationParticipants(policy);
-        }
-
-        /** @brief Cold host identity and backend-neutral root admission, before creating any owner. */
-        bool ValidPreparation(const std::filesystem::path &root, const EditorProjectScenePolicy &policy) const noexcept {
-            return identity_.IsValid() && (!root.empty() || policy.physicsMode == Physics::PhysicsRuntimeMode::Null);
         }
 
         Result<void> PrepareAnimation(const EditorProjectScenePolicy &policy) {
@@ -122,9 +244,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         /** @brief Composes the one shared provider and Scene-owned service participant before presentation seals. */
         Result<void> PreparePrefabServices(Prefab::PrefabLimitProfile limits, const EditorProjectScenePolicy &policy) {
-            prefab_.templates =
-                std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(limits),
-                                                                 Prefab::PrefabTemplateProviderLimits{}, policy.prefabMetrics);
+            prefab_.templates = std::make_unique<Prefab::PrefabTemplateProvider>(resources_.registry_, *resources_.prefabLoads_, *scenes_,
+                                                                                 std::move(limits), Prefab::PrefabTemplateProviderLimits{},
+                                                                                 policy.prefabMetrics);
             prefab_.services = std::make_shared<PlaySavePrefabServices>(*prefab_.templates, *scenes_, prefab_.projector);
             if (auto added = scenes_->AddActivationParticipant(prefab_.services->MakeParticipant()); added.HasError())
                 return added;
@@ -143,7 +265,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (bound.HasError())
                 return Result<void>::Failure(bound.ErrorValue());
             physicsStateUnavailable_ = std::move(bound).Value();
-            auto settings = CaptureSettings(root, policy);
+            auto settings = resources_.CaptureSettings(root, policy, authority_);
             if (settings.HasError())
                 return Result<void>::Failure(settings.ErrorValue());
             return PrepareSceneOwners(std::move(settings).Value());
@@ -151,7 +273,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         /** @brief Registers actual native, structural and presentation owners before the sole Scene service starts. */
         Result<void> PrepareSceneOwners(Physics::PhysicsSceneActivationSettings settings) {
-            scenes_ = std::make_unique<Runtime::RuntimeSceneService>(registry_, *loads_, Runtime::RuntimeSceneAssetLimits{}, identity_);
+            scenes_ = std::make_unique<Runtime::RuntimeSceneService>(resources_.registry_, *resources_.loads_,
+                                                                     Runtime::RuntimeSceneAssetLimits{}, identity_);
             auto participant = native_.MakeParticipant(*physics_, authority_, std::move(settings));
             if (participant.HasError())
                 return Result<void>::Failure(participant.ErrorValue());
@@ -165,75 +288,36 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Captures only actual project identity/baseline cold; workers and UI receive no project path authority. */
-        Result<void> CaptureSaveConfiguration(const std::filesystem::path &root, const EditorProjectScenePolicy &policy,
-                                              const Runtime::RuntimeSceneDefinition *definition) {
-            saveError_ = policy.saveError;
-            if (!definition || !policy.saveFactory)
-                return Result<void>::Success();
-            const auto metadata = LoadProjectMetadata(root);
-            if (metadata.HasError())
-                return Result<void>::Failure(metadata.ErrorValue());
-            const auto project = Runtime::SaveProjectId::Parse(metadata.Value().projectId);
-            if (project.HasError())
-                return Result<void>::Failure(project.ErrorValue());
-            saveProject_ = project.Value();
-            saveBaseline_ = *definition;
-            saveFactory_ = policy.saveFactory;
-            return Result<void>::Success();
-        }
-
-        /** @brief Explicit finite product Save storage policy; Runtime aggregate budget is admitted separately. */
-        static PlaySavePhysicsPolicy SavePhysicsPolicy() {
-            return {.state = {{65'536, 16U * 1024U * 1024U}, 2, 256U * 1024U * 1024U},
-                    .content = {16'384, 4'096, 8U * 1024U * 1024U},
-                    .maximumWireBytes = 8U * 1024U * 1024U};
-        }
-
-        /** @brief Uses only the real bound provider; absent source preserves existing typed-denied PhysicalState scope. */
-        Result<std::shared_ptr<PlaySavePhysicsServices>> SavePhysicsServices() {
-            using Outcome = Result<std::shared_ptr<PlaySavePhysicsServices>>;
-            if (physicsSave_)
-                return Outcome::Success(physicsSave_);
-            if (physics_->Capability(Physics::PhysicsCapability::StateSnapshots) != Physics::PhysicsCapabilitySupport::Available)
-                return Outcome::Success(nullptr);
-            auto created = PlaySavePhysicsServices::Create(native_, *scenes_, SavePhysicsPolicy());
-            if (created.HasError())
-                return created;
-            physicsSave_ = std::move(created).Value();
-            return Outcome::Success(physicsSave_);
-        }
-
         /** @copydoc Editor::EditorPlaySceneHost::ConfigureSaveSession */
         Result<void> ConfigureSaveSession(std::vector<Editor::PlaySaveGameplayBinding> bindings,
                                           std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner) override {
-            if (saveError_)
-                return Result<void>::Failure(*saveError_);
-            if (save_)
-                return save_->RebindGameplay(std::move(bindings));
-            if (!saveFactory_ || !saveBaseline_)
+            if (saves_.saveError_)
+                return Result<void>::Failure(*saves_.saveError_);
+            if (saves_.save_)
+                return saves_.save_->RebindGameplay(std::move(bindings));
+            if (!saves_.saveFactory_ || !saves_.saveBaseline_)
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
-            auto physics = SavePhysicsServices();
+            auto physics = saves_.SavePhysicsServices(*physics_, native_, *scenes_);
             if (physics.HasError())
                 return Result<void>::Failure(physics.ErrorValue());
-            auto composed = saveFactory_(saveProject_, *scenes_, *saveBaseline_, std::move(bindings), std::move(behaviorOwner),
-                                         prefab_.services, std::move(physics).Value());
+            auto composed = saves_.saveFactory_(saves_.saveProject_, *scenes_, *saves_.saveBaseline_, std::move(bindings),
+                                                std::move(behaviorOwner), prefab_.services, std::move(physics).Value());
             if (composed.HasError())
                 return Result<void>::Failure(composed.ErrorValue());
-            save_ = std::move(composed).Value();
+            saves_.save_ = std::move(composed).Value();
             return Result<void>::Success();
         }
 
         /** @copydoc Editor::EditorPlaySceneHost::RetireSaveSession */
         bool RetireSaveSession() noexcept override {
-            if (!save_)
+            if (!saves_.save_)
                 return true;
-            return save_->SuspendForModuleReload();
+            return saves_.save_->SuspendForModuleReload();
         }
 
         /** @copydoc Editor::EditorPlaySceneHost::SaveSession */
         Editor::EditorPlaySaveSession *SaveSession() noexcept override {
-            return save_.get();
+            return saves_.save_.get();
         }
 
         /** @brief Registers the same canonical AI, selected XR and final UI participants in publication order. */
@@ -256,7 +340,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             // Last participant: sealing the UI generation must be followed only by the
             // Scene publication claim.
             if (policy.uiSources) {
-                auto ui = policy.uiSources->MakeParticipant(*scenes_, registry_, *uiLoads_,
+                auto ui = policy.uiSources->MakeParticipant(*scenes_, resources_.registry_, *resources_.uiLoads_,
                                                             policy.cooked ? std::optional{policy.cooked->target} : std::nullopt);
                 if (auto added = scenes_->AddActivationParticipant(std::move(ui)); added.HasError())
                     return added;
@@ -298,29 +382,17 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (prefab_.services)
                 if (const auto advanced = prefab_.services->Advance(tick_); advanced.HasError())
                     return advanced;
-            return FinishSavePhase(frame);
-        }
-
-        /** @brief Closes real synchronous writes before invoking the actual shared runtime capture/restore boundary. */
-        Result<void> FinishSavePhase(const Runtime::FrameContext &frame) {
-            if (!save_)
-                return Result<void>::Success();
-            if (saveMutation_ && !save_->IsRetiring()) {
-                if (const auto ended = save_->EndMutation(); ended.HasError())
-                    return ended;
-                saveMutation_ = false;
-            }
-            return save_->CommitAtSafePoint(frame);
+            return saves_.FinishSavePhase(frame);
         }
 
         /** @copydoc Editor::EditorPlaySceneHost::BeginPresentationUpdate */
         Result<void> BeginPresentationUpdate() override {
-            if (!save_)
+            if (!saves_.save_)
                 return Result<void>::Success();
-            if (!save_->HasRuntimeBinding())
+            if (!saves_.save_->HasRuntimeBinding())
                 return Result<void>::Success();
-            const auto begun = save_->BeginMutation();
-            saveMutation_ = begun.HasValue();
+            const auto begun = saves_.save_->BeginMutation();
+            saves_.saveMutation_ = begun.HasValue();
             return begun;
         }
 
@@ -350,13 +422,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return std::nullopt;
             if (physics_->Mode() == Physics::PhysicsRuntimeMode::Null)
                 return Editor::EditorSceneCollisionReceipt{};
-            if (!collision_)
+            if (!resources_.collision_)
                 return std::nullopt;
-            const auto &input = collision_->Input();
+            const auto &input = resources_.collision_->Input();
             return Editor::EditorSceneCollisionReceipt{native_.HasPublishedScene() ? Editor::EditorScenePhysicsState::Active
                                                                                    : Editor::EditorScenePhysicsState::Inactive,
-                                                       input.projectId, input.revision, capturedFilterGeneration_,
-                                                       collision_->Schema()->SemanticFingerprint()};
+                                                       input.projectId, input.revision, resources_.capturedFilterGeneration_,
+                                                       resources_.collision_->Schema()->SemanticFingerprint()};
         }
 
         Result<void> FixedUpdate(const Gameplay::FixedDeltaTime delta) override {
@@ -399,12 +471,12 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 std::terminate();
             if (sceneClosed_)
                 return;
-            ShutdownSave();
+            saves_.ShutdownSave();
             sceneClosed_ = true;
-            ClosePhysicsSaveSource();
+            saves_.ClosePhysicsSaveSource();
             QuiesceGameplay();
             ShutdownSceneOwners();
-            ShutdownLoadOwners();
+            resources_.ShutdownLoadOwners();
         }
 
         Result<bool> PollShutdown(std::uint32_t maximumNativeRecords) override {
@@ -429,66 +501,15 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 ai_->BeginShutdown();
         }
 
-        /** @brief Revokes all app-owned loaders; caller's existing jobs owner joins accepted work. */
-        void ShutdownLoadOwners() noexcept {
-            if (uiLoads_)
-                uiLoads_->Shutdown();
-            if (uiArtifactLoads_)
-                uiArtifactLoads_->Shutdown();
-            if (prefabLoads_)
-                prefabLoads_->Shutdown();
-            if (loads_)
-                loads_->Shutdown();
-        }
-
-        /** @brief Drops capture references only after actual Save settlement and before native Scene teardown. */
-        void ClosePhysicsSaveSource() noexcept {
-            if (physicsSave_)
-                physicsSave_->CloseCapture();
-            physicsSave_.reset();
-        }
-
-        /** @brief Refuses to unload Scene/module providers while an accepted save/delegate still owns callbacks. */
-        void ShutdownSave() noexcept {
-            if (!save_)
-                return;
-            save_->BeginRetirement();
-            if (!save_->IsSettled())
-                std::terminate();
-            save_.reset();
-        }
-
         Editor::IEditorPlayXrHost *selectedXrHost_{};
 
-        /** @brief Captures immutable registry/cook payloads before constructing any Scene/native owner. */
-        Result<void> CaptureAssets(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
-                                   const Runtime::RuntimeSceneDefinition *definition);
-
-        /** @brief Publishes only the selected project's canonical registry; the welcome host keeps its empty registry. */
-        Result<void> CaptureProjectRegistry(const std::filesystem::path &root);
-
-        /** @brief Builds each existing loader over its exact captured view after cook admission succeeds. */
-        void CreateAssetLoaders(JobSystem &jobs, const EditorProjectScenePolicy &policy);
-
-        /** @brief Captures the selected project schema before any candidate/native-world staging. */
-        Result<Physics::PhysicsSceneActivationSettings> CaptureSettings(const std::filesystem::path &root,
-                                                                        const EditorProjectScenePolicy &policy);
-
         const std::thread::id ownerLane_{std::this_thread::get_id()};
-        Assets::AssetRegistry registry_;
-        std::unique_ptr<CommittedSceneAssets> assets_;
-        Assets::MemoryAssetProvider emptyProvider_;
-        std::unique_ptr<Assets::AssetLoadService> loads_;
-        std::unique_ptr<Assets::AssetLoadService> prefabLoads_;
-        std::unique_ptr<Assets::AssetLoadService> uiArtifactLoads_;
-        std::unique_ptr<Runtime::Ui::UiRuntimeAssetLoadService> uiLoads_;
-        std::shared_ptr<const ProjectCollisionSettings> collision_;
+        ProjectSceneAssetOwners resources_;
         std::unique_ptr<Physics::PhysicsRuntime> physics_;
         std::optional<Physics::PhysicsRuntimeRetirement> physicsRetirement_;
         std::optional<Error> physicsStateUnavailable_;
         bool sceneClosed_{};
         Physics::PhysicsSceneActivationAuthority authority_;
-        std::uint64_t capturedFilterGeneration_{};
         ScenePhysicsHost native_;
         std::vector<AI::AiControllerDescriptor> controllers_;
         std::unique_ptr<AI::AiSceneRuntime> ai_;
@@ -504,13 +525,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         };
 
         PrefabState prefab_;
-        std::optional<Error> saveError_;
-        EditorPlaySaveFactory saveFactory_;
-        std::shared_ptr<PlaySavePhysicsServices> physicsSave_;
-        Runtime::SaveProjectId saveProject_;
-        std::optional<Runtime::RuntimeSceneDefinition> saveBaseline_;
-        std::unique_ptr<EditorPlaySaveHost> save_;
-        bool saveMutation_{};
+        ProjectSceneSaveOwners saves_;
         std::uint64_t tick_{};
         Runtime::SceneRuntimeId identity_;
     };

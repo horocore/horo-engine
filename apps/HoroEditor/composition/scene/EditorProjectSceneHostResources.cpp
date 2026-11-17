@@ -1,10 +1,10 @@
 #include "EditorProjectSceneHostOwner.h"
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
-    /** @copydoc ProjectPlaySceneHost::CaptureAssets */
-    Result<void> ProjectPlaySceneHost::CaptureAssets(const std::filesystem::path &root, JobSystem &jobs,
-                                                     const EditorProjectScenePolicy &policy,
-                                                     const Runtime::RuntimeSceneDefinition *definition) {
+    /** @copydoc ProjectSceneAssetOwners::CaptureAssets */
+    Result<void> ProjectSceneAssetOwners::CaptureAssets(const std::filesystem::path &root, JobSystem &jobs,
+                                                        const EditorProjectScenePolicy &policy,
+                                                        const Runtime::RuntimeSceneDefinition *definition) {
         if (auto captured = CaptureProjectRegistry(root); captured.HasError())
             return captured;
         if ((policy.prefabGranted || (definition && !definition->AssetDependencies().empty())) && !policy.cooked)
@@ -21,8 +21,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         return Result<void>::Success();
     }
 
-    /** @copydoc ProjectPlaySceneHost::CaptureProjectRegistry */
-    Result<void> ProjectPlaySceneHost::CaptureProjectRegistry(const std::filesystem::path &root) {
+    /** @copydoc ProjectSceneAssetOwners::CaptureProjectRegistry */
+    Result<void> ProjectSceneAssetOwners::CaptureProjectRegistry(const std::filesystem::path &root) {
         if (root.empty())
             return Result<void>::Success();
         auto candidate = Assets::PrepareAssetRegistryCandidate(root);
@@ -33,8 +33,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         return Result<void>::Success();
     }
 
-    /** @copydoc ProjectPlaySceneHost::CreateAssetLoaders */
-    void ProjectPlaySceneHost::CreateAssetLoaders(JobSystem &jobs, const EditorProjectScenePolicy &policy) {
+    /** @copydoc ProjectSceneAssetOwners::CreateAssetLoaders */
+    void ProjectSceneAssetOwners::CreateAssetLoaders(JobSystem &jobs, const EditorProjectScenePolicy &policy) {
         loads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_ ? assets_->SceneProvider() : emptyProvider_);
         if (policy.uiSources) {
             uiArtifactLoads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_ ? assets_->ArtifactProvider() : emptyProvider_);
@@ -44,9 +44,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             prefabLoads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_->ArtifactProvider());
     }
 
-    /** @copydoc ProjectPlaySceneHost::CaptureSettings */
-    Result<Physics::PhysicsSceneActivationSettings> ProjectPlaySceneHost::CaptureSettings(const std::filesystem::path &root,
-                                                                                          const EditorProjectScenePolicy &policy) {
+    /** @copydoc ProjectSceneAssetOwners::CaptureSettings */
+    Result<Physics::PhysicsSceneActivationSettings> ProjectSceneAssetOwners::CaptureSettings(
+        const std::filesystem::path &root, const EditorProjectScenePolicy &policy,
+        const Physics::PhysicsSceneActivationAuthority &authority) {
         const auto mode = policy.physicsMode;
         auto physics = policy.physicsSettings ? Result<Physics::PhysicsWorldSettings>::Success(*policy.physicsSettings)
                                               : Physics::PhysicsWorldSettings::Capture({});
@@ -64,7 +65,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (collision.HasError())
                 return Result<Physics::PhysicsSceneActivationSettings>::Failure(collision.ErrorValue());
             collision_ = std::move(collision).Value().settings;
-            auto captured = collision_->Capture(authority_.Capture().collisionFilterGeneration);
+            auto captured = collision_->Capture(authority.Capture().collisionFilterGeneration);
             if (captured.HasError())
                 return Result<Physics::PhysicsSceneActivationSettings>::Failure(captured.ErrorValue());
             simulation = std::move(captured).Value();
