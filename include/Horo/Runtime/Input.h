@@ -1112,7 +1112,7 @@ namespace Horo::Input {
         RawAxisCaptureRange rawAxisRange_{RawAxisCaptureRange::Centered};
         FrameNumber frame_{};
         bool terminal_{};
-        std::vector<GamepadState> baselines_;
+        std::unique_ptr<std::vector<GamepadState>> baselines_; /**< Owned separately so capture moves never allocate. */
     };
 
     /** @brief Headless-capable composition that owns collection, immutable frame commit, and semantic routing. */

@@ -164,7 +164,7 @@ namespace Horo::Input {
         capture.valueType_ = descriptor->valueType;
         capture.rawAxisRange_ = rawAxisRange;
         capture.frame_ = router.Snapshot().frame;
-        capture.baselines_ = router.Snapshot().gamepads;
+        capture.baselines_ = std::make_unique<std::vector<GamepadState>>(router.Snapshot().gamepads);
         return Result<InputBindingCapture>::Success(std::move(capture));
     }
 
@@ -181,7 +181,7 @@ namespace Horo::Input {
         const auto &snapshot = router.Snapshot();
         if (!router.IsContextActive(context) || !snapshot.window.focused || routing.contextIdentity != routing_.contextIdentity ||
             routing.configurationRevision != routing_.configurationRevision || routing.assignmentRevision != routing_.assignmentRevision ||
-            !SameDevices(snapshot, baselines_)) {
+            !SameDevices(snapshot, *baselines_)) {
             terminal_ = true;
             router.FinishBindingCapture();
             return {BindingCaptureStatus::Cancelled, {}};
@@ -194,7 +194,7 @@ namespace Horo::Input {
             router.FinishBindingCapture();
             return {BindingCaptureStatus::Cancelled, {}};
         }
-        const auto binding = SnapshotBinding(snapshot, baselines_, valueType_, rawAxisRange_);
+        const auto binding = SnapshotBinding(snapshot, *baselines_, valueType_, rawAxisRange_);
         terminal_ = binding.status != BindingCaptureStatus::Pending;
         if (terminal_)
             router.FinishBindingCapture();
