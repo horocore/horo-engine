@@ -14,6 +14,8 @@
 #include <vector>
 
 namespace Horo::WorldStreaming {
+    class StreamingFeatureBudgetReservations;
+    class StreamingFeatureBudgetPlan;
     namespace Detail {
         /** @brief Distinct identity for an authority-issued effective-demand revision. */
         struct StreamingCellDemandRevisionTag;
@@ -71,7 +73,8 @@ namespace Horo::WorldStreaming {
 
     /**
      * @brief Unique owner that fences publication and drains every participant on demand reversal.
-     * @details The borrowed scheduler must outlive this owner and must not be mutated for this owner's reservation by other callers.
+     * @details The borrowed scheduler or aggregate authority must outlive this owner and must not move or mutate this owner's
+     *          reservation externally. Aggregate users use the aggregate overload, never independently admit again.
      *          The host must drain interrupted work or transfer this owner before destruction; dropping it is not an acknowledgement.
      *          Successful participant ownership must transfer to the resident/active owner. No new residency authority is introduced.
      */
@@ -95,6 +98,21 @@ namespace Horo::WorldStreaming {
          */
         [[nodiscard]] static Result<StreamingCellDirectionOwner> Create(
             StreamingSchedulerAdmissionLedger &scheduler, const StreamingCellDirectionConfig &config,
+            std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> &participants);
+
+        /** @brief Atomically admits one direction operation and its peaks through the sole aggregate authority.
+         * @param budgets Authority borrowed until terminal release; must not move while this owner is retained.
+         * @param config Exact queued operation, demand revision and mandatory ceilings.
+         * @param peak Complete feature peaks required before work starts.
+         * @param currentAttempt Current canonical cell fence supplied independently by the partition authority.
+         * @param participants Complete retirement order; consumed only on successful admission.
+         * @return Unique owner or typed failure preserving participants and both ledgers.
+         * @details All lifecycle mutation and release route through budgets. Completion releases unrealized peaks only;
+         * shared allocations remain charged through final consumer release and actual cache retirement acknowledgement.
+         */
+        [[nodiscard]] static Result<StreamingCellDirectionOwner> Create(
+            StreamingFeatureBudgetReservations &budgets, const StreamingCellDirectionConfig &config,
+            const StreamingFeatureBudgetPlan &peak, const StreamingFence &currentAttempt,
             std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> &participants);
 
         /**
@@ -121,6 +139,8 @@ namespace Horo::WorldStreaming {
          * @param budget Unique shared owner-frame budget. @param elapsedNanoseconds Monotonic elapsed owner-service time.
          * @return Success or the preserved activation/scheduler error. Frame deferral retains the attempt and its scheduler charge;
          *          interrupted attempts revoke/transfer prepared resources to retirement.
+         * @details Aggregate finalization is admitted before receipt publication and consumes one revision for terminal plus release.
+         *          Reentrant owner/aggregate mutations are rejected through commit and rollback; both owners must remain stationary.
          */
         [[nodiscard]] Result<void> CommitActivation(StreamingCellActivationTransaction &transaction,
                                                     StreamingCellActivationCommitPoint point, StreamingOwnerFrameBudget &budget,
@@ -161,17 +181,25 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] bool RequiresFreshAttempt() const noexcept;
 
     private:
-        StreamingCellDirectionOwner(StreamingSchedulerAdmissionLedger &scheduler, StreamingCellOperation operation,
+        StreamingCellDirectionOwner(StreamingSchedulerAdmissionLedger *scheduler, StreamingFeatureBudgetReservations *budgets,
+                                    StreamingCellOperation operation,
                                     StreamingSchedulerReservation reservation, const StreamingCellDirectionConfig &config,
                                     std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants) noexcept;
+        /** @brief Inspects the selected scheduler without exposing mutable aggregate children. */
+        [[nodiscard]] const StreamingSchedulerAdmissionLedger *Scheduler() const noexcept;
+        /** @brief Routes mutation through the sole selected reservation authority. */
+        [[nodiscard]] Result<StreamingCellOperation> AdvanceReservation(StreamingCellOperationTransition transition);
         /** @brief Retains the first cleanup disposition and fences publication before adapter calls. */
         [[nodiscard]] Result<void> BeginInterruption(StreamingCellOperationTransition reason);
         /** @brief Revokes every participant before ordered cleanup begins. */
         void RevokeParticipants() const noexcept;
         /** @brief Releases canonical terminal capacity exactly once. @return Success or the scheduler error. */
         [[nodiscard]] Result<void> ReleaseTerminal();
+        /** @brief Excludes aggregate mutation during a rejected activation's receipt rollback without consuming a revision. */
+        void RollbackActivation(StreamingCellActivationTransaction &transaction) noexcept;
 
         StreamingSchedulerAdmissionLedger *scheduler_{};
+        StreamingFeatureBudgetReservations *budgets_{};
         StreamingCellOperation operation_;
         std::optional<StreamingSchedulerReservation> reservation_;
         StreamingCellDemandRevision revision_;
@@ -182,5 +210,6 @@ namespace Horo::WorldStreaming {
         bool demandClosed_{};
         bool terminalConsumed_{};
         bool participantsConsumed_{};
+        bool committing_{}; /**< Authority-thread-only callback exclusion; never a second operation authority. */
     };
 }  // namespace Horo::WorldStreaming
