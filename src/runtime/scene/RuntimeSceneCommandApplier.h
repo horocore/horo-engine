@@ -98,12 +98,11 @@ namespace Horo::Runtime {
             if (group.uniformLineage)
                 return ordinary;
             const auto &value = group.entries[index].spawnLineage;
-            const auto found = prepared.find(value);
-            if (found != prepared.end())
+            if (const auto found = prepared.find(value); found != prepared.end())
                 return found->second;
             auto owned =
                 value == group.entries.front().spawnLineage ? ordinary : std::make_shared<const std::vector<Assets::AssetId>>(value);
-            prepared.emplace(value, owned);
+            prepared.try_emplace(value, owned);
             return owned;
         }
 
@@ -111,8 +110,9 @@ namespace Horo::Runtime {
         static std::vector<std::shared_ptr<const void>> ReserveGroupIdentities(const SceneCommandBuffer::CreateGroupCommand &group) {
             std::vector<std::shared_ptr<const void>> identities;
             identities.reserve(group.partitions.size());
-            for (std::size_t index = 0; index < group.partitions.size(); ++index)
+            std::ranges::for_each(group.partitions, [&](const auto &) {
                 identities.push_back(std::make_shared<const std::uint8_t>(0));
+            });
             return identities;
         }
 
@@ -646,12 +646,13 @@ namespace Horo::Runtime {
         Result<void> PrepareOrdinaryOwners(std::span<const std::unique_ptr<SceneStructuralParticipant>> participants,
                                            std::span<const RuntimeEntityView> created, std::span<const EntityRef> destroyed,
                                            std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
+            using enum SceneStructuralPreparationPhase;
             owners.reserve(participants.size());
             std::span<const SceneAgentIdentityProjection> identities;
-            for (const auto phase : {SceneStructuralPreparationPhase::Identity, SceneStructuralPreparationPhase::DerivedResources}) {
+            for (const auto phase : {Identity, DerivedResources}) {
                 if (auto prepared = PrepareOwnerPhase(participants, phase, created, destroyed, owners, identities); prepared.HasError())
                     return prepared;
-                if (phase == SceneStructuralPreparationPhase::Identity) {
+                if (phase == Identity) {
                     if (auto applied = ApplyAgentIdentities(created, identities); applied.HasError())
                         return applied;
                 }
@@ -689,7 +690,7 @@ namespace Horo::Runtime {
         }
 
         /** @brief Preserves complete baseline-owner validation before allocating the detached candidate storage. */
-        static Result<void> ValidateBaselineParticipants(const SceneCommandBuffer &commands, RuntimeSceneView scene,
+        static Result<void> ValidateBaselineParticipants(const SceneCommandBuffer &commands, const RuntimeSceneView &scene,
                                                          std::span<const std::unique_ptr<SceneStructuralParticipant>> participants) {
             std::vector<SceneBaselinePreparationView> baselines;
             for (const auto &command : commands.commands_)

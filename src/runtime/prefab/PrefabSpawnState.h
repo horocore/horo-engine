@@ -140,8 +140,7 @@ namespace Horo::Prefab::Detail {
         Result<void> Check() const {
             if (auto ownerCheck = CheckOwner(); ownerCheck.HasError())
                 return ownerCheck;
-            const auto active = scenes->ActiveScene();
-            if (!active || active->RuntimeId() != scene)
+            if (const auto active = scenes->ActiveScene(); !active || active->RuntimeId() != scene)
                 return Result<void>::Failure(MakeError(PrefabErrors::SceneUnavailable));
             return Result<void>::Success();
         }
@@ -150,8 +149,7 @@ namespace Horo::Prefab::Detail {
         Result<Runtime::RuntimeSceneView> BindingView() const {
             if (auto ownerCheck = CheckOwner(); ownerCheck.HasError())
                 return Result<Runtime::RuntimeSceneView>::Failure(ownerCheck.ErrorValue());
-            const auto active = scenes->ActiveScene();
-            if (active && active->RuntimeId() == scene)
+            if (const auto active = scenes->ActiveScene(); active && active->RuntimeId() == scene)
                 return Result<Runtime::RuntimeSceneView>::Success(*active);
             if (preparedScene && preparedScene->View().RuntimeId() == scene)
                 return Result<Runtime::RuntimeSceneView>::Success(preparedScene->View());

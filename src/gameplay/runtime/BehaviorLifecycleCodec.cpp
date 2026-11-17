@@ -19,9 +19,9 @@ namespace Horo::Gameplay {
             std::set<std::pair<PersistentEntityId, std::uint64_t>> ids;
             const BehaviorLifecycleEntry *prior{};
             for (const auto &value : snapshot.instances) {
-                const std::array valid{value.entity.IsValid(), value.generation.IsValid(), value.instance.IsValid(), value.type.IsValid(),
-                                       ValidLifecycleFlags(value.flags)};
-                if (!std::ranges::all_of(valid, [](bool v) {
+                if (const std::array valid{value.entity.IsValid(), value.generation.IsValid(), value.instance.IsValid(),
+                                           value.type.IsValid(), ValidLifecycleFlags(value.flags)};
+                    !std::ranges::all_of(valid, [](bool v) {
                     return v;
                 }))
                     return Result<void>::Failure(BehaviorRestoreError("Invalid lifecycle identity."));

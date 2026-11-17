@@ -134,8 +134,7 @@ namespace Horo::Runtime {
             seen[member.entity] = true;
             if (member.entity == root)
                 return Result<void>::Success();
-            const auto parent = entries[member.entity].parentInGroup;
-            if (!parent || entries[*parent].restorePartition != partition)
+            if (const auto parent = entries[member.entity].parentInGroup; !parent || entries[*parent].restorePartition != partition)
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
             return Result<void>::Success();
         }
@@ -234,23 +233,23 @@ namespace Horo::Runtime {
 
     /** @copydoc SceneCommandBuffer::ValidateAdmission */
     Result<void> SceneCommandBuffer::ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const {
+        const auto validateCommand = [scene, registry]<typename T>(const T &value) -> Result<void> {
+            if constexpr (std::is_same_v<T, SetLocalTransformCommand>) {
+                return value.admission ? ValidateSceneAdmission(*value.admission, scene) : Result<void>::Success();
+            } else if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, DestroyGroupCommand> ||
+                                 std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>) {
+                constexpr bool checksRegistry = !std::is_same_v<T, DestroyGroupCommand>;
+                if (const auto admitted =
+                        ValidateSceneAdmission(value.admission, scene, checksRegistry ? std::optional{registry} : std::nullopt);
+                    admitted.HasError())
+                    return admitted;
+                if constexpr (std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>)
+                    return value.publicationCheck->ValidatePublication();
+            }
+            return Result<void>::Success();
+        };
         for (const auto &command : commands_) {
-            const auto valid = std::visit([&]<typename T>(const T &value) -> Result<void> {
-                if constexpr (std::is_same_v<T, SetLocalTransformCommand>) {
-                    return value.admission ? ValidateSceneAdmission(*value.admission, scene) : Result<void>::Success();
-                } else if constexpr (std::is_same_v<T, CreateGroupCommand> || std::is_same_v<T, DestroyGroupCommand> ||
-                                     std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>) {
-                    constexpr bool checksRegistry = !std::is_same_v<T, DestroyGroupCommand>;
-                    if (const auto admitted =
-                            ValidateSceneAdmission(value.admission, scene, checksRegistry ? std::optional{registry} : std::nullopt);
-                        admitted.HasError())
-                        return admitted;
-                    if constexpr (std::is_same_v<T, AttachBaselineCommand> || std::is_same_v<T, DetachBaselineCommand>)
-                        return value.publicationCheck->ValidatePublication();
-                }
-                return Result<void>::Success();
-            }, command);
-            if (valid.HasError())
+            if (const auto valid = std::visit(validateCommand, command); valid.HasError())
                 return valid;
         }
         return Result<void>::Success();
