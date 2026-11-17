@@ -101,17 +101,19 @@ TEST_CASE("Platform source edits invalidate both a ready reservation and its fin
     SECTION("After reservation") {
         auto reservation = service.ReserveSession(*terminal.readySession);
         REQUIRE(reservation.HasValue());
-        REQUIRE(reservation.Value().Candidate().platformServices != nullptr);
+        auto lease = std::move(reservation).Value();
+        REQUIRE(lease.Candidate().platformServices != nullptr);
         std::ofstream(project.root / PlatformServicesDocumentPaths::Stats, std::ios::binary | std::ios::app) << ' ';
-        CHECK(reservation.Value().Commit().HasError());
+        CHECK(lease.Commit().HasError());
     }
     SECTION("Shutdown revokes activation while retained CPU models stay owned") {
         auto reservation = service.ReserveSession(*terminal.readySession);
         REQUIRE(reservation.HasValue());
-        const auto retained = reservation.Value().Candidate().platformServices;
+        auto lease = std::move(reservation).Value();
+        const auto retained = lease.Candidate().platformServices;
         REQUIRE(retained != nullptr);
         service.Shutdown();
-        CHECK(reservation.Value().Commit().HasError());
+        CHECK(lease.Commit().HasError());
         CHECK(retained->Stats().Definitions().empty());
         CHECK(retained->Configuration().UsesNullProvider());
     }
