@@ -5,8 +5,18 @@
  */
 #include "HeadlessNetworkWorldOwners.h"
 
+#include <type_traits>
+
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class HeadlessFixedParticipant final : public Runtime::RuntimeLifecycleParticipant {
+        /** @brief Restricts construction to the factory that validates this owner's one-shot dispatch binding. */
+        class ConstructionKey final {
+            friend class HeadlessFixedParticipant;
+            ConstructionKey() noexcept = default;
+        };
+
+        static_assert(!std::is_aggregate_v<ConstructionKey>);
+
     public:
         static Result<std::unique_ptr<Runtime::RuntimeLifecycleParticipant>> Create(std::shared_ptr<WorldOwners> owners,
                                                                                     Runtime::RuntimeDispatchSource source) {
@@ -15,11 +25,19 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Return::Failure(MakeError(Animation::AnimationErrors::GraphAdmissionRejected));
             if (source.BindingStatus() != Runtime::RuntimeDispatchStatus::Valid)
                 return Return::Failure(MakeError(Animation::AnimationErrors::GraphAdmissionRejected));
-            auto participant = std::unique_ptr<HeadlessFixedParticipant>(new HeadlessFixedParticipant(owners, std::move(source)));
+            auto participant = std::make_unique<HeadlessFixedParticipant>(ConstructionKey{}, owners, std::move(source));
             owners->fixedBound = true;
             owners->fixed = participant.get();
             return Return::Success(std::move(participant));
         }
+
+        /** @brief Retains the exact factory-validated generation and dispatch source.
+         * @param owners Existing generation owners retained through the participant's lifecycle.
+         * @param source Validated dispatch source moved only after allocation succeeds.
+         * @details The private key prevents construction outside the validating one-shot factory.
+         */
+        HeadlessFixedParticipant(const ConstructionKey &, std::shared_ptr<WorldOwners> owners, Runtime::RuntimeDispatchSource source)
+            : owners_(std::move(owners)), source_(std::move(source)) {}
 
         HeadlessFixedParticipant(const HeadlessFixedParticipant &) = delete;
         HeadlessFixedParticipant &operator=(const HeadlessFixedParticipant &) = delete;
@@ -121,8 +139,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (!OnOwner() || !attempting_ || !Same(context))
                 return;
             Runtime::RuntimeDispatchFacts facts;
-            const auto status = context.dispatchEvidence.Read(source_, Runtime::RuntimePhase::FixedUpdate, facts);
-            if (status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Retired)
+            if (const auto status = context.dispatchEvidence.Read(source_, Runtime::RuntimePhase::FixedUpdate, facts);
+                status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Retired)
                 return;
             AbortGameplay(context);
             for (std::size_t index = count_; index > 0; --index)
@@ -143,9 +161,6 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
     private:
-        HeadlessFixedParticipant(std::shared_ptr<WorldOwners> owners, Runtime::RuntimeDispatchSource source)
-            : owners_(std::move(owners)), source_(std::move(source)) {}
-
         static Result<void> Rejected() {
             return Result<void>::Failure(MakeError(Animation::AnimationErrors::GraphAdmissionRejected));
         }
