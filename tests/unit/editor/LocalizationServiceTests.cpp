@@ -131,6 +131,12 @@ namespace {
         "workspace.recovery.restore",
         "workspace.recovery.discard",
     };
+    constexpr std::array prefabOverrideKeys{
+        "workspace.prefab.diff.revert_value",
+        "workspace.prefab.diff.revert_component",
+        "workspace.prefab.diff.revert_object",
+        "workspace.prefab.diff.revert_instance",
+    };
     constexpr std::array projectLoadingKeys{
         "project_loading.status.loading_scene",      "project_loading.error.scene",
         "project_loading.error.platform_identity",   "project_loading.error.creation_durability",
@@ -235,6 +241,7 @@ namespace {
         RequireDocumentCatalogKeys(service);
         RequireCatalogKeys(service, contentBrowserKeys);
         RequireCatalogKeys(service, recoveryKeys);
+        RequireCatalogKeys(service, prefabOverrideKeys);
         RequireCatalogKeys(service, projectLoadingKeys);
         RequireCatalogKeys(service, sceneConflictKeys);
         constexpr std::array xrSetupKeys{

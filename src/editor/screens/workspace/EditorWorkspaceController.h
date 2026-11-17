@@ -889,6 +889,10 @@ namespace Horo::Editor {
         [[nodiscard]] bool ProcessCreatePrefabCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Routes exact source/member gestures after owner/session/revision and protected-boundary checks. */
         [[nodiscard]] bool ProcessPrefabHierarchyCommand(const EditorWorkspaceViewCommandData &command);
+
+        /** @brief Commits a validated inspector revert while the exact source bytes and project lease remain pinned. */
+        [[nodiscard]] Result<SceneCommandResult> RevertPrefabHierarchyOverrides(const PrefabHierarchyCommand &request,
+                                                                                const PrefabHierarchyEntry &entry);
         /** @brief Retires cached source and selection evidence after a successful scene opening replacement. */
         void RetirePrefabHierarchy() noexcept;
         /** @brief Contains every postcommit observer failure without reverting authoritative Scene or asset state.

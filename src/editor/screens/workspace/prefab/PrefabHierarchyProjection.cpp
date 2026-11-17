@@ -70,6 +70,16 @@ namespace Horo::Editor {
             return "workspace.prefab.diff.unavailable";
         }
 
+        /** @brief Copies command target identity without giving presentation mutation authority. */
+        void SetRevertTargets(PrefabValueDiffPresentation &row, const Prefab::PrefabValueOverrideTarget &target,
+                              const bool hasValueIntent) {
+            if (hasValueIntent)
+                row.revertValue = target;
+            if (const auto *property = std::get_if<Prefab::PrefabPropertyAddress>(&target))
+                row.revertComponent =
+                    Prefab::PrefabComponentOverrideTarget{property->Object(), property->ComponentType(), property->ComponentInstance()};
+        }
+
         /** @brief Copies bounded immutable values for the selected occurrence; panels never read documents or interpret payloads. */
         void CaptureValues(PrefabHierarchyEntry &row, const SceneSource::ScenePrefabInstanceProjection &placement) {
             row.valueInspectionFailure = placement.valueInspectionFailure;
@@ -93,10 +103,12 @@ namespace Horo::Editor {
                         row.valueDiff.back().effective.clear();
                         row.valueDiff.back().effectivePresent = false;
                         row.valueDiff.back().changed = true;
-                    }
+                        SetRevertTargets(row.valueDiff.back(), value.target, false);
+                    } else if (value.origin == Prefab::PrefabValueOrigin::Instance && row.valueDiff.back().changed)
+                        SetRevertTargets(row.valueDiff.back(), value.target, true);
                 }
             for (const auto &conflict : snapshot.Conflicts())
-                if (matches(conflict.original.target))
+                if (matches(conflict.original.target)) {
                     row.valueDiff.push_back({TargetLabel(conflict.original.target),
                                              {},
                                              ValueLabel(conflict.original.value),
@@ -106,8 +118,10 @@ namespace Horo::Editor {
                                              true,
                                              false,
                                              true});
+                    SetRevertTargets(row.valueDiff.back(), conflict.original.target, true);
+                }
             for (const auto &orphan : snapshot.Orphans())
-                if (matches(orphan.original.target))
+                if (matches(orphan.original.target)) {
                     row.valueDiff.push_back({TargetLabel(orphan.original.target),
                                              {},
                                              ValueLabel(orphan.original.value),
@@ -117,6 +131,8 @@ namespace Horo::Editor {
                                              true,
                                              false,
                                              true});
+                    SetRevertTargets(row.valueDiff.back(), orphan.original.target, true);
+                }
             for (const auto &evidence : snapshot.Components())
                 std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
                     using T = std::decay_t<decltype(item)>;
@@ -127,8 +143,8 @@ namespace Horo::Editor {
                             return item.original;
                     }();
                     const auto *add = std::get_if<Prefab::PrefabAddComponentOverride>(&record);
-                    if (const auto &object = add ? add->object : std::get<Prefab::PrefabRemoveComponentOverride>(record).target.object;
-                        row.target.member && row.target.member->object != object)
+                    const auto &object = add ? add->object : std::get<Prefab::PrefabRemoveComponentOverride>(record).target.object;
+                    if (row.target.member && row.target.member->object != object)
                         return;
                     const char *state = add ? "workspace.prefab.diff.component_added" : "workspace.prefab.diff.component_removed";
                     if constexpr (std::is_same_v<T, Prefab::PrefabComponentOverrideConflict>)
@@ -148,6 +164,7 @@ namespace Horo::Editor {
                                              true,
                                              false,
                                              false});
+                    row.valueDiff.back().revertComponent = Prefab::PrefabComponentOverrideTarget{object, type, instance};
                 }, evidence);
             for (const auto &opaque : snapshot.Opaque())
                 if (!row.target.member || row.target.member == opaque.object)

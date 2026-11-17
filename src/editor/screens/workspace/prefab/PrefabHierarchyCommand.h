@@ -13,7 +13,22 @@ namespace Horo::Editor {
         LocateInstance,
         DuplicateInstance,
         DeleteInstance,
-        ReparentInstance
+        ReparentInstance,
+        RevertOverrides
+    };
+
+    /** @brief Presentation selection level for one instance override revert. */
+    enum class PrefabHierarchyRevertScope : std::uint8_t {
+        Value,
+        Component,
+        Object,
+        Instance
+    };
+
+    /** @brief A row ordinal is meaningful only within the exact fenced presentation publication. */
+    struct PrefabHierarchyRevert final {
+        PrefabHierarchyRevertScope scope;
+        std::uint32_t row{}; /**< Used only for a value or component selection. */
     };
 
     /** @brief Exact presentation evidence copied at gesture time and checked by the document owner. */
@@ -24,6 +39,7 @@ namespace Horo::Editor {
         PrefabHierarchyTarget target;
         PrefabHierarchyAction action{PrefabHierarchyAction::Select};
         std::optional<SceneSource::SceneObjectId> destinationParent; /**< Only ordinary authored scene parents are representable. */
+        std::optional<PrefabHierarchyRevert> revert;
     };
 
     /**

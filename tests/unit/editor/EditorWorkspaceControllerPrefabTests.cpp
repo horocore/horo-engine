@@ -1,5 +1,7 @@
 #include "PrefabWorkspaceTestSupport.h"
 
+#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -8,6 +10,68 @@
 
 namespace Horo::Editor {
     using namespace PrefabWorkspaceTestSupport;
+
+    /** @brief Prepares an ordinary root value edit against the real source capture authority. */
+    static Prefab::PrefabValueOverrideSet RootValueIntent(Project &project) {
+        const auto limits = ScenePrefabLimits();
+        const std::array roots{project.asset};
+        const auto source = project.Capture(project.registry.Snapshot(), roots, limits, {});
+        REQUIRE(source.HasValue());
+        const auto resolved = source.Value().sources.resolver.Resolve(project.asset, project.instance, limits);
+        REQUIRE(resolved.HasValue());
+        const auto address = Prefab::PrefabObjectAddress::Create({}, {0}).Value();
+        const auto edit =
+            Prefab::PreparePrefabValueEdit(resolved.Value(), {}, {Prefab::PrefabValueEditKind::Assign, address, Math::Transform{{1, 2, 3}}},
+                                           nullptr, limits);
+        REQUIRE(edit.HasValue());
+        return edit.Value().rebased;
+    }
+
+    TEST_CASE("Workspace prefab inspector revert is fenced to the selected row and current source bytes", "[editor][prefab][native]") {
+        Workspace workspace;
+        workspace.project.WriteScene(RootValueIntent(workspace.project));
+        workspace.Open(PrefabAsset(10).Asset());
+        auto &owner = *workspace.controller;
+        const auto &model = owner.ViewModel();
+        const auto projection = model.prefabHierarchy;
+        REQUIRE(projection);
+        REQUIRE(projection->entries.size() == 3);
+        const auto &root = projection->entries.front();
+        const auto row = std::ranges::find_if(root.valueDiff, [](const auto &entry) {
+            return entry.revertValue.has_value();
+        });
+        REQUIRE(row != root.valueDiff.end());
+        auto command = Intent(model, root.target, PrefabHierarchyAction::RevertOverrides);
+        command.prefabHierarchy->revert =
+            PrefabHierarchyRevert{PrefabHierarchyRevertScope::Value, static_cast<std::uint32_t>(row - root.valueDiff.begin())};
+        const auto revision = model.documentRevision;
+
+        SECTION("the selected record reverts through normal workspace history") {
+            owner.ProcessCommand(command);
+            CHECK(model.documentRevision.value == revision.value + 1);
+            CHECK(model.isDirty);
+            CHECK_FALSE(model.prefabHierarchy->entries.front().hasOverrides);
+            owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+            CHECK_FALSE(model.isDirty);
+            CHECK(model.prefabHierarchy->entries.front().hasOverrides);
+            owner.ProcessCommand(command);
+            CHECK_FALSE(model.isDirty);
+            CHECK(model.prefabHierarchy->entries.front().hasOverrides);
+        }
+        SECTION("a narrower scope rejects an invalid row") {
+            command.prefabHierarchy->revert->row = static_cast<std::uint32_t>(root.valueDiff.size());
+            owner.ProcessCommand(command);
+            CHECK(model.documentRevision == revision);
+            CHECK_FALSE(model.isDirty);
+        }
+        SECTION("a concurrent source edit rejects before changing the document") {
+            workspace.project.WriteSource("Changed by another owner");
+            owner.ProcessCommand(command);
+            CHECK(model.documentRevision == revision);
+            CHECK_FALSE(model.isDirty);
+            CHECK(model.prefabHierarchy->entries.front().hasOverrides);
+        }
+    }
 
     TEST_CASE("Workspace prefab selection and source navigation retain exact ownership without ordinary mutation",
               "[editor][prefab][native]") {

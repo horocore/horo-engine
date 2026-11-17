@@ -429,6 +429,23 @@ namespace Horo::Editor {
         std::uint64_t expectedReplacementEpoch{};
     };
 
+    /** @brief Explicit selection of all value and component override intent on one placement. */
+    struct AllScenePrefabOverrides final {};
+
+    /** @brief Exact revert levels: one value, one component occurrence, one object or the entire placement. */
+    using ScenePrefabRevertTarget = std::variant<Prefab::PrefabValueOverrideTarget, Prefab::PrefabComponentOverrideTarget,
+                                                 Prefab::PrefabObjectAddress, AllScenePrefabOverrides>;
+
+    /** @brief Revision-fenced removal of one explicitly selected scope of instance override intent. */
+    struct RevertScenePrefabOverridesCommand final {
+        Prefab::PrefabInstanceId instance;
+        DocumentRevision expectedRevision;
+        Prefab::PrefabResolutionRevision expectedSource;
+        Sha256Digest expectedSchema;
+        ScenePrefabRevertTarget target;
+        std::uint64_t expectedReplacementEpoch{};
+    };
+
     /** @brief Typed request to duplicate a placement with a fresh scene-local instance identity. */
     struct DuplicateScenePrefabInstanceCommand final {
         Prefab::PrefabInstanceId source;
@@ -627,13 +644,25 @@ namespace Horo::Editor {
                                                          const Prefab::PrefabLimitProfile &limits,
                                                          const CancellationToken &cancellation = {});
 
+        /** @brief Removes only the selected instance intent and records one undoable scene change.
+         * @param command Exact selection and document, source and schema fences. @param sources Current pinned source context.
+         * @param schemas Current registry schema evidence. @param limits Captured canonical policy.
+         * @param cancellation Cooperative stop until owner publication.
+         * @return The committed change, no-op or typed rejection without mutation.
+         */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const RevertScenePrefabOverridesCommand &command,
+                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                         const Prefab::PrefabLimitProfile &limits,
+                                                         const CancellationToken &cancellation = {});
+
     private:
         friend class SceneDocumentCommandExecutor;
         /** @brief Prepare one value-history replay completely before its no-throw publication.
          * @param undo True for undo, false for redo. @return Canonical history result preserving the current opening fence.
          */
         [[nodiscard]] Result<SceneCommandResult> Replay(bool undo);
-        /** @brief Share revision fences, detached preparation and the no-throw owner publication for both typed command families. */
+        /** @brief Share revision fences, detached preparation and the no-throw publication across typed commands. */
         template <class Command>
         [[nodiscard]] Result<SceneCommandResult> ExecuteEdit(const Command &command, const Prefab::PrefabSourceResolverSnapshot &sources,
                                                              const Prefab::PrefabValueSchemaSnapshot *schemas,

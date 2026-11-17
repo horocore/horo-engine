@@ -4,6 +4,26 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Emits one exact explicitly selectable revert intent from a retained inspector projection. */
+        void DrawOverrideRevert(const PrefabHierarchyEntry &entry, const PrefabHierarchyProjection &projection,
+                                EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
+                                const PrefabHierarchyRevert selection, const char *label, const bool enabled) {
+            if (Ui::Button({.label = context.localization.Get("editor", label).c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .enabled = enabled,
+                            .font = context.theme.fonts.sans,
+                            .style = {.width = Ui::StyleWidth::FillAvailable}})) {
+                command.command = EditorWorkspaceViewCommand::PrefabHierarchy;
+                command.prefabHierarchy = PrefabHierarchyCommand{projection.documentSession,
+                                                                 projection.publication,
+                                                                 projection.documentRevision,
+                                                                 entry.target,
+                                                                 PrefabHierarchyAction::RevertOverrides,
+                                                                 {},
+                                                                 selection};
+            }
+        }
+
         /** @brief Draws typed prefab ownership actions from immutable projection evidence without panel state. */
         void DrawPrefabOwnershipActions(const PrefabHierarchyEntry &entry, const PrefabHierarchyProjection &projection,
                                         EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
@@ -55,7 +75,10 @@ namespace Horo::Editor {
             Ui::ErrorText(entry->failure->message.c_str(), context.theme.fonts);
         if (entry->valueInspectionFailure)
             Ui::ErrorText(entry->valueInspectionFailure->message.c_str(), context.theme.fonts);
-        for (const auto &value : entry->valueDiff) {
+        const bool canRevert =
+            !viewModel.prefabHierarchyUnavailable && !viewModel.sceneExternalConflict && viewModel.playState == EditorPlayState::Idle;
+        for (std::uint32_t index = 0; index < entry->valueDiff.size(); ++index) {
+            const auto &value = entry->valueDiff[index];
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, value.target, Theme::Text(), context.theme.fonts);
             if (value.originKey)
                 Ui::Hint(context.localization.Get("editor", value.originKey).c_str(), context.theme.fonts);
@@ -74,9 +97,23 @@ namespace Horo::Editor {
                 Ui::Hint(context.localization.Get("editor", "workspace.prefab.diff.schema_default").c_str(), context.theme.fonts);
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, *value.schemaDefault, Theme::Muted(), context.theme.fonts);
             }
+            ImGui::PushID(static_cast<int>(index));
+            if (value.revertValue)
+                DrawOverrideRevert(*entry, *viewModel.prefabHierarchy, command, context, {PrefabHierarchyRevertScope::Value, index},
+                                   "workspace.prefab.diff.revert_value", canRevert);
+            if (value.revertComponent)
+                DrawOverrideRevert(*entry, *viewModel.prefabHierarchy, command, context, {PrefabHierarchyRevertScope::Component, index},
+                                   "workspace.prefab.diff.revert_component", canRevert);
+            ImGui::PopID();
         }
         if (entry->valueDiffIncomplete)
             Ui::Hint(context.localization.Get("editor", "workspace.prefab.diff.omitted").c_str(), context.theme.fonts);
+        if (entry->hasOverrides) {
+            const auto scope = entry->target.member ? PrefabHierarchyRevertScope::Object : PrefabHierarchyRevertScope::Instance;
+            DrawOverrideRevert(*entry, *viewModel.prefabHierarchy, command, context, {scope},
+                               entry->target.member ? "workspace.prefab.diff.revert_object" : "workspace.prefab.diff.revert_instance",
+                               canRevert);
+        }
         DrawPrefabOwnershipActions(*entry, *viewModel.prefabHierarchy, command, context);
     }
 

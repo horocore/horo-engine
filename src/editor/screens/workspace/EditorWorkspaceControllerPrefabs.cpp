@@ -7,6 +7,7 @@
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <new>
 #include <type_traits>
@@ -101,6 +102,23 @@ namespace Horo::Editor {
                 default:
                     return Result<SceneCommandResult>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
             }
+        }
+
+        /** @brief Translates a previously validated presentation choice to canonical Scene-owned addresses. */
+        std::optional<ScenePrefabRevertTarget> OverrideRevertTarget(const PrefabHierarchyRevert &revert,
+                                                                    const PrefabHierarchyEntry &entry) {
+            switch (revert.scope) {
+                using enum PrefabHierarchyRevertScope;
+                case Value:
+                    return *entry.valueDiff[revert.row].revertValue;
+                case Component:
+                    return *entry.valueDiff[revert.row].revertComponent;
+                case Object:
+                    return entry.target.member->object;
+                case Instance:
+                    return AllScenePrefabOverrides{};
+            }
+            return std::nullopt;
         }
     }  // namespace
 
@@ -281,6 +299,43 @@ namespace Horo::Editor {
             m_viewModel.prefabSelection.reset();
     }
 
+    /** @copydoc EditorWorkspaceController::RevertPrefabHierarchyOverrides */
+    Result<SceneCommandResult> EditorWorkspaceController::RevertPrefabHierarchyOverrides(const PrefabHierarchyCommand &request,
+                                                                                         const PrefabHierarchyEntry &entry) {
+        using Return = Result<SceneCommandResult>;
+        auto selection = OverrideRevertTarget(*request.revert, entry);
+        if (!selection)
+            return Return::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
+        if (!m_prefabSources || !m_prefabSourceCapture || !m_navigationPrefabSchemas ||
+            m_assetRegistry.Revision() != m_prefabSources->resolver.RegistryRevision())
+            return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
+        const auto instances = m_document.PrefabInstances();
+        const auto instance = std::ranges::find(instances, request.target.instance, &ScenePrefabInstance::instanceId);
+        if (instance == instances.end())
+            return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideOrphan));
+        const auto limits = PrefabLimits();
+        if (limits.HasError())
+            return Return::Failure(limits.ErrorValue());
+        const std::array roots{instance->sourcePrefab.Asset()};
+        auto previous = m_prefabSources->resolver.CaptureResolutionRevision(roots.front(), limits.Value());
+        if (previous.HasError())
+            return Return::Failure(previous.ErrorValue());
+        const auto cancellation = m_prefabCancellation.Token();
+        const auto fresh = m_prefabSourceCapture(m_assetRegistry, roots, limits.Value(), cancellation);
+        if (fresh.HasError())
+            return Return::Failure(fresh.ErrorValue());
+        if (auto current = fresh.Value().sources.inputs.VerifyUnchanged(cancellation); current.HasError())
+            return Return::Failure(current.ErrorValue());
+        SceneDocumentPrefabValueCommands owner{m_document, m_history};
+        return owner.Execute(RevertScenePrefabOverridesCommand{request.target.instance,
+                                                               {request.documentRevision},
+                                                               std::move(previous).Value(),
+                                                               m_navigationPrefabSchemas->Revision(),
+                                                               std::move(*selection),
+                                                               m_prefabObservedDocumentEpoch},
+                             fresh.Value().sources.resolver, &*m_navigationPrefabSchemas, limits.Value(), cancellation);
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessPrefabHierarchyCommand */
     bool EditorWorkspaceController::ProcessPrefabHierarchyCommand(const EditorWorkspaceViewCommandData &command) {
         if (command.command != EditorWorkspaceViewCommand::PrefabHierarchy)
@@ -318,6 +373,10 @@ namespace Horo::Editor {
         }
         if (m_viewModel.sceneExternalConflict || m_playSession.IsActive())
             return true;
+        if (request.action == PrefabHierarchyAction::RevertOverrides) {
+            HandleDocumentCommandResult(RevertPrefabHierarchyOverrides(request, *admitted.Value()), "Revert prefab overrides");
+            return true;
+        }
         HandleDocumentCommandResult(ApplyMutation(m_documentCommands, request), "Prefab hierarchy");
         return true;
     }
