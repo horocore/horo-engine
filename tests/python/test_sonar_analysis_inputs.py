@@ -274,3 +274,26 @@ def test_real_ninja_dependency_graph_survives_transfer_and_recompiles(source, mo
     restore(source)
     assert (build / "compile_commands.json").read_bytes() == database
     subprocess.run(command, check=True, cwd=build)
+
+
+@pytest.mark.parametrize("arguments", [
+    ("config", "--local", "core.sshCommand", "untrusted-command"),
+    ("-c", "alias.untrusted=!untrusted-command", "untrusted"),
+    ("update-ref", "refs/heads/untrusted", "HEAD"),
+])
+def test_analysis_queries_cannot_launch_git_mutations(source, monkeypatch, arguments):
+    workspace = source["workspace"]
+    config = workspace / ".git/config"
+    original_config = config.read_bytes()
+    original_head = git(workspace, "rev-parse", "HEAD")
+
+    def reject_child(*args, **kwargs):
+        pytest.fail("An undeclared analysis query reached subprocess execution")
+
+    with monkeypatch.context() as blocked:
+        blocked.setattr(INPUTS.subprocess, "check_output", reject_child)
+        with pytest.raises(ValueError, match="declared read-only Git operation"):
+            INPUTS.git(workspace, *arguments)
+    assert config.read_bytes() == original_config
+    assert git(workspace, "rev-parse", "HEAD") == original_head
+    assert not (workspace / ".git/refs/heads/untrusted").exists()

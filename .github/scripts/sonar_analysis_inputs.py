@@ -43,7 +43,17 @@ def executable(name: str) -> str:
 
 
 def git(workspace: Path, *args: str) -> str:
-    return subprocess.check_output([executable("git"), "-C", str(workspace), *args], text=True).strip()
+    """Read only the identity and tracked paths required by the transfer protocol."""
+    if args not in (
+        ("rev-parse", "HEAD"),
+        ("rev-parse", "HEAD^{tree}"),
+        ("diff", "--quiet", "HEAD", "--"),
+        ("ls-files", "-z"),
+    ):
+        raise ValueError("Analysis queries require a declared read-only Git operation")
+    return subprocess.check_output(
+        ["git", "-C", str(workspace), *args], executable=executable("git"), shell=False, text=True
+    ).strip()
 
 
 def source_identity(workspace: Path, expected: str) -> str:
@@ -88,7 +98,9 @@ def compile_outputs(entries: list[dict]) -> set[Path]:
 def ninja_inputs(build: Path) -> set[Path]:
     entries = json.loads((build / COMPILE_DATABASE_NAME).read_text(encoding="utf-8"))
     outputs = compile_outputs(entries)
-    output = subprocess.check_output([executable("ninja"), "-C", str(build), "-t", "deps"], text=True)
+    output = subprocess.check_output(
+        ["ninja", "-C", str(build), "-t", "deps"], executable=executable("ninja"), shell=False, text=True
+    )
     paths = set()
     current = False
     for line in output.splitlines():
