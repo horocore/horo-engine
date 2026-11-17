@@ -129,7 +129,7 @@ namespace Horo::AI {
                 h.runtime.BeginShutdown();
             }
             SECTION("publication replacement") {
-                auto replacement = Publish(h.runtime, h.fixtures.front());
+                auto replacement = Publish(h.runtime, MakeFixture(1, 11, 8, 0, 2));
                 CHECK(h.runtime.CaptureDecisionSnapshotAtSafePoint(h.handle).HasError());
             }
             CHECK_FALSE(reserved.Value().CanAdmit());
