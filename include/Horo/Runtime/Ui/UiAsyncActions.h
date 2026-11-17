@@ -158,6 +158,8 @@ namespace Horo::Runtime::Ui {
         struct Storage;
         friend class UiActionRouter;
         friend class UiControlStateMachine;
+        /** @brief Appends metadata-only pending rows without exposing payload, producer or error storage. */
+        [[nodiscard]] Result<void> AppendPendingInspection(std::vector<UiActionInspectionRow> &rows, std::size_t maximumRows) const;
         /** @brief Validates the still-active exact admission and immutable route/semantic audience of a cutoff copy.
          * @details Mutable progress/terminal/latest-record changes are deliberately observed on the next frame.
          */

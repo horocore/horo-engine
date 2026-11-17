@@ -1253,6 +1253,17 @@ rejection/error/cancellation and stale revisions leave committed state unchanged
 The provider cannot reenter UI or publish state during preparation; asynchronous
 work returns private evidence for later owner-thread preparation, never UI callbacks.
 
+At an explicit diagnostic safe point, `UiHotReload::Inspect` copies binding,
+provider and action records from one current canvas generation. A route selection
+must name the exact attached route incarnation. The capture owns its records and
+retains no runtime owner, provider callback, capability token or action
+payload. Public committed values are copied, while UserSensitive, Restricted
+and Secret values are always redacted, including fallbacks. The capture reports
+the store's recorded write admission without calling its provider. Capture
+exceeding a row budget fails before exposing a result. Replaced leases and
+stopped publishers reject new captures, and records already captured remain
+readable. Regular frame work never captures these diagnostics.
+
 The new provider capability's `Prepare` boundary is exception-free (`noexcept`),
 matching the Foundation public engine module policy. The owned adapter converts
 private standard/third-party exceptions into its typed `Result` before returning;

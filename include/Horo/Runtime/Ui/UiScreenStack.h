@@ -359,6 +359,8 @@ namespace Horo::Runtime::Ui {
         /** @brief Borrows a live route's action router for one owner-thread operation. @param route Exact route. @return Router or null;
          * never retain across route mutation. */
         [[nodiscard]] UiActionRouter *Actions(UiRouteInstanceId route) noexcept;
+        /** @brief Borrows an exact active route's action source for a synchronous owner-thread read. */
+        [[nodiscard]] const UiActionRouter *Actions(UiRouteInstanceId route) const noexcept;
 
         /** @brief Closes new operation admission while retaining committed routes for drain/inspection. */
         [[nodiscard]] Result<void> BeginRetirement();

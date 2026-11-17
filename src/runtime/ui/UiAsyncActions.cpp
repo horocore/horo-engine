@@ -70,6 +70,8 @@ namespace Horo::Runtime::Ui {
         /** @brief Slot lifetime is shared by store, completion lease and cancellation observers only. */
         struct Record final {
             UiAsyncActionSnapshot snapshot;
+            UiActionOrigin origin{UiActionOrigin::Count};
+            std::optional<UiActionId> action;
             std::thread::id ownerThread{std::this_thread::get_id()};
             // Sole owner-thread writer; workers read only this signal. Tokens pin storage through shutdown.
             std::atomic<bool> cancelled{false};
@@ -309,11 +311,30 @@ namespace Horo::Runtime::Ui {
             return Failure<UiAsyncActionProducer>(UiErrors::AsyncActionCapacityExceeded);
         const UiActionOperationId operation{request.id.ownership, UiActionOperationSequence::Create(request.id.sequence.Value()).Value()};
         free->snapshot = {request.source, request.id, operation};
+        free->origin = request.origin;
+        free->action = UiActionIdOf(request.command);
         free->snapshot.route = storage->route;
         free->cancelled.store(false);
         free->retained = true;
         storage->lastRequestSequence = request.id.sequence.Value();
         return Result<UiAsyncActionProducer>::Success(UiAsyncActionProducer{std::move(free)});
+    }
+
+    /** @copydoc UiAsyncActionStore::AppendPendingInspection */
+    Result<void> UiAsyncActionStore::AppendPendingInspection(std::vector<UiActionInspectionRow> &rows,
+                                                             const std::size_t maximumRows) const {
+        const auto *const storage = StateStorage();
+        if (!storage || storage->ownerThread != std::this_thread::get_id())
+            return Failure(UiErrors::ActionLifecycleUnavailable);
+        for (const auto &record : storage->records) {
+            if (!record->retained || !record->snapshot.Busy())
+                continue;
+            if (rows.size() == maximumRows)
+                return Failure(UiErrors::ActionQueueCapacityExceeded);
+            const auto &pending = record->snapshot;
+            rows.push_back({pending.source, pending.request, record->origin, record->action, pending.operation});
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc UiAsyncActionStore::Snapshot */

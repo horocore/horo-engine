@@ -241,6 +241,57 @@ namespace Horo::Runtime::Ui {
         std::size_t requiredUnavailable{};
     };
 
+    /** @brief Copied registration evidence, including registrations revoked in the current generation. */
+    struct UiBindingProviderInspection final {
+        UiBindingProviderInstanceId instance;
+        UiBindingProviderSchema schema; /**< Complete copied metadata, including unbound properties. */
+        UiBindingProviderScopeKind scope{UiBindingProviderScopeKind::Count};
+        UiBindingSnapshotRevision revision;
+        bool active{};
+        bool writesRevoked{};
+    };
+
+    /** @brief Retained write admission as observed by the store without calling the provider. */
+    enum class UiBindingWriteInspection : std::uint8_t {
+        NotAdmitted,
+        Admitted,
+        Revoked
+    };
+
+    /** @brief Distinguishes public projection, withheld values and unavailable targets. */
+    enum class UiBindingValueInspection : std::uint8_t {
+        Unavailable,
+        Redacted,
+        Visible
+    };
+
+    /** @brief One owned binding row; edit drafts, command values and capability tokens are excluded. */
+    struct UiBindingInspectionRow final {
+        UiBindingId binding;
+        UiElementHandle element;
+        UiBindingTargetProperty target{};
+        UiBindingDirection direction{};
+        UiBindingProviderInstanceId provider;
+        std::uint16_t propertySlot{}; /**< Exact slot in the matching provider's copied schema. */
+        UiBindingValueOrigin origin{UiBindingValueOrigin::Unavailable};
+        UiBindingValueInspection valueState{UiBindingValueInspection::Unavailable};
+        std::optional<UiBindingValue> value; /**< Only the committed public target value. */
+        UiBindingDirty pending{UiBindingDirty::None};
+        UiBindingWriteInspection write{UiBindingWriteInspection::NotAdmitted};
+        std::optional<UiBindingCommitTrigger> trigger;
+        std::optional<UiActionRequestId> pendingRequest;
+        std::optional<UiActionOperationId> pendingOperation;
+    };
+
+    /** @brief Owned diagnostic frame that remains readable after the captured generation is replaced. */
+    struct UiBindingInspectionSnapshot final {
+        UiCanvasInstanceId canvas;
+        UiRuntimeTreeRevision tree;
+        UiBindingApplyResult publication;
+        std::vector<UiBindingProviderInspection> providers;
+        std::vector<UiBindingInspectionRow> bindings;
+    };
+
     /**
      * @brief Sole mutable binding owner for one exact retained canvas generation.
      * @details Create is load-time and copies schema, descriptors and initial values. Apply and Unregister run only on the Runtime UI
@@ -312,6 +363,17 @@ namespace Horo::Runtime::Ui {
          * @return Copied count or capacity/lifecycle failure. Layout work was already queued by publication.
          */
         [[nodiscard]] Result<std::size_t> DrainDirty(std::span<UiBindingTargetDirty> output);
+        /**
+         * @brief Captures bounded provider and binding metadata at an explicit diagnostic safe point.
+         * @param tree Exact active canvas tree.
+         * @param maximumProviders Caller budget for provider rows.
+         * @param maximumBindings Caller budget for binding rows.
+         * @return Owned public-only snapshot or typed stale, lifecycle or capacity failure.
+         * @note Owner thread only. May allocate outside frame work; no provider calls or dirty acknowledgements occur.
+         */
+        [[nodiscard]] Result<UiBindingInspectionSnapshot> Inspect(const UiElementTree &tree, std::size_t maximumProviders,
+                                                                  std::size_t maximumBindings) const;
+
         /** @brief Returns current publication/content evidence without polling providers. @return Latest committed summary. */
         [[nodiscard]] UiBindingApplyResult Current() const noexcept;
         /** @brief Checks an exact live provider registration without invoking gameplay code.

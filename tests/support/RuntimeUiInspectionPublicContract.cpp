@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiHotReload.h"
 #include "Horo/Runtime/Ui/UiLayoutInspector.h"
 #include "Horo/Runtime/Ui/UiLayoutWork.h"
 #include "Horo/Runtime/Ui/UiPresentationProfiles.h"
@@ -19,3 +20,7 @@ static_assert(requires(const Horo::Runtime::Ui::UiComputedStyleSnapshot &compute
                        const Horo::Runtime::Ui::UiThemeSurfaceProperties &properties) {
     Horo::Runtime::Ui::ProjectUiThemeSurface(computed, input, properties);
 });
+
+static_assert(std::is_copy_constructible_v<Horo::Runtime::Ui::UiCanvasInspectionSnapshot>);
+static_assert(requires(const Horo::Runtime::Ui::UiHotReload &publisher, const Horo::Runtime::Ui::UiReloadLease &lease,
+                       Horo::Runtime::Ui::UiCanvasId canvas) { publisher.Inspect(lease, canvas); });
