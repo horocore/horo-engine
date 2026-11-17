@@ -11,7 +11,7 @@
 #include <fstream>
 
 #if defined(_WIN32)
-#include <windows.h>
+#include <Windows.h>
 #elif defined(__APPLE__)
 #include <fcntl.h>
 #include <unistd.h>
@@ -270,13 +270,13 @@ namespace Horo::Editor::Offline {
         }
 
         /** @brief Binds informational integrity rows to the actual bytes written. */
-        Result<void> WriteRecorded(const std::filesystem::path &root, const std::string &relative, std::span<const std::uint8_t> bytes,
-                                   Json &files) {
+        Result<void> WriteRecorded(const std::filesystem::path &root, const std::filesystem::path &relative,
+                                   std::span<const std::uint8_t> bytes, Json &files) {
             if (auto parents = PrepareParents(root, relative); parents.HasError())
                 return parents;
             if (auto written = Write(root / relative, bytes); written.HasError())
                 return written;
-            files[relative] = FormatSha256(ComputeSha256(std::as_bytes(bytes)));
+            files[relative.generic_string()] = FormatSha256(ComputeSha256(std::as_bytes(bytes)));
             return Result<void>::Success();
         }
 
@@ -313,12 +313,12 @@ namespace Horo::Editor::Offline {
         Json ProgramRows(const AtomicShaderCookPackage &family) {
             auto programs = Json::array();
             const auto programsInventory = family.programs;
-            for (std::size_t index = 0; index < programsInventory.size(); ++index) {
-                const auto &artifact = programsInventory[index].compiled->artifacts.front();
-                programs.push_back({{"prefix", programsInventory[index].prefix},
-                                    {"sourceIdentity", programsInventory[index].manifest->sourceIdentity},
-                                    {"sourceRevision", programsInventory[index].manifest->sourceRevision},
-                                    {"sourceDigest", FormatSha256(programsInventory[index].compiled->sourceDigest)},
+            for (const auto &program : programsInventory) {
+                const auto &artifact = program.compiled->artifacts.front();
+                programs.push_back({{"prefix", program.prefix},
+                                    {"sourceIdentity", program.manifest->sourceIdentity},
+                                    {"sourceRevision", program.manifest->sourceRevision},
+                                    {"sourceDigest", FormatSha256(program.compiled->sourceDigest)},
                                     {"compiledKey", FormatSha256(artifact.artifactKey)},
                                     {"payloadDigest", FormatSha256(artifact.reflection->payloadDigest)},
                                     {"cookedKey", FormatSha256(artifact.reflection->cookedArtifactKey)}});
@@ -356,9 +356,8 @@ namespace Horo::Editor::Offline {
             using Files = Result<Json>;
             auto files = Json::object();
             const auto programsInventory = family.programs;
-            for (std::size_t index = 0; index < programsInventory.size(); ++index)
-                if (auto written = WriteProgram(root, programsInventory[index].prefix, *programsInventory[index].compiled, files);
-                    written.HasError())
+            for (const auto &program : programsInventory)
+                if (auto written = WriteProgram(root, program.prefix, *program.compiled, files); written.HasError())
                     return Files::Failure(written.ErrorValue());
             for (const auto &file : family.auxiliaryFiles)
                 if (auto written = WriteRecorded(root, std::string{file.relativePath}, file.bytes, files); written.HasError())
@@ -386,8 +385,8 @@ namespace Horo::Editor::Offline {
                                                    "The private cook staging filename namespace is reserved; choose another output name."));
         if (auto absent = DestinationAbsent(destination); absent.HasError())
             return absent;
-        std::error_code error;
-        if (!std::filesystem::is_directory(std::filesystem::symlink_status(destination.parent_path(), error)) || error)
+        if (std::error_code error;
+            !std::filesystem::is_directory(std::filesystem::symlink_status(destination.parent_path(), error)) || error)
             return IoFailure();
         return Result<void>::Success();
     }

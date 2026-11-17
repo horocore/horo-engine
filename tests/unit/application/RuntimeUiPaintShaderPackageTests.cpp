@@ -3,7 +3,9 @@
 #include "UiPaintPackageTestFixture.h"
 #include "support/AllocationProbe.h"
 
+#include <cstddef>
 #include <optional>
+#include <span>
 
 using namespace Horo;
 using namespace Horo::Application::Internal;
@@ -22,7 +24,7 @@ TEST_CASE("Application Metal package admits only the exact canonical payload and
         return;
     }
     SECTION("Changed payload") {
-        payload.back() ^= 1;
+        std::as_writable_bytes(std::span{payload}).back() ^= std::byte{1};
     }
     SECTION("Truncated payload") {
         payload.pop_back();
@@ -40,8 +42,9 @@ TEST_CASE("Application Metal package admits only the exact canonical payload and
 }
 
 TEST_CASE("Application packaged UI explicitly denies unsupported backend before filesystem work", "[application][runtime_ui][package]") {
+    using enum ShaderTargetBackend;
     CancellationToken cancellation;
-    for (const auto backend : {ShaderTargetBackend::Vulkan, ShaderTargetBackend::OpenGL, ShaderTargetBackend::Null}) {
+    for (const auto backend : {Vulkan, OpenGL, Null}) {
         const auto result = LoadPackagedProjectUiMetalKernel("/does-not-exist", backend, cancellation);
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == ShaderCompilerPipelineErrors::UnsupportedTarget.code.Value());
@@ -133,7 +136,9 @@ TEST_CASE("Application packaged loader allocation failure cannot publish a parti
         struct PayloadFailure {
             std::size_t bytes;
             std::optional<Tests::AllocationProbe::ScopedFailure> injected;
-        } failure{PackageMetadataKernel().artifact.payload.size(), {}};
+        };
+
+        PayloadFailure failure{PackageMetadataKernel().artifact.payload.size(), {}};
 
         Tests::AllocationProbe::ScopedObserver observe{[](const std::size_t bytes, void *context) noexcept {
             auto &failure = *static_cast<PayloadFailure *>(context);

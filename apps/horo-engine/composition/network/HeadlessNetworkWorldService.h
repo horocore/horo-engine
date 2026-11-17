@@ -2,6 +2,7 @@
 /** @file HeadlessNetworkWorldService.h
  * @brief Target-private network service adapter over the exact generation-owned world.
  */
+#include "HeadlessAnimationFixed.h"
 #include "HeadlessNetworkWorldOwners.h"
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {

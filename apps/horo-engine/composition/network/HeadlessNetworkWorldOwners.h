@@ -126,6 +126,4 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             record.ai->BeginShutdown();
     }
 
-#include "HeadlessAnimationFixed.h"
-
 }  // namespace Horo::Application::Internal::HeadlessNetworkDetail

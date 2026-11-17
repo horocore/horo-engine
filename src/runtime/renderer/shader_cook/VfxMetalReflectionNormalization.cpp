@@ -55,11 +55,12 @@ namespace Horo::Render {
                     continue;
                 std::size_t depth = 1;
                 std::size_t end = at + 2;
-                for (; end < tokens.size() && depth != 0; ++end) {
+                while (end < tokens.size() && depth != 0) {
                     if (tokens[end] == "(")
                         ++depth;
                     if (tokens[end] == ")")
                         --depth;
+                    ++end;
                 }
                 if (depth != 0)
                     throw InvalidVfxEvidence{};
@@ -254,14 +255,16 @@ namespace Horo::Render {
             if (tokens.size() < 3 || tokens[0] != "#" || tokens[1] != "version" || tokens[2] != "410")
                 throw InvalidVfxEvidence{};
             NativeStageEvidence result;
-            for (std::size_t at = 3; at < tokens.size(); ++at) {
+            std::size_t at = 3;
+            while (at < tokens.size()) {
                 if (tokens[at] == "layout" && at + 2 < tokens.size() && tokens[at + 2] == "location")
                     OpenGLInterface(tokens, at, stage, result);
-                if (tokens[at] != "uniform")
-                    continue;
-                if (at + 1 >= tokens.size())
-                    throw InvalidVfxEvidence{};
-                at = tokens[at + 1] == "sampler2D" ? OpenGLSample(tokens, at, result) : OpenGLBlock(tokens, at, result);
+                if (tokens[at] == "uniform") {
+                    if (at + 1 >= tokens.size())
+                        throw InvalidVfxEvidence{};
+                    at = tokens[at + 1] == "sampler2D" ? OpenGLSample(tokens, at, result) : OpenGLBlock(tokens, at, result);
+                }
+                ++at;
             }
             if (stage == ShaderStage::Vertex)
                 OpenGLMatrixLowering(tokens, result);
@@ -321,6 +324,21 @@ namespace Horo::Render {
                     true};
         }
 
+        /** @brief Validates the serialized name before resolving an OpenGL interface from exactly one native placement. */
+        std::string NativeInterfaceName(const Json &value, ShaderStage stage, ShaderInterfaceDirection direction, std::uint32_t location,
+                                        std::uint8_t columns, const NativeStageEvidence &native, ShaderTargetBackend backend) {
+            std::string name = value.at("name").get<std::string>();
+            if (backend == ShaderTargetBackend::OpenGL) {
+                const auto matches = [&](const auto &entry) {
+                    return entry.stage == stage && entry.direction == direction && entry.location == location && entry.columns == columns;
+                };
+                if (std::ranges::count_if(native.interfaces, matches) != 1)
+                    throw InvalidVfxEvidence{};
+                name = std::ranges::find_if(native.interfaces, matches)->nativeName;
+            }
+            return name;
+        }
+
         /** @brief Reconciles JSON semantics with actual backend names; GL fragment-output lookup cannot use SPIR-V names. */
         void Interfaces(const Json &json, const ShaderStage stage, const NativeStageEvidence &native,
                         ShaderReflectionCandidate &candidate) {
@@ -334,16 +352,8 @@ namespace Horo::Render {
                     if (type.size() != 4 || !type.starts_with("vec") || type[3] < '2' || type[3] > '4' || value.contains("array"))
                         throw InvalidVfxEvidence{};
                     const auto location = Unsigned(value.at("location"));
-                    std::string name = value.at("name").get<std::string>();
-                    if (candidate.backend == ShaderTargetBackend::OpenGL) {
-                        const auto matches = [&](const auto &entry) {
-                            return entry.stage == stage && entry.direction == direction && entry.location == location &&
-                                   entry.columns == static_cast<std::uint8_t>(type[3] - '0');
-                        };
-                        if (std::ranges::count_if(native.interfaces, matches) != 1)
-                            throw InvalidVfxEvidence{};
-                        name = std::ranges::find_if(native.interfaces, matches)->nativeName;
-                    }
+                    std::string name = NativeInterfaceName(value, stage, direction, location, static_cast<std::uint8_t>(type[3] - '0'),
+                                                           native, candidate.backend);
                     candidate.stageInterface.emplace_back(stage, direction, location, ShaderValueType::Float32, 1,
                                                           static_cast<std::uint8_t>(type[3] - '0'), 1, std::move(name));
                     ++count;
