@@ -8,10 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Development snapshot with project-owned Platform Services identity, definition documents and portable provider policy.
 - Recoverable adoption of legacy projects into the Platform Services authoring format without replacing existing project identities.
 - Headless Platform Services validation and deterministic paired manifest cooking with source-revision checks before publication.
-
-### Changed
-- Project creation uses an explicitly supplied durable filesystem and preserves published projects when durability requires reconciliation.
-- Native consumers must rebuild for the project creation, migration, filesystem and Platform Services source snapshot contracts.
+- Durable project creation accepts an explicit filesystem and preserves published projects when durability requires reconciliation. Native consumers must rebuild for the project creation, migration, filesystem and Platform Services source snapshot contracts.
 
 ## [0.3.0] — 2026-11-01
 ### Added
