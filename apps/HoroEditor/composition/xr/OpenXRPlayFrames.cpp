@@ -296,7 +296,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::ProgressTail */
     Result<void> OpenXRPlayHost::ProgressTail() {
-        if (!render_ || frames_.Snapshot().phase == XRFramePhase::Idle)
+        if (eventsPending_ || !render_ || frames_.Snapshot().phase == XRFramePhase::Idle)
             return Result<void>::Success();
         if (sessions_.Snapshot().state == XRSessionState::Lost)
             return Result<void>::Success();  // Explicit destructive retirement owns this debt; ordinary End is no longer admitted.
@@ -358,13 +358,15 @@ namespace Horo::Application::Internal {
         using Output = Result<bool>;
         if (host.render_ && host.render_->session != candidate)
             return Output::Failure(MakeError(XRErrors::IdentityStale));
-        if (host.sessions_.Snapshot().state != XRSessionState::Lost && host.events_ && host.events_->Running()) {
+        if (host.sessions_.Snapshot().state != XRSessionState::Lost && host.events_ && (host.eventsPending_ || host.events_->Running())) {
             const auto observed = host.events_->Poll(false);
             if (observed.HasError())
                 return Output::Failure(observed.ErrorValue());
             static_cast<void>(host.ApplyEventObservation(observed.Value()));
         }
         const bool lost = host.sessions_.Snapshot().state == XRSessionState::Lost;
+        if (!lost && host.eventsPending_)
+            return Output::Success(false);
         if (!lost) {
             if (auto tail = host.ProgressTail(); tail.HasError())
                 return Output::Failure(tail.ErrorValue());

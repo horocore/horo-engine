@@ -199,7 +199,7 @@ namespace Horo::Application::Internal {
             RevokeEventAdmission();
             return false;
         }
-        return true;
+        return !observed.morePending;
     }
 
     /** @copydoc OpenXRPlayHost::RevokeEventAdmission */
