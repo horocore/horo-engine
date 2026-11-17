@@ -100,7 +100,7 @@ namespace {
                 .perSubjectActiveCapacity = 16,
                 .retainedCapacity = 32,
                 .progressionMaximumAge = 10s,
-                .presenceMaximumAge = 10s,
+                .presenceMaximumAge = 9s,
                 .terminalRetention = 5s,
                 .producerRedeliveryHorizon = 4s,
                 .maximumPresenceDetailBytes = 32,

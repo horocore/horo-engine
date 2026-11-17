@@ -246,10 +246,11 @@ namespace Horo::PlatformServices {
         };
         const auto removedOperations = std::ranges::count_if(operations_, removable);
         if (removedOperations == 0)
-            return Result<std::vector<PlatformOfflineIntentId>>::Success({});
+            return Result<std::vector<PlatformOfflineIntentId>>::SuccessInPlace(std::size_t{0});
 
-        std::vector<PlatformOfflineIntentId> compacted;
-        std::vector<State> retained;
+        // Checked-library vector setup may allocate. Keep it outside non-throwing constructors.
+        std::vector<PlatformOfflineIntentId> compacted(std::size_t{0});
+        std::vector<State> retained(std::size_t{0});
         retained.reserve(operations_.size() - static_cast<std::size_t>(removedOperations));
         for (const auto &operation : operations_) {
             if (removable(operation)) {
@@ -276,6 +277,6 @@ namespace Horo::PlatformServices {
             }
         } commit{operations_, retained, retainedIntentCount_, compacted.size()};
 
-        return Result<std::vector<PlatformOfflineIntentId>>::Success(std::move(compacted));
+        return Result<std::vector<PlatformOfflineIntentId>>::SuccessInPlace(std::move(compacted), compacted.get_allocator());
     }
 }  // namespace Horo::PlatformServices
