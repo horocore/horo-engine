@@ -654,6 +654,17 @@ no focus, routing, gameplay meaning or scene mutation. Haptic admission/cancella
 owned by the Input/application coordinator; XROpenXR owns native apply/stop and reports
 submission separately from physical completion.
 
+The OpenXR editor requests native hand tracking only when the project enables
+`xr.features.hand_tracking`. Its Input cutoff can admit two anatomical hands
+alongside its head and controller roles when `xr.limits.devices` is at least five.
+The selected instance must advertise the extension, the system must report
+support, and both trackers and their dispatch must prepare on the same native
+session. An unavailable optional hand provider leaves controller routing active.
+The default pinch policy requires tracked thumb and index tips and uses their
+observed radii to determine contact. Host composition can supply a different
+typed policy. Raw joints and gesture candidates expire with their exact
+publication at focus loss, tracking failure, or session retirement.
+
 ## Interaction, Runtime UI, And Comfort
 
 XR interaction sources publish bounded generation-scoped ray/direct/proximity evidence.

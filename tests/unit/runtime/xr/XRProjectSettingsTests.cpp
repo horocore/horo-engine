@@ -82,7 +82,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 15);
+            REQUIRE(descriptors.size() == 16);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -120,6 +120,7 @@ namespace Horo::XR {
                 std::pair{"xr.limits.actions", std::int64_t{513}},
                 std::pair{"xr.limits.devices", std::numeric_limits<std::int64_t>::max()},
                 std::pair{"xr.features.depth_composition", std::int64_t{5}},
+                std::pair{"xr.features.hand_tracking", std::int64_t{5}},
             };
             for (const auto &[key, value] : invalid) {
                 ConfigurationResolutionRequest request;
@@ -137,7 +138,8 @@ namespace Horo::XR {
         }
 
         TEST_CASE("XR project feature policy rejects profile and fallback conflicts", "[unit][xr][settings]") {
-            for (const auto key : {"xr.features.stage_space", "xr.features.controller_presentation", "xr.features.android_standalone"}) {
+            for (const auto key : {"xr.features.stage_space", "xr.features.hand_tracking", "xr.features.controller_presentation",
+                                   "xr.features.android_standalone"}) {
                 ConfigurationResolutionRequest request;
                 Project(request, key, std::int64_t{3});
                 REQUIRE(ResolveXRProjectSettings(Configuration(request)).HasError());

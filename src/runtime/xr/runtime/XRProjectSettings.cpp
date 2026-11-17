@@ -13,6 +13,7 @@ namespace Horo::XR {
 
         constexpr std::array FeatureSettings{
             FeatureSetting{"xr.features.stage_space", XRCapability::StageSpace},
+            FeatureSetting{"xr.features.hand_tracking", XRCapability::HandTracking},
             FeatureSetting{"xr.features.depth_composition", XRCapability::DepthComposition},
             FeatureSetting{"xr.features.fixed_foveation", XRCapability::FixedFoveation},
             FeatureSetting{"xr.features.refresh_rate", XRCapability::RefreshRateSelection},

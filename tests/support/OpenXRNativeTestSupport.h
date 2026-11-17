@@ -32,6 +32,7 @@ namespace Horo::Tests::OpenXR {
         std::vector<std::string_view> calls;
         std::vector<std::string> enabledExtensions;
         bool depthExtension{};
+        bool handExtension{};
         bool legacyVulkan{};   /**< Selects the existing Vulkan-enable1 application bridge in real-loader fixtures. */
         bool clockExtension{}; /**< Optional official native clock extension for same-production-clock tests. */
         std::uint32_t extensionCount{1};
@@ -98,6 +99,8 @@ namespace Horo::Tests::OpenXR {
                         CopyNativeLiteral(properties[index].extensionName, "XR_KHR_convert_timespec_time");
 #endif
                     }
+                    if (!layer && active->handExtension && index == 1U + active->depthExtension + active->clockExtension)
+                        CopyNativeLiteral(properties[index].extensionName, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
                     properties[index].extensionVersion = 1;
                     if (active->malformedExtension)
                         properties[index].type = XR_TYPE_UNKNOWN;

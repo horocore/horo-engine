@@ -62,16 +62,28 @@ namespace Horo::XR::OpenXRInternal {
             const auto system = Resolve<PFN_xrGetSystemProperties>(owner, "xrGetSystemProperties");
             if (system.HasError())
                 return Result<void>::Failure(system.ErrorValue());
+            XrSystemHandTrackingPropertiesEXT hands{XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT};
+            const bool handRoute = std::ranges::any_of(owner.enabledExtensions, [](const char *name) {
+                return std::string_view{name} == XR_EXT_HAND_TRACKING_EXTENSION_NAME;
+            });
+            if (handRoute)
+                census.system.next = &hands;
             result = system.Value()(owner.instance, owner.system, &census.system);
+            const bool validChain = census.system.next == (handRoute ? &hands : nullptr) &&
+                                    hands.type == XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT && !hands.next &&
+                                    hands.supportsHandTracking <= XR_TRUE;
+            census.system.next = nullptr;
             if (XR_FAILED(result))
                 return Result<void>::Failure(QueryFailure("xrGetSystemProperties", result));
-            if (census.system.systemId != owner.system || census.system.graphicsProperties.maxSwapchainImageWidth == 0 ||
+            if (!validChain || census.system.systemId != owner.system || census.system.graphicsProperties.maxSwapchainImageWidth == 0 ||
                 census.system.graphicsProperties.maxSwapchainImageHeight == 0 || census.system.graphicsProperties.maxLayerCount == 0 ||
                 census.system.trackingProperties.orientationTracking > XR_TRUE ||
                 census.system.trackingProperties.positionTracking > XR_TRUE ||
                 std::ranges::find(census.runtime.runtimeName, '\0') == std::end(census.runtime.runtimeName) ||
                 std::ranges::find(census.system.systemName, '\0') == std::end(census.system.systemName))
                 return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "Malformed native system properties"));
+            if (handRoute && hands.supportsHandTracking == XR_TRUE)
+                census.handTracking = XRCapabilityState::Available;
             return Result<void>::Success();
         }
 

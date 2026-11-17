@@ -86,7 +86,8 @@ namespace Horo::Tests::OpenXRApplication {
             std::function<void()> onCheckAdmission;
 
             explicit ApplicationFixture(const bool render = false, const std::int64_t maximumSpaces = 5,
-                                        const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested) {
+                                        const XR::XRProjectFeaturePolicy depth = XR::XRProjectFeaturePolicy::Unrequested,
+                                        const XR::XRProjectFeaturePolicy hands = XR::XRProjectFeaturePolicy::Unrequested) {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
                 if (depth != XR::XRProjectFeaturePolicy::Unrequested) {
@@ -94,6 +95,14 @@ namespace Horo::Tests::OpenXRApplication {
                                                ConfigurationInputValue{static_cast<std::int64_t>(depth), std::nullopt});
                     script.native.depthExtension = true;
                     ++script.native.extensionCount;
+                }
+                if (hands != XR::XRProjectFeaturePolicy::Unrequested) {
+                    request.invocation.emplace(SettingKey{"xr.features.hand_tracking"},
+                                               ConfigurationInputValue{static_cast<std::int64_t>(hands), std::nullopt});
+                    request.invocation.emplace(SettingKey{"xr.limits.devices"}, ConfigurationInputValue{std::int64_t{5}, std::nullopt});
+                    script.native.handExtension = true;
+                    ++script.native.extensionCount;
+                    script.census.handsSupported = true;
                 }
                 REQUIRE(bindings->poses.empty());
                 // This zero-pose Play composition reserves five canonical spaces before native activation.
@@ -498,6 +507,33 @@ namespace Horo::Tests::OpenXRApplication {
             std::array<Render::GuiSampledResource, 1> samples_;
         };
 
+        class AppInputSample final : public Runtime::RuntimeLifecycleParticipant {
+        public:
+            explicit AppInputSample(Host::OpenXRPlayHost &play) : play_(play) {}
+
+            Result<void> Startup(const CancellationToken &) override {
+                return Result<void>::Success();
+            }
+
+            void Shutdown() noexcept override {}
+
+            Result<void> OnFixedUpdate(const Runtime::FixedStepContext &) override {
+                return Result<void>::Success();
+            }
+
+            Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
+                if (phase == Runtime::RuntimePhase::BuildInputSnapshot)
+                    result.emplace(play_.BuildInputSnapshot(context, raw_));
+                return Result<void>::Success();
+            }
+
+            std::optional<Result<void>> result;
+
+        private:
+            Host::OpenXRPlayHost &play_;
+            Input::RawInputSnapshot raw_;
+        };
+
         std::unique_ptr<Runtime::SceneActivationCandidate> PublishPlay(ApplicationFixture &fixture) {
             fixture.CreatePlay();
             REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
@@ -517,6 +553,93 @@ namespace Horo::Tests::OpenXRApplication {
             return candidate;
         }
     }  // namespace
+
+    TEST_CASE("Real installed Play samples bounded hands before Input and revokes candidates on focus or invalid evidence",
+              "[xr][application][play][hands]") {
+        using enum XR::XRProjectFeaturePolicy;
+        ApplicationFixture fixture{true, 5, Unrequested, OptionalDisable};
+        enum class Outcome {
+            FocusLoss,
+            Malformed,
+            PartialCreate,
+            Unsupported
+        };
+        auto outcome = Outcome::FocusLoss;
+        SECTION("partial tracker creation falls back without retaining either native handle") {
+            fixture.script.hands.failRight = true;
+            outcome = Outcome::PartialCreate;
+        }
+        SECTION("discovered extension on an unsupported system falls back") {
+            fixture.script.census.handsSupported = false;
+            outcome = Outcome::Unsupported;
+        }
+        SECTION("native loss of focus clears candidates without another locate") {}
+        SECTION("later malformed joint count revokes") {
+            outcome = Outcome::Malformed;
+        }
+        SECTION("session loss cancels hand evidence and permits a fresh tracker pair") {
+            outcome = Outcome::Replacement;
+        }
+        auto scene = PublishPlay(fixture);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        REQUIRE(fixture.scheduler->AddParticipant(std::move(cutoff)).HasValue());
+        REQUIRE(fixture.scheduler->Startup().HasValue());
+        REQUIRE(fixture.scheduler->RunFrame().HasValue());
+        REQUIRE(observed->result.has_value());
+        INFO((observed->result->HasError() ? OpenXRProduct::ErrorText(observed->result->ErrorValue()) : "Input cutoff committed"));
+        REQUIRE(observed->result->HasValue());
+        const auto handGestures = fixture.play->ReadHandGestures();
+        if (outcome != Outcome::Unsupported && outcome != Outcome::PartialCreate) {
+            REQUIRE(handGestures.Candidates().size() == 1);
+            CHECK(handGestures.Candidates().front().hand == XR::XRHandedness::Left);
+            CHECK(handGestures.Candidates().front().kind == XR::XRHandGestureKind::Pinch);
+            CHECK(handGestures.Candidates().front().confidence == XR::XRTrackingConfidence::High);
+            CHECK(fixture.script.hands.locates == 2);
+            if (outcome == Outcome::FocusLoss) {
+                fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+                REQUIRE(fixture.play->PollEvents().HasValue());
+                CHECK(fixture.play->ReadHandGestures().Candidates().empty());
+                REQUIRE(fixture.scheduler->RunFrame().HasValue());
+                CHECK(fixture.script.hands.locates == 2);
+            } else if (outcome == Outcome::Malformed) {
+                fixture.script.hands.malformed = true;
+                REQUIRE(fixture.scheduler->RunFrame().HasValue());
+                REQUIRE(observed->result->HasError());
+                CHECK(observed->result->ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotInvalid.code.Value());
+                CHECK(fixture.play->ReadHandGestures().Candidates().empty());
+            } else {
+                fixture.script.events.pollResult = XR_ERROR_SESSION_LOST;
+                REQUIRE(fixture.play->PollEvents().HasValue());
+                CHECK(fixture.play->ReadHandGestures().Candidates().empty());
+                REQUIRE(fixture.play->PollEvents().HasValue());
+                CHECK_FALSE(fixture.script.hands.live[0]);
+                CHECK_FALSE(fixture.script.hands.live[1]);
+                REQUIRE(fixture.scheduler->RunFrame().HasValue());  // Canonical Input retirement precedes new reservations.
+                fixture.script.events.pollResult = XR_SUCCESS;
+                auto next = RequireValue(Runtime::RuntimeScene::Create(fixture.definition, {2}));
+                auto participant = fixture.play->MakeSceneParticipant();
+                auto replacement = RequireValue(participant->Prepare(fixture.definition, next->View()));
+                REQUIRE(replacement->ValidatePublication().HasValue());
+                replacement->Publish();
+                scene->Shutdown();
+                CHECK(fixture.play->UsesXrScene());
+                CHECK(fixture.script.hands.live[0]);
+                CHECK(fixture.script.hands.live[1]);
+                CHECK(fixture.play->ReadHandGestures().Candidates().empty());
+                replacement->Shutdown();
+            }
+        } else {
+            CHECK(handGestures.Candidates().empty());
+            CHECK(fixture.script.hands.locates == 0);
+            CHECK(fixture.script.actions.syncs == 1);
+            CHECK_FALSE(fixture.script.hands.live[0]);
+            CHECK_FALSE(fixture.script.hands.live[1]);
+        }
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
 
     TEST_CASE("Real installed Play degrades optional depth and rejects required depth on a color-only renderer",
               "[xr][application][play][features]") {

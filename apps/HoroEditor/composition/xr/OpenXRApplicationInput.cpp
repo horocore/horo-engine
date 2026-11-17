@@ -16,10 +16,62 @@ namespace Horo::Application::Internal {
                 return GripPose;
             return AimPose;
         }
+
+        /** @brief Preserves exactly one current pose's normalized provenance. */
+        XR::XRPoseDescriptor Describe(const XR::XRPoseSample &pose) {
+            return {pose.Session(), pose.Source(), pose.Target(), pose.Purpose(), pose.Time(), pose.Components()};
+        }
+
+        /** @brief Maps the fixed anatomical side order to distinct canonical device roles. */
+        XR::XRTrackedDeviceRole HandRole(std::size_t hand) noexcept {
+            return hand == 0 ? XR::XRTrackedDeviceRole::LeftHand : XR::XRTrackedDeviceRole::RightHand;
+        }
     }  // namespace
 
     using namespace XR;
     using namespace XR::OpenXRInternal;
+
+    /** @copydoc OpenXRApplicationSession::WantsHands */
+    bool OpenXRApplicationSession::WantsHands() const noexcept {
+        const auto features = settings_.Features();
+        const auto hand = std::ranges::find(features, XRCapability::HandTracking, &XRFeatureRequest::capability);
+        return hand != features.end() && hand->kind != XRFeatureRequirementKind::Disabled;
+    }
+
+    /** @copydoc OpenXRApplicationSession::PrepareHands */
+    Result<void> OpenXRApplicationSession::PrepareHands() {
+        if (!WantsHands() || !system_ || system_->handTracking != XRCapabilityState::Available)
+            return Result<void>::Success();
+        // The same cutoff has room for both hands and its existing head/controller sources.
+        constexpr auto sourceSlots = 1 + 2 + XRHandTrackingHardLimits::MaximumHands;
+        if (settings_.Limits().maximumDevices < sourceSlots) {
+            input_.handAvailability = XRCapabilityState::Unavailable;
+            return Result<void>::Success();
+        }
+        input_.hands.emplace(*native_);
+        const auto prepared = input_.hands->Prepare({*preflight_, selection_.attempt});
+        if (prepared.HasError()) {
+            if (auto retired = RetireHands(); retired.HasError())
+                return retired;
+            input_.handAvailability = prepared.ErrorValue().code.Value() == XRErrors::PermissionDenied.code.Value()
+                                          ? XRCapabilityState::Denied
+                                          : XRCapabilityState::Unavailable;
+            return Result<void>::Success();
+        }
+        input_.handAvailability = XRCapabilityState::Available;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRApplicationSession::RetireHands */
+    Result<void> OpenXRApplicationSession::RetireHands() {
+        if (input_.hands) {
+            if (auto closed = input_.hands->Close(); closed.HasError())
+                return closed;
+            input_.hands.reset();
+        }
+        input_.handAvailability = XRCapabilityState::Unsupported;
+        return Result<void>::Success();
+    }
 
     /** @copydoc OpenXRApplicationSession::PrepareInput */
     Result<void> OpenXRApplicationSession::PrepareInput(const Input::InputActionCollection &port, const Input::InputRouter &router,
@@ -50,6 +102,8 @@ namespace Horo::Application::Internal {
         input_.projection.emplace(std::move(reserved).Value());
         input_.bindings.emplace(std::move(plan).Value());
         input_.profiles = profiles.Value();
+        if (auto hands = PrepareHands(); hands.HasError())
+            return hands;
         return Current();
     }
 
@@ -75,6 +129,9 @@ namespace Horo::Application::Internal {
             return bound;
         if (const auto native = native_->Borrow(candidate); native.HasError())
             return Result<void>::Failure(native.ErrorValue());
+        if (input_.hands)
+            if (const auto hands = input_.hands->Bind(candidate); hands.HasError())
+                return hands;
         // Actual dispatch is sealed cold on the same installed instance; frame sampling never resolves symbols.
         return input_.native->PreparePresentation({getProc_});
     }
@@ -113,10 +170,32 @@ namespace Horo::Application::Internal {
             return current;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-        std::array<RuntimeInternal::TrackingSourceEvidence, 5> sources{};
+        std::optional<NativeHandSamples> hands;
+        if (input_.hands) {
+            const auto space = WorldSpace(state.session);
+            if (space.HasError())
+                return Result<void>::Failure(space.ErrorValue());
+            const auto reference = BorrowWorldSpace(space.Value());
+            if (reference.HasError())
+                return Result<void>::Failure(reference.ErrorValue());
+            auto tracked = input_.hands->Sample(reference.Value(), space.Value(), time.Value());
+            if (tracked.HasError())
+                return Result<void>::Failure(tracked.ErrorValue());
+            if (!bindingsCurrent())
+                return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+            hands.emplace(std::move(tracked).Value());
+        }
+        std::array<RuntimeInternal::TrackingSourceEvidence, 7> sources{};
         std::size_t sourceCount = 0;
         for (const auto &pose : poses.Value().Poses())
             sources[sourceCount++] = {pose.role, pose.kind, pose.active, pose.pose};
+        if (hands)
+            for (std::size_t hand = 0; hand < hands->hands.size(); ++hand) {
+                const auto &palm = hands->hands[hand].joints[static_cast<std::size_t>(XRHandJoint::Palm)].pose;
+                if (!palm)
+                    continue;
+                sources[sourceCount++] = {HandRole(hand), XRTrackedPoseKind::Palm, true, Describe(*palm)};
+            }
         if (auto observed = publication.ObserveSources(std::span{sources}.first(sourceCount)); observed.HasError())
             return observed;
         const auto actions = input_.native->Sample(state.session, *coordinator.Current(), publication.Devices());
@@ -126,15 +205,17 @@ namespace Horo::Application::Internal {
             return current;
         if (!bindingsCurrent())
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
-        return AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision}, publication, frame);
+        return AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision,
+                                    hands ? &*hands : nullptr},
+                                   publication, frame);
     }
 
     /** @copydoc OpenXRApplicationSession::AppendPreparedInput */
     Result<void> OpenXRApplicationSession::AppendPreparedInput(const PreparedInputSample &sample,
                                                                XR::RuntimeInternal::XRTrackingPublication &publication,
                                                                const Input::InputCollectionFrame &frame) {
-        const auto &[poses, actions, state, time, origin, bindingRevision] = sample;
-        std::array<RuntimeInternal::TrackingPoseEvidence, 5> normalized{};
+        const auto &[poses, actions, state, time, origin, bindingRevision, hands] = sample;
+        std::array<RuntimeInternal::TrackingPoseEvidence, 7> normalized{};
         std::size_t poseCount = 0;
         bool tracked = false;
         for (const auto &pose : poses.Poses()) {
@@ -147,21 +228,60 @@ namespace Horo::Application::Internal {
             tracked |= pose.pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
                        pose.pose.components.orientation.validity != XRPoseComponentValidity::Invalid;
         }
-        if (const auto candidate = publication.Publish({time, origin, XRTrackingFocusState::Focused,
-                                                        state.state == XRSessionState::Focused || state.state == XRSessionState::Visible
-                                                            ? XRTrackingVisibilityState::Visible
-                                                            : XRTrackingVisibilityState::Hidden,
-                                                        tracked ? XRTrackingState::Active : XRTrackingState::TrackingLost, bindingRevision,
-                                                        std::span{normalized}.first(poseCount), actions.Actions()});
+        std::array<XRHandJointRecord, XRHandTrackingHardLimits::MaximumJoints> joints;
+        std::size_t jointCount = 0;
+        if (hands) {
+            const auto devices = publication.Devices();
+            for (std::size_t handIndex = 0; handIndex < hands->hands.size(); ++handIndex) {
+                const auto device = std::ranges::find(devices, HandRole(handIndex), &XRTrackedDeviceRecord::role);
+                if (device == devices.end() || device->state != XRTrackedDeviceState::Tracked)
+                    continue;
+                const auto &hand = hands->hands[handIndex];
+                const auto &palm = hand.joints[static_cast<std::size_t>(XRHandJoint::Palm)].pose;
+                if (palm)
+                    normalized[poseCount++] = {device->id, XRTrackedPoseKind::Palm, Describe(*palm)};
+                for (std::size_t index = 0; index < hand.joints.size(); ++index) {
+                    const auto &joint = hand.joints[index];
+                    if (joint.pose)
+                        joints[jointCount++] = {device->id, static_cast<XRHandedness>(handIndex), static_cast<XRHandJoint>(index),
+                                                joint.pose, joint.radiusMeters};
+                }
+            }
+            tracked |= jointCount != 0;
+        }
+        if (const auto candidate = publication.Publish(
+                {time, origin, XRTrackingFocusState::Focused,
+                 state.state == XRSessionState::Focused || state.state == XRSessionState::Visible ? XRTrackingVisibilityState::Visible
+                                                                                                  : XRTrackingVisibilityState::Hidden,
+                 tracked ? XRTrackingState::Active : XRTrackingState::TrackingLost, bindingRevision, std::span{normalized}.first(poseCount),
+                 actions.Actions(), std::span{joints}.first(jointCount)});
             candidate.HasError())
             return candidate;
         const auto *snapshot = publication.Current();
         if (!snapshot)
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        if (hands) {
+            const auto &policy = authorities_.handGestures ? *authorities_.handGestures : pinchPolicy_;
+            auto gestures = DeriveXRHandGestures(*snapshot, state.session, snapshot->Revision(), origin, policy);
+            if (gestures.HasError()) {
+                publication.Revoke();
+                return Result<void>::Failure(gestures.ErrorValue());
+            }
+            input_.gestures = std::move(gestures).Value();
+            input_.gestureRevision = snapshot->Revision();
+        }
         const auto appended = input_.projection->Append(*snapshot, state.session, snapshot->Revision(), origin, bindingRevision, frame);
         if (appended.HasError())
             publication.Revoke();
         return appended;
+    }
+
+    /** @copydoc OpenXRApplicationSession::ReadHandGestures */
+    XRHandGestureCandidates OpenXRApplicationSession::ReadHandGestures(const XRTrackingSnapshot &snapshot) const noexcept {
+        if (std::this_thread::get_id() != lane_ || !native_ || native_->Session() != snapshot.Session() ||
+            input_.gestureRevision != snapshot.Revision())
+            return {};
+        return input_.gestures;
     }
 
     /** @copydoc OpenXRApplicationSession::PreparedBindings */
@@ -210,6 +330,8 @@ namespace Horo::Application::Internal {
     void OpenXRApplicationSession::RevokeInput() noexcept {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
         input_.projection.reset();
+        input_.gestures = {};
+        input_.gestureRevision = {};
         input_.bindings.reset();
         input_.profiles = {};
     }

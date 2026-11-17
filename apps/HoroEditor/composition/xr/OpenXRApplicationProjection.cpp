@@ -91,7 +91,8 @@ namespace Horo::Application::Internal {
         /** @brief Forms immutable capability evidence from validated native census and exact target support. */
         Result<XRCapabilitySnapshot> ProjectionCapabilities(const NativeSystemCensus &observed, const NativeSessionCensus &session,
                                                             const ProjectionTargets &targets, XRSystemId system,
-                                                            XRCapabilityRevision revision, const XRSystemLimits &budget) {
+                                                            XRCapabilityRevision revision, const XRSystemLimits &budget,
+                                                            XRCapabilityState handTracking) {
             const auto spaces = std::span{session.spaces}.first(session.spaceCount);
             const auto hasSpace = [&](XrReferenceSpaceType space) {
                 return std::ranges::find(spaces, space) != spaces.end();
@@ -118,6 +119,7 @@ namespace Horo::Application::Internal {
                   XRCapability::CanonicalInputProjection, XRCapability::PredictedFrames, XRCapability::SessionLossLifecycle})
                 fact(capability, true);
             fact(XRCapability::ExternalColorTargets, targets.exactImages);
+            descriptor.states[static_cast<std::size_t>(XRCapability::HandTracking)] = handTracking;
             return XRCapabilitySnapshot::Create(descriptor);
         }
     }  // namespace
@@ -129,7 +131,7 @@ namespace Horo::Application::Internal {
         const auto &budget = settings_.Limits();
         if (const auto preparedActions = bindings.schema.actions.size() + bindings.poses.size();
             preparedActions > budget.maximumActions || budget.maximumSpaces < 5 + bindings.poses.size() ||
-            budget.maximumActions > XRActionBindingLimits::MaximumActions || budget.maximumDevices > 3 ||
+            budget.maximumActions > XRActionBindingLimits::MaximumActions || budget.maximumDevices > 5 ||
             budget.maximumSpaces > XRHardLimits::MaximumSpaces)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         return Result<void>::Success();
@@ -184,7 +186,8 @@ namespace Horo::Application::Internal {
         auto revision = XRCapabilityRevision::Create(lastCapabilityRevision_ + 1);
         if (revision.HasError())
             return Outcome::Failure(revision.ErrorValue());
-        auto capabilities = ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(), budget);
+        auto capabilities = ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(), budget,
+                                                   input_.handAvailability);
         if (capabilities.HasError())
             return Outcome::Failure(capabilities.ErrorValue());
         auto plan = AdmitXRProjectSettings(settings_, {authorities_.configuration.Snapshot().Revision(), *preflight_, selection_,

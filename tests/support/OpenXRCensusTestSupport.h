@@ -12,6 +12,7 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t formats{2};
         bool duplicateSpaces{};
         bool invalidView{};
+        bool handsSupported{};
         std::string_view fail;
         std::vector<std::string_view> calls;
 
@@ -40,6 +41,11 @@ namespace Horo::Tests::OpenXR {
             CopyNativeLiteral(value->systemName, "Observed native system");
             value->graphicsProperties = {2048, 2048, 16};
             value->trackingProperties = {XR_TRUE, XR_TRUE};
+            if (value->next) {
+                auto &hands = *static_cast<XrSystemHandTrackingPropertiesEXT *>(value->next);
+                REQUIRE(hands.type == XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT);
+                hands.supportsHandTracking = active->handsSupported ? XR_TRUE : XR_FALSE;
+            }
             return Record("system-properties");
         }
 

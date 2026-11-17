@@ -5,6 +5,7 @@
 #include "Horo/XR/XRInputProjection.h"
 #include "Horo/XR/XRProjectSettings.h"
 #include "OpenXRApplicationBindings.h"
+#include "OpenXRHandTracking.h"
 #include "OpenXRInstalledProductSelection.h"
 #include "OpenXRSelectedVulkanBinding.h"
 
@@ -36,6 +37,7 @@ namespace Horo::Application::Internal {
         std::filesystem::path projectRoot;
         std::uint64_t packageGeneration{};
         std::function<Result<void>()> hostAdmission; /**< Same retained executable signature/expiry owner; success allocates no storage. */
+        const XR::IXRHandGesturePolicy *handGestures{}; /**< Optional immutable override with lifetime owned by composition. */
     };
 
     /** @brief Same-owner synchronous preparation facts, never a public session or capability authority.
@@ -171,6 +173,11 @@ namespace Horo::Application::Internal {
                                                XR::RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                const Runtime::FrameContext &context, XR::XRWorldOriginRevision origin,
                                                const Input::InputCollectionFrame &frame);
+        /** @brief Copies candidates derived at the exact active tracking revision, or empty on revocation.
+         * @param snapshot Current immutable tracking publication, borrowed on the owner lane.
+         * @return Bounded hand gesture candidates with source ownership.
+         */
+        [[nodiscard]] XR::XRHandGestureCandidates ReadHandGestures(const XR::XRTrackingSnapshot &snapshot) const noexcept;
         /** @brief Borrows the exact resolved preparation until input retirement; no native identity or sampling authority. */
         [[nodiscard]] const XR::XRResolvedActionBindings *PreparedBindings() const noexcept;
         /** @brief Returns the exact native-created calibrated World identity for the bound candidate.
@@ -230,6 +237,9 @@ namespace Horo::Application::Internal {
     private:
         [[nodiscard]] Result<void> Current() const;
         [[nodiscard]] Result<void> DiscoverRuntime();
+        [[nodiscard]] bool WantsHands() const noexcept;
+        [[nodiscard]] Result<void> PrepareHands();
+        [[nodiscard]] Result<void> RetireHands();
         /** @brief Validates the same selected profile and static capacity required by Play. */
         [[nodiscard]] Result<void> ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const;
 
@@ -241,6 +251,7 @@ namespace Horo::Application::Internal {
             const XR::XRTimeEvidence &time;
             XR::XRWorldOriginRevision origin;
             std::uint64_t bindingRevision;
+            const XR::OpenXRInternal::NativeHandSamples *hands;
         };
 
         /** @brief Publishes the same bounded cutoff through the sole tracking owner and appends without committing.
@@ -287,10 +298,15 @@ namespace Horo::Application::Internal {
             std::unique_ptr<XR::OpenXRInternal::OpenXRActionBindings> native;
             std::optional<XR::XRInputProjection> projection;
             std::optional<XR::XRResolvedActionBindings> bindings;
+            std::optional<XR::OpenXRInternal::OpenXRHandTracking> hands;
+            XR::XRHandGestureCandidates gestures;
+            XR::XRTrackingSnapshotRevision gestureRevision;
+            XR::XRCapabilityState handAvailability{XR::XRCapabilityState::Unsupported};
             std::array<XR::XRActiveInteractionProfile, 2> profiles{}; /**< Actual post-attachment preparation census. */
         };
 
         InputPreparation input_;
+        XR::XRContactPinchGesturePolicy pinchPolicy_;
 
         bool closing_{};
         bool retiringSession_{};

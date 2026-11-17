@@ -83,10 +83,12 @@ namespace Horo::Application::Internal {
         constexpr const char *timeExtension = "XR_KHR_convert_timespec_time";
 #endif
         // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
-        const std::array extensions{NativeExtensionRequest{timeExtension, true}};
+        const std::array extensions{NativeExtensionRequest{timeExtension, true},
+                                    NativeExtensionRequest{XR_EXT_HAND_TRACKING_EXTENSION_NAME}};
+        const auto requested = std::span{extensions}.first(WantsHands() ? extensions.size() : 1);
         const NativeDiscoveryRequest request{selection_,
                                              std::min(compiled, selection_.admittedLoaderVersions.maximum),
-                                             extensions,
+                                             requested,
                                              {},
                                              false};
         if (auto prepared = native_->PrepareDiscovery(request); prepared.HasError())
@@ -271,6 +273,8 @@ namespace Horo::Application::Internal {
 
         RevokeInput();
         sessionCensus_.reset();
+        if (auto retired = RetireHands(); retired.HasError())
+            return retired;
         if (input_.native) {
             if (auto retired = input_.native->Close(); retired.HasError())
                 return retired;
@@ -307,6 +311,8 @@ namespace Horo::Application::Internal {
 
         RevokeInput();
         sessionCensus_.reset();
+        if (auto retired = RetireHands(); retired.HasError())
+            return retired;
         if (input_.native) {
             if (auto retired = input_.native->Close(); retired.HasError())
                 return retired;
@@ -326,6 +332,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         closing_ = true;
         RevokeInput();
+        if (auto retired = RetireHands(); retired.HasError())
+            return retired;
         if (input_.native) {
             if (auto retired = input_.native->Close(); retired.HasError())
                 return retired;

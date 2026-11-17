@@ -223,6 +223,14 @@ namespace Horo::Application::Internal {
         return composition_.session.AppendInput(sessions_, *input_.coordinator, tracking_, clock_, context, input_.origin, frame);
     }
 
+    /** @copydoc OpenXRPlayHost::ReadHandGestures */
+    XRHandGestureCandidates OpenXRPlayHost::ReadHandGestures() const noexcept {
+        const auto *snapshot = tracking_.Current();
+        if (!snapshot || eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing)
+            return {};
+        return composition_.session.ReadHandGestures(*snapshot);
+    }
+
     /** @copydoc OpenXRPlayHost::BuildInputSnapshot */
     Result<void> OpenXRPlayHost::BuildInputSnapshot(const Runtime::FrameContext &context, const Input::RawInputSnapshot &raw) {
         if (auto lane = Lane(); lane.HasError())

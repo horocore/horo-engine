@@ -60,7 +60,7 @@ namespace Horo::XR {
         XRRuntimeSelectionPolicy runtimeSelection_{XRRuntimeSelectionPolicy::SystemDefault};
         XRFeatureProfile profile_{XRFeatureProfile::Projection1_0};
         XRSystemLimits limits_{};
-        std::array<XRFeatureRequest, 7> features_{};
+        std::array<XRFeatureRequest, 8> features_{};
         std::size_t featureCount_{};
     };
 

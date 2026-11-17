@@ -18,6 +18,7 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t primaryViewCount{};
         std::array<XrEnvironmentBlendMode, 16> primaryBlendModes{};
         std::uint32_t primaryBlendModeCount{};
+        XRCapabilityState handTracking{XRCapabilityState::Unsupported}; /**< Observed system support for the admitted EXT route. */
     };
 
     /** @brief Session-dependent exact publications, observed only after actual native session creation. */

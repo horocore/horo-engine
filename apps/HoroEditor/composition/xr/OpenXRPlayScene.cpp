@@ -141,7 +141,12 @@ namespace Horo::Application::Internal {
                     bound.HasError())
                     return bound;
                 const auto &limits = scene_->projection->capabilities.Limits();
-                return tracking_.Bind(candidate, {limits.maximumDevices, 5, limits.maximumActions}, input_.origin);
+                const auto hands = plan.Decision(XRCapability::HandTracking).state;
+                const auto jointLimit = hands == XRFeatureDecisionState::Required || hands == XRFeatureDecisionState::OptionalEnabled
+                                            ? XRHandTrackingHardLimits::MaximumJoints
+                                            : 0U;
+                const auto poseLimit = 5U + (jointLimit ? XRHandTrackingHardLimits::MaximumHands : 0U);
+                return tracking_.Bind(candidate, {limits.maximumDevices, poseLimit, limits.maximumActions, jointLimit}, input_.origin);
             }
             case PlatformLoader:
             case InstanceSystem:

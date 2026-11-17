@@ -140,6 +140,8 @@ namespace Horo::Application::Internal {
          * with physical input intact; a failed transaction commit never publishes a partial cutoff.
          */
         [[nodiscard]] Result<void> BuildInputSnapshot(const Runtime::FrameContext &context, const Input::RawInputSnapshot &raw);
+        /** @brief Reads gesture candidates from the current focused cutoff. @return Bounded candidates or empty after loss. */
+        [[nodiscard]] XR::XRHandGestureCandidates ReadHandGestures() const noexcept;
         /** @brief Severs every router/context borrow before the actual App InputRouter is destroyed.
          * @pre Owner lane, outside a dispatch/native callback; Scene producers are already closed.
          * @post Native/image retirement retains only owned typed values/leases, never outgoing Input storage.

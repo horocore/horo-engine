@@ -138,6 +138,47 @@ namespace Horo::XR {
                       XRErrors::OperationUnavailable));
     }
 
+    TEST_CASE("XR gesture policy reads exact immutable joint evidence without allocations", "[xr][hands][gesture]") {
+        HandFixture fixture;
+        const auto thumb = Joint(fixture.session, fixture.device.id, XRHandedness::Left, XRHandJoint::ThumbTip);
+        const auto index = Joint(fixture.session, fixture.device.id, XRHandedness::Left, XRHandJoint::IndexTip);
+        auto descriptor = fixture.Descriptor();
+        const std::array joints{thumb, index};
+        descriptor.handJoints = joints;
+        const auto snapshot = XRTrackingSnapshot::Create(descriptor, fixture.session, Origin());
+        REQUIRE(snapshot.HasValue());
+        XRContactPinchGesturePolicy contact;
+        const auto before = Tests::AllocationProbe::Count();
+        const auto gestures = DeriveXRHandGestures(snapshot.Value(), fixture.session, descriptor.revision, Origin(), contact);
+        const auto after = Tests::AllocationProbe::Count();
+        REQUIRE(gestures.HasValue());
+        CHECK(before == after);
+        REQUIRE(gestures.Value().Candidates().size() == 1);
+        CHECK(gestures.Value().Candidates().front().confidence == XRTrackingConfidence::High);
+        CHECK(snapshot.Value().HandJoints().size() == 2);
+        CHECK(DeriveXRHandGestures(snapshot.Value(), fixture.session, Value<XRTrackingSnapshotRevision>(2), Origin(), contact).HasError());
+
+        class SuppressGesture final : public IXRHandGesturePolicy {
+            std::optional<std::pair<XRHandGestureKind, XRTrackingConfidence>> Classify(
+                std::span<const XRHandJointRecord>) const noexcept override {
+                return std::nullopt;
+            }
+        } suppress;
+
+        const auto empty = DeriveXRHandGestures(snapshot.Value(), fixture.session, descriptor.revision, Origin(), suppress);
+        REQUIRE(empty.HasValue());
+        CHECK(empty.Value().Candidates().empty());
+        CHECK(snapshot.Value().HandJoints().size() == 2);
+
+        const std::array onlyThumb{thumb};
+        descriptor.handJoints = onlyThumb;
+        const auto partial = XRTrackingSnapshot::Create(descriptor, fixture.session, Origin());
+        REQUIRE(partial.HasValue());
+        const auto noTip = DeriveXRHandGestures(partial.Value(), fixture.session, descriptor.revision, Origin(), contact);
+        REQUIRE(noTip.HasValue());
+        CHECK(noTip.Value().Candidates().empty());
+    }
+
     TEST_CASE("Legacy native XR snapshots default to no hands and preserve existing enum ordinals", "[xr][hands]") {
         static_assert(static_cast<int>(XRTrackedDeviceRole::GenericTracker) == 3);
         static_assert(static_cast<int>(XRTrackedDeviceCapability::Haptics) == 5);
