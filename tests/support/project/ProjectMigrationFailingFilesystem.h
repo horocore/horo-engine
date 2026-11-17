@@ -11,8 +11,6 @@
 #include <utility>
 
 namespace Horo::Tests::MigrationFailure {
-    using namespace Horo;
-
     const ErrorCodeDescriptor InjectedFailure{.domain = ErrorDomainId{"test.migration"},
                                               .code = ErrorCode{"injected"},
                                               .defaultSeverity = ErrorSeverity::Error,
@@ -29,7 +27,7 @@ namespace Horo::Tests::MigrationFailure {
         Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
             auto acquired = native_.TryAcquireExclusive(path, owner);
             if (acquired.HasValue() && onExclusiveAcquired) {
-                auto callback = std::move(onExclusiveAcquired);
+                auto callback = std::exchange(onExclusiveAcquired, {});
                 callback();
             }
             return acquired;
