@@ -18,13 +18,10 @@
 
 namespace Horo::Runtime {
     struct SaveProjectIdentityTag;
-    struct SaveWorldIdentityTag;
     struct SaveBaseSceneIdentityTag;
 
     /** @brief Stable project identity recorded by save metadata. */
     using SaveProjectId = PersistentSaveIdentity<SaveProjectIdentityTag>;
-    /** @brief Stable logical world identity recorded by save metadata. */
-    using SaveWorldId = PersistentSaveIdentity<SaveWorldIdentityTag>;
     /** @brief Stable base-scene asset identity recorded by save metadata. */
     using SaveBaseSceneId = PersistentSaveIdentity<SaveBaseSceneIdentityTag>;
 

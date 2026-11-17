@@ -11,6 +11,7 @@
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsPose.h"
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
+#include "Horo/Physics/SurfaceMaterial.h"
 
 #include <optional>
 #include <span>
@@ -175,6 +176,7 @@ namespace Horo::Physics {
         PhysicsQueryChannelId channel;
         PhysicsQueryFixtureResponse response{PhysicsQueryFixtureResponse::Block};
         bool trigger{};
+        std::optional<PhysicsSurfaceEvidence> surface;
     };
 
     /** @brief Bounded owned compound of at most 256 direct analytic children; no nested or plane children. */
@@ -210,6 +212,7 @@ namespace Horo::Physics {
         bool trigger{};
         std::optional<PhysicsShapeSubresourceId> subshape;
         std::optional<PhysicsQueryMaterial> material;
+        std::optional<PhysicsSurfaceEvidence> surface;
     };
 
     /** @brief Non-owning body/shape identities returned for one admitted query fixture. */
@@ -239,7 +242,9 @@ namespace Horo::Physics {
         Math::Vec3 position;
         std::optional<Math::Vec3> normal;
         float distanceMeters{};
-        float penetrationDepthMeters{}; /**< Nonnegative copied overlap depth; zero for separated hits. */
+        float penetrationDepthMeters{};                /**< Nonnegative copied overlap depth; zero for separated hits. */
+        std::optional<PhysicsSurfaceEvidence> surface; /**< Exact semantic mapping copied independently from physical evidence. */
+        std::uint64_t collider{};                      /**< Stable authored collider slot; source-free query fixtures leave zero. */
     };
 
     /** @brief Metadata for caller-owned bounded hit storage. */

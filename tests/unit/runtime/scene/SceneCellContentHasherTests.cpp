@@ -340,9 +340,10 @@ namespace Horo::Runtime {
                     movement.maximumSlopeDegrees, movement.preserveHorizontalSpeed, movement.steepSlopePolicy, movement.maximumContacts,
                     movement.jumpSpeedMetersPerSecond, movement.dynamicPlatformSupport, movement.inheritPlatformHeading,
                     movement.platformLeaveVelocity);
-        const CharacterSceneCollision collision{.excludedBody = PhysicsBodyReference{{11}, {12}}};
+        const CharacterSceneCollision collision{.excludedBody = PhysicsBodyReference{{11}, {12}},
+                                                .defaultSurface = Physics::SurfaceMaterialId::FromBytes({13})};
         CheckFields(collision, collision.profile, collision.queryChannel, collision.defaultMaterial, collision.requiredLayer,
-                    collision.requiredProfile, collision.excludedBody);
+                    collision.requiredProfile, collision.excludedBody, collision.defaultSurface);
         const CharacterControllerComponent component{.id = {7},
                                                      .enabled = true,
                                                      .geometry = geometry,

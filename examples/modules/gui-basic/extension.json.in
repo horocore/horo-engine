@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "@EXAMPLE_ID@",
+  "version": "1.0.0",
+  "displayName": "gui-basic",
+  "modules": [
+    {
+      "id": "@EXAMPLE_ID@.editor",
+      "version": "1.0.0",
+      "kind": "native",
+      "entry": "bin/reference_editor@CMAKE_SHARED_MODULE_SUFFIX@",
+      "roles": [
+        "editor-presentation"
+      ],
+      "abi": {
+        "major": 1,
+        "minimumMinor": 8
+      },
+      "requiredCapabilities": [
+        "editor.activity",
+        "editor.custom-composition"
+      ]
+    }
+  ],
+  "contributions": [
+    {
+      "type": "editor.activity_item",
+      "id": "@EXAMPLE_ID@.activity",
+      "module": "@EXAMPLE_ID@.editor"
+    },
+    {
+      "type": "editor.panel",
+      "id": "@EXAMPLE_ID@.panel",
+      "module": "@EXAMPLE_ID@.editor"
+    }
+  ]
+}

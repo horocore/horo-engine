@@ -66,8 +66,16 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    FrameScheduler::FixedAttemptGuard::FixedAttemptGuard(RuntimeLifecycle &lifecycle, const FixedStepContext &context) noexcept
+        : lifecycle(lifecycle), context(context) {}
+
+    FrameScheduler::FixedAttemptGuard::~FixedAttemptGuard() {
+        if (!committed)
+            lifecycle.AbortFixedUpdate(context);
+    }
+
     /** @copydoc FrameScheduler::DispatchFixedChecked */
-    Result<void> FrameScheduler::DispatchFixedChecked(RuntimeLifecycle &lifecycle, FixedStepContext &context) {
+    Result<void> FrameScheduler::DispatchFixedChecked(RuntimeLifecycle &lifecycle, FixedStepContext &context, const bool paused) {
         const RuntimeDispatchFacts facts{.frame = context.frameNumber,
                                          .fixedTick = context.simulationTick,
                                          .fixedAttempt = context.attemptNumber,
@@ -81,10 +89,19 @@ namespace Horo::Runtime {
             return admitted;
         const DispatchGuard guard{dispatchSource_};
         context.dispatchEvidence = dispatchSource_.Evidence();
+        FixedAttemptGuard attempt{lifecycle, context};
         if (auto result = lifecycle.DispatchFixedUpdate(context); result.HasError())
             return result;
+        if (auto prepared = lifecycle.PrepareFixedCommit(context); prepared.HasError())
+            return prepared;
         if (context.cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(RuntimeErrors::Cancelled));
+        if (auto admitted = DispatchAdmissionResult(dispatchSource_.CommitFixed()); admitted.HasError())
+            return admitted;
+        // No fallible operation or cancellation decision may follow the commitment fence.
+        CommitFixedStep(context, paused);
+        attempt.committed = true;
+        lifecycle.CommitFixedUpdate(context);
         return Result<void>::Success();
     }
 }  // namespace Horo::Runtime

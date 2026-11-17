@@ -18,6 +18,9 @@ namespace Horo::Editor {
     /** @brief Presents a typed, read-only comparison of document and disk scene state. */
     class SceneConflictCompareModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.scene_compare"};
+
         static constexpr std::uint64_t kModalId = 0x53434E434D504152ULL;
 
         /**

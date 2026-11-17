@@ -59,7 +59,7 @@ namespace Horo::Character {
         /** @brief Checks canonical collision and material identities. */
         [[nodiscard]] Result<void> ValidateDescriptorBindings(const CharacterControllerDescriptor &descriptor) {
             if (!descriptor.collisionProfile.IsValid() || !descriptor.queryChannel.IsValid() ||
-                !IsMaterialValid(descriptor.defaultMaterial))
+                !IsMaterialValid(descriptor.defaultMaterial) || (descriptor.defaultSurface && !descriptor.defaultSurface->IsValid()))
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
             return Result<void>::Success();
         }
@@ -482,6 +482,53 @@ namespace Horo::Character {
         return ValidateStance(request.stance);
     }
 
+    namespace {
+        /** @brief Check semantic evidence shape without looking up mutable project state. */
+        bool IsSemanticEvidenceValid(const Physics::PhysicsSurfaceEvidence &evidence) noexcept {
+            return evidence.surface.IsValid() && evidence.catalogRevision != 0 && evidence.mappingGeneration != 0 &&
+                   evidence.catalogFingerprint != Sha256Digest{};
+        }
+
+        /** @brief Distinguish absent support meaning, query meaning and explicit descriptor policy. */
+        bool IsSemanticSourceValid(const std::optional<Physics::PhysicsSurfaceEvidence> &evidence, CharacterSemanticSurfaceSource source,
+                                   const std::optional<Physics::SurfaceMaterialId> &fallback) noexcept {
+            using enum Horo::Character::CharacterSemanticSurfaceSource;
+            if (!evidence)
+                return source == None;
+            if (!IsSemanticEvidenceValid(*evidence))
+                return false;
+            if (source == Query)
+                return true;
+            return source == DescriptorDefault && fallback == evidence->surface;
+        }
+
+        /** @brief Validate independent semantic and slide state without inferring support from physical IDs. */
+        Result<void> ValidateSemanticMovement(const CharacterMovementResult &result, const CharacterControllerDescriptor &descriptor) {
+            if (result.surfaceAvailability > CharacterSurfaceAvailability::Available ||
+                !IsSemanticSourceValid(result.groundSurface, result.groundSurfaceSource, descriptor.defaultSurface))
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            if (result.groundSurface && (!result.grounded || result.surfaceAvailability != CharacterSurfaceAvailability::Available))
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            if (result.sliding && (result.grounded || descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Slide))
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validate retained semantic contact and optional measured inbound velocity. */
+        Result<void> ValidateContactSemantics(const CharacterMovementResult &result, const CharacterControllerDescriptor &descriptor) {
+            for (std::uint32_t index{}; index < result.contactCount; ++index) {
+                const auto &contact = result.contacts[index];
+                if (const auto valid = ValidateContact(contact, descriptor); valid.HasError())
+                    return valid;
+                if (!IsSemanticSourceValid(contact.surface, contact.surfaceSource, descriptor.defaultSurface))
+                    return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+                if (contact.impactVelocityMetersPerSecond && !Math::IsFinite(*contact.impactVelocityMetersPerSecond))
+                    return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc ValidateCharacterMovementResult */
     Result<void> ValidateCharacterMovementResult(const CharacterMovementResult &result, const CharacterControllerDescriptor &descriptor) {
         if (const auto descriptorValidation = ValidateCharacterControllerDescriptor(descriptor); descriptorValidation.HasError())
@@ -497,12 +544,9 @@ namespace Horo::Character {
             return ground;
         if (const auto attachment = Detail::ValidateCharacterPlatformAttachment(result, descriptor); attachment.HasError())
             return attachment;
-        for (std::uint32_t index = 0; index < result.contactCount; ++index) {
-            const auto contact = ValidateContact(result.contacts[index], descriptor);
-            if (contact.HasError())
-                return contact;
-        }
-        return Result<void>::Success();
+        if (const auto semantic = ValidateSemanticMovement(result, descriptor); semantic.HasError())
+            return semantic;
+        return ValidateContactSemantics(result, descriptor);
     }
 
     /** @copydoc ValidateCharacterLocomotionSnapshot */
@@ -565,7 +609,9 @@ namespace Horo::Character {
                                                     .penetrationDepthMeters =
                                                         std::max(0.0F, descriptor.skinWidthMeters - movement.groundDistanceMeters),
                                                     .subshape = movement.groundSubshape,
-                                                    .materialSource = movement.groundMaterialSource},
+                                                    .materialSource = movement.groundMaterialSource,
+                                                    .surface = movement.groundSurface,
+                                                    .surfaceSource = movement.groundSurfaceSource},
                                         .achievedVelocityMetersPerSecond = movement.achievedVelocityMetersPerSecond};
         return Result<std::optional<CharacterGroundSurfaceFact>>::Success(fact);
     }

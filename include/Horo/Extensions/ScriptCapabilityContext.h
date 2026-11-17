@@ -35,6 +35,13 @@ namespace Horo::Extensions {
         /** @brief Returns the scope boundary. @return Immutable scope kind. */
         [[nodiscard]] ScriptCapabilityScopeKind Kind() const noexcept;
 
+        /** @brief Compares the exact host-issued immutable scope identity; conveys no liveness or access rights.
+         * @param other Actual lease to compare. @return False for null/moved-from leases, otherwise exact owner and kind equality.
+         */
+        [[nodiscard]] bool Matches(const ScriptCapabilityScopeLease &other) const noexcept {
+            return active_ && kind_ == other.kind_ && active_ == other.active_;
+        }
+
     private:
         friend class ScriptCapabilityScope;
         ScriptCapabilityScopeLease(ScriptCapabilityScopeKind kind, std::shared_ptr<const std::atomic<bool>> active);

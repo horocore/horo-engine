@@ -518,3 +518,34 @@ TEST_CASE("Invalid queue policy and disabled capacity have typed outcomes", "[fo
         CheckSubmissionRejected(result, "job.wait_capacity_deadlock");
     }
 }
+
+TEST_CASE("Job cancellation error construction propagates every checked allocation failure", "[foundation][jobs][admission]") {
+    const Horo::ErrorCodeDescriptor descriptor{Horo::ErrorDomainId{"test.jobs"}, Horo::ErrorCode{"test.cancelled"},
+                                               Horo::ErrorSeverity::Error, "Cancelled", "Retry"};
+    constexpr auto message = "Job was cancelled before execution.";
+    std::size_t requests{};
+    {
+        Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
+        const auto error = Horo::MakeError(descriptor, message);
+        requests = measurement.Snapshot().requests;
+    }
+    REQUIRE(requests > 0);
+    for (std::size_t index = 0; index < requests; ++index) {
+        INFO(index);
+        bool failed{};
+        {
+            Horo::Tests::AllocationProbe::ScopedFailure injected(index);
+            try {
+                const auto error = Horo::MakeError(descriptor, message);
+            } catch (const std::bad_alloc &) {
+                failed = true;
+            }
+        }
+        REQUIRE(failed);
+    }
+    const auto recovered = Horo::MakeError(descriptor, message);
+    CHECK(recovered.code.Value() == descriptor.code.Value());
+    CHECK(recovered.domain.Value() == descriptor.domain.Value());
+    CHECK(recovered.message == message);
+    CHECK(recovered.diagnostics.empty());
+}

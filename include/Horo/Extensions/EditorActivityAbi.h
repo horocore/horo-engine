@@ -4,6 +4,7 @@
 
 /** @brief Canonical required host capability for the ABI 1.4 editor registration/session transport. */
 #define HORO_EDITOR_ACTIVITY_HOST_CAPABILITY  "editor.activity"
+#define HORO_EDITOR_COMMAND_HOST_CAPABILITY   "editor.commands"
 #define HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY "editor.custom-composition"
 
 enum {
@@ -374,4 +375,33 @@ struct HoroEditorActivitySessionApi {
 };
 #ifndef __cplusplus
 typedef struct HoroEditorActivitySessionApi HoroEditorActivitySessionApi;
+#endif
+
+/** @brief Opt-in schema2 command routed to an existing semantic action; all strings are copied at registration.
+ * @details IDs must also be manifest-declared editor.command contributions owned by this module.
+ * Shortcuts use the command registry grammar, for example Ctrl+Shift+P or Meta+Shift+P.
+ */
+struct HoroEditorActivityCommand {
+    HoroExtensionStringView id;
+    HoroExtensionStringView nodeId;
+    HoroExtensionStringView actionId;
+    HoroExtensionStringView labelKey;
+    HoroExtensionStringView shortcut;
+};
+#ifndef __cplusplus
+typedef struct HoroEditorActivityCommand HoroEditorActivityCommand;
+#endif
+
+/** @brief Append-only activity descriptor profile with explicit command publication.
+ * @details Set activity.structSize to sizeof this record and activity.schemaVersion to 2.
+ * Require editor.commands in the module manifest. Schema1 and its binary layout remain supported.
+ * Commands execute through the existing scheduled action callback, never during GUI drawing.
+ */
+struct HoroEditorActivityDescriptorV2 {
+    HoroEditorActivityDescriptor activity;
+    const HoroEditorActivityCommand *commands;
+    uint32_t commandCount;
+};
+#ifndef __cplusplus
+typedef struct HoroEditorActivityDescriptorV2 HoroEditorActivityDescriptorV2;
 #endif

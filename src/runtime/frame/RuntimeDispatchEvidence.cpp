@@ -1,5 +1,6 @@
 #include "Horo/Runtime/RuntimeDispatchEvidence.h"
 
+#include "Horo/Runtime/FrameScheduler.h"
 #include "internal/RuntimeDispatchOrdinal.h"
 
 #include <atomic>
@@ -19,6 +20,12 @@ namespace Horo::Runtime {
         Storage &operator=(const Storage &) = delete;
         Storage(Storage &&) = delete;
         Storage &operator=(Storage &&) = delete;
+
+        /** @brief Retirement closes future admission but cannot revoke a completed fixed commitment mid-publication. */
+        [[nodiscard]] bool HasActiveFixedCommit() const noexcept {
+            return active && phase == RuntimePhase::FixedUpdate && facts.fixedTick != 0 && facts.committedTick == facts.fixedTick &&
+                   facts.committedAttempt == facts.fixedAttempt;
+        }
 
         const std::thread::id owner{std::this_thread::get_id()};
         // Only retirement may cross the owner thread. Foreign reads reject before accessing all other mutable fields.
@@ -74,6 +81,29 @@ namespace Horo::Runtime {
         return Valid;
     }
 
+    /** @copydoc RuntimeDispatchSource::CommitFixed */
+    RuntimeDispatchStatus RuntimeDispatchSource::CommitFixed() noexcept {
+        using enum RuntimeDispatchStatus;
+        if (!storage_.Get())
+            return Invalid;
+        if (storage_->owner != std::this_thread::get_id())
+            return WrongThread;
+        if (storage_->retired.load())
+            return Retired;
+        if (!storage_->active)
+            return Stale;
+        if (storage_->phase != RuntimePhase::FixedUpdate)
+            return WrongPhase;
+        const auto &pending = storage_->facts;
+        if (pending.fixedAttempt == 0 || pending.fixedTick <= pending.committedTick)
+            return Invalid;
+        storage_->facts.committedTick = pending.fixedTick;
+        storage_->facts.committedAttempt = pending.fixedAttempt;
+        storage_->facts.committedFrame = pending.frame;
+        storage_->facts.committedDuration = pending.fixedDuration;
+        return Valid;
+    }
+
     /** @copydoc RuntimeDispatchSource::End */
     void RuntimeDispatchSource::End() noexcept {
         storage_->active = false;
@@ -90,6 +120,11 @@ namespace Horo::Runtime {
         return RuntimeDispatchEvidence{storage_.ReadPin(), storage_->ordinal};
     }
 
+    /** @copydoc RuntimeDispatchEvidence::RefersToSameDispatch */
+    bool RuntimeDispatchEvidence::RefersToSameDispatch(const RuntimeDispatchEvidence &other) const noexcept {
+        return storage_ && ordinal_ != 0 && storage_ == other.storage_ && ordinal_ == other.ordinal_;
+    }
+
     /** @copydoc RuntimeDispatchEvidence::Read */
     RuntimeDispatchStatus RuntimeDispatchEvidence::Read(const RuntimeDispatchSource &expected, const RuntimePhase phase,
                                                         RuntimeDispatchFacts &facts) const noexcept {
@@ -100,7 +135,7 @@ namespace Horo::Runtime {
             return WrongThread;
         if (storage_.get() != expected.storage_.Get())
             return ForeignSource;
-        if (storage_->retired.load())
+        if (storage_->retired.load() && !storage_->HasActiveFixedCommit())
             return Retired;
         if (!storage_->active || storage_->ordinal != ordinal_)
             return Stale;

@@ -16,6 +16,7 @@ namespace Horo::SceneSource {
             if (document.prefabInstances.size() > limits.Policy().maximumObjectCount)
                 return Result<ScenePrefabProjection>::Failure(MakeError(Prefab::PrefabErrors::ObjectCountExceeded));
             ScenePrefabProjection projection;
+            Detail::ScenePrefabDebugCaptureBudget debugBudget;
             projection.instances.reserve(document.prefabInstances.size());
             for (const auto &instance : document.prefabInstances) {
                 if (cancellation.IsCancellationRequested())
@@ -27,7 +28,7 @@ namespace Horo::SceneSource {
                     AddInstanceContext(*entry.failure, entry);
                 } else
                     entry.expanded = *candidate.Value();
-                Detail::ApplyInstanceValues(entry, schemas, limits, cancellation);
+                Detail::ApplyInstanceValues(entry, schemas, limits, debugBudget, cancellation);
                 projection.instances.push_back(std::move(entry));
             }
             if (cancellation.IsCancellationRequested())

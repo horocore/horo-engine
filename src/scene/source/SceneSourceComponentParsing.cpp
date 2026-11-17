@@ -447,6 +447,51 @@ namespace Horo::SceneSource::Detail {
             {value["view"].get<std::uint32_t>(), static_cast<std::int32_t>(priority), weight, value["enabled"].get<bool>()});
     }
 
+    /** @brief Preserves existing optional component parsing order and typed errors. */
+    Result<void> ParseCoreComponents(const Json &value, SceneObjectComponentSet &components, std::size_t &recognized) {
+        const auto parse = [&]<typename Component, typename Parser>(const std::string_view name, std::optional<Component> &destination,
+                                                                    Parser &&parser) -> Result<void> {
+            return ParseOptionalComponent(value, name, destination, std::forward<Parser>(parser), recognized);
+        };
+        if (auto parsed = parse("camera", components.camera, ParseCameraComponent); parsed.HasError())
+            return parsed;
+        if (auto parsed = parse("light", components.light, ParseLightComponent); parsed.HasError())
+            return parsed;
+        if (auto parsed = parse("triggerVolume", components.triggerVolume, ParseTriggerVolumeComponent); parsed.HasError())
+            return parsed;
+        if (auto parsed = parse("audioSource", components.audioSource, ParseAudioSourceComponent); parsed.HasError())
+            return parsed;
+        if (auto parsed = parse("audioListener", components.audioListener, ParseAudioListenerComponent); parsed.HasError())
+            return parsed;
+        return Result<void>::Success();
+    }
+
+    /** @brief Preserves existing optional component parsing order and typed errors. */
+    Result<void> ParseNavigationComponents(const Json &value, SceneObjectComponentSet &components, std::size_t &recognized) {
+        const auto parse = [&]<typename Component, typename Parser>(const std::string_view name, std::optional<Component> &destination,
+                                                                    Parser &&parser) -> Result<void> {
+            return ParseOptionalComponent(value, name, destination, std::forward<Parser>(parser), recognized);
+        };
+        if (auto parsed = parse("navigationSurface", components.navigationSurface, ParseNavigationSurface); parsed.HasError())
+            return parsed;
+        if (auto parsed = parse("navigationRegion", components.navigationRegion, ParseNavigationRegion); parsed.HasError())
+            return parsed;
+        if (auto parsed = parse("navigationModifier", components.navigationModifier, ParseNavigationModifier); parsed.HasError())
+            return parsed;
+        if (auto parsed = parse("navigationLink", components.navigationLink, ParseNavigationLink); parsed.HasError())
+            return parsed;
+        if (auto parsed = parse("navigationAgent", components.navigationAgent, ParseNavigationAgent); parsed.HasError())
+            return parsed;
+        return Result<void>::Success();
+    }
+
+    /** @brief Parses the two AI-owned components without changing first-error or recognition order. */
+    Result<void> ParseAiComponents(const Json &value, SceneObjectComponentSet &components, std::size_t &recognized) {
+        if (auto agent = ParseOptionalComponent(value, "aiAgent", components.aiAgent, ParseAiAgent, recognized); agent.HasError())
+            return agent;
+        return ParseOptionalComponent(value, "aiController", components.aiController, ParseAiController, recognized);
+    }
+
     [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value, std::size_t &recognized,
                                                                   Runtime::PhysicsValidationDetail::BodyReferenceDomain domain) {
         recognized = 0;
@@ -458,29 +503,13 @@ namespace Horo::SceneSource::Detail {
                                                                     Parser &&parser) -> Result<void> {
             return ParseOptionalComponent(value, name, destination, std::forward<Parser>(parser), recognized);
         };
-        if (auto parsed = parse("camera", components.camera, ParseCameraComponent); parsed.HasError())
+        if (auto parsed = ParseCoreComponents(value, components, recognized); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("light", components.light, ParseLightComponent); parsed.HasError())
+        if (auto parsed = ParseNavigationComponents(value, components, recognized); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("triggerVolume", components.triggerVolume, ParseTriggerVolumeComponent); parsed.HasError())
+        if (auto parsed = parse("animation", components.animation, ParseAnimationComponent); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("audioSource", components.audioSource, ParseAudioSourceComponent); parsed.HasError())
-            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("audioListener", components.audioListener, ParseAudioListenerComponent); parsed.HasError())
-            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("navigationSurface", components.navigationSurface, ParseNavigationSurface); parsed.HasError())
-            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("navigationRegion", components.navigationRegion, ParseNavigationRegion); parsed.HasError())
-            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("navigationModifier", components.navigationModifier, ParseNavigationModifier); parsed.HasError())
-            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("navigationLink", components.navigationLink, ParseNavigationLink); parsed.HasError())
-            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("navigationAgent", components.navigationAgent, ParseNavigationAgent); parsed.HasError())
-            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("aiAgent", components.aiAgent, ParseAiAgent); parsed.HasError())
-            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (auto parsed = parse("aiController", components.aiController, ParseAiController); parsed.HasError())
+        if (auto parsed = ParseAiComponents(value, components, recognized); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("characterController", components.characterController, ParseCharacterController); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());

@@ -50,7 +50,7 @@ namespace Horo::Prefab::Detail {
     struct PrefabTemplateProviderState final {
         PrefabTemplateProviderState(Assets::AssetRegistry &assetRegistry, Assets::AssetLoadService &assetLoads,
                                     Runtime::RuntimeSceneService &sceneService, PrefabLimitProfile capturedProfile,
-                                    const PrefabTemplateProviderLimits &capacities);
+                                    const PrefabTemplateProviderLimits &capacities, PrefabMetricHandles metrics);
         [[nodiscard]] Result<void> CheckOwner() const;
         [[nodiscard]] Result<void> CheckAdmission(const Assets::AssetRegistrySnapshot &snapshot, Runtime::SceneRuntimeId scene) const;
         /** @brief Completes cancellation only when the shared-loader worker has released its slot. */
@@ -70,6 +70,7 @@ namespace Horo::Prefab::Detail {
         Runtime::RuntimeSceneService &scenes;
         PrefabLimitProfile profile;
         PrefabTemplateProviderLimits limits;
+        PrefabMetricHandles metrics;
         const std::thread::id owner{std::this_thread::get_id()};
         std::shared_ptr<const PrefabProviderIdentity> identity{std::make_shared<const PrefabProviderIdentity>()};
         std::unique_ptr<Assets::AssetPayloadCache> payloads;

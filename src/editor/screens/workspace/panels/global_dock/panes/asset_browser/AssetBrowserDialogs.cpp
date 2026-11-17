@@ -6,6 +6,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 
 #include <algorithm>
 #include <format>
@@ -122,9 +123,9 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::string FormatReimportState(const ContentBrowserEntry &entry, const ILocalizationService &localization) {
-            std::string reimportState = localization.Get("editor", "workspace.content_browser.info.reimport_manual");
+            std::string reimportState = AssetBrowserPane::kTextScope.Text(localization, "info.reimport_manual");
             if (entry.sourceChanged) {
-                reimportState = localization.Get("editor", "workspace.content_browser.info.reimport_source_stale");
+                reimportState = AssetBrowserPane::kTextScope.Text(localization, "info.reimport_source_stale");
             }
             if (entry.importerChanged || entry.moduleChanged) {
                 if (entry.sourceChanged) {
@@ -132,9 +133,8 @@ namespace Horo::Editor {
                 } else {
                     reimportState.clear();
                 }
-                const char *key = entry.moduleChanged ? "workspace.content_browser.info.reimport_module_changed"
-                                                      : "workspace.content_browser.info.reimport_importer_changed";
-                reimportState += localization.Get("editor", key);
+                const char *key = entry.moduleChanged ? "info.reimport_module_changed" : "info.reimport_importer_changed";
+                reimportState += AssetBrowserPane::kTextScope.Text(localization, key);
             }
             return reimportState;
         }
@@ -146,26 +146,26 @@ namespace Horo::Editor {
                 const char *key = nullptr;
                 switch (reason) {
                     case InitialImport:
-                        key = "workspace.content_browser.info.import_reason_initial";
+                        key = "info.import_reason_initial";
                         break;
                     case ManualReimport:
-                        key = "workspace.content_browser.info.import_reason_manual";
+                        key = "info.import_reason_manual";
                         break;
                     case SourceChanged:
-                        key = "workspace.content_browser.info.reimport_source_changed";
+                        key = "info.reimport_source_changed";
                         break;
                     case ImporterChanged:
-                        key = "workspace.content_browser.info.reimport_importer_changed";
+                        key = "info.reimport_importer_changed";
                         break;
                     case ModuleChanged:
-                        key = "workspace.content_browser.info.reimport_module_changed";
+                        key = "info.reimport_module_changed";
                         break;
                 }
                 if (key != nullptr) {
                     if (!lastImport.empty()) {
                         lastImport += ", ";
                     }
-                    lastImport += localization.Get("editor", key);
+                    lastImport += AssetBrowserPane::kTextScope.Text(localization, key);
                 }
             }
             return lastImport;
@@ -178,43 +178,41 @@ namespace Horo::Editor {
                 return;
             }
             const std::string dependencyCount = std::to_string(entry.dependencyCount);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.delete.dependencies").c_str(),
-                        dependencyCount.c_str(), context);
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "delete.dependencies").c_str(), dependencyCount.c_str(),
+                        context);
             if (entry.dependencyCount > 0) {
                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 400.0F);
                 ImGui::TextColored(Theme::Warn(), "%s",
-                                   context.localization.Get("editor", "workspace.content_browser.delete.dependency_warning").c_str());
+                                   AssetBrowserPane::kTextScope.Text(context.localization, "delete.dependency_warning").c_str());
                 ImGui::PopTextWrapPos();
             }
         }
 
         void DrawAssetDetailsRows(const ContentBrowserEntry &entry, const EditorGuiContext &context) {
-            const std::string &none = context.localization.Get("editor", "workspace.content_browser.info.none");
+            const std::string &none = AssetBrowserPane::kTextScope.Text(context.localization, "info.none");
             const std::string size = FormatByteSize(entry.byteSize);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.type").c_str(),
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.type").c_str(),
                         entry.assetType.empty() ? none.c_str() : entry.assetType.c_str(), context);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.asset_id").c_str(),
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.asset_id").c_str(),
                         entry.assetId.empty() ? none.c_str() : entry.assetId.c_str(), context);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.registration").c_str(),
-                        context.localization
-                            .Get("editor", entry.registered ? "workspace.content_browser.info.registered"
-                                                            : "workspace.content_browser.info.unregistered")
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.registration").c_str(),
+                        AssetBrowserPane::kTextScope.Text(context.localization, entry.registered ? "info.registered" : "info.unregistered")
                             .c_str(),
                         context);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.size").c_str(), size.c_str(), context);
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.size").c_str(), size.c_str(), context);
             const std::string importer = FormatImporterInfo(entry, none);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.importer").c_str(), importer.c_str(), context);
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.importer").c_str(), importer.c_str(), context);
             const std::string moduleInfo = FormatModuleInfo(entry, none);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.module").c_str(), moduleInfo.c_str(), context);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.source").c_str(),
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.module").c_str(), moduleInfo.c_str(), context);
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.source").c_str(),
                         entry.absoluteImportSourcePath.empty() ? none.c_str() : entry.absoluteImportSourcePath.c_str(), context);
             const std::string reimportState = FormatReimportState(entry, context.localization);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.reimport_status").c_str(),
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.reimport_status").c_str(),
                         entry.canReimport ? reimportState.c_str() : none.c_str(), context);
             const std::string lastImport = FormatLastImportReasons(entry, context.localization);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.last_import_reason").c_str(),
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.last_import_reason").c_str(),
                         lastImport.empty() ? none.c_str() : lastImport.c_str(), context);
-            DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.metadata").c_str(),
+            DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.metadata").c_str(),
                         entry.absoluteMetadataPath.empty() ? none.c_str() : entry.absoluteMetadataPath.c_str(), context);
         }
 
@@ -232,15 +230,15 @@ namespace Horo::Editor {
             if (ImGui::BeginPopupModal(popupId, nullptr,
                                        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
                                            ImGuiWindowFlags_NoSavedSettings)) {
-                if (DrawClosableModalHeading(context.localization.Get("editor", "workspace.content_browser.info.title"), context))
+                if (DrawClosableModalHeading(AssetBrowserPane::kTextScope.Text(context.localization, "info.title"), context))
                     ImGui::CloseCurrentPopup();
                 if (state.popupEntry.has_value()) {
                     const auto &entry = *state.popupEntry;
-                    DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.name").c_str(),
-                                entry.displayName.c_str(), context);
+                    DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.name").c_str(), entry.displayName.c_str(),
+                                context);
                     ImGui::Dummy({0.0F, 2.0F});
-                    DrawInfoRow(context.localization.Get("editor", "workspace.content_browser.info.path").c_str(),
-                                entry.absolutePath.c_str(), context);
+                    DrawInfoRow(AssetBrowserPane::kTextScope.Text(context.localization, "info.path").c_str(), entry.absolutePath.c_str(),
+                                context);
                     if (entry.kind == ContentBrowserEntryKind::Asset) {
                         DrawAssetDetailsRows(entry, context);
                     }
@@ -265,13 +263,13 @@ namespace Horo::Editor {
             if (ImGui::BeginPopupModal(popupId, nullptr,
                                        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
                                            ImGuiWindowFlags_NoSavedSettings)) {
-                DrawModalHeading(context.localization.Get("editor", "workspace.content_browser.rename.title"), context);
-                Ui::FieldLabel(context.localization.Get("editor", "workspace.content_browser.rename.name").c_str(), context.theme.fonts);
+                DrawModalHeading(AssetBrowserPane::kTextScope.Text(context.localization, "rename.title"), context);
+                Ui::FieldLabel(AssetBrowserPane::kTextScope.Text(context.localization, "rename.name").c_str(), context.theme.fonts);
                 static_cast<void>(Ui::InputTextControl("##ContentBrowserRenameInput", state.renameBuffer.data(), state.renameBuffer.size(),
                                                        context.theme.fonts));
                 ImGui::Dummy({0.0F, 12.0F});
                 if (Ui::Button({
-                        .label = context.localization.Get("editor", "workspace.content_browser.action.cancel").c_str(),
+                        .label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
                         .size = {92.0F, 32.0F},
                         .variant = Ui::ButtonVariant::Secondary,
                         .font = context.theme.fonts.sans,
@@ -280,7 +278,7 @@ namespace Horo::Editor {
                 }
                 ImGui::SameLine();
                 if (Ui::Button({
-                        .label = context.localization.Get("editor", "workspace.content_browser.action.rename").c_str(),
+                        .label = AssetBrowserPane::kTextScope.Text(context.localization, "action.rename").c_str(),
                         .size = {92.0F, 32.0F},
                         .variant = Ui::ButtonVariant::Primary,
                         .enabled = state.renameBuffer[0] != '\0',
@@ -310,10 +308,9 @@ namespace Horo::Editor {
             if (ImGui::BeginPopupModal(popupId, nullptr,
                                        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
                                            ImGuiWindowFlags_NoSavedSettings)) {
-                DrawModalHeading(context.localization.Get("editor", "workspace.content_browser.delete.title"), context);
+                DrawModalHeading(AssetBrowserPane::kTextScope.Text(context.localization, "delete.title"), context);
                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 400.0F);
-                ImGui::TextColored(Theme::Muted(), "%s",
-                                   context.localization.Get("editor", "workspace.content_browser.delete.message").c_str());
+                ImGui::TextColored(Theme::Muted(), "%s", AssetBrowserPane::kTextScope.Text(context.localization, "delete.message").c_str());
                 ImGui::PopTextWrapPos();
                 if (state.popupEntry.has_value()) {
                     DrawDeleteDialogEntryDetails(*state.popupEntry, context);
@@ -321,7 +318,7 @@ namespace Horo::Editor {
 
                 ImGui::Dummy({0.0F, 12.0F});
                 if (Ui::Button({
-                        .label = context.localization.Get("editor", "workspace.content_browser.action.cancel").c_str(),
+                        .label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
                         .size = {92.0F, 32.0F},
                         .variant = Ui::ButtonVariant::Secondary,
                         .font = context.theme.fonts.sans,
@@ -330,7 +327,7 @@ namespace Horo::Editor {
                 }
                 ImGui::SameLine();
                 if (Ui::Button({
-                        .label = context.localization.Get("editor", "workspace.content_browser.action.delete").c_str(),
+                        .label = AssetBrowserPane::kTextScope.Text(context.localization, "action.delete").c_str(),
                         .size = {92.0F, 32.0F},
                         .variant = Ui::ButtonVariant::Primary,
                         .font = context.theme.fonts.sans,
@@ -359,14 +356,13 @@ namespace Horo::Editor {
             if (ImGui::BeginPopupModal(popupId, nullptr,
                                        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
                                            ImGuiWindowFlags_NoSavedSettings)) {
-                DrawModalHeading(context.localization.Get("editor", "workspace.content_browser.create_folder.title"), context);
-                Ui::FieldLabel(context.localization.Get("editor", "workspace.content_browser.create_folder.name").c_str(),
-                               context.theme.fonts);
+                DrawModalHeading(AssetBrowserPane::kTextScope.Text(context.localization, "create_folder.title"), context);
+                Ui::FieldLabel(AssetBrowserPane::kTextScope.Text(context.localization, "create_folder.name").c_str(), context.theme.fonts);
                 static_cast<void>(Ui::InputTextControl("##ContentBrowserCreateFolderInput", state.createFolderBuffer.data(),
                                                        state.createFolderBuffer.size(), context.theme.fonts));
                 ImGui::Dummy({0.0F, 12.0F});
                 if (Ui::Button({
-                        .label = context.localization.Get("editor", "workspace.content_browser.action.cancel").c_str(),
+                        .label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
                         .size = {92.0F, 32.0F},
                         .variant = Ui::ButtonVariant::Secondary,
                         .font = context.theme.fonts.sans,
@@ -375,7 +371,7 @@ namespace Horo::Editor {
                 }
                 ImGui::SameLine();
                 if (Ui::Button({
-                        .label = context.localization.Get("editor", "workspace.content_browser.action.create_folder").c_str(),
+                        .label = AssetBrowserPane::kTextScope.Text(context.localization, "action.create_folder").c_str(),
                         .size = {112.0F, 32.0F},
                         .variant = Ui::ButtonVariant::Primary,
                         .enabled = state.createFolderBuffer[0] != '\0',

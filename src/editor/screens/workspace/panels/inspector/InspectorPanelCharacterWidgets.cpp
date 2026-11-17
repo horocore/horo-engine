@@ -1,3 +1,5 @@
+#include "component_fields/definitions/CharacterGeometryFields.h"
+#include "component_fields/definitions/CharacterMovementFields.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanelInternal.h"
 
 #include <array>
@@ -15,23 +17,14 @@ namespace Horo::Editor {
 
         /** @brief Uses the existing shared localized boolean row without a raw ImGui checkbox. */
         [[nodiscard]] bool Boolean(const char *key, bool &value, const EditorGuiContext &context) {
-            const std::array entries{context.localization.Get("editor", "workspace.value.off").c_str(),
-                                     context.localization.Get("editor", "workspace.value.on").c_str()};
+            const std::array entries{InspectorPanel::kTextScope.Text(context.localization, "value.off").c_str(),
+                                     InspectorPanel::kTextScope.Text(context.localization, "value.on").c_str()};
             int selected = value ? 1 : 0;
             const bool changed =
                 Ui::DrawComboPropRow(context.localization.Get("editor", key).c_str(), key, selected, entries, context.theme.fonts);
             if (changed)
                 value = selected != 0;
             return changed;
-        }
-
-        /** @brief Keeps world-basis vectors typed outside the shared three-axis presentation control. */
-        [[nodiscard]] Ui::PropertyEditResult Vector(const char *key, Math::Vec3 &value, const EditorGuiContext &context) {
-            std::array fields{value.x, value.y, value.z};
-            const auto edit = Ui::DrawFloat3PropRow(context.localization.Get("editor", key).c_str(), key, fields, context.theme.fonts);
-            if (edit.changed)
-                value = {fields[0], fields[1], fields[2]};
-            return {.changed = edit.changed, .committed = edit.committed};
         }
 
         /** @brief Draws capsule dimensions in canonical meters, independent of visual hierarchy scale. */
@@ -50,9 +43,7 @@ namespace Horo::Editor {
 
         /** @brief Draws finite geometry/basis fields and an explicit optional crouched capsule. */
         [[nodiscard]] Ui::PropertyEditResult Geometry(Runtime::CharacterSceneGeometry &geometry, const EditorGuiContext &context) {
-            auto result = Capsule(geometry.capsule, false, context);
-            Merge(result, Vector("workspace.inspector.character.up", geometry.up, context));
-            Merge(result, Vector("workspace.inspector.character.gravity", geometry.gravity, context));
+            auto result = InspectorFields::Draw(geometry, context);
             if (bool crouched = geometry.crouchedCapsule.has_value(); Boolean("workspace.inspector.character.crouch", crouched, context)) {
                 if (crouched)
                     geometry.crouchedCapsule =
@@ -65,44 +56,6 @@ namespace Horo::Editor {
             if (geometry.crouchedCapsule)
                 Merge(result, Capsule(*geometry.crouchedCapsule, true, context));
             return result;
-        }
-
-        /** @brief Draws all movement scalars through shared property controls. */
-        [[nodiscard]] Ui::PropertyEditResult Movement(Runtime::CharacterSceneMovement &movement, const EditorGuiContext &context) {
-            const std::array fields{std::pair{"workspace.inspector.character.skin", &movement.skinWidthMeters},
-                                    std::pair{"workspace.inspector.character.minimum_move", &movement.minimumMoveDistanceMeters},
-                                    std::pair{"workspace.inspector.character.step", &movement.maximumStepHeightMeters},
-                                    std::pair{"workspace.inspector.character.slope", &movement.maximumSlopeDegrees},
-                                    std::pair{"workspace.inspector.character.jump", &movement.jumpSpeedMetersPerSecond}};
-            Ui::PropertyEditResult result;
-            for (const auto &[key, value] : fields)
-                Merge(result, Ui::DrawFloatPropRow(context.localization.Get("editor", key).c_str(), key, *value, context.theme.fonts));
-            return result;
-        }
-
-        /** @brief Draws the closed policy vocabulary using localized entries in exact typed enum order. */
-        [[nodiscard]] bool Policies(Runtime::CharacterSceneMovement &movement, const EditorGuiContext &context) {
-            bool changed = Boolean("workspace.inspector.character.preserve_speed", movement.preserveHorizontalSpeed, context);
-            changed |= Boolean("workspace.inspector.character.dynamic_platform", movement.dynamicPlatformSupport, context);
-            changed |= Boolean("workspace.inspector.character.platform_heading", movement.inheritPlatformHeading, context);
-            const auto slopes = std::array{context.localization.Get("editor", "workspace.inspector.character.stop").c_str(),
-                                           context.localization.Get("editor", "workspace.inspector.character.slide").c_str()};
-            if (auto slope = static_cast<int>(movement.steepSlopePolicy);
-                Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.steep_policy").c_str(),
-                                     "steep_policy", slope, slopes, context.theme.fonts)) {
-                movement.steepSlopePolicy = static_cast<Character::CharacterSteepSlopePolicy>(slope);
-                changed = true;
-            }
-            const auto leave = std::array{context.localization.Get("editor", "workspace.inspector.character.none").c_str(),
-                                          context.localization.Get("editor", "workspace.inspector.character.linear").c_str(),
-                                          context.localization.Get("editor", "workspace.inspector.character.point").c_str()};
-            if (auto velocity = static_cast<int>(movement.platformLeaveVelocity);
-                Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.leave_velocity").c_str(),
-                                     "leave_velocity", velocity, leave, context.theme.fonts)) {
-                movement.platformLeaveVelocity = static_cast<Character::CharacterPlatformLeaveVelocityPolicy>(velocity);
-                changed = true;
-            }
-            return changed;
         }
 
         /** @brief Keeps bounded invalid UUID/decimal text visible while only the reducer admits complete typed bindings. */
@@ -129,8 +82,9 @@ namespace Horo::Editor {
         if (!draft.characterController)
             return {};
         Ui::Card card(Ui::CardProps{.id = "##CharacterControllerCard"});
-        const auto header = DrawComponentTitleBar(card, context.localization.Get("editor", "workspace.inspector.character.title").c_str(),
-                                                  {.enabled = draft.characterController->enabled}, context);
+        const auto header =
+            DrawComponentTitleBar(card, InspectorPanel::kTextScope.Text(context.localization, "inspector.character.title").c_str(),
+                                  {.enabled = draft.characterController->enabled}, context);
         if (header.resetRequested) {
             draft.characterController = Runtime::CharacterControllerComponent{.id = draft.characterController->id,
                                                                               .enabled = draft.characterController->enabled,
@@ -144,11 +98,7 @@ namespace Horo::Editor {
         const bool cancelled = IsInspectorCardEscapeRequested();
         if (card.BeginBody()) {
             Merge(edit, Geometry(draft.characterController->geometry, context));
-            Merge(edit, Movement(draft.characterController->movement, context));
-            if (Policies(draft.characterController->movement, context)) {
-                edit.changed = true;
-                edit.committed = true;
-            }
+            Merge(edit, InspectorFields::Draw(draft.characterController->movement, context));
             Merge(edit, Bindings(draft.characterBindings, context));
             card.Finish();
         }

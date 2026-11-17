@@ -167,6 +167,9 @@ namespace Horo::Vfx {
 
         void MoveDenseParticle(Detail::CpuParticleBufferState &state, const std::uint32_t destination,
                                const std::uint32_t source) noexcept {
+            // Stable survivors already at their destination retain their bytes without redundant stream writes.
+            if (destination == source)
+                return;
             for (float *const stream : state.streams.floats)
                 stream[destination] = stream[source];
             for (std::uint32_t index = 0; index < state.customFloatStreamCount; ++index)

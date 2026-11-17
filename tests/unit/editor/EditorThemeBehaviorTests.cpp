@@ -1,4 +1,6 @@
+#include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -6,13 +8,14 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 namespace {
     class ScopedThemeDirectory {
     public:
         ScopedThemeDirectory()
             : path_{std::filesystem::temp_directory_path() /
-                    ("horo-theme-tests-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))} {
+                    ("horo theme tests-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))} {
             std::filesystem::create_directories(path_);
         }
 
@@ -34,6 +37,109 @@ namespace {
         std::filesystem::path path_;
     };
 }  // namespace
+
+TEST_CASE("Theme candidates are fenced to the selected source and bounded before parsing", "[unit][editor][gui][theme][reload]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    ScopedThemeDirectory directory;
+    directory.Write("theme.json", R"({"colors":{"WindowBg":"#112233"}})");
+    Theme::RefreshThemeList(directory.Path().string().c_str());
+    const int custom = static_cast<int>(Theme::GetThemeList().size() - 1U);
+    Theme::ThemeEntry candidate;
+    REQUIRE(Theme::LoadThemeFromJson((directory.Path() / "theme.json").string().c_str(), candidate));
+    Theme::SelectThemeByIndex(0);
+    CHECK_FALSE(Theme::ApplyReloadedTheme(candidate));
+    Theme::SelectThemeByIndex(custom);
+    REQUIRE(Theme::ApplyReloadedTheme(candidate));
+    CHECK(Theme::Bg0().x == 17.0F / 255.0F);
+    directory.Write("theme.json", std::string(256U * 1024U + 1U, ' '));
+    CHECK_FALSE(Theme::LoadThemeFromJson((directory.Path() / "theme.json").string().c_str(), candidate));
+    CHECK(Theme::Bg0().x == 17.0F / 255.0F);
+}
+
+TEST_CASE("Theme watcher publishes valid replacements and retains the last good theme after invalid saves",
+          "[unit][editor][gui][theme][reload]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    ScopedThemeDirectory directory;
+    const auto path = directory.Path() / "theme.json";
+    directory.Write("theme.json", R"({"colors":{"WindowBg":"#112233"}})");
+    Theme::RefreshThemeList(directory.Path().string().c_str());
+    Theme::SelectThemeByIndex(static_cast<int>(Theme::GetThemeList().size() - 1U));
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+    EditorDataBus events;
+    int reloads{};
+    const auto subscription = events.Subscribe<Theme::ThemeReloadedEvent>([&](const auto &) {
+        ++reloads;
+    });
+    Theme::LiveReload watcher{jobs, events};
+    const auto pumpUntil = [&](const auto &ready) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (!ready() && std::chrono::steady_clock::now() < deadline) {
+            watcher.Update(0.5);
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        REQUIRE(ready());
+    };
+    pumpUntil([&] {
+        return reloads == 1;
+    });
+    directory.Write("theme.json", "{invalid");
+    for (int attempt = 0; attempt < 30; ++attempt) {
+        watcher.Update(0.5);
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    CHECK(reloads == 1);
+    CHECK(Theme::Bg0().x == 17.0F / 255.0F);
+    directory.Write("theme.json", R"({"colors":{"WindowBg":"#445566"},"tokens":{"radii":{"control":9},"layoutSizes":{"modalWidth":820}}})");
+    pumpUntil([&] {
+        return reloads == 2;
+    });
+    CHECK(Theme::Bg0().x == 68.0F / 255.0F);
+    CHECK(ImGui::GetStyle().FrameRounding == 9.0F);
+    CHECK(Theme::GetActiveTokens().sizes.modalWidth == 820.0F);
+    std::filesystem::remove(path);
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        watcher.Update(0.5);
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    CHECK(reloads == 2);
+    directory.Write("theme.json", R"({"colors":{"WindowBg":"#778899"}})");
+    pumpUntil([&] {
+        return reloads == 3;
+    });
+    CHECK(Theme::Bg0().x == 119.0F / 255.0F);
+    Theme::SelectThemeByIndex(0);
+    watcher.Update(0.5);
+    CHECK(Theme::GetActiveThemeIndex() == 0);
+    CHECK(ImGui::GetStyle().FrameRounding == Theme::GetActiveTokens().radii.control);
+    watcher.Shutdown();
+    watcher.Shutdown();
+}
+
+TEST_CASE("Switching to a built-in theme fences a pending background candidate", "[unit][editor][gui][theme][reload]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    ScopedThemeDirectory directory;
+    directory.Write("theme.json", R"({"colors":{"WindowBg":"#112233"}})");
+    Theme::RefreshThemeList(directory.Path().string().c_str());
+    Theme::SelectThemeByIndex(static_cast<int>(Theme::GetThemeList().size() - 1U));
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+    EditorDataBus events;
+    int reloads{};
+    const auto subscription = events.Subscribe<Theme::ThemeReloadedEvent>([&](const auto &) {
+        ++reloads;
+    });
+    Theme::LiveReload watcher{jobs, events};
+    watcher.Update(0.5);
+    Theme::SelectThemeByIndex(0);
+    watcher.Update(0.5);
+    watcher.Shutdown();
+    CHECK(reloads == 0);
+    CHECK(Theme::GetActiveThemeIndex() == 0);
+}
 
 TEST_CASE("Built-in themes update active style and design tokens", "[unit][editor][gui][theme]") {
     using namespace Horo::Editor;

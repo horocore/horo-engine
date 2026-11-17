@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "objects": [],
+  "prefabInstances": [
+    {
+      "instanceId": 41,
+      "sourceAsset": "00000000-0000-0000-0000-000000000004",
+      "parent": null,
+      "rootTransform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "instanceId": 42,
+      "sourceAsset": "00000000-0000-0000-0000-000000000002",
+      "parent": null,
+      "rootTransform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "valueOverrides": "{\n\"authoredAgainst\": {\n\"contentDigest\": \"sha256:9e12ed49c7dd0240244eb64d5e98ac468458c2661beb5fb7e3c9b44eac202dee\",\n\"projectVersion\": \"0.2.0\"\n},\n\"conflicts\": [],\n\"orphans\": [],\n\"records\": [\n{\n\"componentSchemaVersion\": 0,\n\"expectedSourceValue\": \"sha256:df4273c4a025b812c1ba2076bdf5eff45a06ef41e5a709022f3502e82cdb39c1\",\n\"operation\": 0,\n\"target\": {\n\"kind\": \"transform\",\n\"object\": 17,\n\"scope\": []\n},\n\"value\": {\n\"kind\": \"transform\",\n\"value\": {\n\"rotation\": [\n0.0,\n0.0,\n0.0,\n1.0\n],\n\"scale\": [\n1.0,\n1.0,\n1.0\n],\n\"translation\": [\n9.0,\n0.0,\n0.0\n]\n}\n}\n}\n],\n\"schema\": 1,\n\"schemaRevision\": \"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\n\"sourcePrefab\": \"00000000-0000-0000-0000-000000000002\"\n}"
+    }
+  ]
+}

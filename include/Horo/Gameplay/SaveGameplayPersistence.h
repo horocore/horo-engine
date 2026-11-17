@@ -1,4 +1,9 @@
 #pragma once
+#include "Horo/Gameplay/BehaviorRestore.h"
+#include "Horo/Gameplay/PersistenceInstallation.h"
+
+#include <functional>
+#include <optional>
 
 /**
  * @file SaveGameplayPersistence.h
@@ -15,11 +20,21 @@
 #include <span>
 #include <vector>
 
+namespace Horo::Gameplay::Detail {
+    class PreparedGameplaySourceBinding;
+}
+
 namespace Horo::Runtime {
     /** @brief Exact SDK-facing runtime source used by the save integration adapter. */
     using IGameplayPersistenceSource = Gameplay::IPersistenceSource;
     /** @brief Exact SDK-facing no-fail publication candidate used by staged restore. */
     using IPreparedGameplayPersistenceState = Gameplay::IPreparedPersistenceState;
+
+    /** @brief Explicit host contract for published native preparation retirement. */
+    enum class GameplayPersistenceRestorePolicy : std::uint8_t {
+        PreservePreparedOwnership,
+        ReloadableScene
+    };
 
     /**
      * @brief Capture binding and restore factory pinned to one live gameplay module generation.
@@ -71,11 +86,29 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<std::unique_ptr<IStagedRestoreParticipant>> StageRestore(ParticipantSchemaVersion savedSchema,
                                                                                       SaveRecordId savedRecord,
                                                                                       std::span<const std::byte> bytes) const;
+        /** @brief Stages under explicit reloadable Scene policy; actual native retirement capability is required before publication. */
+        [[nodiscard]] Result<std::unique_ptr<IStagedRestoreParticipant>> StageRestore(ParticipantSchemaVersion savedSchema,
+                                                                                      SaveRecordId savedRecord,
+                                                                                      std::span<const std::byte> bytes,
+                                                                                      GameplayPersistenceRestorePolicy policy) const;
+
+        /** @brief Binds through this privately installed adapter's existing native owner/admission/generation authority.
+         * @param target Actual scoped candidate (or actual published target for ordinary capture binding).
+         * @return Exact installed adapter or typed foreign-thread/revoked/missing capability failure; no worker dispatch.
+         */
+        [[nodiscard]] Result<GameplayPersistenceInstallation> BindRestoreCandidate(Gameplay::BehaviorPersistenceTarget target) const;
 
         /** @brief Returns inert metadata for explicit host registration. */
         [[nodiscard]] const GameplayPersistenceDescriptor &Descriptor() const noexcept;
 
     private:
+        friend class Gameplay::LoadedGameModule;
+        [[nodiscard]] static Result<std::shared_ptr<GameplayPersistenceAdapter>> CreateBound(
+            GameplayPersistenceDescriptor, std::shared_ptr<IGameplayPersistenceSource>, std::shared_ptr<void>,
+            Gameplay::BehaviorPersistenceTarget, std::shared_ptr<Gameplay::Detail::PreparedGameplaySourceBinding>);
+        std::function<Result<GameplayPersistenceInstallation>(Gameplay::BehaviorPersistenceTarget)> candidateBinder_;
+        std::optional<Gameplay::BehaviorPersistenceTarget> behaviorTarget_;
+        std::shared_ptr<Gameplay::Detail::PreparedGameplaySourceBinding> bindingPublication_;
         GameplayPersistenceDescriptor descriptor_;
         std::shared_ptr<void> moduleLease_;
         std::shared_ptr<IGameplayPersistenceSource> source_;

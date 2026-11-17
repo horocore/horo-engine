@@ -5,6 +5,7 @@
  */
 #include "Horo/Application/PhysicsTriggerVolumeHost.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
 #include "PrefabSceneCookHostFixture.h"
 
@@ -31,6 +32,7 @@ namespace Horo::Application::CharacterSceneProductTest {
             std::filesystem::rename(project.project.dir.path / "assets/level.scene", project.project.dir.path / "assets/level.horo");
             std::filesystem::rename(project.project.dir.path / "assets/level.scene.horo",
                                     project.project.dir.path / "assets/level.horo.horo");
+            WriteSurfaces();
             WriteCollision();
             WriteMaterial();
             WriteScene(extraObjects);
@@ -47,6 +49,15 @@ namespace Horo::Application::CharacterSceneProductTest {
                     .type = Type(type),
                     .sourcePath = ProjectPath::Parse(path).Value(),
                     .metadataPath = ProjectPath::Parse(std::string(path) + ".horo").Value()};
+        }
+
+        /** @brief Adopts the exact project's empty surface inventory without an inferred material/default. */
+        void WriteSurfaces() {
+            const auto settings = ProjectSurfaceSettings::Create({.projectId = "p1"});
+            REQUIRE(settings.HasValue());
+            const auto encoded = EncodeProjectSurfaceSettings(settings.Value());
+            REQUIRE(encoded.HasValue());
+            project.WriteText(".horo/surfaces.json", encoded.Value());
         }
 
         void WriteCollision() {

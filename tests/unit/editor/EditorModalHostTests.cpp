@@ -23,7 +23,7 @@ namespace {
 
     class RecordingModal final : public EditorModal {
     public:
-        RecordingModal(std::uint64_t id, ModalStats &stats) : m_id(ModalId{id}), m_stats(stats) {}
+        RecordingModal(std::uint64_t id, ModalStats &stats) : EditorModal("test.RecordingModal"), m_id(ModalId{id}), m_stats(stats) {}
 
         [[nodiscard]] ModalId Id() const override {
             return m_id;

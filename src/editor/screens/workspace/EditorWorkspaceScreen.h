@@ -37,6 +37,7 @@
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     struct WorkspacePanelServices {
+        XRSimulatorModel *xrSimulator{};
         IEditorGuiRenderer *guiRenderer{nullptr};
         IEditorViewportRenderer *viewportRenderer{nullptr};
         const Log::IStructuredLogQuery *logQuery{nullptr};
@@ -110,6 +111,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
         std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
         std::optional<WorldDocumentFence> worldFence;
+        std::uint64_t prefabSettingsRevision{};
+        std::vector<std::pair<DocumentInstanceId, std::uint64_t>> terrainRevisions;
     };
 
     /** @brief Routes source document commands while fencing delayed close decisions to the workspace session. */
@@ -135,22 +138,35 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @brief Owns workspace presentation and controller lifetime inside the GUI host. */
     class EditorWorkspaceScreen final : public GuiScreen {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace"};
+
         /** @brief Binds borrowed application capabilities before any project activation. */
         explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages);
         /** @brief Revokes any failed-enter XR connection before the existing context member is destroyed. */
         ~EditorWorkspaceScreen() override;
+        /** @brief Revoke the same admitted project artifact port before retiring its workspace owner. */
+        void RevokeSimulatorArtifacts() noexcept;
+        /** @brief Restore exactly the previous workspace Input profile before releasing its context. */
+        void RestoreWorkspaceInputProfile();
         /** @brief Reports the workspace route identity. */
         ScreenId Id() const override;
         /** @brief Activates a reserved project session after controller preparation. */
         Result<void> OnEnter(const GuiRoute &route) override;
         /** @brief Returns navigation settings from the current controller. */
         Result<NavigationProjectSettingsSession *> NavigationSettings() override;
+        Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings() override;
         /** @brief Updates canonical owners and derived presentation for the current frame. */
         void OnUpdate(float dt) override;
         /** @brief Captures gameplay input only while Play owns simulation. */
         void OnInputSnapshot() override;
         /** @brief Delivers the captured gameplay command to the fixed simulation tick. */
         void OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) override;
+        [[nodiscard]] Result<void> BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &source) override;
+        [[nodiscard]] Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override;
+        [[nodiscard]] Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) override;
+        void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override;
+        void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override;
         /** @brief Draws the workspace before routing its current-frame command and input. */
         void Draw(const GuiContentRegion &contentRegion) override;
         /** @brief Collects only currently presented panel identities. */
@@ -197,12 +213,27 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OpenPackagesModal();
         /** @brief Opens topology editing only while Play is idle. */
         void OpenPlayTopologyProfilesModal();
+        /** @brief Routes the existing packages and Play Save/Load Manager menu actions to real modal owners. */
+        [[nodiscard]] bool OpenWorkspaceManager(EditorMenuAction action);
+        /** @brief Preserves untitled-scene Save As normalization. */
+        [[nodiscard]] EditorMenuAction NormalizeSceneSaveAction(EditorMenuAction action) const;
+        /** @brief Routes exact primitive command payloads through the canonical workspace controller. */
+        [[nodiscard]] bool HandlePrimitiveMenu(const EditorMenuInvocation &invocation);
+        /** @brief Retains the existing source dialog result for Save As and Save Copy As. */
+        [[nodiscard]] std::optional<bool> HandleScenePersistenceMenu(EditorMenuAction action);
+        /** @brief Dispatches ordinary Save/Undo/Redo through the existing document owner. */
+        [[nodiscard]] bool HandleDocumentHistoryMenu(EditorMenuAction action);
         /** @brief Captures the external scene before opening its comparison modal. */
         void OpenSceneComparison();
         /** @brief Opens layer creation over the canonical world document owner. */
         void OpenWorldLayerCreation(const WorldDocumentFence &expected);
         /** @brief Opens the transient captured-subtree workflow under the workspace lifetime fence. */
         void OpenPrefabCreationModal(const SceneObjectId root);
+        bool TryOpenCreationModal(const EditorWorkspaceViewCommandData &command);
+        bool TryOpenDocumentModal(const EditorWorkspaceViewCommandData &command);
+        void DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &command);
+        void DrawWorkspaceSnackbar();
+        void OpenTerrainAssetCreationModal(const EditorWorkspaceViewCommandData &command);
         /** @brief Resolves a contained destination before opening behavior creation. */
         void OpenGameplayBehaviorModal(const GameplayBehaviorKind kind, const std::string &requestedDirectory);
         /** @brief Installs the project profile while retaining the host profile for teardown. */
@@ -233,6 +264,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Runtime::RuntimeSceneService &runtimeScene_;
         EditorSettingsService &settings_;
         ProjectOpenService &projectOpenService_;
+        std::shared_ptr<IXRSimulatorArtifacts> simulatorArtifacts_;
         WorkspacePanelServices panelServices_{};
         WorkspaceProjectServices projectServices_{};
         WorkspacePublishedRevisions publishedRevisions_{};

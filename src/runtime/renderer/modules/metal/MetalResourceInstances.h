@@ -49,6 +49,7 @@ namespace Horo::Render::Detail {
 
     struct MetalTextureViewInstance {
         RenderResourceNativeLifetime lifetime;
+        MetalTextureInstance *sourceInstance{}; /**< Borrowed while the existing view dependency pins its source. */
         __strong id<MTLTexture> texture{nil};
         __strong id<MTLTexture> sourceTexture{nil};
         RenderTextureViewDescriptor descriptor;

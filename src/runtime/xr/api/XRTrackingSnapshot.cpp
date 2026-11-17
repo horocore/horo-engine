@@ -46,6 +46,9 @@ namespace Horo::XR {
                     return kind == Grip || kind == Aim || kind == Palm;
                 case XRTrackedDeviceRole::GenericTracker:
                     return kind == Tracker;
+                case XRTrackedDeviceRole::LeftHand:
+                case XRTrackedDeviceRole::RightHand:
+                    return kind == Palm;
                 case XRTrackedDeviceRole::Count:
                     return false;
             }
@@ -76,30 +79,52 @@ namespace Horo::XR {
             return found != poses.end() && found->device == device && found->kind == kind ? std::to_address(found) : nullptr;
         }
 
-        /** @brief Validates fixed bounds before immutable storage allocation. */
-        [[nodiscard]] bool ValidLimits(const XRTrackingSnapshotDescriptor &descriptor) noexcept {
+        bool ValidPoseBounds(const XRTrackingSnapshotDescriptor &descriptor) noexcept {
             return descriptor.limits.maximumDevices > 0 &&
                    descriptor.limits.maximumDevices <= XRTrackingSnapshotHardLimits::MaximumDevices && descriptor.limits.maximumPoses > 0 &&
                    descriptor.limits.maximumPoses <= XRTrackingSnapshotHardLimits::MaximumPoses &&
                    descriptor.devices.size() <= descriptor.limits.maximumDevices &&
-                   descriptor.poses.size() <= descriptor.limits.maximumPoses &&
-                   descriptor.limits.maximumActions <= XRTrackingSnapshotHardLimits::MaximumActions &&
-                   descriptor.actions.size() <= descriptor.limits.maximumActions;
+                   descriptor.poses.size() <= descriptor.limits.maximumPoses;
         }
 
-        /** @brief Checks that advertised device capabilities agree with the semantic role. */
-        [[nodiscard]] bool ValidCapabilities(const XRTrackedDeviceRecord &device) noexcept {
+        bool ValidLimits(const XRTrackingSnapshotDescriptor &descriptor) noexcept {
+            return ValidPoseBounds(descriptor) && descriptor.limits.maximumActions <= XRTrackingSnapshotHardLimits::MaximumActions &&
+                   descriptor.actions.size() <= descriptor.limits.maximumActions &&
+                   descriptor.limits.maximumHandJoints <= XRHandTrackingHardLimits::MaximumJoints &&
+                   descriptor.handJoints.size() <= descriptor.limits.maximumHandJoints;
+        }
+
+        bool ControllerCapabilities(const XRTrackedDeviceCapabilities &capabilities) noexcept {
             using enum XRTrackedDeviceCapability;
-            if (const bool controller =
-                    device.role == XRTrackedDeviceRole::LeftController || device.role == XRTrackedDeviceRole::RightController;
-                device.capabilities.Has(HeadPose) != (device.role == XRTrackedDeviceRole::Head) ||
-                device.capabilities.Has(TrackerPose) != (device.role == XRTrackedDeviceRole::GenericTracker) ||
-                (device.capabilities.Has(GripPose) || device.capabilities.Has(AimPose) || device.capabilities.Has(PalmPose)) !=
-                    controller ||
-                (device.capabilities.Has(Haptics) && !controller))
-                return false;
-            return device.role == XRTrackedDeviceRole::Head || device.role == XRTrackedDeviceRole::GenericTracker ||
-                   device.capabilities.Has(GripPose) || device.capabilities.Has(AimPose) || device.capabilities.Has(PalmPose);
+            XRTrackedDeviceCapabilities permitted;
+            for (const auto capability : {GripPose, AimPose, PalmPose, Haptics})
+                permitted.values[static_cast<std::size_t>(capability)] = capabilities.Has(capability);
+            return permitted == capabilities && (capabilities.Has(GripPose) || capabilities.Has(AimPose) || capabilities.Has(PalmPose));
+        }
+
+        /** @brief Enforces exact role capabilities; a hand is never a controller alias. */
+        bool ValidCapabilities(const XRTrackedDeviceRecord &device) noexcept {
+            using enum XRTrackedDeviceCapability;
+            XRTrackedDeviceCapabilities permitted;
+            switch (device.role) {
+                case XRTrackedDeviceRole::Head:
+                    permitted.values[static_cast<std::size_t>(HeadPose)] = true;
+                    break;
+                case XRTrackedDeviceRole::GenericTracker:
+                    permitted.values[static_cast<std::size_t>(TrackerPose)] = true;
+                    break;
+                case XRTrackedDeviceRole::LeftController:
+                case XRTrackedDeviceRole::RightController:
+                    return ControllerCapabilities(device.capabilities);
+                case XRTrackedDeviceRole::LeftHand:
+                case XRTrackedDeviceRole::RightHand:
+                    permitted.values[static_cast<std::size_t>(HandJoints)] = true;
+                    permitted.values[static_cast<std::size_t>(PalmPose)] = device.capabilities.Has(PalmPose);
+                    break;
+                case XRTrackedDeviceRole::Count:
+                    return false;
+            }
+            return permitted == device.capabilities;
         }
 
         /** @brief Validates canonical device identities, roles, states, and uniqueness. */
@@ -180,12 +205,36 @@ namespace Horo::XR {
             return Result<void>::Success();
         }
 
+        bool HandsAvailable(const XRTrackingSnapshotDescriptor &descriptor) noexcept {
+            return descriptor.handJoints.empty() ||
+                   (descriptor.focus == XRTrackingFocusState::Focused && descriptor.visibility == XRTrackingVisibilityState::Visible &&
+                    descriptor.state == XRTrackingState::Active);
+        }
+
+        Result<void> ValidateHands(const XRTrackingSnapshotDescriptor &descriptor, const XRSessionId &activeSession,
+                                   const XRWorldOriginRevision origin) {
+            for (std::size_t index = 0; index < descriptor.handJoints.size(); ++index) {
+                const auto &joint = descriptor.handJoints[index];
+                if (auto shape = ValidateXRHandJointRecord(joint, activeSession, descriptor.sampledAt, origin); shape.HasError())
+                    return shape;
+                const auto *device = FindDevice(descriptor.devices, joint.device);
+                if (const auto role = joint.hand == XRHandedness::Left ? XRTrackedDeviceRole::LeftHand : XRTrackedDeviceRole::RightHand;
+                    !device || device->role != role || device->state != XRTrackedDeviceState::Tracked ||
+                    !device->capabilities.Has(XRTrackedDeviceCapability::HandJoints))
+                    return Reject<void>(XRErrors::TrackingSnapshotInvalid);
+                if (index > 0 && !(std::pair{descriptor.handJoints[index - 1].hand, descriptor.handJoints[index - 1].joint} <
+                                   std::pair{joint.hand, joint.joint}))
+                    return Reject<void>(XRErrors::TrackingSnapshotInvalid);
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Validates loss-state rules that prevent stale pose fabrication. */
         [[nodiscard]] bool ValidAggregateState(const XRTrackingSnapshotDescriptor &descriptor) noexcept {
             using enum XRTrackingState;
             if (descriptor.state == Active)
                 return true;
-            if (!descriptor.poses.empty())
+            if (!descriptor.poses.empty() || !descriptor.handJoints.empty())
                 return false;
             if (descriptor.state == TrackingLost) {
                 return std::ranges::none_of(descriptor.devices, [](const XRTrackedDeviceRecord &device) {
@@ -196,30 +245,49 @@ namespace Horo::XR {
         }
     }  // namespace
 
+    namespace {
+        bool ValidMetadata(const XRTrackingSnapshotDescriptor &descriptor, const XRWorldOriginRevision origin) noexcept {
+            return descriptor.revision.IsValid() && descriptor.sequence != 0 && descriptor.sampledAt.IsValid() &&
+                   descriptor.worldOriginRevision.IsValid() && origin.IsValid() && descriptor.focus < XRTrackingFocusState::Count &&
+                   descriptor.visibility < XRTrackingVisibilityState::Count && descriptor.state < XRTrackingState::Count;
+        }
+
+        Result<void> ValidateHeader(const XRTrackingSnapshotDescriptor &descriptor, const XRSessionId &activeSession,
+                                    const XRWorldOriginRevision activeOriginRevision) {
+            if (auto version = RequireXRContractVersion(CurrentXRContractVersion, descriptor.contractVersion); version.HasError())
+                return Result<void>::Failure(version.ErrorValue());
+            if (auto session = ValidateXRSession(descriptor.session, activeSession); session.HasError())
+                return Result<void>::Failure(session.ErrorValue());
+            if (!ValidMetadata(descriptor, activeOriginRevision))
+                return Reject<void>(XRErrors::TrackingSnapshotInvalid);
+            if (descriptor.worldOriginRevision != activeOriginRevision)
+                return Reject<void>(XRErrors::OriginRevisionStale);
+            if (!ValidLimits(descriptor))
+                return Reject<void>(XRErrors::CapacityExceeded);
+            if (!ValidAggregateState(descriptor) || !HandsAvailable(descriptor))
+                return Reject<void>(XRErrors::TrackingSnapshotInvalid);
+            return Result<void>::Success();
+        }
+
+        Result<void> ValidateRecords(const XRTrackingSnapshotDescriptor &descriptor, const XRSessionId &session,
+                                     const XRWorldOriginRevision origin) {
+            if (auto devices = ValidateDevices(descriptor.devices, session); devices.HasError())
+                return devices;
+            if (auto poses = ValidatePoses(descriptor, session, origin); poses.HasError())
+                return poses;
+            if (auto actions = ValidateActions(descriptor); actions.HasError())
+                return actions;
+            return ValidateHands(descriptor, session, origin);
+        }
+    }  // namespace
+
     /** @copydoc XRTrackingSnapshot::Create */
     Result<XRTrackingSnapshot> XRTrackingSnapshot::Create(const XRTrackingSnapshotDescriptor &descriptor, const XRSessionId &activeSession,
                                                           const XRWorldOriginRevision activeOriginRevision) {
-        if (auto version = RequireXRContractVersion(CurrentXRContractVersion, descriptor.contractVersion); version.HasError())
-            return Result<XRTrackingSnapshot>::Failure(version.ErrorValue());
-        if (auto session = ValidateXRSession(descriptor.session, activeSession); session.HasError())
-            return Result<XRTrackingSnapshot>::Failure(session.ErrorValue());
-        if (!descriptor.revision.IsValid() || descriptor.sequence == 0 || !descriptor.sampledAt.IsValid() ||
-            !descriptor.worldOriginRevision.IsValid() || !activeOriginRevision.IsValid() ||
-            descriptor.focus >= XRTrackingFocusState::Count || descriptor.visibility >= XRTrackingVisibilityState::Count ||
-            descriptor.state >= XRTrackingState::Count)
-            return Reject<XRTrackingSnapshot>(XRErrors::TrackingSnapshotInvalid);
-        if (descriptor.worldOriginRevision != activeOriginRevision)
-            return Reject<XRTrackingSnapshot>(XRErrors::OriginRevisionStale);
-        if (!ValidLimits(descriptor))
-            return Reject<XRTrackingSnapshot>(XRErrors::CapacityExceeded);
-        if (!ValidAggregateState(descriptor))
-            return Reject<XRTrackingSnapshot>(XRErrors::TrackingSnapshotInvalid);
-        if (auto devices = ValidateDevices(descriptor.devices, activeSession); devices.HasError())
-            return Result<XRTrackingSnapshot>::Failure(devices.ErrorValue());
-        if (auto poses = ValidatePoses(descriptor, activeSession, activeOriginRevision); poses.HasError())
-            return Result<XRTrackingSnapshot>::Failure(poses.ErrorValue());
-        if (auto actions = ValidateActions(descriptor); actions.HasError())
-            return Result<XRTrackingSnapshot>::Failure(actions.ErrorValue());
+        if (auto header = ValidateHeader(descriptor, activeSession, activeOriginRevision); header.HasError())
+            return Result<XRTrackingSnapshot>::Failure(header.ErrorValue());
+        if (auto records = ValidateRecords(descriptor, activeSession, activeOriginRevision); records.HasError())
+            return Result<XRTrackingSnapshot>::Failure(records.ErrorValue());
         return Result<XRTrackingSnapshot>::Success(XRTrackingSnapshot{descriptor});
     }
 
@@ -235,10 +303,11 @@ namespace Horo::XR {
           sequence_(descriptor.sequence), sampledAt_(descriptor.sampledAt), worldOriginRevision_(descriptor.worldOriginRevision),
           focus_(descriptor.focus), visibility_(descriptor.visibility), state_(descriptor.state), limits_(descriptor.limits),
           deviceCount_(descriptor.devices.size()), poseCount_(descriptor.poses.size()), actionCount_(descriptor.actions.size()),
-          bindingRevision_(descriptor.bindingRevision) {
+          handJointCount_(descriptor.handJoints.size()), bindingRevision_(descriptor.bindingRevision) {
         std::ranges::copy(descriptor.devices, devices_.begin());
         std::ranges::copy(descriptor.poses, poses_.begin());
         std::ranges::copy(descriptor.actions, actions_.begin());
+        std::ranges::copy(descriptor.handJoints, handJoints_.begin());
     }
 
     /** @copydoc XRTrackingSnapshot::ContractVersion */
@@ -311,6 +380,11 @@ namespace Horo::XR {
         return std::span{actions_}.first(actionCount_);
     }
 
+    /** @copydoc XRTrackingSnapshot::HandJoints */
+    std::span<const XRHandJointRecord> XRTrackingSnapshot::HandJoints() const noexcept {
+        return std::span{handJoints_}.first(handJointCount_);
+    }
+
     /** @copydoc ValidateXRTrackingSnapshot */
     Result<void> ValidateXRTrackingSnapshot(const XRTrackingSnapshot &snapshot, const XRSessionId &activeSession,
                                             const XRTrackingSnapshotRevision expectedRevision,
@@ -349,5 +423,38 @@ namespace Horo::XR {
         if (const auto *pose = FindPose(snapshot.Poses(), device, kind); pose != nullptr)
             return Result<XRPoseSample>::Success(pose->sample);
         return Reject<XRPoseSample>(XRErrors::OperationUnavailable);
+    }
+
+    namespace {
+        Result<void> AdmitHandQuery(const XRTrackingSnapshot &snapshot, const XRTrackedDeviceRecord *record, const XRDeviceId &device) {
+            if (!record)
+                return Reject<void>(HasReplacedDeviceSlot(snapshot.Devices(), device) ? XRErrors::IdentityStale
+                                                                                      : XRErrors::OperationUnavailable);
+            if (!record->capabilities.Has(XRTrackedDeviceCapability::HandJoints))
+                return Reject<void>(XRErrors::OperationUnsupported);
+            if (snapshot.State() != XRTrackingState::Active || record->state != XRTrackedDeviceState::Tracked ||
+                snapshot.Focus() != XRTrackingFocusState::Focused)
+                return Reject<void>(XRErrors::OperationUnavailable);
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @copydoc QueryXRHandJoint */
+    Result<XRHandJointRecord> QueryXRHandJoint(const XRTrackingSnapshot &snapshot, const XRDeviceId &device, const XRHandJoint joint,
+                                               const XRSessionId &activeSession, const XRTrackingSnapshotRevision expectedRevision,
+                                               const XRWorldOriginRevision origin) {
+        if (auto current = ValidateXRTrackingSnapshot(snapshot, activeSession, expectedRevision, origin); current.HasError())
+            return Result<XRHandJointRecord>::Failure(current.ErrorValue());
+        if (auto identity = ValidateXRSessionObject(device, activeSession); identity.HasError())
+            return Result<XRHandJointRecord>::Failure(identity.ErrorValue());
+        if (joint >= XRHandJoint::Count)
+            return Reject<XRHandJointRecord>(XRErrors::OperationInvalid);
+        if (auto admitted = AdmitHandQuery(snapshot, FindDevice(snapshot.Devices(), device), device); admitted.HasError())
+            return Result<XRHandJointRecord>::Failure(admitted.ErrorValue());
+        const auto found = std::ranges::find_if(snapshot.HandJoints(), [&](const auto &value) {
+            return value.device == device && value.joint == joint;
+        });
+        return found == snapshot.HandJoints().end() ? Reject<XRHandJointRecord>(XRErrors::OperationUnavailable)
+                                                    : Result<XRHandJointRecord>::Success(*found);
     }
 }  // namespace Horo::XR

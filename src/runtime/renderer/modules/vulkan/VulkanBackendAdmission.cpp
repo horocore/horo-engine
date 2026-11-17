@@ -151,17 +151,28 @@ namespace Horo::Render::Detail {
         return {graphics, requirePresentation ? presentation : graphics};
     }
 
+    bool AdmittedGraphicsComputeAlias(const VulkanAdapterCandidate &candidate, const RenderBackendConfig &config, std::uint32_t graphics) {
+        const auto graphicsRole = std::ranges::find(config.queueAssignments, RenderQueueRole::Graphics, &RenderQueueAssignment::role);
+        for (const auto &role : config.queueAssignments) {
+            if (role.role != RenderQueueRole::Compute)
+                continue;
+            if (graphicsRole == config.queueAssignments.end() || role.queue != graphicsRole->queue)
+                return false;
+            const auto family = std::ranges::find(candidate.queueFamilies, graphics, &VulkanQueueFamily::index);
+            if (family == candidate.queueFamilies.end() || !family->supportsCompute)
+                return false;
+        }
+        return true;
+    }
+
     [[nodiscard]] Result<std::uint32_t> SelectTransferQueue(const VulkanAdapterCandidate &candidate, const RenderBackendConfig &config,
                                                             const std::uint32_t graphics) {
         const auto graphicsRole = std::ranges::find(config.queueAssignments, RenderQueueRole::Graphics, &RenderQueueAssignment::role);
         const auto transferRole = std::ranges::find(config.queueAssignments, RenderQueueRole::Transfer, &RenderQueueAssignment::role);
         if (graphicsRole == config.queueAssignments.end() || transferRole == config.queueAssignments.end() ||
-            std::ranges::any_of(config.queueAssignments, [](const auto &queue) {
-            return queue.role == RenderQueueRole::Compute;
-        }))
-            return Result<std::uint32_t>::Failure(
-                MakeError(VulkanBackendErrors::UnsupportedOperation,
-                          "Vulkan command execution requires graphics/transfer roles; compute workloads are separate."));
+            !AdmittedGraphicsComputeAlias(candidate, config, graphics))
+            return Result<std::uint32_t>::Failure(MakeError(VulkanBackendErrors::UnsupportedOperation,
+                                                            "Vulkan compute requires an explicitly proven same-graphics queue alias."));
         if (graphicsRole->queue == transferRole->queue)
             return Result<std::uint32_t>::Success(graphics);
         std::uint32_t transfer = VK_QUEUE_FAMILY_IGNORED;

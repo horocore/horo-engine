@@ -25,6 +25,11 @@ namespace Horo::Telemetry {
         Log::LogContextSnapshot diagnosticContext;
     };
 
+    /** @brief Allocates one process-lifetime logical operation identity from the canonical span allocator.
+     * @return Nonzero identity shared with OperationSpan; thread-safe and independent of sink/shutdown state.
+     */
+    [[nodiscard]] OperationId AllocateOperationId() noexcept;
+
     /** @brief Captures only numeric operation lineage without clock reads, allocation or ambient field copying.
      * @return Owned numeric identity with empty diagnostic context; callers explicitly supply any approved fields.
      */

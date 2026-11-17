@@ -6,6 +6,7 @@
  */
 
 #include <cstddef>
+#include <memory>
 #include <span>
 #include <string>
 #include <utility>
@@ -49,7 +50,8 @@ namespace Horo::Log {
         [[nodiscard]] LogContextSnapshot With(std::string key, std::string value) const;
 
     private:
-        std::vector<MdcField> fields_;
+        friend LogContextSnapshot CaptureLogContext();
+        std::shared_ptr<const std::vector<MdcField>> fields_;
         bool isolated_{};
     };
 

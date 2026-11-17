@@ -37,8 +37,9 @@ namespace Horo::Prefab::Detail {
     /** @copydoc PrefabTemplateProviderState::PrefabTemplateProviderState */
     PrefabTemplateProviderState::PrefabTemplateProviderState(Assets::AssetRegistry &assetRegistry, Assets::AssetLoadService &assetLoads,
                                                              Runtime::RuntimeSceneService &sceneService, PrefabLimitProfile capturedProfile,
-                                                             const PrefabTemplateProviderLimits &capacities)
-        : registry(assetRegistry), loads(assetLoads), scenes(sceneService), profile(std::move(capturedProfile)), limits(capacities) {
+                                                             const PrefabTemplateProviderLimits &capacities, PrefabMetricHandles metrics)
+        : registry(assetRegistry), loads(assetLoads), scenes(sceneService), profile(std::move(capturedProfile)), limits(capacities),
+          metrics(std::move(metrics)) {
         if (!limits.IsValid())
             return;
         const auto entries = limits.maximumTemplates * (profile.Policy().maximumReferencedAssets + 1);

@@ -1,7 +1,9 @@
 #include "SourceEditorTools.h"
 
+#include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/input/EditorInputActions.h"
 
 #include <algorithm>
 #include <charconv>
@@ -25,6 +27,14 @@ namespace Horo::Editor {
                 ImGui::NewLine();
             const bool clicked = Ui::Button(
                 {.label = label.c_str(), .variant = Ui::ButtonVariant::Secondary, .enabled = enabled, .font = context.theme.fonts.sans});
+            ImGui::SameLine();
+            return clicked;
+        }
+
+        /** @brief Uses borderless shared icon actions on the single source toolbar row. */
+        bool ToolbarAction(const EditorGuiContext &context, const char *key, const Ui::IconButtonGlyph glyph, const bool enabled = true) {
+            const bool clicked =
+                Ui::IconButton({.id = key, .glyph = glyph, .tooltip = Text(context, key).c_str(), .enabled = enabled, .borderless = true});
             ImGui::SameLine();
             return clicked;
         }
@@ -71,6 +81,8 @@ namespace Horo::Editor {
         if (!searchOpen_)
             return std::nullopt;
         const auto &fonts = context.theme.fonts;
+        if (std::exchange(focusSearch_, false))
+            ImGui::SetKeyboardFocusHere();
         static_cast<void>(Ui::InputTextControl("##source-find-query", query_, 4097, fonts,
                                                {.hint = Text(context, "workspace.source_edit.query").c_str()}));
         ownsInput_ = ownsInput_ || ImGui::IsItemActive();
@@ -98,6 +110,8 @@ namespace Horo::Editor {
     void SourceEditorTools::Navigate(SourceEditorWidget &widget, const SourceDocumentSnapshot &source, const EditorGuiContext &context) {
         if (!lineOpen_)
             return;
+        if (std::exchange(focusLine_, false))
+            ImGui::SetKeyboardFocusHere();
         static_cast<void>(Ui::InputTextControl("##source-line-number", line_, 32, context.theme.fonts,
                                                {.hint = Text(context, "workspace.source_edit.line").c_str()}));
         ownsInput_ = ownsInput_ || ImGui::IsItemActive();
@@ -143,18 +157,53 @@ namespace Horo::Editor {
                                                                 const std::optional<Result<SourceEditingPublication>> &outcome,
                                                                 const EditorGuiContext &context) {
         ownsInput_ = false;
+        handledShortcut_ = false;
         const auto identity = widget.Identity().value;
         ImGui::PushID(static_cast<int>(identity >> 32));
         ImGui::PushID(static_cast<int>(identity & 0xffffffffU));
         std::optional<SourceEditingCommand> intent;
-        if (Button(context, "workspace.source_edit.undo", history.undoEntries != 0))
+        const auto &profile = context.settings.settings.keymap.profile;
+        const bool acceptsShortcuts = widget.OwnsInput() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+                                      !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const auto pressed = [&](const char *action, const bool repeat = false) {
+            const bool matched = acceptsShortcuts && Ui::ShortcutPressed(EditorActionBindings(action, profile), repeat);
+            if (matched) {
+                handledShortcut_ = true;
+                ImGui::GetIO().InputQueueCharacters.resize(0);
+            }
+            return matched;
+        };
+        static_cast<void>(pressed(kActionSave));
+        if (pressed(kActionSourceZoomIn, true))
+            widget.SetFontZoom(widget.FontZoom() + 1);
+        if (pressed(kActionSourceZoomOut, true))
+            widget.SetFontZoom(widget.FontZoom() - 1);
+        if (pressed(kActionSourceZoomReset))
+            widget.SetFontZoom(0);
+        if (pressed(kActionUndo) && history.undoEntries != 0)
             intent = SourceHistoryRequest{source.Identity().instance, source.Revision(), SourceHistoryDirection::Undo};
-        if (Button(context, "workspace.source_edit.redo", history.redoEntries != 0))
+        if (pressed(kActionRedo) && history.redoEntries != 0)
             intent = SourceHistoryRequest{source.Identity().instance, source.Revision(), SourceHistoryDirection::Redo};
-        if (Button(context, "workspace.source_edit.find"))
+        if (pressed(kActionSourceFind)) {
             searchOpen_ = !searchOpen_;
-        if (Button(context, "workspace.source_edit.go_to"))
+            focusSearch_ = searchOpen_;
+        }
+        if (pressed(kActionSourceGoToLine)) {
             lineOpen_ = !lineOpen_;
+            focusLine_ = lineOpen_;
+        }
+        if (ToolbarAction(context, "workspace.source_edit.undo", Ui::IconButtonGlyph::Undo, history.undoEntries != 0))
+            intent = SourceHistoryRequest{source.Identity().instance, source.Revision(), SourceHistoryDirection::Undo};
+        if (ToolbarAction(context, "workspace.source_edit.redo", Ui::IconButtonGlyph::Redo, history.redoEntries != 0))
+            intent = SourceHistoryRequest{source.Identity().instance, source.Revision(), SourceHistoryDirection::Redo};
+        if (ToolbarAction(context, "workspace.source_edit.find", Ui::IconButtonGlyph::Search)) {
+            searchOpen_ = !searchOpen_;
+            focusSearch_ = searchOpen_;
+        }
+        if (ToolbarAction(context, "workspace.source_edit.go_to", Ui::IconButtonGlyph::GoToLine)) {
+            lineOpen_ = !lineOpen_;
+            focusLine_ = lineOpen_;
+        }
         ImGui::NewLine();
         if (auto search = Search(widget, source, context))
             intent = std::move(search);

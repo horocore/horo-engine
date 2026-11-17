@@ -10,7 +10,8 @@
 
 namespace Horo::Physics::Detail {
     namespace {
-        /** @brief Orders native body identities without dropping their reuse sequence. */
+        /** @brief Orders native body identities without dropping their reuse sequence.
+         */
         [[nodiscard]] std::uint64_t CollisionPairKey(const JPH::BodyID first, const JPH::BodyID second) noexcept {
             const auto low = std::min(first.GetIndexAndSequenceNumber(), second.GetIndexAndSequenceNumber());
             const auto high = std::max(first.GetIndexAndSequenceNumber(), second.GetIndexAndSequenceNumber());
@@ -35,12 +36,14 @@ namespace Horo::Physics::Detail {
             return &world.query.fixtures[fixtureIndex];
         }
 
-        /** @brief Converts one native contact position into backend-neutral scene coordinates. */
+        /** @brief Converts one native contact position into backend-neutral scene
+         * coordinates. */
         [[nodiscard]] Math::Vec3 ToScene(const JPH::RVec3 &value) noexcept {
             return {value.GetX(), value.GetY(), value.GetZ()};
         }
 
-        /** @brief Copies one query fixture identity and filter generation into event evidence. */
+        /** @brief Copies one query fixture identity and filter generation into event
+         * evidence. */
         [[nodiscard]] PhysicsEventEndpoint ToEventEndpoint(const CanonicalWorld &world, const CanonicalQueryFixtureRecord &fixture,
                                                            const PhysicsCompoundChild *child) noexcept {
             return {.body = fixture.fixture.body,
@@ -51,7 +54,8 @@ namespace Horo::Physics::Detail {
                     .filterSchemaGeneration = world.query.querySchemaGeneration};
         }
 
-        /** @brief Copies optional query material evidence without retaining descriptor storage. */
+        /** @brief Copies optional query material evidence without retaining descriptor
+         * storage. */
         [[nodiscard]] std::optional<PhysicsEventMaterial> ToEventMaterial(const std::optional<PhysicsQueryMaterial> &material) noexcept {
             if (!material.has_value())
                 return std::nullopt;
@@ -61,25 +65,28 @@ namespace Horo::Physics::Detail {
         struct ContactEndpointEvidence final {
             PhysicsEventEndpoint endpoint;
             std::optional<PhysicsEventMaterial> material;
+            std::optional<PhysicsSurfaceEvidence> surface;
         };
 
-        /** @brief Copies exact fixture or indexed resident identity; unknown IDs remain closed. */
-        [[nodiscard]] std::optional<ContactEndpointEvidence> ResolveContactEndpoint(const CanonicalWorld &world, const JPH::Body &native,
-                                                                                    const JPH::SubShapeID subshape) noexcept {
-            if (const auto *fixture = FindFixture(world, native.GetID())) {
-                const auto *child = ResolveCanonicalFixtureChild(*fixture, subshape);
-                if (std::holds_alternative<PhysicsCompoundShapeDescriptor>(fixture->descriptor.shape) && child == nullptr)
-                    return std::nullopt;
-                return ContactEndpointEvidence{ToEventEndpoint(world, *fixture, child),
-                                               ToEventMaterial(child == nullptr ? fixture->descriptor.material : child->material)};
+        /** @brief Copy prepared collider metadata selected by exact native child user
+         * data. */
+        ContactEndpointEvidence CopyResidentContact(const CanonicalSceneBodyRecord &record, PhysicsEventEndpoint endpoint,
+                                                    JPH::SubShapeID subshape) noexcept {
+            ContactEndpointEvidence result{endpoint, std::nullopt, std::nullopt};
+            if (const auto *collider = ResolveCanonicalSceneCollider(record, subshape)) {
+                result.endpoint.subshape = collider->subshape;
+                result.endpoint.collider = collider->collider;
+                if (collider->materials.size() == 1)
+                    result.material = ToEventMaterial(collider->materials.front());
+                result.surface = collider->surface;
             }
-            const auto nativeIndex = native.GetID().GetIndex();
-            if (nativeIndex >= world.scene.nativeBodyIndices.size())
-                return std::nullopt;
-            const auto index = world.scene.nativeBodyIndices[nativeIndex];
-            if (index >= world.scene.bodies.size())
-                return std::nullopt;
-            const auto &record = world.scene.bodies[index];
+            return result;
+        }
+
+        /** @brief Validate indexed resident identity/profile before projecting one
+         * contact endpoint. */
+        std::optional<ContactEndpointEvidence> ProjectResidentContact(const CanonicalWorld &world, const CanonicalSceneBodyRecord &record,
+                                                                      const JPH::Body &native, JPH::SubShapeID subshape) noexcept {
             const auto row = native.GetObjectLayer();
             if (record.nativeBody != native.GetID() || !record.handle.IsValid() || !record.collision || row == 0 ||
                 row > world.simulation.layerCount)
@@ -91,19 +98,53 @@ namespace Horo::Physics::Detail {
                                           .layer = world.simulation.Layer(row),
                                           .profile = record.collision->profile,
                                           .filterSchemaGeneration = world.simulation.SchemaGeneration()};
-            // A compound's native path is not an authored ID. Only exact single-contributor evidence is unambiguous here.
-            if (record.collision->colliders.size() == 1)
-                endpoint.subshape = record.collision->colliders.front().subshape;
-            return ContactEndpointEvidence{endpoint, std::nullopt};
+            return CopyResidentContact(record, endpoint, subshape);
         }
 
-        /** @brief Orders point identity independently of an optional estimated impulse. */
+        /** @brief Resolve a resident native index through its bounded live Horo body
+         * table. */
+        std::optional<ContactEndpointEvidence> ResolveResidentContact(const CanonicalWorld &world, const JPH::Body &native,
+                                                                      JPH::SubShapeID subshape) noexcept {
+            const auto nativeIndex = native.GetID().GetIndex();
+            if (nativeIndex >= world.scene.nativeBodyIndices.size())
+                return std::nullopt;
+            const auto index = world.scene.nativeBodyIndices[nativeIndex];
+            if (index >= world.scene.bodies.size())
+                return std::nullopt;
+            return ProjectResidentContact(world, world.scene.bodies[index], native, subshape);
+        }
+
+        /** @brief Project the selected admitted fixture contributor without any
+         * catalogue lookup. */
+        std::optional<ContactEndpointEvidence> ResolveFixtureContact(const CanonicalWorld &world,
+                                                                     const CanonicalQueryFixtureRecord &fixture,
+                                                                     JPH::SubShapeID subshape) noexcept {
+            const auto *child = ResolveCanonicalFixtureChild(fixture, subshape);
+            if (std::holds_alternative<PhysicsCompoundShapeDescriptor>(fixture.descriptor.shape) && !child)
+                return std::nullopt;
+            return ContactEndpointEvidence{ToEventEndpoint(world, fixture, child),
+                                           ToEventMaterial(child ? child->material : fixture.descriptor.material),
+                                           child ? child->surface : fixture.descriptor.surface};
+        }
+
+        /** @brief Select the real fixture or resident owner before copying exact Horo
+         * endpoint evidence. */
+        std::optional<ContactEndpointEvidence> ResolveContactEndpoint(const CanonicalWorld &world, const JPH::Body &native,
+                                                                      JPH::SubShapeID subshape) noexcept {
+            if (const auto *fixture = FindFixture(world, native.GetID()))
+                return ResolveFixtureContact(world, *fixture, subshape);
+            return ResolveResidentContact(world, native, subshape);
+        }
+
+        /** @brief Orders point identity independently of an optional estimated impulse.
+         */
         [[nodiscard]] bool PointGeometryLess(const PhysicsContactPoint &left, const PhysicsContactPoint &right) noexcept {
             return std::tie(left.positionOnFirst, left.positionOnSecond, left.normal, left.penetrationDepthMeters) <
                    std::tie(right.positionOnFirst, right.positionOnSecond, right.normal, right.penetrationDepthMeters);
         }
 
-        /** @brief Retains the smallest distinct point evidence in the fixed public manifold. */
+        /** @brief Retains the smallest distinct point evidence in the fixed public
+         * manifold. */
         void RetainPoint(PhysicsContactSummary &summary, const PhysicsContactPoint &point) noexcept {
             auto end = summary.points.begin() + summary.pointCount;
             auto position = std::lower_bound(summary.points.begin(), end, point, PointGeometryLess);
@@ -124,7 +165,8 @@ namespace Horo::Physics::Detail {
             *position = point;
         }
 
-        /** @brief Copies bounded native manifold geometry and clearly labels pre-solve estimates. */
+        /** @brief Copies bounded native manifold geometry and clearly labels pre-solve
+         * estimates. */
         [[nodiscard]] PhysicsContactSummary CopyContactSummary(const JPH::Body &first, const JPH::Body &second,
                                                                const JPH::ContactManifold &manifold,
                                                                const JPH::ContactSettings &settings) noexcept {
@@ -192,7 +234,8 @@ namespace Horo::Physics::Detail {
         OnContactAdded(body1, body2, manifold, settings);
     }
 
-    /** @brief Copies one complete callback manifold before native storage is released. */
+    /** @brief Copies one complete callback manifold before native storage is
+     * released. */
     void CanonicalContactListener::Emit(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
                                         const JPH::ContactSettings &settings) const noexcept {
         const ContactCaptureRoute *route = world_.contactRoute.load(std::memory_order::seq_cst);
@@ -211,7 +254,9 @@ namespace Horo::Physics::Detail {
                                                     .firstMaterial = first->material,
                                                     .secondMaterial = second->material,
                                                     .contact = contact,
-                                                    .sensor = settings.mIsSensor};
+                                                    .sensor = settings.mIsSensor,
+                                                    .firstSurface = first->surface,
+                                                    .secondSurface = second->surface};
         static_cast<void>(route->Sink().append(route->Sink().context, observation));
     }
 

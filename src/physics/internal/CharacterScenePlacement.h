@@ -5,6 +5,10 @@
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
 
+namespace Horo::Physics::Detail {
+    class PhysicsSceneStateTarget;
+}
+
 namespace Horo::Character::Detail {
     /** @brief Grants the paired Scene host the ordinary single-spawn recovery with an authored world heading.
      * @details This boundary does not expose mutable Character implementation state or bypass placement guards.
@@ -29,5 +33,14 @@ namespace Horo::Character::Detail {
                                                                     const CharacterPhysicsQueryContext &query, Math::Quaternion heading) {
             return world.SpawnControllerWithHeading(handle, query, heading);
         }
+
+    private:
+        friend class Horo::Physics::Detail::PhysicsSceneStateTarget;
+        /** @brief Exact pending Physics Scene target only; rejects used/nonempty peers before reconstruction. */
+        [[nodiscard]] static Result<void> ValidateEmptyPendingContinuation(CharacterWorld &, Physics::PhysicsWorld &,
+                                                                           Runtime::SceneRuntimeId);
+        /** @brief Adopts only the actual successfully restored Physics publication into a genuinely empty pending peer.
+         * No simulation/events/cumulative completed-step count is manufactured. */
+        [[nodiscard]] static Result<void> AdoptEmptyPendingContinuation(CharacterWorld &, Physics::PhysicsWorld &, Runtime::SceneRuntimeId);
     };
 }  // namespace Horo::Character::Detail

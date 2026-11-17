@@ -11,18 +11,21 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "SecurityTestSupport.h"
 #include "editor/design_system/components/EditorUiCustomResources.h"
+#include "editor/input/EditorInputActions.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/ExtensionActivityView.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <memory>
 #include <new>
 #include <optional>
+#include <thread>
 #include <type_traits>
 
 static_assert(!std::is_copy_constructible_v<Horo::Editor::ExtensionActivityView>);
@@ -439,3 +442,56 @@ namespace {
     }
 
 }  // namespace
+
+TEST_CASE("Workspace module shortcuts use committed overrides and suspend during modal input withdrawal", "[editor][extensions][keymap]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    Horo::Tests::EditorActivityPackage package{true};
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+    auto host = std::make_shared<Extensions::EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
+    Extensions::ExtensionManager manager{nullptr,
+                                         Extensions::ExtensionHostProfile::Interactive,
+                                         {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY,
+                                          HORO_EDITOR_COMMAND_HOST_CAPABILITY},
+                                         Horo::Tests::CreateAcceptingArtifactGate(),
+                                         {},
+                                         {},
+                                         Extensions::ExtensionEditorHosts{.activities = host}};
+    REQUIRE(manager.LoadExtension(package.root.string()).HasValue());
+    host->Update();
+    const auto initial = host->Prepared().front().revision;
+    Gui gui;
+    gui.settings.settings.keymap.profile.overrides.push_back({Input::ActionId{"fixture.command.run"}, {*ParseEditorShortcut("Ctrl+F3")}});
+    ++gui.settings.revision;
+    RecordingRenderer renderer;
+    ExtensionActivityView view{gui.context, host.get(), &renderer};
+    const auto frame = [&](const bool admitted) {
+        ImGui::NewFrame();
+        ImGui::Begin("Module command workspace");
+        view.Update();
+        view.SetInputAdmitted(admitted);
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame(false);
+    auto &io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    io.AddKeyEvent(ImGuiKey_F3, true);
+    frame(false);
+    host->Update();
+    CHECK(host->Prepared().front().revision == initial);
+    io.AddKeyEvent(ImGuiKey_F3, false);
+    frame(true);
+    io.AddKeyEvent(ImGuiKey_F3, true);
+    frame(true);
+    CHECK(host->QueueCommand("fixture.command.run").HasError());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    do {
+        host->Update();
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    } while (host->Prepared().front().revision == initial && std::chrono::steady_clock::now() < deadline);
+    CHECK(host->Prepared().front().revision > initial);
+    io.AddKeyEvent(ImGuiKey_F3, false);
+    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    frame(true);
+}

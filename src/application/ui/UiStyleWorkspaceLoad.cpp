@@ -60,6 +60,7 @@ namespace Horo::Application::UiStyleWorkspaceInternal {
             Assets::FilesystemAssetProvider provider{generation.generationRoot, {config.cook.limits.maximumArtifactBytes}};
             Assets::AssetLoadService loads{jobs, provider, 1};
             Loaded loaded;
+            loaded.bytes.reserve(contents.entries.size());
             for (const auto &entry : contents.entries) {
                 const auto *record = capture.selected.Find(entry.assetId);
                 if (!record || record->type != entry.assetType)

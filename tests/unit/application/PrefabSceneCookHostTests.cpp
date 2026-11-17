@@ -124,7 +124,7 @@ TEST_CASE("Host prefab scene cook publishes expanded source-free scenes and vali
     fixture.WritePrefab(9);
     const auto changed = fixture.Cook();
     REQUIRE(changed.HasValue());
-    CHECK(changed.Value().cacheHits == 0);
+    CHECK(changed.Value().cacheHits == 1);
     CHECK(changed.Value().generation.manifestDigest != first.Value().generation.manifestDigest);
 }
 

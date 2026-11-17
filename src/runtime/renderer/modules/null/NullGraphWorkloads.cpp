@@ -43,6 +43,30 @@ namespace Horo::Render::Detail {
                    descriptor.format == RenderTextureFormat::Rgba8Unorm;
         }
 
+        /** @brief Headless graph admission cannot acknowledge unexecuted GPU particle simulation. */
+        [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &, const RenderGraphExecutionRequest &,
+                                                    const RenderGraphVfxGpuCompute &) {
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
+        /** @brief Headless graphs cannot acknowledge an unexecuted GPU-buffer draw. */
+        [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &, const RenderGraphExecutionRequest &,
+                                                    const RenderGraphVfxGpuDraw &) {
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
+        /** @brief Null never treats an unexecuted texture transfer as a successful ordering-only pass. */
+        [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &, const RenderGraphExecutionRequest &,
+                                                    const RenderGraphTextureUpload &) {
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
+        /** @brief Null cannot acknowledge unexecuted native exposure work, even with a caller-constructed lease. */
+        [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &, const RenderGraphExecutionRequest &,
+                                                    const RenderGraphExposureGpu &) {
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::Unsupported));
+        }
+
         /** @brief Validates one workload against resolved native resources before submission. */
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &resources, const RenderGraphExecutionRequest &request,

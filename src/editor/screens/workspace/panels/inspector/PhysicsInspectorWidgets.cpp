@@ -10,15 +10,54 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
         return context.localization.Get("editor", key).c_str();
     }
 
+    /** @copydoc BeginFields */
+    bool BeginFields(const char *id) {
+        const float padding = Ui::ScaledLayoutValue(12);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {padding, Ui::ScaledLayoutValue(8)});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {Ui::ScaledLayoutValue(8), Ui::ScaledLayoutValue(8)});
+        if (!ImGui::BeginChild(id, {ImGui::GetContentRegionAvail().x, 0},
+                               ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_AlwaysUseWindowPadding,
+                               ImGuiWindowFlags_NoScrollbar)) {
+            ImGui::EndChild();
+            ImGui::PopStyleVar(2);
+            return false;
+        }
+        return true;
+    }
+
+    /** @copydoc EndFields */
+    void EndFields() {
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+    }
+
+    /** @copydoc Field */
+    void Field(const EditorGuiContext &context, const char *key) {
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {ImGui::GetStyle().ItemSpacing.x, Ui::ScaledLayoutValue(4)});
+        ImGui::PushTextWrapPos(0);
+        Ui::FieldLabel(Label(context, key), context.theme.fonts);
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleVar();
+    }
+
+    /** @copydoc Choice */
+    bool Choice(const EditorGuiContext &context, const char *key, const char *id, int &value, const std::span<const char *const> entries) {
+        Field(context, key);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        return Ui::ComboControl(id, &value, entries.data(), static_cast<int>(entries.size()), context.theme.fonts);
+    }
+
     /** @copydoc Scalar */
     bool Scalar(const EditorGuiContext &context, const char *key, float &value) {
-        return Ui::DrawFloatPropRow(Label(context, key), key, value, context.theme.fonts).changed;
+        Field(context, key);
+        return Ui::DrawFloatPropRow("", key, value, context.theme.fonts).changed;
     }
 
     /** @copydoc Vector */
     bool Vector(const EditorGuiContext &context, const char *key, Math::Vec3 &value) {
         std::array components{value.x, value.y, value.z};
-        const auto edit = Ui::DrawFloat3PropRow(Label(context, key), key, components, context.theme.fonts);
+        Field(context, key);
+        const auto edit = Ui::DrawFloat3PropRow("", key, components, context.theme.fonts);
         if (edit.changed)
             value = {components[0], components[1], components[2]};
         return edit.changed;
@@ -39,7 +78,11 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
 
     /** @copydoc Toggle */
     bool Toggle(const EditorGuiContext &context, const char *key, bool &value) {
-        return Ui::CheckboxControl(Label(context, key), &value, context.theme.fonts);
+        Field(context, key);
+        ImGui::PushID(key);
+        const bool changed = Ui::CheckboxControl("##value", &value, context.theme.fonts);
+        ImGui::PopID();
+        return changed;
     }
 
     namespace {
@@ -49,8 +92,12 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
                 text.bytes.back() = '\0';
                 text.valid = false;
             }
-            Ui::FieldLabel(Label(context, key), context.theme.fonts);
-            return Ui::InputTextControl(key, text.bytes.data(), text.bytes.size(), context.theme.fonts, {.error = !text.valid});
+            Field(context, key);
+            ImGui::PushID(key);
+            const bool changed =
+                Ui::InputTextControl("##value", text.bytes.data(), text.bytes.size(), context.theme.fonts, {.error = !text.valid});
+            ImGui::PopID();
+            return changed;
         }
     }  // namespace
 
@@ -103,15 +150,34 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
     void Stable(const EditorGuiContext &context, const char *key, const std::uint64_t value) {
         std::array<char, 21> text{};
         static_cast<void>(std::to_chars(text.data(), text.data() + text.size() - 1, value));
-        Ui::DrawPropRow(Label(context, key), text.data(), context.theme.fonts);
+        Field(context, key);
+        ImGui::PushID(key);
+        ImGui::BeginDisabled();
+        (void)Ui::InputTextControl("##value", text.data(), text.size(), context.theme.fonts);
+        ImGui::EndDisabled();
+        ImGui::PopID();
+    }
+
+    /** @copydoc Details */
+    void Details(const EditorGuiContext &context, const std::uint64_t component) {
+        Ui::Card card({.id = "component_details", .defaultExpanded = false});
+        card.DrawTitleBar({.id = "title", .title = Label(context, "workspace.physics.details"), .fonts = context.theme.fonts});
+        if (card.BeginBody() && BeginFields()) {
+            Stable(context, "workspace.physics.component_id", component);
+            EndFields();
+        }
+        card.Finish();
     }
 
     /** @copydoc Action */
-    bool Action(const EditorGuiContext &context, const char *key, const bool enabled) {
+    bool Action(const EditorGuiContext &context, const char *key, const bool enabled, const bool primary) {
         const char *label = Label(context, key);
         const float available = ImGui::GetContentRegionAvail().x;
-        const bool clicked = Ui::Button(
-            {.label = label, .enabled = enabled, .font = context.theme.fonts.sans, .style = {.width = Ui::StyleWidth::FillAvailable}});
+        const bool clicked = Ui::Button({.label = label,
+                                         .variant = primary ? Ui::ButtonVariant::Primary : Ui::ButtonVariant::Secondary,
+                                         .enabled = enabled,
+                                         .font = context.theme.fonts.sans,
+                                         .style = {.width = Ui::StyleWidth::FillAvailable}});
         if (ImGui::CalcTextSize(label).x > available && (ImGui::IsItemHovered() || ImGui::IsItemFocused()))
             Ui::ShowTooltip(label, &context.theme.fonts);
         return clicked;

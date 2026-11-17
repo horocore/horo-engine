@@ -21,6 +21,7 @@ namespace Horo::AI::Detail {
 
         /** @brief Allocates the fixed slot array before instance activation. */
         explicit AiTaskMailbox(std::size_t capacity);
+        [[nodiscard]] static std::uint64_t StorageBytes(std::size_t capacity) noexcept;
         /** @brief Rebinds an exclusively owner-reserved slot to a fresh task generation. */
         [[nodiscard]] Result<AiTaskContinuation> Bind(std::size_t slot, const AiTaskOperationContext &operation);
         /** @brief Takes one pending candidate and wake without waiting for a producer. */

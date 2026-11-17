@@ -10,6 +10,8 @@
 #include <string_view>
 #include <utility>
 
+// Keep the PNG-only decoder and its configuration private to this translation unit.
+#define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_NO_STDIO

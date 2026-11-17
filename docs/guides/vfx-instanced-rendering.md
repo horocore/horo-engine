@@ -3,8 +3,9 @@
 Delivery identity: HORO-1735 / #1778 [VFX-004.3].
 
 This document records the implementation and migration boundary for native
-billboard and mesh drawing. Source authoring is in progress. Packing tests,
-shader source, or headless graph tests do not qualify native execution.
+billboard and mesh drawing. Metal and desktop OpenGL have native functional
+evidence below; software Vulkan functional qualification has also passed. Packing tests, shader source,
+or headless graph tests do not qualify native execution.
 
 The source was reconciled onto merged main `6b7830dd`, which includes the
 OpenXR application-host (#3544) and runtime-UI deliveries. Their canonical
@@ -62,11 +63,11 @@ MSL and GLSL. The previous `column_major` declaration produced a different MSL
 operation; accepting it with canonical column-major packing transposed a
 non-symmetric off-axis transform. The selected logical-to-native map therefore
 remains canonical column-major packing, without a backend-specific CPU transpose.
-The actual native off-axis fixture is still required; mathematical translation
-evidence does not qualify pixels or device execution.
+The native off-axis fixtures below exercise this mapping; mathematical translation
+evidence alone does not qualify pixels or device execution.
 The shared HLSL qualifier also changes Vulkan and DXIL lowering. Neither route
-is qualified by the GL/MSL diagnostic: Vulkan and D3D12 VFX admission remains
-disabled or unsupported pending its own layout, native draw and lifetime evidence.
+is qualified by the GL/MSL diagnostic: Vulkan needs its own layout, native draw
+and lifetime evidence. D3D12 graphics remains unsupported.
 
 `MakeVfxShaderManifest` in the existing `HoroRenderApi`-owned
 `VfxShaderParameters.h` is the canonical logical cook interface: Instances,
@@ -176,8 +177,8 @@ production tool catalog.
 Metal's narrow instance-array admission requires the canonical VFX interface,
 actual reflected `float4x4[128]` and `float4[128]` element types, exact native
 offsets/array strides, column-matrix packing and a 10240-byte block. Ordinary
-material arrays/matrices remain unsupported. Native malformed-layout and block
-extent cases are authored but have not run. Immutable Material constants retain
+material arrays/matrices remain unsupported. The native preparation regression
+target exercises malformed layout and block extent admission. Immutable Material constants retain
 their logical 20-byte member extent: the existing frontend queries native block
 size and pads the allocation before publication, including Metal's native struct
 extent. Callers must not substitute a 20-byte native buffer for that query.
@@ -188,8 +189,7 @@ two distinct billboard instances, a mesh with authored nonzero Z, masked discard
 foreground alpha, depth-occluded alpha and additive color. Pixel-center ray/plane
 depth is computed independently from the VFX packer. Actual GPU completion and
 ordinary frame admission precede publication reuse; test-only readback/teardown
-barriers do not change the production frame path. These new native assertions are
-source-only until the opt-in GPU target is configured, built and run.
+barriers do not change the production frame path. The opt-in desktop OpenGL target has now run with the result recorded below.
 The authored-Z mesh selects a deliberate quadrant of a nonuniform 2x2 texture;
 normal-field reads, swapped UV components and a flipped V coordinate produce
 different expected texels. Its UV remains the proven canonical MeshVertex input
@@ -202,7 +202,7 @@ resource owner now admits `Rgba16Float` sampled/render attachments using
 This supplies the existing scheduler contract; it does not add tone mapping,
 exposure, a look policy, or a fallback to normalized color. `Rgba32Float` remains
 unsupported on this GL path. Storage mapping/attachment regression sources and
-the native VFX color oracle must qualify this addition before delivery.
+the native VFX color oracle exercise this addition, as recorded below.
 
 Each uniform draw is bounded by 128 instances. That bound is an admission ceiling,
 not a claim that a device supports the reflected block: actual native block size,
@@ -314,13 +314,14 @@ policies. Shadow, depth-prepass and GBuffer VFX encoders remain unsupported in
 this phase. Generic GL depth-clear graph support now has source coverage for
 whole depth/depth-stencil attachments, preserving stencil, the depth write mask
 and the caller's clear value. CPU dispatch and an existing native smoke fixture
-have new depth/abort/readback assertions; none has run for the current source.
-Full VFX pixel/depth fixtures remain pending. Metal and Vulkan now have source routes
+have depth/abort/readback assertions with native results below.
+Metal and Vulkan now have source routes
 through their canonical prepared material/mesh/target owners, exact native
 publication checks and indexed instance counts. Metal uses the existing native
 command-use retirement records; Vulkan retains the existing graph submission
-lease and resource-state/timeline authority. Both still keep this bit disabled
-pending compile and native qualification. D3D12 remains an explicit graphics
+lease and resource-state/timeline authority. Both publish the capability only
+after their actual native resource/command prerequisites are initialized; the
+bit does not itself prove platform qualification. D3D12 remains an explicit graphics
 foundation dependency. None of these source changes constitutes platform
 qualification.
 
@@ -329,6 +330,11 @@ Shutdown revokes that marker before teardown. The host must release slots and
 graph borrowers before destroying the frontend: their canonical material leases
 still obey the existing registry/native retirement contract. Staging destruction
 does not allocate; it does not create another retirement or fence authority.
+Shutdown drops the frontend's scheduling inventory after aborting an active frame.
+It does not clear a borrowed order: an accepted graph retains its slot until actual
+command completion, then releases the slot's material backing while the device is
+still alive. Host-owned material and scheduling aliases must still be released in
+the order required by `MaterialBindingLease`; shutdown cannot revoke those leases.
 
 The new `IRenderBackend::UpdateVfxFrame` virtual is an intentional source/ABI
 change for custom backend providers. Existing source implementations inherit a
@@ -353,6 +359,67 @@ Neither fixed packing layout tests nor unsupported-return tests replace these
 results. A performance report must name instance/mesh complexity, resolution,
 blend/depth workload, CPU/GPU timing availability, and the measured budget.
 
+## Manual Metal measurement
+
+The long measurement is deliberately separate from ordinary tests. The
+`HORO_BUILD_METAL_VFX_BENCHMARK` option defaults to `OFF`. When enabled,
+`HoroMetalVfxInstancedBenchmark` is still excluded from the default build and has
+no CTest/discovery registration. Existing GPU smoke selectors do not run it.
+Build only this target in a separate Release tree; a single-config Debug tree
+cannot become Release by passing `--config Release`.
+
+```sh
+cmake -S . -B build/vfx-metal-release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+  -DHORO_BUILD_METAL_VFX_BENCHMARK=ON \
+  -DHORO_BUILD_EDITOR_GUI=ON -DHORO_EDITOR_LIVE_UI=OFF \
+  -DHORO_BUILD_RENDER_METAL=ON -DHORO_BUILD_RENDER_OPENGL=OFF \
+  -DHORO_BUILD_RENDER_VULKAN=OFF -DHORO_BUILD_XR_OPENXR=OFF \
+  -DHORO_ENABLE_GPU_SMOKE_TESTS=OFF
+cmake --build build/vfx-metal-release --target HoroMetalVfxInstancedBenchmark --parallel 1
+```
+
+The GUI configuration enables the existing SDL/Metal presentation composition;
+this target does not build or run the Editor application. Supply an absolute
+path to the authentic cooked ordinary/masked Metal package, a count of exactly
+`1024`, `4096` or `16384`, and a new absolute JSONL destination whose parent
+already exists. The receipt refuses overwrite.
+
+```sh
+HORO_VFX_INSTANCED_ASSET_ROOT=/absolute/path/to/cooked-metal-package \
+HORO_VFX_BENCHMARK_COUNT=1024 \
+HORO_VFX_BENCHMARK_RECEIPT=/absolute/path/to/new-iteration.jsonl \
+MTL_DEBUG_LAYER=0 \
+  build/vfx-metal-release/tests/HoroMetalVfxInstancedBenchmark
+```
+
+Each invocation measures one count in one process. For a measurement set, run
+seven independent processes per count, sequentially, retaining every receipt and
+failure. Each iteration prepares a static 1920x1080 RGBA16F/Depth32F scene with
+five deterministic blend/depth families: translucent/additive billboards and
+three opaque/masked indexed-mesh families, one with authored mesh-local Z. Each
+geometry uses four vertices and six indices. Canonical 128-instance chunks
+produce 10, 35 or 130 indexed draws. Resources and graph preparation occur before
+the measured window. The explicit Fifo cohort uses serial native-completion
+observation; it introduces no hidden pacing sleeps to satisfy the sample count.
+
+There are 300 completed warmup frames, then at least 1,200 measured frames and
+20 measured seconds. Both minimums must hold within 10,000 samples and the
+300-second iteration deadline; a limit/error preserves partial evidence and
+fails the invocation. Raw observations are buffered within a fixed bound and
+written after the window. The receipt reports CPU encode and Present-call time
+separately from the entire native command-buffer GPU interval, retaining
+unavailable/invalid GPU timestamps explicitly. It does not measure whole-frame
+CPU time, simulation/update throughput or product FPS. Catch instrumentation,
+serial completion polling, presentation policy and requested validation state
+remain part of this diagnostic cohort.
+
+This is an opt-in measurement candidate, not an automatic performance gate or
+approved baseline. Numeric targets remain unset until the measured reference
+workload/cohort is reviewed. Run it when renderer/VFX performance changes or at
+milestone qualification, rather than on every build or PR. Keep the existing
+functional pixel/depth/lifetime checks separate from timing evidence.
+
 ## Current availability and remaining acceptance
 
 Implementation proceeds against available OpenGL, Metal and Vulkan graphics
@@ -367,3 +434,532 @@ Existing plan-only `ScheduleVfx` consumers remain source-compatible. Native
 execution must reject absent, stale, foreign or unready preparation explicitly;
 it cannot turn an unencoded graph into successful rendering. No backend fallback
 or reduced assertion policy is part of this migration.
+
+## Registered graph texture uploads
+
+`RenderGraphTextureUpload` adds one closed Vulkan upload operation to the existing
+render graph. The host creates a registered `HostVisible | CopySource` buffer with
+the actual pixels and an ordinary registered `CopyDestination` texture, then submits
+the upload through the normal graph and frontend submission owner.
+
+The workload contains the graph-local source/destination IDs, exact extent and
+byte count. It accepts only a complete tightly packed RGBA8 2D base level: one mip,
+one layer, one sample, depth one, and exactly `width * height * 4` bytes. The source
+buffer must have that exact size. Offsets, row padding, partial updates and other
+formats are rejected rather than reinterpreted or clamped.
+
+The pass declares exactly two uses: source `Read/CopySource` and destination
+`Write/CopyDestination`. Compiled synchronization supplies the image transitions;
+subsequent graph uses supply the sampling layout. Existing resource resolution and
+submission leases retain both registered resources. Destination contents are
+published only by actual accepted submission; an unsent abort discards candidate
+state. This adds no private staging allocation, queue, timeline or normal-frame wait.
+
+Vulkan records the operation with its existing `vkCmdCopyBufferToImage2` entry
+point. OpenGL, Metal and Null reject this new workload explicitly. Vulkan's
+`CreateTexture(initialData)` remains unsupported; callers use the declared graph
+upload instead of inventing ready state or issuing an untracked native write.
+
+The workload alternative is appended to `RenderGraphWorkload`, preserving existing
+alternative indices. Providers and consumers must rebuild for the changed C++
+variant type; preserved indices are not a binary compatibility promise.
+
+### Depth-copy descriptor admission
+
+The frontend also admits exactly a single-sample, single-mip/layer 2D Depth32Float
+attachment with `RenderAttachment | CopySource`, only when the selected backend's
+valid support snapshot reports those roles. Initial bytes, extra roles and other
+shapes remain unsupported by this narrow extension.
+
+Metal reports the copy-source role after its bounded native private render-target
+allocation probe succeeds, and probes sampled attachment support separately.
+Vulkan derives the role from actual native format properties. Existing allocation,
+resource retirement and submission ownership remain authoritative.
+
+The native VFX tests use terminal diagnostic copies to inspect actual color/depth.
+Those test observations do not introduce a general public texture-to-buffer graph
+workload or a normal-frame readback policy.
+
+## Native functional evidence (2026-11-06)
+
+The Debug macOS build has GUI/live UI and opt-in GPU smoke enabled. Physical
+Apple M3 Metal ran four instanced cases with 1,875 assertions, zero failures and
+zero skips, with the Metal validation layer enabled. The cases exercise off-axis
+billboards, authored-Z mesh/UV canaries, floating-point blend/depth, masked discard,
+actual in-flight retention, and unsent abort/retry. Desktop OpenGL ran its named
+billboard/authored-Z mesh case with 669 assertions, zero failures and zero skips.
+These are selected native functional cases, not full-platform qualification.
+
+The ordinary and masked Metal libraries and Vulkan SPIR-V packages were produced
+by the admitted host tools through the authenticated cook route. The offline
+`HoroVfxInstancedShaderCook` tool publishes decoded, validated packages atomically;
+it does not compile shaders in the runtime or supply handwritten reflection.
+
+Authentic Linux ARM64 GCC 15 compilation succeeded for the owning Vulkan, graph,
+frontend, reflection and native smoke targets. The latest Vulkan unit run had 137
+cases, zero failures and three explicit existing unsupported shader/stereo skips.
+The actual software Vulkan native run passed both cases with 1,122 assertions,
+zero failures, zero skips and no Vulkan validation errors. This covers the main
+pixel/depth scene and abandoned-first/committed-retry execution. The fresh frontend
+suite also passed all 311 cases without skips. Graph (84) and reflection (108)
+results are carried from byte-identical executables, not rerun results.
+This is software Vulkan evidence, not physical Vulkan hardware qualification.
+
+The earlier unenabled shader demotion, duplicate graph texture identities,
+frontend-owned shutdown inventory and stale per-pass material alias cache were
+corrected; raw failing runs remain separate from current evidence. Material alias
+scratch is reset for every pass and abandoned attempt; accepted resource states
+still publish only through successful submission.
+
+Shader demotion is optional, queried from the actual Vulkan 1.3 device and enabled
+only when supported. A module declaring the demotion capability is rejected before
+driver creation if the feature is unavailable. Ordinary non-demoting shaders and
+baseline adapter admission do not acquire a new mandatory feature requirement.
+
+The Metal diagnostic used seven particles, five indexed draws, two instanced
+batches and a 64x32 floating-point color/depth target. One warm-up and eight frames
+with validation enabled are diagnostic timing only. No reviewed reference scene,
+performance cohort or numeric throughput budget has been supplied. This does not
+satisfy ADR-051 measurement windows or the ticket's throughput acceptance.
+The ticket remains In Progress until the remaining acceptance is resolved.
+
+## Manual Metal measurement baseline (2026-11-06)
+
+The isolated Release functional executable also passed the original four native
+cases with 1,843 assertions, zero failures and zero skips, with Metal validation
+enabled. This is fresh functional evidence, separate from timing windows.
+
+The opt-in Release benchmark completed seven independent processes at each count
+on an Apple M3 with a 10-core GPU, at 1920x1080. Each process completed 300 warm-up
+frames followed by at least 1,200 measured frames and 20 seconds. All 21 processes
+completed, producing 50,337 measured frames with valid GPU timestamps. The table
+reports the median of the seven per-process nearest-rank p99 values; samples from
+different processes are not pooled or filtered.
+
+| Instances | Indexed draws | CPU encode p99 (ms) | GPU command-buffer p99 (ms) |
+| ---: | ---: | ---: | ---: |
+| 1,024 | 10 | 0.547 | 2.247 |
+| 4,096 | 35 | 0.852 | 2.284 |
+| 16,384 | 130 | 2.099 | 2.467 |
+
+At 16,384 instances, the seven CPU p99 values ranged from 2.007 to 2.249 ms;
+GPU p99 values ranged from 2.397 to 3.555 ms. CPU encode excludes drawable
+acquisition and completion waiting. GPU time covers the entire native command
+buffer, rather than an isolated VFX pass. The prepared static graph is replayed
+with serial completion; these windows exclude per-frame simulation, extraction,
+camera updates, readback and resource creation. They therefore do not establish
+whole-engine frame time or the complete ADR-051 performance cohort.
+
+The performance target is comparable behavior against mainstream engines such as
+Unity and Unreal under matched workloads. No numeric acceptance threshold is
+derived from Horo's own results. A comparison must match hardware, resolution,
+particle simulation mode, geometry, material behavior, screen coverage, depth and
+blend work, and measurement boundaries. Simulation and rendering costs must be
+reported separately. Equivalent reference-engine runs have not yet been recorded;
+performance parity and HORO-1735 throughput acceptance remain open.
+
+The benchmark stays manual, disabled by default and outside normal build and
+CTest execution. These measurements are a baseline for comparison, not a CI gate.
+
+### Published engine workloads informing the next measurements
+
+The [Procedural Pixels Unity case study](https://www.proceduralpixels.com/blog/rendering-90000-particles-in-unity)
+reports 90,000 moving cube particles in Unity 6000.3.11f1/URP, using a Windows
+IL2CPP Master build with DX12 at 1600x900 on an i5-10400F and RTX 3060. Its
+procedural rendering route reports a 3.40 ms CPU frame median and approximately
+3.02 ms GPU frame time. Those are the author's observations, not independently
+reproduced Horo reference results. They include simulation, uploads and a rendered
+URP frame; Horo's static five-family quad workload and p99 values have different
+boundaries. Use the published 5,000/90,000 count range to inform scalability
+coverage, rather than copying its milliseconds into an Apple M3 acceptance gate.
+
+[GPU Instancer's published asteroid test](https://gurbu.com/performance) uses
+10,000 through 500,000 instances at 1080p, with three prefabs, two LODs and much
+heavier geometry than the Horo quads. It measures a commercial Unity extension
+as well as Unity's ordinary instancing, so its extension results do not establish
+baseline Unity performance. Its methodology reinforces recording actual geometry,
+LOD, visibility, draw count and residual scene work alongside instance count.
+
+[Puget's Unreal Niagara scalability workload](https://www.pugetsystems.com/pugetbench/creators/unreal-engine/)
+maintains approximately 750,000 GPU-simulated particles, with 148,000 spawns per
+second and a five-second lifetime, measured over a 30-second 1080p editor window.
+It is a useful separate GPU simulation stress model. Neither its frame-rate
+metric nor a fluid simulation is interchangeable with Horo's CPU-world static
+instancing microbenchmark.
+
+Published results guide workload selection without requiring a reference engine
+installation here. Comparable performance remains a target; an online number on
+different hardware cannot establish an engine speed ratio. Keep static rendering
+scalability, per-frame simulation/extraction/upload and whole-engine frame timing
+as distinct measurements, with every omitted stage stated in the result.
+
+### Separate opaque cube scalability profile
+
+The manual executable also accepts the explicitly selected
+`opaque-cube-scalability-v1` profile, with exactly 5,000 or 90,000 instances at
+1600x900. It uses one opaque emitter and actual indexed cubes: 24 vertices and
+36 indices per mesh, with uniform world size 0.04. A deterministic three-dimensional
+lattice provides bounded placement. Canonical 128-instance chunks require 40 or
+704 indexed draws. The shader, renderer, preparation and resource admission remain
+the real production paths; no production limit is raised for the measurement.
+
+The cube profile explicitly selects the existing host retirement configuration
+with 8,192 submission pins. At 704 chunks, resident material generations hold
+3,520 pins and one graph needs 713 more, exceeding the default 4,096. Two in-flight
+graphs require 4,946 pins. This changes only this fixture's requested envelope;
+production, legacy mixed and functional-test defaults remain unchanged. The
+original revision-1 90,000-instance attempt failed this admission before any
+warm-up frame or measured sample; its raw failure is retained separately.
+Cube cohort revision 2 records the selected pin envelope explicitly.
+
+```sh
+HORO_VFX_BENCHMARK_PROFILE=opaque-cube-scalability-v1 \
+HORO_VFX_INSTANCED_ASSET_ROOT=/absolute/path/to/cooked-metal-package \
+HORO_VFX_BENCHMARK_COUNT=90000 \
+HORO_VFX_BENCHMARK_RECEIPT=/absolute/path/to/new-cube-iteration.jsonl \
+MTL_DEBUG_LAYER=0 \
+  build/vfx-metal-release/tests/HoroMetalVfxInstancedBenchmark
+```
+
+An absent profile variable selects the original mixed profile and its original
+1,024/4,096/16,384 counts. An explicitly empty or unknown profile is rejected.
+The cube profile shares the bounded warm-up/window and raw receipt protocol but
+has a separate workload identity. Keep its results separate from the 21 mixed
+profile measurements above.
+
+The hidden manual case `[.manual-vfx-pin-budget-rejection]` exercises intentional
+resource-budget rejection and cleanup without a long timing window. It runs only
+when explicitly selected and is outside ordinary build/CTest execution.
+
+Revision 2 completed seven independent processes per count on the same Apple M3,
+with AC power observed, for 29,210 measured frames and no invalid GPU timestamps.
+Each process used the declared 300-frame warm-up and at least 1,200 frames/20
+seconds. These are medians of seven per-process nearest-rank quantiles, without
+pooling or filtering samples:
+
+| Cubes | Draws | CPU encode median (ms) | CPU encode p99 (ms) | GPU command-buffer median (ms) | GPU command-buffer p99 (ms) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 5,000 | 40 | 0.427 | 0.834 | 0.559 | 2.948 |
+| 90,000 | 704 | 3.015 | 4.771 | 5.068 | 9.083 |
+
+Cold schedule/packing medians were 1.146 and 20.648 ms respectively, outside the
+measured replay loop. This startup measurement is not sustained moving-particle
+throughput. The reference Unity CPU number includes different work and comes from
+different hardware; neither the table nor a ratio of these times establishes
+engine parity. No numerical pass/fail threshold was applied.
+
+The corrected executable also passed all four original functional cases with
+1,891 assertions and no skips, plus the hidden budget-rejection case with 1,244
+assertions. A fresh legacy mixed-profile run completed 2,397 measured frames;
+its invocation and cohort metadata exactly matched the original mixed workload.
+These compatibility observations are separate from both measurement aggregates.
+
+This extends count and geometry scalability coverage inspired by the published
+Unity workload. It remains static, unlit, offscreen rendering: no per-frame
+particle simulation, extraction, sorting, packing, uploads, shadows or final image
+copy to the drawable is timed. It is not a reproduction of the moving, shadowed
+Unity scene, a whole-engine FPS result, or evidence of matching Unity's speed.
+The original mixed profile's conservative transparency admission also remains
+authoritative; this opaque profile does not qualify 90,000 mixed particles.
+
+### Dynamic CPU World measurement profile
+
+`cpu-world-additive-v1` is a separate opt-in manual cohort for 1,024, 4,096 or
+16,384 additive camera-facing billboards at 1920x1080. It advances the actual
+`VfxWorld::PrepareSpawns` simulation, extracts a fresh immutable snapshot, schedules
+and packs/uploads the canonical indexed chunks, compiles a new graph and submits
+real Metal work on every frame. It does not mutate raw particle buffers to imitate
+simulation. The existing spawn contract supports this bounded additive billboard
+profile; it does not establish support for 90,000 dynamically simulated opaque cubes.
+
+The deterministic initial burst has no continuous spawning, seed 1735, a unit-sphere
+volume, radial speed 0.002, size 0.01 and opacity 0.05. Both particle lifetime and
+effect duration are 60 seconds. The fixed simulation delta is `1.F / 60.F`:
+one cold activation, 300 warm-up frames and at most 3,000 measured frames remain
+below 55.02 simulated seconds. Simulation time and wall time are distinct. The
+measurement still requires at least 1,200 frames and 20 wall seconds; exceeding
+the frame/time envelope is an incomplete run, never a filtered success.
+
+```sh
+HORO_VFX_BENCHMARK_PROFILE=cpu-world-additive-v1 \
+HORO_VFX_INSTANCED_ASSET_ROOT=/absolute/path/to/cooked-metal-package \
+HORO_VFX_BENCHMARK_COUNT=16384 \
+HORO_VFX_BENCHMARK_RECEIPT=/absolute/path/to/new-dynamic-iteration.jsonl \
+MTL_DEBUG_LAYER=0 \
+  build/vfx-metal-release/tests/HoroMetalVfxInstancedBenchmark
+```
+
+Raw observations separate simulation, extraction, scheduling, packing/upload,
+graph compilation, encoding, submission and reclamation. The owner-phase total
+adds the actual same-frame non-overlapping phases; extraction/scheduling/upload
+are already inside graph preparation and are not counted twice. These are wall
+clock durations around owner CPU work, not thread CPU time or whole-engine FPS.
+Drawable acquisition, native completion, completion pumping and autorelease-pool
+cleanup are outside that total. GPU time still covers the entire command buffer.
+Graph allocation, compilation and destruction are included; no allocation-free
+preparation claim is made. Native resources and upload slots are prepared cold.
+
+The hidden manual case `[.manual-vfx-dynamic-reuse]` checks multi-chunk reuse,
+client/native retention, completion and abort recovery. Untimed end checks compare
+copied particle identities/positions, real native uniform bytes and the native
+resource ledger. Snapshots and slots are not retained merely for diagnostics.
+This profile remains outside ordinary CTest/build execution and does not define
+an automatic performance gate or establish Unity/Unreal parity.
+
+#### Dynamic pilot observations (2026-11-06)
+
+One successful independent process per count completed 6,150 measured frames on
+the Apple M3/Metal Release executable. Each passed the complete protocol, actual
+motion/native-byte-change checks and native resource ledger checks, with no invalid
+GPU timestamps. These are single-process pilot quantiles, not medians of seven
+runs or a stable cross-engine comparison:
+
+| Particles | Draws | Frames | Owner phase p50 (ms) | Owner phase p99 (ms) | GPU command-buffer p50 (ms) | GPU command-buffer p99 (ms) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,024 | 8 | 2,300 | 0.460 | 2.058 | 1.639 | 4.452 |
+| 4,096 | 32 | 2,398 | 2.455 | 3.714 | 0.217 | 1.079 |
+| 16,384 | 128 | 1,452 | 6.296 | 7.065 | 0.582 | 1.209 |
+
+At 16,384 particles, the individually measured simulation and packing/upload
+medians were 1.977 ms and 3.548 ms. The total column uses actual same-frame totals;
+it was not obtained by adding these medians. Bracketed phases include their Catch
+assertion/check machinery. The differing GPU ordering across these single-process
+pilots is not enough evidence to rank scaling or claim a repeatable speed ratio.
+The earlier 1,024-particle attempt was interrupted by the continuous free-disk
+reserve guard; its partial artifacts remain separate and are not in this table.
+
+The new hidden native reuse case passed with 26,420 assertions. All four original
+functional cases and the prior budget-rejection case also passed, with zero skips.
+Six deliberately invalid profile/count inputs were rejected before native receipt
+creation; they are expected rejection controls, not successful measurement runs.
+No new coverage, hosted gate, engine FPS or throughput-parity clearance is implied.
+
+
+#### Dynamic packing optimization observations (2026-11-06)
+
+The frontend now serializes each admitted canonical chunk once into its existing
+cold-owned slot staging, before any native upload callback. Publication retains
+its exact transaction claim, owner/revision admission, resident checks and native
+write evidence. A later preflight rejection performs no native writes; a later
+native upload failure releases graph/transaction claims but does not undo a
+previous successful native write. No new per-frame staging allocation is added.
+
+The VFX serializer uses a direct writer only for fully admitted, disjoint,
+contiguous 128-lane matrix/color arrays with the required reflected strides and
+bounds. Both matrix orders, reversed arrays and gaps are supported. Irregular,
+interleaved or padded layouts and descriptor/output overlap retain the canonical
+generic path. All inputs are copied and finite-checked before destination mutation;
+unused lanes and padding remain zero and the suffix remains untouched.
+
+On the same Apple M3/Metal Release profile, three independent processes per
+implementation ran in interleaved AB/BA/AB order, with no profiler. All 79 cohort
+fields matched. Each process completed its 300-frame warm-up and 1,200 measured
+frames over at least 20 seconds, for 7,200 measured frames total. All frames had
+valid GPU timestamps; motion, stable identities, native uniform changes and the
+final resource ledger passed. These values are medians of three per-process
+nearest-rank quantiles; samples were not pooled or filtered:
+
+| Metric | Before p50 (ms) | After p50 (ms) | Before p99 (ms) | After p99 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Packing/upload | 3.733 | 1.306 | 4.613 | 2.352 |
+| Owner phase total | 6.558 | 5.285 | 8.237 | 7.310 |
+| GPU command buffer | 0.579 | 0.578 | 0.596 | 0.595 |
+
+Within the three matched pairs, owner-phase p50 reductions ranged from 16.3% to
+26.0%, and packing/upload reductions from 64.4% to 67.1%. Acquisition, native
+completion, completion pumping and autorelease cleanup remain outside the owner
+phase. Power/thermal state was observed at batch boundaries, without formal
+thermal or background-workload control. This is a local observation, not an
+engine FPS result, a general stability guarantee or Unity/Unreal parity proof.
+
+An earlier baseline attempt stopped at warm-up attempt 50, after 49 completed
+warm-up frames and before any measured sample. Its raw failure is preserved and
+its underlying cause remains unknown; successful later runs do not explain it.
+The manual harness now emits bounded native command-buffer status and NSError
+details only on terminal failure, plus one untimed measurement-start marker.
+No timeout, completion rule, assertion or sample admission was weakened.
+
+Fresh validation passed 29 VFX extraction/serialization cases, 34 injected OpenGL
+protocol cases and all six actual Metal functional/reuse/budget cases, with zero
+failures or skips. Serializer tests compare full output against the independent
+generic writer, including both matrix orders, inactive lanes, aliasing, malformed
+layouts, typed failure ordering and zero allocations. The affected public frontend
+header consumer also compiled. Local Sonar remains waived; no new coverage,
+Codacy, hosted-platform or whole-ticket acceptance clearance is claimed. Manual
+benchmarks remain opt-in and outside normal build/CTest execution.
+
+
+#### Stable particle payload self-moves
+
+Stable CPU compaction now leaves a particle's payload untouched when its source
+and destination dense indices are identical. Handle admission, stable ordering,
+slot mappings, generation retirement, tail clearing and canonical free-slot
+rebuilding still run. In particular, keeping every particle does not bypass the
+free-slot rebuild: that would change subsequent spawn identities after prior kills.
+The private copy helper adds one branch and no storage, allocation or public API.
+
+A separate matched Apple M3/Metal Release comparison retained the preceding
+frontend/serializer optimization in both implementations. Three processes per
+implementation ran in AB/BA/AB order, with the same 79 cohort fields and no
+profiler, completing 7,201 measured frames. Medians of per-process quantiles were:
+
+| Metric | Before p50 (ms) | After p50 (ms) | Before p99 (ms) | After p99 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Simulation | 3.041 | 1.667 | 4.015 | 2.306 |
+| Packing/upload | 1.332 | 1.758 | 2.315 | 2.741 |
+| Owner phase total | 5.480 | 5.101 | 6.871 | 6.501 |
+| GPU command buffer | 0.580 | 0.580 | 0.597 | 0.601 |
+
+Owner-phase p50 improved in all three pairs, by 4.0% to 8.0%. Packing/upload
+worsened in this batch despite its unchanged source path; the cause is unproven.
+The independently measured phase quantiles must not be added or subtracted to
+infer the total. The preceding power/thermal, workload, timing-scope and parity
+limitations apply; this does not set a reference-scene acceptance budget.
+
+All 157 owning VFX API/simulator/buffer cases passed separately on macOS and Linux
+ARM64 GCC 15, with no failures or skips. Two regressions check exact fixed/custom
+payload bits, preserved and moved particles, canonical free-slot reuse, stale
+handles, zeroed recycled payloads and allocation-free full-survivor compaction.
+All six native Metal functional/reuse/budget cases also passed. OpenGL and software
+Vulkan native results above belong to their recorded preceding source, rather
+than a fresh run of this CPU-only change. No new hosted, coverage or analyzer
+clearance is claimed; HORO-1735 throughput acceptance remains open.
+
+
+#### Bulk committed CPU identity view
+
+`CpuParticleExtractView::handles` borrows the simulator's existing committed
+handle prefix in the same dense order and generation as its position/payload
+streams. It allocates no identity table and adds no ownership authority. All
+borrowed spans expire at the next owner-thread mutation; callers needing a longer
+lifetime must copy values or consume the existing immutable World snapshot.
+Candidate handles remain private until the same successful atomic commit. The
+individual `HandleAtDenseIndex` API remains available for isolated checked reads.
+
+World spawn extraction consumes this one admitted bulk view, preserving finite
+geometry checks and immutable snapshot copies. It also computes the unchanged
+placement scale once per emitter rather than once per particle; quaternion
+rotation and large-world coordinate arithmetic keep their existing operations.
+
+This appends a span to a public C++ result structure. C++ consumers/providers must
+rebuild against the updated `HoroVfxApi` header; compatibility with an older binary
+structure layout is not promised. No serialized asset schema or external C ABI is
+changed. The owning public-header consumer checks the exact read-only handle type.
+
+
+For this change, both macOS and Linux ARM64 GCC 15 passed 161 API JUnit entries
+(including the new rollback sections), plus 29 extraction entries and the actual
+public-header consumer build. All six native Metal functional/reuse/budget cases
+passed. The bulk view allocated nothing in its direct extraction checks; successful
+compaction/reuse and rejected/cancelled candidates retained the expected identities.
+
+A separate AB/BA/AB comparison on the same Apple M3/Metal Release workload completed
+14,354 measured frames across six independent processes with all 79 cohort fields
+matched, no filtered samples and valid GPU timestamps throughout. Medians of the
+three per-process nearest-rank quantiles were:
+
+| Metric | Before p50 (ms) | After p50 (ms) | Before p99 (ms) | After p99 (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Extraction | 0.394 | 0.277 | 0.991 | 0.725 |
+| Packing/upload | 1.231 | 1.281 | 1.807 | 1.906 |
+| Owner phase total | 3.456 | 3.413 | 4.554 | 4.440 |
+| GPU command buffer | 0.582 | 0.582 | 1.126 | 0.855 |
+
+Extraction p50 improved in all three pairs. Total owner-phase p50 changed by
+27.3%, 1.2% and 0.8% respectively; the large first-pair variation is not a general
+speedup guarantee. The total benefit in the median table is small, and packing
+again worsened slightly despite unchanged packing code. Background/thermal effects
+and per-phase costs are not fully isolated. These wall observations retain the
+same assertion-inclusive scope and do not establish normal-engine FPS or a
+reference-engine performance acceptance budget.
+
+
+#### Prepared mesh spawn recipes
+
+CPU `PrepareSpawns` recipes may now supply a host-admitted logical `mesh` handle
+for Mesh descriptors with opaque, masked or additive materials. Additive billboards
+retain an exactly empty mesh handle. Ribbon, translucent, unsupported sorting and
+callback/collision combinations still reject explicitly; no recipe falls back to
+billboards or a different blend class. Cold preparation captures the exact mesh,
+material, topology and pass by value. A structural handle is not native admission
+or ownership: the host retains resources, and frontend draw preparation still
+checks the actual registry generation and geometry/material compatibility.
+
+Solid mesh batches reserve two logical extraction credits, additive batches one,
+matching the existing fixed-emitter policy. Insufficient credits omit the whole
+batch before copying particles. Native 128-instance draw chunk admission remains
+a separate renderer scheduling budget. Deferred and shadow flags stay false.
+The ADR-128 aggregate CPU ceiling remains 16,384; neither these recipes nor the
+90,000-cube static diagnostic raise it. ADR-125's numeric time targets cover sort
+work only and cannot clear total simulation, upload or raster throughput.
+
+The existing representation provides sizeXY and particle-local Z rotation while
+preserving authored mesh Z. Mesh spawn requests therefore require identity world
+orientation (including its equivalent negative quaternion) and effective Z scale
+one. Other valid TRS requests return `UnsupportedRecipe` before queue/dedup state
+changes; translation and XY scaling remain supported. Full 3D mesh TRS is not
+silently approximated. The public C++ preparation struct gains a mesh field, so
+C++ consumers/providers rebuild; no serialized asset or external C ABI changes.
+
+The opt-in manual target adds `[.manual-vfx-spawn-mesh]` controls for actual
+World-owned opaque cube simulation/reuse/abort and masked front-face color/depth
+readback. These are explicit native controls, not ordinary CTest cases or a new
+long-running default benchmark.
+
+For this change, macOS and Linux ARM64 GCC 15 each passed 166 API JUnit entries
+and 29 extraction entries with no failures or skips; both public-header consumer
+targets compiled. All eight actual Metal controls passed, including the two new
+World mesh cases. The masked control independently checks front-face depth and
+decoded RGB at particle-rotation-aware texel positions. The opaque control also
+exercises 241 simulation ticks, retained native/client frames and abort/reuse.
+Ten changed C++ files passed formatting; reviewed production and native helper
+functions had cyclomatic complexity at most ten. These results do not establish
+new throughput, cross-engine parity, or current hosted quality-gate clearance.
+
+#### Moving opaque cube measurement
+
+`cpu-world-opaque-cubes-v1` measures genuine prepared CPU World mesh spawns at
+1920x1080 with the existing 1,024 / 4,096 / 16,384 count choices. Each opaque cube
+has 24 vertices, 36 indices and 0.04 world-unit sides. A deterministic seed-1735
+sphere burst moves at 0.002 units/second through the real simulator; every frame
+extracts, schedules, packs/uploads and rebuilds/compiles the actual native graph.
+Depth testing/writes are enabled. This is a moving opaque workload, distinct from
+the static 90,000-cube diagnostic and the additive billboard profile.
+
+Use the existing opt-in Release build and authentic shader package described
+above, with a new absolute receipt path for each invocation:
+
+```sh
+HORO_VFX_BENCHMARK_PROFILE=cpu-world-opaque-cubes-v1 \
+HORO_VFX_BENCHMARK_COUNT=16384 \
+HORO_VFX_INSTANCED_ASSET_ROOT=/absolute/authentic/package \
+HORO_VFX_BENCHMARK_RECEIPT=/absolute/new-moving-cubes.jsonl \
+MTL_DEBUG_LAYER=0 \
+  build/vfx-metal-release/tests/HoroMetalVfxInstancedBenchmark
+```
+
+An Apple M3/Metal Release pilot completed one independent process per count,
+300 warmup frames followed by at least 1,200 measured frames and 20 seconds.
+All 7,142 measured mesh frames completed with valid GPU timestamps, stable
+identities and observed simulation/native-buffer changes; no samples were
+filtered. Per-process nearest-rank quantiles were:
+
+| Moving cubes | Frames | CPU owner p50 / p99 (ms) | GPU buffer p50 / p99 (ms) |
+| --- | ---: | ---: | ---: |
+| 1,024 | 2,400 | 0.605 / 1.370 | 0.726 / 2.093 |
+| 4,096 | 2,386 | 1.767 / 3.555 | 0.572 / 1.586 |
+| 16,384 | 2,356 | 3.256 / 5.103 | 1.633 / 2.421 |
+
+The owner total includes same-frame simulation, extraction, scheduling, packing,
+graph allocation/compilation/destruction and assertion instrumentation; it omits
+acquisition/completion waits and autorelease-pool cleanup. GPU time covers the
+whole native command buffer. Serial completion, offscreen output and one process
+per count prevent interpreting these as product FPS, a stable hardware baseline
+or Unity/Unreal performance parity. The non-monotonic smaller-count GPU values
+are retained as observed, not replaced by a fitted scaling claim.
+
+All eight native functional controls passed after the shared helper change,
+including opaque/masked pixel-depth and reuse/abort checks now at 1080p. A fresh
+16,384-particle additive run also passed and matched all 79 previous cohort fields.
+The isolated manual target remains disabled/excluded by default and unregistered
+with CTest; neither the count sweep nor a throughput threshold runs on each build.

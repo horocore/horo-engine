@@ -13,7 +13,7 @@ namespace Horo::Editor {
     /** @copydoc ValidSourceWidgetFrame */
     bool ValidSourceWidgetFrame(const SourceWidgetFrame &frame) noexcept {
         return std::isfinite(frame.width) && std::isfinite(frame.height) && frame.width > 0 && frame.height > 0 &&
-               std::isfinite(frame.dpiScale) && frame.dpiScale > 0;
+               std::isfinite(frame.dpiScale) && frame.dpiScale > 0 && std::isfinite(frame.fontSizePx) && frame.fontSizePx >= 0;
     }
 
     namespace {

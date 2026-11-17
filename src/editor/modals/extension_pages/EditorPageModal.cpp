@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Foundation/Sha256.h"
@@ -26,7 +27,8 @@ namespace Horo::Editor {
     EditorPageModal::EditorPageModal(const EditorGuiContext &context, std::shared_ptr<Extensions::EditorPageHost> host,
                                      const Extensions::EditorSurfaceDescriptor &surface,
                                      std::shared_ptr<const Extensions::EditorThemeFrame> theme)
-        : context_(context), host_(std::move(host)), surface_(surface), view_(context, host_, std::move(theme)), id_(Identity(surface)) {
+        : EditorModal(kTextScope), context_(context), host_(std::move(host)), surface_(surface), view_(context, host_, std::move(theme)),
+          id_(Identity(surface)) {
         view_.Select(surface.provider, surface.id);
     }
 
@@ -49,7 +51,7 @@ namespace Horo::Editor {
     Result<void> EditorPageModal::OnOpen(EditorModalContext &context) {
         modals_ = &context.modals;
         if (!view_.Current())
-            return Result<void>::Failure(MakeError(Extensions::ExtensionErrors::CapabilityRevoked));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Extensions::ExtensionErrors::CapabilityRevoked>()));
         return Result<void>::Success();
     }
 

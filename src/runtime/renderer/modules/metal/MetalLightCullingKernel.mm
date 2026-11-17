@@ -2,10 +2,32 @@
 
 #include "MetalResourceRuntimeInternal.h"
 
+#include <format>
 #include <new>
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Reports actual driver evidence without changing any native admission condition. */
+        std::string NativeArgumentEvidence(MTLComputePipelineReflection *reflection, const std::array<NSUInteger, 5> &bindings,
+                                           id<MTLComputePipelineState> pipeline) {
+            std::string evidence = std::format("Native light-culling pipeline ABI is incompatible: pipelineMissing={}, "
+                                               "maxThreads={}, argumentCount={}; expected",
+                                               pipeline == nil, pipeline.maxTotalThreadsPerThreadgroup, reflection.arguments.count);
+            constexpr std::array<std::size_t, 5> bytes{sizeof(PackedRenderLight), sizeof(PackedLightCluster), sizeof(PackedLightMembership),
+                                                       sizeof(std::uint32_t), sizeof(LightCullingDispatch)};
+            for (std::size_t logical = 0; logical < bindings.size(); ++logical)
+                evidence += std::format(" [logical={}, index={}, dataSize={}, writes={}]", logical, bindings[logical], bytes[logical],
+                                        logical == 2 || logical == 3);
+            evidence += "; actual";
+            for (MTLArgument *argument in reflection.arguments) {
+                const auto dataSize = argument.type == MTLArgumentTypeBuffer ? argument.bufferDataSize : 0;
+                evidence += std::format(" [index={}, type={}, access={}, active={}, dataSize={}]", argument.index,
+                                        static_cast<unsigned long>(argument.type), static_cast<unsigned long>(argument.access),
+                                        static_cast<bool>(argument.active), dataSize);
+            }
+            return evidence;
+        }
+
         /** @brief Verifies native reflection independently of the host's cooked mapping assertions. */
         bool NativeArgumentsMatch(MTLComputePipelineReflection *reflection, const std::array<NSUInteger, 5> &bindings) {
             if (reflection == nil || reflection.arguments.count != bindings.size())
@@ -60,7 +82,7 @@ namespace Horo::Render::Detail {
             if (resident.pipeline == nil || !NativeArgumentsMatch(reflection, resident.bindings) ||
                 resident.pipeline.maxTotalThreadsPerThreadgroup < 64)
                 return Result<void>::Failure(
-                    MakeError(LightCullingErrors::InvalidInput, "Native light-culling pipeline ABI is incompatible."));
+                    MakeError(LightCullingErrors::InvalidInput, NativeArgumentEvidence(reflection, resident.bindings, resident.pipeline)));
             return Result<void>::Success();
         }
     }  // namespace

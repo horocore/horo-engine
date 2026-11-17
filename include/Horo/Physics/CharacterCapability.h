@@ -6,6 +6,7 @@
 
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Physics/CharacterCommandPipeline.h"
+#include "Horo/Physics/CharacterEvents.h"
 
 #include <memory>
 
@@ -78,6 +79,10 @@ namespace Horo::Character {
          */
         [[nodiscard]] Result<CharacterLocomotionSnapshot> ControllerLocomotionSnapshot(const CharacterControllerHandle &handle) const;
         /** @brief Permanently closes this shared grant from any thread; idempotent and invokes no world or consumer callback. */
+        /** @brief Copy committed events through this grant's normal owner/reload/revocation fence. */
+        [[nodiscard]] Result<CharacterEventCapture> CaptureEvents(const CharacterEventCaptureRequest &request,
+                                                                  std::span<CharacterMovementEvent> events,
+                                                                  std::span<CharacterEventTerminalState> terminal) const;
         void Revoke() const noexcept;
 
     private:

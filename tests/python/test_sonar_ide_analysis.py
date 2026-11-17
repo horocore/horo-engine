@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 
+import io
 import json
 import sys
-from pathlib import Path
+from email.message import Message
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -250,9 +252,232 @@ def test_analyze_when_indexed_retries_only_the_startup_response(tmp_path: Path, 
         return response
 
     monkeypatch.setattr(sonar_ide_analysis, 'request_bridge', request)
-    monkeypatch.setattr(sonar_ide_analysis.time, 'sleep', lambda *_: None)
+    monkeypatch.setattr(sonar_ide_analysis.CANCELLED, 'wait', lambda *_: False)
 
     assert sonar_ide_analysis.analyze_when_indexed(64120, [tmp_path / "source.cpp"], 30, 5) == [{"ruleKey": "cpp:S1"}]
+
+
+def test_bridge_indexing_and_rate_limit_backoff_preserves_findings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [0.0]
+    waits: list[float] = []
+    requests: list[object] = []
+    headers = Message()
+    headers['Retry-After'] = '7'
+    responses = [
+        sonar_ide_analysis.HTTPError('http://127.0.0.1:64120', 500, 'indexing', None,
+                                    io.BytesIO(b'No files were found to be indexed by SonarQube for IDE')),
+        sonar_ide_analysis.HTTPError('http://127.0.0.1:64120', 429, 'busy', headers, io.BytesIO(b'')),
+    ]
+
+    class Response:
+        def __enter__(self) -> 'Response':
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"findings": [{"ruleKey": "cpp:S1"}]}'
+
+    def request(value: object, **_: object) -> Response:
+        requests.append(value)
+        if responses:
+            raise responses.pop(0)
+        return Response()
+
+    def wait(delay: float) -> bool:
+        waits.append(delay)
+        clock[0] += delay
+        return False
+
+    monkeypatch.setattr(sonar_ide_analysis, 'urlopen', request)
+    monkeypatch.setattr(sonar_ide_analysis.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(sonar_ide_analysis.CANCELLED, 'wait', wait)
+    assert sonar_ide_analysis.analyze_when_indexed(64120, [tmp_path / 'source.cpp'], 30, 20) == [{'ruleKey': 'cpp:S1'}]
+    assert waits == [1.0, 7.0]
+    assert len(requests) == 3
+
+
+def test_persistent_bridge_rate_limit_exhausts_admission_without_early_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [0.0]
+    attempts: list[float] = []
+
+    def request(*_: object) -> object:
+        attempts.append(clock[0])
+        raise sonar_ide_analysis.BridgeRateLimited('IDE bridge returned HTTP 429', 4.0)
+
+    def wait(delay: float) -> bool:
+        clock[0] += delay
+        return False
+
+    monkeypatch.setattr(sonar_ide_analysis, 'request_bridge', request)
+    monkeypatch.setattr(sonar_ide_analysis.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(sonar_ide_analysis.CANCELLED, 'wait', wait)
+    with pytest.raises(sonar_ide_analysis.BridgeRateLimited, match='429'):
+        sonar_ide_analysis.analyze_when_indexed(64120, [tmp_path / 'source.cpp'], 30, 10)
+    assert attempts == [0.0, 4.0, 8.0]
+
+
+@pytest.mark.parametrize('status', [401, 403, 500, 503])
+def test_other_bridge_failures_are_not_retried(status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def request(*_: object, **__: object) -> object:
+        raise sonar_ide_analysis.HTTPError('http://127.0.0.1:64120', status, 'failed', None, io.BytesIO(b'failure'))
+
+    def unexpected_wait(_: float) -> bool:
+        pytest.fail('authentication and unrelated server errors must fail immediately')
+
+    monkeypatch.setattr(sonar_ide_analysis, 'urlopen', request)
+    monkeypatch.setattr(sonar_ide_analysis.CANCELLED, 'wait', unexpected_wait)
+    with pytest.raises(sonar_ide_analysis.AnalysisError, match=f'HTTP {status}'):
+        sonar_ide_analysis.analyze_when_indexed(64120, [tmp_path / 'source.cpp'], 30, 10)
+
+
+@pytest.mark.parametrize(('header', 'delay'), [(None, 5.0), ('0', 0.0), ('12', 12.0), ('-1', 5.0),
+                                             ('nan', 5.0), ('inf', 5.0), ('invalid', 5.0)])
+def test_bridge_retry_after_is_finite(header: str | None, delay: float) -> None:
+    assert sonar_ide_analysis.bridge_retry_after(header) == delay
+
+
+def test_bridge_retry_after_honors_http_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sonar_ide_analysis.time, 'time', lambda: 1000.0)
+    assert sonar_ide_analysis.bridge_retry_after('Thu, 01 Jan 1970 00:17:00 GMT') == 20.0
+
+
+def test_bridge_retry_wait_can_be_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def request(*_: object) -> object:
+        raise sonar_ide_analysis.BridgeRateLimited('IDE bridge returned HTTP 429', 5.0)
+
+    monkeypatch.setattr(sonar_ide_analysis, 'request_bridge', request)
+    monkeypatch.setattr(sonar_ide_analysis.CANCELLED, 'wait', lambda _: True)
+    with pytest.raises(sonar_ide_analysis.AnalysisError, match='cancelled'):
+        sonar_ide_analysis.analyze_when_indexed(64120, [tmp_path / 'source.cpp'], 30, 10)
+
+
+@pytest.mark.parametrize('status', [401, 403, 503])
+def test_indexing_text_cannot_make_other_http_failures_retry(status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def request(*_: object) -> object:
+        raise sonar_ide_analysis.AnalysisError(
+            f'IDE bridge returned HTTP {status}: No files were found to be indexed by SonarQube for IDE')
+
+    monkeypatch.setattr(sonar_ide_analysis, 'request_bridge', request)
+    with pytest.raises(sonar_ide_analysis.AnalysisError, match=f'HTTP {status}'):
+        sonar_ide_analysis.analyze_when_indexed(64120, [tmp_path / 'source.cpp'], 30, 10)
+
+
+def test_bridge_does_not_retry_after_a_delayed_wakeup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [0.0]
+    attempts: list[float] = []
+
+    def request(*_: object) -> object:
+        attempts.append(clock[0])
+        raise sonar_ide_analysis.BridgeRateLimited('IDE bridge returned HTTP 429', 1.0)
+
+    def wait(_: float) -> bool:
+        clock[0] = 20.0
+        return False
+
+    monkeypatch.setattr(sonar_ide_analysis, 'request_bridge', request)
+    monkeypatch.setattr(sonar_ide_analysis.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(sonar_ide_analysis.CANCELLED, 'wait', wait)
+    with pytest.raises(sonar_ide_analysis.BridgeRateLimited, match='429'):
+        sonar_ide_analysis.analyze_when_indexed(64120, [tmp_path / 'source.cpp'], 30, 10)
+    assert attempts == [0.0]
+
+
+@pytest.mark.parametrize(('value', 'expected'), [
+    (r'C:\Project\MixedCase\Renderer.cpp', r'c:\Project\MixedCase\Renderer.cpp'),
+    (r'c:\Project\MixedCase\Renderer.cpp', r'c:\Project\MixedCase\Renderer.cpp'),
+    (r'\\Server\Share\MixedCase\Renderer.cpp', r'\\Server\Share\MixedCase\Renderer.cpp'),
+    (r'\\?\C:\Project\Renderer.cpp', r'\\?\C:\Project\Renderer.cpp'),
+    (r'C:Renderer.cpp', r'C:Renderer.cpp'),
+])
+def test_bridge_matches_windows_drive_uri_without_folding_other_names(value: str, expected: str,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(sonar_ide_analysis.sys, 'platform', 'win32')
+        result = sonar_ide_analysis.bridge_file_path(PureWindowsPath(value))
+    assert result == expected
+
+
+def test_bridge_does_not_change_paths_on_other_platforms(monkeypatch: pytest.MonkeyPatch) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(sonar_ide_analysis.sys, 'platform', 'linux')
+        result = sonar_ide_analysis.bridge_file_path(PureWindowsPath(r'C:\Project\Renderer.cpp'))
+    assert result == r'C:\Project\Renderer.cpp'
+
+
+def test_analysis_transport_sends_the_windows_index_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested: list[str] = []
+
+    def request(_port: int, _path: str, _timeout: float, body: bytes) -> object:
+        requested.extend(json.loads(body)['fileAbsolutePaths'])
+        return {'findings': [{'ruleKey': 'cpp:S1'}]}
+
+    monkeypatch.setattr(sonar_ide_analysis, 'request_bridge', request)
+    with monkeypatch.context() as patch:
+        patch.setattr(sonar_ide_analysis.sys, 'platform', 'win32')
+        result = sonar_ide_analysis.analyze_when_indexed(64120, [PureWindowsPath(r'C:\Project\Renderer.cpp')], 30, 10)
+    assert requested == [r'c:\Project\Renderer.cpp']
+    assert result == [{'ruleKey': 'cpp:S1'}]
+
+
+def test_windows_completion_matches_the_index_uri_and_still_requires_each_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = PureWindowsPath(r'C:\Project\MixedCase\Renderer.cpp')
+    header = PureWindowsPath(r'C:\Project\MixedCase\Renderer.h')
+    log = 'file:///c:/Project/MixedCase/Renderer.cpp 456 cpp] 1 compilation units analyzed Analysis detected 1 issue'
+    with monkeypatch.context() as patch:
+        patch.setattr(sonar_ide_analysis.sys, 'platform', 'win32')
+        assert sonar_ide_analysis.verify_evidence(log, [source])['completion']
+        with pytest.raises(sonar_ide_analysis.AnalysisError, match='all submitted files'):
+            sonar_ide_analysis.verify_evidence(log, [source, header])
+        with pytest.raises(sonar_ide_analysis.AnalysisError, match='analysis errors'):
+            sonar_ide_analysis.verify_evidence(log + ' [Error - CFamily failed', [source])
+
+
+@pytest.mark.parametrize('reported', ['/c:/Project/MixedCase/Renderer.cpp', '/C:/Project/MixedCase/Renderer.cpp'])
+def test_windows_finding_paths_become_native_without_losing_the_original(reported: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    finding = {'ruleKey': 'cpp:S1238', 'filePath': reported, 'message': 'actual finding'}
+    with monkeypatch.context() as patch:
+        patch.setattr(sonar_ide_analysis.sys, 'platform', 'win32')
+        patch.setattr(sonar_ide_analysis, 'Path', PureWindowsPath)
+        result = sonar_ide_analysis.mapped_findings([finding], PureWindowsPath(r'C:\Project'))
+    assert result == [{**finding, 'filePath': str(PureWindowsPath(reported[1:])), 'reportedFilePath': reported}]
+    assert finding['filePath'] == reported
+
+
+def test_posix_finding_paths_are_not_reinterpreted_as_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    finding = {'ruleKey': 'cpp:S1', 'filePath': '/c:/Project/Renderer.cpp'}
+    with monkeypatch.context() as patch:
+        patch.setattr(sonar_ide_analysis.sys, 'platform', 'linux')
+        patch.setattr(sonar_ide_analysis, 'Path', PurePosixPath)
+        patch.setattr(sonar_ide_analysis, 'original_header', lambda candidate, _: candidate)
+        result = sonar_ide_analysis.mapped_findings([finding], PurePosixPath('/repo'))
+    assert result == [finding]
+
+
+def test_windows_findings_in_selected_files_cannot_be_misclassified_as_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    finding = {'ruleKey': 'cpp:S1238', 'filePath': r'c:\Project\MixedCase\Renderer.cpp', 'message': 'selected'}
+    context = {'ruleKey': 'cpp:S1', 'filePath': r'c:\Project\Elsewhere.cpp', 'message': 'retain context'}
+    with monkeypatch.context() as patch:
+        patch.setattr(sonar_ide_analysis.sys, 'platform', 'win32')
+        patch.setattr(sonar_ide_analysis, 'Path', PureWindowsPath)
+        selected, contextual = sonar_ide_analysis.partition_sonar_findings(
+            [finding, dict(finding), context], [PureWindowsPath(r'C:\Project\MixedCase\Renderer.cpp')])
+    assert selected == [finding]
+    assert contextual == [context]
+
+
+def test_posix_selected_file_matching_preserves_case_and_unknown_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    selected_finding = {'filePath': '/repo/Renderer.cpp', 'ruleKey': 'cpp:S1'}
+    other_case = {'filePath': '/repo/renderer.cpp', 'ruleKey': 'cpp:S2'}
+    no_path = {'ruleKey': 'cpp:S3'}
+    with monkeypatch.context() as patch:
+        patch.setattr(sonar_ide_analysis.sys, 'platform', 'linux')
+        patch.setattr(sonar_ide_analysis, 'Path', PurePosixPath)
+        selected, contextual = sonar_ide_analysis.partition_sonar_findings(
+            [selected_finding, other_case, no_path], [PurePosixPath('/repo/Renderer.cpp')])
+    assert selected == [selected_finding]
+    assert contextual == [other_case, no_path]
 
 
 def test_filter_findings_to_ranges_suppresses_unchanged_lines(tmp_path: Path) -> None:

@@ -52,7 +52,7 @@ namespace Horo::Editor {
         m_viewModel.documentRevision = documentSnapshot.revision;
         m_viewModel.assetDropFence = {m_workspaceSession, documentSnapshot.revision, m_document.ReplacementEpoch()};
         m_viewModel.navigationScenePath =
-            m_defaultScenePath ? m_defaultScenePath->lexically_relative(m_viewModel.projectRoot) : std::filesystem::path{};
+            m_defaultScenePath ? m_defaultScenePath->lexically_relative(ProjectRoot()) : std::filesystem::path{};
         RefreshPhysicsInspectorPort();
         RefreshNavigationInspectorDefinitions();
         m_viewModel.objects.clear();
@@ -102,7 +102,7 @@ namespace Horo::Editor {
         Result<Runtime::RuntimeSceneDefinition> definition = ConvertSceneDocumentToRuntime(snapshot, m_previewSceneId, m_triggerBinding);
         if (!snapshot.prefabInstances.empty() && m_prefabSources && m_viewModel.prefabHierarchy &&
             !m_viewModel.prefabHierarchyUnavailable && m_viewModel.prefabHierarchy->documentRevision == snapshot.revision.value) {
-            auto limits = Prefab::PrefabLimitProfile::Create({});
+            auto limits = PrefabLimits();
             if (limits.HasValue())
                 definition = ConvertScenePrefabProjectionToRuntime(snapshot, m_previewSceneId, *m_viewModel.prefabHierarchy->sources,
                                                                    m_prefabSources->resolver, limits.Value(), nullptr, m_triggerBinding);

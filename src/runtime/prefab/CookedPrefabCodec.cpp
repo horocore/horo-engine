@@ -11,7 +11,8 @@ namespace Horo::Prefab::Detail {
     static_assert(sizeof(double) == 8 && std::numeric_limits<double>::is_iec559);
 
     namespace {
-        /** @brief Bounded network-order output; exhausted writers never allocate or append further bytes. */
+        /** @brief Bounded network-order output; exhausted writers never allocate or
+         * append further bytes. */
         class Writer final {
         public:
             explicit Writer(const std::size_t maximumBytes) : maximumBytes_(maximumBytes) {}
@@ -85,7 +86,8 @@ namespace Horo::Prefab::Detail {
             std::vector<std::byte> bytes_;
         };
 
-        /** @brief Fail-closed input cursor; lengths/counts are checked before allocation or traversal. */
+        /** @brief Fail-closed input cursor; lengths/counts are checked before
+         * allocation or traversal. */
         class Reader final {
         public:
             explicit Reader(const std::span<const std::byte> bytes) : bytes_(bytes) {}
@@ -187,7 +189,33 @@ namespace Horo::Prefab::Detail {
             bool valid_{true};
         };
 
-        /** @brief Writes one closed behavioral value, including its explicit portable type tag. */
+        /** @brief Stores genuine cooker provenance without synthesizing source metadata
+         * for procedural templates. */
+        void WriteSourceRevision(Writer &writer, const std::optional<PrefabSourceRevision> &revision) {
+            writer.Integer(static_cast<std::uint8_t>(revision.has_value()));
+            if (revision) {
+                writer.Text(Application::FormatHoroVersion(revision->projectVersion));
+                writer.Digest(revision->contentDigest);
+            }
+        }
+
+        /** @brief Rejects malformed optional root revision through the same strict
+         * payload cursor. */
+        void ReadSourceRevision(Reader &reader, CookedPrefabData &data) {
+            if (!reader.Boolean())
+                return;
+            const auto text = reader.Text(64);
+            const auto version = Application::ParseHoroVersion(text);
+            const auto digest = reader.Digest();
+            if (version.HasError() || Application::FormatHoroVersion(version.Value()) != text || digest == Sha256Digest{}) {
+                reader.Reject();
+                return;
+            }
+            data.rootSourceRevision = PrefabSourceRevision{version.Value(), digest};
+        }
+
+        /** @brief Writes one closed behavioral value, including its explicit portable
+         * type tag. */
         void WriteField(Writer &writer, const Gameplay::BehaviorField &field) {
             writer.Text(field.name);
             writer.Integer(static_cast<std::uint8_t>(field.value.index()));
@@ -205,7 +233,8 @@ namespace Horo::Prefab::Detail {
             }, field.value);
         }
 
-        /** @brief Reads one closed behavioral value; unknown tags fail rather than guessing a default. */
+        /** @brief Reads one closed behavioral value; unknown tags fail rather than
+         * guessing a default. */
         [[nodiscard]] Gameplay::BehaviorField ReadField(Reader &reader) {
             Gameplay::BehaviorField field;
             field.name = reader.Text(Gameplay::MaximumBehaviorFieldNameBytes);
@@ -241,7 +270,8 @@ namespace Horo::Prefab::Detail {
             return field;
         }
 
-        /** @brief Encodes a complete member envelope without native layout or pointers. */
+        /** @brief Encodes a complete member envelope without native layout or pointers.
+         */
         void WriteMember(Writer &writer, const CookedPrefabMember &member) {
             writer.Integer(static_cast<std::uint8_t>(member.index()));
             std::visit([&writer]<typename Member>(const Member &value) {
@@ -264,7 +294,8 @@ namespace Horo::Prefab::Detail {
             }, member);
         }
 
-        /** @brief Decodes one member within both provider-specific and cooked-byte bounds. */
+        /** @brief Decodes one member within both provider-specific and cooked-byte
+         * bounds. */
         [[nodiscard]] CookedPrefabMember ReadMember(Reader &reader) {
             const auto kind = reader.Integer<std::uint8_t>();
             const auto instance = reader.Integer<std::uint64_t>();
@@ -297,7 +328,8 @@ namespace Horo::Prefab::Detail {
             return member;
         }
 
-        /** @brief Writes flattened hierarchy and path-free source evidence for one entity. */
+        /** @brief Writes flattened hierarchy and path-free source evidence for one
+         * entity. */
         void WriteEntity(Writer &writer, const CookedPrefabEntity &entity) {
             writer.Integer(entity.parent ? entity.parent->value : std::numeric_limits<std::uint32_t>::max());
             writer.Vector(entity.localTransform.translation);
@@ -314,7 +346,8 @@ namespace Horo::Prefab::Detail {
                 WriteMember(writer, member);
         }
 
-        /** @brief Reads bounded hierarchy/member data without resolving source assets. */
+        /** @brief Reads bounded hierarchy/member data without resolving source assets.
+         */
         [[nodiscard]] CookedPrefabEntity ReadEntity(Reader &reader, const PrefabProjectPolicy &policy) {
             CookedPrefabEntity entity;
             if (const auto parent = reader.Integer<std::uint32_t>(); parent != std::numeric_limits<std::uint32_t>::max())
@@ -351,7 +384,8 @@ namespace Horo::Prefab::Detail {
             }, reference.target);
         }
 
-        /** @brief Decodes one property fixup, rejecting every unrecognized reference class. */
+        /** @brief Decodes one property fixup, rejecting every unrecognized reference
+         * class. */
         [[nodiscard]] CookedPrefabReference ReadReference(Reader &reader) {
             CookedPrefabReference reference;
             reference.owner.entity.value = reader.Integer<std::uint32_t>();
@@ -412,6 +446,7 @@ namespace Horo::Prefab::Detail {
             writer.Integer(std::bit_cast<std::uint64_t>(declaration.minimum));
             writer.Integer(std::bit_cast<std::uint64_t>(declaration.maximum));
         }
+        WriteSourceRevision(writer, data.rootSourceRevision);
         return std::move(writer).Finish();
     }
 
@@ -459,6 +494,7 @@ namespace Horo::Prefab::Detail {
             declaration.maximum = std::bit_cast<double>(reader.Integer<std::uint64_t>());
             data.initialization.push_back(declaration);
         }
+        ReadSourceRevision(reader, data);
         if (!reader.Complete())
             return Result<CookedPrefabData>::Failure(MakeError(PrefabErrors::CorruptedPayload));
         return Result<CookedPrefabData>::Success(std::move(data));

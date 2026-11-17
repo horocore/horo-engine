@@ -35,6 +35,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                 auto character = Character::CharacterWorldSettings::Capture({});
                 REQUIRE(physics.HasValue());
                 REQUIRE(character.HasValue());
+                load.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{60};
                 const std::filesystem::path root{HORO_TEST_SOURCE_ROOT};
                 const Internal::GameplayWorldSelection gameplay{.moduleId = "game.tests",
                                                                 .scriptSource =
@@ -59,7 +60,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                           .completeness =
                                                                               Network::NetworkReplicationInventoryCompleteness::Complete}});
                 REQUIRE(composed.HasValue());
-                factories = std::move(composed).Value();
+                factories = std::move(composed).Value().factories;
             }
 
             Result<std::unique_ptr<Network::INetworkModeService>> Make(const Network::NetworkModeServiceKind kind,

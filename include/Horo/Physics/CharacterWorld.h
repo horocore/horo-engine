@@ -9,6 +9,7 @@
 #include "Horo/Physics/CharacterCommandPipeline.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
 #include "Horo/Physics/CharacterDebugSnapshot.h"
+#include "Horo/Physics/CharacterEvents.h"
 #include "Horo/Physics/CharacterWorldSettings.h"
 
 #include <compare>
@@ -69,7 +70,8 @@ namespace Horo::Character {
          * @post Success publishes no controller or scene state and retains no caller-owned storage.
          */
         [[nodiscard]] static Result<std::unique_ptr<CharacterWorld>> Prepare(const CharacterWorldPreparationDescriptor &descriptor,
-                                                                             const CharacterWorldSettings &settings);
+                                                                             const CharacterWorldSettings &settings,
+                                                                             const Physics::PhysicsSurfaceWorldBinding &surfaces = {});
 
         /** @brief Drains controller records and retires the world if its aggregate owner omitted explicit shutdown. */
         ~CharacterWorld();
@@ -170,6 +172,16 @@ namespace Horo::Character {
          */
         [[nodiscard]] CharacterDebugCapture CaptureDebugSnapshot(const CharacterDebugCaptureRequest &request) const noexcept;
 
+        /** @brief Copy an immutable committed event journal prefix and complete terminal-state projection without allocation.
+         * @param request Exact world/scene fence and last consumed world publication watermark.
+         * @param events Caller-owned event storage; a short span reports read loss without affecting movement.
+         * @param terminal Caller-owned state storage; insufficient capacity rejects before copying any output.
+         * @return Closed capture status and exact publication/loss counts. No callback or world borrow escapes.
+         */
+        [[nodiscard]] CharacterEventCapture CaptureEvents(const CharacterEventCaptureRequest &request,
+                                                          std::span<CharacterMovementEvent> events,
+                                                          std::span<CharacterEventTerminalState> terminal) const noexcept;
+
         /**
          * @brief Copies one future tick-addressed movement request into bounded world storage without blocking.
          * @param request Immutable owned request; no live producer state is retained.
@@ -205,6 +217,8 @@ namespace Horo::Character {
         /** @brief Returns the immutable settings snapshot retained for this world lifetime. @return Borrow valid for this world lifetime.
          */
         [[nodiscard]] const CharacterWorldSettings &Settings() const noexcept;
+        /** @brief Borrow the exact immutable semantic policy retained at preparation; never a mutable registry. */
+        [[nodiscard]] const Physics::PhysicsSurfaceWorldBinding &SurfaceBinding() const noexcept;
         /** @brief Returns the number of currently resident controllers. @return Live slot count; zero after shutdown. */
         [[nodiscard]] std::size_t ActiveControllerCount() const noexcept;
         /** @brief Returns the controller capacity reserved during preparation. @return Immutable slot count. */

@@ -329,6 +329,46 @@ ticks and is therefore zero before the first successful tick. Variable update
 and render extraction observe that committed count together with interpolation
 alpha.
 
+Participants with staged state use the canonical fixed-attempt boundary. After
+all `OnFixedUpdate` callbacks succeed, the scheduler invokes every participant's
+fallible `PrepareFixedCommit`. Failure, a lifecycle state change, or cancellation
+before the final fence invokes `AbortFixedUpdate` in reverse registration order
+while the same dispatch evidence remains active. Abort must also tolerate owners
+whose update callback was never reached.
+
+Once all preparation succeeds, the scheduler stamps the exact attempted tick into
+its opaque dispatch facts, commits its counters and any single-step receipt, then
+invokes `CommitFixedUpdate` in registration order. Publication is nonthrowing and
+must not allocate, perform I/O, dispatch external callbacks, change lifecycle state,
+or reconsider cancellation. Cancellation after this fence cannot undo or partially
+publish the committed tick. Preparation sees the prior committed tick; publication
+sees the newly committed tick through the same issuer-bound dispatch evidence.
+Retiring the issuer after that fence closes future admission but leaves the exact
+active committed fixed proof readable until publication ends. Retirement before
+the fence still rejects commitment; ending the dispatch revokes this final read.
+Retirement before the fence also denies ordinary fact reads during rollback.
+An owner that already admitted a candidate may authenticate that rollback by first
+reading against its explicitly bound issuer on the owner thread (accepting only
+`Valid` or `Retired`) and then comparing the exact retained opaque evidence with
+`RefersToSameDispatch`. This identity-only comparison does not grant execution,
+fact-read or commitment authority and deliberately survives expiry; it cannot
+replace admission. Numeric tick/attempt copies alone never authorize rollback.
+The lifecycle's publication entry point is private to the scheduler. Default
+callbacks preserve existing participants; they do not make legacy owner mutations
+transactional. Each staged owner remains responsible for its candidate, no-fail
+publication, and abort implementation.
+
+The Editor forwards the actual issuer and fixed context through its screen,
+workspace, Play controller and application-injected Scene host. Only the Scene
+host composes Animation before native Physics; it is not also registered as a
+second runtime participant. A Play failure aborts its own staged candidate before
+closing that Play unit and remains an Editor-local failure. Global scheduler
+rollback discards candidates without consuming a queued paused step. That step
+is consumed only after genuine same-attempt commitment. Stop requested during an
+attempt retains the Scene/behavior owners until rollback or publication releases
+the reservation; ordinary presentation performs deferred teardown. Presentation
+projection and viewport extraction remain outside fixed preparation/publication.
+
 [ADR-061](../../adr/061-animation-ownership-update-order-and-clock.md) applies
 this policy to animation. Animation consumes the unchanged fixed quantum once
 per attempted tick. Host simulation rate is already represented by tick cadence;

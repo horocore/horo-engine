@@ -3,9 +3,13 @@
 #include "support/AllocationProbe.h"
 #include "support/VfxTestSupport.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <limits>
+#include <span>
+#include <thread>
 #include <utility>
 
 namespace Horo::Vfx {
@@ -76,6 +80,46 @@ namespace Horo::Vfx {
                                                           .maximumBurstParticles = CpuParticleSimulationHardLimits::BurstParticles});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
+        }
+
+        /** @brief Checks an allocation-free committed bulk borrow against existing individual-handle authority. */
+        void CheckExtractedHandles(CpuParticleSimulator &simulator, std::span<const CpuParticleHandle> expected) {
+            const auto before = ::Horo::Tests::AllocationProbe::Count();
+            const auto extracted = simulator.Extract();
+            const auto after = ::Horo::Tests::AllocationProbe::Count();
+            REQUIRE(extracted.HasValue());
+            const auto view = extracted.Value();
+            CHECK(after == before);
+            REQUIRE(view.handles.size() == expected.size());
+            CHECK(view.handles.size() == view.positionX.size());
+            CHECK(view.committedGeneration == simulator.Statistics().committedGeneration);
+            CHECK(std::ranges::equal(view.handles, expected));
+            for (std::uint32_t dense = 0; dense < view.handles.size(); ++dense)
+                CHECK(view.handles[dense] == simulator.HandleAtDenseIndex(dense).Value());
+        }
+
+        struct LegacyReentry final {
+            CpuParticleSimulator *simulation{};
+            bool observed{};
+            CpuParticleAdvanceOutcome reentry;
+        };
+
+        void ObserveLegacyAllocation(std::size_t, void *context) noexcept {
+            auto &probe = *static_cast<LegacyReentry *>(context);
+            if (probe.observed)
+                return;
+            probe.observed = true;
+            probe.reentry = probe.simulation->AdvancePrepared({.tick = 0});
+        }
+
+        struct FailureProvider final {
+            std::uint32_t calls{};
+        };
+
+        Result<CpuParticleCollisionHit> ProviderFailure(void *context, const CpuParticleCollisionQueryRequest &) noexcept {
+            ++static_cast<FailureProvider *>(context)->calls;
+            return Result<CpuParticleCollisionHit>::Failure(
+                MakeError(VfxErrors::ParticleCollisionQueryUnavailable, "fixture provider cause"));
         }
     }  // namespace
 
@@ -213,5 +257,332 @@ namespace Horo::Vfx {
         CHECK(simulator.Statistics().committedGeneration == 0);
         CHECK(simulator.Statistics().active == 0);
         REQUIRE(simulator.Advance({.burstCount = 1, .tick = 0}).HasValue());
+    }
+
+    TEST_CASE("CPU prepared reset preserves monotonic particle tick and generation identities", "[unit][vfx][particle-simulator][reset]") {
+        auto simulator = Simulator(Descriptor(4), 7);
+        REQUIRE(simulator.Advance({.deltaSeconds = 0.125F, .burstCount = 2, .tick = 0}).HasValue());
+        const auto old = simulator.HandleAtDenseIndex(0);
+        REQUIRE(old.HasValue());
+        const auto before = simulator.Statistics();
+        auto next = Activation();
+        ++next.generation;
+        const auto bytes = simulator.PreparedBytes();
+        Horo::Tests::AllocationProbe::Measurement measured;
+        CpuParticleResetStatus status;
+        {
+            Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+            status = simulator.Reset(next);
+            measured = probe.Snapshot();
+        }
+        REQUIRE(status == CpuParticleResetStatus::Complete);
+        CHECK(measured.requests == 0);
+        CHECK(simulator.PreparedBytes() == bytes);
+        CHECK(simulator.Statistics().active == 0);
+        CHECK(simulator.Statistics().steps == before.steps);
+        CHECK(simulator.Statistics().committedGeneration > before.committedGeneration);
+        REQUIRE(simulator.Advance({.deltaSeconds = 0.125F, .burstCount = 1, .tick = 1}).HasValue());
+        const auto current = simulator.HandleAtDenseIndex(0);
+        REQUIRE(current.HasValue());
+        CHECK(current.Value().particle.Value() > old.Value().particle.Value());
+        CHECK(simulator.SignalKill(old.Value()).HasError());
+    }
+
+    TEST_CASE("CPU prepared reset rejects stale foreign and shutdown activation before mutation",
+              "[unit][vfx][particle-simulator][reset]") {
+        auto simulator = Simulator(Descriptor(4), 7);
+        REQUIRE(simulator.Advance({.burstCount = 1, .tick = 0}).HasValue());
+        const auto before = simulator.Statistics();
+        CHECK(simulator.Reset(Activation()) == CpuParticleResetStatus::InvalidActivation);
+        auto foreign = Activation();
+        ++foreign.slot;
+        ++foreign.generation;
+        CHECK(simulator.Reset(foreign) == CpuParticleResetStatus::InvalidActivation);
+        CHECK(simulator.Statistics().active == before.active);
+        CHECK(simulator.Statistics().committedGeneration == before.committedGeneration);
+        REQUIRE(simulator.Shutdown().HasValue());
+        CHECK(simulator.Reset(foreign) == CpuParticleResetStatus::ShutDown);
+    }
+
+    TEST_CASE("Prepared CPU advance shares exact canonical trajectories and generations with legacy Advance",
+              "[unit][vfx][particle-simulator][prepared]") {
+        auto legacy = Simulator(Descriptor(8), 9);
+        auto prepared = Simulator(Descriptor(8), 9);
+        for (std::uint64_t tick = 0; tick < 10; ++tick) {
+            const CpuParticleSimulationStep step{0.125F, 1, tick, false};
+            const auto left = legacy.Advance(step);
+            const auto right = prepared.AdvancePrepared(step);
+            REQUIRE(left.HasValue());
+            REQUIRE(right.status == CpuParticleAdvanceStatus::Complete);
+            CHECK(left.Value() == right.step);
+            const auto leftView = legacy.Extract();
+            const auto rightView = prepared.Extract();
+            REQUIRE(leftView.HasValue());
+            REQUIRE(rightView.HasValue());
+            CHECK(std::ranges::equal(leftView.Value().positionX, rightView.Value().positionX));
+            CHECK(std::ranges::equal(leftView.Value().positionY, rightView.Value().positionY));
+            CHECK(std::ranges::equal(leftView.Value().age, rightView.Value().age));
+        }
+    }
+
+    TEST_CASE("Prepared mandatory capacity failure preserves exact code and committed state without allocation",
+              "[unit][vfx][particle-simulator][prepared][allocation]") {
+        auto created = CpuParticleSimulator::Create(Descriptor(1), {.buffer = BufferId(9),
+                                                                    .activation = Activation(),
+                                                                    .maximumBurstParticles = 4,
+                                                                    .requiredGameplay = true});
+        REQUIRE(created.HasValue());
+        auto simulation = std::move(created).Value();
+        Horo::Tests::AllocationProbe::Measurement measured;
+        CpuParticleAdvanceOutcome result;
+        {
+            Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+            result = simulation.AdvancePrepared({.burstCount = 2, .tick = 0});
+            measured = probe.Snapshot();
+        }
+        CHECK(measured.requests == 0);
+        REQUIRE(result.status == CpuParticleAdvanceStatus::Rejected);
+        REQUIRE(result.failure == &VfxErrors::ParticleStepCapacityExceeded);
+        CHECK(simulation.Statistics().committedGeneration == 0);
+        CHECK(simulation.Statistics().active == 0);
+        const auto legacy = simulation.Advance({.burstCount = 2, .tick = 0});
+        REQUIRE(legacy.HasError());
+        CHECK(legacy.ErrorValue().code.Value() == result.failure->code.Value());
+        CHECK(legacy.ErrorValue().message == result.failure->summary);
+        CHECK(simulation.AdvancePrepared({.burstCount = 1, .tick = 0}).status == CpuParticleAdvanceStatus::Complete);
+    }
+
+    TEST_CASE("Prepared CPU front guards reject cancellation invalid ticks and oversized steps without allocation",
+              "[unit][vfx][particle-simulator][prepared][allocation]") {
+        auto simulation = Simulator(Descriptor(4), 9);
+        const std::array steps{CpuParticleSimulationStep{.tick = 0, .cancelled = true}, CpuParticleSimulationStep{.tick = 1},
+                               CpuParticleSimulationStep{.deltaSeconds = -1.0F, .tick = 0},
+                               CpuParticleSimulationStep{.deltaSeconds = std::numeric_limits<float>::infinity(), .tick = 0},
+                               CpuParticleSimulationStep{.burstCount = CpuParticleSimulationHardLimits::BurstParticles + 1, .tick = 0}};
+        std::array<CpuParticleAdvanceOutcome, 5> results;
+        Horo::Tests::AllocationProbe::Measurement measured;
+        {
+            Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+            for (std::size_t index = 0; index < steps.size(); ++index)
+                results[index] = simulation.AdvancePrepared(steps[index]);
+            measured = probe.Snapshot();
+        }
+        CHECK(measured.requests == 0);
+        CHECK(results[0].failure == &VfxErrors::ParticleSimulationStepCancelled);
+        for (std::size_t index = 1; index < results.size(); ++index)
+            CHECK(results[index].failure == &VfxErrors::ParticleSpawnStepInvalid);
+        CHECK(simulation.Statistics().steps == 0);
+        CHECK(simulation.Statistics().committedGeneration == 0);
+    }
+
+    TEST_CASE("Prepared CPU admission refuses legacy observers while legacy Advance preserves all seven callbacks",
+              "[unit][vfx][particle-simulator][prepared]") {
+        StageTrace trace;
+        auto created = CpuParticleSimulator::Create(Descriptor(4), {.buffer = BufferId(9),
+                                                                    .activation = Activation(),
+                                                                    .maximumBurstParticles = 4,
+                                                                    .stageObserver = ObserveStage,
+                                                                    .stageObserverContext = &trace});
+        REQUIRE(created.HasValue());
+        auto simulation = std::move(created).Value();
+        CHECK(simulation.AdvancePrepared({.burstCount = 1, .tick = 0}).status == CpuParticleAdvanceStatus::UnsupportedDiagnostics);
+        CHECK(trace.count == 0);
+        REQUIRE(simulation.Advance({.burstCount = 1, .tick = 0}).HasValue());
+        CHECK(trace.count == 7);
+    }
+
+    TEST_CASE("Legacy provider failure retains exact immutable cause and prepared execution never invokes it",
+              "[unit][vfx][particle-simulator][prepared]") {
+        FailureProvider provider;
+        auto created =
+            CpuParticleSimulator::Create(Descriptor(4, ParticleCollisionMode::PhysicsWorld), {.buffer = BufferId(9),
+                                                                                              .activation = Activation(),
+                                                                                              .maximumBurstParticles = 4,
+                                                                                              .physicsWorld = {.context = &provider,
+                                                                                                               .probe = ProviderFailure,
+                                                                                                               .sceneGeneration = 1,
+                                                                                                               .snapshotGeneration = 1,
+                                                                                                               .required = true}});
+        REQUIRE(created.HasValue());
+        auto simulation = std::move(created).Value();
+        CHECK(simulation.AdvancePrepared({.burstCount = 1, .tick = 0}).status == CpuParticleAdvanceStatus::UnsupportedDiagnostics);
+        CHECK(provider.calls == 0);
+        const auto legacy = simulation.Advance({.burstCount = 1, .tick = 0});
+        REQUIRE(legacy.HasError());
+        REQUIRE(legacy.ErrorValue().cause.Get());
+        CHECK(legacy.ErrorValue().code.Value() == VfxErrors::ParticleCollisionQueryFailed.code.Value());
+        CHECK(legacy.ErrorValue().cause.Get()->code.Value() == VfxErrors::ParticleCollisionQueryUnavailable.code.Value());
+        CHECK(legacy.ErrorValue().cause.Get()->message == "fixture provider cause");
+        CHECK(provider.calls == 1);
+        CHECK(simulation.Statistics().committedGeneration == 0);
+    }
+
+    TEST_CASE("Legacy stage error materialization retains reentry fence until the public Result is complete",
+              "[unit][vfx][particle-simulator][prepared]") {
+        auto created = CpuParticleSimulator::Create(Descriptor(1), {.buffer = BufferId(9),
+                                                                    .activation = Activation(),
+                                                                    .maximumBurstParticles = 4,
+                                                                    .requiredGameplay = true});
+        REQUIRE(created.HasValue());
+        auto simulation = std::move(created).Value();
+        LegacyReentry probe{&simulation};
+        std::optional<Result<CpuParticleSimulationStepResult>> result;
+        {
+            Horo::Tests::AllocationProbe::ScopedObserver observer{ObserveLegacyAllocation, &probe};
+            result.emplace(simulation.Advance({.burstCount = 2, .tick = 0}));
+        }
+        REQUIRE(result);
+        CHECK(result->HasError());
+        REQUIRE(probe.observed);
+        CHECK(probe.reentry.status == CpuParticleAdvanceStatus::Rejected);
+        CHECK(probe.reentry.failure == &VfxErrors::ParticleStageContractViolation);
+        CHECK(simulation.Statistics().committedGeneration == 0);
+    }
+
+    TEST_CASE("Prepared continuous mandatory capacity exhaustion preserves the last real commit without allocation",
+              "[unit][vfx][particle-simulator][prepared][allocation]") {
+        auto data = Descriptor(2).Data();
+        data.spawnRate = {2.0, 2.0};
+        const auto descriptor = Tests::ParticleDescriptor(data);
+        auto created = CpuParticleSimulator::Create(descriptor, {.buffer = BufferId(9),
+                                                                 .activation = Activation(),
+                                                                 .maximumBurstParticles = 2,
+                                                                 .requiredGameplay = true});
+        REQUIRE(created.HasValue());
+        auto simulation = std::move(created).Value();
+        REQUIRE(simulation.AdvancePrepared({.deltaSeconds = 0.5F, .tick = 0}).status == CpuParticleAdvanceStatus::Complete);
+        REQUIRE(simulation.AdvancePrepared({.deltaSeconds = 0.5F, .tick = 1}).status == CpuParticleAdvanceStatus::Complete);
+        const auto before = simulation.Statistics();
+        CpuParticleAdvanceOutcome result;
+        Horo::Tests::AllocationProbe::Measurement measured;
+        {
+            Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+            result = simulation.AdvancePrepared({.deltaSeconds = 0.5F, .tick = 2});
+            measured = probe.Snapshot();
+        }
+        CHECK(measured.requests == 0);
+        CHECK(result.failure == &VfxErrors::ParticleStepCapacityExceeded);
+        CHECK(simulation.Statistics().committedGeneration == before.committedGeneration);
+        CHECK(simulation.Statistics().active == before.active);
+        CHECK(simulation.Statistics().steps == before.steps);
+    }
+
+    TEST_CASE("Prepared analytic collision arithmetic overflow returns the original static error without allocation",
+              "[unit][vfx][particle-simulator][prepared][allocation]") {
+        auto data = Descriptor(2, ParticleCollisionMode::Planes).Data();
+        data.shape = ParticleEmitterShape::Point;
+        const auto descriptor = Tests::ParticleDescriptor(data);
+        const auto maximum = std::numeric_limits<float>::max();
+        const std::array forces{CpuParticleForceModule{.kind = CpuParticleForceKind::Gravity, .vector = {maximum, 0.0F, 0.0F}}};
+        const std::array planes{CpuParticlePlane{.point = {-maximum, 0.0F, 0.0F}, .normal = {1.0F, 0.0F, 0.0F}}};
+        auto created = CpuParticleSimulator::Create(descriptor, {.buffer = BufferId(9),
+                                                                 .activation = Activation(),
+                                                                 .maximumBurstParticles = 2,
+                                                                 .forces = forces,
+                                                                 .planes = planes});
+        REQUIRE(created.HasValue());
+        auto simulation = std::move(created).Value();
+        CpuParticleAdvanceOutcome result;
+        Horo::Tests::AllocationProbe::Measurement measured;
+        {
+            Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+            result = simulation.AdvancePrepared({.deltaSeconds = 1.0F, .burstCount = 1, .tick = 0});
+            measured = probe.Snapshot();
+        }
+        CHECK(measured.requests == 0);
+        CHECK(result.status == CpuParticleAdvanceStatus::Rejected);
+        CHECK(result.failure == &VfxErrors::ParticleCollisionQueryFailed);
+        CHECK(simulation.Statistics().committedGeneration == 0);
+        const auto legacy = simulation.Advance({.deltaSeconds = 1.0F, .burstCount = 1, .tick = 0});
+        REQUIRE(legacy.HasError());
+        CHECK(legacy.ErrorValue().code.Value() == result.failure->code.Value());
+    }
+
+    TEST_CASE("Prepared CPU wrong-thread and shutdown guards expose static failures before stage access",
+              "[unit][vfx][particle-simulator][prepared]") {
+        auto simulation = Simulator(Descriptor(2), 9);
+        CpuParticleAdvanceOutcome foreign;
+        std::thread worker([&] {
+            foreign = simulation.AdvancePrepared({.tick = 0});
+        });
+        worker.join();
+        CHECK(foreign.failure == &VfxErrors::ParticleBufferThreadViolation);
+        REQUIRE(simulation.Shutdown().HasValue());
+        CHECK(simulation.AdvancePrepared({.tick = 0}).failure == &VfxErrors::ParticleBufferShutDown);
+    }
+
+    TEST_CASE("CpuParticleSimulator rejects authored GPU readback in an actual CPU unit", "[unit][vfx][particle-simulator][readback]") {
+        auto data = Descriptor().Data();
+        data.simulationPreference = SimulationPreference::Automatic;
+        SECTION("automatic source selected for CPU") {}
+        SECTION("prefer GPU source selected for CPU") {
+            data.simulationPreference = SimulationPreference::PreferGPU;
+        }
+        data.gpuReadback = {true, 1, Render::VfxGpuReadbackPurpose::DiagnosticsCapture, Render::VfxGpuReadbackRequirement::Optional, 2, 1,
+                            1024, 1};
+        const auto source = Tests::ParticleDescriptor(data);
+        const auto denied =
+            CpuParticleSimulator::Create(source, {.buffer = BufferId(70), .activation = Activation(), .maximumBurstParticles = 4});
+        CHECK(HasError(denied, VfxErrors::GpuSimulationUnsupported));
+        const auto invalidOwner =
+            CpuParticleSimulator::Create(source, {.buffer = BufferId(70), .activation = Activation(), .maximumBurstParticles = 0});
+        CHECK(HasError(invalidOwner, VfxErrors::ParticleSimulationDescriptorInvalid));
+        CHECK(source.Data().gpuReadback.enabled);
+
+        // A separately authored CPU-compatible source is admitted; the rejected GPU source is never rewritten.
+        data.gpuReadback = {};
+        data.simulationPreference = SimulationPreference::RequireCPU;
+        const auto substitute = Tests::ParticleDescriptor(data);
+        const auto admitted =
+            CpuParticleSimulator::Create(substitute, {.buffer = BufferId(71), .activation = Activation(), .maximumBurstParticles = 4});
+        REQUIRE(admitted.HasValue());
+        CHECK(source.Data().gpuReadback.enabled);
+    }
+
+    TEST_CASE("CPU extraction bulk identities follow committed compaction and slot reuse", "[unit][vfx][particle-simulator]") {
+        auto simulator = Simulator(Descriptor(8), 42);
+        CheckExtractedHandles(simulator, {});
+        REQUIRE(simulator.Advance({.deltaSeconds = .1F, .burstCount = 4, .tick = 0}).HasValue());
+        const std::array initial{simulator.HandleAtDenseIndex(0).Value(), simulator.HandleAtDenseIndex(1).Value(),
+                                 simulator.HandleAtDenseIndex(2).Value(), simulator.HandleAtDenseIndex(3).Value()};
+        CheckExtractedHandles(simulator, initial);
+        REQUIRE(simulator.SignalKill(initial[1]).HasValue());
+        REQUIRE(simulator.Advance({.deltaSeconds = .1F, .tick = 1}).HasValue());
+        const std::array survivors{initial[0], initial[2], initial[3]};
+        CheckExtractedHandles(simulator, survivors);
+        REQUIRE(simulator.Advance({.deltaSeconds = .1F, .burstCount = 1, .tick = 2}).HasValue());
+        const auto reused = simulator.HandleAtDenseIndex(3).Value();
+        CHECK(reused.slot == initial[1].slot);
+        CHECK(reused.generation == initial[1].generation + 1);
+        CHECK(reused.particle != initial[1].particle);
+        const std::array final{survivors[0], survivors[1], survivors[2], reused};
+        CheckExtractedHandles(simulator, final);
+    }
+
+    TEST_CASE("CPU extraction bulk identities never expose rejected candidate generations", "[unit][vfx][particle-simulator]") {
+        StageTrace trace{};
+        auto created = CpuParticleSimulator::Create(Descriptor(8), {.buffer = BufferId(43),
+                                                                    .activation = Activation(),
+                                                                    .maximumBurstParticles = 8,
+                                                                    .stageObserver = ObserveStage,
+                                                                    .stageObserverContext = &trace});
+        REQUIRE(created.HasValue());
+        auto simulator = std::move(created).Value();
+        REQUIRE(simulator.Advance({.deltaSeconds = .1F, .burstCount = 4, .tick = 0}).HasValue());
+        const std::array committed{simulator.HandleAtDenseIndex(0).Value(), simulator.HandleAtDenseIndex(1).Value(),
+                                   simulator.HandleAtDenseIndex(2).Value(), simulator.HandleAtDenseIndex(3).Value()};
+        const auto generation = simulator.Statistics().committedGeneration;
+        SECTION("cancelled candidate") {
+            CHECK(HasError(simulator.Advance({.deltaSeconds = .1F, .burstCount = 1, .tick = 1, .cancelled = true}),
+                           VfxErrors::ParticleSimulationStepCancelled));
+        }
+        SECTION("failed candidate") {
+            trace.count = 0;
+            trace.failAfter = 2;
+            CHECK(
+                HasError(simulator.Advance({.deltaSeconds = .1F, .burstCount = 1, .tick = 1}), VfxErrors::ParticleStageContractViolation));
+        }
+        CHECK(simulator.Statistics().committedGeneration == generation);
+        CheckExtractedHandles(simulator, committed);
     }
 }  // namespace Horo::Vfx

@@ -12,20 +12,56 @@ namespace Horo::AI {
             return Result<T>::Failure(MakeError(code));
         }
 
-        /** @brief Checks operation-specific cardinality and finite typed policy inputs. */
-        bool ValidNode(const BehaviorTreeExecutionNode &node) noexcept {
-            using enum BehaviorTreeOperation;
-            if (!node.id.IsValid() || node.operation >= Count || node.parallel >= BehaviorTreeParallelPolicy::Count ||
-                node.abort >= BehaviorTreeAbortMode::Count || node.iterations == 0 ||
-                node.children.size() > BehaviorTreeExecutionLimits::HardNodes)
+        bool ValidExecutionHeader(const BehaviorTreeExecutionNode &node) noexcept {
+            return node.id.IsValid() && node.operation < BehaviorTreeOperation::Count &&
+                   node.parallel < BehaviorTreeParallelPolicy::Count && node.abort < BehaviorTreeAbortMode::Count && node.iterations != 0 &&
+                   node.children.size() <= BehaviorTreeExecutionLimits::HardNodes;
+        }
+
+        bool ValidLeaf(const BehaviorTreeExecutionNode &node) noexcept {
+            if (!node.children.empty() || node.abort != BehaviorTreeAbortMode::None)
                 return false;
-            if (node.operation == Task)
-                return node.children.empty() && node.task.IsValid() && node.abort == BehaviorTreeAbortMode::None;
-            if (node.task.IsValid() || (node.operation != BlackboardCheck && node.abort != BehaviorTreeAbortMode::None))
+            return node.operation == BehaviorTreeOperation::Task ? node.task.IsValid() : !node.task.IsValid();
+        }
+
+        bool ValidControl(const BehaviorTreeExecutionNode &node) noexcept {
+            using enum BehaviorTreeOperation;
+            if (node.task.IsValid())
+                return false;
+            if (node.operation != BlackboardCheck && node.abort != BehaviorTreeAbortMode::None)
                 return false;
             if (node.operation == Sequence || node.operation == Selector || node.operation == Parallel)
                 return !node.children.empty();
             return node.children.size() == 1 && (node.operation != TimeLimit || node.durationTicks > 0);
+        }
+
+        /** @brief Checks closed policies and family-specific finite cardinality before topology allocation. */
+        bool ValidNode(const BehaviorTreeExecutionNode &node) noexcept {
+            if (!ValidExecutionHeader(node))
+                return false;
+            if (node.operation == BehaviorTreeOperation::Task || node.operation == BehaviorTreeOperation::Subplan)
+                return ValidLeaf(node);
+            return ValidControl(node);
+        }
+
+        bool ValidCompileLimits(std::span<const BehaviorTreeExecutionNode> nodes, std::span<const BehaviorTreeExecutionService> services,
+                                const BehaviorTreeExecutionLimits &limits) noexcept {
+            return limits.maximumNodes > 0 && limits.maximumNodes <= BehaviorTreeExecutionLimits::HardNodes && limits.maximumDepth > 0 &&
+                   limits.maximumDepth <= BehaviorTreeExecutionLimits::HardNodes && nodes.size() <= limits.maximumNodes &&
+                   services.size() <= limits.maximumNodes && nodes.size() + services.size() <= limits.maximumNodes;
+        }
+
+        bool ValidCompileBindings(const std::shared_ptr<const DecisionAssetPlan> &bindings, DecisionNodeId root,
+                                  std::span<const BehaviorTreeExecutionNode> nodes,
+                                  std::span<const BehaviorTreeExecutionService> services) noexcept {
+            return bindings && bindings->Kind() == DecisionPlanKind::BehaviorTree && root.IsValid() && !nodes.empty() &&
+                   bindings->Nodes().size() == nodes.size() + services.size();
+        }
+
+        bool HasCalls(const DecisionAssetPlan &bindings, std::span<const BehaviorTreeExecutionNode> nodes) noexcept {
+            return !bindings.Dependencies().empty() || std::ranges::any_of(nodes, [](const auto &node) {
+                return node.operation == BehaviorTreeOperation::Subplan;
+            });
         }
 
         /** @brief Admits every control/service identity against the shared compiled binding table. */
@@ -109,16 +145,26 @@ namespace Horo::AI {
         std::shared_ptr<const DecisionAssetPlan> bindings, const DecisionNodeId root,
         const std::span<const BehaviorTreeExecutionNode> nodes, const std::span<const BehaviorTreeExecutionService> services,
         const BehaviorTreeExecutionLimits &limits) {
+        return CompileAdmitted(std::move(bindings), root, nodes, services, limits, false);
+    }
+
+    Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> BehaviorTreeExecutionPlan::CompileClosure(
+        DecisionClosureAdmission, std::shared_ptr<const DecisionAssetPlan> bindings, DecisionNodeId root,
+        std::span<const BehaviorTreeExecutionNode> nodes, std::span<const BehaviorTreeExecutionService> services,
+        const BehaviorTreeExecutionLimits &limits) {
+        return CompileAdmitted(std::move(bindings), root, nodes, services, limits, true);
+    }
+
+    Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> BehaviorTreeExecutionPlan::CompileAdmitted(
+        std::shared_ptr<const DecisionAssetPlan> bindings, const DecisionNodeId root,
+        const std::span<const BehaviorTreeExecutionNode> nodes, const std::span<const BehaviorTreeExecutionService> services,
+        const BehaviorTreeExecutionLimits &limits, const bool composed) {
         using PlanResult = Result<std::shared_ptr<const BehaviorTreeExecutionPlan>>;
-        if (limits.maximumNodes == 0 || limits.maximumNodes > BehaviorTreeExecutionLimits::HardNodes || limits.maximumDepth == 0 ||
-            limits.maximumDepth > BehaviorTreeExecutionLimits::HardNodes || nodes.size() > limits.maximumNodes ||
-            services.size() > limits.maximumNodes || nodes.size() + services.size() > limits.maximumNodes)
+        if (!ValidCompileLimits(nodes, services, limits))
             return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::BehaviorTreeLimitExceeded);
-        if (!bindings || bindings->Kind() != DecisionPlanKind::BehaviorTree || !root.IsValid() || nodes.empty() ||
-            bindings->Nodes().size() != nodes.size() + services.size())
+        if (!ValidCompileBindings(bindings, root, nodes, services))
             return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::BehaviorTreeSchemaInvalid);
-        // Cross-plan calls need a dependency runner; never silently execute an incomplete plan.
-        if (!bindings->Dependencies().empty())
+        if (!composed && HasCalls(*bindings, nodes))
             return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::DecisionAssetSubtreeIncompatible);
         try {
             auto plan = std::make_shared<BehaviorTreeExecutionPlan>(ConstructionKey{});
@@ -205,6 +251,14 @@ namespace Horo::AI {
         if (services_.size() != services.size())
             return Failure<void>(AIErrors::BehaviorTreeTopologyInvalid);
         return Result<void>::Success();
+    }
+
+    std::size_t BehaviorTreeExecutionPlan::TaskSlots() const noexcept {
+        std::size_t span{};
+        for (std::size_t index = 0; index < nodes_.size(); ++index)
+            if (nodes_[index].execution.operation == BehaviorTreeOperation::Task)
+                span = index + 1;
+        return span;
     }
 
     /** @copydoc BehaviorTreeExecutionPlan::IsCompatible */

@@ -104,7 +104,11 @@ the build lock is released. A cache checkpoint records successful compilation,
 not passing tests or a Sonar/Codacy gate.
 
 On macOS/Linux, cancellation verifies and terminates owned subprocesses before
-releasing build and cache leases. If termination cannot be verified, the runner
+releasing build and cache leases. On Windows, each developer command starts
+suspended and enters a private non-breakaway Job Object before its initial
+thread resumes. Cancellation and ordinary command completion drain the entire
+job and verify zero active processes before releasing the build lock. Verified
+cancellation returns exit code 130. If termination cannot be verified, the runner
 records `cleanup-unverified.json` in its cache root and blocks later builds and
 generation retirement. Audit the remaining process tree before removing this
 marker; it is not an automatic retry or cleanup shortcut.
@@ -113,9 +117,9 @@ Missing or invalid checkpoints fall back to an ordinary build. Explicit
 `--compiler-launcher`, cache environment variables, and PCH requests take
 precedence over automatic discovery. `--no-cache` disables discovery. This
 first managed lifecycle supports ccache on macOS and Linux. Windows preparation
-and automatic discovery remain disabled until descendant process cleanup is
-qualified there; explicit Windows sccache configurations continue through the
-existing launcher option.
+and automatic discovery remain disabled; explicit Windows sccache configurations
+continue through the existing launcher option. Windows process containment and
+cancellation have independent native regression coverage.
 
 **Verify it's working:**
 

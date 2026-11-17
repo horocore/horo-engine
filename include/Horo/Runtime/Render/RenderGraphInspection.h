@@ -4,11 +4,11 @@
  * @brief Explicit bounded, owned graph inspection and deterministic debug export.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
 #include "Horo/Runtime/Render/RenderGraphLifetime.h"
 
 #include <memory>
-#include <stop_token>
 #include <string>
 #include <thread>
 
@@ -141,7 +141,7 @@ namespace Horo::Render {
     private:
         friend Result<std::shared_ptr<const RenderGraphInspectionSnapshot>> CaptureRenderGraphInspection(
             const RenderGraph &, const RenderGraphSchedule &, const RenderGraphLifetimePlan &, const CompiledRenderGraphExecution &,
-            RenderGraphInspectionContext, RenderGraphInspectionLimits, std::stop_token);
+            RenderGraphInspectionContext, RenderGraphInspectionLimits, CancellationToken);
 
         static ConstructionKey MakeConstructionKey() noexcept {
             return ConstructionKey{};
@@ -171,24 +171,24 @@ namespace Horo::Render {
      * @param execution Execution plan compiled from this exact graph/schedule.
      * @param context Host-supplied exact renderer owner, real backend frame and non-zero revision.
      * @param limits Finite record/owned-byte capacities; no partial or silently truncated capture.
-     * @param cancellation Cooperative cancellation observed between bounded copies and before publication.
+     * @param cancellation Foundation cooperative token polled between bounded copies and before publication; empty means no cancellation.
      * @return Owned immutable snapshot or typed identity, capacity, cancellation or allocation failure.
      */
     [[nodiscard]] Result<std::shared_ptr<const RenderGraphInspectionSnapshot>> CaptureRenderGraphInspection(
         const RenderGraph &graph, const RenderGraphSchedule &schedule, const RenderGraphLifetimePlan &lifetime,
         const CompiledRenderGraphExecution &execution, RenderGraphInspectionContext context, RenderGraphInspectionLimits limits = {},
-        std::stop_token cancellation = {});
+        CancellationToken cancellation = {});
 
     /**
      * @brief Encodes the already captured complete graph as deterministic versioned JSON without native content or paths.
      * @param snapshot Detached captured facts; export never recaptures or calls a backend.
      * @param maxBytes Finite output allowance no greater than the inspection hard byte bound.
-     * @param cancellation Cooperative cancellation; failure returns no partial output.
+     * @param cancellation Foundation cooperative token; empty means no cancellation, and failure returns no partial output.
      * @return Owned JSON bytes or typed capacity, cancellation or allocation failure. Host Platform services own safe file publication.
      */
     [[nodiscard]] Result<std::string> ExportRenderGraphInspection(const RenderGraphInspectionSnapshot &snapshot,
                                                                   std::size_t maxBytes = RenderGraphInspectionLimits::HardMaxBytes,
-                                                                  std::stop_token cancellation = {});
+                                                                  CancellationToken cancellation = {});
 
     /**
      * @brief Owner-thread publication slot for explicit captures; readers retain detached immutable values.

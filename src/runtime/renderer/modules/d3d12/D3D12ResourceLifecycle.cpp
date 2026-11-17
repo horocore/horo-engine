@@ -14,6 +14,7 @@ namespace Horo::Render::D3D12Detail {
     /** @copydoc Resources::~Resources */
     Resources::~Resources() {
         HORO_INVARIANT_MSG(owner_ == std::this_thread::get_id(), "Destroy D3D12 resources on their owner thread.");
+        HORO_INVARIANT_MSG(commandOwner_ == nullptr, "Destroy the borrowed command service before its canonical resources.");
         // A real removed device can no longer execute outstanding work. Otherwise the host must drain.
         HORO_INVARIANT_MSG(transfers_.empty() || FAILED(device_->GetDeviceRemovedReason()), "Drain D3D12 transfers before destruction.");
         // Records retain each heap until their native resources disappear, before their final lease releases.

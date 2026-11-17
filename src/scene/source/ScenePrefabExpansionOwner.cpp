@@ -31,6 +31,8 @@ namespace Horo::SceneSource {
                 !budget.Add(components.physicsConstraints.size(), sizeof(Runtime::PhysicsConstraintComponent)))
                 return false;
             for (const auto &collider : components.colliders) {
+                if (!budget.Add(collider.surfaceBindings.size(), sizeof(Physics::PhysicsSurfaceBinding)))
+                    return false;
                 if (!budget.Add(collider.materials.size(), sizeof(Runtime::PhysicsColliderMaterialBinding)))
                     return false;
             }
@@ -208,6 +210,7 @@ namespace Horo::SceneSource {
         /** @brief Resolves missing exact keys and invokes the ordinary transactional Scene conversion without live owner access. */
         Result<void> Execute(const CancellationToken &token) {
             ScenePrefabProjection projection;
+            Detail::ScenePrefabDebugCaptureBudget debugBudget;
             const auto &placements = request.document.prefabInstances;
             projection.instances.reserve(placements.size());
             candidates.resize(placements.size());
@@ -226,7 +229,8 @@ namespace Horo::SceneSource {
                     candidates[index] = std::move(candidate).Value();
                     entry.expanded = *candidates[index];
                 }
-                Detail::ApplyInstanceValues(entry, request.valueSchemas ? &*request.valueSchemas : nullptr, request.limits, token);
+                Detail::ApplyInstanceValues(entry, request.valueSchemas ? &*request.valueSchemas : nullptr, request.limits, debugBudget,
+                                            token);
                 projection.instances.push_back(std::move(entry));
             }
             if (token.IsCancellationRequested())

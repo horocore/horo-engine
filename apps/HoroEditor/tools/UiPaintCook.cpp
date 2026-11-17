@@ -1,9 +1,8 @@
 /** @file UiPaintCook.cpp @brief Explicit authenticated offline UI Metal producer; runtime never invokes it. */
+#include "AuthenticatedMetalCookConfiguration.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
-#include "HostSignatureDocument.h"
 #include "RuntimeUiPaintShaderPackage.h"
-#include "VerifiedShaderHostCatalog.h"
 
 #include <algorithm>
 #include <array>
@@ -20,94 +19,12 @@ namespace {
     using namespace Horo::Application::Internal;
     using Bytes = Result<std::vector<std::uint8_t>>;
 
-    /** @brief Reads explicit host inputs only, with a finite allocation and exact length before use. */
-    Bytes Read(const std::filesystem::path &path, const std::size_t maximum) {
-        std::error_code error;
-        if (!path.is_absolute() || !std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || error)
-            return Bytes::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
-        const auto size = std::filesystem::file_size(path, error);
-        if (error || size == 0 || size > maximum)
-            return Bytes::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
-        std::ifstream stream(path, std::ios::binary);
-        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-        if (!stream.read(std::bit_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())) ||
-            stream.peek() != std::char_traits<char>::eof())
-            return Bytes::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
-        return Bytes::Success(std::move(bytes));
-    }
-
-    /** @brief The executable's real cook host identity cannot be overridden by catalog or command-line data. */
-    std::string_view ActualHost() {
-#if defined(__APPLE__) && defined(__aarch64__)
-        return "macos-arm64";
-#elif defined(__APPLE__) && defined(__x86_64__)
-        return "macos-x86_64";
-#else
-        return {};
-#endif
-    }
-
-    /** @brief Constructs only independent explicitly supplied active roots; decoding alone does not approve a publisher. */
-    Result<std::shared_ptr<Security::TrustedRootStore>> Roots(const std::span<const std::uint8_t> bytes) {
-        using Creation = Result<std::shared_ptr<Security::TrustedRootStore>>;
-        const auto policy = DecodePublisherTrustDocument(std::as_bytes(bytes), Packages::PackagePublisherVerificationPolicy{});
-        if (policy.HasError())
-            return Creation::Failure(policy.ErrorValue());
-        auto roots = std::make_shared<Security::TrustedRootStore>();
-        const auto now = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
-        for (const auto &record : policy.Value().publishers) {
-            if (record.publisherRevoked || (record.expiresAtUnixMilliseconds != 0 && now >= record.expiresAtUnixMilliseconds))
-                continue;
-            const auto added = roots->Add({record.algorithm, record.publisher.Value(), record.keyId, record.publicKey});
-            if (added.HasError())
-                return Creation::Failure(added.ErrorValue());
-        }
-        return Creation::Success(std::move(roots));
-    }
-
-    /** @brief Configures the existing adapter from authenticated tuples plus independently supplied absolute tool paths. */
     Result<ShaderCompilerToolchainConfiguration> Configuration(char **argv) {
-        using Configuration = Result<ShaderCompilerToolchainConfiguration>;
-        if (ActualHost().empty())
-            return Configuration::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
-        const auto catalogBytes = Read(argv[4], 65536);
-        const auto signatureBytes = Read(argv[5], MaximumHostSignatureDocumentBytes);
-        const auto trustBytes = Read(argv[6], MaximumHostSignatureDocumentBytes);
-        if (catalogBytes.HasError())
-            return Configuration::Failure(catalogBytes.ErrorValue());
-        if (signatureBytes.HasError())
-            return Configuration::Failure(signatureBytes.ErrorValue());
-        if (trustBytes.HasError())
-            return Configuration::Failure(trustBytes.ErrorValue());
-        const auto envelope = DecodeDetachedSignatureDocument(std::as_bytes(std::span{signatureBytes.Value()}));
-        if (envelope.HasError())
-            return Configuration::Failure(envelope.ErrorValue());
-        const auto roots = Roots(trustBytes.Value());
-        if (roots.HasError())
-            return Configuration::Failure(roots.ErrorValue());
-        const Security::ArtifactVerifier verifier{Security::CreateMbedTlsSignatureProvider(), roots.Value()};
-        const auto catalog =
-            VerifiedShaderHostCatalog::Create(std::as_bytes(std::span{catalogBytes.Value()}), envelope.Value(), verifier, ActualHost());
-        if (catalog.HasError())
-            return Configuration::Failure(catalog.ErrorValue());
-        ShaderCompilerToolchainConfiguration configuration{.hostPlatform = std::string{ActualHost()},
-                                                           .scratchRoot = std::filesystem::path{argv[3]},
-                                                           .verifiedCatalog = catalog.Value(),
-                                                           .processTimeout = std::chrono::seconds{60}};
-        constexpr std::array roles{ShaderCompilerTool::Dxc, ShaderCompilerTool::SpirvTools, ShaderCompilerTool::SpirvCross,
-                                   ShaderCompilerTool::AppleMetal};
-        const auto approved = catalog.Value()->Tools();
-        for (std::size_t index = 0; index < roles.size(); ++index) {
-            const auto entry = std::ranges::find(approved, roles[index], [](const auto &tool) {
-                return tool.identity.tool;
-            });
-            const std::filesystem::path executable{argv[7 + index]};
-            if (entry == approved.end() || !executable.is_absolute())
-                return Configuration::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-            configuration.tools.emplace_back(entry->identity, executable, entry->executableDigest);
-        }
-        return Configuration::Success(std::move(configuration));
+        auto authenticated =
+            MakeAuthenticatedMetalCookConfiguration({argv[3], argv[4], argv[5], argv[6], {argv[7], argv[8], argv[9], argv[10]}});
+        if (authenticated.HasError())
+            return Result<ShaderCompilerToolchainConfiguration>::Failure(authenticated.ErrorValue());
+        return Result<ShaderCompilerToolchainConfiguration>::Success(std::move(authenticated).Value().configuration);
     }
 
     /** @brief Writes only a host-claimed private candidate; no existing package file is overwritten. */
@@ -181,11 +98,11 @@ namespace {
             ExternalShaderCompilerAdapter::Create(std::move(configuration).Value(), std::make_shared<NativeExternalProcessRunner>());
         if (adapter.HasError())
             return Result<void>::Failure(adapter.ErrorValue());
-        auto source = Read(argv[1], 1024U * 1024U);
+        auto source = ReadShaderCookInput(argv[1], 1024U * 1024U);
         if (source.HasError())
             return Result<void>::Failure(source.ErrorValue());
         ShaderCompilerTargetDescriptor target{.requirement = ProjectUiPaintMetalTarget(),
-                                              .platformTriple = std::string{ActualHost()},
+                                              .platformTriple = std::string{ActualMetalCookHost()},
                                               .intermediateEnvironment = ShaderIntermediateEnvironment::Vulkan13SpirV16};
         for (const auto &tool : tools)
             target.tools.push_back(tool.identity);

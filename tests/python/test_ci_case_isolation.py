@@ -9,6 +9,7 @@ import shutil
 # Exception type only; the fixed-tool helper owns process creation.
 from subprocess import CalledProcessError  # nosec B404
 import sys
+import tempfile
 
 import pytest
 
@@ -172,8 +173,81 @@ def test_case_windows_runner_temp_preserves_build_identity_and_rejects_collision
     assert "CI temporary build namespace collision" in collision.value.stdout + collision.value.stderr
 
 
+@pytest.mark.parametrize("selection", ["LOCALAPPDATA", "TEMP", "TMP"])
+@pytest.mark.parametrize("native_separators", [False, True])
+def test_case_windows_local_temp_preserves_stable_host_namespace(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str, native_separators: bool) -> None:
+    for variable in ("RUNNER_TEMP", "LOCALAPPDATA", "TEMP", "TMP"):
+        monkeypatch.delenv(variable, raising=False)
+    host = tmp_path / "host temporary ü"
+    spelling = str(host) if native_separators else host.as_posix()
+    monkeypatch.setenv(selection, spelling)
+    if selection == "LOCALAPPDATA":
+        # Nested CMake inherits the isolated runtime TEMP/TMP, not the host's original temporary root.
+        inherited = tmp_path / "deep" / "parent build" / "ci-runtime" / "ParentSuite" / "tmp"
+        monkeypatch.setenv("TEMP", str(inherited))
+        monkeypatch.setenv("TMP", str(inherited))
+    expected_parent = host / "Temp" if selection == "LOCALAPPDATA" else host
+    assert not expected_parent.exists()
+    build, _ = project(tmp_path, windows_host=True, labels="display")
+    identity = build.resolve().as_posix() + "\nHoroPhysicsTests"
+    namespace = expected_parent / "hci" / hashlib.sha256(identity.encode()).hexdigest()[:16]
+    identity_file = namespace / "identity.txt"
+    assert identity_file.read_text(encoding="utf-8") == identity
+    for test in manifest(build)["tests"]:
+        properties = {item["name"]: item["value"] for item in test["properties"]}
+        assert Path(properties["WORKING_DIRECTORY"]) == namespace / "work"
+        assert properties["RUN_SERIAL"]
+        assert "horo-suite-HoroPhysicsTests" in properties["RESOURCE_LOCK"]
+        for variable in ("TMPDIR", "TMP", "TEMP"):
+            assert f"{variable}=set:{(namespace / 'tmp').as_posix()}" in properties["ENVIRONMENT_MODIFICATION"]
+    identity_file.write_text("different build", encoding="utf-8")
+    with pytest.raises(CalledProcessError) as collision:
+        run("cmake", "-S", str(tmp_path / "source ü"), "-B", str(build))
+    assert "CI temporary build namespace collision" in collision.value.stdout + collision.value.stderr
+
+
+@pytest.mark.parametrize("selection", ["RUNNER_TEMP", "LOCALAPPDATA", "TEMP", "TMP", "missing"])
+def test_case_windows_rejects_missing_or_relative_host_temporary_root(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str) -> None:
+    for variable in ("RUNNER_TEMP", "LOCALAPPDATA", "TEMP", "TMP"):
+        monkeypatch.delenv(variable, raising=False)
+    if selection != "missing":
+        monkeypatch.setenv(selection, "relative-host-temp")
+    with pytest.raises(CalledProcessError) as failure:
+        project(tmp_path, windows_host=True)
+    assert "Windows test isolation requires an absolute host temporary root" in failure.value.stdout + failure.value.stderr
+    assert not (tmp_path / "source ü" / "relative-host-temp").exists()
+    assert not (tmp_path / "build ü" / "relative-host-temp").exists()
+
+
+def test_case_nonwindows_layout_ignores_host_temporary_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    build = tmp_path / "build"
+    for variable in ("RUNNER_TEMP", "LOCALAPPDATA", "TEMP", "TMP"):
+        monkeypatch.setenv(variable, str(tmp_path / "external temporary"))
+    (source / "CMakeLists.txt").write_text(f'''cmake_minimum_required(VERSION 3.25)
+project(NonWindowsRuntimeRoot NONE)
+set(CMAKE_HOST_WIN32 OFF)
+include("{(ROOT / 'tests/cmake/HoroCiSuites.cmake').as_posix()}")
+horo_ci_test_runtime_root(Fixture runtime_root)
+file(WRITE "${{CMAKE_BINARY_DIR}}/root.txt" "${{runtime_root}}")
+''', encoding="utf-8")
+    run("cmake", "-S", str(source), "-B", str(build))
+    assert Path((build / "root.txt").read_text(encoding="utf-8")) == build / "ci-runtime" / "Fixture"
+    # Native CMake may create MSBuildTemp under TEMP even for this NONE
+    # project. Only Horo runtime namespaces must ignore host overrides.
+    assert not (tmp_path / "external temporary" / "hci").exists()
+    assert not (tmp_path / "external temporary" / "Temp" / "hci").exists()
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Native Windows classic file-I/O path budget")
-def test_case_windows_temp_root_preserves_classic_io_in_deep_save_namespace(tmp_path: Path) -> None:
+def test_case_windows_temp_root_preserves_classic_io_in_deep_save_namespace(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    runner_temp = tempfile.TemporaryDirectory(prefix="hci-")
+    request.addfinalizer(runner_temp.cleanup)
+    monkeypatch.setenv("RUNNER_TEMP", runner_temp.name)
     source = tmp_path / "source"
     build = tmp_path / "build"
     source.mkdir()
@@ -213,6 +287,15 @@ set(ARG_PROPERTIES TIMEOUT 10)
 horo_ci_catch_properties({target})
 ''')
     run("cmake", "-S", str(source), "-B", str(build), "-G", "Ninja")
+    identity = build.resolve().as_posix() + "\n" + target
+    namespace = Path(runner_temp.name) / "hci" / hashlib.sha256(identity.encode()).hexdigest()[:16]
+    assert (namespace / "identity.txt").read_text(encoding="utf-8") == identity
+    properties = {item["name"]: item["value"] for item in manifest(build)["tests"][0]["properties"]}
+    # CMake resolves the runtime root to its long Win32 spelling; Python's
+    # temporary root may retain an 8.3 parent such as RUNNER~1. Require the
+    # same directory, then exercise the actual CTest environment below so
+    # the classic-I/O path budget is checked on the spelling used at runtime.
+    assert Path(properties["WORKING_DIRECTORY"]).samefile(namespace / "work")
     run("cmake", "--build", str(build), "--parallel", "1")
     run("ctest", "--test-dir", str(build), "--output-on-failure")
 

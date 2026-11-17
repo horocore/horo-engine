@@ -1,0 +1,28 @@
+#pragma once
+/** @file AuthenticatedMetalCookConfiguration.h @brief Explicit authenticated offline Metal toolchain host configuration. */
+#include "AuthenticatedShaderCookConfiguration.h"
+
+#include <array>
+#include <filesystem>
+
+namespace Horo::Application::Internal {
+    /** @brief Independent host inputs; tool paths never derive from catalog or project data. */
+    struct AuthenticatedMetalCookInputs final {
+        std::filesystem::path scratchRoot;
+        std::filesystem::path catalog;
+        std::filesystem::path detachedSignature;
+        std::filesystem::path hostTrust;
+        std::array<std::filesystem::path, 4> executables; /**< DXC, SPIRV validator, Cross, Apple xcrun, in exact order. */
+    };
+
+    /** @brief Tool configuration and immutable authenticated documents; independent trust roots are deliberately excluded. */
+    using AuthenticatedMetalCookConfiguration = AuthenticatedShaderCookConfiguration;
+
+    [[nodiscard]] std::string_view ActualMetalCookHost() noexcept;
+    /** @brief Reads one explicitly named absolute regular input with a finite bound and exact final length. */
+    [[nodiscard]] Result<std::vector<std::uint8_t>> ReadShaderCookInput(const std::filesystem::path &path, std::size_t maximum);
+    /** @brief Reuses existing signature verification and independently supplied active publisher roots.
+     * @details No discovery, observed-digest approval, process invocation or scratch/output mutation occurs. */
+    [[nodiscard]] Result<AuthenticatedMetalCookConfiguration> MakeAuthenticatedMetalCookConfiguration(
+        const AuthenticatedMetalCookInputs &inputs);
+}  // namespace Horo::Application::Internal

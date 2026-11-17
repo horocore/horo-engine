@@ -62,8 +62,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<PhysicsInspectorRequest> Request() const;
         /** @brief Stage a complete body/box producer set with explicit unresolved project references. */
         void AddBody();
-        /** @brief Stage a collider with explicit body reference; project bindings must be supplied before Apply. */
-        void AddCollider();
+        /** @brief Stage a collider or trigger with a valid local body; project bindings must be supplied before Apply.
+         * @param trigger Whether the collider detects overlaps without physical response. */
+        void AddCollider(bool trigger = false);
         /** @brief Stage a fixed constraint whose first endpoint is an explicit selected body when present. */
         void AddConstraint();
         /** @brief Capture all text for a typed collider once, outside its steady draw path. */

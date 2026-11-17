@@ -121,7 +121,8 @@ namespace Horo {
             state->deferred.push_back(std::move(retry));
             return;
         }
-        std::vector<Handler> snapshot;
+        // Unlike the default constructor, this permits MSVC Debug proxy allocation to propagate.
+        std::vector<Handler> snapshot(0);
         {
             std::lock_guard lock(state->mutex);
             if (const auto it = state->handlers.find(type); it != state->handlers.end())
@@ -149,9 +150,10 @@ namespace Horo {
         state->activeTypes.pop_back();
         LOG_TRACE(state->config.logCategory, "dispatch complete event=%s elapsed_us=%lld", name.data(),
                   std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
-        if (state->activeTypes.empty()) {
-            auto deferred = std::move(state->deferred);
-            state->deferred.clear();
+        if (state->activeTypes.empty() && !state->deferred.empty()) {
+            // Prepare fallible metadata before the no-fail ownership handoff; empty dispatches need neither.
+            std::vector<DeferredPublisher> deferred(0);
+            deferred.swap(state->deferred);
             for (const auto &publish : deferred)
                 publish(*this);
         }

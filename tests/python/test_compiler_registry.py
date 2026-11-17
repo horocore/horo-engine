@@ -335,7 +335,12 @@ def test_workspace_symlink_rejected(tmp_path, monkeypatch):
     workspace.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    (workspace / ".sonar").symlink_to(outside, target_is_directory=True)
+    try:
+        (workspace / ".sonar").symlink_to(outside, target_is_directory=True)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Creating symlinks requires Windows symlink privilege")
+        raise
     monkeypatch.chdir(workspace)
     with pytest.raises(ValueError):
         compiler.cache_root(NAMESPACE)
@@ -384,7 +389,12 @@ def test_destination_symlink_cannot_mutate_outside(tmp_path):
     destination.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    (destination / "a").symlink_to(outside, target_is_directory=True)
+    try:
+        (destination / "a").symlink_to(outside, target_is_directory=True)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Creating symlinks requires Windows symlink privilege")
+        raise
     with pytest.raises(ValueError):
         compiler.merge_entries(staging, destination)
     assert list(outside.iterdir()) == []

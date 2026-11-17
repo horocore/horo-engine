@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Physics/SurfaceMaterial.h"
 
 /**
  * @file PhysicsEvents.h
@@ -40,6 +41,7 @@ namespace Horo::Physics {
         CollisionProfileId profile;
         std::uint64_t filterSchemaGeneration{};
 
+        std::uint64_t collider{}; /**< Distinguishes authored compound contributors even without semantic bindings. */
         [[nodiscard]] constexpr auto operator<=>(const PhysicsEventEndpoint &) const noexcept = default;
     };
 
@@ -107,6 +109,7 @@ namespace Horo::Physics {
         std::optional<PhysicsEventMaterial> secondMaterial;
         PhysicsContactSummary contact;
         bool sensor{};
+        std::optional<PhysicsSurfaceEvidence> firstSurface, secondSurface;
 
         [[nodiscard]] constexpr auto operator<=>(const PhysicsContactObservation &) const noexcept = default;
     };
@@ -119,6 +122,7 @@ namespace Horo::Physics {
         std::optional<PhysicsEventMaterial> firstMaterial;
         std::optional<PhysicsEventMaterial> secondMaterial;
         PhysicsContactSummary contact;
+        std::optional<PhysicsSurfaceEvidence> firstSurface, secondSurface;
 
         [[nodiscard]] constexpr auto operator<=>(const PhysicsEventRecord &) const noexcept = default;
     };

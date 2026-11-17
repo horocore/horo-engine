@@ -1,0 +1,12 @@
+{
+  "id": "core.authoring.semantic_surfaces",
+  "fromBaseline": "0.2.0",
+  "toBaseline": "0.3.0",
+  "sourceContract": "sha256:e068efe802defac5ec18d9742f0b1e1c50b1bfda5b26f8fc4a3a02eaf478065c",
+  "targetContract": "sha256:285bfdfdb77e09706085550de98315000d8bb576e8baef48d3f3be1992fc29d7",
+  "storageEstimate": {
+    "maximumOutputRatioPermille": 1000,
+    "maximumAddedBytesPerDocument": 0,
+    "maximumFixedBytes": 4096
+  }
+}

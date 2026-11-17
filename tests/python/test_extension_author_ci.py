@@ -34,7 +34,10 @@ def archive(entries):
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as zipped:
         for name, content in entries.items():
-            zipped.writestr(name, content)
+            entry = zipfile.ZipInfo(name)
+            # Preserve adversarial wire names: ZipInfo otherwise normalizes backslashes on Windows.
+            entry.filename = name
+            zipped.writestr(entry, content)
     return output.getvalue()
 
 

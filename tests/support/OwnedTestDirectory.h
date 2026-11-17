@@ -10,9 +10,9 @@ namespace Horo::Tests {
     /** @brief Owns only an exclusively created directory in the trusted test working directory, never a shared temp path. */
     class OwnedTestDirectory final {
     public:
-        explicit OwnedTestDirectory(const std::string_view prefix)
-            : path_(std::filesystem::current_path() /
-                    (std::string{prefix} + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+        explicit OwnedTestDirectory(const std::string_view prefix) : path_(std::filesystem::current_path()) {
+            const auto name = std::string{prefix} + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+            path_ /= std::filesystem::path{std::u8string{name.begin(), name.end()}};
             // An existing directory or symlink must fail admission, not be adopted or deleted.
             REQUIRE(std::filesystem::create_directory(path_));
         }

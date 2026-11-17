@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-set(HORO_ENGINE_VERSION "0.2.0")
+set(HORO_ENGINE_VERSION "0.3.0")
 
 project(HoroEngine VERSION ${HORO_ENGINE_VERSION} LANGUAGES CXX C)
 
@@ -23,11 +23,11 @@ if(NOT HORO_GIT_REVISION_RESULT EQUAL 0 OR HORO_SOURCE_REVISION STREQUAL "")
 endif()
 
 set(HORO_GAMEPLAY_SDK_FINGERPRINT
-    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk22-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
+    "horo-${HORO_ENGINE_VERSION}-gameplay-sdk29-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}"
 )
 set(HORO_EXTENSION_SDK_VERSION "${HORO_ENGINE_VERSION}")
 set(HORO_EXTENSION_ABI_MAJOR_VERSION 1)
-set(HORO_EXTENSION_ABI_PUBLISHED_MINOR 7)
+set(HORO_EXTENSION_ABI_PUBLISHED_MINOR 8)
 set(HORO_EXTENSION_ABI_MIN_HOST_MINOR 0)
 set(HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE 2)
 
@@ -40,12 +40,21 @@ include(CTest)
 include(CMakePackageConfigHelpers)
 
 if(MSVC)
-    add_compile_options(/FS)
+    # Source and narrow literals are UTF-8 independently of the Windows code page.
+    add_compile_options(/FS "$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(HORO_BUILD_EDITOR_GUI "Build the graphical HoroEditor bootstrap" ON)
+option(HORO_EDITOR_LIVE_UI "Enable the local RCC++ development UI (Windows/MSVC or macOS/AppleClang Debug)" OFF)
+if(HORO_EDITOR_LIVE_UI AND NOT HORO_BUILD_EDITOR_GUI)
+    message(FATAL_ERROR "HORO_EDITOR_LIVE_UI requires HORO_BUILD_EDITOR_GUI=ON")
+endif()
+if(HORO_EDITOR_LIVE_UI)
+    # The development compiler bridge reads the host's exact compile definitions.
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
 option(HORO_BUILD_INPUT_SDL3 "Build the SDL3 input adapter independently of the editor GUI" ${HORO_BUILD_EDITOR_GUI})
 option(HORO_BUILD_RENDER_OPENGL "Build the OpenGL renderer backend" ${HORO_BUILD_EDITOR_GUI})
 set(_HORO_BUILD_RENDER_METAL_DEFAULT OFF)
@@ -54,12 +63,16 @@ if(APPLE AND HORO_BUILD_EDITOR_GUI)
 endif()
 option(HORO_BUILD_RENDER_METAL "Build the Metal renderer backend" ${_HORO_BUILD_RENDER_METAL_DEFAULT})
 option(HORO_BUILD_RENDER_VULKAN "Build the Vulkan renderer backend" OFF)
+option(HORO_BUILD_RENDER_VULKAN_ANDROID "Build the Android Vulkan presentation backend and host-test protocol" OFF)
 option(HORO_ENABLE_GPU_SMOKE_TESTS "Register tests that require a display server and hardware graphics context" OFF)
 option(HORO_ENABLE_IMGUI_UI_TESTS "Build headless Dear ImGui UI automation tests" OFF)
 option(HORO_ENABLE_TELEMETRY "Compile Horo telemetry producer instrumentation" ON)
-option(HORO_ENABLE_OPENTELEMETRY "Build the optional OpenTelemetry OTLP export sink" OFF)
 option(HORO_BUILD_EXAMPLES "Build SDK and extension examples" ${BUILD_TESTING})
 option(HORO_BUILD_PHYSICS_NATIVE "Build the private CanonicalV1 Physics solver" ON)
+if(HORO_BUILD_PHYSICS_NATIVE)
+    # Snapshot compatibility consumes the actual Physics and solver compile recipes.
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
 option(HORO_BUILD_NAVIGATION_RECAST_DETOUR "Build the default grounded navigation query provider" ON)
 option(HORO_BUILD_AUDIO_SDL3 "Build the SDL3 portability/reference audio backend" ${HORO_BUILD_EDITOR_GUI})
 option(HORO_BUILD_NETWORK_GNS "Build the optional production GameNetworkingSockets transport" OFF)
@@ -104,6 +117,9 @@ horo_configure_extension_sdk()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/CMakeLists.txt")
     add_subdirectory(src)
+    if(TARGET HoroPlatformAndroidWindow)
+        add_subdirectory(apps/android-package-qualification)
+    endif()
 endif()
 
 set(HORO_GAMEPLAY_SDK_PACKAGE_DIR "${CMAKE_BINARY_DIR}/sdk/gameplay" CACHE INTERNAL
@@ -114,7 +130,8 @@ set_target_properties(HoroSecurityEnvelope PROPERTIES EXPORT_NAME SecurityEnvelo
 set_target_properties(HoroNetworkApi PROPERTIES EXPORT_NAME NetworkApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroSaveApi PROPERTIES EXPORT_NAME SaveApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroGameplayApi PROPERTIES EXPORT_NAME GameplayApi POSITION_INDEPENDENT_CODE ON)
-export(TARGETS HoroFoundation HoroSecurityEnvelope HoroNetworkApi HoroSaveApi HoroGameplayApi
+set_target_properties(HoroAI PROPERTIES EXPORT_NAME AI POSITION_INDEPENDENT_CODE ON)
+export(TARGETS HoroFoundation HoroSecurityEnvelope HoroNetworkApi HoroSaveApi HoroGameplayApi HoroAI
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayTargets.cmake")
 # Physics is an explicit SDK component. The minimal gameplay export remains solver-free;
@@ -123,6 +140,7 @@ set_target_properties(HoroSceneIdentity PROPERTIES EXPORT_NAME SceneIdentity)
 set(HORO_GAMEPLAY_COMMON_SDK_TARGETS HoroSceneIdentity HoroAssets HoroRuntime HoroThirdPartyUfbx miniz utf8proc nlohmann_json)
 set(HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HoroGameplayPhysicsIntegration HoroGameplayCharacterIntegration HoroPhysics HoroPhysicsModel)
 set(HORO_GAMEPLAY_UI_SDK_TARGETS HoroRuntimeUi harfbuzz HoroThirdPartyUnicode)
+set(HORO_GAMEPLAY_VFX_SDK_TARGETS HoroGameplayVfxIntegration HoroVfxApi HoroVfxSimulationData HoroRenderApi)
 set_target_properties(HoroRuntimeUi PROPERTIES EXPORT_NAME RuntimeUi)
 set_target_properties(HoroThirdPartyUnicode PROPERTIES EXPORT_NAME ThirdPartyUnicode)
 if(TARGET Jolt)
@@ -134,7 +152,11 @@ set_target_properties(HoroPhysics PROPERTIES EXPORT_NAME Physics)
 set_target_properties(HoroPhysicsModel PROPERTIES EXPORT_NAME PhysicsModel)
 set_target_properties(HoroAssets PROPERTIES EXPORT_NAME Assets)
 set_target_properties(HoroRuntime PROPERTIES EXPORT_NAME Runtime)
-foreach(target IN LISTS HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HORO_GAMEPLAY_COMMON_SDK_TARGETS HORO_GAMEPLAY_UI_SDK_TARGETS)
+set_target_properties(HoroGameplayVfxIntegration PROPERTIES EXPORT_NAME GameplayVfxIntegration)
+set_target_properties(HoroVfxApi PROPERTIES EXPORT_NAME VfxApi)
+set_target_properties(HoroVfxSimulationData PROPERTIES EXPORT_NAME VfxSimulationData)
+set_target_properties(HoroRenderApi PROPERTIES EXPORT_NAME RenderApi)
+foreach(target IN LISTS HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HORO_GAMEPLAY_COMMON_SDK_TARGETS HORO_GAMEPLAY_UI_SDK_TARGETS HORO_GAMEPLAY_VFX_SDK_TARGETS)
     get_target_property(target_type ${target} TYPE)
     if(target_type STREQUAL "STATIC_LIBRARY")
         set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -142,7 +164,7 @@ foreach(target IN LISTS HORO_GAMEPLAY_PHYSICS_SDK_TARGETS HORO_GAMEPLAY_COMMON_S
 endforeach()
 # Native prefab gameplay fixtures link the Scene runtime closure into a module.
 # Keep this host-only link closure independent from the exported Physics SDK.
-foreach(target HoroPrefabRuntime HoroPrefab HoroRuntimeScene HoroSceneModel
+foreach(target HoroPrefabRuntime HoroPrefab HoroRuntimeScene HoroSceneModel HoroAnimationApi
         HoroGameplayAiIntegration HoroAISceneIntegration
         HoroRuntimeUi HoroAudioApi HoroVfxApi HoroAI HoroNavigationApi HoroRenderApi harfbuzz)
     get_target_property(target_type ${target} TYPE)
@@ -168,6 +190,10 @@ set_target_properties(HoroGameplayNavigationIntegration PROPERTIES EXPORT_NAME G
 export(TARGETS HoroNavigationApi HoroNavigationRuntime HoroGameplayNavigationIntegration
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayNavigationTargets.cmake")
+# VFX is an explicit neutral SDK component; Scene/cinematic host services stay private.
+export(TARGETS ${HORO_GAMEPLAY_VFX_SDK_TARGETS}
+       NAMESPACE HoroEngine::
+       FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayVfxTargets.cmake")
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroEngineGameplayConfig.cmake.in"
     "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayConfig.cmake"
@@ -184,6 +210,11 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/scripts/project.py"
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/apps/CMakeLists.txt")
     add_subdirectory(apps)
 endif()
+
+include(HoroNetworkChaosBoundary)
+horo_verify_network_chaos_boundary(horo-engine)
+horo_verify_network_chaos_boundary(HoroEditor)
+horo_verify_network_chaos_release_inventory()
 
 # Validate only production targets. Tests and examples consume production
 # contracts but are not layers in the shipped module graph.

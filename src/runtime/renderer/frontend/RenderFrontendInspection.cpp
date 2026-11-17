@@ -8,7 +8,7 @@ namespace Horo::Render {
     /** @copydoc RenderFrameScope::CaptureInspection */
     Result<std::shared_ptr<const RenderGraphInspectionSnapshot>> RenderFrameScope::CaptureInspection(
         const RenderGraph &graph, const RenderGraphSchedule &schedule, const RenderGraphLifetimePlan &lifetime,
-        const CompiledRenderGraphExecution &execution, const RenderGraphInspectionLimits limits, const std::stop_token cancellation) {
+        const CompiledRenderGraphExecution &execution, const RenderGraphInspectionLimits limits, const CancellationToken cancellation) {
         using SnapshotResult = Result<std::shared_ptr<const RenderGraphInspectionSnapshot>>;
         if (owner_ == nullptr || backend_ == nullptr || executed_ || !frame_.IsValid())
             return SnapshotResult::Failure(MakeError(RenderGraphInspectionErrors::InvalidSource));

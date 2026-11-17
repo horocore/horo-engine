@@ -84,6 +84,14 @@ namespace Horo::Render::Detail {
         };
 
         struct Buffer final : AllocationResource<VkBuffer, PFN_vkDestroyBuffer> {
+            void *mapped{};
+            PFN_vkUnmapMemory unmap{};
+
+            ~Buffer() {
+                if (mapped)
+                    unmap(device, memory);
+            }
+
             RenderBufferDescriptor descriptor;
             VulkanGraphResourceState graphState;
             std::uint64_t vfxRevision{};
@@ -158,6 +166,21 @@ namespace Horo::Render::Detail {
             PFN_vkCreateImageView createImageView{nullptr};
             PFN_vkDestroyImageView destroyImageView{nullptr};
         };
+
+        Result<void> MapParticleBuffer(Buffer &buffer) {
+            if (buffer.descriptor.access != RenderBufferAccess::HostVisible)
+                return Result<void>::Failure(ResourceError(VulkanBackendErrors::MemoryTypeUnavailable,
+                                                           "Particle mapping requires allocator-proven coherent memory."));
+            if (buffer.mapped)
+                return Result<void>::Success();
+            void *mapped{};
+            if (dispatch.mapMemory(device, buffer.memory, 0, buffer.descriptor.byteSize, 0, &mapped) != VK_SUCCESS || !mapped)
+                return Result<void>::Failure(
+                    ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Particle coherent memory mapping failed."));
+            buffer.mapped = mapped;
+            buffer.unmap = dispatch.unmapMemory;
+            return Result<void>::Success();
+        }
 
         template <typename Resource> using Registry = std::unordered_map<std::uint64_t, std::shared_ptr<Resource>>;
 
@@ -522,6 +545,28 @@ namespace Horo::Render::Detail {
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Buffer upload mapping failed."));
         instance->graphState.contentsDefined = !initialData.empty();
         return impl_->Register(impl_->buffers, std::move(instance));
+    }
+
+    Result<VulkanVfxGpuBufferCapture> VulkanResourceRuntime::CaptureVfxGpuBuffer(const NativeVfxGpuBuffer &source,
+                                                                                 RenderResourceOwnerId owner, std::size_t bytes,
+                                                                                 RenderBufferUsage usage, bool hostVisible) {
+        using Outcome = Result<VulkanVfxGpuBufferCapture>;
+        const auto found = impl_->buffers.find(source.instance);
+        if (!source.handle.IsValid() || source.handle.owner != owner || found == impl_->buffers.end())
+            return Outcome::Failure(ResourceError(VulkanBackendErrors::ResourceIdentityInvalid,
+                                                  "Particle inventory is not an exact registered buffer generation."));
+        auto &buffer = *found->second;
+        if (!HasBufferUsage(buffer.descriptor.usage, usage) || bytes > buffer.descriptor.byteSize || buffer.descriptor.byteSize % 4)
+            return Outcome::Failure(ResourceError(VulkanBackendErrors::ResourceRequestInvalid,
+                                                  "Particle buffer usage/extent differs from its closed word ABI."));
+        if (hostVisible)
+            if (const auto mapped = impl_->MapParticleBuffer(buffer); mapped.HasError())
+                return Outcome::Failure(mapped.ErrorValue());
+        VulkanGraphResource resource{.kind = RenderGraphResourceKind::Buffer,
+                                     .buffer = buffer.handle,
+                                     .bufferDescriptor = buffer.descriptor,
+                                     .state = &buffer.graphState};
+        return Outcome::Success({source, resource, found->second, buffer.mapped});
     }
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,

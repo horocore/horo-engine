@@ -1,7 +1,9 @@
 #include "PrefabValueOverridesInternal.h"
 
+#include <algorithm>
 #include <array>
 #include <set>
+#include <tuple>
 
 namespace Horo::Prefab::ValueDetail {
     namespace {
@@ -34,6 +36,8 @@ namespace Horo::Prefab::ValueDetail {
 
         /** @brief Instance identity is unique on an object even when two records claim different component types. */
         Result<void> InsertOccurrence(const PrefabComponentOverrideRecord &record, std::set<Occurrence> &targets) {
+            if (record.valueless_by_exception())
+                return Invalid<void>();
             if (const auto target = ComponentTarget(record); !targets.emplace(target.object, target.instance.Value()).second)
                 return Result<void>::Failure(
                     MakeError(PrefabErrors::OverrideConflict, "Duplicate component intent cannot add/remove the same occurrence twice."));
@@ -94,33 +98,122 @@ namespace Horo::Prefab::ValueDetail {
         return Result<void>::Success();
     }
 
-    /** @brief Admit all normal and preserved topology intent with exact shared count/byte and cross-kind conflict rules. */
+    /** @brief Rejects contradictory occurrence claims independently of record payload validity or arrival order. */
+    Result<void> PreflightComponentClaims(const PrefabValueOverrideSet &set) {
+        std::set<Occurrence> targets;
+        for (const auto &record : set.componentRecords)
+            if (auto claimed = InsertOccurrence(record, targets); claimed.HasError())
+                return claimed;
+        for (const auto &conflict : set.componentConflicts)
+            if (auto claimed = InsertOccurrence(conflict.original, targets); claimed.HasError())
+                return claimed;
+        for (const auto &orphan : set.componentOrphans)
+            if (auto claimed = InsertOccurrence(orphan.original, targets); claimed.HasError())
+                return claimed;
+        return CheckValueTargets(set, targets);
+    }
+
+    namespace {
+        /** @brief Borrows every canonical ordering dimension without copying component type strings in sort comparisons. */
+        struct ComponentKey final {
+            const PrefabObjectAddress &object;
+            std::string_view type;
+            std::uint64_t instance;
+        };
+
+        /** @brief Projects both supported operations into their common stable occurrence key. */
+        ComponentKey Key(const PrefabComponentOverrideRecord &record) {
+            if (const auto *add = std::get_if<PrefabAddComponentOverride>(&record))
+                return {add->object, add->payload.component.typeId.Value(), add->payload.instance.Value()};
+            const auto &remove = std::get<PrefabRemoveComponentOverride>(record);
+            return {remove.target.object, remove.target.type.Value(), remove.target.instance.Value()};
+        }
+
+        /** @brief Uses the exact semantic object/component identity order shared with canonical encoding. */
+        bool KeyLess(const PrefabComponentOverrideRecord &a, const PrefabComponentOverrideRecord &b) {
+            const auto x = Key(a);
+            const auto y = Key(b);
+            if (const auto order = CompareObjectAddresses(x.object, y.object); order != 0)
+                return std::is_lt(order);
+            return std::tie(x.type, x.instance) < std::tie(y.type, y.instance);
+        }
+
+        /** @brief Orders bounded borrowed entries without copying or rewriting preserved payload data. */
+        template <class Entry, class Record>
+        std::vector<const Entry *> OrderedComponents(const std::vector<Entry> &entries, Record record) {
+            std::vector<const Entry *> ordered;
+            ordered.reserve(entries.size());
+            for (const auto &entry : entries)
+                ordered.push_back(&entry);
+            std::ranges::sort(ordered, [&](const auto *a, const auto *b) {
+                return KeyLess(record(*a), record(*b));
+            });
+            return ordered;
+        }
+
+        /** @brief Validates ordinary topology records in stable-target order. */
+        Result<void> ValidateNormalComponents(const PrefabValueOverrideSet &set, const PrefabProjectPolicy &policy, std::size_t &bytes,
+                                              std::set<Occurrence> &targets) {
+            for (const auto *record : OrderedComponents(set.componentRecords, [](const auto &entry) -> const auto & {
+                return entry;
+            })) {
+                if (auto valid = Admit(*record, policy, targets); valid.HasError())
+                    return valid;
+                if (auto charged = Charge(*record, EncodeComponentRecord(*record), policy, bytes); charged.HasError())
+                    return charged;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates retained topology conflicts without allowing source vector order to choose their failure. */
+        Result<void> ValidateComponentConflicts(const PrefabValueOverrideSet &set, const PrefabProjectPolicy &policy, std::size_t &bytes,
+                                                std::set<Occurrence> &targets) {
+            for (const auto *conflict : OrderedComponents(set.componentConflicts, [](const auto &entry) -> const auto & {
+                return entry.original;
+            })) {
+                if (auto valid = Admit(conflict->original, policy, targets); valid.HasError())
+                    return valid;
+                if (!Detail::IsCanonicalProjectVersion(conflict->authoredAgainst.projectVersion) ||
+                    !Detail::IsCanonicalProjectVersion(conflict->observedSource.projectVersion))
+                    return Invalid<void>();
+                if (auto charged = Charge(conflict->original, EncodeComponentConflict(*conflict), policy, bytes); charged.HasError())
+                    return charged;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Preserves opaque orphan payloads while admitting their envelopes in canonical identity order. */
+        Result<void> ValidateComponentOrphans(const PrefabValueOverrideSet &set, const PrefabProjectPolicy &policy, std::size_t &bytes,
+                                              std::set<Occurrence> &targets) {
+            for (const auto *orphan : OrderedComponents(set.componentOrphans, [](const auto &entry) -> const auto & {
+                return entry.original;
+            })) {
+                if (auto valid = Admit(orphan->original, policy, targets); valid.HasError())
+                    return valid;
+                if (!Detail::IsCanonicalProjectVersion(orphan->authoredAgainst.projectVersion) ||
+                    orphan->reason > PrefabComponentOverrideIssue::SchemaChanged)
+                    return Invalid<void>();
+                if (auto charged = Charge(orphan->original, EncodeComponentOrphan(*orphan), policy, bytes); charged.HasError())
+                    return charged;
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @brief Shares the same complete stable occurrence order with parsed canonical record storage. */
+    bool ComponentRecordLess(const PrefabComponentOverrideRecord &left, const PrefabComponentOverrideRecord &right) {
+        return KeyLess(left, right);
+    }
+
+    /** @brief Admits all normal and preserved topology intent with shared deterministic structural and byte rules. */
     Result<void> ValidateComponentRecords(const PrefabValueOverrideSet &set, const PrefabProjectPolicy &policy, std::size_t &bytes) {
         std::set<Occurrence> targets;
-        for (const auto &record : set.componentRecords) {
-            if (auto valid = Admit(record, policy, targets); valid.HasError())
-                return valid;
-            if (auto charged = Charge(record, EncodeComponentRecord(record), policy, bytes); charged.HasError())
-                return charged;
-        }
-        for (const auto &conflict : set.componentConflicts) {
-            if (auto valid = Admit(conflict.original, policy, targets); valid.HasError())
-                return valid;
-            if (!Detail::IsCanonicalProjectVersion(conflict.authoredAgainst.projectVersion) ||
-                !Detail::IsCanonicalProjectVersion(conflict.observedSource.projectVersion))
-                return Invalid<void>();
-            if (auto charged = Charge(conflict.original, EncodeComponentConflict(conflict), policy, bytes); charged.HasError())
-                return charged;
-        }
-        for (const auto &orphan : set.componentOrphans) {
-            if (auto valid = Admit(orphan.original, policy, targets); valid.HasError())
-                return valid;
-            if (!Detail::IsCanonicalProjectVersion(orphan.authoredAgainst.projectVersion) ||
-                orphan.reason > PrefabComponentOverrideIssue::SchemaChanged)
-                return Invalid<void>();
-            if (auto charged = Charge(orphan.original, EncodeComponentOrphan(orphan), policy, bytes); charged.HasError())
-                return charged;
-        }
+        if (auto valid = ValidateNormalComponents(set, policy, bytes, targets); valid.HasError())
+            return valid;
+        if (auto valid = ValidateComponentConflicts(set, policy, bytes, targets); valid.HasError())
+            return valid;
+        if (auto valid = ValidateComponentOrphans(set, policy, bytes, targets); valid.HasError())
+            return valid;
         return CheckValueTargets(set, targets);
     }
 }  // namespace Horo::Prefab::ValueDetail

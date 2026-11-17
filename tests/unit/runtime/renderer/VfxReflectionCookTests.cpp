@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/ShaderReflectionErrors.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "LockedVfxShaderFixture.h"
 #include "ShaderReflectionCook.h"
@@ -6,6 +7,8 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <cstddef>
+#include <span>
 #include <string>
 
 namespace {
@@ -101,19 +104,25 @@ TEST_CASE("VFX cook rejects unproven intermediate or native layout rather than p
         evidence.manifest.sourceRevision = 2;
     }
     SECTION("Array stride") {
-        Replace(evidence.stages[0].json, "\"array_stride\":64", "\"array_stride\":80");
+        Replace(evidence.stages[0].json, R"("array_stride":64)", R"("array_stride":80)");
     }
     SECTION("Runtime array") {
-        Replace(evidence.stages[0].json, "\"array_size_is_literal\":[true]", "\"array_size_is_literal\":[false]");
+        Replace(evidence.stages[0].json, R"("array_size_is_literal":[true])", R"("array_size_is_literal":[false])");
     }
     SECTION("Wrong major order has no admitted native lowering proof") {
-        Replace(evidence.stages[0].json, "\"matrix_stride\":16", "\"matrix_stride\":16,\"row_major\":true");
+        Replace(evidence.stages[0].json, R"("matrix_stride":16)", R"("matrix_stride":16,"row_major":true)");
     }
     SECTION("Matrix stride") {
-        Replace(evidence.stages[0].json, "\"matrix_stride\":16", "\"matrix_stride\":32");
+        Replace(evidence.stages[0].json, R"("matrix_stride":16)", R"("matrix_stride":32)");
     }
     SECTION("Offset") {
-        Replace(evidence.stages[0].json, "\"offset\":8192", "\"offset\":8208");
+        Replace(evidence.stages[0].json, R"("offset":8192)", R"("offset":8208)");
+    }
+    SECTION("Vector cannot claim matrix layout even with false row major") {
+        Replace(evidence.stages[0].json, R"("offset":8192)", R"("offset":8192,"row_major":false)");
+    }
+    SECTION("Scalar cannot claim a vector type at the same offset") {
+        Replace(evidence.stages[0].json, R"("name":"AlphaCutoff","type":"float")", R"("name":"AlphaCutoff","type":"vec4")");
     }
     SECTION("Native array shape") {
         Replace(evidence.translations[0], "ClipFromLocal[128]", "ClipFromLocal[127]");
@@ -157,6 +166,21 @@ TEST_CASE("VFX cook rejects competing native semantics and foreign logical evide
         evidence.translations[0].resize(1024U * 1024U + 1, ' ');
     }
     CHECK(NormalizeVfxMetalReflection(evidence.manifest, evidence.target, evidence.stages, evidence.translations).HasError());
+}
+
+TEST_CASE("VFX native layout rejects non-string parameter types with a typed reflection failure", "[renderer][shader-cook][vfx]") {
+    const auto backend = GENERATE(ShaderTargetBackend::OpenGL, ShaderTargetBackend::Metal);
+    const auto malformed =
+        GENERATE(std::string_view{"null"}, std::string_view{"true"}, std::string_view{"7"}, std::string_view{"[]"}, std::string_view{"{}"});
+    auto evidence = backend == ShaderTargetBackend::OpenGL ? OpenGLEvidence() : Evidence{};
+    Replace(evidence.stages[0].json, R"("type":"mat4")", std::string{R"("type":)"} + std::string{malformed});
+    const auto result = backend == ShaderTargetBackend::OpenGL
+                            ? NormalizeVfxOpenGLReflection(evidence.manifest, evidence.target, evidence.stages, evidence.translations)
+                            : NormalizeVfxMetalReflection(evidence.manifest, evidence.target, evidence.stages, evidence.translations);
+    INFO("Backend=" << static_cast<unsigned>(backend) << " malformed type=" << malformed);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().domain.Value() == ShaderReflectionErrors::InvalidReflection.domain.Value());
+    CHECK(result.ErrorValue().code.Value() == ShaderReflectionErrors::InvalidReflection.code.Value());
 }
 
 TEST_CASE("VFX cook handles optimized fragment uniform removal without renumbering logical identities", "[renderer][shader-cook][vfx]") {
@@ -224,7 +248,7 @@ TEST_CASE("VFX GL cook rejects missing unsupported or ambiguous final-target evi
         Replace(evidence.translations[1], "sampler2D", "sampler2DShadow");
     }
     SECTION("Intermediate member offset differs") {
-        Replace(evidence.stages[0].json, "\"offset\":8192", "\"offset\":8208");
+        Replace(evidence.stages[0].json, R"("offset":8192)", R"("offset":8208)");
     }
     SECTION("Native layout cannot come from a Metal map") {
         evidence.translations[0] = std::string{Structs};
@@ -252,7 +276,9 @@ TEST_CASE("VFX GL cook preserves optimizer stage removal and rejects different c
           "[renderer][shader-cook][vfx][opengl]") {
     auto evidence = OpenGLEvidence();
     bool accepted = true;
-    SECTION("Unused fragment material block removed") {}
+    SECTION("Unused fragment material block removed") {
+        // The original fixture intentionally keeps the valid case without a fragment material block.
+    }
     SECTION("Same material block retained by masked fragment") {
         evidence.stages[1].json.insert(1, "\"ubos\":[" + std::string{Material} + "],");
         evidence.translations[1] += " layout(std140) uniform ActualMaterial { vec4 Tint; float AlphaCutoff; } m;";
@@ -322,7 +348,7 @@ TEST_CASE("Locked GL VFX cooked metadata roundtrips its exact package and reject
 
     SECTION("Changed GLSL package bytes") {
         auto payload = artifact.payload;
-        payload.back() ^= 1;
+        std::as_writable_bytes(std::span{payload}).back() ^= std::byte{1};
         CHECK(DecodeReflectedShaderArtifact(evidence.manifest, evidence.target, payload, encoded.Value()).HasError());
     }
     SECTION("Changed canonical metadata bytes") {
@@ -333,13 +359,13 @@ TEST_CASE("Locked GL VFX cooked metadata roundtrips its exact package and reject
 }
 
 TEST_CASE("GL cooked reflection rejects foreign backends and mismatched payload formats", "[renderer][shader-cook][vfx][locked]") {
+    using enum ShaderTargetBackend;
     const auto evidence = Horo::Tests::LoadLockedVfxShaderEvidence(ShaderTargetBackend::OpenGL, false);
     const auto artifact = Horo::Tests::CookLockedVfxOpenGlFixture(evidence);
     REQUIRE(artifact.reflection);
     const auto encoded = EncodeReflectedShaderArtifact(*artifact.reflection);
     REQUIRE(encoded.HasValue());
-    for (const auto backend :
-         {ShaderTargetBackend::Vulkan, ShaderTargetBackend::Metal, ShaderTargetBackend::D3D12, ShaderTargetBackend::Null}) {
+    for (const auto backend : {Vulkan, Metal, D3D12, Null}) {
         auto compiled = artifact;
         compiled.backend = backend;
         CHECK(ValidateReflectedShaderArtifact(compiled, *artifact.reflection).HasError());

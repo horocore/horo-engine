@@ -89,10 +89,8 @@ TEST_CASE("0.2 authoring migration is registered with the exact immutable 0.1 so
     REQUIRE(definition.sourceContract ==
             ParsePersistentContractHash("sha256:997e790fc23515b362847c755006156aa35353ce7f2624518acf7ed1214ddb03").Value());
     REQUIRE(definition.pipeline->Nodes().size() == 3);
-    auto support = BuildBuiltInProjectMigrationSupportDescriptor();
-    REQUIRE(support.HasValue());
-    REQUIRE(definition.targetContract == support.Value().targetContract);
-    REQUIRE(support.Value().targetValidator != nullptr);
+    REQUIRE(definition.targetContract ==
+            ParsePersistentContractHash("sha256:e068efe802defac5ec18d9742f0b1e1c50b1bfda5b26f8fc4a3a02eaf478065c").Value());
 }
 
 TEST_CASE("0.2 migration never fabricates Network policy when no project policy exists", "[unit][application][authoring-migration]") {

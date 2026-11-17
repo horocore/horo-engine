@@ -32,6 +32,8 @@ namespace Horo::Editor {
             return Result<Assets::AssetSourcePublication>::Failure(admitted.ErrorValue());
         if (conflict_)
             return Result<Assets::AssetSourcePublication>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        if (const auto validated = source_->ValidateLimits(limits_); validated.HasError())
+            return Result<Assets::AssetSourcePublication>::Failure(validated.ErrorValue());
         auto encoded = source_->SerializeCanonical();
         if (encoded.HasError())
             return Result<Assets::AssetSourcePublication>::Failure(encoded.ErrorValue());
@@ -67,6 +69,8 @@ namespace Horo::Editor {
             return admitted;
         if (state_ == saved_)
             return Result<void>::Success();
+        if (const auto validated = source_->ValidateLimits(limits_); validated.HasError())
+            return Result<void>::Failure(validated.ErrorValue());
         auto encoded = source_->SerializeCanonical();
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());

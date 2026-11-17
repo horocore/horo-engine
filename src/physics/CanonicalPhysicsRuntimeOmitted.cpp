@@ -60,7 +60,8 @@ namespace Horo::Physics::Detail {
     Result<CanonicalSceneBodyBatch> PrepareCanonicalSceneBodies(CanonicalWorldHandle, PhysicsWorldId,
                                                                 std::span<const PhysicsSceneBodyDescriptor>,
                                                                 std::span<const PhysicsSceneGroupShape>,
-                                                                std::span<const PhysicsSceneGroupBody>) {
+                                                                std::span<const PhysicsSceneGroupBody>,
+                                                                std::span<const StateDetail::ConstructionRecipeLease>) {
         return Result<CanonicalSceneBodyBatch>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
     }
 
@@ -97,14 +98,16 @@ namespace Horo::Physics::Detail {
     void DestroyCanonicalWorld(const CanonicalWorldHandle) noexcept {}
 
     /** @copydoc CreateCanonicalSceneShape */
-    Result<ShapeHandle> CreateCanonicalSceneShape(const CanonicalWorldHandle, const PhysicsWorldId, const PhysicsShapeDescriptor &) {
+    Result<ShapeHandle> CreateCanonicalSceneShape(const CanonicalWorldHandle, const PhysicsWorldId, const PhysicsShapeDescriptor &,
+                                                  const StateDetail::ConstructionRecipeLease *) {
         return Result<ShapeHandle>::Failure(
             MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
     }
 
     /** @copydoc CreateCanonicalSceneCompoundShape */
     Result<ShapeHandle> CreateCanonicalSceneCompoundShape(const CanonicalWorldHandle, const PhysicsWorldId,
-                                                          const std::span<const PhysicsSceneShapeInstance>) {
+                                                          const std::span<const PhysicsSceneShapeInstance>,
+                                                          const StateDetail::ConstructionRecipeLease *) {
         return Result<ShapeHandle>::Failure(
             MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
     }
@@ -190,7 +193,8 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc CreateCanonicalQueryFixture */
     Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(const CanonicalWorldHandle, const PhysicsWorldId,
-                                                            const PhysicsQueryFixtureDescriptor &) {
+                                                            const PhysicsQueryFixtureDescriptor &,
+                                                            const StateDetail::ConstructionRecipeLease *) {
         return Result<PhysicsQueryFixture>::Failure(
             MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
     }

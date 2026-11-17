@@ -26,8 +26,14 @@ namespace {
     class Labels final : public ILocalizationService {
     public:
         const std::string &Get(std::string_view, std::string_view key) const override {
-            const auto [entry, inserted] =
-                labels_.try_emplace(std::string{key}, key == "workspace.world_sources.title" ? "Sources" : std::string{key});
+            if (key == "workspace.world_sources.unavailable") {
+                static const std::string unavailable{"Open a partitioned world to edit streaming sources."};
+                return unavailable;
+            }
+            const auto [entry, inserted] = labels_.try_emplace(std::string{key}, key == "workspace.world_sources.title" ||
+                                                                                         key == "workspace.content_browser.location.sources"
+                                                                                     ? "Sources"
+                                                                                     : std::string{key});
             static_cast<void>(inserted);
             return entry->second;
         }
@@ -466,6 +472,11 @@ namespace {
         EditorWorkspaceViewModel view;
         WorldSourceViewportTool tool;
         OpenSources(harness, tool, view);
+        const auto *popup = ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+        REQUIRE(popup != nullptr);
+        CHECK(popup->Size.x >= 176.0F * Theme::GetActiveTokens().sizes.uiScale);
+        CHECK(popup->WindowPadding.x > 0.0F);
+        CHECK(popup->Size.y < ImGui::GetTextLineHeight() * 8.0F);
         const auto result = PopupAction(harness, tool, view, "workspace.world_sources.sphere");
         CHECK_FALSE(result.command.worldSource.has_value());
     }

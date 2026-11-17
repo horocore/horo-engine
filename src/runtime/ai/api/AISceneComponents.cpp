@@ -2,12 +2,26 @@
 
 #include "Horo/AI/AIErrors.h"
 
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
 
 namespace Horo::AI {
     namespace {
+        // Checked hash storage allocates iterator bookkeeping inside noexcept.
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+        template <class Key, class Hash = std::hash<Key>> using ValidationSet = std::set<Key>;
+#else
+        template <class Key, class Hash = std::hash<Key>> using ValidationSet = std::unordered_set<Key, Hash>;
+#endif
+
+        /** @brief Reserves bucket capacity only for the compiled index representation. */
+        template <class Index> void ReserveValidationIndex(Index &index, const std::size_t count) {
+            if constexpr (requires { index.reserve(count); })
+                index.reserve(count);
+        }
+
         [[nodiscard]] Result<void> Failure(const ErrorCodeDescriptor &descriptor, std::string message) {
             return Result<void>::Failure(MakeError(descriptor, std::move(message)));
         }
@@ -58,8 +72,8 @@ namespace Horo::AI {
 
     /** @copydoc ValidateAiSceneComponents */
     Result<void> ValidateAiSceneComponents(const std::span<const AiSceneComponentView> components) {
-        std::unordered_set<std::uint64_t> agents;
-        agents.reserve(components.size());
+        ValidationSet<std::uint64_t> agents;
+        ReserveValidationIndex(agents, components.size());
         for (const AiSceneComponentView component : components) {
             if (component.agent != nullptr) {
                 if (const Result<void> valid = ValidateAiAgentComponent(*component.agent); valid.HasError())

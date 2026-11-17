@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/design_system/components/EditorBusyIndicator.h"
 
 #include <algorithm>
 #include <format>
@@ -57,7 +58,7 @@ namespace Horo::Editor {
                                        : context_.localization.Get(item.descriptor.localizationNamespace, item.descriptor.labelKey);
         float width = kInnerPadding * 2.0F;
         if (!item.content.iconResourceId.empty()) {
-            width += kIconDiameter + 6.0F;
+            width += (item.content.iconResourceId == Ui::BusyStatusIcon ? 12.0F : kIconDiameter) + 6.0F;
         }
         if (!label.empty()) {
             width += ImGui::CalcTextSize(label.c_str()).x;
@@ -110,9 +111,14 @@ namespace Horo::Editor {
         float cursorX = position.x + kInnerPadding;
         const float centerY = position.y + itemSize.y * 0.5F;
         if (!item.content.iconResourceId.empty()) {
-            drawList->AddCircleFilled(ImVec2(cursorX + kIconDiameter * 0.5F, centerY), kIconDiameter * 0.5F,
-                                      Theme::U32(ToneColor(item.content.tone)));
-            cursorX += kIconDiameter + 6.0F;
+            if (item.content.iconResourceId == Ui::BusyStatusIcon) {
+                Ui::DrawBusyIndicator(*drawList, {cursorX + 6, centerY}, 5, ToneColor(item.content.tone));
+                cursorX += 18;
+            } else {
+                drawList->AddCircleFilled(ImVec2(cursorX + kIconDiameter * 0.5F, centerY), kIconDiameter * 0.5F,
+                                          Theme::U32(ToneColor(item.content.tone)));
+                cursorX += kIconDiameter + 6.0F;
+            }
         }
 
         const ImU32 labelColor =

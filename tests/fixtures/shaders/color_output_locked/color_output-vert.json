@@ -1,0 +1,8 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "VSMain",
+            "mode" : "vert"
+        }
+    ]
+}

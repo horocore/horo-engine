@@ -77,7 +77,7 @@ namespace Horo::Physics {
 
         TEST_CASE("Physics world capacities reject each bound independently and never clamp", "[physics][world]") {
             using Mutation = void (*)(PhysicsWorldCapacity &);
-            const std::array<Mutation, 5> mutations{
+            const Mutation mutations[]{
                 [](auto &value) {
                 value.maximumBodies = MaximumPhysicsBodies + 1;
             },
@@ -108,7 +108,12 @@ namespace Horo::Physics {
         }
 
         TEST_CASE("Physics capability defaults never advertise available functionality", "[physics][capability]") {
+            static_assert(PhysicsCapabilityContractVersion == 2);
+            static_assert(static_cast<unsigned>(PhysicsCapability::ContinuousCollision) == 8);
+            static_assert(static_cast<unsigned>(PhysicsCapability::StateSnapshots) == 9);
+            static_assert(static_cast<unsigned>(PhysicsCapability::AtomicStateRestore) == 10);
             PhysicsCapabilities report;
+            REQUIRE(report.contractVersion == 2);
             REQUIRE_FALSE(ValidatePhysicsCapabilities(report));
             report.revision = 1;
             REQUIRE(ValidatePhysicsCapabilities(report));
@@ -137,9 +142,12 @@ namespace Horo::Physics {
 
         TEST_CASE("Physics capability validation rejects malformed and incoherent complete snapshots", "[physics][capability]") {
             using Mutation = void (*)(PhysicsCapabilities &);
-            const std::array<Mutation, 5> mutations{
+            const std::array<Mutation, 6> mutations{
                 [](auto &value) {
-                value.contractVersion = 2;
+                value.contractVersion = 3;
+            },
+                [](auto &value) {
+                value.contractVersion = 1;
             },
                 [](auto &value) {
                 value.revision = 0;

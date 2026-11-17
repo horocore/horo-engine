@@ -368,6 +368,23 @@ namespace Horo::Prefab {
         Reject(CookedPrefab::Parse(bytes, Test::Asset(), Limits()), PrefabErrors::UnsupportedCookedVersion);
         Word(bytes, 4, 0);
         Reject(CookedPrefab::Parse(bytes, Test::Asset(), Limits()), PrefabErrors::UnsupportedCookedVersion);
+        Word(bytes, 4, 2);
+        Reject(CookedPrefab::Parse(bytes, Test::Asset(), Limits()), PrefabErrors::UnsupportedCookedVersion);
+    }
+
+    TEST_CASE("Cooked prefab3 retains genuine optional root source revision separately from full artifact identity",
+              "[prefab][cooked][save]") {
+        auto data = Candidate();
+        data.rootSourceRevision = PrefabSourceRevision{Application::ParseHoroVersion("1.2.3").Value(), Digest("genuine root source")};
+        auto encoded = CookedPrefab::Create(data, Limits());
+        REQUIRE(encoded.HasValue());
+        const auto parsed = CookedPrefab::Parse(encoded.Value().Bytes(), data.assetId, Limits());
+        REQUIRE(parsed.HasValue());
+        CHECK(parsed.Value().Data().rootSourceRevision == data.rootSourceRevision);
+        CHECK(parsed.Value().PayloadDigest() != data.rootSourceRevision->contentDigest);
+        // Procedural cooked producers remain valid for ephemeral spawn; durable capture separately requires genuine source provenance.
+        data.rootSourceRevision.reset();
+        CHECK(CookedPrefab::Create(std::move(data), Limits()).HasValue());
     }
 
     TEST_CASE("Cooked prefab rejects hostile tables even with a matching payload digest", "[prefab][cooked]") {
@@ -396,9 +413,12 @@ namespace Horo::Prefab {
             Reject(CookedPrefab::Parse(bytes, Test::Asset(), Limits()), PrefabErrors::CorruptedPayload);
         }
         SECTION("unrecognized reference tag") {
-            // The final binding target is followed by the v2 initialization-table count.
-            constexpr auto trailerBytes = 2 * sizeof(std::uint32_t);
-            bytes[bytes.size() - trailerBytes - 1] = std::byte{4};
+            // HPFB3 ends with the binding slot, empty initialization count and absent root-revision flag.
+            constexpr auto trailerBytes = 2 * sizeof(std::uint32_t) + sizeof(std::uint8_t);
+            const auto tagOffset = bytes.size() - trailerBytes - sizeof(std::uint8_t);
+            REQUIRE(bytes.back() == std::byte{0});
+            REQUIRE(bytes[tagOffset] == std::byte{3});
+            bytes[tagOffset] = std::byte{4};
             Reseal(bytes);
             Reject(CookedPrefab::Parse(bytes, Test::Asset(), Limits()), PrefabErrors::CorruptedPayload);
         }

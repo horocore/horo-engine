@@ -1,5 +1,6 @@
 #include "Horo/Application/HostObservability.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Telemetry/Operation.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -60,8 +61,15 @@ TEST_CASE("Graphical and headless hosts share one deterministic observability li
     REQUIRE(editor != nullptr);
     REQUIRE(Horo::Application::HostObservabilitySession::Start(MakeConfiguration(temporary.path, "cli")) == nullptr);
     Horo::Log::Logger::Write("Editor.Project", Horo::Log::Level::Info, "editor lifecycle");
+    {
+        Horo::Telemetry::OperationSpan operation{"Editor.Project", "Project.Validate"};
+        REQUIRE(operation.Complete(Horo::Telemetry::SpanStatus::Succeeded));
+    }
     editor.reset();
     REQUIRE(std::filesystem::is_regular_file(temporary.path / "test-host.shutdown.json"));
+    const auto history = temporary.path / "operations" / "test-host.jsonl";
+    REQUIRE(std::filesystem::is_regular_file(history));
+    CHECK(ReadText(history).find("Project.Validate") != std::string::npos);
 
     auto headless = Horo::Application::HostObservabilitySession::Start(MakeConfiguration(temporary.path, "cli"));
     REQUIRE(headless != nullptr);

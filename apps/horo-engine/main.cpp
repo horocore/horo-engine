@@ -1,7 +1,9 @@
+#include "AnimationRuntimeIdentitySource.h"
 #include "NetworkProductLaunch.h"
 #include "cli_host/CliHost.h"
 
 #include <iostream>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -19,8 +21,26 @@
 namespace {
     /** @brief Borrows invocation storage only for the synchronous CLI or existing network host call. */
     int RunProcess(const std::span<char *> argv, std::optional<Horo::Error> admissionFailure = {}) {
-        if (!admissionFailure && argv.size() >= 2 && std::string_view{argv[1]} == "--run-network-product")
-            return Horo::Application::Internal::RunNetworkProduct(argv.subspan(2));
+        if (!admissionFailure && argv.size() >= 2 && std::string_view{argv[1]} == "--run-network-product") {
+            std::unique_ptr<Horo::Application::HostObservabilitySession> observability;
+            try {
+                observability =
+                    Horo::Application::HostObservabilitySession::Start({.logging = {.logDirectory = "~/.horo/logs",
+                                                                                    .baseName = "horo-engine",
+                                                                                    .hostName = "horo-engine",
+                                                                                    .hostVersion = HORO_ENGINE_VERSION_STRING},
+                                                                        .identity = {.processRole = "network-product",
+                                                                                     .engineVersion = HORO_ENGINE_VERSION_STRING,
+                                                                                     .buildConfiguration = HORO_BUILD_CONFIGURATION,
+                                                                                     .sourceRevision = HORO_SOURCE_REVISION}});
+            } catch (...) { /* Observation startup is best-effort; product authority is unchanged. */
+            }
+            const auto metrics = Horo::Prefab::RegisterPrefabMetricHandles(Horo::Telemetry::MetricCollectionLevel::Detailed, true);
+            auto animationIdentities = std::make_shared<Horo::Application::Internal::AnimationRuntimeIdentitySource>(
+                Horo::Application::Internal::AnimationRuntimeIdentityRange{1, std::numeric_limits<std::uint64_t>::max()});
+            return Horo::Application::Internal::RunNetworkProduct(argv.subspan(2), nullptr, nullptr, metrics,
+                                                                  std::move(animationIdentities));
+        }
         std::vector<std::string_view> arguments;
         for (std::size_t index = 1; index < argv.size(); ++index)
             arguments.emplace_back(argv[index]);

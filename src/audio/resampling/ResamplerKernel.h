@@ -3,8 +3,8 @@
 #include "Horo/Audio/AudioResampler.h"
 #include "ResamplerSimd.h"
 
+#include <memory>
 #include <span>
-#include <vector>
 
 namespace Horo::Audio::Detail {
     /** @brief Immutable control-thread-prepared coefficient bank, privately owned by a render-core generation. */
@@ -35,8 +35,8 @@ namespace Horo::Audio::Detail {
 
     private:
         /** @brief Take exclusive ownership of a complete bank, never an incomplete preparation. */
-        explicit ResamplerKernel(std::vector<float> coefficients, std::uint32_t taps, ResamplerEvaluator evaluator);
-        std::vector<float> coefficients_;
+        explicit ResamplerKernel(std::unique_ptr<float[]> coefficients, std::uint32_t taps, ResamplerEvaluator evaluator);
+        std::unique_ptr<float[]> coefficients_;
         std::uint32_t taps_;
         ResamplerEvaluator evaluator_;
     };

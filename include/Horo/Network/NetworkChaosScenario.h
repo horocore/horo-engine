@@ -22,7 +22,7 @@ namespace Horo::Network {
         extern const ErrorCodeDescriptor CheckpointMismatch;
     }  // namespace NetworkChaosErrors
 
-    /** @brief Explicit host policy; shipping/release products must select Disabled. */
+    /** @brief Test/preview intent within the non-shipping harness target; this enum never grants product authority. */
     enum class NetworkChaosProfile : std::uint8_t {
         Disabled,
         Test,
@@ -124,6 +124,11 @@ namespace Horo::Network {
         [[nodiscard]] Result<std::size_t> Advance(NetworkChaosScope scope, std::uint64_t tick,
                                                   std::span<DeterministicTransportEvent> output);
 
+        /** @brief Returns the owner-issued replacement only after old disconnect drainage and successful Open.
+         * @param scope Exact pinned host/session correlation. @param previous Exact retired occurrence.
+         * @return Replacement connection or typed stale, pending, closed or shutdown denial. Never grants session authentication. */
+        [[nodiscard]] Result<ConnectionHandle> RestartedConnection(NetworkChaosScope scope, ConnectionHandle previous) const;
+
         /** @brief Cancels one exact selected connection and any deferred restart of that occurrence.
          * Subsequent incompatible timeline work fails terminally.
          * @param scope Exact pinned host/session correlation.
@@ -153,6 +158,7 @@ namespace Horo::Network {
         void RebindViews() noexcept;
         [[nodiscard]] std::size_t TopologyIndex(ConnectionHandle connection) const noexcept;
         [[nodiscard]] Result<void> Apply(const NetworkChaosAction &action);
+        [[nodiscard]] Result<void> ApplyLifecycleAction(const NetworkChaosAction &action);
         [[nodiscard]] Result<void> CompleteRestarts(std::span<const DeterministicTransportEvent> events);
 
         NetworkChaosScenarioDescriptor descriptor_;
@@ -163,6 +169,7 @@ namespace Horo::Network {
         // Owner-thread state only: a next generation cannot open before the previous terminal event is drained.
         std::array<ConnectionHandle, 16> disconnected_{};
         std::array<PendingRestart, 16> pendingRestarts_{};
+        std::array<PendingRestart, 16> restarted_{};
         NetworkChaosEvidence evidence_{};
         std::size_t nextAction_{};
         std::size_t nextCheckpoint_{};

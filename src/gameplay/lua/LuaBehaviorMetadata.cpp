@@ -190,6 +190,12 @@ namespace Horo::Gameplay::Detail {
 
 namespace Horo::Gameplay {
     namespace {
+        /** @brief Preserves native source locations in UTF-8 Lua chunks and diagnostics. */
+        std::string PathText(const std::filesystem::path &path) {
+            const auto encoded = path.u8string();
+            return {encoded.begin(), encoded.end()};
+        }
+
         /** @brief Resolves sidecar replication identities without inventing a module namespace. */
         struct SidecarReplicationIdentity {
             Network::ReplicationSchemaId schema;
@@ -205,18 +211,18 @@ namespace Horo::Gameplay {
                 if (!sidecar["replicationSchemaId"].is_number_unsigned())
                     return Result<SidecarReplicationIdentity>::Failure(
                         MakeError(GameplayErrors::InvalidReplicationRegistration,
-                                  sidecarPath.string() + ": replicationSchemaId must be a nonzero unsigned integer."));
+                                  PathText(sidecarPath) + ": replicationSchemaId must be a nonzero unsigned integer."));
                 auto identity = Network::ReplicationSchemaId::Create(sidecar["replicationSchemaId"].get<std::uint64_t>());
                 if (identity.HasError()) {
                     auto error = identity.ErrorValue();
-                    error.message = sidecarPath.string() + ": " + error.message;
+                    error.message = PathText(sidecarPath) + ": " + error.message;
                     return Result<SidecarReplicationIdentity>::Failure(std::move(error));
                 }
                 schema = identity.Value();
                 if (!sidecar.contains("replicationModuleId") || !sidecar["replicationModuleId"].is_string())
                     return Result<SidecarReplicationIdentity>::Failure(
                         MakeError(GameplayErrors::InvalidReplicationRegistration,
-                                  sidecarPath.string() + ": replicationModuleId is required with replicationSchemaId."));
+                                  PathText(sidecarPath) + ": replicationModuleId is required with replicationSchemaId."));
                 moduleId.value = sidecar["replicationModuleId"].get<std::string>();
             }
             return Result<SidecarReplicationIdentity>::Success({schema, std::move(moduleId)});
@@ -241,13 +247,13 @@ namespace Horo::Gameplay {
             const auto size = std::filesystem::file_size(path, error);
             if (error || size == 0 || size > maximumBytes)
                 return Result<std::string>::Failure(
-                    MakeError(GameplayErrors::InvalidBehaviorComponent, path.string() + ": Lua input is missing or oversized."));
+                    MakeError(GameplayErrors::InvalidBehaviorComponent, PathText(path) + ": Lua input is missing or oversized."));
             std::ifstream input(path, std::ios::binary);
             std::string contents(static_cast<std::size_t>(size), '\0');
             input.read(contents.data(), static_cast<std::streamsize>(size));
             if (input.gcount() != static_cast<std::streamsize>(size) || input.peek() != std::char_traits<char>::eof())
                 return Result<std::string>::Failure(
-                    MakeError(GameplayErrors::InvalidBehaviorComponent, path.string() + ": Lua input could not be read completely."));
+                    MakeError(GameplayErrors::InvalidBehaviorComponent, PathText(path) + ": Lua input could not be read completely."));
             return Result<std::string>::Success(std::move(contents));
         }
 
@@ -272,14 +278,14 @@ namespace Horo::Gameplay {
                 if (duplicateKey || (sidecar.contains("replicationModuleId") && !sidecar.contains("replicationSchemaId")))
                     return Result<SidecarMetadata>::Failure(
                         MakeError(GameplayErrors::InvalidReplicationRegistration,
-                                  sidecarPath.string() + ": duplicate or incomplete replication identities."));
+                                  PathText(sidecarPath) + ": duplicate or incomplete replication identities."));
                 if (!ValidBehaviorMetadata(sidecar))
                     return Result<SidecarMetadata>::Failure(
-                        MakeError(GameplayErrors::InvalidBehaviorComponent, sidecarPath.string() + ": Invalid Lua sidecar metadata."));
+                        MakeError(GameplayErrors::InvalidBehaviorComponent, PathText(sidecarPath) + ": Invalid Lua sidecar metadata."));
                 auto typeId = BehaviorTypeId::Parse(sidecar["behaviorTypeId"].get<std::string>());
                 if (typeId.HasError()) {
                     auto error = typeId.ErrorValue();
-                    error.message = sidecarPath.string() + ": " + error.message;
+                    error.message = PathText(sidecarPath) + ": " + error.message;
                     return Result<SidecarMetadata>::Failure(std::move(error));
                 }
                 auto identity = ReadReplicationIdentity(sidecar, sidecarPath);
@@ -289,7 +295,7 @@ namespace Horo::Gameplay {
                 return Result<SidecarMetadata>::Success({std::move(typeId).Value(), std::move(identities)});
             } catch (const nlohmann::json::exception &exception) {
                 return Result<SidecarMetadata>::Failure(
-                    MakeError(GameplayErrors::InvalidBehaviorComponent, sidecarPath.string() + ": " + exception.what()));
+                    MakeError(GameplayErrors::InvalidBehaviorComponent, PathText(sidecarPath) + ": " + exception.what()));
             }
         }
 
@@ -309,7 +315,7 @@ namespace Horo::Gameplay {
         if (metadata.HasError())
             return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(metadata.ErrorValue());
         auto identity = std::move(metadata).Value();
-        return Compile(std::move(source).Value(), identity.type, sourcePath.string(), limits, identity.replication.schema,
+        return Compile(std::move(source).Value(), identity.type, PathText(sourcePath), limits, identity.replication.schema,
                        identity.replication.moduleId);
     }
 

@@ -1,5 +1,6 @@
 #include "CanonicalJsonWriter.h"
 #include "Horo/Prefab/PrefabDocument.h"
+#include "PrefabDocumentOverrideLayers.h"
 #include "PrefabDocumentSerializationInternal.h"
 
 #include <algorithm>
@@ -176,11 +177,14 @@ namespace Horo::Prefab {
         /** @brief Encodes one nested placement in persisted identity order. */
         [[nodiscard]] OrderedJson EncodePlacement(const NestedPrefabPlacement &placement) {
             const bool mountsAtRoot = !placement.parentLocalId || placement.parentLocalId->IsRoot();
-            return OrderedJson{{"placementLocalId", placement.placementLocalId.value},
-                               {"parentLocalId", mountsAtRoot ? OrderedJson(nullptr) : OrderedJson(placement.parentLocalId->value)},
-                               {"sourceAsset", placement.sourcePrefab.Asset().ToString()},
-                               {"authoredAgainst", EncodeRevision(placement.authoredAgainst)},
-                               {"localRootTransform", EncodeTransform(placement.localRootTransform)}};
+            OrderedJson encoded{{"placementLocalId", placement.placementLocalId.value},
+                                {"parentLocalId", mountsAtRoot ? OrderedJson(nullptr) : OrderedJson(placement.parentLocalId->value)},
+                                {"sourceAsset", placement.sourcePrefab.Asset().ToString()},
+                                {"authoredAgainst", EncodeRevision(placement.authoredAgainst)},
+                                {"localRootTransform", EncodeTransform(placement.localRootTransform)}};
+            if (placement.valueOverrides)
+                encoded["valueOverrides"] = Detail::EncodeOverrideLayer(*placement.valueOverrides);
+            return encoded;
         }
 
         /** @brief Encodes optional composition without allowing record order to select precedence. */
@@ -188,9 +192,11 @@ namespace Horo::Prefab {
             if (composition.variantParent) {
                 if (!composition.variantAuthoredAgainst)
                     return Failed<OrderedJson>(PrefabErrors::CompositionInvalid, "Prefab variant revision is missing.");
-                return Result<OrderedJson>::Success(
-                    OrderedJson{{"variantParent", composition.variantParent->Asset().ToString()},
-                                {"variantAuthoredAgainst", EncodeRevision(*composition.variantAuthoredAgainst)}});
+                OrderedJson encoded{{"variantParent", composition.variantParent->Asset().ToString()},
+                                    {"variantAuthoredAgainst", EncodeRevision(*composition.variantAuthoredAgainst)}};
+                if (composition.variantOverrides)
+                    encoded["variantOverrides"] = Detail::EncodeOverrideLayer(*composition.variantOverrides);
+                return Result<OrderedJson>::Success(std::move(encoded));
             }
             if (composition.variantAuthoredAgainst || composition.nestedPlacements.empty())
                 return Failed<OrderedJson>(PrefabErrors::CompositionInvalid, "Prefab composition is not canonical.");

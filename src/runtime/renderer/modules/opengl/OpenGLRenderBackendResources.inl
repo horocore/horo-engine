@@ -120,12 +120,19 @@ Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const overrid
     return functions_.pipelines.queryDeviceIdentity();
 }
 
+/** @brief Rejects native depth-only material pipelines until this backend owns the complete batching contract. */
+static Result<PipelineCacheKey> ValidateOpenGLMaterialPipelineRequest(const RenderGraphicsPipelineDescriptor &descriptor) {
+    if (descriptor.state.depthOnly)
+        return Result<PipelineCacheKey>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
+    return ValidateRenderGraphicsPipelineDescriptor(descriptor);
+}
+
 /** @copydoc IRenderResourceBackend::QueryGraphicsPipelineMemoryCost */
 Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphicsPipelineDescriptor &descriptor, const std::uint64_t vertex,
                                                              const std::uint64_t fragment) const override {
     if (!IsOwnerThread())
         return WrongThread<RenderMemoryCostPlan>();
-    const auto valid = ValidateRenderGraphicsPipelineDescriptor(descriptor);
+    const auto valid = ValidateOpenGLMaterialPipelineRequest(descriptor);
     if (valid.HasError())
         return Result<RenderMemoryCostPlan>::Failure(valid.ErrorValue());
     if (!initialized_ || !functions_.shaders.IsValid() || !functions_.pipelines.IsValid() || !functions_.pipelines.isAvailable() ||

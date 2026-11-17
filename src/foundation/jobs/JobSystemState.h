@@ -63,7 +63,9 @@ namespace Horo {
         std::array<std::deque<std::uint64_t>, 3> producerOrder;
         std::uint64_t nextProducer = 1;
         std::shared_ptr<JobStoreState> store;
-        std::vector<std::thread> workers;  // NOSONAR(cpp:S6168) std::jthread not supported by AppleClang libc++ without experimental flags
+        const Error preCancelledError; /**< Prepared before workers; admission copies it without checked-library moves. */
+        // std::jthread is not supported by AppleClang libc++ without experimental flags.
+        std::vector<std::thread> workers = std::vector<std::thread>(std::size_t{0});  // NOSONAR(cpp:S6168)
 
         std::mutex shutdownMutex;
 

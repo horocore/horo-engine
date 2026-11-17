@@ -106,6 +106,30 @@ namespace Horo::Render::Detail {
                    std::isfinite(depth.clearDepth) && depth.clearDepth >= 0 && depth.clearDepth <= 1;
         }
 
+        /** @brief The admitted OpenGL 4.1 profile cannot execute GPU particle compute. */
+        [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &, const OpenGLGraphResources &,
+                                                    const RenderGraphVfxGpuCompute &) {
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
+        /** @brief The admitted OpenGL 4.1 profile cannot consume the GPU simulation storage ABI. */
+        [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &, const OpenGLGraphResources &,
+                                                    const RenderGraphVfxGpuDraw &) {
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
+        /** @brief This graph executor has no implemented whole-base texture transfer operation. */
+        [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &, const OpenGLGraphResources &,
+                                                    const RenderGraphTextureUpload &) {
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
+        /** @brief This OpenGL executor has no native exposure family and must never treat it as ordering-only. */
+        [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &, const OpenGLGraphResources &,
+                                                    const RenderGraphExposureGpu &) {
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::Unsupported));
+        }
+
         /** @brief Validates one workload against resolved native resources before submission. */
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources,

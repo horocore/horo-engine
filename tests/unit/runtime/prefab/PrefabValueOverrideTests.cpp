@@ -1,5 +1,6 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabValueOverrides.h"
+#include "Horo/Prefab/PrefabValueSnapshot.h"
 #include "PrefabValueOverrideTestSupport.h"
 
 #include <algorithm>
@@ -55,6 +56,130 @@ namespace Horo::Prefab {
             return sources.Value().Resolve(outer, PrefabInstanceId::Create(9).Value(), Limits()).Value();
         }
 
+        TEST_CASE("Immutable prefab value snapshots retain actual values defaults intent and independent revision fences",
+                  "[prefab][value-snapshot]") {
+            const auto source = Source();
+            const auto schemas = Schemas();
+            const auto baseline = PrefabValueSnapshot::Prepare(source, {}, &schemas, Limits());
+            REQUIRE(baseline.HasValue());
+            REQUIRE(baseline.Value().snapshot->Values().size() == 2);
+            const auto &property = baseline.Value().snapshot->Values().back();
+            CHECK(property.origin == PrefabValueOrigin::Source);
+            CHECK(std::get<double>(property.sourceValue) == 2.0);
+            CHECK(std::get<double>(*property.schemaDefault) == 1.0);
+            const auto changed = PreparePrefabValueEdit(source, {}, {PrefabValueEditKind::Assign, Property(), 7.0}, &schemas, Limits());
+            REQUIRE(changed.HasValue());
+            const auto snapshot = PrefabValueSnapshot::Prepare(source, changed.Value().rebased, &schemas, Limits());
+            REQUIRE(snapshot.HasValue());
+            CHECK(snapshot.Value().snapshot->Values().back().origin == PrefabValueOrigin::Instance);
+            CHECK(std::get<double>(snapshot.Value().snapshot->Values().back().effectiveValue) == 7.0);
+            CHECK(std::get<double>(property.effectiveValue) == 2.0);
+            CHECK(baseline.Value().snapshot->IsCurrent(CapturePrefabValueSnapshotRevision(Source(), {}, &schemas, Limits()).Value()));
+            CHECK_FALSE(baseline.Value().snapshot->IsCurrent(snapshot.Value().snapshot->Revision()));
+            const PrefabValueOverrideSet empty{source.RootAsset(), source.Revision().rootSource, schemas.Revision(), {}, {}, {}};
+            const auto presentEmpty = CapturePrefabValueSnapshotRevision(source, empty, &schemas, Limits());
+            REQUIRE(presentEmpty.HasValue());
+            CHECK(presentEmpty.Value().delta != Sha256Digest{});
+            CHECK_FALSE(baseline.Value().snapshot->IsCurrent(presentEmpty.Value()));
+            const auto unavailable = PrefabValueSnapshot::Prepare(source, changed.Value().rebased, &schemas, Limits(),
+                                                                  {PrefabHardLimits::OverrideRecords + 1, 0});
+            REQUIRE(unavailable.HasValue());
+            CHECK(unavailable.Value().inspectionFailure);
+            CHECK_FALSE(unavailable.Value().snapshot);
+            REQUIRE(unavailable.Value().resolution.effective);
+            CHECK(unavailable.Value().resolution.effective->Objects()[0].object.components != source.Objects()[0].object.components);
+            CHECK_FALSE(baseline.Value().snapshot->IsCurrent(
+                CapturePrefabValueSnapshotRevision(Source("{\"speed\":3.0}", 2), {}, &schemas, Limits()).Value()));
+            CHECK_FALSE(baseline.Value().snapshot->IsCurrent(
+                CapturePrefabValueSnapshotRevision(Source("{\"speed\":3.0}", 1), {}, &schemas, Limits()).Value()));
+            const auto alternateSchema = PrefabValueSchemaSnapshot::Create({}, Limits()).Value();
+            CHECK_FALSE(
+                baseline.Value().snapshot->IsCurrent(CapturePrefabValueSnapshotRevision(source, {}, &alternateSchema, Limits()).Value()));
+        }
+
+        TEST_CASE("Prefab value snapshots expose canonical variant nested and scene-instance origin chains", "[prefab][value-snapshot]") {
+            const auto schemas = Schemas();
+            const auto variant = ComposedSource(true);
+            const auto inherited = PrefabValueSnapshot::Prepare(variant, {}, &schemas, Limits()).Value().snapshot;
+            REQUIRE(inherited->Values().size() == 2);
+            for (const auto &value : inherited->Values()) {
+                CHECK(value.origin == PrefabValueOrigin::Variant);
+                REQUIRE(value.originChain.size() == 1);
+                CHECK(value.originChain[0].kind == PrefabCompositionOrigin::Variant);
+                CHECK(value.originChain[0].owner == variant.RootAsset());
+                CHECK(value.originChain[0].source == Asset());
+                CHECK_FALSE(value.originChain[0].placement);
+            }
+            const auto nested = ComposedSource(false);
+            const auto inspected = PrefabValueSnapshot::Prepare(nested, {}, &schemas, Limits()).Value().snapshot;
+            REQUIRE(inspected->Values().size() == 5);
+            CHECK(inspected->Values()[0].origin == PrefabValueOrigin::Source);
+            for (const auto &value : inspected->Values().subspan(1)) {
+                CHECK(value.origin == PrefabValueOrigin::Nested);
+                REQUIRE(value.originChain.size() == 1);
+                CHECK(value.originChain[0].kind == PrefabCompositionOrigin::Nested);
+                const auto &address = std::holds_alternative<PrefabObjectAddress>(value.target)
+                                          ? std::get<PrefabObjectAddress>(value.target)
+                                          : std::get<PrefabPropertyAddress>(value.target).Object();
+                REQUIRE(address.NestedInstanceScope().size() == 1);
+                CHECK(value.originChain[0].placement == address.NestedInstanceScope().front());
+            }
+        }
+
+        TEST_CASE("Prefab value inspection budgets and opaque evidence are explicit without changing source admission",
+                  "[prefab][value-snapshot]") {
+            const auto source = Source("{not-json}");
+            const auto opaque = PrefabValueSnapshot::Prepare(source, {}, nullptr, Limits());
+            REQUIRE(opaque.HasValue());
+            REQUIRE(opaque.Value().snapshot->Opaque().size() == 1);
+            CHECK(opaque.Value().snapshot->Opaque()[0].payload ==
+                  ComputeSha256(source.Objects()[0].object.components[0].component.payload));
+            const auto schemas = Schemas();
+            CHECK(PrefabValueSnapshot::Prepare(source, {}, &schemas, Limits()).HasError());
+            const auto valid = Source();
+            const auto omitted = PrefabValueSnapshot::Prepare(valid, {}, &schemas, Limits(), {0, 0});
+            REQUIRE(omitted.HasValue());
+            CHECK(omitted.Value().snapshot->Coverage().total == 2);
+            CHECK(omitted.Value().snapshot->Coverage().retained == 0);
+            CHECK_FALSE(omitted.Value().snapshot->Coverage().Complete());
+            const auto prefix = PrefabValueSnapshot::Prepare(valid, {}, &schemas, Limits(), {1, 4096}).Value().snapshot;
+            CHECK(prefix->Values().size() == 1);
+            CHECK(prefix->Coverage().total == 2);
+            CHECK(prefix->RetainedBytes() <= 4096);
+            const auto invalidCapture =
+                PrefabValueSnapshot::Prepare(valid, {}, &schemas, Limits(), {PrefabHardLimits::OverrideRecords + 1, 4096});
+            REQUIRE(invalidCapture.HasValue());
+            CHECK(invalidCapture.Value().inspectionFailure);
+            CHECK_FALSE(invalidCapture.Value().snapshot);
+            const auto zeroBytes = PrefabValueSnapshot::Prepare(valid, {}, &schemas, Limits(), {256, 0}).Value().snapshot;
+            CHECK(zeroBytes->Coverage().total == 2);
+            CHECK(zeroBytes->Coverage().retained == 0);
+            const auto zeroEntries = PrefabValueSnapshot::Prepare(valid, {}, &schemas, Limits(), {0, 4096}).Value().snapshot;
+            CHECK(zeroEntries->Coverage().total == 2);
+            CHECK(zeroEntries->Coverage().retained == 0);
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            CHECK(PrefabValueSnapshot::Prepare(valid, {}, &schemas, Limits(), {}, cancelled.Token()).HasError());
+        }
+
+        TEST_CASE("Prefab immutable diff preserves exact conflicts and orphan intent across source and schema lifetimes",
+                  "[prefab][value-snapshot]") {
+            const auto schemas = Schemas();
+            const auto authored =
+                PreparePrefabValueEdit(Source(), {}, {PrefabValueEditKind::Assign, Property(), 7.0}, &schemas, Limits()).Value().rebased;
+            const auto conflicted = PrefabValueSnapshot::Prepare(Source("{\"speed\":4.0}", 2), authored, &schemas, Limits());
+            REQUIRE(conflicted.HasValue());
+            CHECK_FALSE(conflicted.Value().resolution.effective);
+            REQUIRE(conflicted.Value().snapshot->Conflicts().size() == 1);
+            CHECK(conflicted.Value().snapshot->Conflicts()[0].original == authored.records[0]);
+            const auto unavailable = PrefabValueSnapshot::Prepare(Source(), authored, nullptr, Limits());
+            REQUIRE(unavailable.HasValue());
+            REQUIRE(unavailable.Value().snapshot->Orphans().size() == 1);
+            CHECK(unavailable.Value().snapshot->Orphans()[0].original == authored.records[0]);
+            CHECK(unavailable.Value().snapshot->Opaque().size() == 1);
+            CHECK(std::get<double>(conflicted.Value().snapshot->Values().back().effectiveValue) == 4.0);
+        }
+
         /** @brief Known canonical identity order exercises every persisted comparison dimension. */
         std::vector<PrefabValueOverrideTarget> CanonicalTargets() {
             const auto property = [](const PrefabObjectAddress &object, const char *type, std::uint32_t occurrence,
@@ -83,7 +208,7 @@ namespace Horo::Prefab {
             auto inspected =
                 PreparePrefabValueEdit(inherited, std::nullopt, {PrefabValueEditKind::Rebase, Object(), false}, &schemas, Limits());
             REQUIRE(inspected.HasValue());
-            CHECK(inspected.Value().provenance.back().origin == PrefabValueOrigin::Inherited);
+            CHECK(inspected.Value().provenance.back().origin == PrefabValueOrigin::Variant);
             CHECK(inspected.Value().provenance.back().sourcePrefab == Asset());
             const auto nested = ComposedSource(false);
             const std::array scope{LocalObjectId{3}};

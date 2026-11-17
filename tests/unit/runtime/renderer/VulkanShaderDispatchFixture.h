@@ -37,6 +37,10 @@ namespace {
         std::uint32_t specializationCount{1};
         bool depthTestEnabled{}, depthWriteEnabled{};
         VkCompareOp depthCompare{};
+        std::uint32_t colorAttachments{}, blendAttachments{};
+        VkImageLayout sampledImageLayout{VK_IMAGE_LAYOUT_UNDEFINED};
+        VkFilter samplerMinFilter{VK_FILTER_LINEAR};
+        bool samplerCompareEnabled{true};
     };
 
     Driver *driver{};
@@ -105,6 +109,8 @@ namespace {
             CHECK(spec->pMapEntries[0].constantID == 7);
             driver->specialization = *static_cast<const std::uint32_t *>(spec->pData);
         }
+        driver->colorAttachments = static_cast<const VkPipelineRenderingCreateInfo *>(info->pNext)->colorAttachmentCount;
+        driver->blendAttachments = info->pColorBlendState->attachmentCount;
         driver->depthTestEnabled = info->pDepthStencilState->depthTestEnable;
         driver->depthWriteEnabled = info->pDepthStencilState->depthWriteEnable;
         driver->depthCompare = info->pDepthStencilState->depthCompareOp;
@@ -117,7 +123,9 @@ namespace {
         ++driver->destroyedPipelines;
     }
 
-    VKAPI_ATTR VkResult VKAPI_CALL CreateSampler(VkDevice, const VkSamplerCreateInfo *, const VkAllocationCallbacks *, VkSampler *out) {
+    VKAPI_ATTR VkResult VKAPI_CALL CreateSampler(VkDevice, const VkSamplerCreateInfo *info, const VkAllocationCallbacks *, VkSampler *out) {
+        driver->samplerMinFilter = info->minFilter;
+        driver->samplerCompareEnabled = info->compareEnable;
         *out = Handle<VkSampler>(60);
         return VK_SUCCESS;
     }
@@ -154,9 +162,10 @@ namespace {
                     CHECK(std::ranges::find(driver->admittedUniformRanges, range) != driver->admittedUniformRanges.end());
             } else {
                 REQUIRE(writes[index].pImageInfo != nullptr);
-                if (writes[index].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+                if (writes[index].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) {
                     CHECK(writes[index].pImageInfo->imageView != VK_NULL_HANDLE);
-                else
+                    driver->sampledImageLayout = writes[index].pImageInfo->imageLayout;
+                } else
                     CHECK(writes[index].pImageInfo->sampler != VK_NULL_HANDLE);
             }
         }

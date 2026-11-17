@@ -42,13 +42,6 @@ namespace Horo::Runtime {
         auto operator<=>(const SaveSceneReference &) const noexcept = default;
     };
 
-    /** @brief Stable entity target inside a logical world. */
-    struct SaveEntityReference final {
-        SaveWorldId world;
-        PersistentEntityId entity;
-        auto operator<=>(const SaveEntityReference &) const noexcept = default;
-    };
-
     /** @brief Stable provenance for an entity instantiated from a prefab asset. */
     struct SavePrefabProvenance final {
         SaveAssetId prefab;

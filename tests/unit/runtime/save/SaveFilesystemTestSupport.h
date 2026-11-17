@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -48,8 +49,9 @@ namespace Horo::Runtime::SaveFilesystemTest {
         TemporaryDirectory() {
             static std::atomic_uint64_t next{0};
             const auto base = std::filesystem::temp_directory_path();
+            const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
             for (std::uint64_t attempt = 0; attempt < 256; ++attempt) {
-                path_ = base / ("horo-save-root-" + std::to_string(next.fetch_add(1)));
+                path_ = base / ("hsr-" + std::to_string(nonce) + "-" + std::to_string(next.fetch_add(1)));
                 std::error_code error;
                 if (std::filesystem::create_directory(path_, error))
                     return;
@@ -59,8 +61,17 @@ namespace Horo::Runtime::SaveFilesystemTest {
 
         ~TemporaryDirectory() {
             std::error_code ignored;
-            std::filesystem::permissions(path_, std::filesystem::perms::owner_all, std::filesystem::perm_options::add, ignored);
-            std::filesystem::remove_all(path_, ignored);
+            auto cleanup = path_;
+#if defined(_WIN32)
+            // Retire the complete private fixture even when typed namespace/slot names exceed classic Win32 path limits.
+            auto native = cleanup.native();
+            if (!native.starts_with(L"\\\\?\\")) {
+                native = native.starts_with(L"\\\\") ? std::wstring{L"\\\\?\\UNC\\"} + native.substr(2) : std::wstring{L"\\\\?\\"} + native;
+                cleanup = std::filesystem::path{native};
+            }
+#endif
+            std::filesystem::permissions(cleanup, std::filesystem::perms::owner_all, std::filesystem::perm_options::add, ignored);
+            std::filesystem::remove_all(cleanup, ignored);
         }
 
         [[nodiscard]] const std::filesystem::path &Path() const noexcept {

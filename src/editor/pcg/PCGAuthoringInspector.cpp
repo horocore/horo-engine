@@ -1,6 +1,7 @@
 #include "PCGAuthoringInspector.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 
 #include <algorithm>
@@ -70,7 +71,7 @@ namespace Horo::Editor {
                 } else if constexpr (std::is_same_v<T, PCG::SpatialElementId>) {
                     auto numeric = value.Value();
                     Number(key, numeric);
-                    const auto id = PCG::SpatialElementId::Create(numeric);
+                    const auto id = GuiLive::HostSymbol<&PCG::SpatialElementId::Create>()(numeric);
                     if (id.HasValue()) {
                         value = id.Value();
                         state.invalid.erase(prefix + key + ".identity");
@@ -84,7 +85,7 @@ namespace Horo::Editor {
                     ImGui::PushID(key);
                     if (Ui::InputTextControl("##key", entry->second, PCG::MaximumAttributeKeyBytes + 1, fonts,
                                              {.error = state.invalid.contains(id)})) {
-                        const auto parsed = PCG::PCGAttributeKey::Create(entry->second);
+                        const auto parsed = GuiLive::HostSymbol<&PCG::PCGAttributeKey::Create>()(entry->second);
                         if (parsed.HasValue()) {
                             value = parsed.Value();
                             state.invalid.erase(id);
@@ -397,7 +398,7 @@ namespace Horo::Editor {
                 fields.state.error = MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Exhausted));
                 return;
             }
-            const auto id = PCG::ExposedInputId::Create(maximum + 1).Value();
+            const auto id = GuiLive::HostSymbol<&PCG::ExposedInputId::Create>()(maximum + 1).Value();
             draft.values.exposedInputs.emplace_back(id, std::format("graph.input_{}", id.Value()), node, pin.id,
                                                     pin.defaultValue.value_or(ZeroFor(pin.type)));
         }

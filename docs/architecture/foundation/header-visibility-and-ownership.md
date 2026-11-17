@@ -7,6 +7,13 @@ are recorded in [Resident repeated playback](../../guides/audio-repeated-playbac
 
 ## Purpose
 
+`HoroPlatformFileApiPathInternal` is a non-installed header-only interface owned
+by Platform. It shares only native filesystem path spelling with the concrete
+filesystem asset provider through a staged `NativeFileApiPath.h`; it exposes no
+Windows handles, filesystem errors, global source roots or installed SDK headers.
+Assets consumes it privately in the build tree. Read admission and path authority
+remain owned by the existing caller and platform contracts.
+
 This document defines the enforceable C++ header boundary for Horo's production
 targets. It preserves stable `#include <Horo/...>` spelling without allowing a
 consumer of one module to discover every header in the repository.

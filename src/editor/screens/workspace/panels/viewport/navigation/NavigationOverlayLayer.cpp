@@ -2,8 +2,10 @@
 
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/renderer/EditorViewportScene.h"
+#include "editor/screens/workspace/panels/viewport/ViewportOverlay.h"
 
 #include <algorithm>
 #include <cmath>
@@ -224,11 +226,13 @@ namespace Horo::Editor {
     void NavigationOverlayLayer::ApplyIdentityFilter(const std::size_t field) {
         const auto value = selected_[field] ? choices_[field][selected_[field] - 1].value : 0;
         if (field == 0)
-            filter_.profile = value ? std::optional{Navigation::NavigationAgentProfileId::Create(value).Value()} : std::nullopt;
+            filter_.profile =
+                value ? std::optional{GuiLive::HostSymbol<&Navigation::NavigationAgentProfileId::Create>()(value).Value()} : std::nullopt;
         else if (field == 1)
-            filter_.area = value ? std::optional{Navigation::NavigationAreaId::Create(value).Value()} : std::nullopt;
+            filter_.area =
+                value ? std::optional{GuiLive::HostSymbol<&Navigation::NavigationAreaId::Create>()(value).Value()} : std::nullopt;
         else
-            filter_.surface = value ? std::optional{Navigation::SurfaceId::Create(value).Value()} : std::nullopt;
+            filter_.surface = value ? std::optional{GuiLive::HostSymbol<&Navigation::SurfaceId::Create>()(value).Value()} : std::nullopt;
     }
 
     /** @copydoc NavigationOverlayLayer::IdentityControl */
@@ -293,15 +297,26 @@ namespace Horo::Editor {
         const auto &context = frame.gui;
         const auto origin = frame.origin;
         const auto size = frame.size;
-        ImGui::SetCursorScreenPos({origin.x + 16, origin.y + 108});
+        const auto &tokens = Theme::GetActiveTokens();
+        const float scale = tokens.sizes.uiScale;
+        ImGui::SetCursorScreenPos(ResolveViewportToolbar(origin, size).optionsPosition);
         if (Ui::Button(
                 {.label = Text(context, "title").c_str(), .size = {std::min(220.0F, size.x - 32), 0}, .font = context.theme.fonts.sans}))
             ImGui::OpenPopup(OptionsPopup);
         capturesPointer_ = ImGui::IsItemHovered() || ImGui::IsPopupOpen(OptionsPopup);
-        ImGui::SetNextWindowSizeConstraints({160.0F, 0.0F},
-                                            {std::max(160.0F, std::min(360.0F, size.x - 32.0F)), std::max(180.0F, size.y - 32.0F)});
+        const float availableWidth = std::max(1.0F, size.x - 32.0F);
+        ImGui::SetNextWindowSizeConstraints({std::min(240.0F * scale, availableWidth), 0.0F},
+                                            {std::min(360.0F * scale, availableWidth), std::max(180.0F, size.y - 32.0F)});
+        const float padding = DesignSystem::SpacingFor(tokens, Ui::SpacingSize::Medium);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {padding, padding});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {tokens.spacing.propertyRowGap, tokens.spacing.propertyRowGap});
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, tokens.radii.card);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, scale);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, Theme::MenuSurface());
+        ImGui::PushStyleColor(ImGuiCol_Border, Theme::MenuBorder());
         if (ImGui::BeginPopup(OptionsPopup)) {
             static_cast<void>(Ui::CheckboxControl(Text(context, "show").c_str(), &visible_, context.theme.fonts));
+            Ui::ContextMenuSeparator();
             if (visible_ && !prepared_ && access.prepare) {
                 auto prepared = access.prepare(frame.projectRoot);
                 prepared_ = prepared.HasValue();
@@ -315,5 +330,7 @@ namespace Horo::Editor {
                 Ui::Hint(Text(context, "limited").c_str(), context.theme.fonts);
             ImGui::EndPopup();
         }
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(4);
     }
 }  // namespace Horo::Editor

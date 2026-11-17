@@ -26,6 +26,16 @@ namespace Horo::Editor {
                 return Result<std::vector<std::uint8_t>>::Failure(BundleError());
             return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
         }
+
+        Result<EditorVulkanShadowCook> LoadPackagedShadow(const std::filesystem::path &assetRoot) {
+            const auto payload = ReadArtifact(assetRoot / "shaders/editor/viewport-shadow-vulkan.horoshdr", 8U * 1024U * 1024U);
+            if (payload.HasError())
+                return Result<EditorVulkanShadowCook>::Failure(payload.ErrorValue());
+            const auto metadata = ReadArtifact(assetRoot / "shaders/editor/viewport-shadow-vulkan.reflection.json", 1024U * 1024U);
+            if (metadata.HasError())
+                return Result<EditorVulkanShadowCook>::Failure(metadata.ErrorValue());
+            return LoadEditorVulkanShadowCook(payload.Value(), metadata.Value());
+        }
     }  // namespace
 
     /** @copydoc LoadPackagedVulkanViewportShader */
@@ -36,7 +46,15 @@ namespace Horo::Editor {
         const auto metadata = ReadArtifact(assetRoot / "shaders/editor/viewport-vulkan.reflection.json", 1024U * 1024U);
         if (metadata.HasError())
             return Result<EditorVulkanViewportCook>::Failure(metadata.ErrorValue());
-        return LoadEditorVulkanViewportCook(payload.Value(), metadata.Value());
+        auto viewport = LoadEditorVulkanViewportCook(payload.Value(), metadata.Value());
+        if (viewport.HasError())
+            return viewport;
+        auto shadow = LoadPackagedShadow(assetRoot);
+        if (shadow.HasError())
+            return Result<EditorVulkanViewportCook>::Failure(shadow.ErrorValue());
+        auto cooked = std::move(viewport).Value();
+        cooked.shadow.emplace(std::move(shadow).Value());
+        return Result<EditorVulkanViewportCook>::Success(std::move(cooked));
     }
 
     /** @copydoc LoadPackagedVulkanMultiviewShader */

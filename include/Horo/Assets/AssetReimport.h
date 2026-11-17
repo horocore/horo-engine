@@ -36,7 +36,17 @@ namespace Horo::Assets {
      * @brief Reimports one asset from durable provenance and atomically replaces its payload and sidecar.
      * @param request Absolute project/asset paths and host-owned services.
      * @param cancellation Cooperative cancellation token checked before publication.
-     * @return Reimport report, or a typed error with the previous payload restored.
+     * @return Reimport report after durable pair and registry publication, or a typed failure.
+     * @pre The caller serializes project source readers/activation through its shared host project admission.
+     * @details Both native source writer leases and originally captured payload/metadata identities remain held
+     * through import, expected-identity publication and compensation. Captured metadata is parsed directly;
+     * rollback copies are created exclusively from the admitted bytes, never a later file generation.
+     * Precommit failure restores only bytes still matching this transaction's promoted identities. Foreign
+     * replacements are preserved. Reconciliation errors retain uncertainty, including post-rename directory
+     * failure and derived-index persistence failure after the registry commit barrier; they do not promise
+     * unchanged sources. This is not a crash-atomic filesystem pair transaction or an atomic content CAS
+     * against noncooperating writes after the final native recheck. Legacy reimport uses the explicit bounded
+     * 1 GiB source profile; ordinary authoring publication remains limited to 64 MiB.
      */
     [[nodiscard]] Result<AssetReimportReport> ReimportProjectAsset(const AssetReimportRequest &request,
                                                                    const CancellationToken &cancellation);

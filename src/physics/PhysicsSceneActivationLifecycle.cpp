@@ -26,6 +26,14 @@ namespace Horo::Physics::Detail {
 }  // namespace Horo::Physics::Detail
 
 namespace Horo::Physics {
+    namespace {
+        bool ActiveScenePair(const PhysicsWorld *physics, const Character::CharacterWorld *character) noexcept {
+            return physics && character &&
+                   (physics->State() == PhysicsWorldState::ActiveSolver || physics->State() == PhysicsWorldState::ActiveNull) &&
+                   character->State() == Character::CharacterWorldState::Active;
+        }
+    }  // namespace
+
     /** @copydoc PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate */
     PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate(ConstructionData data) noexcept
         : physics_(std::move(data.physics)), character_(std::move(data.character)), runtime_(data.runtime), authority_(data.authority),
@@ -106,11 +114,11 @@ namespace Horo::Physics {
     Result<void> PhysicsSceneActivationCandidate::ValidatePublication() const {
         if (authority_ == nullptr || !authority_->IsCurrent(evidence_))
             return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
+        if (structuralState_ && structuralState_->closed)
+            return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityRevoked));
         if (runtime_ == nullptr || runtime_->State() != PhysicsRuntimeState::Ready)
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState, "The Physics runtime is no longer available."));
-        if (!physics_ || !character_ ||
-            (physics_->State() != PhysicsWorldState::ActiveSolver && physics_->State() != PhysicsWorldState::ActiveNull) ||
-            character_->State() != Character::CharacterWorldState::Active)
+        if (!ActiveScenePair(physics_.get(), character_.get()))
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
         return Result<void>::Success();
     }

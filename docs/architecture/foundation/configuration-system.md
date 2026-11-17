@@ -28,6 +28,33 @@ bus, secret vault, or replacement for authoritative runtime models.
 
 ## Configuration Domains
 
+### Prefab project policy composition
+
+`HoroPrefabProjectSettings` is an explicit application bridge over Foundation,
+Assets and the backend-neutral Prefab model. Generic Application and
+`HoroProjectSettings` do not depend on Prefab. The bridge alone owns
+`Application/PrefabProjectSettings.h`; Editor Services links it for the project
+document workflow and Prefab Cook Host links it for operation capture.
+
+The module project document is `.horo/prefab.json`, alongside existing
+`.horo/navigation.json` and `.horo/collision.json` domain documents. It uses the
+canonical Foundation `schemaVersion`/`values` configuration envelope and the
+canonical resolver, not a second precedence engine or settings authority.
+Descriptors admit Project input only and declare NextOperation reload. Absence
+selects declared defaults; malformed, unknown or invalid present data fails
+closed. The field registry projects all nineteen existing lowerable
+`PrefabProjectPolicy` members; parser safety and derived expansion work are not
+editable settings. The complete policy passes `PrefabLimitProfile::Create`
+before persistence or new-operation publication.
+
+Publication retains Assets' exact source-identity fencing, exclusive file lock
+and atomic replacement under the shared project mutation lease. Durable failure
+and post-rename uncertainty stay distinct. Existing operations and live runtime
+scenes keep their captured policy. Source projection and future cook requests
+capture accepted configuration; cook keys include every accepted policy member
+and the persisted document identity is fenced before publication. No settings
+widget or module descriptor activates a runtime backend.
+
 Configuration is divided by ownership:
 
 | Domain | Examples | Typical persistence |

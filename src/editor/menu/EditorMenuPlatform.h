@@ -25,9 +25,11 @@ namespace Horo::Editor {
     [[nodiscard]] std::optional<EditorMenuInvocation> PollNativeEditorMenuAction() noexcept;
 
     /**
-     * @brief Reveals one absolute editor-owned path in the native file manager.
-     * @param absolutePath Existing absolute file or directory path.
+     * @brief Opens an editor-owned directory or reveals a file through the platform desktop adapter.
+     * @param absolutePath Existing absolute regular file or directory, without a symbolic link.
      * @return True when the platform accepted the reveal request.
+     * @pre Called on the host main thread after a user action.
+     * @note Linux opens the containing directory rather than selecting the file. Typed failures are logged at this GUI boundary.
      */
     [[nodiscard]] bool RevealInNativeFileManager(const std::filesystem::path &absolutePath) noexcept;
 

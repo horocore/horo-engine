@@ -49,7 +49,8 @@ add_test(NAME harfbuzz-probe COMMAND probe)
 
     def configure(name, *options):
         build = tmp_path / name
-        run("cmake", "-S", str(host), "-B", str(build), "-DCMAKE_BUILD_TYPE=Debug",
+        # SDK production and restoration require a single-config generator.
+        run("cmake", "-S", str(host), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug",
             f"-DFETCHCONTENT_SOURCE_DIR_HARFBUZZ={upstream}",
             "-DHORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON", *options)
         return build

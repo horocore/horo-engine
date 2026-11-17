@@ -66,6 +66,7 @@ namespace Horo::Tests::RenderFrontendTesting {
         int createBufferCount{0};
         int createMeshCount{0};
         int createTextureCount{0};
+        int textureMemoryCostQueries{0};
         int createTextureViewCount{0};
         int createRenderTargetCount{0};
         int destroyBufferCount{0};
@@ -98,7 +99,9 @@ namespace Horo::Tests::RenderFrontendTesting {
         bool supportsBufferResources{true};
         bool supportsMeshResources{true};
         bool supportsTextureResources{true};
-        std::uint32_t completeMultiviewViews{0}; /**< CPU-only admission contract; never native rendering evidence. */
+        std::optional<RenderCapabilitySnapshot> syntheticCapabilities; /**< Optional CPU-only advertised metadata; initialization retains
+                                                                          the actual acquired device incarnation. */
+        std::uint32_t completeMultiviewViews{0};                       /**< CPU-only admission contract; never native rendering evidence. */
         std::optional<Error> textureMemoryCostFailure;
         std::optional<Error> textureCreationFailure;
         bool supportsRenderTargetResources{true};

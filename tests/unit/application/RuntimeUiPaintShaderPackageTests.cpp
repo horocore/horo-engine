@@ -3,7 +3,9 @@
 #include "UiPaintPackageTestFixture.h"
 #include "support/AllocationProbe.h"
 
+#include <cstddef>
 #include <optional>
+#include <span>
 
 using namespace Horo;
 using namespace Horo::Application::Internal;
@@ -22,7 +24,7 @@ TEST_CASE("Application Metal package admits only the exact canonical payload and
         return;
     }
     SECTION("Changed payload") {
-        payload.back() ^= 1;
+        std::as_writable_bytes(std::span{payload}).back() ^= std::byte{1};
     }
     SECTION("Truncated payload") {
         payload.pop_back();
@@ -40,8 +42,9 @@ TEST_CASE("Application Metal package admits only the exact canonical payload and
 }
 
 TEST_CASE("Application packaged UI explicitly denies unsupported backend before filesystem work", "[application][runtime_ui][package]") {
+    using enum ShaderTargetBackend;
     CancellationToken cancellation;
-    for (const auto backend : {ShaderTargetBackend::Vulkan, ShaderTargetBackend::OpenGL, ShaderTargetBackend::Null}) {
+    for (const auto backend : {Vulkan, OpenGL, Null}) {
         const auto result = LoadPackagedProjectUiMetalKernel("/does-not-exist", backend, cancellation);
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == ShaderCompilerPipelineErrors::UnsupportedTarget.code.Value());
@@ -77,15 +80,20 @@ TEST_CASE("Application packaged UI rejects missing partial tampered and escaping
         std::filesystem::remove(payload);
         std::filesystem::create_directory(payload);
     }
-    SECTION("Symlink payload") {
-        const auto alternate = package.root / "alternative";
-        std::filesystem::rename(payload, alternate);
-        std::error_code error;
-        std::filesystem::create_symlink(alternate, payload, error);
-        if (error) {
-            SKIP("host does not permit test symlinks");
-        }
-    }
+    CancellationToken cancellation;
+    REQUIRE(LoadPackagedProjectUiMetalKernel(package.root, ShaderTargetBackend::Metal, cancellation).HasError());
+}
+
+TEST_CASE("Application packaged UI rejects a symlink payload", "[application][runtime_ui][package][symlink]") {
+    PackageDirectory package;
+    package.PublishMetadataFixture();
+    const auto payload = package.root / "shaders/runtime/ui-paint-metal.horoshdr";
+    const auto alternate = package.root / "alternative";
+    std::filesystem::rename(payload, alternate);
+    std::error_code error;
+    std::filesystem::create_symlink(alternate, payload, error);
+    if (error)
+        SKIP("host does not permit test symlinks");
     CancellationToken cancellation;
     REQUIRE(LoadPackagedProjectUiMetalKernel(package.root, ShaderTargetBackend::Metal, cancellation).HasError());
 }
@@ -122,10 +130,25 @@ TEST_CASE("Application packaged loader allocation failure cannot publish a parti
     package.PublishMetadataFixture();
     CancellationToken cancellation;
     std::optional<Result<std::shared_ptr<const CookedUiPaintKernel>>> failed;
+    bool injected{};
     {
-        Tests::AllocationProbe::ScopedFailure failure;
+        // Target the bounded file buffer, not MSVC Debug's allocating noexcept empty-path constructor.
+        struct PayloadFailure {
+            std::size_t bytes;
+            std::optional<Tests::AllocationProbe::ScopedFailure> injected;
+        };
+
+        PayloadFailure failure{PackageMetadataKernel().artifact.payload.size(), {}};
+
+        Tests::AllocationProbe::ScopedObserver observe{[](const std::size_t bytes, void *context) noexcept {
+            auto &failure = *static_cast<PayloadFailure *>(context);
+            if (bytes == failure.bytes && !failure.injected)
+                failure.injected.emplace();
+        }, &failure};
         failed.emplace(LoadPackagedProjectUiMetalKernel(package.root, ShaderTargetBackend::Metal, cancellation));
+        injected = failure.injected.has_value();
     }
+    REQUIRE(injected);
     REQUIRE(failed->HasError());
     CHECK(failed->ErrorValue().domain.Value() == ShaderCompilerPipelineErrors::AllocationFailed.domain.Value());
     CHECK(failed->ErrorValue().code.Value() == ShaderCompilerPipelineErrors::AllocationFailed.code.Value());

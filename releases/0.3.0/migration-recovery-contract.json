@@ -1,0 +1,20 @@
+{
+  "contract": "horo.project-migration-journal",
+  "requiredFields": [
+    "writerHoroVersion",
+    "recoveryContract",
+    "operationId",
+    "state",
+    "sourceVersion",
+    "targetVersion",
+    "projectId",
+    "engineBuildIdentity",
+    "records"
+  ],
+  "states": [
+    "Preparing",
+    "PublishReady",
+    "Publishing",
+    "Committed"
+  ]
+}

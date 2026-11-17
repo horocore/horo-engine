@@ -1,4 +1,5 @@
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 namespace Horo::Editor {
@@ -7,26 +8,26 @@ namespace Horo::Editor {
         switch (cmd.command) {
             case EditorWorkspaceViewCommand::RenameContentBrowserEntry:
                 if (cmd.stringPayload.has_value() && cmd.secondaryStringPayload.has_value())
-                    RenameContentBrowserEntry(*cmd.stringPayload, *cmd.secondaryStringPayload);
+                    RenameContentBrowserEntry(WorkspaceNativePath(*cmd.stringPayload), *cmd.secondaryStringPayload);
                 break;
             case EditorWorkspaceViewCommand::DeleteContentBrowserEntry:
                 if (cmd.stringPayload.has_value())
-                    DeleteContentBrowserEntry(*cmd.stringPayload);
+                    DeleteContentBrowserEntry(WorkspaceNativePath(*cmd.stringPayload));
                 break;
             case EditorWorkspaceViewCommand::DuplicateContentBrowserAsset:
                 if (cmd.stringPayload.has_value())
-                    DuplicateContentBrowserAsset(*cmd.stringPayload);
+                    DuplicateContentBrowserAsset(WorkspaceNativePath(*cmd.stringPayload));
                 break;
             case EditorWorkspaceViewCommand::CopyContentBrowserAsset:
                 if (cmd.stringPayload.has_value())
-                    SetContentBrowserClipboard(*cmd.stringPayload, ContentBrowserClipboardMode::Copy);
+                    SetContentBrowserClipboard(WorkspaceNativePath(*cmd.stringPayload), ContentBrowserClipboardMode::Copy);
                 break;
             case EditorWorkspaceViewCommand::CutContentBrowserAsset:
                 if (cmd.stringPayload.has_value())
-                    SetContentBrowserClipboard(*cmd.stringPayload, ContentBrowserClipboardMode::Move);
+                    SetContentBrowserClipboard(WorkspaceNativePath(*cmd.stringPayload), ContentBrowserClipboardMode::Move);
                 break;
             case EditorWorkspaceViewCommand::PasteContentBrowserAsset:
-                PasteContentBrowserAsset(cmd.stringPayload.value_or(m_viewModel.contentBrowser.absoluteCurrentPath));
+                PasteContentBrowserAsset(WorkspaceNativePath(cmd.stringPayload.value_or(m_viewModel.contentBrowser.absoluteCurrentPath)));
                 break;
             case EditorWorkspaceViewCommand::TransferContentBrowserAsset:
                 if (cmd.contentBrowserTransfer.has_value())
@@ -37,7 +38,7 @@ namespace Horo::Editor {
                 break;
             case EditorWorkspaceViewCommand::CreateContentBrowserFolder:
                 if (cmd.stringPayload.has_value() && cmd.secondaryStringPayload.has_value())
-                    CreateContentBrowserFolder(*cmd.stringPayload, *cmd.secondaryStringPayload);
+                    CreateContentBrowserFolder(WorkspaceNativePath(*cmd.stringPayload), *cmd.secondaryStringPayload);
                 break;
             default:
                 return false;
@@ -73,11 +74,11 @@ namespace Horo::Editor {
                 break;
             case EditorWorkspaceViewCommand::ReimportContentBrowserAsset:
                 if (cmd.stringPayload.has_value())
-                    ReimportContentBrowserAsset(*cmd.stringPayload);
+                    ReimportContentBrowserAsset(WorkspaceNativePath(*cmd.stringPayload));
                 break;
             case EditorWorkspaceViewCommand::RevealContentBrowserEntry:
                 if (cmd.stringPayload.has_value())
-                    RevealContentBrowserEntry(*cmd.stringPayload);
+                    RevealContentBrowserEntry(WorkspaceNativePath(*cmd.stringPayload));
                 break;
             case EditorWorkspaceViewCommand::OpenSourceFile:
                 if (cmd.sourceOpenRequest.has_value())

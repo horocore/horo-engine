@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 #include <limits>
+#include <numbers>
 #include <ranges>
 #include <string_view>
 #include <utility>
@@ -497,7 +500,182 @@ namespace Horo::Terrain {
                 return Result<void>::Success();
             }
         };
+
+        /** @brief Check one authored transform before any floating-to-integer conversion. */
+        [[nodiscard]] bool ValidAuthoredTransform(const TerrainAuthoredPlacement &value, const FoliageTypeDefinitionData &definition) {
+            if (!std::isfinite(value.offsetMeters) || !std::isfinite(value.scale) || !std::isfinite(value.yawRadians))
+                return false;
+            const double scale = std::round(double(value.scale) * 1'000);
+            return std::abs(double(value.offsetMeters) * 1'000) <= MaximumCoordinateMillimeters &&
+                   scale >= definition.minimumScalePermille && scale <= definition.maximumScalePermille;
+        }
+
+        /** @brief Keep authored offset addition inside the existing canonical coordinate domain. */
+        [[nodiscard]] bool AuthoredAltitudeValid(std::int64_t altitude) noexcept {
+            return altitude >= -MaximumCoordinateMillimeters && altitude <= MaximumCoordinateMillimeters;
+        }
+
+        /** @brief Resolve the authored dataset sample against the explicitly assigned tile grid. */
+        [[nodiscard]] Result<PlacementPosition> AuthoredPosition(const FoliageAuthoredPlacementCookRequest &request,
+                                                                 const TerrainAuthoredPlacement &value) {
+            const auto &grid = request.target.grid;
+            if (!value.id.IsValid() || value.type != request.target.definition.Data().type || value.sampleX < request.sampleOriginX ||
+                value.sampleZ < request.sampleOriginZ)
+                return Result<PlacementPosition>::Failure(MakeError(FoliagePlacementCookErrors::InvalidInput));
+            const auto x = value.sampleX - request.sampleOriginX;
+            const auto z = value.sampleZ - request.sampleOriginZ;
+            if (x >= grid.width || z >= grid.height || !ValidAuthoredTransform(value, request.target.definition.Data()))
+                return Result<PlacementPosition>::Failure(MakeError(FoliagePlacementCookErrors::InvalidInput));
+            if (!AuthoredAltitudeValid(grid.samples[std::size_t(z) * grid.width + x].altitudeMillimeters))
+                return Result<PlacementPosition>::Failure(MakeError(FoliagePlacementCookErrors::InvalidInput));
+            const auto cells = request.target.clustering.cellsPerCluster;
+            return Result<PlacementPosition>::Success({grid.originXMillimeters + std::int64_t{x} * grid.spacingXMillimeters,
+                                                       grid.originZMillimeters + std::int64_t{z} * grid.spacingZMillimeters, x / cells,
+                                                       z / cells, &grid.samples[std::size_t(z) * grid.width + x]});
+        }
+
+        /** @brief Materialize the authored transform while preserving its accepted persistent instance identity. */
+        [[nodiscard]] CookedFoliageInstance AuthoredInstance(const TerrainAuthoredPlacement &value, const PlacementPosition &position,
+                                                             FoliageClusterId cluster, std::uint32_t ordinal,
+                                                             FoliageSurfaceAlignment alignment) {
+            double yaw = std::fmod(double(value.yawRadians), 2.0 * std::numbers::pi);
+            if (yaw < 0)
+                yaw += 2.0 * std::numbers::pi;
+            const bool normalAligned = alignment == FoliageSurfaceAlignment::SurfaceNormal;
+            const auto &sample = *position.sample;
+            return {.id = value.id,
+                    .cluster = cluster,
+                    .type = value.type,
+                    .xMillimeters = position.x,
+                    .altitudeMillimeters =
+                        sample.altitudeMillimeters + static_cast<std::int64_t>(std::round(double(value.offsetMeters) * 1'000)),
+                    .zMillimeters = position.z,
+                    .scalePermille = static_cast<std::uint32_t>(std::round(double(value.scale) * 1'000)),
+                    .yawMilliDegrees = static_cast<std::uint32_t>(std::round(yaw * 180'000 / std::numbers::pi)) % 360'000,
+                    .slopeMilliDegrees = sample.slopeMilliDegrees,
+                    .candidateOrdinal = ordinal,
+                    .normalXPermille = normalAligned ? sample.normalXPermille : std::int16_t{0},
+                    .normalYPermille = normalAligned ? sample.normalYPermille : std::int16_t{1'000},
+                    .normalZPermille = normalAligned ? sample.normalZPermille : std::int16_t{0}};
+        }
+
+        /** @brief Apply the same exclusion/separation/surface/cluster limits used by procedural placement. */
+        [[nodiscard]] Result<void> AppendAuthored(PlacementWork &work, const TerrainAuthoredPlacement &value,
+                                                  const PlacementPosition &position) {
+            auto eligible = work.Eligible(position);
+            if (eligible.HasError())
+                return Result<void>::Failure(eligible.ErrorValue());
+            if (!eligible.Value())
+                return Result<void>::Failure(MakeError(FoliagePlacementCookErrors::InvalidInput));
+            auto cluster = DeriveFoliageClusterId(work.request.grid.tile, ClusterKey(value.type, position.clusterX, position.clusterZ));
+            if (cluster.HasError())
+                return Result<void>::Failure(cluster.ErrorValue());
+            if (std::ranges::find(work.clusters, cluster.Value()) == work.clusters.end()) {
+                if (work.clusters.size() >= work.request.limits.maximumClusters)
+                    return Result<void>::Failure(MakeError(FoliagePlacementCookErrors::LimitExceeded));
+                work.clusters.push_back(cluster.Value());
+            }
+            work.instances.push_back(AuthoredInstance(value, position, cluster.Value(), static_cast<std::uint32_t>(work.instances.size()),
+                                                      work.request.definition.Data().placement.alignment));
+            return Result<void>::Success();
+        }
+
+        /** @brief Bound complete authored count and conservative sorting work before scratch allocation. */
+        [[nodiscard]] Result<void> AdmitAuthored(const FoliageAuthoredPlacementCookRequest &request, const CancellationToken &cancel) {
+            if (cancel.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(FoliagePlacementCookErrors::Cancelled));
+            if (auto valid = Validate(request.target); valid.HasError())
+                return valid;
+            const auto count = request.placements.size();
+            const auto &limits = request.target.limits;
+            if (count > limits.maximumCandidates || count > limits.maximumInstances ||
+                count > request.target.definition.Data().maximumInstances)
+                return Result<void>::Failure(MakeError(FoliagePlacementCookErrors::LimitExceeded));
+            if (count * (std::bit_width(count) + 4U) > limits.maximumPredicateChecks)
+                return Result<void>::Failure(MakeError(FoliagePlacementCookErrors::LimitExceeded));
+            return Result<void>::Success();
+        }
+
+        /** @brief Traverse canonical authored-ID order; any invalid record discards the entire detached candidate. */
+        [[nodiscard]] Result<void> RunAuthored(const FoliageAuthoredPlacementCookRequest &request,
+                                               std::span<const TerrainAuthoredPlacement *const> ordered, PlacementWork &work) {
+            const TerrainAuthoredPlacement *prior{};
+            for (const auto *value : ordered) {
+                if (work.cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(FoliagePlacementCookErrors::Cancelled));
+                if (prior && prior->id == value->id)
+                    return Result<void>::Failure(MakeError(FoliagePlacementCookErrors::InvalidInput));
+                prior = value;
+                auto position = AuthoredPosition(request, *value);
+                if (position.HasError())
+                    return Result<void>::Failure(position.ErrorValue());
+                if (auto appended = AppendAuthored(work, *value, position.Value()); appended.HasError())
+                    return appended;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Commit every exact authored field to the cache identity, including values below cook quantization. */
+        [[nodiscard]] Sha256Digest AuthoredFingerprint(const FoliageAuthoredPlacementCookRequest &request, const Sha256Digest &base,
+                                                       std::span<const TerrainAuthoredPlacement *const> ordered) {
+            Sha256Builder hash;
+            constexpr std::string_view domain{"horo.foliage.authored-placement.v1"};
+            static_cast<void>(hash.Update(std::as_bytes(std::span{domain.data(), domain.size()})));
+            static_cast<void>(hash.Update(std::as_bytes(std::span{base.bytes})));
+            HashInteger(hash, request.sampleOriginX);
+            HashInteger(hash, request.sampleOriginZ);
+            HashInteger(hash, ordered.size());
+            for (const auto *value : ordered) {
+                static_cast<void>(hash.Update(std::as_bytes(std::span{value->id.Bytes()})));
+                HashInteger(hash, value->sampleX);
+                HashInteger(hash, value->sampleZ);
+                HashInteger(hash, std::bit_cast<std::uint32_t>(value->offsetMeters));
+                HashInteger(hash, std::bit_cast<std::uint32_t>(value->scale));
+                HashInteger(hash, std::bit_cast<std::uint32_t>(value->yawRadians));
+            }
+            return hash.Finalize();
+        }
     }  // namespace
+
+    /** @copydoc CookAuthoredFoliagePlacement */
+    Result<CookedFoliagePlacement> CookAuthoredFoliagePlacement(const FoliageAuthoredPlacementCookRequest &request,
+                                                                const CancellationToken &cancel) {
+        if (auto valid = AdmitAuthored(request, cancel); valid.HasError())
+            return Result<CookedFoliagePlacement>::Failure(valid.ErrorValue());
+        std::vector<const TerrainAuthoredPlacement *> ordered;
+        ordered.reserve(request.placements.size());
+        for (const auto &value : request.placements)
+            ordered.push_back(&value);
+        std::ranges::sort(ordered, [](const auto *a, const auto *b) {
+            return a->id < b->id;
+        });
+        std::vector<FoliageExclusionRectangle> exclusions(request.target.grid.exclusions.begin(), request.target.grid.exclusions.end());
+        std::ranges::sort(exclusions);
+        if (std::ranges::adjacent_find(exclusions) != exclusions.end())
+            return Result<CookedFoliagePlacement>::Failure(MakeError(FoliagePlacementCookErrors::InvalidInput));
+        const auto base = Fingerprint(request.target, exclusions, true);
+        PlacementWork work{request.target, exclusions, base, cancel};
+        work.predicateChecks = ordered.size() * (std::bit_width(ordered.size()) + 4U);
+        if (auto run = RunAuthored(request, ordered, work); run.HasError())
+            return Result<CookedFoliagePlacement>::Failure(run.ErrorValue());
+        if (cancel.IsCancellationRequested())
+            return Result<CookedFoliagePlacement>::Failure(MakeError(FoliagePlacementCookErrors::Cancelled));
+        CookedFoliagePlacement output;
+        const auto &target = request.target;
+        output.tile_ = target.grid.tile;
+        output.sourceRevision_ = target.grid.sourceRevision;
+        output.capability_ = target.grid.capability;
+        output.type_ = target.definition.Data().type;
+        output.definitionRevision_ = target.definition.Data().revision;
+        output.contentRevision_ = target.contentRevision;
+        output.targetDigest_ = target.targetDigest;
+        output.toolchainDigest_ = target.toolchainDigest;
+        output.tier_ = target.tier;
+        output.fingerprint_ = AuthoredFingerprint(request, base, ordered);
+        output.instances_ = std::move(work.instances);
+        output.resultDigest_ = DigestInstances(output.instances_);
+        return Result<CookedFoliagePlacement>::Success(std::move(output));
+    }
 
     /** @copydoc CookFoliagePlacement */
     Result<CookedFoliagePlacement> CookFoliagePlacement(const FoliagePlacementCookRequest &request, const CancellationToken &cancellation) {

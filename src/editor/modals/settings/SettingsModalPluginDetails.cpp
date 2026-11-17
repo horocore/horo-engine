@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -60,8 +61,8 @@ namespace Horo::Editor::SettingsModalInternal {
         ImGui::SameLine(0.0F, 8.0F);
         ScopedTextStyle ts(ctx.theme.fonts.sans, TextPx::Caption(), FontPx::Sans);
         ImGui::PushStyleColor(ImGuiCol_Text, *value ? Text() : Muted());
-        const std::string enabledText = ctx.localization.Get("editor", "settings.plugins.status.enabled");
-        const std::string disabledText = ctx.localization.Get("editor", "settings.plugins.status.disabled");
+        const std::string enabledText = SettingsModal::kTextScope.Text(ctx.localization, "plugins.status.enabled");
+        const std::string disabledText = SettingsModal::kTextScope.Text(ctx.localization, "plugins.status.disabled");
         ImGui::TextUnformatted(*value ? enabledText.c_str() : disabledText.c_str());
         ImGui::PopStyleColor();
     }
@@ -267,23 +268,23 @@ namespace Horo::Editor::SettingsModalInternal {
             return;
         }
 
-        const std::string mcpDDesc = ctx.localization.Get("editor", "settings.plugins.mcp.detail_desc");
-        const std::string mcpScope = ctx.localization.Get("editor", "settings.plugins.scope.editor");
-        const std::string mcpSigned = ctx.localization.Get("editor", "settings.plugins.signed.signed");
-        const std::string mcpRestart = ctx.localization.Get("editor", "settings.plugins.restart.not_required");
-        const std::string openLogs = ctx.localization.Get("editor", "settings.plugins.action.open_logs");
-        const std::string disableStr = ctx.localization.Get("editor", "settings.plugins.action.disable");
-        const std::string fmodDDesc = ctx.localization.Get("editor", "settings.plugins.fmod.detail_desc");
-        const std::string fmodScope = ctx.localization.Get("editor", "settings.plugins.scope.project");
-        const std::string fmodSigned = ctx.localization.Get("editor", "settings.plugins.signed.vendor");
-        const std::string fmodRestart = ctx.localization.Get("editor", "settings.plugins.restart.needs_sdk");
-        const std::string validateStr = ctx.localization.Get("editor", "settings.plugins.action.validate");
-        const std::string steamDDesc = ctx.localization.Get("editor", "settings.plugins.steam.detail_desc");
-        const std::string steamScope = ctx.localization.Get("editor", "settings.plugins.scope.platform");
-        const std::string steamSigned = ctx.localization.Get("editor", "settings.plugins.signed.disabled");
-        const std::string steamRestart = ctx.localization.Get("editor", "settings.plugins.restart.on_enable");
-        const std::string enableStr = ctx.localization.Get("editor", "settings.plugins.action.enable");
-        const std::string openDocs = ctx.localization.Get("editor", "settings.plugins.action.open_docs");
+        const std::string mcpDDesc = SettingsModal::kTextScope.Text(ctx.localization, "plugins.mcp.detail_desc");
+        const std::string mcpScope = SettingsModal::kTextScope.Text(ctx.localization, "plugins.scope.editor");
+        const std::string mcpSigned = SettingsModal::kTextScope.Text(ctx.localization, "plugins.signed.signed");
+        const std::string mcpRestart = SettingsModal::kTextScope.Text(ctx.localization, "plugins.restart.not_required");
+        const std::string openLogs = SettingsModal::kTextScope.Text(ctx.localization, "plugins.action.open_logs");
+        const std::string disableStr = SettingsModal::kTextScope.Text(ctx.localization, "plugins.action.disable");
+        const std::string fmodDDesc = SettingsModal::kTextScope.Text(ctx.localization, "plugins.fmod.detail_desc");
+        const std::string fmodScope = SettingsModal::kTextScope.Text(ctx.localization, "plugins.scope.project");
+        const std::string fmodSigned = SettingsModal::kTextScope.Text(ctx.localization, "plugins.signed.vendor");
+        const std::string fmodRestart = SettingsModal::kTextScope.Text(ctx.localization, "plugins.restart.needs_sdk");
+        const std::string validateStr = SettingsModal::kTextScope.Text(ctx.localization, "plugins.action.validate");
+        const std::string steamDDesc = SettingsModal::kTextScope.Text(ctx.localization, "plugins.steam.detail_desc");
+        const std::string steamScope = SettingsModal::kTextScope.Text(ctx.localization, "plugins.scope.platform");
+        const std::string steamSigned = SettingsModal::kTextScope.Text(ctx.localization, "plugins.signed.disabled");
+        const std::string steamRestart = SettingsModal::kTextScope.Text(ctx.localization, "plugins.restart.on_enable");
+        const std::string enableStr = SettingsModal::kTextScope.Text(ctx.localization, "plugins.action.enable");
+        const std::string openDocs = SettingsModal::kTextScope.Text(ctx.localization, "plugins.action.open_docs");
         const std::array<PluginDetailHeaderSpec, 3> kDetailHeaders = {{
             {"Horo MCP Bridge", mcpDDesc.c_str(), mcpScope.c_str(), mcpSigned.c_str(), BadgeTone::Success, mcpRestart.c_str(),
              openLogs.c_str(), disableStr.c_str()},

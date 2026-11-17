@@ -616,8 +616,8 @@ namespace Horo::Log {
         sinks.reserve(3U + resolved.additionalSinks.size());
         sinks.push_back(std::move(fileSink));
         sinks.push_back(std::make_shared<StructuredLogStoreSink>());
-        if (const auto historySink = Diagnostics::OperationHistorySink::Create({.directory = resolved.logDirectory,
-                                                                                .baseName = std::format("{}.operations", resolved.baseName),
+        if (const auto historySink = Diagnostics::OperationHistorySink::Create({.directory = resolved.logDirectory / "operations",
+                                                                                .baseName = resolved.baseName,
                                                                                 .maxFileBytes = resolved.maxFileBytes,
                                                                                 .maxRolledFiles = resolved.maxRolledFiles,
                                                                                 .maxRecoveredRecords = 1024});

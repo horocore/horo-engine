@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { createServer } from 'vite';
 
-const root = new URL('../', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../', import.meta.url));
 // The catalog is a fixed path relative to this script.
 // eslint-disable-next-line security/detect-non-literal-fs-filename
 const catalog = JSON.parse(await readFile(join(root, 'src/catalog.json'), 'utf8'));

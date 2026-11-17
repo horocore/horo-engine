@@ -78,15 +78,22 @@ def test_non_native_runner_executes_no_apple_tools(tools, monkeypatch):
     assert not log.exists()
 
 
-def test_custom_runner_requires_explicit_manual_dispatch():
+def test_hardware_runner_requires_successful_producer_and_trusted_event():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     route = next(line for line in workflow.splitlines() if "vars.HORO_MACOS_METAL_RUNNER" in line)
-    assert "github.event_name == 'workflow_dispatch' && inputs.use_macos_metal_runner" in route
+    assert "needs.macos-build.result == 'success' || needs.macos-build-main.result == 'success'" in route
+    assert "vars.HORO_MACOS_METAL_RUNNER != ''" in route
+    assert "github.event_name == 'push'" in route
+    assert "github.event_name == 'workflow_dispatch'" in route
+    assert "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository" in route
     assert "|| 'macos-latest'" in route
-    dispatch = workflow.split("  workflow_dispatch:\n", 1)[1].split("\npermissions:", 1)[0]
-    custom = dispatch.split("      use_macos_metal_runner:\n", 1)[1].split("      save_allocation_diagnostics:", 1)[0]
-    assert "type: boolean" in custom
-    assert "default: false" in custom
-    native = workflow.split("\n  test:\n", 1)[1].split("\n  test-main:\n", 1)[0]
-    assert native.index("prepare_macos_toolchain.sh") < native.index("Canonicalize macOS temporary directory")
-    assert "timeout-minutes: 10" in native.split("Prepare native macOS Metal compiler", 1)[1].split("- name:", 1)[0]
+    assert "|| 'ubuntu-slim'" in route
+
+
+def test_native_producer_verifies_metal_before_temporary_directory():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    native = workflow.split("\n  test:\n", 1)[1].split("\n  macos-build:\n", 1)[0]
+    admission = native.split("- name: Canonicalize macOS temporary directory", 1)[1].split("- name:", 1)[0]
+    assert "if: matrix.name == 'macOS / Clang'" in admission
+    assert 'if [[ "$RUNNER_OS" != macOS ]]' in admission
+    assert admission.index("xcrun --sdk macosx metal --version") < admission.index("tempfile.gettempdir()")

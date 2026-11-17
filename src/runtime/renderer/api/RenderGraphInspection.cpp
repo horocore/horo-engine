@@ -53,10 +53,10 @@ namespace Horo::Render {
         Result<void> ValidateCaptureSources(const RenderGraph &graph, const RenderGraphSchedule &schedule,
                                             const RenderGraphLifetimePlan &lifetime, const CompiledRenderGraphExecution &execution,
                                             const RenderGraphInspectionContext context, const RenderGraphInspectionLimits limits,
-                                            const std::stop_token cancellation) {
+                                            const CancellationToken cancellation) {
             if (!LimitsValid(limits))
                 return Result<void>::Failure(MakeError(RenderGraphInspectionErrors::InvalidLimits));
-            if (cancellation.stop_requested())
+            if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(RenderGraphInspectionErrors::Cancelled));
             if (!context.renderer.IsValid() || !context.frame.IsValid() || context.revision == 0 ||
                 !SourcesMatch(graph, schedule, lifetime, execution))
@@ -97,7 +97,7 @@ namespace Horo::Render {
     SnapshotResult CaptureRenderGraphInspection(const RenderGraph &graph, const RenderGraphSchedule &schedule,
                                                 const RenderGraphLifetimePlan &lifetime, const CompiledRenderGraphExecution &execution,
                                                 const RenderGraphInspectionContext context, const RenderGraphInspectionLimits limits,
-                                                const std::stop_token cancellation) {
+                                                const CancellationToken cancellation) {
         if (const auto admitted = ValidateCaptureSources(graph, schedule, lifetime, execution, context, limits, cancellation);
             admitted.HasError())
             return SnapshotResult::Failure(admitted.ErrorValue());
@@ -109,12 +109,12 @@ namespace Horo::Render {
             snapshot->owner_ = graph.Owner();
             snapshot->execution_.reserve(execution.Passes().size());
             for (const auto &pass : execution.Passes()) {
-                if (cancellation.stop_requested())
+                if (cancellation.IsCancellationRequested())
                     return SnapshotResult::Failure(MakeError(RenderGraphInspectionErrors::Cancelled));
                 snapshot->execution_.emplace_back(pass.pass, pass.kind, pass.queue);
             }
             const auto copy = [&]<typename T>(std::vector<T> &destination, const std::span<const T> source) {
-                if (cancellation.stop_requested())
+                if (cancellation.IsCancellationRequested())
                     return false;
                 destination.assign(source.begin(), source.end());
                 return true;
@@ -127,7 +127,7 @@ namespace Horo::Render {
                                         copy(snapshot->allocations_, lifetime.AllocationRequirements()),
                                         copy(snapshot->transitions_, execution.Transitions()),
                                         copy(snapshot->transfers_, execution.AcquireTransfers())};
-                !std::ranges::all_of(copied, std::identity{}) || cancellation.stop_requested())
+                !std::ranges::all_of(copied, std::identity{}) || cancellation.IsCancellationRequested())
                 return SnapshotResult::Failure(MakeError(RenderGraphInspectionErrors::Cancelled));
             return SnapshotResult::Success(std::move(snapshot));
         } catch (const std::bad_alloc &) {

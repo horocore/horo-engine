@@ -1,0 +1,8 @@
+#pragma once
+#define EXAMPLE_PACKAGE "@EXAMPLE_ID@"
+#define EXAMPLE_VERSION "1.0.0"
+#define EXAMPLE_SERVICE EXAMPLE_PACKAGE ".arithmetic"
+#define EXAMPLE_CONTRACT "horo.examples.checked-arithmetic"
+#define EXAMPLE_IMPORT EXAMPLE_PACKAGE ".backend-import"
+#define EXAMPLE_SCRIPT_API EXAMPLE_PACKAGE ".arithmetic-api"
+#define TEXT(s) {s, sizeof(s) - 1}

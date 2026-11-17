@@ -7,6 +7,7 @@
 #include "SecurityTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -346,4 +347,70 @@ namespace Horo::Extensions::Tests {
         CHECK(host->Registry().Snapshot().empty());
     }
 
+}  // namespace Horo::Extensions::Tests
+
+namespace Horo::Extensions::Tests {
+    TEST_CASE("Explicit module commands use the live activity action queue and retire with their generation",
+              "[Extensions][Activity][Commands][ABI]") {
+        Horo::Tests::EditorActivityPackage package{true};
+        JobSystem jobs;
+        auto host = std::make_shared<EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
+        ExtensionManager manager{nullptr,
+                                 ExtensionHostProfile::Interactive,
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY,
+                                  HORO_EDITOR_COMMAND_HOST_CAPABILITY},
+                                 Horo::Tests::CreateAcceptingArtifactGate(),
+                                 {},
+                                 {},
+                                 ExtensionEditorHosts{.activities = host}};
+        RequirePackageLoad(manager, package.root);
+        REQUIRE(manager.LoadedManifest("fixture.package"));
+        host->Update();
+        REQUIRE(host->PreparedCommands().size() == 1);
+        CHECK(host->PreparedCommands().front().command.id.value == "fixture.command.run");
+        CHECK(host->PreparedCommands().front().command.shortcut == "Ctrl+Shift+P");
+        CHECK(host->QueueCommand("fixture.command.unknown").HasError());
+        host->SetInputAdmitted(false);
+        CHECK(host->QueueCommand("fixture.command.run").HasError());
+        host->SetInputAdmitted(true);
+        const auto revision = host->Prepared().front().revision;
+        REQUIRE(host->QueueCommand("fixture.command.run").HasValue());
+        CHECK(host->QueueCommand("fixture.command.run").HasError());
+        host->Update();
+        WaitForActivityRevision(*host, revision);
+        REQUIRE(host->Prepared().front().revision > revision);
+        manager.UnloadAll();
+        host->Update();
+        CHECK(host->PreparedCommands().empty());
+        CHECK(host->QueueCommand("fixture.command.run").HasError());
+        CHECK_FALSE(manager.LoadedManifest("fixture.package"));
+    }
+
+    TEST_CASE("Schema2 command publication requires explicit negotiated module capability and manifest claim",
+              "[Extensions][Activity][Commands][ABI]") {
+        Horo::Tests::EditorActivityPackage package{true};
+        std::ifstream input{package.root / "extension.json"};
+        std::string text{std::istreambuf_iterator<char>{input}, {}};
+        const std::string key =
+            GENERATE(std::string{",\"editor.commands\""},
+                     std::string{",{\"type\":\"editor.command\",\"id\":\"fixture.command.run\",\"module\":\"fixture.module\"}"});
+        const auto offset = text.find(key);
+        REQUIRE(offset != std::string::npos);
+        text.erase(offset, key.size());
+        std::ofstream{package.root / "extension.json"} << text;
+        JobSystem jobs;
+        auto host = std::make_shared<EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
+        ExtensionManager manager{nullptr,
+                                 ExtensionHostProfile::Interactive,
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY,
+                                  HORO_EDITOR_COMMAND_HOST_CAPABILITY},
+                                 Horo::Tests::CreateAcceptingArtifactGate(),
+                                 {},
+                                 {},
+                                 ExtensionEditorHosts{.activities = host}};
+        REQUIRE(manager.LoadExtension(package.root.string()).HasError());
+        host->Update();
+        CHECK(host->Prepared().empty());
+        CHECK(host->PreparedCommands().empty());
+    }
 }  // namespace Horo::Extensions::Tests

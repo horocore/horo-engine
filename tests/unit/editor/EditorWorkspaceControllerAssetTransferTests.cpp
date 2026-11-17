@@ -4,6 +4,7 @@
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+#include "editor/screens/workspace/WorkspacePathText.h"
 
 #include <algorithm>
 #include <atomic>
@@ -46,8 +47,8 @@ namespace {
         EditorWorkspaceViewCommandData move;
         move.command = EditorWorkspaceViewCommand::TransferContentBrowserAsset;
         move.contentBrowserTransfer = ContentBrowserAssetTransferRequest{
-            .absoluteSourcePath = source.string(),
-            .absoluteDestinationDirectory = targetDirectory.string(),
+            .absoluteSourcePath = WorkspacePathText(source),
+            .absoluteDestinationDirectory = WorkspacePathText(targetDirectory),
             .mode = ContentBrowserTransferMode::Move,
         };
         controller.ProcessCommand(move);
@@ -57,18 +58,18 @@ namespace {
 
         EditorWorkspaceViewCommandData rename;
         rename.command = EditorWorkspaceViewCommand::RenameContentBrowserEntry;
-        rename.stringPayload = source.string();
+        rename.stringPayload = WorkspacePathText(source);
         rename.secondaryStringPayload = "çatı.horoasset";
         controller.ProcessCommand(rename);
-        source = sourceDirectory / "çatı.horoasset";
+        source = sourceDirectory / u8"\u00e7at\u0131.horoasset";
         REQUIRE((std::filesystem::is_regular_file(source)));
-        REQUIRE((std::filesystem::is_regular_file(source.string() + ".horo")));
+        REQUIRE((std::filesystem::is_regular_file(std::filesystem::path{source}.concat(".horo"))));
 
         {
             std::ofstream companionCollision(sourceDirectory / "safe.horoasset.horo");
             companionCollision << "collision";
         }
-        rename.stringPayload = source.string();
+        rename.stringPayload = WorkspacePathText(source);
         rename.secondaryStringPayload = "safe.horoasset";
         controller.ProcessCommand(rename);
         REQUIRE((std::filesystem::is_regular_file(source)));
@@ -82,7 +83,7 @@ namespace {
                                                 EditorWorkspaceViewCommandData &copy) {
         EditorWorkspaceViewCommandData createFolder;
         createFolder.command = EditorWorkspaceViewCommand::CreateContentBrowserFolder;
-        createFolder.stringPayload = sourceDirectory.string();
+        createFolder.stringPayload = WorkspacePathText(sourceDirectory);
         createFolder.secondaryStringPayload = "CON";
         controller.ProcessCommand(createFolder);
         std::error_code reservedNameError;
@@ -97,7 +98,7 @@ namespace {
         const std::filesystem::path escape = projectRoot / "assets/Escape";
         std::filesystem::create_directory_symlink(outsideDirectory, escape, symlinkError);
         if (!symlinkError) {
-            copy.contentBrowserTransfer->absoluteDestinationDirectory = escape.string();
+            copy.contentBrowserTransfer->absoluteDestinationDirectory = WorkspacePathText(escape);
             controller.ProcessCommand(copy);
             REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.content_browser.operation.invalid_target"));
             REQUIRE(std::filesystem::is_empty(outsideDirectory));
@@ -110,11 +111,11 @@ namespace {
                                                                 const std::filesystem::path &sourceDirectory) {
         EditorWorkspaceViewCommandData duplicate;
         duplicate.command = EditorWorkspaceViewCommand::DuplicateContentBrowserAsset;
-        duplicate.stringPayload = source.string();
+        duplicate.stringPayload = WorkspacePathText(source);
         controller.ProcessCommand(duplicate);
         const std::filesystem::path duplicatePath = sourceDirectory / "crate (1).horoasset";
         REQUIRE((std::filesystem::is_regular_file(duplicatePath)));
-        REQUIRE((std::filesystem::is_regular_file(duplicatePath.string() + ".horo")));
+        REQUIRE((std::filesystem::is_regular_file(WorkspacePathText(duplicatePath) + ".horo")));
         const Assets::AssetRegistrySnapshot afterDuplicate = registry.Snapshot();
         const Assets::AssetRecord *originalRecord = afterDuplicate.FindByPath("assets/Meshes/crate.horoasset");
         const Assets::AssetRecord *duplicateRecord = afterDuplicate.FindByPath("assets/Meshes/crate (1).horoasset");
@@ -135,13 +136,13 @@ namespace {
                                                                            const Assets::AssetId &originalId) {
         EditorWorkspaceViewCommandData copy;
         copy.command = EditorWorkspaceViewCommand::CopyContentBrowserAsset;
-        copy.stringPayload = source.string();
+        copy.stringPayload = WorkspacePathText(source);
         controller.ProcessCommand(copy);
         REQUIRE((controller.ViewModel().contentBrowserClipboard.mode == ContentBrowserClipboardMode::Copy));
 
         EditorWorkspaceViewCommandData paste;
         paste.command = EditorWorkspaceViewCommand::PasteContentBrowserAsset;
-        paste.stringPayload = targetDirectory.string();
+        paste.stringPayload = WorkspacePathText(targetDirectory);
         controller.ProcessCommand(paste);
         const std::filesystem::path copiedPath = targetDirectory / "crate.horoasset";
         REQUIRE((std::filesystem::is_regular_file(copiedPath)));
@@ -163,19 +164,19 @@ namespace {
                                                                     EditorWorkspaceViewCommandData &paste) {
         EditorWorkspaceViewCommandData cut;
         cut.command = EditorWorkspaceViewCommand::CutContentBrowserAsset;
-        cut.stringPayload = source.string();
+        cut.stringPayload = WorkspacePathText(source);
         controller.ProcessCommand(cut);
-        paste.stringPayload = targetDirectory.string();
+        paste.stringPayload = WorkspacePathText(targetDirectory);
         controller.ProcessCommand(paste);
         REQUIRE((std::filesystem::is_regular_file(source)));
         REQUIRE((controller.ViewModel().contentBrowserClipboard.mode == ContentBrowserClipboardMode::Move));
         REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.content_browser.operation.name_exists"));
 
-        cut.stringPayload = duplicatePath.string();
+        cut.stringPayload = WorkspacePathText(duplicatePath);
         controller.ProcessCommand(cut);
         REQUIRE((controller.ViewModel().contentBrowserClipboard.mode == ContentBrowserClipboardMode::Move));
 
-        paste.stringPayload = targetDirectory.string();
+        paste.stringPayload = WorkspacePathText(targetDirectory);
         controller.ProcessCommand(paste);
         const std::filesystem::path movedPath = targetDirectory / "crate (1).horoasset";
         REQUIRE((!std::filesystem::exists(duplicatePath)));
@@ -201,8 +202,8 @@ namespace {
         EditorWorkspaceViewCommandData dragCopy;
         dragCopy.command = EditorWorkspaceViewCommand::TransferContentBrowserAsset;
         dragCopy.contentBrowserTransfer = ContentBrowserAssetTransferRequest{
-            .absoluteSourcePath = source.string(),
-            .absoluteDestinationDirectory = dragCopyDirectory.string(),
+            .absoluteSourcePath = WorkspacePathText(source),
+            .absoluteDestinationDirectory = WorkspacePathText(dragCopyDirectory),
             .mode = ContentBrowserTransferMode::Copy,
         };
         controller.ProcessCommand(dragCopy);
@@ -215,8 +216,8 @@ namespace {
         EditorWorkspaceViewCommandData dragMove;
         dragMove.command = EditorWorkspaceViewCommand::TransferContentBrowserAsset;
         dragMove.contentBrowserTransfer = ContentBrowserAssetTransferRequest{
-            .absoluteSourcePath = movedPath.string(),
-            .absoluteDestinationDirectory = dragMoveDirectory.string(),
+            .absoluteSourcePath = WorkspacePathText(movedPath),
+            .absoluteDestinationDirectory = WorkspacePathText(dragMoveDirectory),
             .mode = ContentBrowserTransferMode::Move,
         };
         controller.ProcessCommand(dragMove);
@@ -236,7 +237,7 @@ namespace {
         relativeDrag.command = EditorWorkspaceViewCommand::TransferContentBrowserAsset;
         relativeDrag.contentBrowserTransfer = ContentBrowserAssetTransferRequest{
             .absoluteSourcePath = "assets/Meshes/crate.horoasset",
-            .absoluteDestinationDirectory = dragCopyDirectory.string(),
+            .absoluteDestinationDirectory = WorkspacePathText(dragCopyDirectory),
             .mode = ContentBrowserTransferMode::Move,
         };
         controller.ProcessCommand(relativeDrag);
@@ -244,12 +245,12 @@ namespace {
 
         EditorWorkspaceViewCommandData createFolder;
         createFolder.command = EditorWorkspaceViewCommand::CreateContentBrowserFolder;
-        createFolder.stringPayload = sourceDirectory.string();
+        createFolder.stringPayload = WorkspacePathText(sourceDirectory);
         createFolder.secondaryStringPayload = "Generated";
         controller.ProcessCommand(createFolder);
         REQUIRE((std::filesystem::is_directory(sourceDirectory / "Generated")));
 
-        navigate.stringPayload = targetDirectory.string();
+        navigate.stringPayload = WorkspacePathText(targetDirectory);
         controller.ProcessCommand(navigate);
         REQUIRE((controller.ViewModel().contentBrowserCanNavigateBack));
         EditorWorkspaceViewCommandData navigateBack;
@@ -288,7 +289,7 @@ namespace {
 
         EditorWorkspaceViewCommandData navigate;
         navigate.command = EditorWorkspaceViewCommand::NavigateContentBrowser;
-        navigate.stringPayload = sourceDirectory.string();
+        navigate.stringPayload = WorkspacePathText(sourceDirectory);
         controller.ProcessCommand(navigate);
 
         const auto duplicated = VerifyDuplicatedAssetIdentity(controller, registry, source, sourceDirectory);
@@ -339,21 +340,21 @@ namespace {
 
         EditorWorkspaceViewCommandData navigate;
         navigate.command = EditorWorkspaceViewCommand::NavigateContentBrowser;
-        navigate.stringPayload = sourceDirectory.string();
+        navigate.stringPayload = WorkspacePathText(sourceDirectory);
         controller.ProcessCommand(navigate);
 
         files.failSync = true;
         EditorWorkspaceViewCommandData move;
         move.command = EditorWorkspaceViewCommand::TransferContentBrowserAsset;
         move.contentBrowserTransfer = ContentBrowserAssetTransferRequest{
-            .absoluteSourcePath = source.string(),
-            .absoluteDestinationDirectory = targetDirectory.string(),
+            .absoluteSourcePath = WorkspacePathText(source),
+            .absoluteDestinationDirectory = WorkspacePathText(targetDirectory),
             .mode = ContentBrowserTransferMode::Move,
         };
         controller.ProcessCommand(move);
 
         REQUIRE((std::filesystem::is_regular_file(source)));
-        REQUIRE((std::filesystem::is_regular_file(source.string() + ".horo")));
+        REQUIRE((std::filesystem::is_regular_file(std::filesystem::path{source}.concat(".horo"))));
         REQUIRE_FALSE(std::filesystem::exists(targetDirectory / source.filename()));
         REQUIRE((registry.Snapshot().FindByPath("assets/Source/rollback.horoasset") != nullptr));
         REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.content_browser.operation.move_failed"));
@@ -369,7 +370,7 @@ namespace {
             ("horo-workspace-asset-path-hardening-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         const std::filesystem::path sourceDirectory = projectRoot / "assets/Source";
         const std::filesystem::path targetDirectory = projectRoot / "assets/Target";
-        const std::filesystem::path outsideDirectory = projectRoot.parent_path() / (projectRoot.filename().string() + "-outside");
+        const std::filesystem::path outsideDirectory = projectRoot.parent_path() / (WorkspacePathText(projectRoot.filename()) + "-outside");
         std::filesystem::create_directories(sourceDirectory);
         std::filesystem::create_directories(targetDirectory);
         std::filesystem::create_directories(outsideDirectory);
@@ -393,19 +394,20 @@ namespace {
 
         EditorWorkspaceViewCommandData navigate;
         navigate.command = EditorWorkspaceViewCommand::NavigateContentBrowser;
-        navigate.stringPayload = sourceDirectory.string();
+        navigate.stringPayload = WorkspacePathText(sourceDirectory);
         controller.ProcessCommand(navigate);
 
         VerifyNameCollisionAndUnicodeRename(controller, sourceDirectory, targetDirectory, source);
 
-        const std::filesystem::path identitySidecar = source.string() + ".horo";
+        auto identitySidecar = source;
+        identitySidecar += ".horo";
         const std::filesystem::path heldSidecar = sourceDirectory / "held-sidecar";
         std::filesystem::rename(identitySidecar, heldSidecar);
         EditorWorkspaceViewCommandData copy;
         copy.command = EditorWorkspaceViewCommand::TransferContentBrowserAsset;
         copy.contentBrowserTransfer = ContentBrowserAssetTransferRequest{
-            .absoluteSourcePath = source.string(),
-            .absoluteDestinationDirectory = targetDirectory.string(),
+            .absoluteSourcePath = WorkspacePathText(source),
+            .absoluteDestinationDirectory = WorkspacePathText(targetDirectory),
             .mode = ContentBrowserTransferMode::Copy,
         };
         controller.ProcessCommand(copy);

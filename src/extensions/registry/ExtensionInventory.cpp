@@ -718,11 +718,13 @@ namespace Horo::Extensions {
                 {
                     {.id = "horo.builtin.assets.importer.obj", .version = "1.0.0", .kind = "asset_importer"},
                     {.id = "horo.builtin.assets.importer.fbx", .version = "1.0.0", .kind = "asset_importer"},
+                    {.id = "horo.builtin.assets.importer.terrain", .version = "1.0.0", .kind = "asset_importer"},
                 },
             .contributions =
                 {
                     {.type = "asset.importer", .id = "horo.asset-importer.obj-mesh", .owningModule = "horo.builtin.assets.importer.obj"},
                     {.type = "asset.importer", .id = "horo.asset-importer.fbx-mesh", .owningModule = "horo.builtin.assets.importer.fbx"},
+                    {.type = "asset.importer", .id = "horo.terrain.raw-f32", .owningModule = "horo.builtin.assets.importer.terrain"},
                 },
             .enabled = enabled_.contains("horo.builtin.assets"),
             .locallyTrusted = true,

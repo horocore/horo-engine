@@ -73,6 +73,40 @@ failed replacement is reported as storage-unknown and never treated as an empty 
 The storage boundary does not admit credentials, raw provider account identifiers or
 live subject handles.
 
+### In-memory admission allocation boundary
+
+`PlatformOfflineQueue::Admit` borrows `const PlatformOfflineIntent&` for the call
+and prepares independently owned receipt/operation copies inside its typed error
+boundary. `std::bad_alloc` reports `OfflineQueueErrors::CapacityExceeded`; it does
+not consume the caller's intent or publish partial supersession/coalescing. Private
+preparation may reserve bounded storage, but receipt states, sequence and active/
+retained counts publish only after the outer returned `Result` is fully constructed.
+An exception removes the prepared appended receipt/operation using its stable index.
+The monotonic clock observation retains the existing invalid-admission semantics.
+
+Presence payload and admission records remain aggregates, including designated
+initialization. Their explicitly defaulted destructors deliberately suppress implicit
+moves: on checked MSVC STL, otherwise `noexcept` string/vector moves allocate an
+iterator proxy and would terminate on allocation failure. Fallible copies preserve
+the typed boundary and transaction; presence text and superseded IDs are already
+bounded by queue policy (presence detail at most 512 bytes and active receipt IDs
+at most 4096). Growth may copy retained records up to the configured retained limit
+(hard maximum 16384), rather than moving their checked-library storage. The
+regression measures the exact allocation count instead of assuming a fixed budget.
+This trades bounded admission-copy cost for a recoverable allocation contract; no
+allocator or debug-check exclusions are used.
+
+Migration: ordinary lvalue/rvalue calls remain source-compatible. Code retaining an
+exact pointer-to-member signature must change its first parameter from
+`PlatformOfflineIntent` to `const PlatformOfflineIntent&`. Admission no longer moves
+from an rvalue input. Callers retain the input only through the synchronous call;
+queue records own copies and do not retain borrowed references. There are currently
+two unit-test source consumers and no production `src/` or `apps/` consumers.
+The changed `Admit` symbol requires rebuilding the engine and linked consumers together.
+Regression sweeps inject failure at every measured allocation for fresh presence
+replacement and progression coalescing, including checked-library bookkeeping and
+return-value construction; they also check aggregate traits and caller preservation.
+
 ## Scope
 
 Platform services covered here:

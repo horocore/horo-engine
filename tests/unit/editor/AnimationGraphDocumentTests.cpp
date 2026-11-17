@@ -1,6 +1,7 @@
 #include "../runtime/animation/AnimationGraphTestFixtures.h"
 #include "AllocationProbe.h"
 #include "Horo/Editor/AnimationGraphDocument.h"
+#include "Horo/Editor/SemanticDocumentHistory.h"
 
 #include <limits>
 #include <thread>
@@ -285,6 +286,89 @@ namespace Horo::Editor {
             }
         }
         CHECK(completed);
+        CHECK(failures > 0);
+    }
+
+    TEST_CASE("Semantic history preparation propagates every allocation failure before publication", "[animation][editor][document]") {
+        struct Entry {
+            std::size_t bytes;
+        };
+
+        using History = SemanticDocumentHistory<Entry>;
+        History history;
+        auto initial = history.Prepare(Entry{3});
+        REQUIRE(initial);
+        history.Commit(*initial);
+        std::unique_ptr<History> measured;
+        std::size_t requests{};
+        {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            measured = history.Prepare(Entry{7});
+            requests = measurement.Snapshot().requests;
+        }
+        REQUIRE(measured);
+        REQUIRE(measured->UndoCount() == 2);
+        REQUIRE(measured->Bytes() == 10);
+        REQUIRE(requests > 0);
+        for (std::size_t allocation = 0; allocation < requests; ++allocation) {
+            INFO(allocation);
+            std::unique_ptr<History> rejected;
+            bool failed{};
+            {
+                Tests::AllocationProbe::ScopedFailure failure{allocation};
+                try {
+                    rejected = history.Prepare(Entry{7});
+                } catch (const std::bad_alloc &) {
+                    failed = true;
+                }
+            }
+            REQUIRE(failed);
+            CHECK_FALSE(rejected);
+            CHECK(history.UndoCount() == 1);
+            CHECK(history.RedoCount() == 0);
+            CHECK(history.Bytes() == 3);
+            REQUIRE(history.Next(false));
+            CHECK(history.Next(false)->bytes == 3);
+        }
+    }
+
+    TEST_CASE("Animation graph inserted semantic values unwind allocation failures before root publication",
+              "[animation][editor][document]") {
+        auto positive = Document();
+        auto definition = Capture(*positive).Data().definitions.front();
+        definition.id = Id<GraphDefinitionId>(2);
+        const std::array<AnimationGraphDocumentCommand, 2> commands{PutAnimationGraphDefinition{definition},
+                                                                    PutAnimationGraphParameter{
+                                                                        {Id<GraphParameterId>(2), "spare", GraphValueType::Float, 0.25F}}};
+        REQUIRE(positive->Execute(Capture(*positive).Revision(), commands).HasValue());
+        positive.reset();
+        bool completed{};
+        std::size_t failures{};
+        for (std::size_t allocation = 0; allocation < 8192 && !completed; ++allocation) {
+            auto document = Document();
+            const auto before = Capture(*document);
+            try {
+                Tests::AllocationProbe::ScopedFailure failure{allocation};
+                completed = document->Execute(before.Revision(), commands).HasValue();
+            } catch (const std::bad_alloc &) {
+                ++failures;
+            }
+            if (!completed) {
+                Unchanged(*document, before);
+                CHECK(&Capture(*document).Data() == &before.Data());
+                CHECK_FALSE(document->IsDirty());
+                CHECK_FALSE(document->CanUndo());
+            } else {
+                const auto inserted = Capture(*document);
+                CHECK(inserted.Data().definitions.size() == before.Data().definitions.size() + 1);
+                CHECK(inserted.Data().parameters.size() == before.Data().parameters.size() + 1);
+                REQUIRE(document->Undo(inserted.Revision()).HasValue());
+                CHECK(Capture(*document).SourceBytes() == before.SourceBytes());
+                REQUIRE(document->Redo(Capture(*document).Revision()).HasValue());
+                CHECK(Capture(*document).SourceBytes() == inserted.SourceBytes());
+            }
+        }
+        REQUIRE(completed);
         CHECK(failures > 0);
     }
 

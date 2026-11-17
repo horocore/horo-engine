@@ -147,17 +147,64 @@ namespace Horo::Audio::StreamingTests {
             return AudioStreamingService::Create(jobs, {BorrowedCallbackContext{&fixture}, &Open});
         }();
         CHECK(creation.HasError());
-        auto service = Service(jobs, fixture);
-        auto request = Request();
-        const auto admission = [&] {
-            Tests::AllocationProbe::ScopedFailure failure;
-            return service->Admit(std::move(request));
-        }();
-        CHECK(admission.HasError());
-        const auto admitted = service->Admit(Request());
-        REQUIRE(admitted.HasValue());
-        CHECK(fixture.opens.load() == 0);
-        REQUIRE(service->Retire(admitted.Value()).HasValue());
+
+        std::size_t requests{};
+        {
+            auto service = Service(jobs, fixture, {1, 1, 1'088});
+            const auto request = Request();
+            AudioStreamHandle handle;
+            {
+                Tests::AllocationProbe::ScopedMeasurement measurement;
+                const auto measured = service->Admit(request);
+                requests = measurement.Snapshot().requests;
+                REQUIRE(measured.HasValue());
+                handle = measured.Value();
+            }
+            REQUIRE(service->Retire(handle).HasValue());
+        }
+        REQUIRE(requests > 0);
+
+        bool admitted{};
+        std::size_t failures{};
+        for (std::size_t successfulAllocations{}; successfulAllocations <= requests && !admitted; ++successfulAllocations) {
+            // One stream and exactly one request's byte charge expose any leaked slot or reservation.
+            auto service = Service(jobs, fixture, {1, 1, 1'088});
+            auto request = Request();
+            const auto original = request;
+            const auto result = [&] {
+                Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
+                return service->Admit(std::move(request));
+            }();
+            CHECK(request.asset == original.asset);
+            CHECK(request.decoder.codec == original.decoder.codec);
+            CHECK(request.decoder.outputFormat == original.decoder.outputFormat);
+            CHECK(request.decoder.frameCount == original.decoder.frameCount);
+            CHECK(request.decoder.maximumFramesPerDecode == original.decoder.maximumFramesPerDecode);
+            CHECK(request.decoder.requiredWorkingBytes == original.decoder.requiredWorkingBytes);
+            CHECK(request.decoder.seekable == original.decoder.seekable);
+            CHECK(request.ringFrames == original.ringFrames);
+            CHECK(request.lookaheadFrames == original.lookaheadFrames);
+            CHECK(request.maximumPackageBytes == original.maximumPackageBytes);
+            CHECK(request.priority == original.priority);
+            CHECK(request.underrunPolicy == original.underrunPolicy);
+            if (result.HasError()) {
+                CHECK(result.ErrorValue().code.Value() == AudioErrors::StreamCapacityExceeded.code.Value());
+                ++failures;
+                const auto retry = service->Admit(request);
+                REQUIRE(retry.HasValue());
+                CHECK(retry.Value().slot == 1);
+                CHECK(retry.Value().generation == 1);
+                REQUIRE(service->Retire(retry.Value()).HasValue());
+            } else {
+                admitted = true;
+                CHECK(result.Value().slot == 1);
+                CHECK(result.Value().generation == 1);
+                REQUIRE(service->Retire(result.Value()).HasValue());
+            }
+            CHECK(fixture.opens.load() == 0);
+        }
+        CHECK(failures == requests);
+        CHECK(admitted);
     }
 
     TEST_CASE("Streaming source transfer retains its lease through work and retirement", "[unit][audio][streaming]") {

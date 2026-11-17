@@ -69,10 +69,11 @@ failure, or process termination.
 - Persistent-model changes without a generated or explicit migration decision
   fail the release pipeline.
 
-## Current Production Baseline
+## Current Development Baseline
 
-Horo `0.1.0` is the current development release. The frozen `0.0.1` descriptor
-remains unchanged and is the first supported predecessor. The automatically
+Horo `0.3.0` introduces the project-owned semantic surface catalog. Frozen
+`0.0.1`, `0.1.0` and `0.2.0` release descriptors and migration definitions remain
+unchanged; the first supported predecessor remains `0.0.1`. The automatically
 discovered sequential definition
 `core.project_settings.compression_defaults` upgrades `0.0.1` projects to
 `0.1.0`: missing `settings.assetCompression` and
@@ -110,6 +111,24 @@ source/scene paths or a stage-qualified failure, including malformed asset paths
 Sidecars remain identity authority. Derived registries and cooked generations
 remain outside authored publication; failed publication/recovery restores the
 original sources, scenes, history and root marker through the existing journal.
+
+The existing `0.2.0` edge adopts portable Network v3 and Navigation authoring.
+The subsequent `core.authoring.semantic_surfaces` edge adds a missing
+`.horo/surfaces.json` as an explicit empty catalog with revision one and no default
+surface. It preserves the exact existing opaque project identity. It never infers
+semantic surfaces from physical materials, names, collision layers or media, and
+never assigns an invented default to a legacy controller. An existing catalog is
+validated against its project and preserved byte for byte; malformed, foreign or
+unsupported catalogs reject the unpublished candidate.
+
+The catalog's `schemaVersion: 1` describes the shape frozen by the `0.3.0`
+persistent contract; it is not an independent project-version timeline. New
+projects may author an actual surface UUID and explicitly select that entry as the
+default. Existing projects retain an unassigned catalog until authoring selects
+real entries; physical evidence never becomes a semantic identity by fallback.
+The new target barrier retains the preceding authoring checks, requires the
+project-bound catalog and verifies the exact target marker and migration history.
+Root-last publication and journaled rollback remain executor-owned.
 
 ## Version Model
 

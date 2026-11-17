@@ -140,7 +140,8 @@ namespace Horo::Character {
                                   .distanceMeters = hit.distanceMeters,
                                   .subshape = hit.subshape,
                                   .layer = hit.layer,
-                                  .profile = hit.profile};
+                                  .profile = hit.profile,
+                                  .surface = hit.surface};
         }
         return Result<CharacterSweepProbeResult>::Success(result);
     }

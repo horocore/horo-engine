@@ -243,7 +243,7 @@ namespace Horo::Editor {
         float x = regions.toolbarOrigin.x + metrics.toolbarPaddingX;
         const std::string previousSearch{m_search.data()};
         x = DrawGlobalDockSearchControl({x, controlY}, searchWidth, "##BuildOutputSearch", m_search,
-                                        context.localization.Get("editor", "workspace.global_dock.build_output.search"), fonts);
+                                        GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "search"), fonts);
         if (previousSearch != std::string_view{m_search.data()})
             m_filterDirty = true;
         layout.x = x;
@@ -257,27 +257,27 @@ namespace Horo::Editor {
         const Theme::Fonts &fonts = context.theme.fonts;
         const GlobalDockToolbarChipProps allProps{
             .id = "BuildAll",
-            .label = context.localization.Get("editor", "workspace.global_dock.build_output.status.all"),
+            .label = GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "status.all"),
             .count = m_snapshot.records.size(),
             .active = m_statusFilter == StatusFilter::All,
         };
         const GlobalDockToolbarChipProps errorProps{
             .id = "BuildErrors",
-            .label = context.localization.Get("editor", "workspace.global_dock.build_output.status.failed"),
+            .label = GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "status.failed"),
             .count = errorCount,
             .tone = GlobalDockTone::Error,
             .active = m_statusFilter == StatusFilter::Errors,
         };
         const GlobalDockToolbarChipProps warningProps{
             .id = "BuildWarnings",
-            .label = context.localization.Get("editor", "workspace.global_dock.build_output.status.warning"),
+            .label = GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "status.warning"),
             .count = warningCount,
             .tone = GlobalDockTone::Warning,
             .active = m_statusFilter == StatusFilter::Warning,
         };
         const GlobalDockToolbarChipProps rebuildProps{
             .id = "BuildRebuild",
-            .label = context.localization.Get("editor", "workspace.global_dock.build_output.rebuild"),
+            .label = GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "rebuild"),
             .tone = GlobalDockTone::Accent,
             .active = true,
             .icon = Ui::UiIcon::Reset,
@@ -330,9 +330,9 @@ namespace Horo::Editor {
         const float targetWidth = 108.0F * scale;
         const float configurationWidth = 132.0F * scale;
         const std::array<std::string, 3> targetText{
-            context.localization.Get("editor", "workspace.global_dock.build_output.target.editor"),
-            context.localization.Get("editor", "workspace.global_dock.build_output.target.runtime"),
-            context.localization.Get("editor", "workspace.global_dock.build_output.target.tests"),
+            GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "target.editor"),
+            GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "target.runtime"),
+            GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "target.tests"),
         };
         const std::array<const char *, 3> targetItems{targetText[0].c_str(), targetText[1].c_str(), targetText[2].c_str()};
         ImGui::SetCursorScreenPos({x, controlY});
@@ -345,9 +345,9 @@ namespace Horo::Editor {
         x += targetWidth + metrics.toolbarGap;
 
         const std::array<std::string, 3> configurationText{
-            context.localization.Get("editor", "workspace.global_dock.build_output.configuration.development"),
-            context.localization.Get("editor", "workspace.global_dock.build_output.configuration.debug"),
-            context.localization.Get("editor", "workspace.global_dock.build_output.configuration.release"),
+            GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "configuration.development"),
+            GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "configuration.debug"),
+            GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "configuration.release"),
         };
         const std::array<const char *, 3> configurationItems{configurationText[0].c_str(), configurationText[1].c_str(),
                                                              configurationText[2].c_str()};
@@ -361,7 +361,7 @@ namespace Horo::Editor {
         x += configurationWidth + metrics.toolbarGap;
         const GlobalDockToolbarChipProps rebuildProps{
             .id = "BuildRebuild",
-            .label = context.localization.Get("editor", "workspace.global_dock.build_output.rebuild"),
+            .label = GlobalDockBuildOutputPane::kTextScope.Text(context.localization, "rebuild"),
             .tone = GlobalDockTone::Accent,
             .active = true,
             .icon = Ui::UiIcon::Reset,
@@ -391,14 +391,15 @@ namespace Horo::Editor {
             headerMin.x + metrics.contentPadding + (68.0F + 74.0F + 96.0F) * scale + metrics.columnGap * 3.0F,
         };
         const std::array<const char *, 4> keys{
-            "workspace.global_dock.build_output.column.level",
-            "workspace.global_dock.build_output.column.line",
-            "workspace.global_dock.build_output.column.file",
-            "workspace.global_dock.build_output.column.message",
+            "column.level",
+            "column.line",
+            "column.file",
+            "column.message",
         };
         for (std::size_t index = 0; index < positions.size(); ++index)
             drawList->AddText(context.theme.fonts.sansCompact, Theme::TextPx::Caption(), {positions[index], headerY},
-                              Theme::U32(Theme::Muted()), context.localization.Get("editor", keys[index]).c_str());
+                              Theme::U32(Theme::Muted()),
+                              GlobalDockBuildOutputPane::kTextScope.Text(context.localization, keys[index]).c_str());
     }
 
     void GlobalDockBuildOutputPane::DrawTableRows(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,

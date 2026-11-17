@@ -25,8 +25,11 @@ namespace Horo::Editor {
     namespace {
         class WelcomeScreen final : public GuiScreen {
         public:
+            /** @brief Catalog scope shared by this surface and its view helpers. */
+            static constexpr GuiLocalizationScope kTextScope = WelcomeTextScope;
+
             explicit WelcomeScreen(const EditorServiceRegistry &services)
-                : host_(services.Get<GuiScreenHost>()), context_(services.GetConst<EditorGuiContext>()),
+                : GuiScreen(kTextScope), host_(services.Get<GuiScreenHost>()), context_(services.GetConst<EditorGuiContext>()),
                   modalHost_(services.Get<EditorModalHost>()), inputRouter_(services.Get<Input::InputRouter>()),
                   recentInspection_(services.Get<RecentProjectInspectionService>()),
                   logoTexture_(services.TryGet<std::uintptr_t>() ? *services.TryGet<std::uintptr_t>() : 0) {}
@@ -71,7 +74,8 @@ namespace Horo::Editor {
                     return;
                 }
                 const WelcomeViewResult result =
-                    DrawWelcomeView(viewModel_, viewState_, context_, WelcomeViewAssets{(ImTextureID)logoTexture_}, contentRegion);
+                    GuiLive::Invoke<&DrawWelcomeView>(context_.theme.liveReload, viewModel_, viewState_, context_,
+                                                      WelcomeViewAssets{(ImTextureID)logoTexture_}, contentRegion);
                 if (modalHost_.HasOpenModal()) {
                     // A modal owns interaction — ignore any commands the view emits this frame.
                     return;
@@ -105,17 +109,18 @@ namespace Horo::Editor {
                         const std::string projectRoot = entry->rootPath;
                         auto nativeDialogContext = inputRouter_.PushContext(Input::InputContextId{"editor.native_dialog.delete_project"},
                                                                             Input::InputContextKind::NativeDialog);
-                        const std::string title = context_.localization.Get("editor", "welcome.project.delete_confirm_title");
+                        const std::string title = WelcomeScreen::kTextScope.Text(context_.localization, "project.delete_confirm_title");
                         if (const std::string prompt =
-                                context_.localization.Get("editor", "welcome.project.delete_confirm_message") + "\n\n" + projectRoot;
+                                WelcomeScreen::kTextScope.Text(context_.localization, "project.delete_confirm_message") + "\n\n" +
+                                projectRoot;
                             pfd::message(title, prompt, pfd::choice::yes_no, pfd::icon::warning).result() != pfd::button::yes)
                             break;
                         if (!DeleteRecentProjectFiles(projectRoot)) {
-                            static_cast<void>(
-                                pfd::message(title,
-                                             context_.localization.Get("editor", "welcome.project.delete_failed") + "\n\n" + projectRoot,
-                                             pfd::choice::ok, pfd::icon::error)
-                                    .result());
+                            static_cast<void>(pfd::message(title,
+                                                           WelcomeScreen::kTextScope.Text(context_.localization, "project.delete_failed") +
+                                                               "\n\n" + projectRoot,
+                                                           pfd::choice::ok, pfd::icon::error)
+                                                  .result());
                             break;
                         }
                         if (!RemoveRecentProject(projectRoot))
@@ -181,11 +186,11 @@ namespace Horo::Editor {
                     const std::filesystem::path root{project.rootPath};
                     auto modified = std::filesystem::last_write_time(root, error);
                     if (error)
-                        modified = std::filesystem::file_time_type::min();
+                        modified = (std::filesystem::file_time_type::min)();
                     error.clear();
                     const auto metadataModified = std::filesystem::last_write_time(root / ".horo/project.json", error);
                     if (!error)
-                        modified = std::max(modified, metadataModified);
+                        modified = (std::max)(modified, metadataModified);
                     viewState_.projectModifiedTimes.push_back(modified);
                 }
             }
@@ -208,9 +213,9 @@ namespace Horo::Editor {
             void ShowRecentListSaveFailure() {
                 auto nativeDialogContext = inputRouter_.PushContext(Input::InputContextId{"editor.native_dialog.recent_projects_error"},
                                                                     Input::InputContextKind::NativeDialog);
-                static_cast<void>(pfd::message(context_.localization.Get("editor", "welcome.project.list_save_failed_title"),
-                                               context_.localization.Get("editor", "welcome.project.list_save_failed"), pfd::choice::ok,
-                                               pfd::icon::error)
+                static_cast<void>(pfd::message(WelcomeScreen::kTextScope.Text(context_.localization, "project.list_save_failed_title"),
+                                               WelcomeScreen::kTextScope.Text(context_.localization, "project.list_save_failed"),
+                                               pfd::choice::ok, pfd::icon::error)
                                       .result());
             }
 

@@ -5,6 +5,7 @@
  * @brief Project-scoped discovery and ownership of editor-visible gameplay behaviors.
  */
 
+#include "EditorPlaySaveSession.h"
 #include "Horo/Gameplay/BehaviorRegistry.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
@@ -136,6 +137,11 @@ namespace Horo::Editor {
          * @return Success or a typed restore failure.
          */
         [[nodiscard]] Result<void> RestoreNativeReload(const Gameplay::GameModuleReloadSnapshot &snapshot);
+        /** @brief Acquires every declared durable native source from the actual current module generation.
+         * @return Complete bounded bindings or original stale/missing/capacity failure; no partial inventory is published.
+         * @details The core Scene participant consumes one registry slot. Lua or unregistered owners gain no implied save support.
+         */
+        [[nodiscard]] Result<std::vector<PlaySaveGameplayBinding>> AcquireSaveBindings() const;
         /** @brief Reports whether a native generation is loaded. */
         [[nodiscard]] bool HasNativeModule() const noexcept;
         /** @brief Returns deep-owned metadata of the actual loaded generation, without executable leases.

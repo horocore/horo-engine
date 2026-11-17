@@ -125,6 +125,10 @@ namespace Horo::Input {
                     return F11;
                 case SDL_SCANCODE_F12:
                     return F12;
+                case SDL_SCANCODE_EQUALS:
+                    return Equal;
+                case SDL_SCANCODE_MINUS:
+                    return Minus;
                 default:
                     return Unknown;
             }

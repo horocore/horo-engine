@@ -24,15 +24,9 @@ namespace Horo::Editor {
         };
 
         constexpr std::array Rows{
-            PhysicsRow{"Player", "workspace.global_dock.physics.state.active", GlobalDockTone::Positive,
-                       "workspace.global_dock.physics.shape.capsule", "workspace.global_dock.physics.layer.player",
-                       "workspace.global_dock.physics.timing.player"},
-            PhysicsRow{"PF Enemy", "workspace.global_dock.physics.state.active", GlobalDockTone::Positive,
-                       "workspace.global_dock.physics.shape.convex", "workspace.global_dock.physics.layer.enemy",
-                       "workspace.global_dock.physics.timing.enemy"},
-            PhysicsRow{"Floor 000", "workspace.global_dock.physics.state.static", GlobalDockTone::Neutral,
-                       "workspace.global_dock.physics.shape.mesh", "workspace.global_dock.physics.layer.terrain",
-                       "workspace.global_dock.physics.timing.floor"},
+            PhysicsRow{"Player", "state.active", GlobalDockTone::Positive, "shape.capsule", "layer.player", "timing.player"},
+            PhysicsRow{"PF Enemy", "state.active", GlobalDockTone::Positive, "shape.convex", "layer.enemy", "timing.enemy"},
+            PhysicsRow{"Floor 000", "state.static", GlobalDockTone::Neutral, "shape.mesh", "layer.terrain", "timing.floor"},
         };
 
     }  // namespace
@@ -62,7 +56,7 @@ namespace Horo::Editor {
         const GlobalDockPaneRegions regions =
             ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockPhysicsPane::kTextScope.Text(context.localization, key);
         };
 
         DrawGlobalDockToolbarSurface(regions.toolbarOrigin, regions.toolbarWidth, metrics.toolbarHeight);
@@ -71,7 +65,7 @@ namespace Horo::Editor {
         const float searchWidth = ResolveGlobalDockSearchWidth(regions.toolbarWidth, fixedWidth);
         float x = regions.toolbarOrigin.x + metrics.toolbarPaddingX;
 
-        const std::string &searchHint = localized("workspace.global_dock.physics.search");
+        const std::string &searchHint = localized("search");
         x = DrawGlobalDockSearchControl({x, controlY}, searchWidth, "##PhysicsSearch", m_search, searchHint, fonts);
         DrawWorldSelector(x, controlY, context);
         DrawToolbarActions(x, controlY, context);
@@ -81,18 +75,17 @@ namespace Horo::Editor {
         const auto &fonts = context.theme.fonts;
         const auto &localization = context.localization;
         const std::array props{GlobalDockToolbarChipProps{.id = "PhysicsColliders",
-                                                          .label = localization.Get("editor", "workspace.global_dock.physics.colliders")},
+                                                          .label = GlobalDockPhysicsPane::kTextScope.Text(localization, "colliders")},
                                GlobalDockToolbarChipProps{.id = "PhysicsContacts",
-                                                          .label = localization.Get("editor", "workspace.global_dock.physics.contacts")},
+                                                          .label = GlobalDockPhysicsPane::kTextScope.Text(localization, "contacts")},
                                GlobalDockToolbarChipProps{.id = "PhysicsConstraints",
-                                                          .label = localization.Get("editor", "workspace.global_dock.physics.constraints")},
+                                                          .label = GlobalDockPhysicsPane::kTextScope.Text(localization, "constraints")},
                                GlobalDockToolbarChipProps{.id = "PhysicsPause",
-                                                          .label =
-                                                              localization.Get("editor", m_paused ? "workspace.global_dock.physics.resume"
-                                                                                                  : "workspace.global_dock.physics.pause"),
+                                                          .label = GlobalDockPhysicsPane::kTextScope.Text(localization,
+                                                                                                          m_paused ? "resume" : "pause"),
                                                           .icon = m_paused ? Ui::UiIcon::Play : Ui::UiIcon::Pause},
                                GlobalDockToolbarChipProps{.id = "PhysicsStep",
-                                                          .label = localization.Get("editor", "workspace.global_dock.physics.step"),
+                                                          .label = GlobalDockPhysicsPane::kTextScope.Text(localization, "step"),
                                                           .icon = Ui::UiIcon::Play}};
         float width = 132.0F * Theme::GetActiveTokens().sizes.uiScale;
         for (const auto &propsItem : props)
@@ -103,8 +96,8 @@ namespace Horo::Editor {
 
     void GlobalDockPhysicsPane::DrawWorldSelector(float &x, const float y, const EditorGuiContext &context) {
         const float width = 132.0F * Theme::GetActiveTokens().sizes.uiScale;
-        const std::array<std::string, 2> labels{context.localization.Get("editor", "workspace.global_dock.physics.world.room"),
-                                                context.localization.Get("editor", "workspace.global_dock.physics.world.all")};
+        const std::array<std::string, 2> labels{GlobalDockPhysicsPane::kTextScope.Text(context.localization, "world.room"),
+                                                GlobalDockPhysicsPane::kTextScope.Text(context.localization, "world.all")};
         const std::array<const char *, 2> items{labels[0].c_str(), labels[1].c_str()};
         ImGui::SetCursorScreenPos({x, y});
         ImGui::SetNextItemWidth(width);
@@ -120,13 +113,13 @@ namespace Horo::Editor {
         const auto &fonts = context.theme.fonts;
         const auto &localization = context.localization;
         std::array props{GlobalDockToolbarChipProps{.id = "PhysicsColliders",
-                                                    .label = localization.Get("editor", "workspace.global_dock.physics.colliders"),
+                                                    .label = GlobalDockPhysicsPane::kTextScope.Text(localization, "colliders"),
                                                     .active = m_colliders},
                          GlobalDockToolbarChipProps{.id = "PhysicsContacts",
-                                                    .label = localization.Get("editor", "workspace.global_dock.physics.contacts"),
+                                                    .label = GlobalDockPhysicsPane::kTextScope.Text(localization, "contacts"),
                                                     .active = m_contacts},
                          GlobalDockToolbarChipProps{.id = "PhysicsConstraints",
-                                                    .label = localization.Get("editor", "workspace.global_dock.physics.constraints"),
+                                                    .label = GlobalDockPhysicsPane::kTextScope.Text(localization, "constraints"),
                                                     .active = m_constraints}};
         std::array<bool *, 3> values{&m_colliders, &m_contacts, &m_constraints};
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
@@ -139,8 +132,7 @@ namespace Horo::Editor {
         DrawGlobalDockToolbarSeparator(x, y);
         x += metrics.toolbarGap + Theme::GetActiveTokens().sizes.uiScale;
         const GlobalDockToolbarChipProps pause{.id = "PhysicsPause",
-                                               .label = localization.Get("editor", m_paused ? "workspace.global_dock.physics.resume"
-                                                                                            : "workspace.global_dock.physics.pause"),
+                                               .label = GlobalDockPhysicsPane::kTextScope.Text(localization, m_paused ? "resume" : "pause"),
                                                .tone = GlobalDockTone::Accent,
                                                .active = true,
                                                .icon = m_paused ? Ui::UiIcon::Play : Ui::UiIcon::Pause};
@@ -149,7 +141,7 @@ namespace Horo::Editor {
             m_paused = !m_paused;
         x += pauseWidth + metrics.toolbarGap;
         const GlobalDockToolbarChipProps step{.id = "PhysicsStep",
-                                              .label = localization.Get("editor", "workspace.global_dock.physics.step"),
+                                              .label = GlobalDockPhysicsPane::kTextScope.Text(localization, "step"),
                                               .disabled = !m_paused,
                                               .icon = Ui::UiIcon::Play};
         static_cast<void>(DrawGlobalDockToolbarChip({x, y}, MeasureGlobalDockToolbarChip(step, fonts), step, fonts));
@@ -157,21 +149,15 @@ namespace Horo::Editor {
 
     float GlobalDockPhysicsPane::DrawMetrics(const ImVec2 &origin, const float width, const EditorGuiContext &context) const {
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockPhysicsPane::kTextScope.Text(context.localization, key);
         };
         const std::array<GlobalDockMetricCardProps, 4> cards{
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.physics.metric.step"),
-                                      .value = "0.72 ms",
-                                      .valueTone = GlobalDockTone::Positive},
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.physics.metric.active_sleeping"),
-                                      .value = "28",
-                                      .note = "/ 64"},
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.physics.metric.contacts_pairs"),
-                                      .value = "14",
-                                      .note = "/ 37"},
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.physics.metric.snapshot"),
+            GlobalDockMetricCardProps{.label = localized("metric.step"), .value = "0.72 ms", .valueTone = GlobalDockTone::Positive},
+            GlobalDockMetricCardProps{.label = localized("metric.active_sleeping"), .value = "28", .note = "/ 64"},
+            GlobalDockMetricCardProps{.label = localized("metric.contacts_pairs"), .value = "14", .note = "/ 37"},
+            GlobalDockMetricCardProps{.label = localized("metric.snapshot"),
                                       .value = "8 / 16",
-                                      .note = localized("workspace.global_dock.physics.metric.dropped"),
+                                      .note = localized("metric.dropped"),
                                       .noteTone = GlobalDockTone::Positive},
         };
         return DrawGlobalDockMetricGrid(origin, width, cards, context.theme.fonts);
@@ -183,7 +169,7 @@ namespace Horo::Editor {
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockPhysicsPane::kTextScope.Text(context.localization, key);
         };
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         const ImVec2 headerMin = origin;
@@ -198,11 +184,11 @@ namespace Horo::Editor {
             drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {textX, headerY}, Theme::U32(Theme::Muted()),
                               localized(key).c_str());
         };
-        headerText(layout.body, "workspace.global_dock.physics.column.body");
-        headerText(layout.state, "workspace.global_dock.physics.column.state");
-        headerText(layout.shape, "workspace.global_dock.physics.column.shape");
-        headerText(layout.layer, "workspace.global_dock.physics.column.layer");
-        headerText(layout.timing, "workspace.global_dock.physics.column.timing");
+        headerText(layout.body, "column.body");
+        headerText(layout.state, "column.state");
+        headerText(layout.shape, "column.shape");
+        headerText(layout.layer, "column.layer");
+        headerText(layout.timing, "column.timing");
 
         const ImVec2 rowsOrigin{headerMin.x, headerMin.y + metrics.tableHeaderHeight};
         const float rowsHeight = std::max(1.0F, height - metrics.tableHeaderHeight);
@@ -221,10 +207,10 @@ namespace Horo::Editor {
     void GlobalDockPhysicsPane::DrawRow(const std::size_t index, const float width, const TableLayout &layout,
                                         const EditorGuiContext &context) const {
         const PhysicsRow &row = Rows[index];
-        const std::string &state = context.localization.Get("editor", row.stateKey);
-        const std::string &shape = context.localization.Get("editor", row.shapeKey);
-        const std::string &layer = context.localization.Get("editor", row.layerKey);
-        const std::string &timing = context.localization.Get("editor", row.timingKey);
+        const std::string &state = GlobalDockPhysicsPane::kTextScope.Text(context.localization, row.stateKey);
+        const std::string &shape = GlobalDockPhysicsPane::kTextScope.Text(context.localization, row.shapeKey);
+        const std::string &layer = GlobalDockPhysicsPane::kTextScope.Text(context.localization, row.layerKey);
+        const std::string &timing = GlobalDockPhysicsPane::kTextScope.Text(context.localization, row.timingKey);
         if (const std::string_view search{m_search.data()};
             !GlobalDockContainsCaseInsensitive(row.body, search) && !GlobalDockContainsCaseInsensitive(state, search) &&
             !GlobalDockContainsCaseInsensitive(shape, search) && !GlobalDockContainsCaseInsensitive(layer, search))

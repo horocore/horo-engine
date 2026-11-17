@@ -1,0 +1,79 @@
+{
+  "scope": "diagnostic original strict-route DXC/SPIRV-Val/Cross evidence; hash pinned tools; not a cooked/Metal-native qualification",
+  "sourceIdentity": "horo/runtime/exposure.hlsl",
+  "sourceSHA256": "d25e11cb5e5ecf5921c6bd83a6a742cdc402670dcc542a79979b3b37291c9198",
+  "captureDate": "2026-11-06",
+  "tools": [
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:b0bf9b20b9425d8e80c39bd4e3c5ce5dbdf26be7973f2122d2ea50de8a8d8a4e",
+      "release": "lunarg-1.4.363.0.dxc-1.9.0.5512",
+      "role": "dxc"
+    },
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:42938d66ae3703537376116c11abed84639a9bc2c02c1f360058287320603ad6",
+      "release": "lunarg-1.4.363.0.spirv-tools-2026.4",
+      "role": "spirv-val"
+    },
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:2adca603ef473f3b292784c1020c61b597a1545c981b2ed128e3de04feb46ad2",
+      "release": "lunarg-1.4.363.0.spirv-cross-f11ba9f0",
+      "role": "spirv-cross"
+    }
+  ],
+  "dxcArguments": [
+    "-nologo",
+    "-HV",
+    "2021",
+    "-Ges",
+    "-Zpc",
+    "-T",
+    "cs_6_0",
+    "-E",
+    "<canonical-stage>",
+    "-Gis",
+    "-O3",
+    "-spirv",
+    "-fspv-target-env=vulkan1.3",
+    "-fvk-use-gl-layout"
+  ],
+  "validatorArguments": [
+    "--target-env",
+    "vulkan1.3"
+  ],
+  "crossArguments": [
+    "--entry",
+    "<canonical-stage>",
+    "--stage",
+    "comp",
+    "--msl",
+    "--msl-version",
+    "20400",
+    "--msl-decoration-binding"
+  ],
+  "buildImageTypeOperands": [
+    [
+      9,
+      35,
+      1,
+      2,
+      0,
+      0,
+      1,
+      0
+    ]
+  ],
+  "files": {
+    "ClearExposureHistogram.spv": "1f39262e49e56b0aad30b60fb40472c2a3658083c76fde798429ab7eac7b0b5c",
+    "ClearExposureHistogram.json": "c487c06be7739ebaac9823ab1c50c2b89ac2057cedcfbdf0f629208a9074d849",
+    "ClearExposureHistogram.metal": "28b87273dd73579ddc969c1ba1839809c670665bf62642bc66aa26c00d21fef4",
+    "BuildExposureHistogram.spv": "808c6b2c5c56a58444c637e423cf1433f4eac0697407360ed130c8695c206d0a",
+    "BuildExposureHistogram.json": "2bd89179797536de6ce53f82668f5b2f8f1a8670546ffa86c48e2400f3f1297a",
+    "BuildExposureHistogram.metal": "12f2c2ba502ed320575850c4f2d1e195f7bef453f2dfa98cc6751674122f14ca",
+    "AdaptExposure.spv": "f756611620684ff72e4805a0f218ff8e7f8f1bf1dab300f80bd1f1c9ea6bdd9e",
+    "AdaptExposure.json": "491e72ff4505cb3edf8920f7da8d1e48b18b395d1163d570e3c25121cb881108",
+    "AdaptExposure.metal": "2bc40c7c5c63e2c5de7ecc6d4f93efcf234a0542706ae2759921f7184dafa97b"
+  }
+}

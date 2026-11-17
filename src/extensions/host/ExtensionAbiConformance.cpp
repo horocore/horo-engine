@@ -1,6 +1,7 @@
 #include "Horo/Extensions/ExtensionAbiConformance.h"
 
 #include "ExtensionAbiValidation.h"
+#include "ExtensionReferenceConformance.h"
 #include "Horo/Platform/DynamicLibrary.h"
 
 #include <cstddef>
@@ -21,6 +22,7 @@ namespace Horo::Extensions {
 
         struct RegistrationSession final {
             std::vector<OwnedImporter> importers;
+            ExtensionReferenceConformance reference;
             bool rejected{};
         };
 
@@ -60,6 +62,28 @@ namespace Horo::Extensions {
             }
         }
 
+        HoroExtensionStatus ReferenceService(void *context, const HoroExtensionServiceDescriptor *descriptor) noexcept {
+            auto &session = *static_cast<RegistrationSession *>(context);
+            const auto status = session.reference.Service(descriptor);
+            session.rejected = session.rejected || status != HORO_EXTENSION_SUCCESS;
+            return status;
+        }
+
+        HoroExtensionStatus ReferenceImport(void *context, HoroExtensionStringView id, HoroExtensionServiceClient *client) noexcept {
+            auto &session = *static_cast<RegistrationSession *>(context);
+            const auto status = session.reference.Import(id, client);
+            session.rejected = session.rejected || status != HORO_EXTENSION_SUCCESS;
+            return status;
+        }
+
+        HoroExtensionStatus ReferenceActivity(void *context, const HoroEditorActivityDescriptor *descriptor,
+                                              HoroEditorActivitySessionApi *output) noexcept {
+            auto &session = *static_cast<RegistrationSession *>(context);
+            const auto status = session.reference.Activity(descriptor, output);
+            session.rejected = session.rejected || status != HORO_EXTENSION_SUCCESS;
+            return status;
+        }
+
         [[nodiscard]] bool DestroyRegistrations(RegistrationSession &session) noexcept {
             bool clean = true;
             for (auto &importer : std::ranges::reverse_view(session.importers)) {
@@ -73,6 +97,12 @@ namespace Horo::Extensions {
             }
             session.importers.clear();
             return clean;
+        }
+
+        bool DestroyAllRegistrations(RegistrationSession &session) noexcept {
+            const bool reference = session.reference.Destroy();
+            const bool importers = DestroyRegistrations(session);
+            return reference && importers;
         }
 
         template <typename UnloadCallback>
@@ -154,6 +184,7 @@ namespace Horo::Extensions {
 
         RegistrationSession registration;
         constexpr std::string_view engineVersion = "abi-conformance";
+        const HoroExtensionServiceHostApi services{sizeof(services), 1, ReferenceService, ReferenceImport};
         const HoroExtensionHostApi host{
             .structSize = sizeof(HoroExtensionHostApi),
             .abiVersion = HORO_EXTENSION_ABI_VERSION,
@@ -161,6 +192,8 @@ namespace Horo::Extensions {
             .hostContext = &registration,
             .registerAssetImporter = RegisterImporter,
             .abiMinorVersion = HORO_EXTENSION_ABI_MINOR_VERSION,
+            .registerEditorActivity = ReferenceActivity,
+            .services = &services,
         };
         report.status = NegotiateModuleAbi(query, host);
         if (report.status != HORO_EXTENSION_SUCCESS) {
@@ -170,7 +203,7 @@ namespace Horo::Extensions {
 
         HoroExtensionModuleApi moduleApi{.structSize = sizeof(HoroExtensionModuleApi)};
         report.status = InvokeLoad(load, host, moduleApi);
-        report.registrationCount = static_cast<std::uint32_t>(registration.importers.size());
+        report.registrationCount = static_cast<std::uint32_t>(registration.importers.size()) + registration.reference.Count();
         ExtensionAbiConformanceCode loadCode = ExtensionAbiConformanceCode::Passed;
         if (registration.rejected)
             loadCode = ExtensionAbiConformanceCode::RegistrationRejected;
@@ -181,7 +214,7 @@ namespace Horo::Extensions {
         else if (!ValidModuleIdentity(moduleApi))
             loadCode = ExtensionAbiConformanceCode::ModuleIdentityRejected;
 
-        const bool registrationsClean = DestroyRegistrations(registration);
+        const bool registrationsClean = DestroyAllRegistrations(registration);
         report.unloadInvoked = unload != nullptr;
         const bool unloadClean = InvokeUnload(unload, moduleApi);
         report.code = registrationsClean && unloadClean ? loadCode : ExtensionAbiConformanceCode::CleanupRejected;

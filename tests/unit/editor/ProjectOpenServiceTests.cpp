@@ -1,10 +1,13 @@
+#include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "editor/project_model/RendererAvailability.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -37,6 +40,11 @@ namespace {
                    "\"settings\":{\"renderBackend\":\"opengl\","
                    "\"defaultScene\":\"assets/scenes/main.horo\"}}\n";
             std::ofstream(root / "assets/scenes/main.horo") << R"({"schemaVersion":1,"objects":[]})";
+            auto surfaces = ProjectSurfaceSettings::Create({.projectId = "test-project"});
+            REQUIRE(surfaces.HasValue());
+            auto source = EncodeProjectSurfaceSettings(surfaces.Value());
+            REQUIRE(source.HasValue());
+            std::ofstream(root / ".horo/surfaces.json") << source.Value();
         }
 
         ~TempProject() {
@@ -328,4 +336,188 @@ TEST_CASE("Project open validates the default scene before workspace preparation
 
     service.Shutdown();
     jobs.Shutdown(ShutdownPolicy::Drain);
+}
+
+TEST_CASE("Project open retains the missing collision cause from derived preparation and installation",
+          "[unit][editor][project-open-error]") {
+    const bool failDuringInstall = GENERATE(false, true);
+    TempProject project;
+    const auto missing = LoadProjectCollisionSettings(project.root, "test-project");
+    REQUIRE(missing.HasError());
+    const Error original = missing.ErrorValue();
+
+    struct FailedPrepared final : IPreparedProjectOpenDerivedState {
+        explicit FailedPrepared(Error error) : error{std::move(error)} {}
+
+        Result<std::string> Install() override {
+            return Result<std::string>::Failure(error);
+        }
+
+        Error error;
+    };
+
+    struct FailedContributor final : IProjectOpenDerivedStateContributor {
+        FailedContributor(Error error, bool install) : error{std::move(error)}, install{install} {}
+
+        std::string_view Id() const noexcept override {
+            return "test.collision";
+        }
+
+        Result<std::unique_ptr<IPreparedProjectOpenDerivedState>> Prepare(const std::filesystem::path &,
+                                                                          const CancellationToken &) override {
+            if (!install)
+                return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(error);
+            return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Success(std::make_unique<FailedPrepared>(error));
+        }
+
+        Error error;
+        bool install;
+    } contributor{original, failDuringInstall};
+
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8}};
+    ProjectMutationCoordinator mutations{files};
+    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectOpenPreflightService preflight{transactions};
+    RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
+    std::array<IProjectOpenDerivedStateContributor *, 1> contributors{&contributor};
+    ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers, contributors};
+    const auto started = service.Start({.projectRoot = project.root, .expectedProjectName = "Open Test", .engineBuildIdentity = "test"});
+    REQUIRE(started.HasValue());
+    const auto snapshot = PumpToTerminal(service, started.Value().Id());
+    REQUIRE(snapshot.outcome == ProjectOpenOutcome::Failed);
+    REQUIRE(snapshot.diagnostic.has_value());
+    CHECK(snapshot.diagnostic->code.Value() == "project.open.derived_state_failed");
+    CHECK(snapshot.diagnostic->message.find("test.collision") != std::string::npos);
+    REQUIRE(snapshot.diagnostic->cause.Get() != nullptr);
+    CHECK(snapshot.diagnostic->cause.Get()->message == original.message);
+    CHECK(ErrorChainContains(*snapshot.diagnostic, original.domain, original.code));
+    CHECK_FALSE(std::filesystem::exists(project.root / ".horo/collision.json"));
+    CHECK_FALSE(snapshot.readySession.has_value());
+}
+
+TEST_CASE("Project open rejects missing catalogs without implicit adoption", "[unit][editor][surface]") {
+    TempProject project;
+    std::filesystem::remove(project.root / ".horo/surfaces.json");
+    const auto before = ReadText(project.root / ".horo/project.json");
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    JobSystem jobs{{.workerCount = 3, .maxQueuedJobs = 32}};
+    ProjectMutationCoordinator mutations{files};
+    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectOpenPreflightService preflight{transactions};
+    RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
+    ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers};
+    auto started = service.Start({.projectRoot = project.root, .engineBuildIdentity = "test"});
+    REQUIRE(started.HasValue());
+    const auto snapshot = PumpToTerminal(service, started.Value().Id());
+    CHECK(snapshot.outcome == ProjectOpenOutcome::Failed);
+    REQUIRE(snapshot.diagnostic.has_value());
+    CHECK(snapshot.diagnostic->code.Value() == ProjectSurfaceErrors::Unavailable.code.Value());
+    CHECK(ReadText(project.root / ".horo/project.json") == before);
+    CHECK_FALSE(std::filesystem::exists(project.root / ".horo/surfaces.json"));
+    service.Shutdown();
+}
+
+TEST_CASE("Project session rejects catalog drift before reservation or activation commit", "[unit][editor][surface]") {
+    TempProject project;
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    JobSystem jobs{{.workerCount = 3, .maxQueuedJobs = 32}};
+    ProjectMutationCoordinator mutations{files};
+    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectOpenPreflightService preflight{transactions};
+    RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
+    ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers};
+    auto started = service.Start({.projectRoot = project.root, .engineBuildIdentity = "test"});
+    REQUIRE(started.HasValue());
+    const auto snapshot = PumpToTerminal(service, started.Value().Id());
+    REQUIRE(snapshot.outcome == ProjectOpenOutcome::ReadyToActivate);
+    REQUIRE(snapshot.readySession.has_value());
+    SECTION("before reserve") {
+        std::ofstream(project.root / ".horo/surfaces.json", std::ios::app) << ' ';
+        CHECK(service.ReserveSession(*snapshot.readySession).HasError());
+    }
+    SECTION("after reserve") {
+        auto reserved = service.ReserveSession(*snapshot.readySession);
+        REQUIRE(reserved.HasValue());
+        auto lease = std::move(reserved).Value();
+        REQUIRE(lease.Candidate().surfaces.settings);
+        CHECK(lease.Candidate().surfaces.settings->Input().projectId == "test-project");
+        std::ofstream(project.root / ".horo/surfaces.json", std::ios::app) << ' ';
+        CHECK(lease.Commit().HasError());
+    }
+    service.Shutdown();
+}
+
+TEST_CASE("Surface adoption migration preserves semantic absence and rolls back rejected catalogs", "[unit][editor][surface][migration]") {
+    LegacyProject project;
+    auto projectId = ReadJson(project.root / ".horo/project.json").at("projectId").get<std::string>();
+    std::optional<std::string> priorCatalog;
+    bool accepted = true;
+    bool empty = true;
+    SECTION("missing catalog becomes explicit empty authoring") {}
+    SECTION("256-byte project identity survives exact empty adoption") {
+        projectId.assign(256, 'p');
+        auto metadata = ReadJson(project.root / ".horo/project.json");
+        metadata["projectId"] = projectId;
+        std::ofstream(project.root / ".horo/project.json", std::ios::binary | std::ios::trunc) << metadata.dump(2) << '\n';
+    }
+    SECTION("existing catalog bytes preserved") {
+        ProjectSurfaceSettingsInput input{.projectId = projectId};
+        auto id = Physics::SurfaceMaterialId::Parse("11111111-1111-4111-8111-111111111111");
+        REQUIRE(id.HasValue());
+        input.surfaces.push_back({id.Value(), "Authored"});
+        input.defaultSurfaceId = id.Value();
+        auto settings = ProjectSurfaceSettings::Create(std::move(input));
+        REQUIRE(settings.HasValue());
+        auto encoded = EncodeProjectSurfaceSettings(settings.Value());
+        REQUIRE(encoded.HasValue());
+        priorCatalog = encoded.Value() + "  ";
+        empty = false;
+    }
+    SECTION("malformed catalog aborts publication") {
+        priorCatalog = "{bad";
+        accepted = false;
+    }
+    SECTION("foreign catalog aborts publication") {
+        auto settings = ProjectSurfaceSettings::Create({.projectId = "another-project"});
+        REQUIRE(settings.HasValue());
+        auto encoded = EncodeProjectSurfaceSettings(settings.Value());
+        REQUIRE(encoded.HasValue());
+        priorCatalog = encoded.Value();
+        accepted = false;
+    }
+    if (priorCatalog)
+        std::ofstream(project.root / ".horo/surfaces.json", std::ios::binary) << *priorCatalog;
+    const auto originalRoot = ReadText(project.root / ".horo/project.json");
+    const auto originalScene = ReadText(project.root / "assets/scenes/main.horo");
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    JobSystem jobs{{.workerCount = 3, .maxQueuedJobs = 32}};
+    ProjectMutationCoordinator mutations{files};
+    ProjectMigrationTransactionService transactions{files, clock, mutations, jobs};
+    ProjectOpenPreflightService preflight{transactions};
+    RendererAvailabilitySnapshot renderers{{{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}}, "opengl"};
+    ProjectOpenService service{jobs, files, preflight, mutations, transactions, renderers};
+    auto started = service.Start({.projectRoot = project.root, .engineBuildIdentity = "test"});
+    REQUIRE(started.HasValue());
+    const auto snapshot = PumpToTerminal(service, started.Value().Id());
+    CHECK(snapshot.outcome == (accepted ? ProjectOpenOutcome::ReadyToActivate : ProjectOpenOutcome::Failed));
+    CHECK(ReadText(project.root / "assets/scenes/main.horo") == originalScene);
+    if (accepted) {
+        auto catalog = LoadProjectSurfaceSettings(project.root, projectId);
+        REQUIRE(catalog.HasValue());
+        CHECK(catalog.Value().settings->Catalog()->Entries().empty() == empty);
+        CHECK(catalog.Value().settings->Input().defaultSurfaceId.has_value() == !empty);
+        CHECK(catalog.Value().settings->Input().revision == 1);
+        CHECK(catalog.Value().settings->Input().projectId == projectId);
+        CHECK(ReadJson(project.root / ".horo/project.json").at("projectId").get<std::string>() == projectId);
+    } else {
+        CHECK(ReadText(project.root / ".horo/project.json") == originalRoot);
+    }
+    if (priorCatalog)
+        CHECK(ReadText(project.root / ".horo/surfaces.json") == *priorCatalog);
+    service.Shutdown();
 }

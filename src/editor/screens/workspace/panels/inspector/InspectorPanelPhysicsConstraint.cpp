@@ -1,3 +1,4 @@
+#include "component_fields/definitions/DistanceJointFields.h"
 #include "editor/screens/workspace/panels/inspector/PhysicsInspectorWidgets.h"
 
 namespace Horo::Editor::PhysicsInspectorWidgets {
@@ -14,8 +15,7 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
         bool Second(const EditorGuiContext &context, PhysicsInspectorConstraintDraft &draft) {
             const std::array entries{Label(context, "workspace.physics.world"), Label(context, "workspace.physics.body")};
             int mode = std::holds_alternative<Runtime::PhysicsConstraintBodyEndpoint>(draft.value.second) ? 1 : 0;
-            bool changed = Ui::DrawComboPropRow(Label(context, "workspace.physics.second_endpoint"), "second_kind", mode, entries,
-                                                context.theme.fonts);
+            bool changed = Choice(context, "workspace.physics.second_endpoint", "second_kind", mode, entries);
             if (changed) {
                 if (mode == 1) {
                     draft.value.second = Runtime::PhysicsConstraintBodyEndpoint{};
@@ -34,8 +34,7 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
         bool Parameters(const EditorGuiContext &context, Runtime::PhysicsConstraintComponent &value) {
             const std::array entries{Label(context, "workspace.physics.fixed"), Label(context, "workspace.physics.distance")};
             int kind = std::holds_alternative<Runtime::PhysicsDistanceConstraint>(value.parameters) ? 1 : 0;
-            bool changed = Ui::DrawComboPropRow(Label(context, "workspace.physics.constraint_kind"), "constraint_kind", kind, entries,
-                                                context.theme.fonts);
+            bool changed = Choice(context, "workspace.physics.constraint_kind", "constraint_kind", kind, entries);
             if (changed) {
                 if (kind == 1)
                     value.parameters = Runtime::PhysicsDistanceConstraint{};
@@ -43,8 +42,7 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
                     value.parameters = Runtime::PhysicsFixedConstraint{};
             }
             if (auto *distance = std::get_if<Runtime::PhysicsDistanceConstraint>(&value.parameters)) {
-                changed = Scalar(context, "workspace.physics.minimum_distance", distance->minimumMeters) || changed;
-                changed = Scalar(context, "workspace.physics.maximum_distance", distance->maximumMeters) || changed;
+                changed = InspectorFields::Draw(*distance, context, InspectorFields::Layout::Stacked).changed || changed;
             }
             return changed;
         }
@@ -52,10 +50,6 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
 
     /** @copydoc Constraint */
     bool Constraint(const EditorGuiContext &context, PhysicsInspectorConstraintDraft &draft) {
-        Stable(context, "workspace.physics.component_id", draft.value.id.value);
-        Stable(context, "workspace.physics.constraint_slot", draft.value.constraint.value);
-        Stable(context, "workspace.physics.generation", draft.value.generation);
-        Stable(context, "workspace.physics.schema", draft.value.schemaVersion);
         bool changed = Toggle(context, "workspace.physics.enabled", draft.value.enabled);
         changed = Parameters(context, draft.value) || changed;
         Ui::FieldLabel(Label(context, "workspace.physics.first_endpoint"), context.theme.fonts);
@@ -66,7 +60,7 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
         ImGui::PushID("second");
         changed = Second(context, draft) || changed;
         ImGui::PopID();
-        Ui::Hint(Label(context, "workspace.physics.constraint_unsupported"), context.theme.fonts);
+        Details(context, draft.value.id.value);
         return changed;
     }
 }  // namespace Horo::Editor::PhysicsInspectorWidgets

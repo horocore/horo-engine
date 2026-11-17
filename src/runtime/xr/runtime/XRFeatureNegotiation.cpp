@@ -53,8 +53,9 @@ namespace Horo::XR {
 
         [[nodiscard]] constexpr bool IsOptionalOne(const XRFeatureProfile profile, const XRCapability capability) noexcept {
             using enum XRCapability;
-            return capability == StageSpace || capability == DepthComposition || capability == FixedFoveation ||
-                   capability == RefreshRateSelection || capability == VisibilityMask || capability == AndroidStandalone ||
+            return capability == HandTracking || capability == StageSpace || capability == DepthComposition ||
+                   capability == FixedFoveation || capability == RefreshRateSelection || capability == VisibilityMask ||
+                   capability == AndroidStandalone ||
                    (profile == XRFeatureProfile::TrackedInteraction1_0 && capability == ControllerPresentation);
         }
 

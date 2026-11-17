@@ -101,6 +101,47 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc FrameScheduler::RunOneFixedStep */
+    Result<void> FrameScheduler::RunOneFixedStep(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation, const bool paused) {
+        if (cancellation.IsCancellationRequested())
+            return CancelledResult();
+        if (completedSimulationTick_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(RuntimeErrors::SimulationTimingOverflow));
+        const auto attempt = Internal::ReserveFixedAttempt(fixedAttemptNumber_);
+        if (attempt.HasError())
+            return Result<void>::Failure(attempt.ErrorValue());
+        FixedStepContext context{.simulationTick = completedSimulationTick_ + 1,
+                                 .fixedDelta = config_.fixedStep,
+                                 .cancellation = cancellation,
+                                 .attemptNumber = attempt.Value(),
+                                 .frameNumber = frameNumber_};
+        return DispatchFixedChecked(lifecycle, context, paused);
+    }
+
+    /** @copydoc FrameScheduler::CommitFixedStep */
+    void FrameScheduler::CommitFixedStep(const FixedStepContext &context, const bool paused) noexcept {
+        if (!paused)
+            accumulator_ -= config_.fixedStep;
+        completedSimulationTick_ = context.simulationTick;
+        if (paused)
+            simulationControl_.CommitStep(completedSimulationTick_, context.attemptNumber, context.frameNumber, context.fixedDelta);
+        committedFixedStep_ = {completedSimulationTick_, context.attemptNumber, context.frameNumber, context.fixedDelta};
+        statistics_.completedSimulationTick = completedSimulationTick_;
+    }
+
+    /** @copydoc FrameScheduler::DropExcessFixedTime */
+    void FrameScheduler::DropExcessFixedTime(Duration &droppedSimulationTime) noexcept {
+        if (accumulator_ < config_.fixedStep)
+            return;
+        const auto steps = static_cast<std::uint64_t>(accumulator_.ToNanoseconds() / config_.fixedStep.ToNanoseconds());
+        const auto dropped = Duration::FromNanoseconds(static_cast<std::int64_t>(steps) * config_.fixedStep.ToNanoseconds());
+        accumulator_ -= dropped;
+        statistics_.totalDroppedSimulationTime += dropped;
+        statistics_.totalDroppedFixedSteps += steps;
+        ++statistics_.catchUpLimitedFrameCount;
+        droppedSimulationTime = dropped;
+    }
+
     /** @copydoc FrameScheduler::RunFixedSteps */
     Result<void> FrameScheduler::RunFixedSteps(RuntimeLifecycle &lifecycle, const CancellationToken &cancellation,
                                                Duration &droppedSimulationTime) {
@@ -109,42 +150,12 @@ namespace Horo::Runtime {
         const bool paused = simulationControl_.Policy().paused;
         while ((paused ? simulationControl_.HasAdmittedStep() : accumulator_ >= config_.fixedStep) &&
                executedSteps < config_.maximumCatchUpSteps) {
-            if (cancellation.IsCancellationRequested())
-                return CancelledResult();
-            if (completedSimulationTick_ == std::numeric_limits<std::uint64_t>::max())
-                return Result<void>::Failure(MakeError(RuntimeErrors::SimulationTimingOverflow));
-            const auto attempt = Internal::ReserveFixedAttempt(fixedAttemptNumber_);
-            if (attempt.HasError())
-                return Result<void>::Failure(attempt.ErrorValue());
-            FixedStepContext fixedContext{.simulationTick = completedSimulationTick_ + 1,
-                                          .fixedDelta = config_.fixedStep,
-                                          .cancellation = cancellation,
-                                          .attemptNumber = attempt.Value(),
-                                          .frameNumber = frameNumber_};
-            if (Result<void> result = DispatchFixedChecked(lifecycle, fixedContext); result.HasError())
+            if (auto result = RunOneFixedStep(lifecycle, cancellation, paused); result.HasError())
                 return result;
-            if (cancellation.IsCancellationRequested())
-                return CancelledResult();
-            if (!paused)
-                accumulator_ -= config_.fixedStep;
-            ++completedSimulationTick_;
-            if (paused)
-                simulationControl_.CommitStep(completedSimulationTick_, fixedContext.attemptNumber, fixedContext.frameNumber,
-                                              fixedContext.fixedDelta);
-            committedFixedStep_ = {completedSimulationTick_, fixedContext.attemptNumber, fixedContext.frameNumber, fixedContext.fixedDelta};
-            statistics_.completedSimulationTick = completedSimulationTick_;
             ++executedSteps;
         }
-
-        if (!paused && accumulator_ >= config_.fixedStep) {
-            const auto droppedSteps = static_cast<std::uint64_t>(accumulator_.ToNanoseconds() / config_.fixedStep.ToNanoseconds());
-            const auto dropped = Duration::FromNanoseconds(static_cast<std::int64_t>(droppedSteps) * config_.fixedStep.ToNanoseconds());
-            accumulator_ -= dropped;
-            statistics_.totalDroppedSimulationTime += dropped;
-            statistics_.totalDroppedFixedSteps += droppedSteps;
-            ++statistics_.catchUpLimitedFrameCount;
-            droppedSimulationTime = dropped;
-        }
+        if (!paused)
+            DropExcessFixedTime(droppedSimulationTime);
         return Result<void>::Success();
     }
 

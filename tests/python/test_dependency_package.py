@@ -416,7 +416,8 @@ file(WRITE "${CMAKE_BINARY_DIR}/sdk-root.txt" "${SDK_ROOT}")
 
 
 def configure_external_sdk(source, build, caller, cache):
-    run("cmake", "-S", str(source), "-B", str(build), "-DCMAKE_BUILD_TYPE=Debug",
+    # Registry/cache selection is qualified only for single-config generators.
+    run("cmake", "-S", str(source), "-B", str(build), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug",
         "-DHORO_BUILD_DEPENDENCY_SDK_PACKAGES=ON", "-DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON",
         f"-DHORO_DEPENDENCY_SDK_CACHE={cache}", f"-DPython3_EXECUTABLE={sys.executable}", cwd=caller)
 
@@ -427,19 +428,19 @@ def test_cmake_selects_independent_roots_for_external_build_and_cache(external_s
     cache = tmp_path / "external cache ü"
     configure_external_sdk(source, build, caller, cache)
     assert (cache / "fetch-cwd.txt").read_text(encoding="utf-8") == str(cache.resolve())
-    assert (build / "sdk-root.txt").read_text() == ""
+    assert (build / "sdk-root.txt").read_text(encoding="utf-8") == ""
     identity_file = next((build / "dependency-sdk").glob("Fixture-*.json"))
-    identity = json.loads(identity_file.read_text())
+    identity = json.loads(identity_file.read_text(encoding="utf-8"))
     staging = build / "staging"
     staging.mkdir()
     (staging / "probe.h").write_text("int probe(void);", encoding="utf-8")
     sdk.pack(staging, identity, cache / (identity_file.stem + ".tar.gz"))
     configure_external_sdk(source, build, caller, cache)
-    restored = Path((build / "sdk-root.txt").read_text())
+    restored = Path((build / "sdk-root.txt").read_text(encoding="utf-8"))
     assert restored.is_relative_to(build)
     assert (restored / "probe.h").read_text() == "int probe(void);"
     configure_external_sdk(source, build, caller, cache)
-    assert (build / "sdk-root.txt").read_text() == str(restored)
+    assert (build / "sdk-root.txt").read_text(encoding="utf-8") == restored.as_posix()
     assert list(caller.iterdir()) == []
 
 

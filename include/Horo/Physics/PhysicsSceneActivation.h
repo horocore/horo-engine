@@ -26,6 +26,7 @@ namespace Horo::Physics {
         struct PhysicsStructuralRegistration;
         struct PhysicsStructuralState;
         class PhysicsSceneHostAccess;
+        class PhysicsSceneStateTarget;
     }  // namespace Detail
 
     /** @brief Exact collision-filter and local-origin evidence captured for one scene candidate. */
@@ -191,6 +192,7 @@ namespace Horo::Physics {
         friend class PhysicsSceneActivationParticipant;
         friend class PhysicsPlayWorldSession;
         friend class Detail::PhysicsSceneHostAccess;
+        friend class Detail::PhysicsSceneStateTarget;
 
         [[nodiscard]] static std::unique_ptr<PhysicsSceneActivationCandidate> Create(ConstructionData data);
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Editor/EditorDataBus.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Input.h"
 
@@ -10,6 +11,10 @@
 
 namespace Horo::Editor {
     class EditorModalHost;
+
+    namespace GuiLive {
+        class IRegistry;
+    }
 
     /** @brief Validated stable identity for an editor modal in the active stack. */
     class ModalId {
@@ -116,7 +121,10 @@ namespace Horo::Editor {
     };
 
     /** @brief Headless-capable contract for one editor modal workflow surface. */
-    class EditorModal {
+    class EditorModal : public LocalizedGui {
+    protected:
+        using LocalizedGui::LocalizedGui;
+
     public:
         virtual ~EditorModal() = default;
         [[nodiscard]] virtual ModalId Id() const = 0;
@@ -162,8 +170,10 @@ namespace Horo::Editor {
         [[nodiscard]] EditorInteractionScope InteractionScope() const noexcept;
         /** @brief Performs modal updates and commits any deferred lifecycle transition at its boundary. */
         void OnUpdate(float dt);
-        /** @brief Draws the top modal and commits any draw-requested close at its boundary. */
-        void Draw();
+        /** @brief Draws the top modal and commits any draw-requested close at its boundary.
+         * @param liveReload Optional host-owned drawing registry, borrowed only for this call; never stored on a modal.
+         */
+        void Draw(const GuiLive::IRegistry *liveReload = nullptr);
         /** @brief Requests orderly shutdown closes after every modal accepts the shutdown reason. */
         [[nodiscard]] Result<void> RequestCloseAllForShutdown();
         /** @brief Immediately invokes close callbacks once and releases every modal during forced shutdown. */

@@ -41,9 +41,9 @@ namespace Horo::Network {
                 return false;
             for (std::size_t index{}; index < custom.size(); ++index) {
                 const auto found = std::ranges::find(schema.fields, custom[index].field, &ReplicationFieldDescriptor::id);
+                const auto prefix = custom.first(index);
                 if (found == schema.fields.end() || found->condition != ReplicationCondition::Custom ||
-                    std::ranges::find(custom.first(index), custom[index].field, &ReplicationStateCustomVisibility::field) !=
-                        custom.begin() + static_cast<std::ptrdiff_t>(index))
+                    std::ranges::find(prefix, custom[index].field, &ReplicationStateCustomVisibility::field) != prefix.end())
                     return false;
             }
             return true;

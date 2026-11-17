@@ -44,6 +44,26 @@ include directories do not enforce those ownership boundaries, as documented in
 
 ### Foundation, Platform, Application, And Runtime
 
+Shader reload follow-up (2026-11-01): `HoroShaderHotReload`
+(`HoroEngine::ShaderHotReload`) owns `Application/ShaderHotReloadService.h` and
+the bounded job/mailbox/publication implementation. Its sole direct dependency
+is ShaderBuild, which publicly supplies Foundation and RenderApi. RenderApi owns
+the additive `Runtime/Render/ShaderHotReloadTarget.h` consumer contract; it does
+not acquire an Application dependency. The generated public-header consumers
+and the reload-specific consumer compile these boundaries independently.
+
+The non-installed `HoroShaderHotReloadHostInternal` composes immutable source
+capture, explicit developer configuration and commands above ShaderHotReload
+and Assets; its private recipe dependencies do not select a renderer.
+`HoroEditorViewportShaderRecipeInternal` exports only the narrow editor shader
+directory and depends on RenderApi. OpenGL candidate validation crosses exactly
+`OpenGLProgramValidation.h` through the non-installed
+`HoroRenderOpenGLProgramValidationInternal` interface, which links its existing
+OpenGL owner. Native functions and handles remain outside the installed API.
+Existing applications retain disabled reload until they opt into the trusted
+composition described in [the migration guide](../../guides/shader-hot-reload.md).
+No existing public value or gameplay SDK 25 boundary changes.
+
 `HoroProjectAssetRegistrySource` (`HoroEngine::ProjectAssetRegistrySource`) owns
 `Application/ProjectAssetRegistrySource.h` and the inert retained-root inventory
 adapter. Its public dependencies are Assets and ProjectReadFilesApi. EditorServices
@@ -89,7 +109,6 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 |---|---|---|---|
 | `HoroFoundation` (`HoroEngine::Foundation`) | Always | Owns Foundation primitives, canonical cross-subsystem asset cook-target identity, immutable host-published error-code registry snapshots, diagnostics, logging, telemetry facade, jobs, configuration, paths, hashing, strings, and shared `Math/**` contracts. Implementation is under `src/foundation/`. | None |
 | `HoroCliHost` (`HoroEngine::CliHost`) | Always | Owns inert CLI descriptors, bounded host-policy validation, immutable command registration, deterministic discovery/help, and the bounded typed pre-dispatch parser under `Cli/**`. Parsing consumes only explicit argv, resolved configuration snapshots, path-normalizer seams, and selected stdin. Typed capability-scoped dispatch and invocation-owned human/JSON/JSONL presentation consume the same canonical host error translation. | Foundation, HostErrors (public), nlohmann_json (private) |
-| `HoroOpenTelemetry` (`HoroEngine::OpenTelemetry`) | `HORO_ENABLE_OPENTELEMETRY` | Owns the optional OTLP sink and `Foundation/Telemetry/OpenTelemetrySink.h`; the concrete exporter dependencies are private. | Foundation (public) |
 | `HoroPlatform` (`HoroEngine::Platform`) | Always | Owns `Platform/**` dynamic-library and process contracts plus POSIX/Windows implementations. OS headers and `dl` are private. | Foundation (public) |
 | `HoroSecurityEnvelope` (`HoroEngine::SecurityEnvelope`) | Always | Owns only unchanged `SignatureAlgorithm` and `DetachedSignatureEnvelope` data under `Security/ArtifactSignatureEnvelope.h`; no verifier, trust store, I/O or crypto provider. | Foundation (interface) |
 | `HoroSecurity` (`HoroEngine::Security`) | Always | Owns security services, current trust verification and the private MbedTLS provider; `ArtifactSignature.h` reexports the neutral envelope header. | Foundation, SecurityEnvelope (public); mbedcrypto (private) |
@@ -102,7 +121,16 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 | `HoroRuntimeUi` (`HoroEngine::RuntimeUi`) | Always | Owns backend-neutral identities, authored/cooked document contracts, canvas modes and deterministic logical-to-screen resolution, typed viewport evidence and safe-area/UI/font-scale/pixel-snap policy resolution, canvas references, mutable instance lifecycle, bounded retained element trees, deferred structural transactions, typed style assets/tokens/classes, deterministic element inheritance and visual-state resolution, incremental measure-arrange caching, immutable style/layout/render snapshots, per-view render extraction, dependency enumeration, and typed stale-value rejection under `Runtime/Ui/**`. Platform owns native evidence publication and Renderer owns native realization; Runtime UI does not query either. Owns transactional semantic UI scene reconciliation over actual generation publishers and explicit Scene provider lineage. | Foundation, Assets, SceneIdentity (public) |
 | `HoroAssets` (`HoroEngine::Assets`) | Always | Owns all current `Assets/**` headers. The target currently combines registry, provider, import, preview, reimport, cook, cache, and output responsibilities. | Foundation (public) |
 | `HoroAnimationApi` (`HoroEngine::AnimationApi`) | Always | Owns backend-neutral persistent animation asset identities, generation-safe runtime handles, stable validation errors, inert component contracts, immutable bounded skeleton, skinning, and clip assets, exact bounded clip traversal/sampling, plus preallocated frame pose storage with deterministic hierarchy evaluation and move-only immutable leases under `Animation/**`. Renderer resources, presentation palette publication, graph evaluation, and backend integration remain outside this target. | Foundation, Assets (public) |
+| `HoroAnimationClipProgramInternal` | Always | Non-installed AnimationApi-owned direct-clip execution-plan bridge; exact Clip lineage and no synthetic Graph asset ID. Uses the existing validator, dependency binder and runtime executor. | AnimationApi (interface) |
+| `HoroAnimationHostIdentityInternal` | Always | Non-installed application helper issuing non-reusable animation-runtime owner identities from an explicit root-assigned range; copied factory pins share one owner-thread nonwrapping sequence. Actual factory composition remains a separate obligation. | AnimationApi (interface) |
 | `HoroAnimationRuntime` (`HoroEngine::AnimationRuntime`) | Always | Owns explicitly prepared graph instances consuming immutable compiled occurrence/access plans, preallocated typed execution, exact fixed-point cursor residuals, transactional tick commit/abort, copied previous/current local pose publication, replacement and shutdown. No scene activation or backend discovery. | AnimationApi (public) |
+| `HoroAnimationCookedAssets` (`HoroEngine::AnimationCookedAssets`) | Always | Owns generation-free Skeleton/Clip/Graph binary payloads and exact dependency commitments. No JSON/source parser or cache owner. | AnimationApi, Assets, Foundation (public); utf8proc (private) |
+| `HoroAnimationClipPayloadBindingInternal` | Always | One non-installed Clip field handoff to the existing canonical asset constructor; no generation issuer or second validator. | AnimationCookedAssets (interface) |
+| `HoroAnimationCookedFieldsInternal` | Always | One non-installed canonical portable-field header shared with the offline source codec. No directory exposure. | AnimationCookedAssets (interface) |
+| `HoroAnimationAssetSourceCodec` (`HoroEngine::AnimationAssetSourceCodec`) | Always | Owns strict offline Skeleton/Clip source transport; runtime consumes binary payloads. | AnimationCookedAssets (public); cooked-field bridge and JSON (private) |
+| `HoroAnimationSourceCodecInternal` | Always | Two non-installed canonical source-codec headers for the cold cook owner. | AssetSourceCodec, GraphSourceCodec, cooked-field bridge, JSON (interface) |
+| `HoroAnimationAssetCook` (`HoroEngine::AnimationAssetCook`) | Always | Prepares immutable native Animation semantics from the exact Assets capture for existing cook/Prefab phases. No independent cache or publication authority. | AssetSourceCodec, Assets (public); AnimationApi, GraphSourceCodec, cooked assets, narrow source/Clip bridges, JSON (private) |
+| `HoroAnimationSceneIntegration` (`HoroEngine::AnimationSceneIntegration`) | Always | Owns Scene activation/discovery, structural Animation candidates and exact fixed-attempt evaluation/prepare/publication/abort. Actual application factory composition remains required. | RuntimeScene, AnimationRuntime, Foundation (public); cooked assets and narrow Animation bridges (private) |
 | `HoroAnimationEditorModel` (`HoroEngine::AnimationEditorModel`) | Always | Owns isolated editor clip transport, revision-fenced replacement and atomic prepared pose sampling. Source persistence/history and actual preview scene/mesh/camera composition remain with their separate owners; see the [integration guide](../../guides/animation-preview-session.md). | AnimationApi (public) |
 | `HoroInput` (`HoroEngine::Input`) | Always | Owns the backend-neutral `Runtime/Input.h` contract and runtime implementation. | Foundation (public) |
 | `HoroRuntimeUiInput` (`HoroEngine::RuntimeUiInput`) | Always | Owns public `Runtime/Ui/UiNavigationInput.h` canonical navigation/modality/glyph composition plus the target-private focused-text adapter. Borrows the existing Input router, Runtime UI focus graph and action queue; creates no independent UI owner or device assignment. | Input, RuntimeUi (public) |
@@ -128,7 +156,7 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 | Real target (alias) | Availability | Owner and public/private boundary | Direct first-party dependencies |
 |---|---|---|---|
 | `HoroPhysicsModel` (`HoroEngine::PhysicsModel`) | Always | Owns inert backend-neutral Physics authoring identities, errors, and versioned scene component values. It contains no solver, runtime world, backend selection, or activation behavior. | Foundation, Assets, Runtime (public) |
-| `HoroRuntimeScene` (`HoroEngine::RuntimeScene`) | Always | Owns runtime scene definition, scene state, saved-scene baseline admission, and scene component contracts under `Runtime/Scene/**`, excluding primitive mesh/catalog and Physics-owned authoring headers. | Foundation, Runtime (including Runtime/Save), RuntimeUi, GameplayApi, Assets, PhysicsModel, SceneModel (public) |
+| `HoroRuntimeScene` (`HoroEngine::RuntimeScene`) | Always | Owns runtime scene definition, scene state, saved-scene baseline admission, and scene component contracts under `Runtime/Scene/**`, excluding primitive mesh/catalog and Physics-owned authoring headers. | Foundation, Runtime (including Runtime/Save), RuntimeUi, GameplayApi, Assets, PhysicsModel, SceneModel, AnimationApi (public) |
 | `HoroNetworkRuntime` (`HoroEngine::NetworkRuntime`) | Always | Owns the bounded session/scene-scoped network-object mapping and immutable diagnostic snapshots under `Network/NetworkObjectMapping.h`; it performs no Scene mutation or transport work. | NetworkApi, RuntimeScene (public) |
 | `HoroSceneModel` (`HoroEngine::SceneModel`) | Always | Owns `Runtime/Scene/PrimitiveCatalog.h`, `PrimitiveMesh.h`, and `PrimitiveMeshDescriptor.h`. | Foundation, RenderApi (public) |
 | `HoroRenderApi` (`HoroEngine::RenderApi`) | Always | Owns backend-neutral mesh, render-scene, shader-manifest, final-artifact reflection/source-map validation, binding-layout, and backend contracts under `Runtime/Render/**`, excluding registry/frontend/module headers. Reflection adds no native dependency and existing consumers require no migration. | Foundation (public) |
@@ -148,14 +176,15 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 | Real target (alias) | Availability | Owner and public/private boundary | Direct first-party dependencies |
 |---|---|---|---|
 | `HoroTerrainAuthoring` (`HoroEngine::TerrainAuthoring`) | Always | Owns `Editor/TerrainAuthoringDocument.h`: owner-thread bounded exact canonical source/placement transactions, monotonic source revision fences, semantic undo/redo and content-state dirty tracking. Tools have immutable queries; no runtime/native/GUI dependency or full-dataset history copy. New adapters link the target explicitly; see the terrain-authoring edit migration guide. | TerrainImport (public) |
-| `HoroEditorModel` (`HoroEngine::EditorModel`) | Always | Owns scene-document, selection, viewport and headless partitioned-world document/workspace model code. `Editor/PartitionedWorldWorkspace.h` exposes immutable source metadata leases and typed owner/generation/revision-fenced transactions; its public header is staged only through the owning target. See the partitioned-world document migration guide. | WorldStreaming, SceneRuntimeConversion, SceneSourceModel, NavigationApi, Assets, Foundation, AI, Prefab, PrefabAuthoring, PrefabSceneExpansion, SceneModel, RuntimeScene (public); SceneSourceCodecInternal, PrefabHierarchyInternal (private) |
+| `HoroEditorModel` (`HoroEngine::EditorModel`) | Always | Owns scene-document, selection, viewport and headless partitioned-world document/workspace model code. `Editor/PartitionedWorldWorkspace.h` exposes immutable source metadata leases and typed owner/generation/revision-fenced transactions; its public header is staged only through the owning target. See the partitioned-world document migration guide. | WorldStreaming, SceneRuntimeConversion, SceneSourceModel, NavigationApi, Assets, Foundation, AI, Prefab, PrefabAuthoring, PrefabSceneExpansion, SceneModel, RuntimeScene (public); AnimationApi, SceneSourceCodecInternal, PrefabHierarchyInternal (private) |
 | `HoroEditorViewportScene` (`HoroEngine::EditorViewportScene`) | Always | Owns backend-neutral editor viewport scene/camera/light visualization geometry. It has no isolated installed public surface and exports `src/`. | EditorModel (public) |
 | `HoroEditorRenderExtraction` (`HoroEngine::EditorRenderExtraction`) | Always | Owns editor-to-render snapshot extraction, mesh cache, picking, and asset drop conversion. It has no isolated installed public surface and exports `src/`. | EditorModel, EditorViewportScene (public) |
 | `HoroEditorServices` (`HoroEngine::EditorServices`) | Always | Owns current GUI-neutral project, settings, localization, input orchestration, workspace model, editor bus, modal host, notification, menu, hierarchy, and status contracts under `Editor/**`, including the persistent UI Canvas document/session boundary, shared cinematic property inspector/Problems adapters and animation graph source documents with bounded semantic history. Animation source validation and serialization remain owned by AnimationGraphSourceCodec. It also exports `src/`. | AnimationGraphSourceCodec, Foundation, CinematicRuntime, Application, Platform, RuntimeUi, EditorModel, GameplayLua, GameplayModuleHost, GameplayBuild, Input, ProjectMigrations (public); Assets (private) |
 | `HoroEditorViewportOpenGL` (`HoroEngine::EditorViewportOpenGL`) | GUI and OpenGL | Owns the OpenGL ImGui/viewport/presentation bridge. Backend, SDL, GLAD, and ImGui adapter details are private, but SDL is currently a public link dependency. | EditorViewportScene, RenderOpenGL (public) |
 | `HoroEditorViewportMetal` (`HoroEngine::EditorViewportMetal`) | Apple, GUI, and Metal | Owns the Metal ImGui/viewport/presentation bridge. Objective-C++ and ImGui adapter details are private, but SDL is currently a public link dependency. | EditorViewportScene, RenderMetal (public) |
-| `HoroGui` (`HoroEngine::Gui`) | Editor GUI only | Owns ImGui screens, modals, panels, workspace controllers, and design-system implementation. ImGui is private, while all of `include/` and `src/` are exported as public include roots. | EditorServices, Foundation (public); EditorRenderExtraction and Extensions (private) |
-| `HoroHostModuleComposition` | Always | Non-installed application-host composition contract under `apps/common/`. It describes and activates the real linked module profiles and registers the Platform Services error domain for both hosts without exposing an SDK header. | Foundation, PlatformServices (public) |
+| `HoroGui` (`HoroEngine::Gui`) | Editor GUI only | Owns ImGui screens, modals, panels, workspace controllers, and design-system implementation. The application binds the real Runtime issuer for typed screen fixed update/prepare/commit/abort and deferred screen destruction. ImGui is private, while all of `include/` and `src/` are exported as public include roots. | Runtime, EditorServices, Foundation (public); EditorRenderExtraction and Extensions (private) |
+| `HoroEditorGuiLiveReloadHost` | Editor GUI only; RCC++ backend in explicit live-UI Debug builds | Non-installed internal owner of built-in development GUI compiler lifetime, typed host build inputs and frame-boundary module publication. Normal builds compile an inert implementation. | EditorServices; Gui, GuiLiveReloadInternal and ThirdPartyRccpp only when live UI is enabled |
+| `HoroHostModuleComposition` | Always | Non-installed application-host composition contract under `apps/shared/modules/`. It describes and activates the real linked module profiles and registers the Platform Services error domain for both hosts without exposing an SDK header. | Foundation, PlatformServices (public) |
 | `horo-engine` | Always | Terminal/headless composition root. It owns the backend-extension composition without linking GUI or renderer targets; CLI command and MCP target composition remain follow-up work. | Application, Extensions (private) |
 | `HoroEditor` | Editor GUI only | Graphical composition root. It selects GUI, editor services/extraction, runtime, extensions, platform, input, migrations, frontend, and enabled concrete viewport backends. | Composition-only private links |
 
@@ -175,7 +204,7 @@ There are 388 non-placeholder headers under `include/Horo/` at this snapshot:
 | `Destruction/` | 7 | DestructionApi and DestructionRuntime |
 | `Editor/` | 49 | EditorModel, EditorServices, and Gui |
 | `Extensions/` | 12 | Extensions |
-| `Foundation/` | 34 | Foundation, except the optional OpenTelemetry sink header |
+| `Foundation/` | 43 | Foundation |
 | `Gameplay/` | 17 | GameplayApi, GameplayRuntime, GameplayModuleHost, GameplayBuild, and GameplayLua |
 | `Math/` | 2 | Foundation |
 | `Navigation/` | 13 | NavigationApi and NavigationRuntime |
@@ -242,8 +271,7 @@ headless profile contains Foundation, Security, Platform, Assets, Application,
 Extensions, and the CLI host. The
 editor profile mirrors the real linked first-party module closure and selects
 exactly one concrete renderer and viewport adapter before window or presentation
-creation. Optional OpenTelemetry participation is derived from the same build
-selection that controls the executable link edge. Focused host-composition tests
+creation. Observability uses the shared local host session. Focused host-composition tests
 validate deterministic graph ordering, headless exclusion, concrete-backend
 selection, and rejection before activation of impossible host profiles.
 
@@ -309,8 +337,7 @@ Build System additionally documents `HoroEngine::RenderBackendRegistry`,
 five are implemented. Its `HoroEngine::TestSdk`, `EditorSourceEditor`, and
 `EditorGraphEditor` targets are planned and have no production target.
 
-Current but non-canonical targets are Transitional: OpenTelemetry,
-GameplayRuntime, GameplayModuleHost, GameplayLua, GameplayBuild, Input,
+Current but non-canonical targets are Transitional: GameplayRuntime, GameplayModuleHost, GameplayLua, GameplayBuild, Input,
 InputSdl, Extensions, HostModuleComposition, and the renderer registry. They represent useful real
 boundaries, but the canonical target lists must either adopt them or assign
 their responsibilities to another documented target.

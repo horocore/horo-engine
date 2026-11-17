@@ -27,10 +27,11 @@ namespace Horo::Tests {
         std::ofstream stream{manifestPath, std::ios::binary | std::ios::trunc};
         if (!stream)
             throw std::runtime_error{"test gameplay module manifest could not be opened"};
+        const auto artifactUtf8 = artifactPath.u8string();
         stream << "{\n  \"schemaVersion\": 1,\n  \"moduleId\": " << std::quoted(std::string{moduleId})
                << ",\n  \"buildFingerprint\": " << std::quoted(std::string{buildFingerprint})
-               << ",\n  \"descriptorRevision\": " << descriptorRevision << ",\n  \"artifactPath\": " << std::quoted(artifactPath.string())
-               << "\n}\n";
+               << ",\n  \"descriptorRevision\": " << descriptorRevision
+               << ",\n  \"artifactPath\": " << std::quoted(std::string{artifactUtf8.begin(), artifactUtf8.end()}) << "\n}\n";
         stream.close();
         if (!stream)
             throw std::runtime_error{"test gameplay module manifest could not be written"};

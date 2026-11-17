@@ -57,6 +57,8 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor QuerySnapshotStale;
     /** @brief A queued query batch was cancelled before its result was published. */
     extern const ErrorCodeDescriptor QueryCancelled;
+    /** @brief A state restore was cancelled before its same-owner publication claim. */
+    extern const ErrorCodeDescriptor StateCancelled;
     /** @brief Candidate or process initialization failed after releasing acquired resources. */
     extern const ErrorCodeDescriptor InitializationFailed;
     /** @brief Convex or mesh source geometry is malformed before solver cooking. */

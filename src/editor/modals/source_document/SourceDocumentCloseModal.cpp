@@ -1,6 +1,7 @@
 #include "SourceDocumentCloseModal.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -8,8 +9,8 @@ namespace Horo::Editor {
     /** @copydoc SourceDocumentCloseModal::SourceDocumentCloseModal */
     SourceDocumentCloseModal::SourceDocumentCloseModal(const EditorGuiContext &context, EditorWorkspaceController &controller,
                                                        std::weak_ptr<const void> lifetime, SourceSaveRequest request, std::string source)
-        : context_(context), controller_(&controller), lifetime_(std::move(lifetime)), request_(std::move(request)),
-          source_(std::move(source)) {}
+        : EditorModal(kTextScope), context_(context), controller_(&controller), lifetime_(std::move(lifetime)),
+          request_(std::move(request)), source_(std::move(source)) {}
 
     /** @copydoc SourceDocumentCloseModal::Id */
     ModalId SourceDocumentCloseModal::Id() const {
@@ -42,7 +43,7 @@ namespace Horo::Editor {
             return Result<bool>::Success(true);
         if (lifetime_.expired()) {
             failed_ = true;
-            return Result<bool>::Failure(MakeError(SourceDocumentErrors::Stale));
+            return Result<bool>::Failure(MakeError(GuiLive::HostSymbol<&SourceDocumentErrors::Stale>()));
         }
         EditorWorkspaceViewCommandData command;
         command.command = EditorWorkspaceViewCommand::CloseSourceDocument;
@@ -51,12 +52,12 @@ namespace Horo::Editor {
         controller_->ProcessCommand(command);
         const auto &outcome = controller_->SourceCloseOutcome();
         failed_ = !outcome || outcome->HasError() || !outcome->Value();
-        return outcome ? *outcome : Result<bool>::Failure(MakeError(SourceDocumentErrors::Invalid));
+        return outcome ? *outcome : Result<bool>::Failure(MakeError(GuiLive::HostSymbol<&SourceDocumentErrors::Invalid>()));
     }
 
     /** @copydoc SourceDocumentCloseModal::Text */
     const std::string &SourceDocumentCloseModal::Text(const char *suffix) const {
-        return context_.localization.Get("editor", std::string{"workspace.documents."} + suffix);
+        return LocalizedText(context_.localization, suffix);
     }
 
     /** @copydoc SourceDocumentCloseModal::LogicalFooterHeight */

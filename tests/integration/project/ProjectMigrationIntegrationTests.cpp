@@ -29,6 +29,7 @@ namespace {
 
     constexpr auto ProductionDefinitionId = "core.project_settings.compression_defaults";
     constexpr auto AuthoringDefinitionId = "core.authoring.navigation_network";
+    constexpr auto SemanticSurfaceDefinitionId = "core.authoring.semantic_surfaces";
 
     /** @brief Parks the owned dispatcher after JSONL flush, outside ingestion locks, until capture ends. */
     class MigrationDispatchGate final : public Telemetry::ISink {
@@ -212,9 +213,10 @@ namespace {
     void VerifyMigrationReceipt(const ProjectMigrationTestFixture &project) {
         const auto history = project.ReadHistoryJson();
         REQUIRE((history.at("receipts").size() == 1));
-        REQUIRE((history.at("receipts").front().at("definitions").size() == 2));
+        REQUIRE((history.at("receipts").front().at("definitions").size() == 3));
         REQUIRE((history.at("receipts").front().at("definitions").front().at("id") == ProductionDefinitionId));
-        REQUIRE((history.at("receipts").front().at("definitions").back().at("id") == AuthoringDefinitionId));
+        REQUIRE((history.at("receipts").front().at("definitions").at(1).at("id") == AuthoringDefinitionId));
+        REQUIRE((history.at("receipts").front().at("definitions").back().at("id") == SemanticSurfaceDefinitionId));
         const auto catalog = BuildBuiltInProjectMigrationCatalog();
         REQUIRE(catalog.HasValue());
         const auto definition = std::ranges::find(catalog.Value(), std::string{ProductionDefinitionId}, [](const auto &entry) {
@@ -237,7 +239,7 @@ namespace {
         REQUIRE((HasLogCategory(records, "editor.project_migration.transaction")));
         REQUIRE((HasLogCategory(records, "editor.project_open")));
         REQUIRE((HasLogMessagePart(records, "source=0.0.1")));
-        REQUIRE((HasLogMessagePart(records, "target=0.2.0")));
+        REQUIRE((HasLogMessagePart(records, "target=0.3.0")));
         REQUIRE((HasLogMessagePart(records, ProductionDefinitionId)));
         REQUIRE((HasLogMessagePart(records, "operation=")));
         REQUIRE_FALSE((HasLogMessagePart(records, project.Root().string())));
@@ -276,7 +278,7 @@ namespace {
     }
 }  // namespace
 
-TEST_CASE("Legacy 0.0.1 project migrates through immutable 0.1.0 to 0.2.0 through backend project open",
+TEST_CASE("Legacy 0.0.1 project migrates through immutable 0.1.0 and 0.2.0 to 0.3.0 through backend project open",
           "[integration][project][migration]") {
     REQUIRE((ComputeTestSha256("abc") == "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
     ProjectMigrationTestFixture project;
@@ -287,16 +289,17 @@ TEST_CASE("Legacy 0.0.1 project migrates through immutable 0.1.0 to 0.2.0 throug
     const auto preflight = backend.preflight.Inspect(project.Root());
     REQUIRE((preflight.compatibility.status == ProjectCompatibilityStatus::AutomaticMigrationRequired));
     REQUIRE((preflight.migrationPlan.has_value()));
-    REQUIRE((preflight.migrationPlan->definitions.size() == 2));
+    REQUIRE((preflight.migrationPlan->definitions.size() == 3));
     REQUIRE((preflight.migrationPlan->definitions.front().id.value == ProductionDefinitionId));
-    REQUIRE((preflight.migrationPlan->definitions.back().id.value == AuthoringDefinitionId));
+    REQUIRE((preflight.migrationPlan->definitions.at(1).id.value == AuthoringDefinitionId));
+    REQUIRE((preflight.migrationPlan->definitions.back().id.value == SemanticSurfaceDefinitionId));
 
     const auto opened = OpenProject(backend, project);
     REQUIRE((opened.outcome == ProjectOpenOutcome::ReadyToActivate));
     REQUIRE((opened.readySession.has_value()));
 
     const auto migrated = project.ReadProjectJson();
-    REQUIRE((migrated.at("horoVersion") == "0.2.0"));
+    REQUIRE((migrated.at("horoVersion") == "0.3.0"));
     REQUIRE_FALSE((migrated.at("settings").contains("network")));
     REQUIRE((migrated.at("settings").at("assetCompression") == "lz4"));
     REQUIRE((migrated.at("settings").at("textureCompression") == "bc7"));
@@ -456,9 +459,10 @@ TEST_CASE("0.2 production migration recovery survives host restart without rewri
         recoverAfterRestart(MigrationRecoveryAction::ResumePublish);
         REQUIRE(ReadBytes(sidecarPath) == originalSidecar);
         REQUIRE(ReadBytes(registryPath) == registry);
-        REQUIRE(project.ReadProjectJson()["horoVersion"] == "0.2.0");
+        REQUIRE(project.ReadProjectJson()["horoVersion"] == "0.3.0");
         REQUIRE(project.ReadProjectJson()["migrationHistoryHead"] == ComputeTestSha256(project.ReadHistoryBytes()));
-        REQUIRE(project.ReadHistoryJson()["receipts"].front()["definitions"].back()["id"] == AuthoringDefinitionId);
+        REQUIRE(project.ReadHistoryJson()["receipts"].front()["definitions"].at(1)["id"] == AuthoringDefinitionId);
+        REQUIRE(project.ReadHistoryJson()["receipts"].front()["definitions"].back()["id"] == SemanticSurfaceDefinitionId);
     }
     SECTION("restore verified originals when forward root evidence is lost") {
         std::error_code error;

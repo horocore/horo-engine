@@ -152,7 +152,7 @@ namespace Horo::Editor {
             return Frame(gui, visible, access, scene, Math::ClipDepthRange::ZeroToOne);
         };
         static_cast<void>(draw());
-        ImGui::GetIO().AddMousePosEvent(40, 120);
+        ImGui::GetIO().AddMousePosEvent(40, 72);
         static_cast<void>(draw());
         ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
         static_cast<void>(draw());

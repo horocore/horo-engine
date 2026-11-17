@@ -2,6 +2,7 @@
 
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
@@ -156,6 +157,19 @@ namespace Horo::Tests {
             if (!metadata)
                 throw std::runtime_error("Unable to write recent-project E2E metadata.");
             WriteEmptySceneFixture(projectRoot / "assets/scenes/main.horo");
+            Application::ProjectSurfaceSettingsInput surfaceInput;
+            surfaceInput.projectId = "recent-project-e2e";
+            auto surfaces = Application::ProjectSurfaceSettings::Create(std::move(surfaceInput));
+            if (surfaces.HasError())
+                throw std::runtime_error("Unable to create recent-project E2E surface settings.");
+            auto source = Application::EncodeProjectSurfaceSettings(surfaces.Value());
+            if (source.HasError())
+                throw std::runtime_error("Unable to encode recent-project E2E surface settings.");
+            std::ofstream surfaceFile(projectRoot / ".horo/surfaces.json", std::ios::binary);
+            surfaceFile << source.Value();
+            surfaceFile.close();
+            if (!surfaceFile)
+                throw std::runtime_error("Unable to write recent-project E2E surface settings.");
 
             if (!Editor::SaveRecentProjectsToDisk(
                     {Editor::RecentProjectEntry{name, projectRoot.string(), "Just now", "empty", std::nullopt}})) {
@@ -175,7 +189,8 @@ namespace Horo::Tests {
               mutations(files), transactions(files, wallClock, mutations, jobs),
               gameplayBuilds(externalProcesses, jobs, files, &buildOutput, &operations),
               gameplayBuildEnvironment{.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR,
-                                       .cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER}},
+                                       .cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER},
+                                       .generator = HORO_TEST_CMAKE_GENERATOR},
               preflight(transactions), recentInspection(jobs, preflight), rendererAvailability(MakeRendererAvailability(testSurface)),
               open(jobs, files, preflight, mutations, transactions, rendererAvailability), surface(testSurface),
               viewportRenderer(testSurface.ViewportRenderer()),

@@ -215,6 +215,16 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportModel::SetCamera */
+    Result<void> EditorViewportModel::SetCamera(const EditorViewportCamera &camera) {
+        if (!camera.IsValid())
+            return Result<void>::Failure(MakeViewportError(ViewportModelErrors::InvalidCamera, "Asset preview camera must be finite."));
+        current_.camera = camera;
+        ++current_.revision.value;
+        events_->Publish(ViewportChangedEvent{current_.revision, ViewportChangeKind::CameraFocused});
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorViewportModel::Focus */
     Result<void> EditorViewportModel::Focus(const Math::Aabb &worldBounds, const float aspect) {
         if (!worldBounds.IsValid() || !std::isfinite(aspect) || aspect <= 0.0F)

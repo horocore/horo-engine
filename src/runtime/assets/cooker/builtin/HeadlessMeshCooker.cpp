@@ -51,6 +51,12 @@ namespace Horo::Assets {
 
         class HeadlessMeshCooker final : public ICookerStrategy {
         public:
+            /** @brief Declares a source-only producer; all other byte-affecting settings are captured by CacheIdentity. */
+            Result<std::optional<std::vector<AssetId>>> InputDependencies(const CookSourceView &,
+                                                                          const CancellationToken &) const override {
+                return Result<std::optional<std::vector<AssetId>>>::Success(std::vector<AssetId>{});
+            }
+
             [[nodiscard]] Result<CookOutputSink> Cook(const CookSourceView &source, const CancellationToken &cancellation) const override {
                 if (cancellation.IsCancellationRequested()) {
                     return Result<CookOutputSink>::Failure(Error{CookErrors::Cancelled.code});

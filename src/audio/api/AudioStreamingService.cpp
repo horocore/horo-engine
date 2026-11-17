@@ -298,7 +298,7 @@ namespace Horo::Audio {
     }
 
     /** @copydoc AudioStreamingService::Admit */
-    Result<AudioStreamHandle> AudioStreamingService::Admit(AudioStreamRequest request) {
+    Result<AudioStreamHandle> AudioStreamingService::Admit(const AudioStreamRequest &request) {
         std::size_t bytes = 0;
         if (closed_ || !ValidRequest(request, limits_, bytes))
             return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
@@ -309,7 +309,7 @@ namespace Horo::Audio {
             if (slot.state != nullptr || slot.generation == 0)
                 continue;
             try {
-                slot.state = std::make_unique<AudioStreamState>(std::move(request), bytes);
+                slot.state = std::make_unique<AudioStreamState>(request, bytes);
             } catch (const std::bad_alloc &) {
                 return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
             }

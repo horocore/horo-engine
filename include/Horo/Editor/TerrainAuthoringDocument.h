@@ -4,6 +4,7 @@
  * @brief Owner-thread bounded terrain source transactions and exact semantic history.
  */
 
+#include "Horo/Terrain/FoliageAuthoringSource.h"
 #include "Horo/Terrain/TerrainSourceImport.h"
 
 #include <map>
@@ -57,13 +58,7 @@ namespace Horo::Editor {
     };
 
     /** @brief Authored placement value; cooked cluster/runtime identity is deliberately absent. */
-    struct TerrainAuthoredPlacement final {
-        Terrain::FoliageInstanceId id;
-        Terrain::FoliageTypeId type;
-        std::uint32_t sampleX{}, sampleZ{};
-        float offsetMeters{}, scale{1.0F}, yawRadians{};
-        [[nodiscard]] bool operator==(const TerrainAuthoredPlacement &) const noexcept = default;
-    };
+    using TerrainAuthoredPlacement = Terrain::TerrainAuthoredPlacement;
 
     /** @brief Exact placement assign/remove; an absent value erases an existing stable ID. */
     struct TerrainPlacementEdit final {

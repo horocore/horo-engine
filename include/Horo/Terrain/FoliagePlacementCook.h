@@ -7,6 +7,7 @@
 
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Sha256.h"
+#include "Horo/Terrain/FoliageAuthoringSource.h"
 #include "Horo/Terrain/FoliageDefinition.h"
 #include "Horo/Terrain/TerrainSourceImport.h"
 
@@ -120,6 +121,13 @@ namespace Horo::Terrain {
         [[nodiscard]] constexpr auto operator<=>(const CookedFoliageInstance &) const noexcept = default;
     };
 
+    /** @brief Explicit authored source subset assigned to one tile by the host; identities are never regenerated. */
+    struct FoliageAuthoredPlacementCookRequest final {
+        FoliagePlacementCookRequest target;
+        std::span<const TerrainAuthoredPlacement> placements;
+        std::uint32_t sampleOriginX{}, sampleOriginZ{}; /**< Dataset sample at this tile's first grid vertex. */
+    };
+
     /** @brief Cook-issued detached candidate; caller cannot forge or edit published evidence. */
     class CookedFoliagePlacement final {
     public:
@@ -190,6 +198,8 @@ namespace Horo::Terrain {
 
     private:
         friend Result<CookedFoliagePlacement> CookFoliagePlacement(const FoliagePlacementCookRequest &, const CancellationToken &);
+        friend Result<CookedFoliagePlacement> CookAuthoredFoliagePlacement(const FoliageAuthoredPlacementCookRequest &,
+                                                                           const CancellationToken &);
         friend class FoliagePlacementCookOwner;
         friend struct FoliageClusterCookWorker;
         CookedFoliagePlacement() = default;
@@ -217,6 +227,16 @@ namespace Horo::Terrain {
      */
     [[nodiscard]] Result<CookedFoliagePlacement> CookFoliagePlacement(const FoliagePlacementCookRequest &request,
                                                                       const CancellationToken &cancellation);
+
+    /** @brief Cook one exact authored tile/type subset through canonical surface/constraint/output validation.
+     * @param request Immutable source/definition grants, explicit dataset sample origin and complete assigned placements.
+     * @param cancellation Cooperative stop throughout record/predicate work.
+     * @return Sealed detached output preserving every accepted authored instance ID, or typed failure with no publication.
+     * @details Input order is immaterial. Duplicates, unsupported transforms, exclusions, separation and invalid surfaces reject the
+     * complete candidate; they never silently remove authored intent. Cluster identity uses the existing type/cell provenance.
+     */
+    [[nodiscard]] Result<CookedFoliagePlacement> CookAuthoredFoliagePlacement(const FoliageAuthoredPlacementCookRequest &request,
+                                                                              const CancellationToken &cancellation = {});
 
     /** @brief Owner-thread publication fence for detached candidates and shutdown; do not call concurrently. */
     class FoliagePlacementCookOwner final {

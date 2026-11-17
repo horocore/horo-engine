@@ -6,7 +6,7 @@
 namespace Horo::Editor {
     /** @copydoc NavigationBakeCancelModal::NavigationBakeCancelModal */
     NavigationBakeCancelModal::NavigationBakeCancelModal(const EditorGuiContext &context, NavigationBakeCancelDecision decision)
-        : context_(context), decision_(std::move(decision)) {}
+        : EditorModal(kTextScope), context_(context), decision_(std::move(decision)) {}
 
     ModalId NavigationBakeCancelModal::Id() const {
         return ModalId{0x4e415643414e434cULL};
@@ -30,7 +30,7 @@ namespace Horo::Editor {
 
     ModalFrameResult NavigationBakeCancelModal::Draw() {
         const auto text = [this](const char *key) -> const std::string & {
-            return context_.localization.Get("editor", std::string{"workspace.navigation_bake."} + key);
+            return LocalizedText(context_.localization, key);
         };
         const auto &fonts = context_.theme.fonts;
         Ui::ScopedModalShell shell({.id = "NavigationBakeCancel",

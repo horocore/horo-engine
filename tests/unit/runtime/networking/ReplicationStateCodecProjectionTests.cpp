@@ -5,13 +5,17 @@ namespace Horo::Network {
 
     namespace {
         std::shared_ptr<const ReplicationSerializerRegistry> ProjectedRegistry(const ReplicationCondition condition,
-                                                                               const std::shared_ptr<CountingCodec> &codec) {
-            auto field = Field();
-            field.condition = condition;
-            using enum ReplicationCondition;
-            if (condition == Custom)
-                field.customCondition = ReplicationConditionId::Create(9).Value();
-            const std::array schemas{Schema(10, {field})};
+                                                                               const std::shared_ptr<CountingCodec> &codec,
+                                                                               const std::uint32_t fieldCount = 1) {
+            std::vector<ReplicationFieldDescriptor> fields;
+            for (std::uint32_t index = 1; index <= fieldCount; ++index) {
+                auto field = Field(index);
+                field.condition = condition;
+                if (condition == ReplicationCondition::Custom)
+                    field.customCondition = ReplicationConditionId::Create(9).Value();
+                fields.push_back(field);
+            }
+            const std::array schemas{Schema(10, std::move(fields))};
             const auto descriptors = BuildReplicationDescriptorSnapshot(schemas, Limits).Value();
             const std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> codecs{codec};
             return std::make_shared<const ReplicationSerializerRegistry>(
@@ -61,6 +65,38 @@ namespace Horo::Network {
         REQUIRE(ReplicationStateCodec::Create(registry, Recipient(), ReplicationRecordKind::Update, 1, evidence).HasError());
         evidence[0].field = FieldIdValue(2);
         REQUIRE(ReplicationStateCodec::Create(registry, Recipient(), ReplicationRecordKind::Update, 1, evidence).HasError());
+    }
+
+    TEST_CASE("Custom visibility validates distinct prefix evidence without mixing span iterator ranges", "[network][state-codec]") {
+        auto codec = std::make_shared<CountingCodec>();
+        const auto registry = ProjectedRegistry(ReplicationCondition::Custom, codec, 2);
+        const auto condition = ReplicationConditionId::Create(9).Value();
+        std::array evidence{ReplicationStateCustomVisibility{FieldIdValue(1), {condition, true}},
+                            ReplicationStateCustomVisibility{FieldIdValue(2), {condition, false}}};
+        const auto accepted = ReplicationStateCodec::Create(registry, Recipient(), ReplicationRecordKind::Update, 1, evidence);
+        REQUIRE(accepted.HasValue());
+
+        std::swap(evidence[0], evidence[1]);
+        const auto reordered = ReplicationStateCodec::Create(registry, Recipient(), ReplicationRecordKind::Update, 1, evidence);
+        REQUIRE(reordered.HasValue());
+        CHECK(accepted.Value()->ProjectionFingerprint() == reordered.Value()->ProjectionFingerprint());
+
+        auto duplicated = evidence;
+        duplicated[1].field = duplicated[0].field;
+        const auto duplicate = ReplicationStateCodec::Create(registry, Recipient(), ReplicationRecordKind::Update, 1, duplicated);
+        REQUIRE(duplicate.HasError());
+        CHECK(duplicate.ErrorValue().code.Value() == "network.state.invalid");
+
+        auto foreign = evidence;
+        foreign[1].field = FieldIdValue(3);
+        const auto unknown = ReplicationStateCodec::Create(registry, Recipient(), ReplicationRecordKind::Update, 1, foreign);
+        REQUIRE(unknown.HasError());
+        CHECK(unknown.ErrorValue().code.Value() == "network.state.invalid");
+
+        const auto ordinary = ProjectedRegistry(ReplicationCondition::Always, codec, 2);
+        const auto notCustom = ReplicationStateCodec::Create(ordinary, Recipient(), ReplicationRecordKind::Update, 1, evidence);
+        REQUIRE(notCustom.HasError());
+        CHECK(notCustom.ErrorValue().code.Value() == "network.state.invalid");
     }
 
     TEST_CASE("Equivalent quantized captures produce the same representation while server values stay canonical",

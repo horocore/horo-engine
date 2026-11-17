@@ -34,28 +34,27 @@ namespace Horo::Editor {
         };
 
         constexpr std::array AuditRows{
-            AuditRow{"12:08:14", "scene.query", Permission::Read, "workspace.global_dock.mcp.request.scene_query", Status::Done},
-            AuditRow{"12:08:08", "asset.list", Permission::Read, "workspace.global_dock.mcp.request.asset_list", Status::Done},
-            AuditRow{"12:07:51", "scene.move", Permission::Mutation, "workspace.global_dock.mcp.request.scene_move", Status::Approval},
-            AuditRow{"12:07:39", "build.trigger", Permission::Mutation, "workspace.global_dock.mcp.request.build_trigger", Status::Denied},
+            AuditRow{"12:08:14", "scene.query", Permission::Read, "request.scene_query", Status::Done},
+            AuditRow{"12:08:08", "asset.list", Permission::Read, "request.asset_list", Status::Done},
+            AuditRow{"12:07:51", "scene.move", Permission::Mutation, "request.scene_move", Status::Approval},
+            AuditRow{"12:07:39", "build.trigger", Permission::Mutation, "request.build_trigger", Status::Denied},
         };
 
         [[nodiscard]] const char *PermissionKey(const Permission permission) noexcept {
-            return permission == Permission::Read ? "workspace.global_dock.mcp.permission.read"
-                                                  : "workspace.global_dock.mcp.permission.mutation";
+            return permission == Permission::Read ? "permission.read" : "permission.mutation";
         }
 
         [[nodiscard]] const char *StatusKey(const Status status) noexcept {
             using enum Status;
             switch (status) {
                 case Done:
-                    return "workspace.global_dock.mcp.status.done";
+                    return "status.done";
                 case Approval:
-                    return "workspace.global_dock.mcp.status.approval";
+                    return "status.approval";
                 case Denied:
-                    return "workspace.global_dock.mcp.status.denied";
+                    return "status.denied";
             }
-            return "workspace.global_dock.mcp.status.denied";
+            return "status.denied";
         }
 
         [[nodiscard]] GlobalDockTone StatusTone(const Status status) noexcept {
@@ -87,10 +86,9 @@ namespace Horo::Editor {
             const auto &fonts = context.theme.fonts;
             const float scale = Theme::GetActiveTokens().sizes.uiScale;
             const float currentWidth = MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Label(),
-                                                                  localization.Get("editor", "workspace.global_dock.mcp.session.current"));
-            const float lastHourWidth =
-                MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Label(),
-                                           localization.Get("editor", "workspace.global_dock.mcp.session.last_hour"));
+                                                                  GlobalDockMcpPane::kTextScope.Text(localization, "session.current"));
+            const float lastHourWidth = MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Label(),
+                                                                   GlobalDockMcpPane::kTextScope.Text(localization, "session.last_hour"));
             return std::max(128.0F * scale, std::max(currentWidth, lastHourWidth) + 32.0F * scale);
         }
     }  // namespace
@@ -118,7 +116,7 @@ namespace Horo::Editor {
         const GlobalDockPaneRegions regions =
             ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockMcpPane::kTextScope.Text(context.localization, key);
         };
 
         DrawGlobalDockToolbarSurface(regions.toolbarOrigin, regions.toolbarWidth, metrics.toolbarHeight);
@@ -127,7 +125,7 @@ namespace Horo::Editor {
         const float searchWidth = ResolveGlobalDockSearchWidth(regions.toolbarWidth, fixedWidth);
         float x = regions.toolbarOrigin.x + metrics.toolbarPaddingX;
 
-        const std::string &searchHint = localized("workspace.global_dock.mcp.search");
+        const std::string &searchHint = localized("search");
         x = DrawGlobalDockSearchControl({x, controlY}, searchWidth, "##McpSearch", m_search, searchHint, fonts);
         DrawFilterActions(x, controlY, context);
         DrawGlobalDockToolbarSeparator(x, controlY);
@@ -139,20 +137,19 @@ namespace Horo::Editor {
         const auto &fonts = context.theme.fonts;
         const auto &localization = context.localization;
         const GlobalDockToolbarChipProps all{.id = "McpAll",
-                                             .label = localization.Get("editor", "workspace.global_dock.mcp.filter.all"),
+                                             .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.all"),
                                              .count = 18U};
         const GlobalDockToolbarChipProps mutations{.id = "McpMutations",
-                                                   .label = localization.Get("editor", "workspace.global_dock.mcp.filter.mutations"),
+                                                   .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.mutations"),
                                                    .count = 3U};
         const GlobalDockToolbarChipProps errors{.id = "McpErrors",
-                                                .label = localization.Get("editor", "workspace.global_dock.mcp.filter.errors"),
+                                                .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.errors"),
                                                 .count = 1U};
         const GlobalDockToolbarChipProps pause{.id = "McpPause",
-                                               .label = localization.Get("editor", m_paused ? "workspace.global_dock.mcp.resume"
-                                                                                            : "workspace.global_dock.mcp.pause"),
+                                               .label = GlobalDockMcpPane::kTextScope.Text(localization, m_paused ? "resume" : "pause"),
                                                .icon = m_paused ? Ui::UiIcon::Play : Ui::UiIcon::Pause};
         const GlobalDockToolbarChipProps exportAudit{.id = "McpExport",
-                                                     .label = localization.Get("editor", "workspace.global_dock.mcp.export"),
+                                                     .label = GlobalDockMcpPane::kTextScope.Text(localization, "export"),
                                                      .icon = Ui::UiIcon::Download};
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         return SessionControlWidth(context) + MeasureGlobalDockToolbarChip(all, fonts) + MeasureGlobalDockToolbarChip(mutations, fonts) +
@@ -165,16 +162,16 @@ namespace Horo::Editor {
         const auto &fonts = context.theme.fonts;
         const auto &localization = context.localization;
         const GlobalDockToolbarChipProps all{.id = "McpAll",
-                                             .label = localization.Get("editor", "workspace.global_dock.mcp.filter.all"),
+                                             .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.all"),
                                              .count = 18U,
                                              .active = m_filter == All};
         const GlobalDockToolbarChipProps mutations{.id = "McpMutations",
-                                                   .label = localization.Get("editor", "workspace.global_dock.mcp.filter.mutations"),
+                                                   .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.mutations"),
                                                    .count = 3U,
                                                    .tone = GlobalDockTone::Warning,
                                                    .active = m_filter == Mutations};
         const GlobalDockToolbarChipProps errors{.id = "McpErrors",
-                                                .label = localization.Get("editor", "workspace.global_dock.mcp.filter.errors"),
+                                                .label = GlobalDockMcpPane::kTextScope.Text(localization, "filter.errors"),
                                                 .count = 1U,
                                                 .tone = GlobalDockTone::Error,
                                                 .active = m_filter == Errors};
@@ -199,17 +196,16 @@ namespace Horo::Editor {
         const float sessionWidth = SessionControlWidth(context);
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const GlobalDockToolbarChipProps pause{.id = "McpPause",
-                                               .label = localization.Get("editor", m_paused ? "workspace.global_dock.mcp.resume"
-                                                                                            : "workspace.global_dock.mcp.pause"),
+                                               .label = GlobalDockMcpPane::kTextScope.Text(localization, m_paused ? "resume" : "pause"),
                                                .active = m_paused,
                                                .icon = m_paused ? Ui::UiIcon::Play : Ui::UiIcon::Pause};
         const GlobalDockToolbarChipProps exportAudit{.id = "McpExport",
-                                                     .label = localization.Get("editor", "workspace.global_dock.mcp.export"),
+                                                     .label = GlobalDockMcpPane::kTextScope.Text(localization, "export"),
                                                      .icon = Ui::UiIcon::Download};
         const float pauseWidth = MeasureGlobalDockToolbarChip(pause, fonts);
         const float exportWidth = MeasureGlobalDockToolbarChip(exportAudit, fonts);
-        const std::array<std::string, 2> sessionLabels{localization.Get("editor", "workspace.global_dock.mcp.session.current"),
-                                                       localization.Get("editor", "workspace.global_dock.mcp.session.last_hour")};
+        const std::array<std::string, 2> sessionLabels{GlobalDockMcpPane::kTextScope.Text(localization, "session.current"),
+                                                       GlobalDockMcpPane::kTextScope.Text(localization, "session.last_hour")};
         const std::array<const char *, 2> sessionItems{sessionLabels[0].c_str(), sessionLabels[1].c_str()};
         ImGui::SetCursorScreenPos({x, y});
         ImGui::SetNextItemWidth(sessionWidth);
@@ -231,7 +227,7 @@ namespace Horo::Editor {
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockMcpPane::kTextScope.Text(context.localization, key);
         };
         const ImVec2 headerMin = contentOrigin;
         DrawGlobalDockTableHeaderSurface(headerMin, contentWidth, metrics.tableHeaderHeight);
@@ -246,11 +242,11 @@ namespace Horo::Editor {
             drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {textX, headerY}, Theme::U32(Theme::Muted()),
                               localized(key).c_str());
         };
-        headerText(layout.time, "workspace.global_dock.mcp.column.time");
-        headerText(layout.tool, "workspace.global_dock.mcp.column.tool");
-        headerText(layout.permission, "workspace.global_dock.mcp.column.permission");
-        headerText(layout.request, "workspace.global_dock.mcp.column.request");
-        headerText(layout.status, "workspace.global_dock.mcp.column.status");
+        headerText(layout.time, "column.time");
+        headerText(layout.tool, "column.tool");
+        headerText(layout.permission, "column.permission");
+        headerText(layout.request, "column.request");
+        headerText(layout.status, "column.status");
 
         const ImVec2 rowsOrigin{contentOrigin.x, contentOrigin.y + metrics.tableHeaderHeight};
         const float rowsHeight = std::max(1.0F, contentHeight - metrics.tableHeaderHeight);
@@ -270,9 +266,9 @@ namespace Horo::Editor {
     void GlobalDockMcpPane::DrawAuditRow(const std::size_t index, const float width, const TableLayout &layout,
                                          const EditorGuiContext &context) {
         const AuditRow &row = AuditRows[index];
-        const std::string permission = context.localization.Get("editor", PermissionKey(row.permission));
-        const std::string request = context.localization.Get("editor", row.requestKey);
-        const std::string status = context.localization.Get("editor", StatusKey(row.status));
+        const std::string permission = GlobalDockMcpPane::kTextScope.Text(context.localization, PermissionKey(row.permission));
+        const std::string request = GlobalDockMcpPane::kTextScope.Text(context.localization, row.requestKey);
+        const std::string status = GlobalDockMcpPane::kTextScope.Text(context.localization, StatusKey(row.status));
         const std::string_view search{m_search.data()};
         const bool filterMatches =
             MatchesAuditFilter(row, m_filter == Filter::All, m_filter == Filter::Mutations, m_filter == Filter::Errors);

@@ -353,7 +353,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::CommitPrefabNavigationInspector */
     Result<SceneCommandResult> EditorWorkspaceController::CommitPrefabNavigationInspector(const NavigationInspectorRequest &request) {
         using Return = Result<SceneCommandResult>;
-        auto limits = Prefab::PrefabLimitProfile::Create({});
+        auto limits = PrefabLimits();
         if (limits.HasError())
             return Return::Failure(limits.ErrorValue());
         if (auto schemas = EnsureNavigationPrefabSchemas(limits.Value()); schemas.HasError())

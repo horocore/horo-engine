@@ -1,4 +1,5 @@
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/PathUtils.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
@@ -13,8 +14,7 @@ namespace Horo::Editor {
             const Assets::AssetRecord *record = m_assetRegistry.Find(*object.meshAsset);
             if (record == nullptr || record->type.Value() != "core.mesh")
                 continue;
-            const std::filesystem::path source =
-                (std::filesystem::path{m_viewModel.projectRoot} / record->sourcePath.String()).lexically_normal();
+            const std::filesystem::path source = Foundation::Paths::Resolve(ProjectRoot(), record->sourcePath).lexically_normal();
             const auto loaded = m_assetMeshCache.Load(record->id, source);
             if (loaded.HasError())
                 LOG_WARN("editor.asset", "Unable to load scene mesh asset: %s", loaded.ErrorValue().message.c_str());

@@ -1,0 +1,73 @@
+{
+  "captureReceiptSHA256": {
+    "encode": "32ffdab93057e9a0612e097bac0da846b290a59a120187ddda1bb4aeaeb8b5ec",
+    "sceneOutput": "b252e54d6f2034258f829171b855168990e0a8d55a7e77572d09797c5caf2db3"
+  },
+  "compilerPolicy": {
+    "intermediate": "Vulkan1.3 SPIR-V1.6",
+    "language": "HLSL2021",
+    "layout": "fvk-use-gl-layout",
+    "optimization": "O3",
+    "strictFloat": true,
+    "target": "vs_6_0/ps_6_0"
+  },
+  "files": {
+    "color_encode_sdr-frag.json": "21333091a56cef2e80dafbeeb297953dda9394b05540b484b9d25dc9be008842",
+    "color_encode_sdr-frag.metal": "d9485534334edd3c71f7446ed2e8bd834a50525f3c88e5dba321da59d625dc29",
+    "color_encode_sdr-frag.spv": "a680fac1543b206c55e497abaa424f69733769a796c249efec8e048d2ca34549",
+    "color_encode_sdr-vert.json": "571942cfa0db696bd045e318145ce25ccd5e032728655d003e98f367cf94ab87",
+    "color_encode_sdr-vert.metal": "61d7d25c33aee3e36bcf1ee2240b95b636316e44513c788e07a38dd17b48bb38",
+    "color_encode_sdr-vert.spv": "e667c346c4e0c345da8c2107551365abde5ff0b07033cd30f9b70a72cd423bf8",
+    "color_output-frag.json": "1dafb7ede3b008ccbe23428681e4377b6e21b864a4d0496919979f4f886ac6ba",
+    "color_output-frag.metal": "eee4af50d9741fb8bd58bca51e1d898434a5d2b6403d646d106b2b4edc8b9ca0",
+    "color_output-frag.spv": "2cc0b9fb107582e4a87a0921411d372db9a3c11ab710354a6f6958908adcedb3",
+    "color_output-vert.json": "571942cfa0db696bd045e318145ce25ccd5e032728655d003e98f367cf94ab87",
+    "color_output-vert.metal": "61d7d25c33aee3e36bcf1ee2240b95b636316e44513c788e07a38dd17b48bb38",
+    "color_output-vert.spv": "b91ed787cf7dd851766361f2c97eb503c36803b6fab0aaa36f6d1a8303b1db97"
+  },
+  "schemaVersion": 1,
+  "scope": "Original diagnostic color-output VS/PS parser evidence; standalone fixtures do not qualify cook trust, native pipelines, ACES accuracy or GPU execution.",
+  "sources": {
+    "assets/shaders/runtime/color_encode_sdr.hlsl": "4f760b142c52a1a4f1af5600fb982d0be7184577a3d53535be99cc0b6876e9ad",
+    "engine/runtime/color_output.hlsl": "c1ad16946dd7e2e2087fcb070c221d7abaae23363c3c0f02d5febac9a2c582b4"
+  },
+  "tools": [
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:b0bf9b20b9425d8e80c39bd4e3c5ce5dbdf26be7973f2122d2ea50de8a8d8a4e",
+      "release": "lunarg-1.4.363.0.dxc-1.9.0.5512",
+      "role": "dxc"
+    },
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:42938d66ae3703537376116c11abed84639a9bc2c02c1f360058287320603ad6",
+      "release": "lunarg-1.4.363.0.spirv-tools-2026.4",
+      "role": "spirv-val"
+    },
+    {
+      "archive_sha256": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "executable_sha256": "sha256:2adca603ef473f3b292784c1020c61b597a1545c981b2ed128e3de04feb46ad2",
+      "release": "lunarg-1.4.363.0.spirv-cross-f11ba9f0",
+      "role": "spirv-cross"
+    },
+    {
+      "archive_sha256": "sha256:54ba4b368264ecbe2afd0ad988d7df3ad1b2906f51578cbd2ded53f8f3f55db6",
+      "executable_sha256": "sha256:bbe7671518a3905f9d3fce54312fbc77c2876b0d62aca74a0688fa869d31a8a9",
+      "release": "local-deployment.apple-metal-32023.921.5",
+      "role": "apple-metal"
+    }
+  ],
+  "translationPolicy": {
+    "decorationBindings": true,
+    "entryPoints": [
+      "VSMain",
+      "PSMain"
+    ],
+    "mslVersion": "20400"
+  },
+  "upstreamAttribution": {
+    "SPDX": "BSD-3-Clause",
+    "copyright": "Copyright Contributors to the OpenColorIO Project.",
+    "scope": "Generated analytic OCIO/ACES-derived shader code; retain upstream license notice."
+  }
+}

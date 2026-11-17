@@ -226,6 +226,15 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = true,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor StateCancelled{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.state.cancelled"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Physics state restoration was cancelled before publication.",
+        .remediationHint = "The current world is unchanged; prepare a new restore if still needed.",
+        .retryable = true,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor InitializationFailed{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.initialization.failed"},
@@ -335,6 +344,7 @@ namespace Horo::Physics::PhysicsErrors {
             &CapabilityRevoked,
             &QuerySnapshotStale,
             &QueryCancelled,
+            &StateCancelled,
             &InitializationFailed,
             &ShapeCookSourceInvalid,
             &ShapeCookImporterFailed,

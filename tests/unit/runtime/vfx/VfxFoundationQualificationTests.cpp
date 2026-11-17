@@ -123,21 +123,22 @@ namespace Horo::Vfx {
                                                         Tests::ParticleErrorRegistry(), "assets/effects/火球.particle");
         REQUIRE(cooked.HasValue());
         REQUIRE(cooked.Value().Accepted());
+        const auto &runtimeSource = cooked.Value().admission->Descriptor();
+        CHECK(runtimeSource.Data() == imported.Value().descriptor->Data());
 
         const auto capabilities = Capabilities(false);
         const auto policy = Policy(VfxQualityProfile::Standard);
-        const auto resolution = ResolveForHeadless(*imported.Value().descriptor, capabilities, policy);
+        const auto resolution = ResolveForHeadless(runtimeSource, capabilities, policy);
         REQUIRE(resolution.domain == ResolvedSimulationDomain::CPU);
         REQUIRE(resolution.degradation == VfxDegradation::None);
         REQUIRE(resolution.selectedCount == imported.Value().descriptor->Data().maximumParticles);
         REQUIRE(ValidateVfxResolutionFreshness(resolution, capabilities.Revision(), policy.Revision()).HasValue());
 
-        auto pipeline = CpuParticleSpawnPipeline::Create(*imported.Value().descriptor,
-                                                         {.buffer = Buffer(10),
-                                                          .activation = Activation(),
-                                                          .effectSeed = 0xA55A'1234ULL,
-                                                          .maximumBurstParticles = 128,
-                                                          .maximumBufferBytes = capabilities.Limits().maximumMemoryBytes});
+        auto pipeline = CpuParticleSpawnPipeline::Create(runtimeSource, {.buffer = Buffer(10),
+                                                                         .activation = Activation(),
+                                                                         .effectSeed = 0xA55A'1234ULL,
+                                                                         .maximumBurstParticles = 128,
+                                                                         .maximumBufferBytes = capabilities.Limits().maximumMemoryBytes});
         REQUIRE(pipeline.HasValue());
 
         auto simulation = std::move(pipeline).Value();
@@ -238,8 +239,8 @@ namespace Horo::Vfx {
                                                             Tests::ParticleErrorRegistry());
             REQUIRE(cooked.HasValue());
             REQUIRE(cooked.Value().Accepted());
-            CHECK(cooked.Value().plan->maximumParticles == profile.Value().maximumParticles);
-            CHECK(cooked.Value().plan->maximumSpawnRate == profile.Value().maximumSpawnRate);
+            CHECK(cooked.Value().admission->Plan().maximumParticles == profile.Value().maximumParticles);
+            CHECK(cooked.Value().admission->Plan().maximumSpawnRate == profile.Value().maximumSpawnRate);
         }
 
         const std::array qualityProfiles{VfxQualityProfile::Baseline, VfxQualityProfile::Standard, VfxQualityProfile::High,

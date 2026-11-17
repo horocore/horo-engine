@@ -40,6 +40,7 @@ namespace Horo::Render::Detail {
             mix(candidate->requiredFeatures.timelineSemaphore);
             mix(candidate->vertexLayerRouting);
             mix(candidate->swapchainMaintenance);
+            mix(candidate->shaderDemote);
             mix(candidate->driverAllowed);
             auto queues = candidate->queueFamilies;
             std::ranges::sort(queues, {}, &VulkanQueueFamily::index);

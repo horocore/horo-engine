@@ -1,22 +1,31 @@
 #pragma once
 /** @file AnimationGraphCompilerInternal.h
- * @brief Target-private graph compiler diagnostics, lookup and detached binding/access plan.
+ * @brief Target-private graph compiler diagnostics, lookup and detached
+ * binding/access plan.
  */
 #include "Horo/Animation/AnimationGraph.h"
 
 #include <algorithm>
 
 namespace Horo::Animation::GraphCompileDetail {
-    /** @brief Produces one stable diagnostic without candidate content or project paths. */
+    /** @brief Produces one stable diagnostic without candidate content or project
+     * paths. */
     Error Failure(const ErrorCodeDescriptor &code, GraphSourceLocation location = {});
-    /** @brief Checks captured admission/cancellation at bounded compiler checkpoints. */
+    /** @brief Checks captured admission/cancellation at bounded compiler
+     * checkpoints. */
     Result<void> Admission(const AnimationGraphCompileContext &context);
-    /** @brief Admits whole-asset identity, structural counts and caller-lowerable budgets before copying any candidate storage. */
+    /** @brief Admits whole-asset identity, structural counts and caller-lowerable
+     * budgets before copying any candidate storage. */
     Result<void> PreflightGraph(const AnimationGraphData &data, const AnimationGraphCompileContext &context);
+    /** @brief Admits every cooked declaration count before copying or interpreting any instruction. */
+    Result<void> PreflightCookedGraph(const AnimationGraphCookedData &data, const AnimationGraphCompileContext &context);
+    /** @brief Checks fixed direct-clip shape and exact dependencies before any execution-local plan allocation. */
+    Result<void> PreflightClipProgram(AnimationClipId clip, const AnimationGraphCompileContext &context);
     /** @brief Validates exact typed node settings and semantic pin shape. */
     Result<void> ValidatePins(const GraphNode &node, const GraphDefinition &definition, const AnimationGraphData &data);
 
-    /** @brief Rejects reserved and duplicated identities in canonical collections. */
+    /** @brief Rejects reserved and duplicated identities in canonical collections.
+     */
     template <typename Collection> bool UniqueIds(const Collection &values) {
         for (std::size_t index = 0; index < values.size(); ++index)
             if (!values[index].id.IsValid() || (index != 0 && values[index - 1].id == values[index].id))
@@ -31,23 +40,70 @@ namespace Horo::Animation::GraphCompileDetail {
         return found != values.end() && found->id == id ? &*found : nullptr;
     }
 
-    /** @brief Complete detached immutable dependency/access plan before program publication. */
+    /** @brief Checks finite blend-space geometry, exact float parameter
+     * declarations and instance-wide group policy agreement. */
+    Result<void> ValidateBlendTree(const GraphBlendTreeNode &tree, const AnimationGraphData &data, GraphSourceLocation location);
+    /** @brief Binds tree sample players/coverage and one admitted scratch pose in
+     * either graph expansion path. */
+    Result<void> BindBlendTree(const GraphBlendTreeNode &tree, GraphInstructionOccurrence &occurrence, GraphMemoryRequirements &memory,
+                               const AnimationGraphCompileContext &context);
+
+    /** @brief Uses the same authoritative sparse mask validator as ordinary pose
+     * layers. */
+    bool ValidGraphBoneMask(const GraphBoneMask &mask);
+    /** @brief Bounds the complete action catalog before copying it. */
+    Result<void> PreflightActions(const AnimationGraphData &data, const AnimationGraphCompileContext &context);
+    /** @brief Uses the same bounded action admission for detached cooked declarations. */
+    Result<void> PreflightActions(const AnimationGraphCookedData &data, const AnimationGraphCompileContext &context);
+    /** @brief Validates stable names, sections, loop topology and slot membership
+     * in the canonical catalog. */
+    Result<void> ValidateActions(const AnimationGraphData &data);
+    /** @brief Validates exact immutable clips and joint masks before any action
+     * instance can exist. */
+    Result<void> ValidateActionDependencies(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context);
+
+    /** @brief Complete detached immutable dependency/access plan before program
+     * publication. */
     struct BoundPlan final {
+        /** @brief Creates detached buffers; checked-library allocation failure propagates. */
+        BoundPlan() = default;
+        BoundPlan(const BoundPlan &) = default;
+        BoundPlan &operator=(const BoundPlan &) = default;
+
+        /** @brief Prepares bookkeeping before transferring owned buffers. @param other Source owner.
+         * @throws std::bad_alloc Leaving source buffers unchanged. */
+        BoundPlan(BoundPlan &&other) : skeleton(other.skeleton), memory(other.memory) {
+            clips.swap(other.clips);
+            occurrences.swap(other.occurrences);
+            stateMachines.swap(other.stateMachines);
+        }
+
+        BoundPlan &operator=(BoundPlan &&) noexcept = default;
+
         GraphSkeletonBinding skeleton{};
-        std::vector<AnimationClipDescriptor> clips{};
+        std::vector<AnimationClipDescriptor> clips = std::vector<AnimationClipDescriptor>(std::size_t{0});
         GraphMemoryRequirements memory{};
-        std::vector<GraphInstructionOccurrence> occurrences{};
-        std::vector<GraphStateMachineBinding> stateMachines{};
+        std::vector<GraphInstructionOccurrence> occurrences = std::vector<GraphInstructionOccurrence>(std::size_t{0});
+        std::vector<GraphStateMachineBinding> stateMachines = std::vector<GraphStateMachineBinding>(std::size_t{0});
     };
 
-    /** @brief Captures exact dependencies and produces finite occurrence-to-storage/state accesses. */
+    /** @brief Adds one existing cursor per declared action slot to either complete
+     * binding expansion. */
+    Result<BoundPlan> FinalizeActionPlan(Result<BoundPlan> plan, const AnimationGraphProgram &program,
+                                         const AnimationGraphCompileContext &context);
+
+    /** @brief Captures exact dependencies and produces finite
+     * occurrence-to-storage/state accesses. */
     Result<BoundPlan> Bind(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context);
-    /** @brief Binds canonical dense clip coverage/layer masks and charges immutable composition storage for either expansion path. */
+    /** @brief Binds canonical dense clip coverage/layer masks and charges immutable
+     * composition storage for either expansion path. */
     Result<void> BindWriterComposition(const GraphNodePayload &payload, GraphInstructionOccurrence &occurrence,
                                        GraphMemoryRequirements &memory, const AnimationGraphCompileContext &context);
-    /** @brief Validates typed state sources, identities and transition conditions against exact graph declarations. */
+    /** @brief Validates typed state sources, identities and transition conditions
+     * against exact graph declarations. */
     Result<void> ValidateStateNode(const GraphStateMachineNode &machine, const AnimationGraphData &data, GraphSourceLocation location);
-    /** @brief Expands actual guarded clip/subgraph branches into the same compiler-owned occurrence plan. */
+    /** @brief Expands actual guarded clip/subgraph branches into the same
+     * compiler-owned occurrence plan. */
     Result<BoundPlan> BindStateNodes(const AnimationGraphProgram &program, const AnimationGraphCompileContext &context,
-                                     const GraphSkeletonBinding &skeleton, std::vector<AnimationClipDescriptor> clips);
+                                     const GraphSkeletonBinding &skeleton, std::vector<AnimationClipDescriptor> &&clips);
 }  // namespace Horo::Animation::GraphCompileDetail

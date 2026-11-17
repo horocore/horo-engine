@@ -3,10 +3,19 @@
 #include "Horo/Editor/DesignSystem/DesignTokens.h"
 
 #include <imgui.h>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+namespace Horo {
+    class JobSystem;
+}
+
+namespace Horo::Editor {
+    class EditorDataBus;
+}
 
 namespace Horo::Editor::Theme {
 
@@ -243,13 +252,21 @@ namespace Horo::Editor::Theme {
     // ─────────────────────────────────────────────────────────────────────────
     // Fonts — the three font atlas entries loaded by the application
     // ─────────────────────────────────────────────────────────────────────────
+    /** @brief Host-loaded font family; atlas owns both faces for the GUI session. */
+    struct CodeFontFamily final {
+        std::string name;
+        ImFont *regular{};
+        ImFont *emphasis{};
+    };
+
     struct Fonts {
         ImFont *sans = nullptr;
         ImFont *sansCompact = nullptr;
         ImFont *sansEmphasis = nullptr;
-        ImFont *icon = nullptr;              /**< Material Symbols Outlined for editor UI icons. */
-        ImFont *monospace = nullptr;         /**< Source text at the semantic body size. */
-        ImFont *monospaceEmphasis = nullptr; /**< Emphasized source roles with identical cell metrics. */
+        ImFont *icon = nullptr;                   /**< Material Symbols Outlined for editor UI icons. */
+        ImFont *monospace = nullptr;              /**< Source text at the semantic body size. */
+        std::vector<CodeFontFamily> codeFamilies; /**< Explicit host registry of available atlas families. */
+        ImFont *monospaceEmphasis = nullptr;      /**< Emphasized source roles with identical cell metrics. */
     };
 
     namespace FontPx {
@@ -407,7 +424,8 @@ namespace Horo::Editor::Theme {
         std::string sourcePath; /**< Empty for built-ins; source JSON path for custom themes. */
         std::unordered_map<std::string, ImVec4, ThemeStringHash, std::equal_to<>> colors; /**< ImGui color name to RGBA. */
         DesignSystem::DesignTokens designTokens = DesignSystem::DefaultDesignTokens();    /**< Unscaled theme token baseline. */
-        bool isBuiltIn = true;                                                            /**< Whether the entry ships with Horo. */
+        std::string id;        /**< Stable package contribution identity; empty for legacy file themes and builtins. */
+        bool isBuiltIn = true; /**< Whether the entry ships with Horo. */
     };
 
     /** @brief Returns the list of all discovered themes (built-in + custom). */
@@ -416,8 +434,57 @@ namespace Horo::Editor::Theme {
     /** @brief Scans `~/.horo/themes/` for JSON theme files. Call once at startup. */
     void RefreshThemeList(const char *additionalPath = nullptr);
 
+    /** @brief Publishes a package theme during owner startup; rejects missing/duplicate identities.
+     * @param theme Owned parsed theme. @return Whether publication succeeded.
+     */
+    [[nodiscard]] bool RegisterPackageTheme(ThemeEntry theme);
+    /** @brief Withdraws a package theme on the owner lane; active removal selects the builtin Horo theme. */
+    void UnregisterPackageTheme(std::string_view id);
+    /** @brief Selects a published stable package theme identity. @return False without changing appearance when absent. */
+    [[nodiscard]] bool SelectThemeById(std::string_view id);
+
     /** @brief Loads a single theme JSON from the given path. Returns true on success. */
     [[nodiscard]] bool LoadThemeFromJson(const char *path, ThemeEntry &outEntry);
+
+    /** @brief Installs a validated candidate only if its source still owns the active theme.
+     * @param candidate Theme parsed outside the GUI frame.
+     * @return True if the candidate replaced the active custom theme.
+     * @pre Called on the GUI owner thread before starting an ImGui frame.
+     */
+    [[nodiscard]] bool ApplyReloadedTheme(ThemeEntry candidate);
+
+    /** @brief Invalidates theme consumers after one successful owner-thread publication. */
+    struct ThemeReloadedEvent {
+        static constexpr std::string_view HoroEventTypeName = "horo.editor.theme_reloaded.v1";
+        std::string sourcePath;
+    };
+
+    /** @brief Polls the selected custom theme through one bounded background I/O job.
+     * @details The GUI thread owns selection and installation. Workers own candidate parsing;
+     * shared completion storage is mutex-protected. Shutdown cancels and joins before releasing it.
+     */
+    class LiveReload final {
+    public:
+        /** @brief Borrows session services which must outlive this watcher.
+         * @param jobs Process job scheduler, including its I/O lane.
+         * @param events Editor-thread notification bus.
+         */
+        LiveReload(JobSystem &jobs, EditorDataBus &events);
+        ~LiveReload();
+        LiveReload(const LiveReload &) = delete;
+        LiveReload &operator=(const LiveReload &) = delete;
+        /** @brief Consumes completed candidates and schedules inspection at most twice per second.
+         * @param elapsedSeconds Non-negative owner-thread time since the previous update.
+         * @pre Called before beginning the GUI frame; performs no filesystem I/O.
+         */
+        void Update(double elapsedSeconds);
+        /** @brief Cancels and joins the one outstanding inspection during session teardown. */
+        void Shutdown() noexcept;
+
+    private:
+        struct State;
+        std::unique_ptr<State> state_;
+    };
 
     /** @brief Activates a theme by index into GetThemeList(). */
     void SelectThemeByIndex(int index);

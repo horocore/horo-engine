@@ -321,7 +321,7 @@ namespace Horo::Editor {
         auto serialized = SerializeDocumentOpenKey(opened.Value().document->identity.key);
         REQUIRE(serialized.HasValue());
         CHECK(DeserializeDocumentOpenKey(serialized.Value()).Value() == opened.Value().document->identity.key);
-        auto again = routing.Open({.path = Identity().key.source.Value(), .mode = SourceOpenMode::EmbeddedOnly});
+        auto again = routing.Open({.path = project.path.lexically_relative(project.root), .mode = SourceOpenMode::EmbeddedOnly});
         REQUIRE(again.HasValue());
         CHECK(again.Value().document->identity.instance == opened.Value().document->identity.instance);
     }

@@ -511,3 +511,18 @@ namespace Horo::Extensions::Tests {
 #endif
 
 }  // namespace Horo::Extensions::Tests
+
+namespace Horo::Extensions::Tests {
+    TEST_CASE("Theme contributions require bounded package relative JSON resources", "[Extensions][Manifest][Theme]") {
+        for (const auto resource : {"themes/example.json", "../escape.json", "/absolute.json", "theme.txt", ""}) {
+            const std::string source =
+                std::string{
+                    R"({"id":"example.package","version":"1.0.0","modules":[{"id":"example.module","version":"1.0.0","kind":"native","roles":["editor-presentation"]}],"contributions":[{"type":"editor.theme","id":"example.theme","module":"example.module","resource":")"} +
+                resource + R"("}]})";
+            const auto result = ParseExtensionManifest(source);
+            CHECK(result.HasValue() == (std::string_view{resource} == "themes/example.json"));
+            if (result.HasValue())
+                CHECK(result.Value().contributions.front().resource == resource);
+        }
+    }
+}  // namespace Horo::Extensions::Tests

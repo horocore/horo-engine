@@ -1,4 +1,5 @@
 #pragma once
+#include "CharacterSurfaceInternal.h"
 
 /** @file
  * @brief Target-private canonical sweep evidence, bounded constraints and copied support reduction.
@@ -64,7 +65,11 @@ namespace Horo::Character::Detail {
                                          right.subshape};
         if (const auto ordering = leftKey <=> rightKey; ordering != 0)
             return ordering < 0;
-        return CharacterFastPathOptionalMaterialLess(left.material, right.material);
+        if (CharacterFastPathOptionalMaterialLess(left.material, right.material))
+            return true;
+        if (CharacterFastPathOptionalMaterialLess(right.material, left.material))
+            return false;
+        return left.surface < right.surface;
     }
 
     /** @brief Orders retained contacts by stable identities and copied geometry. */
@@ -101,12 +106,7 @@ namespace Horo::Character::Detail {
                                          right.subshape};
         if (const auto ordering = leftKey <=> rightKey; ordering != 0)
             return ordering < 0;
-        if (left.materialSource != right.materialSource)
-            return left.materialSource < right.materialSource;
-        const auto leftSlot = left.material.slot.Value();
-        const auto rightSlot = right.material.slot.Value();
-        return std::tie(left.material.asset.Bytes(), left.material.assetGeneration, leftSlot) <
-               std::tie(right.material.asset.Bytes(), right.material.assetGeneration, rightSlot);
+        return CharacterFastPathContactPayloadLess(left, right);
     }
 
     /** @brief Reports whether a surface normal is walkable against the controller's explicit up basis. */
@@ -132,8 +132,8 @@ namespace Horo::Character::Detail {
     }
 
     /** @brief Retains one stable contact and reports overflow without allocating or reordering state. */
-    void RetainSweepContact(CharacterMovementResult &result, const CharacterSweepHit &hit,
-                            const CharacterControllerDescriptor &descriptor) {
+    void RetainSweepContact(CharacterMovementResult &result, const CharacterSweepHit &hit, const CharacterControllerDescriptor &descriptor,
+                            std::optional<Math::Vec3> impactVelocity = {}) {
         if (const auto duplicate = std::ranges::find_if(result.contacts.begin(), result.contacts.begin() + result.contactCount,
                                                         [&hit](const CharacterSurfaceContact &contact) {
             return contact.body == hit.body && contact.shape == hit.shape && contact.subshape == hit.subshape &&
@@ -154,6 +154,9 @@ namespace Horo::Character::Detail {
         contact.subshape = hit.subshape;
         contact.materialSource = hit.material.has_value() ? CharacterMaterialSource::Query : CharacterMaterialSource::DescriptorFallback;
         contact.penetrationDepthMeters = std::max(0.0F, descriptor.skinWidthMeters - hit.distanceMeters);
+        contact.surface = hit.surface;
+        contact.surfaceSource = hit.surface ? CharacterSemanticSurfaceSource::Query : CharacterSemanticSurfaceSource::None;
+        contact.impactVelocityMetersPerSecond = impactVelocity;
     }
 
     struct SweepBlockSelection final {
@@ -234,12 +237,21 @@ namespace Horo::Character::Detail {
         bool steep{};
     };
 
+    /** @brief Optional incoming sweep velocity; support probes deliberately have none. */
+    [[nodiscard]] std::optional<Math::Vec3> IncomingSweepVelocity(const SweepMotionState &motion, const Math::Vec3 displacement) noexcept {
+        if (motion.elapsedSeconds <= 0.F)
+            return {};
+        return displacement / motion.elapsedSeconds;
+    }
+
     /** @brief Retains every physically eligible nearest constraint before slope response or cone projection. */
     [[nodiscard]] SweepNormals RetainSweepConstraints(CharacterMovementResult &result, const CharacterSweepProbeResult &evidence,
                                                       const CharacterControllerDescriptor &descriptor, const Math::Vec3 direction,
-                                                      const float nearest, const float walkableCosine, SweepMotionState &motion) {
+                                                      const float nearest, const float walkableCosine, const Math::Vec3 impactDisplacement,
+                                                      SweepMotionState &motion) {
         constexpr float DistanceEpsilon = 1.0e-5F;
         SweepNormals normals;
+        const auto impact = IncomingSweepVelocity(motion, impactDisplacement);
         for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
             const auto &hit = evidence.hits[index];
             if (!IsBlockingSweepHit(hit, descriptor) || hit.distanceMeters > nearest + DistanceEpsilon ||
@@ -248,7 +260,7 @@ namespace Horo::Character::Detail {
             normals.steep = normals.steep || (Math::Dot(hit.normal, descriptor.up) > 0.0F &&
                                               !IsWalkableGroundNormal(hit.normal, descriptor.up, walkableCosine));
             result.collisions = result.collisions | CollisionFlagForNormal(hit.normal, descriptor.up, walkableCosine);
-            RetainSweepContact(result, hit, descriptor);
+            RetainSweepContact(result, hit, descriptor, impact);
             if (normals.count < normals.active.size())
                 normals.active[normals.count++] = hit.normal;
             if (!motion.planes.Add(hit.normal))
@@ -267,13 +279,15 @@ namespace Horo::Character::Detail {
         // retained contact capacity. Never accumulate pressure behind a clipped displacement.
         if (!motion.airbornePass)
             motion.gravityVelocity = {};
+        const auto impactDisplacement = remaining;
         const float travel = std::max(0.0F, nearest - descriptor.skinWidthMeters);
         position += direction * travel;
         remaining -= direction * travel;
         const float slopeRadians = descriptor.maximumSlopeDegrees * Math::Pi / 180.0F;
         const float walkableCosine = std::cos(slopeRadians);
 
-        const auto normals = RetainSweepConstraints(result, evidence, descriptor, direction, nearest, walkableCosine, motion);
+        const auto normals =
+            RetainSweepConstraints(result, evidence, descriptor, direction, nearest, walkableCosine, impactDisplacement, motion);
         for (std::uint32_t index{}; index < normals.count; ++index) {
             remaining = ClipSlopeMotion(remaining, normals.active[index], descriptor, walkableCosine);
             if (motion.airbornePass) {
@@ -309,6 +323,9 @@ namespace Horo::Character::Detail {
         result.groundSlopeDegrees = 0.0F;
         result.groundNormal = up;
         result.groundMaterial.reset();
+        result.surfaceAvailability = CharacterSurfaceAvailability::Unavailable;
+        result.groundSurface.reset();
+        result.groundSurfaceSource = CharacterSemanticSurfaceSource::None;
         result.groundSubshape.reset();
         result.groundMaterialSource = CharacterMaterialSource::Query;
         result.groundPoint = {};
@@ -360,6 +377,9 @@ namespace Horo::Character::Detail {
         result.groundSlopeDegrees = GroundSlopeDegrees(support.normal, descriptor.up);
         result.groundNormal = support.normal;
         result.groundMaterial = support.material.value_or(descriptor.defaultMaterial);
+        result.surfaceAvailability = support.surface ? CharacterSurfaceAvailability::Available : CharacterSurfaceAvailability::Unavailable;
+        result.groundSurface = support.surface;
+        result.groundSurfaceSource = support.surface ? CharacterSemanticSurfaceSource::Query : CharacterSemanticSurfaceSource::None;
         result.groundSubshape = support.subshape;
         result.groundMaterialSource =
             support.material.has_value() ? CharacterMaterialSource::Query : CharacterMaterialSource::DescriptorFallback;
@@ -426,6 +446,8 @@ namespace Horo::Character::Detail {
         CharacterSweepProbeResult evidence = std::move(probe).Value();
         if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
             return valid;
+        if (const auto surface = ValidateCharacterSurfaceProbe(impl.surfaces, evidence); surface.HasError())
+            return Result<void>::Failure(surface.ErrorValue());
         impl.debug.RecordSweep(request, evidence, CharacterDebugProbePurpose::Ground);
         std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);
         if (RetainNearestSteepSupport(evidence, descriptor, result, steepSupport))

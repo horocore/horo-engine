@@ -63,13 +63,13 @@ TEST_CASE("Render capability snapshots keep feature, queue, limit, and format pr
 
 TEST_CASE("Render capability bitsets cover every public capability and reject reserved values", "[unit][runtime][renderer][capabilities]") {
     RenderCapabilitySet capabilities;
-    for (std::uint16_t value = 0; value < RenderCapabilitySet::CapabilityCount; ++value) {
+    for (std::uint32_t value = 0; value < RenderCapabilitySet::CapabilityCount; ++value) {
         capabilities.Enable(static_cast<RenderCapability>(value));
     }
 
     REQUIRE(capabilities.IsValid());
     CHECK(capabilities.bits == RenderCapabilitySet::KnownBits);
-    for (std::uint16_t value = 0; value < RenderCapabilitySet::CapabilityCount; ++value) {
+    for (std::uint32_t value = 0; value < RenderCapabilitySet::CapabilityCount; ++value) {
         CHECK(capabilities.Supports(static_cast<RenderCapability>(value)));
     }
 
@@ -79,11 +79,32 @@ TEST_CASE("Render capability bitsets cover every public capability and reject re
     capabilities.Enable(invalid);
     CHECK(capabilities.bits == RenderCapabilitySet::KnownBits);
 
-    if constexpr (RenderCapabilitySet::CapabilityCount < std::numeric_limits<std::uint16_t>::digits) {
-        const auto firstReservedBit = static_cast<std::uint16_t>(std::uint32_t{1} << RenderCapabilitySet::CapabilityCount);
-        capabilities.bits = static_cast<std::uint16_t>(RenderCapabilitySet::KnownBits | firstReservedBit);
+    if constexpr (RenderCapabilitySet::CapabilityCount < std::numeric_limits<std::uint32_t>::digits) {
+        const auto firstReservedBit = std::uint32_t{1} << RenderCapabilitySet::CapabilityCount;
+        capabilities.bits = RenderCapabilitySet::KnownBits | firstReservedBit;
         CHECK_FALSE(capabilities.IsValid());
     }
+}
+
+TEST_CASE("GPU particle capabilities remain independent without truncating existing feature bits",
+          "[unit][runtime][renderer][capabilities]") {
+    RenderCapabilitySet legacy{0x7FFFU};
+    REQUIRE(legacy.IsValid());
+    CHECK(legacy.Supports(RenderCapability::VfxForwardInstancing));
+    CHECK_FALSE(legacy.Supports(RenderCapability::VfxGpuSimulation));
+    CHECK_FALSE(legacy.Supports(RenderCapability::VfxGpuDraw));
+    CHECK_FALSE(legacy.Supports(RenderCapability::VfxGpuReadback));
+    legacy.Enable(RenderCapability::VfxGpuDraw);
+    CHECK(legacy.Supports(RenderCapability::VfxGpuDraw));
+    CHECK_FALSE(legacy.Supports(RenderCapability::VfxGpuSimulation));
+    CHECK_FALSE(legacy.Supports(RenderCapability::VfxGpuReadback));
+    legacy.Enable(RenderCapability::VfxGpuReadback);
+    CHECK(legacy.Supports(RenderCapability::VfxGpuReadback));
+    CHECK(legacy.Supports(RenderCapability::VfxForwardInstancing));
+    CHECK_FALSE(legacy.Supports(RenderCapability::VfxGpuSimulation));
+    CHECK(RenderCapabilitySet::Bit(static_cast<RenderCapability>(255)) == 0);
+    legacy.bits |= std::uint32_t{1} << 31U;
+    CHECK_FALSE(legacy.IsValid());
 }
 
 TEST_CASE("Null backend publishes a synthetic bounded capability snapshot", "[unit][runtime][renderer][capabilities]") {

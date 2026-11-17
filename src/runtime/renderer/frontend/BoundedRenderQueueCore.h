@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -115,6 +116,33 @@ namespace Horo::Render::detail {
                 ++failedAdmissionCount_;
                 return Result<Id>::Failure(errorFactory(Length));
             }
+        }
+
+        /** @brief Reports actual fixed record-vector capacity payload; owning object bytes are accounted separately. */
+        [[nodiscard]] std::size_t RecordStoragePayloadBytes() const noexcept {
+            return records_.capacity() * sizeof(Record);
+        }
+
+        /** @brief Uses the same monotonic identity and reserved records for no-throw prepared admission without diagnostic allocation. */
+        template <typename RecordFactory>
+        [[nodiscard]] bool TryAdmitPrepared(bool capacity, RecordFactory &&factory, Id &output, QueueAdmissionFailure &failure) noexcept {
+            static_assert(std::is_nothrow_invocable_r_v<Record, RecordFactory, Id>);
+            static_assert(std::is_nothrow_move_constructible_v<Record>);
+            output = {};
+            if (!capacity || records_.size() >= limits_.maximumRequests) {
+                ++failedAdmissionCount_;
+                failure = QueueAdmissionFailure::Capacity;
+                return false;
+            }
+            if (nextId_ == std::numeric_limits<std::uint64_t>::max()) {
+                ++failedAdmissionCount_;
+                failure = QueueAdmissionFailure::Identity;
+                return false;
+            }
+            const Id id{renderer_, nextId_++};
+            records_.push_back(std::forward<RecordFactory>(factory)(id));
+            output = id;
+            return true;
         }
 
         template <typename Request> [[nodiscard]] auto FindIterator(const Request request) {

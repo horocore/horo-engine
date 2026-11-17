@@ -38,6 +38,7 @@ namespace Horo::XR::RuntimeInternal {
         std::uint64_t bindingRevision{};
         std::span<const TrackingPoseEvidence> poses;
         std::span<const XRTrackedActionRecord> actions;
+        std::span<const XRHandJointRecord> handJoints; /**< Optional exact hand sources; default empty for native controllers. */
     };
 
     /** @brief Owner-lane canonical tracking publication, composed with the SAME canonical session lifecycle.
@@ -61,7 +62,7 @@ namespace Horo::XR::RuntimeInternal {
          */
         [[nodiscard]] Result<void> Bind(const XRSessionId &candidate, XRTrackingSnapshotLimits limits, XRWorldOriginRevision origin);
         /** @brief Records an observed head/controller incarnation; replacement revokes the current publication.
-         * @param role Exact observed role, restricted to the initial head/left/right profile.
+         * @param role Exact observed role, head/controller or explicitly planned articulated-hand role.
          * @param state Actual connected/tracking state. Disconnected is retained as explicit neutral evidence.
          * @param capabilities Actual prepared native pose capabilities, never fabricated defaults.
          * @return Runtime-issued generation-safe device ID or typed owner/capacity/invalid failure.
@@ -70,7 +71,7 @@ namespace Horo::XR::RuntimeInternal {
         [[nodiscard]] Result<XRDeviceId> ObserveDevice(XRTrackedDeviceRole role, XRTrackedDeviceState state,
                                                        XRTrackedDeviceCapabilities capabilities);
         /** @brief Joins one complete native observation packet to the SAME canonical device issuer.
-         * @param sources At most five unique head/grip/aim observations from this session's simulation cutoff.
+         * @param sources At most seven unique head/grip/aim/hand-palm observations from this session's simulation cutoff.
          * @return Success or typed source/session/origin/time/capacity failure; invalid input cannot partly replace devices.
          * @post No absent source is invented. Inactivity retains known devices as TrackingLost, never fabricated Disconnected.
          * Previously observed capabilities survive temporary loss; genuine replacements use ObserveDevice's existing generations.
@@ -103,13 +104,18 @@ namespace Horo::XR::RuntimeInternal {
 
     private:
         [[nodiscard]] Result<void> Lane() const;
+        [[nodiscard]] Result<void> AdmitHands() const;
+        [[nodiscard]] Result<void> AdmitJointRecords(std::span<const XRHandJointRecord> joints) const;
+        [[nodiscard]] Result<void> AdmitSources(std::span<const TrackingSourceEvidence> sources) const;
+        [[nodiscard]] Result<void> ValidateDevice(XRTrackedDeviceRole role, XRTrackedDeviceState state,
+                                                  XRTrackedDeviceCapabilities capabilities) const;
         [[nodiscard]] Result<void> PreparePoses(const TrackingPublicationRequest &request);
         XRSessionLifecycle *lifecycle_;
         const std::thread::id lane_{std::this_thread::get_id()};
         XRSessionId session_;
         XRTrackingSnapshotLimits limits_;
         XRWorldOriginRevision origin_;
-        std::array<XRTrackedDeviceRecord, 3> devices_{};
+        std::array<XRTrackedDeviceRecord, 5> devices_{};
         std::size_t deviceCount_{};
         std::vector<XRTrackedPoseRecord> poses_;  // Bounded allocation at Bind, retained through all frame work.
         std::optional<XRTrackingSnapshot> current_;

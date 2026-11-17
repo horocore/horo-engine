@@ -3,16 +3,13 @@
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
 #include "RenderFrontendErrors.h"
 #include "RenderResourceRegistry.h"
+#include "VfxFrontendState.h"
 
 #include <algorithm>
+#include <memory>
 #include <new>
 
 namespace Horo::Render {
-    namespace Detail {
-        /** @brief Inert owner-incarnation marker; no frontend pointer or native authority survives revocation. */
-        struct VfxFrontendState final {};
-    }  // namespace Detail
-
     namespace {
         /** @brief Selects one dedicated instance binding without borrowing mutable frontend metadata. */
         Result<MaterialBufferBinding> VfxInstanceBinding(const MaterialBindingDescriptor &descriptor) {
@@ -25,7 +22,7 @@ namespace Horo::Render {
             if (!binding || binding->offset != 0)
                 return Binding::Failure(MakeError(VfxFrameErrors::InvalidInput));
             for (const auto &other : descriptor.resources)
-                if (&other != &*resource)
+                if (&other != std::to_address(resource))
                     if (const auto *alias = std::get_if<MaterialBufferBinding>(&other.value); alias && alias->buffer == binding->buffer)
                         return Binding::Failure(MakeError(VfxFrameErrors::InvalidInput));
             return Binding::Success(*binding);
@@ -63,8 +60,8 @@ namespace Horo::Render {
             return Result<void>::Failure(currentBuffer.ErrorValue());
         if (currentPipeline.HasError())
             return Result<void>::Failure(currentPipeline.ErrorValue());
-        const auto &current = buffers_[proof.buffer.slot];
-        if (currentBuffer.Value() != proof.bufferInstance || currentPipeline.Value() != proof.pipelineInstance ||
+        if (const auto &current = buffers_[proof.buffer.slot];
+            currentBuffer.Value() != proof.bufferInstance || currentPipeline.Value() != proof.pipelineInstance ||
             current.generation != proof.buffer.generation || current.descriptor.byteSize != proof.byteSize ||
             current.descriptor.usage != RenderBufferUsage::Uniform || current.descriptor.access != RenderBufferAccess::HostVisible)
             return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
@@ -80,7 +77,7 @@ namespace Horo::Render {
         const auto selected = VfxInstanceBinding(descriptor);
         if (selected.HasError())
             return Result<VfxSlotPreparation>::Failure(selected.ErrorValue());
-        const auto binding = selected.Value();
+        const auto &binding = selected.Value();
         if (binding.buffer.owner != resourceRegistry_->Owner() || binding.buffer.slot >= buffers_.size())
             return Result<VfxSlotPreparation>::Failure(MakeError(VfxFrameErrors::InvalidInput));
         // A selected-adapter query may reenter the owner and resize/release registry metadata.
@@ -122,8 +119,7 @@ namespace Horo::Render {
         const auto bufferHandle = proof.buffer;
         if (const auto valid = ValidateVfxResidents(proof); valid.HasError())
             return Preparation::Failure(valid.ErrorValue());
-        const auto &current = buffers_[bufferHandle.slot];
-        if (!current.vfxPreparing || current.vfxClaimed || !current.vfxSlot.expired())
+        if (const auto &current = buffers_[bufferHandle.slot]; !current.vfxPreparing || current.vfxClaimed || !current.vfxSlot.expired())
             return Preparation::Failure(MakeError(VfxFrameErrors::InvalidInput));
         if (!vfxFrontendState_)
             vfxFrontendState_ = std::make_shared<const Detail::VfxFrontendState>();
@@ -145,7 +141,7 @@ namespace Horo::Render {
         const auto selected = InspectVfxSlotMaterial(*material);
         if (selected.HasError())
             return Preparation::Failure(selected.ErrorValue());
-        const auto facts = selected.Value();
+        const auto &facts = selected.Value();
         const auto bufferHandle = facts.residents.buffer;
         if (buffers_[bufferHandle.slot].vfxPreparing)
             return Preparation::Failure(MakeError(VfxFrameErrors::Pending, "This buffer's VFX slot is already being prepared."));
@@ -210,22 +206,54 @@ namespace Horo::Render {
         VfxMutationScope mutation{retained->updating_};
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(VfxFrameErrors::Cancelled));
-        const auto buffer = BackendInstance(retained->buffer_);
-        const auto &descriptor = retained->material_->Descriptor();
+        const auto proof = ResolveVfxFrameResidents(*retained);
+        if (proof.HasError())
+            return Result<void>::Failure(proof.ErrorValue());
+        if (const auto packed = StageVfxFrameParameters(*retained, instances); packed.HasError())
+            return packed;
+        return PublishVfxSlot(retained, proof.Value(), revision, static_cast<std::uint32_t>(instances.size()), cancellation);
+    }
+
+    /** @copydoc RenderFrontend::ResolveVfxFrameResidents */
+    Result<RenderFrontend::VfxResidentProof> RenderFrontend::ResolveVfxFrameResidents(const PreparedVfxFrameSlot &slot) const {
+        using Proof = Result<VfxResidentProof>;
+        const auto buffer = BackendInstance(slot.buffer_);
+        const auto &descriptor = slot.material_->Descriptor();
         const auto pipeline = BackendInstance(descriptor.pipeline);
         if (buffer.HasError())
-            return Result<void>::Failure(buffer.ErrorValue());
+            return Proof::Failure(buffer.ErrorValue());
         if (pipeline.HasError())
-            return Result<void>::Failure(pipeline.ErrorValue());
-        const VfxResidentProof proof{retained->buffer_, descriptor.pipeline,       buffer.Value(),
-                                     pipeline.Value(),  retained->staging_.size(), retained->deviceIncarnation_};
+            return Proof::Failure(pipeline.ErrorValue());
+        const VfxResidentProof proof{slot.buffer_,     descriptor.pipeline,  buffer.Value(),
+                                     pipeline.Value(), slot.staging_.size(), slot.deviceIncarnation_};
         if (const auto valid = ValidateVfxResidents(proof); valid.HasError())
-            return valid;
-        const auto packed = PackVfxShaderParameters(descriptor.layout, instances, retained->staging_);
+            return Proof::Failure(valid.ErrorValue());
+        return Proof::Success(proof);
+    }
+
+    /** @copydoc RenderFrontend::StageVfxFrameParameters */
+    Result<void> RenderFrontend::StageVfxFrameParameters(PreparedVfxFrameSlot &slot,
+                                                         const std::span<const VfxPackedDrawInstance> instances) {
+        const auto packed = PackVfxShaderParameters(slot.material_->Descriptor().layout, instances, slot.staging_);
         if (packed.HasError())
             return Result<void>::Failure(packed.ErrorValue());
-        std::fill(retained->staging_.begin() + packed.Value(), retained->staging_.end(), std::byte{0});
-        return PublishVfxSlot(retained, proof, revision, static_cast<std::uint32_t>(instances.size()), cancellation);
+        std::fill(slot.staging_.begin() + packed.Value(), slot.staging_.end(), std::byte{0});
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RenderFrontend::PublishStagedVfxFrame */
+    Result<void> RenderFrontend::PublishStagedVfxFrame(const VfxPreparedDraw &draw, const VfxDrawOrder &issuer) {
+        if (draw.instanceCount == 0 || draw.instanceCount > MaximumVfxDrawInstances)
+            return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
+        if (const auto admitted = AdmitVfxFrameMutation(draw.slot, draw.revision, &issuer); admitted.HasError())
+            return admitted;
+        // Every other draw's staging remains protected by its own transaction claim during this callback.
+        const auto retained = draw.slot;
+        VfxMutationScope mutation{retained->updating_};
+        const auto proof = ResolveVfxFrameResidents(*retained);
+        if (proof.HasError())
+            return Result<void>::Failure(proof.ErrorValue());
+        return PublishVfxSlot(retained, proof.Value(), draw.revision, draw.instanceCount, {});
     }
 
     /** @copydoc RenderFrontend::PublishVfxSlot */
@@ -246,8 +274,8 @@ namespace Horo::Render {
                                           retained->deviceIncarnation_};
         try {
             const auto uploaded = backend_->UpdateVfxFrame(update);
-            const auto valid = ValidateVfxResidents(proof);
-            if (valid.HasError() || retained->owner_.lock() != vfxFrontendState_ || !vfxFrontendState_) {
+            if (const auto valid = ValidateVfxResidents(proof);
+                valid.HasError() || retained->owner_.lock() != vfxFrontendState_ || !vfxFrontendState_) {
                 retained->published_ = false;
                 if (uploaded.HasError())
                     return uploaded;

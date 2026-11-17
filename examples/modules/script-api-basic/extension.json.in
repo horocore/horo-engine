@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "id": "@EXAMPLE_ID@",
+  "version": "1.0.0",
+  "displayName": "script-api-basic",
+  "modules": [
+    {
+      "id": "@EXAMPLE_ID@.backend",
+      "version": "1.0.0",
+      "kind": "native",
+      "entry": "bin/reference_backend@CMAKE_SHARED_MODULE_SUFFIX@",
+      "roles": [
+        "backend-capability",
+        "headless-tooling",
+        "script-provider"
+      ],
+      "abi": {
+        "major": 1,
+        "minimumMinor": 8
+      },
+      "requiredCapabilities": [
+        "extension.services"
+      ],
+      "exports": [
+        {
+          "id": "@EXAMPLE_ID@.arithmetic",
+          "contract": "horo.examples.checked-arithmetic",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "id": "@EXAMPLE_ID@.script",
+      "version": "1.0.0",
+      "kind": "native",
+      "entry": "bin/reference_script@CMAKE_SHARED_MODULE_SUFFIX@",
+      "roles": [
+        "script-provider"
+      ],
+      "abi": {
+        "major": 1,
+        "minimumMinor": 8
+      },
+      "requiredCapabilities": [
+        "extension.services"
+      ],
+      "dependencies": [
+        "@EXAMPLE_ID@.backend"
+      ],
+      "imports": [
+        {
+          "id": "@EXAMPLE_ID@.backend-import",
+          "service": "@EXAMPLE_ID@.arithmetic",
+          "contract": "horo.examples.checked-arithmetic",
+          "minimumVersion": "1.0.0"
+        }
+      ]
+    }
+  ],
+  "contributions": [
+    {
+      "type": "script.api",
+      "id": "@EXAMPLE_ID@.arithmetic-api",
+      "module": "@EXAMPLE_ID@.backend"
+    }
+  ]
+}

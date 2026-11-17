@@ -4,6 +4,7 @@ from __future__ import annotations
 
 
 import os
+import hashlib
 from pathlib import Path
 import shutil
 # Disposable native fixture runs explicit, validated argv without a shell.
@@ -51,14 +52,14 @@ def test_real_worktree_cache_hit_and_changed_header_miss(tmp_path: Path, monkeyp
     store = tmp_path / "compiler store türkçe"
     monkeypatch.setattr(cache, 'cache_directory', lambda _: store)
 
-    def compile_source(source: Path, build: Path, binding: cache.CacheBinding, stats: Path | None = None) -> None:
+    def compile_source(source: Path, build: Path, binding: cache.CacheBinding, log: Path | None = None) -> None:
         command = ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
                    "-DCMAKE_BUILD_TYPE=Debug", f"-DCMAKE_CXX_COMPILER={compiler}",
                    f"-DCMAKE_CXX_COMPILER_LAUNCHER={binding.launcher}"]
         command = dev._cache_configure_arguments(command, build, source)
         environment = dict(binding.env)
-        if stats:
-            environment["CCACHE_STATSLOG"] = str(stats)
+        if log:
+            environment["CCACHE_LOGFILE"] = str(log)
         run(*command, cwd=source, env=environment)
         run("cmake", "--build", str(build), "--parallel", "1", cwd=source, env=environment)
 
@@ -73,11 +74,19 @@ def test_real_worktree_cache_hit_and_changed_header_miss(tmp_path: Path, monkeyp
     try:
         assert cache.status(feature)["main_commit"] == commit
         build = feature / "build" / "dev-editor"
-        stats = tmp_path / "consumer-stats.log"
+        log = tmp_path / "consumer-hit.log"
+
+        def inventory(directory: Path) -> dict[str, str]:
+            return {str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in directory.rglob("*") if path.is_file()}
         with cache.automatic_cache(feature) as binding:
             assert binding is not None
-            compile_source(feature, build, binding, stats)
-        assert "cache_hit" in stats.read_text()
+            assert binding.env["CCACHE_NOSTATS"] == "1"
+            generation = Path(binding.env["CCACHE_DIR"])
+            before = inventory(generation)
+            compile_source(feature, build, binding, log)
+        assert "Succeeded getting cached result" in log.read_text(encoding="utf-8")
+        assert inventory(generation) == before
         assert run(str(build / "proof"), cwd=feature).strip() == "42"
         (feature / "answer.h").write_text("inline constexpr int answer = 99;\n")
         # Ensure the header is newer than the built object on coarse timestamp filesystems.
@@ -85,7 +94,11 @@ def test_real_worktree_cache_hit_and_changed_header_miss(tmp_path: Path, monkeyp
         os.utime(feature / "answer.h", (stamp, stamp))
         with cache.automatic_cache(feature) as binding:
             assert binding is not None
-            compile_source(feature, build, binding)
+            assert binding.env["CCACHE_NOSTATS"] == "1"
+            miss_log = tmp_path / "consumer-miss.log"
+            compile_source(feature, build, binding, miss_log)
+        assert "running real compiler" in miss_log.read_text(encoding="utf-8").lower()
+        assert inventory(generation) == before
         assert run(str(build / "proof"), cwd=feature).strip() == "99"
         assert cache.status(feature)["main_commit"] == commit
     finally:

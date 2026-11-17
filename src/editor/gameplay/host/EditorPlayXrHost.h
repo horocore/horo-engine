@@ -3,9 +3,11 @@
  * @brief Non-installed explicit application XR bridge for the existing workspace input and Play owners.
  */
 #include "EditorPlayState.h"
+#include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/InputCollection.h"
 
 #include <memory>
+#include <optional>
 
 namespace Horo::Runtime {
     class SceneActivationParticipant;
@@ -15,6 +17,15 @@ namespace Horo::Runtime {
 namespace Horo::Editor {
     class EditorXrSceneSourcePort;
 
+    /** @brief Copied actual consumed simulator view in canonical World coordinates; never authored-camera fallback. */
+    struct EditorPlayXrPreview final {
+        Math::Vec3 position;
+        Math::Quaternion orientation{Math::Quaternion::Identity()};
+        float verticalFovRadians{1.04719755F};
+        float nearPlane{0.01F};
+        float farPlane{1000.0F};
+    };
+
     /** @brief Borrowed selected host; it cannot create contexts/actions/players or commit Input.
      * @details All calls are serialized on the workspace/router owner lane. The application keeps this
      * adapter and its verified native parents alive until after screen destruction and native drain.
@@ -23,6 +34,17 @@ namespace Horo::Editor {
     class IEditorPlayXrHost {
     public:
         virtual ~IEditorPlayXrHost() = default;
+
+        /** @return Explicit selected presentation intent; native implementations preserve SelectedXr by default. */
+        [[nodiscard]] virtual EditorPlayViewSource ViewSource() const noexcept {
+            return EditorPlayViewSource::SelectedXr;
+        }
+
+        /** @return Owned actual consumed simulator view, or empty for native mirror/unavailable evidence. */
+        [[nodiscard]] virtual std::optional<EditorPlayXrPreview> Preview() const noexcept {
+            return {};
+        }
+
         /** @brief Attaches the actual workspace's current context/player-bound collection port.
          * @param input Exact existing InputRouter-issued port, after project profile installation.
          * @param geometry Weak source from the SAME workspace document and mesh owners; no parent lifetime is extended.

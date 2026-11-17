@@ -16,12 +16,15 @@ def test_d3d12_resource_job_builds_and_executes_real_warp_tests() -> None:
     assert "timeout-minutes: 45" in job
     assert "cmake --preset ci-windows-debug -B build/ci-d3d12-resources" in job
     assert "cmake --build build/ci-d3d12-resources --parallel 2" in job
-    assert "HoroD3D12InitializationTests HoroD3D12ResourceTests" in job
+    assert "HoroD3D12InitializationTests HoroD3D12ResourceTests HoroD3D12CommandTests" in job
     assert "ctest --test-dir build/ci-d3d12-resources" in job
     assert "--no-tests=error" in job
     assert "-R '^HoroD3D12InitializationTests::'" in job
     assert "tests/HoroD3D12ResourceTests.exe '[warp]'" in job
     assert "--reporter junit --out build/ci-d3d12-resources/warp.xml" in job
+    assert "Test D3D12 commands on WARP" in job
+    assert "--timeout 90 -R '^HoroD3D12CommandTests::'" in job
+    assert '--output-junit "$GITHUB_WORKSPACE/build/ci-d3d12-resources/commands.xml"' in job
     assert "d3d12-resource-results" in job
     assert "build/ci-d3d12-resources/*.xml" in job
     assert "build/ci-d3d12-resources/Testing/Temporary/LastTest.log" in job

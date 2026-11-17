@@ -15,6 +15,31 @@ namespace Horo::Render {
         std::string json;
     };
 
+    /** @brief Validates a bounded float-register raster interface before invoking native translators.
+     * @details Supports one read-only uniform block of float4/float4x4 fields and literal arrays,
+     * with at most one ordinary sampled texture/sampler pair on OpenGL; Metal admits up to eight independent
+     * ordinary sampled images and eight independent samplers. Multi-resource Metal evidence establishes
+     * exact independent native bindings, not inferred image/sampler usage pairs. This validates logical inputs only;
+     * it provides no native offsets, slots, shader compatibility or execution evidence.
+     */
+    [[nodiscard]] Result<void> ValidateRegisterRasterReflection(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
+                                                                std::span<const ShaderReflectionBindingName> names);
+
+    /** @brief Reconciles same-operation Cross JSON and native raster declarations with the exact authored IDs.
+     * @details Only the bounded register profile is admitted. Placements and packing must be proven by
+     * both reflection and actual native declarations before canonical target normalization.
+     */
+    [[nodiscard]] Result<NormalizedShaderReflection> NormalizeRegisterRasterReflection(const ShaderManifest &manifest,
+                                                                                       const ShaderTargetRequirement &target,
+                                                                                       std::span<const SpirvReflectionStage> stages,
+                                                                                       std::span<const std::string> translations,
+                                                                                       std::span<const ShaderReflectionBindingName> names);
+
+    /** @brief Reads sorted unique actual vertex-output or fragment-input locations for finite GL renaming.
+     * @details Reads bounded exact-entry compiler JSON; never invents authored identities or placements.
+     */
+    [[nodiscard]] Result<std::vector<std::uint32_t>> RegisterRasterVaryingLocations(const SpirvReflectionStage &stage);
+
     /** @brief Normalizes bounded official SPIRV-Cross JSON against exact authored IDs and the existing manifest contract. */
     [[nodiscard]] Result<NormalizedShaderReflection> NormalizeVulkanReflection(const ShaderManifest &manifest,
                                                                                const ShaderTargetRequirement &target,

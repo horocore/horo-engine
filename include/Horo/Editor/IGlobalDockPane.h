@@ -27,7 +27,10 @@ namespace Horo::Editor {
     };
 
     /** @brief Owned extension point implemented by built-in and module-provided global-dock panes. */
-    class IGlobalDockPane {
+    class IGlobalDockPane : public LocalizedGui {
+    protected:
+        using LocalizedGui::LocalizedGui;
+
     public:
         virtual ~IGlobalDockPane() = default;
 

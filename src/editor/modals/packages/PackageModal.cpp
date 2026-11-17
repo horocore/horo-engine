@@ -8,7 +8,7 @@ namespace Horo::Editor {
     /** @copydoc PackageModal::PackageModal */
     PackageModal::PackageModal(const EditorGuiContext &context,
                                std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire)
-        : context_(context), acquire_(std::move(acquire)) {}
+        : EditorModal(kTextScope), context_(context), acquire_(std::move(acquire)) {}
 
     ModalId PackageModal::Id() const {
         return ModalId{0x5041434B41474553ULL};
@@ -68,15 +68,15 @@ namespace Horo::Editor {
     }
 
     const std::string &PackageModal::Text(const char *key) const {
-        return context_.localization.Get("editor", key);
+        return LocalizedText(context_.localization, key);
     }
 
     /** @brief Displays existing evidence only; missing semantic metadata remains unavailable. */
     void PackageModal::DrawPlan() {
-        Ui::Hint(Text("workspace.packages.policy_hint").c_str(), context_.theme.fonts);
+        Ui::Hint(Text("policy_hint").c_str(), context_.theme.fonts);
         const auto plan = session_ ? session_->Plan() : nullptr;
         if (!plan) {
-            Ui::Hint(Text("workspace.packages.plan_unavailable").c_str(), context_.theme.fonts);
+            Ui::Hint(Text("plan_unavailable").c_str(), context_.theme.fonts);
             return;
         }
         if (plan != displayedPlan_) {
@@ -90,12 +90,10 @@ namespace Horo::Editor {
         for (const auto &row : planRows_) {
             Ui::FieldLabel(row.package.c_str(), context_.theme.fonts);
             Ui::Hint(row.version.c_str(), context_.theme.fonts);
-            Ui::Hint(Text(row.verification == Application::PackagePlanVerification::ArchiveVerified ? "workspace.packages.verified"
-                                                                                                    : "workspace.packages.locked")
-                         .c_str(),
+            Ui::Hint(Text(row.verification == Application::PackagePlanVerification::ArchiveVerified ? "verified" : "locked").c_str(),
                      context_.theme.fonts);
         }
-        Ui::Hint(Text("workspace.packages.semantic_unavailable").c_str(), context_.theme.fonts);
+        Ui::Hint(Text("semantic_unavailable").c_str(), context_.theme.fonts);
     }
 
     /** @brief Keeps the original typed cause for structured diagnostics; visible copy remains localized. */
@@ -134,24 +132,24 @@ namespace Horo::Editor {
                                .font = context_.theme.fonts.sans,
                                .style = {.width = Ui::StyleWidth::FillAvailable}});
         };
-        if (button("workspace.packages.restore", session_ && !running))
+        if (button("restore", session_ && !running))
             Record(session_->Submit(generation_, Application::PackageOperationKind::Restore));
-        if (button("workspace.packages.install", session_ && !running))
+        if (button("install", session_ && !running))
             Record(session_->Submit(generation_, Application::PackageOperationKind::Install));
-        Ui::FieldLabel(Text("workspace.packages.package").c_str(), context_.theme.fonts);
+        Ui::FieldLabel(Text("package").c_str(), context_.theme.fonts);
         static_cast<void>(Ui::InputTextControl("##PackageIdentity", package_, 256, context_.theme.fonts));
-        Ui::FieldLabel(Text("workspace.packages.descriptor").c_str(), context_.theme.fonts);
+        Ui::FieldLabel(Text("descriptor").c_str(), context_.theme.fonts);
         static_cast<void>(Ui::InputTextControl("##PackageDescriptor", descriptor_, 1024, context_.theme.fonts));
-        if (button("workspace.packages.activate", session_ && !running && !package_.empty() && !descriptor_.empty()))
+        if (button("activate", session_ && !running && !package_.empty() && !descriptor_.empty()))
             Activate();
-        if (button("workspace.packages.disable", session_ && !running))
+        if (button("disable", session_ && !running))
             Record(session_->Submit(generation_, Application::PackageOperationKind::Disable));
-        if (button("workspace.packages.cancel", running)) {
+        if (button("cancel", running)) {
             if (const auto cancelled = session_->Cancel(generation_); cancelled.HasError())
                 error_ = cancelled.ErrorValue();
         }
         if (operation) {
-            Ui::Hint(Text(running ? "workspace.packages.running" : "workspace.packages.terminal").c_str(), context_.theme.fonts);
+            Ui::Hint(Text(running ? "running" : "terminal").c_str(), context_.theme.fonts);
             if (operation->diagnostic)
                 DrawDiagnostic(*operation->diagnostic);
         }
@@ -159,7 +157,7 @@ namespace Horo::Editor {
 
     /** @brief Shows bounded machine-readable causes alongside localized guidance, without private paths or error text. */
     void PackageModal::DrawDiagnostic(const Error &error) const {
-        Ui::ErrorText(Text("workspace.packages.operation_failed").c_str(), context_.theme.fonts);
+        Ui::ErrorText(Text("operation_failed").c_str(), context_.theme.fonts);
         const Error *cause = &error;
         for (unsigned depth = 0; cause && depth < 8; ++depth, cause = cause->cause.Get()) {
             if (cause->code.Value().size() <= 256)
@@ -169,7 +167,7 @@ namespace Horo::Editor {
 
     ModalFrameResult PackageModal::Draw() {
         Ui::ScopedModalShell shell({.id = "PackageManagement",
-                                    .title = Text("workspace.packages.title").c_str(),
+                                    .title = Text("title").c_str(),
                                     .requestedSize = {640, 720},
                                     .viewportPadding = 32,
                                     .minimumWidth = 280,
@@ -184,9 +182,9 @@ namespace Horo::Editor {
         DrawActions();
         if (error_) {
             DrawDiagnostic(*error_);
-            Ui::Hint(Text("workspace.packages.recovery_hint").c_str(), context_.theme.fonts);
+            Ui::Hint(Text("recovery_hint").c_str(), context_.theme.fonts);
         }
-        if (Ui::Button({.label = Text("workspace.packages.retry").c_str(),
+        if (Ui::Button({.label = Text("retry").c_str(),
                         .variant = Ui::ButtonVariant::Secondary,
                         .font = context_.theme.fonts.sans,
                         .style = {.width = Ui::StyleWidth::FillAvailable}}))
@@ -194,7 +192,7 @@ namespace Horo::Editor {
         ImGui::PopTextWrapPos();
         ImGui::EndChild();
         shell.BeginFooter({16, 12});
-        const bool close = Ui::Button({.label = Text("workspace.packages.close").c_str(),
+        const bool close = Ui::Button({.label = Text("close").c_str(),
                                        .variant = Ui::ButtonVariant::Secondary,
                                        .font = context_.theme.fonts.sans,
                                        .style = {.width = Ui::StyleWidth::FillAvailable}});

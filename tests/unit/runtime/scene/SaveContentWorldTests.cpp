@@ -11,6 +11,26 @@ using namespace Horo::Runtime;
 
 using namespace Horo::Runtime::SceneContentWorldTest;
 
+TEST_CASE("Unknown degraded-world policies leave capture readiness available without invoking adapters", "[scene][save][content]") {
+    WorldFixture fixture;
+    REQUIRE(fixture.barrier->Request(91, fixture.generation).HasValue());
+    const SaveContentCaptureRequest request{.phase = RuntimePhase::CommitDeferredLifecycleChanges,
+                                            .generation = fixture.generation,
+                                            .capturedState = SceneTest::Id<CapturedStateId>(22),
+                                            .epoch = {.value = 41}};
+    auto rejected =
+        fixture.world->CaptureAtSafePoint(*fixture.barrier, request, fixture.participants, static_cast<SaveDegradedWorldPolicy>(255));
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == SaveErrors::RestoreContextInvalid.code.Value());
+    CHECK(fixture.adapter->calls == 0);
+    auto admitted = fixture.world->CaptureAtSafePoint(*fixture.barrier, request, fixture.participants, SaveDegradedWorldPolicy::Reject);
+    REQUIRE(admitted.HasValue());
+    CHECK(admitted.Value().barrier.state == SaveBarrierState::Captured);
+    REQUIRE(admitted.Value().capture);
+    CHECK(fixture.adapter->calls == 1);
+    REQUIRE(fixture.barrier->Acknowledge(91).HasValue());
+}
+
 TEST_CASE("Content-bound real Scene publication and safe-point captures recompute schema2 state and survive live retirement",
           "[scene][save][content]") {
     WorldFixture fixture;
@@ -122,10 +142,11 @@ namespace {
 
 namespace {
     /** @brief Proves owned fallback preparation may throw before changing admission, callbacks or the published root. */
-    void RequireCapturePreflightFailure(WorldFixture &fixture, const SceneRuntimeId scene) {
+    void RequireCapturePreflightFailure(WorldFixture &fixture, const SceneRuntimeId scene, const std::size_t successfulAllocations) {
+        INFO(successfulAllocations);
         bool preflightThrew{};
         {
-            Horo::Tests::AllocationProbe::ScopedFailure fail;
+            Horo::Tests::AllocationProbe::ScopedFailure fail{successfulAllocations};
             try {
                 (void)fixture.world->CaptureAtSafePoint(*fixture.barrier,
                                                         SaveContentCaptureRequest{.phase = RuntimePhase::CommitDeferredLifecycleChanges,
@@ -148,15 +169,18 @@ TEST_CASE("Capture preparation allocation failure preserves the published world 
     WorldFixture fixture;
     const auto scene = fixture.service->ActiveScene()->RuntimeId();
     REQUIRE(fixture.barrier->Request(91, fixture.generation).HasValue());
-    RequireCapturePreflightFailure(fixture, scene);
     std::size_t fallbackRequests{};
     {
         Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
-        auto fallback = Result<SaveContentCaptureOutcome>::Failure(MakeError(SaveErrors::CanonicalCodecAllocationFailed));
+        auto fallback = Result<SaveContentCaptureOutcome>::CompleteInPlace(MakeError(SaveErrors::CanonicalCodecAllocationFailed),
+                                                                           [](Result<SaveContentCaptureOutcome> &) noexcept {
+        });
         fallbackRequests = measurement.Snapshot().requests;
         REQUIRE(fallback.HasError());
     }
     REQUIRE(fallbackRequests > 0);
+    for (std::size_t index = 0; index < fallbackRequests; ++index)
+        RequireCapturePreflightFailure(fixture, scene, index);
     bool rejected{};
     bool typedFailure{};
     std::size_t allocationsAfterFailure{};

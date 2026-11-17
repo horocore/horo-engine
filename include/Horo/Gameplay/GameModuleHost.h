@@ -5,6 +5,7 @@
  * @brief Validated ownership and unload ordering for one project gameplay dynamic library.
  */
 
+#include "Horo/Gameplay/BehaviorRestore.h"
 #include "Horo/Gameplay/GameModule.h"
 #include "Horo/Gameplay/PersistenceInstallation.h"
 #include "Horo/Gameplay/ReplicationRegistration.h"
@@ -32,6 +33,14 @@ namespace Horo::Gameplay {
         std::shared_ptr<GameplayNavigationContext> navigation; /**< Exact generation navigation anchor. */
         std::shared_ptr<GameplayAiContext> ai;                 /**< AI anchor; each loaded generation receives a fresh child. */
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact independently revocable UI anchor. */
+    };
+
+    /** @brief Owned inert projection of one frozen durable registration; contains no source callback or module authority.
+     * @details Values may outlive unload. Acquiring a source still requires the original admitted module's existing APIs.
+     */
+    struct GameplayPersistenceDeclaration final {
+        Runtime::GameplayPersistenceDescriptor descriptor;
+        PersistenceOwnerIdentity ownerIdentity;
     };
 
     /** @brief Explicit immutable load configuration; requires both values so legacy brace calls stay unambiguous. */
@@ -72,6 +81,11 @@ namespace Horo::Gameplay {
         [[nodiscard]] const std::string &BuildFingerprint() const noexcept;
         /** @brief Returns the complete generated descriptor revision loaded from the module. */
         [[nodiscard]] std::uint64_t DescriptorRevision() const noexcept;
+        /** @brief Acquires generated nodes with exact native-generation callback/code-image admission.
+         * @return Owned immutable metadata and revocable factories, or typed retired/off-owner failure.
+         * Leases block native reload/finalization until all executor cleanup and factory destruction complete.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionNodes() const;
         /** @brief Returns the artifact path actually loaded by the platform library loader. */
         [[nodiscard]] const std::filesystem::path &LoadedArtifactPath() const noexcept;
         /** @brief Returns the frozen descriptor registry while the module is loaded. */
@@ -92,6 +106,12 @@ namespace Horo::Gameplay {
         [[nodiscard]] const SystemRegistry &Systems() const noexcept;
         /** @brief Returns frozen native replication registrations and generation-safe lease acquisition. */
         [[nodiscard]] const ReplicationRegistrationRegistry &Replication() const noexcept;
+        /** @brief Copies the existing frozen persistence inventory at an owner-thread quiescent composition boundary.
+         * @return Bounded owned descriptors/owner identities, or typed wrong-thread/retired/allocation failure.
+         * @details No callbacks run and no source/native authority is included. Copies remain safe after unload; they do not
+         * keep the module admitted. Resolve each selected source through AcquirePersistence/AcquireInstalledPersistence.
+         */
+        [[nodiscard]] Result<std::vector<GameplayPersistenceDeclaration>> PersistenceDeclarations() const;
         /** @brief Acquires one declared durable adapter while exact-generation runtime admission remains open.
          * @param participant Stable identity registered through GameRegistrationContext::persistence.
          * @return Pinned adapter for explicit SaveParticipationClient registration, or typed missing/retiring error.
@@ -106,6 +126,12 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] Result<Runtime::GameplayPersistenceInstallation> AcquireInstalledPersistence(
             const Runtime::SaveParticipantId &participant) const;
+        /** @brief Binds the actual registered behavior source to an exact inactive runtime of this same native generation.
+         * @param participant Existing registered durable owner. @param target Privately issued candidate binding.
+         * @return One installed adapter with real optional source/materialization capabilities, or original typed failure.
+         */
+        [[nodiscard]] Result<Runtime::GameplayPersistenceInstallation> AcquireInstalledPersistence(
+            const Runtime::SaveParticipantId &participant, BehaviorPersistenceTarget target) const;
         /** @brief Returns frozen event callbacks; acquisition pins this exact native module generation. */
         [[nodiscard]] const GameEventRegistry &Events() const noexcept;
         /** @brief Returns active project-scoped services in provider-first order. */
@@ -153,6 +179,14 @@ namespace Horo::Gameplay {
 
     private:
         friend class GameModuleHost;
+        static void AttachPersistenceBinder(const std::shared_ptr<Impl> &, const Runtime::SaveParticipantId &,
+                                            Runtime::GameplayPersistenceAdapter &);
+        [[nodiscard]] static Result<Runtime::GameplayPersistenceInstallation> BindPersistenceCandidate(std::shared_ptr<Impl>,
+                                                                                                       const Runtime::SaveParticipantId &,
+                                                                                                       BehaviorPersistenceTarget);
+        [[nodiscard]] static Result<Runtime::GameplayPersistenceInstallation> BuildPersistenceInstallation(std::shared_ptr<Impl>,
+                                                                                                           std::size_t index,
+                                                                                                           BehaviorPersistenceTarget);
         std::shared_ptr<Impl> impl_;
     };
 

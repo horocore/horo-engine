@@ -8,6 +8,12 @@
 
 namespace Horo::Application::CharacterSceneProductTest {
     namespace {
+        /** @brief Preserves the original typed product-start failure before requiring genuine admission. */
+        void RequirePlayStarted(Result<void> result) {
+            INFO((result.HasError() ? result.ErrorValue().code.Value() + ": " + result.ErrorValue().message : "Editor Play started"));
+            REQUIRE(result.HasValue());
+        }
+
         /** @brief Pumps only actual asynchronous Scene lifecycle progress, never a Physics/gameplay fixed tick. */
         void FinishPlayPreparation(Editor::EditorPlaySessionController &play) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
@@ -45,7 +51,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         REQUIRE(registry.Freeze().HasValue());
         Editor::EditorPlaySessionController play;
         const Editor::SceneDocumentSnapshot authored{{1}, {1}, fixture.source.objects};
-        REQUIRE(play.Start(authored, registry, BindProjectFactory(fixture, Physics::PhysicsRuntimeMode::Canonical)).HasValue());
+        RequirePlayStarted(play.Start(authored, registry, BindProjectFactory(fixture, Physics::PhysicsRuntimeMode::Canonical)));
         FinishPlayPreparation(play);
         REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
         REQUIRE(play.SceneView());
@@ -71,7 +77,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         play.Stop();
         CHECK_FALSE(play.SceneView());
         CHECK_FALSE(play.CollisionReceipt());
-        REQUIRE(play.Start(authored, registry, BindProjectFactory(fixture, Physics::PhysicsRuntimeMode::Canonical)).HasValue());
+        RequirePlayStarted(play.Start(authored, registry, BindProjectFactory(fixture, Physics::PhysicsRuntimeMode::Canonical)));
         FinishPlayPreparation(play);
         REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
         CHECK(play.SceneView()->RuntimeId().value > first.value);

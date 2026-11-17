@@ -76,7 +76,7 @@ Scene pins exact artifact resources until the final owning group entity retires.
 
 ## Initialization and cooked format migration
 
-HPFB version 2 adds at most 64 sorted, nonzero `PrefabInitializationId`
+Current HPFB version3 retains at most64 sorted, nonzero `PrefabInitializationId`
 declarations. IDs are a distinct type from binding/property identities. The
 cooker selects an existing behavior member and field occurrence, a closed value
 kind, required/optional semantics, and finite inclusive numeric bounds. Targets
@@ -92,7 +92,7 @@ behavior attachment IDs are freshly allocated from the bounded Scene domain,
 with exhaustion checked before publication; template occurrence IDs are not
 reused as live attachment IDs.
 
-Version 1 cooked artifacts must be recooked and republished in a complete catalog
+Version1 and version2 cooked artifacts must be recooked and republished in a complete catalog
 generation. They return `UnsupportedCookedVersion`; there is no silent fallback,
 byte reinterpretation, source parsing or in-place authoring migration. Include
 the cooked format version and complete initialization declaration table in cook
@@ -147,3 +147,43 @@ only the admitted service and the existing derived-client factory can create the
 key. Scope IDs advance after successful allocation, preserving allocation-failure
 admission behavior. The consumer also verifies that the former unkeyed constructor
 arguments cannot create a capability.
+
+## Durable prefab Save and Load
+
+Recook runtime prefabs as HPFB3 before durable spawning. The actual source cooker
+now records the genuine root revision. Procedural templates without that evidence
+remain usable for ephemeral spawning and reject durable capture with a typed error.
+HPFB2 has no runtime fallback. Full envelope digest/target and member provenance
+must match the saved creation recipe; source revision alone is insufficient.
+
+`PrefabSpawnRequest::overrides` accepts explicit complete typed intent through the
+shared runtime-safe baseline/delta implementation. Existing ordinary requests keep
+their placement semantics. Initialization IDs and external binding slots remain
+separate from property/component deltas. Saves store root TRS once as placement.
+
+Install the actual Save inventory before the first structural prefab queue.
+Pending unsubmitted OnCreate loads may already exist; already committed ephemeral
+groups cannot acquire invented durable identities retroactively. Dynamic metadata
+reserves all identities and aggregate payload before queue admission, and only the
+real successful structural receipt publishes existence or tombstones.
+
+After Load, retain the stable `SavePrefabInstanceId`, then use the current admitted
+`GameplayPrefabContext::FindPersistent` to obtain a fresh ordinary handle. The
+stable creator comes from host-admitted module routing, not the request or an old
+process scope. A foreign creator, stale member incarnation or tombstoned occurrence
+fails closed. Pre-Load contexts/handles stay revoked, and Despawn still follows the
+existing real Scene transaction.
+
+Rebuild all native Gameplay consumers against the next coordinated Gameplay SDK revision selected by the host. The
+C++ request/context/persistence contracts changed; old-layout module images must
+be rejected before construction. The external C ABI is unchanged. Host registration
+must assign the new public headers and explicit SaveApi dependency to their exact
+owning targets; broad include roots and duplicate override implementations are not
+migration substitutes.
+
+Private restore command migration also adds service-issued aggregate group admission,
+command-only dense external-binding slots, and exact qualified occurrence partitions.
+Ordinary public group bounds/lineage and published reference variant categories stay
+the same. Only the actual Scene restore capability can admit aggregate partitions;
+Scene validates the sole Bundle inventory and issues private occurrence ownership
+pins, keeping independent Despawn semantics when instances share asset leases.

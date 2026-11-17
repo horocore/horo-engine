@@ -109,6 +109,7 @@ namespace Horo::Extensions {
         std::string type;         /**< Typed extension point, for example `asset.importer`. */
         std::string id;           /**< Stable globally unique contribution identity. */
         std::string owningModule; /**< Owning module identity from this manifest. */
+        std::string resource;     /**< Package-relative JSON resource; required only for editor.theme contributions. */
     };
 
     /** @brief Represents a parsed extension.json manifest. */

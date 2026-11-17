@@ -10,7 +10,10 @@
 namespace Horo::Editor {
     class HierarchyPanel final : public IWorkspacePanel {
     public:
-        HierarchyPanel() = default;
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace"};
+
+        HierarchyPanel() : IWorkspacePanel(kTextScope) {}
 
         [[nodiscard]] std::string GetId() const override {
             return "horo.hierarchy";

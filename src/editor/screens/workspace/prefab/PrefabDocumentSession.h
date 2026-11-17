@@ -5,6 +5,7 @@
 #include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Editor/SemanticDocumentHistory.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
+#include "Horo/Prefab/PrefabValueOverrides.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include <cstddef>
@@ -64,6 +65,9 @@ namespace Horo::Editor {
         };
 
     public:
+        /** @brief Adopt an accepted next-operation project policy without changing source, history or active stage.
+         * @param limits Complete validated profile. @return Current-source validation outcome; saves/edits use the new profile. */
+        [[nodiscard]] Result<void> UpdateLimitProfile(const Prefab::PrefabLimitProfile &limits);
         /** @brief Internal factory construction; only Open can create the admission key.
          * @param root Canonical project root. @param path Canonical source. @param identity Shared identity.
          * @param owner Workspace incarnation. @param limits Validated policy. */
@@ -92,6 +96,15 @@ namespace Horo::Editor {
         /** @brief Applies one semantic transaction. @param fence Exact source admission. @param edit Source-owned edit.
          * @return Success or zero-mutation validation/history/stale error. */
         [[nodiscard]] Result<void> Execute(const PrefabDocumentFence &fence, const PrefabSourceEdit &edit);
+        /** @brief Prepares a variant or exact nested-placement delta through the canonical resolver, then records one source transaction.
+         * @param fence Exact owner/document revision. @param placement Null selects variant, otherwise an existing nested placement.
+         * @param sources Actual captured dependency authority. @param edit Typed assignment/revert/rebase or component topology intent.
+         * @param cancellation Cooperative preparation token. @return Complete accepted source or zero document/history mutation. */
+        [[nodiscard]] Result<void> ExecuteLayer(const PrefabDocumentFence &fence, std::optional<Prefab::LocalObjectId> placement,
+                                                const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                const std::variant<Prefab::PrefabValueEdit, Prefab::PrefabComponentEdit> &edit,
+                                                const CancellationToken &cancellation = {});
+
         /** @brief Replays exact semantic values. @param fence Current source admission. @param redo Replay direction.
          * @return Success or zero-mutation rejection. */
         [[nodiscard]] Result<void> Replay(const PrefabDocumentFence &fence, bool redo);
@@ -160,15 +173,33 @@ namespace Horo::Editor {
         /** @brief Materializes bounded parser characters from typed bytes; allocation failure is a typed error. */
         [[nodiscard]] static Result<std::string> ReadSourceText(std::span<const std::byte> bytes);
 
+        /** @brief Prepares source history inside the public layer operation's allocation-failure boundary. */
+        [[nodiscard]] Result<void> ExecuteLayerImpl(const PrefabDocumentFence &fence, std::optional<Prefab::LocalObjectId> placement,
+                                                    const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                    const std::variant<Prefab::PrefabValueEdit, Prefab::PrefabComponentEdit> &edit,
+                                                    const CancellationToken &cancellation);
+
+        /** @brief Exact reversible source-layer state; only canonical preparation constructs a forward replacement. */
+        struct LayerReplacement final {
+            std::optional<Prefab::LocalObjectId> placement;
+            Prefab::PrefabSourceRevision revision;
+            std::optional<Prefab::PrefabValueOverrideSet> overrides;
+        };
+
+        using Edit = std::variant<RenamePrefabObject, TransformPrefabObject, LayerReplacement>;
+        [[nodiscard]] Result<LayerReplacement> Layer(std::optional<Prefab::LocalObjectId> placement) const;
+        [[nodiscard]] Result<Edit> Before(const Edit &edit) const;
+        [[nodiscard]] Result<std::size_t> EditBytes(const Edit &before, const Edit &after) const;
+        [[nodiscard]] Result<void> CommitEdit(const Edit &edit);
+
         struct Delta final {
-            Prefab::LocalObjectId object;
-            PrefabSourceEdit before;
-            PrefabSourceEdit after;
+            Edit before;
+            Edit after;
             std::size_t bytes{};
         };
 
         [[nodiscard]] Result<void> Admit(const PrefabDocumentFence &fence) const;
-        [[nodiscard]] Result<std::shared_ptr<const Prefab::PrefabDocument>> Apply(const PrefabSourceEdit &edit) const;
+        [[nodiscard]] Result<std::shared_ptr<const Prefab::PrefabDocument>> Apply(const Edit &edit) const;
         [[nodiscard]] Result<void> Replace(const Assets::AssetSourceCapture &capture);
         /** @brief Installs only a complete definition, retaining the old stage on preparation rejection. */
         [[nodiscard]] Result<void> InstallStage(Runtime::RuntimeSceneDefinition definition, Runtime::SceneRuntimeId id,

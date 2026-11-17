@@ -59,8 +59,9 @@ namespace Horo::Audio {
         UnderrunReporting reporting;
         std::size_t chargedBytes{};
 
-        explicit AudioStreamState(AudioStreamRequest value, const std::size_t bytes)
-            : request(std::move(value)),
+        // Copy bounded decoder facts inside admission's allocation boundary before publishing any slot.
+        explicit AudioStreamState(const AudioStreamRequest &value, const std::size_t bytes)
+            : request(value),
               ring(static_cast<std::size_t>(request.ringFrames) * request.decoder.outputFormat.layout.orderedChannels.size()),
               decodeBuffer(static_cast<std::size_t>(request.decoder.maximumFramesPerDecode) *
                            request.decoder.outputFormat.layout.orderedChannels.size()),

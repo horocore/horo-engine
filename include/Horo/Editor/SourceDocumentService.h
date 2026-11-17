@@ -252,6 +252,16 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceSaveResult> Save(const SourceSaveRequest &request, DurableFileSystem &files,
                                                     CancellationToken cancellation = {});
+        /** @brief Advances owner-lane source autosave; admits at most one ordinary conflict-checked save per call.
+         * @param elapsedSeconds Finite positive host delta; invalid deltas perform no work.
+         * @param delaySeconds Zero disables/reset timers; otherwise clamped to 1..300 seconds after the latest revision.
+         * @param files Host-composed durable filesystem, used only at a due save transition.
+         * @return No due work, or the exact save result. Failures retain dirty text and retry after at least 30 seconds.
+         * @details Uses the same revision fence, exact disk-base checks and publication path as explicit Save.
+         * No overwrite consent is synthesized. Timers die with each document session. Runs on the owner lane.
+         */
+        [[nodiscard]] std::optional<Result<SourceSaveResult>> UpdateAutosave(float elapsedSeconds, int delaySeconds,
+                                                                             DurableFileSystem &files);
         /** @brief Saves every dirty admitted document in stable admission order, retaining per-document failures.
          * @param files Host-composed filesystem. @param cancellation Remaining items return cancellation after request.
          * @return Bounded result list or admission/allocation failure before any save starts.

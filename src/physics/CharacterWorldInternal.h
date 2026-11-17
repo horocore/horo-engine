@@ -116,13 +116,15 @@ namespace Horo::Character {
     struct CharacterWorld::Impl final {  // NOSONAR(cpp:S1820) -- the flat hot-state layout keeps command and lifecycle data contiguous.
 
         Impl(const CharacterWorldDescriptor &owner, const CharacterWorldSettings &worldSettings,
-             Detail::CharacterControllerRegistry<Detail::CharacterControllerRecord> &&controllerRegistry)
-            : descriptor(owner), settings(worldSettings), controllers(std::move(controllerRegistry)), fastPath(settings),
-              controllerGenerations(settings.Values().capacities.maximumControllers),
+             Detail::CharacterControllerRegistry<Detail::CharacterControllerRecord> &&controllerRegistry,
+             Physics::PhysicsSurfaceWorldBinding surfaceBinding)
+            : descriptor(owner), settings(worldSettings), surfaces(std::move(surfaceBinding)), controllers(std::move(controllerRegistry)),
+              fastPath(settings), controllerGenerations(settings.Values().capacities.maximumControllers),
               closedSequences(settings.Values().capacities.maximumControllers), debug(settings) {}
 
         CharacterWorldDescriptor descriptor;
         CharacterWorldSettings settings;
+        Physics::PhysicsSurfaceWorldBinding surfaces;
         Detail::CharacterControllerRegistry<Detail::CharacterControllerRecord> controllers;
         Detail::CharacterFastPathStorage fastPath;
         std::vector<std::uint32_t> controllerGenerations;

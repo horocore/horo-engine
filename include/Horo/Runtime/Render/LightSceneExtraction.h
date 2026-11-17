@@ -4,6 +4,7 @@
  * @brief Scene-owner adapter producing canonical renderer light values without backend policy.
  */
 #include "Horo/Runtime/Render/LightCulling.h"
+#include "Horo/Runtime/Render/SceneColorEncoding.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 namespace Horo::Render {
@@ -12,7 +13,18 @@ namespace Horo::Render {
         Runtime::SceneRuntimeId scene;
         std::uint64_t structuralRevision{};
         std::size_t count{};
+        SceneColorSourcePolicy sourceColorPolicy; /**< Explicit host interpretation used before conversion to canonical AP1. */
     };
+
+    /** @brief Formats one enabled authored light using an already resolved proper world pose.
+     * @param authored Borrowed component; no values or references are retained.
+     * @param worldPosition Finite world position in world units.
+     * @param worldDirection Scale-independent direction from the hierarchy's proper rotations.
+     * @param sourceColorPolicy Explicit authored RGB interpretation, never inferred from the backend.
+     * @return Owned validated canonical AP1 light value or typed component/math validation failure.
+     */
+    [[nodiscard]] Result<RenderLight> BuildRenderLightValue(const Runtime::LightComponent &authored, Math::Vec3 worldPosition,
+                                                            Math::Vec3 worldDirection, SceneColorSourcePolicy sourceColorPolicy);
 
     /**
      * @brief Extracts enabled Directional, Point and Spot components into reusable caller scratch.
@@ -27,10 +39,12 @@ namespace Horo::Render {
      * @param scene Current borrowed scene, whose owner must outlive the call.
      * @param maximumLights Admitted finite light count, bounded by LightCullingBudget::HardMaximumLights.
      * @param scratch Reusable storage with at least maximumLights entries.
+     * @param sourceColorPolicy Explicit authored RGB interpretation recorded with the extracted table.
      * @param cancellation Host operation cancellation observed while scanning and resolving ancestors.
      * @return Exact table count and scene provenance, or original scene/math and typed light failures.
      */
     [[nodiscard]] Result<ExtractedLightTable> ExtractSceneLights(Runtime::RuntimeSceneView scene, std::uint32_t maximumLights,
                                                                  std::span<IdentifiedRenderLight> scratch,
+                                                                 SceneColorSourcePolicy sourceColorPolicy,
                                                                  const CancellationToken &cancellation = {});
 }  // namespace Horo::Render

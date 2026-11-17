@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -11,6 +13,21 @@
 
 namespace Horo::Runtime {
     namespace {
+        // Checked hash storage allocates iterator bookkeeping inside noexcept.
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+        template <class Key, class Value, class Hash = std::hash<Key>> using ValidationMap = std::map<Key, Value>;
+        template <class Key, class Hash = std::hash<Key>> using ValidationSet = std::set<Key>;
+#else
+        template <class Key, class Value, class Hash = std::hash<Key>> using ValidationMap = std::unordered_map<Key, Value, Hash>;
+        template <class Key, class Hash = std::hash<Key>> using ValidationSet = std::unordered_set<Key, Hash>;
+#endif
+
+        /** @brief Reserves bucket capacity only for the compiled index representation. */
+        template <class Index> void ReserveValidationIndex(Index &index, const std::size_t count) {
+            if constexpr (requires { index.reserve(count); })
+                index.reserve(count);
+        }
+
         [[nodiscard]] Result<void> Failure(const ErrorCodeDescriptor &descriptor, std::string message) {
             return Result<void>::Failure(MakeError(descriptor, std::move(message)));
         }
@@ -28,8 +45,8 @@ namespace Horo::Runtime {
         [[nodiscard]] bool IsValidProfileSet(const std::span<const Navigation::NavigationAgentProfileId> profiles) {
             if (profiles.empty() || profiles.size() > MaximumNavigationSurfaceProfiles)
                 return false;
-            std::unordered_set<std::uint64_t> identities;
-            identities.reserve(profiles.size());
+            ValidationSet<std::uint64_t> identities;
+            ReserveValidationIndex(identities, profiles.size());
             return std::ranges::all_of(profiles, [&identities](const Navigation::NavigationAgentProfileId profile) {
                 return profile.IsValid() && identities.insert(profile.Value()).second;
             });
@@ -40,7 +57,7 @@ namespace Horo::Runtime {
             return std::ranges::find(surface.profiles, profile) != surface.profiles.end();
         }
 
-        using NavigationSurfaceMap = std::unordered_map<std::uint64_t, const NavigationSurfaceComponent *>;
+        using NavigationSurfaceMap = ValidationMap<std::uint64_t, const NavigationSurfaceComponent *>;
 
         [[nodiscard]] Result<void> ValidateSurfaces(const std::span<const NavigationSceneComponentView> components,
                                                     NavigationSurfaceMap &surfaces) {
@@ -58,7 +75,7 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateUniqueIdentity(Result<void> componentValidation, const std::uint64_t identity,
-                                                          std::unordered_set<std::uint64_t> &identities,
+                                                          ValidationSet<std::uint64_t> &identities,
                                                           const std::string_view conflictMessage) {
             if (componentValidation.HasError())
                 return componentValidation;
@@ -68,8 +85,7 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateSurfaceReference(Result<void> componentValidation, const std::uint64_t identity,
-                                                            const Navigation::SurfaceId surface,
-                                                            std::unordered_set<std::uint64_t> &identities,
+                                                            const Navigation::SurfaceId surface, ValidationSet<std::uint64_t> &identities,
                                                             const NavigationSurfaceMap &surfaces, const std::string_view conflictMessage,
                                                             const std::string_view missingMessage) {
             if (Result<void> valid = ValidateUniqueIdentity(std::move(componentValidation), identity, identities, conflictMessage);
@@ -81,7 +97,7 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateRegion(const NavigationRegionComponent &component, const NavigationSurfaceMap &surfaces,
-                                                  std::unordered_set<std::uint64_t> &identities) {
+                                                  ValidationSet<std::uint64_t> &identities) {
             return ValidateSurfaceReference(ValidateNavigationRegionComponent(component), component.id.Value(), component.surface,
                                             identities, surfaces,
                                             "Navigation region identities must be unique within one committed Scene snapshot.",
@@ -89,7 +105,7 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateModifier(const NavigationModifierComponent &component, const NavigationSurfaceMap &surfaces,
-                                                    std::unordered_set<std::uint64_t> &identities) {
+                                                    ValidationSet<std::uint64_t> &identities) {
             return ValidateSurfaceReference(ValidateNavigationModifierComponent(component), component.id.Value(), component.surface,
                                             identities, surfaces,
                                             "Navigation modifier identities must be unique within one committed Scene snapshot.",
@@ -97,7 +113,7 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateLink(const NavigationLinkComponent &component, const NavigationSurfaceMap &surfaces,
-                                                std::unordered_set<std::uint64_t> &identities) {
+                                                ValidationSet<std::uint64_t> &identities) {
             if (Result<void> valid =
                     ValidateUniqueIdentity(ValidateNavigationLinkComponent(component), component.id.Value(), identities,
                                            "Navigation link identities must be unique within one committed Scene snapshot.");
@@ -131,12 +147,12 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<void> ValidateReferences(const std::span<const NavigationSceneComponentView> components,
                                                       const NavigationSurfaceMap &surfaces) {
-            std::unordered_set<std::uint64_t> regionIds;
-            std::unordered_set<std::uint64_t> modifierIds;
-            std::unordered_set<std::uint64_t> linkIds;
-            regionIds.reserve(components.size());
-            modifierIds.reserve(components.size());
-            linkIds.reserve(components.size());
+            ValidationSet<std::uint64_t> regionIds;
+            ValidationSet<std::uint64_t> modifierIds;
+            ValidationSet<std::uint64_t> linkIds;
+            ReserveValidationIndex(regionIds, components.size());
+            ReserveValidationIndex(modifierIds, components.size());
+            ReserveValidationIndex(linkIds, components.size());
             for (const NavigationSceneComponentView component : components) {
                 if (component.region != nullptr) {
                     if (Result<void> valid = ValidateRegion(*component.region, surfaces, regionIds); valid.HasError())
@@ -169,8 +185,8 @@ namespace Horo::Runtime {
             }
             if (count == 0)
                 return Result<void>::Success();
-            std::unordered_map<std::uint64_t, Navigation::NavigationFilterId> filters;
-            filters.reserve(count);
+            ValidationMap<std::uint64_t, Navigation::NavigationFilterId> filters;
+            ReserveValidationIndex(filters, count);
             for (const auto &view : components) {
                 if (auto valid = ValidateNavigationSourceBindings(view.sources, view.colliders); valid.HasError())
                     return valid;
@@ -273,7 +289,7 @@ namespace Horo::Runtime {
                                                    const std::span<const NavigationModifierComponent> modifiers,
                                                    const std::span<const NavigationLinkComponent> links,
                                                    const std::span<const NavigationAgentComponent> agents) {
-        std::vector<NavigationSceneComponentView> views;
+        std::vector<NavigationSceneComponentView> views(std::size_t{0});
         views.reserve(surfaces.size() + regions.size() + modifiers.size() + links.size() + agents.size());
         for (const NavigationSurfaceComponent &surface : surfaces)
             views.push_back({.surface = &surface});
@@ -291,7 +307,7 @@ namespace Horo::Runtime {
     /** @copydoc ValidateNavigationSceneComponentViews */
     Result<void> ValidateNavigationSceneComponentViews(const std::span<const NavigationSceneComponentView> components) {
         NavigationSurfaceMap surfaces;
-        surfaces.reserve(components.size());
+        ReserveValidationIndex(surfaces, components.size());
         if (Result<void> valid = ValidateSurfaces(components, surfaces); valid.HasError())
             return valid;
         if (auto valid = ValidateReferences(components, surfaces); valid.HasError())

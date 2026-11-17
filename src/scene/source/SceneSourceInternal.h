@@ -29,6 +29,7 @@ namespace Horo::SceneSource::Detail {
     inline constexpr std::uint32_t kSceneSchemaVersion = 1;
     inline constexpr std::uint32_t kCharacterSceneSchemaVersion = 2;
     inline constexpr std::uint32_t kNavigationSourceSceneSchemaVersion = 3;
+    inline constexpr std::uint32_t kAnimationSceneSchemaVersion = 4;
     inline constexpr std::uintmax_t kMaximumProjectMetadataBytes = 64U * 1024U;
     inline constexpr std::uintmax_t kMaximumSceneBytes = 16U * 1024U * 1024U;
     inline constexpr std::uintmax_t kMaximumRecoveryBytes = 20U * 1024U * 1024U;
@@ -95,6 +96,10 @@ namespace Horo::SceneSource::Detail {
         const Json &value,
         Runtime::PhysicsValidationDetail::BodyReferenceDomain domain = Runtime::PhysicsValidationDetail::BodyReferenceDomain::Scene);
     [[nodiscard]] Result<std::vector<Gameplay::BehaviorComponent>> ParseBehaviors(const Json &value);
+
+    /** @brief Strict inert animation binding codec shared by Scene, cooked Scene and prefab projection. */
+    [[nodiscard]] Result<Animation::AnimationAuthoringComponent> ParseAnimationComponent(const Json &value);
+    void AppendAnimationComponent(WireJson &value, const Animation::AnimationAuthoringComponent &component);
 
     [[nodiscard]] WireJson ComponentsJson(const SceneObjectComponentSet &components);
     void AppendPhysicsComponents(WireJson &value, const SceneObjectComponentSet &components);

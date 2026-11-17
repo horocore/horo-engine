@@ -1,0 +1,20 @@
+{
+  "name": "Editor Development",
+  "colors": {
+    "WindowBg": "#0a0c0f",
+    "ChildBg": "#12151a",
+    "PopupBg": "#181c21",
+    "Text": "#e8e4d9",
+    "Border": "#2a2f37",
+    "CheckMark": "#04a5fc"
+  },
+  "tokens": {
+    "radii": { "control": 8, "card": 6, "modal": 8 },
+    "componentSizes": {
+      "m": { "minimumHeight": 36, "paddingX": 14, "paddingY": 7 }
+    },
+    "layoutSpacing": { "cardPadding": 18, "gridGap": 14, "propertyRowGap": 8, "bodyPaddingX": 28, "bodyPaddingY": 24, "sidebarPaddingX": 18, "sidebarPaddingY": 24 },
+    "layoutSizes": { "welcomeSideWidth": 280, "modalWidth": 900, "modalHeight": 680 },
+    "motion": { "reduceMotion": false, "hover": 0.12 }
+  }
+}

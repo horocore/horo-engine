@@ -9,6 +9,11 @@ import subprocess  # nosec B404 - fixed repository installer and local command f
 
 import pytest
 
+pytestmark = pytest.mark.skipif(
+    os.name != "posix",
+    reason="Linux CI installer tests require native POSIX shell/shebang execution and executable command shims",
+)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = ROOT / ".github/scripts/install_linux_build_dependencies.sh"

@@ -10,21 +10,27 @@ endif()
 file(READ "${REVISION_FILE}" revision LIMIT 128)
 string(STRIP "${revision}" revision)
 set(script "${SOURCE_ROOT}/tests/fixtures/gameplay_physics/PhysicsContext.horo_script")
+if(NOT DEFINED PROCESS_TIMEOUT)
+    set(PROCESS_TIMEOUT 30)
+endif()
+if(NOT PROCESS_TIMEOUT MATCHES "^[1-9][0-9]*$" OR PROCESS_TIMEOUT GREATER 120)
+    message(FATAL_ERROR "Launch fixture timeout must be between 1 and 120 seconds")
+endif()
 
 function(expect_launch expected count kind first second third permission)
     # Quote each fixed argument independently: empty identities must reach the real parser.
     if(count EQUAL 4)
         execute_process(COMMAND "${ENGINE}" --run-network-product standalone 2
             "${kind}" "${first}" "${second}" "${third}"
-            RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 30)
+            RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT "${PROCESS_TIMEOUT}")
     elseif(count EQUAL 6)
         execute_process(COMMAND "${ENGINE}" --run-network-product standalone 2
             "${kind}" "${first}" "${second}" "${third}" "${permission}" extra
-            RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 30)
+            RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT "${PROCESS_TIMEOUT}")
     else()
         execute_process(COMMAND "${ENGINE}" --run-network-product standalone 2
             "${kind}" "${first}" "${second}" "${third}" "${permission}"
-            RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 30)
+            RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT "${PROCESS_TIMEOUT}")
     endif()
     if(NOT "${result}" STREQUAL "${expected}")
         message(FATAL_ERROR "Launch ${kind} returned ${result}, expected ${expected}: ${output}${error}")
@@ -64,7 +70,7 @@ expect_launch(3 5 --game-script "${script}" "${script}.meta" "" grant)
 # Independent prefab capability policy must not widen the existing Physics permission suffix.
 function(expect_prefab_launch expected)
     execute_process(COMMAND "${ENGINE}" --run-network-product standalone 2 ${ARGN}
-        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 30)
+        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT "${PROCESS_TIMEOUT}")
     if(NOT "${result}" STREQUAL "${expected}")
         message(FATAL_ERROR "Prefab permission returned ${result}, expected ${expected}: ${output}${error}")
     endif()

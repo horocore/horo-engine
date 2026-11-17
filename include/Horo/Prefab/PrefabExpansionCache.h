@@ -29,15 +29,20 @@ namespace Horo::Prefab {
             return revision_;
         }
 
-        [[nodiscard]] bool operator==(const PrefabExpansionCacheKey &) const noexcept = default;
+        [[nodiscard]] bool operator==(const PrefabExpansionCacheKey &other) const noexcept {
+            return root_ == other.root_ && instance_ == other.instance_ && revision_ == other.revision_ && policy_ == other.policy_ &&
+                   sources_ == other.sources_;
+        }
 
     private:
         friend class PrefabExpansionCache;
 
         PrefabExpansionCacheKey(Assets::AssetId root, PrefabInstanceId instance, PrefabResolutionRevision revision,
-                                PrefabProjectPolicy policy, std::vector<Sha256Digest> sources)
-            : root_(root), instance_(instance), revision_(std::move(revision)), policy_(policy), sources_(std::move(sources)) {}
+                                PrefabProjectPolicy policy, std::vector<Sha256Digest> sources, const PrefabMetricHandles &metrics)
+            : metrics_(metrics), root_(root), instance_(instance), revision_(std::move(revision)), policy_(policy),
+              sources_(std::move(sources)) {}
 
+        PrefabMetricHandles metrics_; /**< Observation generation is deliberately excluded from semantic equality. */
         Assets::AssetId root_;
         PrefabInstanceId instance_;
         PrefabResolutionRevision revision_;
@@ -112,6 +117,8 @@ namespace Horo::Prefab {
         };
 
         [[nodiscard]] bool IsOwner() const noexcept;
+        /** @brief Internal deduplication lookup; never reports another external cache hit/miss. */
+        [[nodiscard]] std::shared_ptr<const EffectivePrefabCandidate> FindUnobserved(const PrefabExpansionCacheKey &key) const;
         /** @brief Measures full key/candidate ownership before any cache mutation. */
         [[nodiscard]] Result<std::size_t> MeasureEntry(const PrefabExpansionCacheKey &key, const EffectivePrefabCandidate &candidate) const;
         /** @brief Checks exact complete candidate identity before memoization. */

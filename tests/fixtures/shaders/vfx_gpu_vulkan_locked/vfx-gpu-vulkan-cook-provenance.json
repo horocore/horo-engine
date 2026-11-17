@@ -1,0 +1,54 @@
+{
+  "catalogDigest": "sha256:7531a5d6c5273218bfaf27a90bd0c77bc8a767f8fefd3f938ef36c450576d313",
+  "files": {
+    "shader-host-catalog.json": "sha256:7531a5d6c5273218bfaf27a90bd0c77bc8a767f8fefd3f938ef36c450576d313",
+    "shader-host-catalog.signature.json": "sha256:dfd6bd9e9784b434c428fa615d69c76cb6b16720201452d39658acd70266a688",
+    "shaders/runtime/vfx-gpu-draw-vulkan.horoshdr": "sha256:5bae90d1ef542f2bb90a524fb56826e015b1093d26383ebf9752fe96f0603859",
+    "shaders/runtime/vfx-gpu-draw-vulkan.reflection.json": "sha256:701902b9b66120b5d9c6a1cf018802cf5bbb28894a8a08fa3b3a2e64f1c0bea9",
+    "shaders/runtime/vfx-simulation-vulkan.horoshdr": "sha256:a7c4dffd59c1d371bfa92c16d7700c022b0525d675662db39df35d21d0589256",
+    "shaders/runtime/vfx-simulation-vulkan.reflection.json": "sha256:93e3f379b09a2d6b58acf91256f724bee6883c53342859bc6ed6de758c17851c"
+  },
+  "host": "macos-arm64",
+  "kind": "informational-integrity",
+  "programs": [
+    {
+      "compiledKey": "sha256:4dbcc2efb3e579b0e174efc86502a48701736f28937fb9f3d75b77bd1b7b3105",
+      "cookedKey": "sha256:c7db4c31b50b88aaf799b0e0ae6b6af687d1a1839b77f36a095d02559995b849",
+      "payloadDigest": "sha256:a7c4dffd59c1d371bfa92c16d7700c022b0525d675662db39df35d21d0589256",
+      "prefix": "shaders/runtime/vfx-simulation-vulkan",
+      "sourceDigest": "sha256:8e57a76ccfdfd633ff7157e8bc86d8f7168f4573b39dd9019e1e9c27bb98b7ba",
+      "sourceIdentity": "horo/runtime/vfx_simulation.hlsl",
+      "sourceRevision": 1
+    },
+    {
+      "compiledKey": "sha256:e53902ff634767c2458912a2a0cf4065d26c087324f9330bf4c6a0b4f83baf6a",
+      "cookedKey": "sha256:5b455410be869496b868ec3079152538c1eb5f22332a0c2a437b7e351b7fa879",
+      "payloadDigest": "sha256:5bae90d1ef542f2bb90a524fb56826e015b1093d26383ebf9752fe96f0603859",
+      "prefix": "shaders/runtime/vfx-gpu-draw-vulkan",
+      "sourceDigest": "sha256:dd36b30f3d5ae49a47805b2a75dce0c7ceaa277668641f89f3872e9d97d8e6d0",
+      "sourceIdentity": "horo/runtime/vfx_gpu_draw.hlsl",
+      "sourceRevision": 1
+    }
+  ],
+  "schema": 1,
+  "tools": [
+    {
+      "approvedExecutableDigest": "sha256:b0bf9b20b9425d8e80c39bd4e3c5ce5dbdf26be7973f2122d2ea50de8a8d8a4e",
+      "buildDigest": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "release": "lunarg-1.4.363.0.dxc-1.9.0.5512",
+      "role": 0
+    },
+    {
+      "approvedExecutableDigest": "sha256:42938d66ae3703537376116c11abed84639a9bc2c02c1f360058287320603ad6",
+      "buildDigest": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "release": "lunarg-1.4.363.0.spirv-tools-2026.4",
+      "role": 1
+    },
+    {
+      "approvedExecutableDigest": "sha256:2adca603ef473f3b292784c1020c61b597a1545c981b2ed128e3de04feb46ad2",
+      "buildDigest": "sha256:163431e0203c8215286a17cf393643ce6b951f77d1b4f74ab30821a1f0beb09b",
+      "release": "lunarg-1.4.363.0.spirv-cross-f11ba9f0",
+      "role": 2
+    }
+  ]
+}

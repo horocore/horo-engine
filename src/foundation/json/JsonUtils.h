@@ -47,6 +47,12 @@ namespace Horo::Foundation {
          * construction use the same pinned JSON parser. Input must remain unchanged through both passes.
          */
         template <std::forward_iterator Iterator> [[nodiscard]] Json Parse(Iterator first, Iterator last);
+        /** @brief Validates syntax, duplicate keys and depth through the SAME pinned no-DOM SAX implementation.
+         * @param first Beginning of unchanged input. @param last End of unchanged input.
+         * @return Complete syntactic/guard validity; no DOM is constructed and malformed input is not replayed.
+         * @throws std::bad_alloc When bounded lexer/guard storage cannot be admitted.
+         */
+        template <std::forward_iterator Iterator> [[nodiscard]] bool Validate(Iterator first, Iterator last);
 
         [[nodiscard]] bool HasDuplicate() const noexcept {
             return duplicate_;
@@ -160,11 +166,16 @@ namespace Horo::Foundation {
         bool tooDeep_{};
     };
 
+    /** @copydoc JsonParseGuard::Validate */
+    template <std::forward_iterator Iterator> bool JsonParseGuard::Validate(const Iterator first, const Iterator last) {
+        SaxValidation validation{*this};
+        return Json::sax_parse(first, last, &validation) && !HasDuplicate() && !IsTooDeep();
+    }
+
     /** @copydoc JsonParseGuard::Parse */
     template <std::forward_iterator Iterator> Json JsonParseGuard::Parse(const Iterator first, const Iterator last) {
-        SaxValidation validation{*this};
         // A syntax failure is replayed by ordinary parsing below to preserve its exception type and position.
-        static_cast<void>(Json::sax_parse(first, last, &validation));
+        static_cast<void>(Validate(first, last));
         if (HasDuplicate() || IsTooDeep())
             return Json(Json::value_t::discarded);
         return Json::parse(first, last);

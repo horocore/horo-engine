@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <numbers>
+#include <vector>
 
 namespace Horo::Audio::Detail {
     namespace {

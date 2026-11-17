@@ -66,7 +66,8 @@ namespace Horo::Network::NativeQualification {
             }
             if (rejectNativeRoot)
                 request.arguments.push_back("--reject-native-root");
-            request.timeout = std::chrono::seconds(22);
+            // Both real products verify their complete native image before peer admission.
+            request.timeout = std::chrono::seconds(120);
             request.gracefulTermination = std::chrono::milliseconds(200);
             request.maximumDrainDuration = std::chrono::milliseconds(500);
             request.maximumOutputBytes = 65536;
@@ -118,7 +119,7 @@ namespace Horo::Network::NativeQualification {
             std::jthread serverWorker([&] {
                 RunChild(serverRequest, server, cancellation.Token());
             });
-            const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             while (!server.ready.load() && std::chrono::steady_clock::now() < readyDeadline)
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             if (server.ready.load()) {

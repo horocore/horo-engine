@@ -1,5 +1,6 @@
 #include "../../helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "../support/AssetImportTestSupport.h"
+#include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/EditorDataBus.h"
@@ -25,10 +26,30 @@ namespace {
 
     using ScopedTempDirectory = ::Horo::Tests::ScopedAssetImportTempDirectory;
 
+    /** @brief Test composition retains real storage and shared writer authority for the complete modal lifetime. */
+    class NativeTestCommitter final : public IAssetImportCommitter {
+    public:
+        explicit NativeTestCommitter(AssetRegistry *registry) : mutations_(files_), committer_(mutations_, files_, registry) {}
+
+        Result<void> Commit(const PreparedAssetImportBatch &batch, IAssetIdGenerator &ids, const CancellationToken &token) override {
+            capturedRoot = batch.projectRoot;
+            return committer_.Commit(batch, ids, token);
+        }
+
+        std::filesystem::path capturedRoot;
+
+    private:
+        NativeDurableFileSystem files_;
+        ProjectMutationCoordinator mutations_;
+        Application::ProjectAssetImportCommitter committer_;
+    };
+
     /** @brief Test double that overrides Draw for headless testing. */
     class TestAssetImportModal : public AssetImportModal {
     public:
-        using AssetImportModal::AssetImportModal;
+        TestAssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs, std::shared_ptr<const AssetImporterCatalogSnapshot> catalog,
+                             AssetImportModalServices services = {})
+            : AssetImportModal(fonts, jobs, std::move(catalog), WithStorage(std::move(services))) {}
 
         ModalFrameResult Draw() override {
             if (!m_preparedCalled && m_prepareFn) {
@@ -40,6 +61,13 @@ namespace {
 
         std::function<void()> m_prepareFn;
         bool m_preparedCalled{false};
+
+    private:
+        static AssetImportModalServices WithStorage(AssetImportModalServices services) {
+            if (!services.committer)
+                services.committer = std::make_shared<NativeTestCommitter>(services.assetRegistry);
+            return services;
+        }
     };
 
     /** @brief Checks that picker calls retain the native-dialog input context. */
@@ -307,8 +335,9 @@ TEST_CASE("AssetImportModal presets are scoped by importer contribution and exte
     const Theme::Fonts fonts{};
     JobSystem jobs;
     TestAssetImportModal modal{fonts, jobs, PublishCatalog(PresetContribution())};
+    const ScopedTempDirectory project{"horo-import-presets"};
     CancellationToken cancellation;
-    REQUIRE((modal.BeginImport({"/tmp/test/cube.obj", "/tmp/test/character.fbx"}, "/tmp/test", cancellation).HasValue()));
+    REQUIRE((modal.BeginImport({project.Path() / "cube.obj", project.Path() / "character.fbx"}, project.Path(), cancellation).HasValue()));
 
     auto &objItem = modal.MutableSnapshot().items[0];
     ConfigureFastPreset(objItem);
@@ -325,6 +354,85 @@ TEST_CASE("AssetImportModal presets are scoped by importer contribution and exte
     REQUIRE((objItem.destinationFolder.empty()));
     REQUIRE((objItem.settings["settings.optimize"] == "false"));
     REQUIRE((objItem.settings["settings.sourceTag"] == "second-source"));
+}
+
+TEST_CASE("AssetImportModal captures a selected project alias before genuine native publication", "[native][asset-import-root]") {
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    const ScopedTempDirectory project{"horo-import-canonical-root"};
+    const auto canonicalRoot = std::filesystem::canonical(project.Path());
+    std::filesystem::create_directory(canonicalRoot / "assets");
+    const auto alias = canonicalRoot / "selected-root";
+    std::error_code error;
+    std::filesystem::create_directory_symlink(canonicalRoot, alias, error);
+    if (error)
+        SKIP("Directory symlink creation is unavailable to this test process.");
+    const auto source = canonicalRoot / "cube.obj";
+    {
+        std::ofstream file(source);
+        file << "mesh";
+    }
+    auto storage = std::make_shared<NativeTestCommitter>(nullptr);
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), {.committer = storage}};
+    modal.SetProjectRoot(alias);
+    modal.AddSourceFiles({source});
+    REQUIRE(modal.Snapshot().items.size() == 1);
+    auto &item = modal.MutableSnapshot().items[0];
+    item.destinationFolder = "assets";
+    item.subfolderByType = 2;
+    REQUIRE(modal.ImportSingleItem(0, {}).HasValue());
+    REQUIRE(storage->capturedRoot == canonicalRoot);
+    REQUIRE(std::filesystem::exists(canonicalRoot / "assets/cube.horoasset"));
+}
+
+TEST_CASE("AssetImportModal invalid selected roots cannot discover a substitute project", "[native][asset-import-root]") {
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    const ScopedTempDirectory project{"horo-import-invalid-root"};
+    const auto source = project.Path() / "cube.obj";
+    {
+        std::ofstream file(source);
+        file << "mesh";
+    }
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution())};
+    modal.AddSourceFiles({source});
+    REQUIRE(modal.Snapshot().items.empty());
+    modal.SetProjectRoot(project.Path() / "missing-project");
+    modal.AddSourceFiles({source});
+    REQUIRE(modal.Snapshot().items.empty());
+    REQUIRE(modal.BeginImport({source}, project.Path() / "missing-project", {}).HasError());
+    REQUIRE(modal.BeginImport({}, {}).HasError());
+    REQUIRE_FALSE(std::filesystem::exists(project.Path() / "assets/cube.horoasset"));
+}
+
+TEST_CASE("AssetImportModal unavailable storage reports one terminal failed operation", "[native][asset-import-root]") {
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    OperationStore operations{4, 4};
+    const ScopedTempDirectory project{"horo-import-unavailable-storage"};
+    const auto source = project.Path() / "cube.obj";
+    {
+        std::ofstream file(source);
+        file << "mesh";
+    }
+    AssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), {.operationStore = &operations}};
+    REQUIRE(modal.BeginImport({source}, project.Path(), {}).HasValue());
+    const auto running = operations.SnapshotIfChanged(0);
+    REQUIRE(running.has_value());
+    REQUIRE(running->operations.size() == 1);
+    REQUIRE(running->operations.front().state == OperationState::Running);
+    REQUIRE(modal.ImportSingleItem(0, {}).HasError());
+    const auto terminal = operations.SnapshotIfChanged(running->revision);
+    REQUIRE(terminal.has_value());
+    REQUIRE(terminal->operations.size() == 1);
+    REQUIRE(terminal->operations.front().state == OperationState::Failed);
+    REQUIRE(terminal->operations.front().phase == "commit");
+    REQUIRE(terminal->operations.front().error.has_value());
+    REQUIRE(terminal->operations.front().error->code.Value() == "assets.source.authority");
+    REQUIRE_FALSE(modal.IsImportComplete());
+    REQUIRE(modal.ImportSingleItem(0, {}).HasError());
+    REQUIRE_FALSE(operations.SnapshotIfChanged(terminal->revision).has_value());
+    REQUIRE_FALSE(std::filesystem::exists(project.Path() / "assets/cube.horoasset"));
 }
 
 TEST_CASE("AssetImportModal applies an absolute Content Browser destination", "[native]") {

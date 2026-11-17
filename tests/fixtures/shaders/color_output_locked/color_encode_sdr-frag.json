@@ -1,0 +1,44 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "PSMain",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_8" : {
+            "name" : "type.ColorEncodeParameters",
+            "members" : [
+                {
+                    "name" : "OutputControl",
+                    "type" : "vec4",
+                    "offset" : 0
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "out.var.SV_Target0",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "DisplayLinearColor",
+            "set" : 0,
+            "binding" : 0
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_8",
+            "name" : "type.ColorEncodeParameters",
+            "block_size" : 16,
+            "set" : 0,
+            "binding" : 1
+        }
+    ]
+}

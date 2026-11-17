@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Result.h"
 
 #include <array>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -51,17 +52,30 @@ namespace Horo::Assets {
     /** @brief Validated stable asset type identifier such as core.mesh. */
     class AssetTypeId final {
     public:
+        /** @brief Creates an empty identifier. @throws std::bad_alloc When checked-library storage cannot be allocated. */
         AssetTypeId() = default;
+        /** @brief Copies the owned identifier. @param other Identifier to copy. @throws std::bad_alloc When storage is unavailable. */
+        AssetTypeId(const AssetTypeId &other) = default;
+        /** @brief Copies the owned identifier. @param other Identifier to copy. @return This identifier.
+         * @throws std::bad_alloc When storage is unavailable. */
+        AssetTypeId &operator=(const AssetTypeId &other) = default;
+        /** @brief Transfers the identifier after preparing empty destination storage. @param other Identifier to transfer.
+         * @post On allocation failure other is unchanged; on success other is empty.
+         * @throws std::bad_alloc When checked-library storage cannot be allocated. */
+        AssetTypeId(AssetTypeId &&other);
+        /** @brief Transfers an identifier into existing destination storage. @param other Identifier to transfer.
+         * @return This identifier. */
+        AssetTypeId &operator=(AssetTypeId &&other) noexcept = default;
         /** @brief Parses a canonical lowercase dotted identifier. @param value Text to validate. @return Validated type ID
-         * or a typed format error. */
+         * or a typed format error. @throws std::bad_alloc When owned identifier storage cannot be allocated. */
         [[nodiscard]] static Result<AssetTypeId> Parse(std::string_view value);
         /** @brief Returns the canonical identifier text. @return Borrowed text owned by this value. */
         [[nodiscard]] const std::string &Value() const noexcept;
         [[nodiscard]] auto operator<=>(const AssetTypeId &) const noexcept = default;
 
     private:
-        explicit AssetTypeId(std::string value) : value_(std::move(value)) {}
+        explicit AssetTypeId(std::string_view value) : value_(value) {}
 
-        std::string value_;
+        std::string value_ = std::string(std::size_t{0}, char{});
     };
 }  // namespace Horo::Assets

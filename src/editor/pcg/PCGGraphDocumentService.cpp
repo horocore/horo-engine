@@ -151,7 +151,8 @@ namespace Horo::Editor {
         if (state_->operationActive)
             return Failure<PCGDocumentSnapshot>(Busy);
         if (!asset.IsValid() || !identity.IsValid() || identity.key.kind != DocumentKind::PCGGraph ||
-            path != state_->root / identity.key.source.Value())
+            path !=
+                state_->root / std::filesystem::path{std::u8string{identity.key.source.Value().begin(), identity.key.source.Value().end()}})
             return Failure<PCGDocumentSnapshot>(Invalid);
         for (const auto &entry : state_->documents) {
             if (entry.asset == asset)

@@ -14,6 +14,9 @@ namespace Horo::Editor {
      * @details All calls belong to the GUI owner thread. The workspace revokes the weak lifetime before controller destruction. */
     class SourceDocumentCloseModal final : public EditorModal {
     public:
+        /** @brief Catalog scope shared by this surface and its view helpers. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.documents"};
+
         /** @brief Captures an exact source revision and borrowed controller guarded by its workspace lifetime.
          * @param context Shared GUI services. @param controller Source lifecycle owner.
          * @param lifetime Revocable workspace lifetime. @param request Frozen source revision.

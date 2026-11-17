@@ -1,5 +1,6 @@
 #include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Foundation/Platform.h"
+#include "PlatformFileInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -21,6 +22,7 @@
 
 namespace Horo {
     namespace {
+        using PlatformFileInternal::NativeApiPath;
         using Bytes = std::vector<std::uint8_t>;
 
         /** @brief Rejects ambiguous input before native access; the host retains parent-namespace authority. */
@@ -55,7 +57,7 @@ namespace Horo {
         public:
             explicit ReadHandle(const std::filesystem::path &path)
 #if defined(_WIN32)
-                : value_(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                : value_(CreateFileW(NativeApiPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                                      FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr))
 #else
                 : value_(open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC))
@@ -175,12 +177,12 @@ namespace Horo {
                     return stop;
                 cursor /= component;
 #if defined(_WIN32)
-                if (const auto attributes = GetFileAttributesW(cursor.c_str());
+                if (const auto attributes = GetFileAttributesW(NativeApiPath(cursor).c_str());
                     attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U)
                     return Result<void>::Failure(MakeError(FileStorageErrors::UnsafeObject));
 #endif
                 std::error_code error;
-                const auto status = std::filesystem::symlink_status(cursor, error);
+                const auto status = std::filesystem::symlink_status(NativeApiPath(cursor), error);
                 if (status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory))
                     return Result<void>::Success();
                 if (error)
@@ -213,7 +215,7 @@ namespace Horo {
                                                                const std::size_t maximumEntries, const CancellationToken &cancellation) {
             using Entries = std::vector<FileDirectoryEntry>;
             std::error_code error;
-            std::filesystem::directory_iterator cursor(path, error);
+            std::filesystem::directory_iterator cursor(NativeApiPath(path), error);
             const std::filesystem::directory_iterator end;
             if (error)
                 return Result<Entries>::Failure(MakeError(FileStorageErrors::IoFailed));
@@ -223,7 +225,7 @@ namespace Horo {
                     return Result<Entries>::Failure(stop.ErrorValue());
                 if (entries.size() == maximumEntries)
                     return Result<Entries>::Failure(MakeError(FileStorageErrors::Capacity));
-                const auto info = files.InspectEntry(cursor->path());
+                const auto info = files.InspectEntry(path / cursor->path().filename());
                 if (info.HasError())
                     return Result<Entries>::Failure(info.ErrorValue());
                 if (!info.Value())
@@ -281,12 +283,12 @@ namespace Horo {
         if (auto parents = CheckNativeParents(path); parents.HasError())
             return Result<std::optional<FileEntryInfo>>::Failure(parents.ErrorValue());
 #if defined(_WIN32)
-        if (const auto attributes = GetFileAttributesW(path.c_str());
+        if (const auto attributes = GetFileAttributesW(NativeApiPath(path).c_str());
             attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U)
             return Result<std::optional<FileEntryInfo>>::Success(FileEntryInfo{.kind = FileEntryKind::Redirect});
 #endif
         std::error_code error;
-        const auto status = std::filesystem::symlink_status(path, error);
+        const auto status = std::filesystem::symlink_status(NativeApiPath(path), error);
         if (status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory))
             return Result<std::optional<FileEntryInfo>>::Success(std::nullopt);
         if (error)
@@ -306,10 +308,10 @@ namespace Horo {
                 info.identity = handle.EntryIdentity(snapshot.Value());
             } else {
                 // Metadata inspection does not require content-read authority. Missing identity remains explicitly unavailable.
-                info.sizeBytes = std::filesystem::file_size(path, error);
+                info.sizeBytes = std::filesystem::file_size(NativeApiPath(path), error);
                 if (error)
                     return Result<std::optional<FileEntryInfo>>::Failure(MakeError(FileStorageErrors::IoFailed));
-                info.hardLinks = std::filesystem::hard_link_count(path, error);
+                info.hardLinks = std::filesystem::hard_link_count(NativeApiPath(path), error);
                 if (error)
                     return Result<std::optional<FileEntryInfo>>::Failure(MakeError(FileStorageErrors::IoFailed));
             }

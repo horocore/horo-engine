@@ -212,3 +212,31 @@ source/program state.
 
 See [Animation Architecture](./animation-architecture.md) and
 [Animation Asset Pipeline Contract](./animation-asset-pipeline-contract.md).
+
+## C++ Checked Allocation Ownership
+
+Detached graph source, compiled declarations, cooked declarations and programs
+prepare empty owned buffers before swapping a completed transfer. Checked MSVC
+iterator bookkeeping can allocate during a library move declared `noexcept`;
+these graph value constructors instead expose that allocation as `std::bad_alloc`.
+A failed move construction leaves the source's buffers unchanged. Copy semantics
+remain detached; existing allocation-free move assignment is retained. These are
+cold source/compile/load operations. Immutable runtime program spans and instance
+execution do not gain frame-path allocations; no throughput claim is made.
+
+This changes C++ construction/exception traits, without changing field types,
+field order, IDs, serialized source/cooked bytes or semantic schema versions.
+Rebuild clients, replace positional/designated aggregate initialization of
+`AnimationGraphData`, `GraphCompiledDefinition`, `AnimationGraphCookedData`,
+`GraphInstructionOccurrence`, `GraphBlendSampleBinding` and `GraphStateMachineBinding`
+with default construction and named assignment, and review any `noexcept`
+wrapper which transfers one of those values or an `AnimationGraphProgram`.
+Private source decoding fills validated reserved nodes and definitions directly.
+Compiled definition collection fills the program's owned vector instead of
+returning a raw vector through a result. Runtime instances continue to hold
+immutable shared program owners.
+
+Mandatory Windows CI includes the separate owned-value allocation harness and
+the existing headless animation document suite. Its unchanged source/history
+and recovery allocation sweeps must run alongside the new value-transfer cases;
+value-transfer checks alone do not qualify document rollback or recovery.

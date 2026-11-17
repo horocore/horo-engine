@@ -23,6 +23,7 @@ namespace Horo::Vfx {
         std::uint32_t maximumInstances{};    /**< Authored per-effect concurrency ceiling. */
         std::uint32_t emittersPerInstance{}; /**< Cooked emitter slots charged per instance. */
         std::uint64_t bytesPerInstance{};    /**< Prepared payload charge, excluding pool control records. */
+        std::uint32_t firstInstanceSlot{};   /**< Host-reserved disjoint same-Scene slot range; default preserves existing IDs. */
     };
 
     /** @brief Explicit scene-ledger slice reserved for this effect by host composition. */

@@ -919,3 +919,301 @@ TEST_CASE("Inspector property rows use the theme vertical gap", "[unit][editor][
 
     ImGui::DestroyContext();
 }
+
+TEST_CASE("Document tabs reserve trailing close padding and distinguish focus from close",
+          "[unit][editor][gui][design-system][source-tab]") {
+    using namespace Horo::Editor;
+    Theme::SetUiScalePercent(100);
+    ImGuiTestContext gui{{800, 260}};
+    Ui::DocumentTabAction action{};
+    ImRect bounds;
+    ImGuiWindow *window{};
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({780, 240});
+        ImGui::Begin("Document tab geometry");
+        action = Ui::DocumentTabButton("document-1", "LongLocalizedDocumentName.horo_script *", "Close", true, gui.fonts);
+        bounds = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+        window = ImGui::GetCurrentWindow();
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame();
+    frame();
+    const auto &tokens = Theme::GetActiveTokens();
+    const float padding = DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::XS);
+    const float height = Ui::DocumentTabHeight();
+    const auto scope = window->GetID("document-1");
+    const auto closeScope = ImHashStr("##close", 0, scope);
+    const auto closeId = ImHashStr("##close", 0, closeScope);
+    ImGui::SetFocusID(closeId, window);
+    frame();
+    CHECK(bounds.GetWidth() == Catch::Approx(160.0F));
+    CHECK(bounds.GetHeight() == Catch::Approx(height));
+    const ImVec2 closeCenter{bounds.Max.x - padding - 12.0F, (bounds.Min.y + bounds.Max.y) * 0.5F};
+    gui.io->AddMousePosEvent(closeCenter.x, closeCenter.y);
+    frame();
+    gui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    gui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    CHECK(action == Ui::DocumentTabAction::Close);
+    gui.io->AddMousePosEvent(bounds.Min.x + padding + 5, closeCenter.y);
+    frame();
+    gui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    gui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    CHECK(action == Ui::DocumentTabAction::Focus);
+}
+
+TEST_CASE("Pinned Viewport and closable source tabs share height typography and active chrome",
+          "[unit][editor][gui][design-system][source-tab]") {
+    using namespace Horo::Editor;
+    Theme::SetUiScalePercent(100);
+    ImGuiTestContext gui{{850, 260}};
+    ImVec2 pinnedSize{}, sourceSize{};
+    ImVec2 pinnedMin{}, pinnedMax{};
+    Ui::DocumentTabAction pinnedAction{};
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({830, 240});
+        ImGui::Begin("Unified document tabs");
+        pinnedAction = Ui::DocumentTabButton("viewport", "Viewport", "Close", true, gui.fonts, false);
+        pinnedMin = ImGui::GetItemRectMin();
+        pinnedMax = ImGui::GetItemRectMax();
+        pinnedSize = ImGui::GetItemRectSize();
+        ImGui::SameLine(0, 0);
+        static_cast<void>(Ui::DocumentTabButton("source", "Jump.horo_script", "Close", false, gui.fonts));
+        sourceSize = ImGui::GetItemRectSize();
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame();
+    frame();
+    REQUIRE(pinnedSize.x == sourceSize.x);
+    REQUIRE(pinnedSize.y == sourceSize.y);
+    REQUIRE(sourceSize.y == Ui::DocumentTabHeight());
+    gui.io->AddMousePosEvent(pinnedMax.x - 5, (pinnedMin.y + pinnedMax.y) * 0.5F);
+    frame();
+    gui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    gui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    REQUIRE(pinnedAction == Ui::DocumentTabAction::Focus);
+}
+
+TEST_CASE("Package theme identities survive list growth and withdraw without retaining active provider data",
+          "[editor][theme][extensions]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext gui{{800, 260}};
+    Theme::RefreshThemeList();
+    Theme::ThemeEntry theme;
+    theme.id = "example.editor.theme";
+    theme.name = "Example";
+    theme.isBuiltIn = false;
+    REQUIRE(Theme::RegisterPackageTheme(theme));
+    CHECK_FALSE(Theme::RegisterPackageTheme(theme));
+    REQUIRE(Theme::SelectThemeById(theme.id));
+    CHECK(Theme::GetThemeList()[static_cast<std::size_t>(Theme::GetActiveThemeIndex())].id == theme.id);
+    auto refreshed = theme;
+    refreshed.id.clear();
+    REQUIRE(Theme::ApplyReloadedTheme(std::move(refreshed)));
+    CHECK(Theme::GetThemeList()[static_cast<std::size_t>(Theme::GetActiveThemeIndex())].id == theme.id);
+    Theme::UnregisterPackageTheme(theme.id);
+    CHECK_FALSE(Theme::SelectThemeById(theme.id));
+    CHECK(Theme::GetActiveThemeIndex() == 0);
+}
+
+TEST_CASE("Descriptionless settings rows center labels and controls with even vertical padding", "[editor][gui][settings][layout]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext gui{{1000, 650}};
+    Theme::RefreshThemeList();
+    for (const int theme : {0, 2}) {
+        Theme::SelectThemeByIndex(theme);
+        for (const float width : {440.0F, 940.0F}) {
+            std::array<ImRect, 2> rows{}, controls{};
+            const auto frame = [&] {
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos({0, 0});
+                ImGui::SetNextWindowSize({width, 620});
+                ImGui::Begin("Settings row geometry", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                for (std::size_t index = 0; index < rows.size(); ++index) {
+                    ImGui::PushID(static_cast<int>(index));
+                    Ui::SettingRow("Save", index == 0 ? "" : nullptr, gui.fonts, [&] {
+                        static_cast<void>(Ui::Button(
+                            {.label = "Cmd + S", .variant = Ui::ButtonVariant::Secondary, .enabled = index == 0, .font = gui.fonts.sans}));
+                        controls[index] = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+                        ImGui::SameLine();
+                        static_cast<void>(Ui::Button(
+                            {.label = "Reset", .variant = Ui::ButtonVariant::Secondary, .enabled = index == 0, .font = gui.fonts.sans}));
+                    });
+                    rows[index] = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+                    ImGui::PopID();
+                }
+                ImGui::End();
+                ImGui::Render();
+            };
+            frame();
+            frame();
+            for (std::size_t index = 0; index < rows.size(); ++index) {
+                CHECK(rows[index].GetCenter().y == Catch::Approx(controls[index].GetCenter().y).margin(0.5F));
+                CHECK(controls[index].Min.y - rows[index].Min.y == Catch::Approx(rows[index].Max.y - controls[index].Max.y).margin(0.5F));
+            }
+            CHECK(rows[0].Max.y == Catch::Approx(rows[1].Min.y).margin(0.5F));
+            const auto color = Theme::U32(Theme::Text());
+            ImRect labelInk{{10000, 10000}, {-10000, -10000}}, buttonInk = labelInk;
+            const auto *data = ImGui::GetDrawData();
+            for (int list = 0; list < data->CmdListsCount; ++list)
+                for (const auto &vertex : data->CmdLists[list]->VtxBuffer) {
+                    if (vertex.col != color || vertex.pos.y < rows[0].Min.y || vertex.pos.y > rows[0].Max.y)
+                        continue;
+                    if (vertex.pos.x >= rows[0].Min.x && vertex.pos.x < controls[0].Min.x)
+                        labelInk.Add(vertex.pos);
+                    else if (controls[0].Contains(vertex.pos))
+                        buttonInk.Add(vertex.pos);
+                }
+            REQUIRE(labelInk.GetHeight() > 0);
+            REQUIRE(buttonInk.GetHeight() > 0);
+            CHECK(labelInk.GetCenter().y == Catch::Approx(buttonInk.GetCenter().y).margin(1.0F));
+        }
+    }
+    Theme::SelectThemeByIndex(0);
+}
+
+TEST_CASE("Settings descriptions remain smaller than labels with compact bounded row spacing", "[editor][gui][settings][layout]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext gui{{1100, 700}};
+    Theme::RefreshThemeList();
+    for (const int theme : {0, 2}) {
+        Theme::SelectThemeByIndex(theme);
+        for (const int scale : {100, 150}) {
+            Theme::SetUiScalePercent(scale);
+            for (const float width : {640.0F, 1000.0F}) {
+                ImRect row, control;
+                const auto frame = [&] {
+                    ImGui::NewFrame();
+                    ImGui::SetNextWindowPos({0, 0});
+                    ImGui::SetNextWindowSize({width, 650});
+                    ImGui::Begin("Compact settings", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                    Ui::SettingRow("Setting label", "Supporting hint", gui.fonts, [&] {
+                        static_cast<void>(Ui::Button({.label = "Value", .variant = Ui::ButtonVariant::Secondary, .font = gui.fonts.sans}));
+                        control = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+                    });
+                    row = {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()};
+                    ImGui::End();
+                    ImGui::Render();
+                };
+                frame();
+                frame();
+                ImRect label{{10000, 10000}, {-10000, -10000}}, hint = label;
+                const auto *data = ImGui::GetDrawData();
+                for (int list = 0; list < data->CmdListsCount; ++list)
+                    for (const auto &vertex : data->CmdLists[list]->VtxBuffer) {
+                        if (vertex.pos.x >= control.Min.x || vertex.pos.y < row.Min.y || vertex.pos.y > row.Max.y)
+                            continue;
+                        if (vertex.col == Theme::U32(Theme::Text()))
+                            label.Add(vertex.pos);
+                        if (vertex.col == Theme::U32(Theme::Dim()))
+                            hint.Add(vertex.pos);
+                    }
+                REQUIRE(label.GetHeight() > 0);
+                REQUIRE(hint.GetHeight() > 0);
+                CHECK(hint.GetHeight() < label.GetHeight());
+                CHECK(hint.Min.y > label.Max.y);
+                CHECK(hint.Max.x < control.Min.x);
+                const auto metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Small);
+                CHECK(control.GetHeight() >= metrics.minimumHeight);
+                // One label and one hint stay compact; narrow scaled columns may wrap.
+                if (width == 1000.0F)
+                    CHECK(row.GetHeight() <= 60.0F * static_cast<float>(scale) / 100.0F);
+            }
+        }
+    }
+    Theme::SetUiScalePercent(100);
+    Theme::SelectThemeByIndex(0);
+}
+
+TEST_CASE("Context menus measure visible labels and bound long component names to the popup", "[editor][gui][context-menu]") {
+    using namespace Horo::Editor;
+    for (const float width : {320.0F, 900.0F}) {
+        ImGuiTestContext gui{{width, 600}};
+        for (const char *label : {"A reasonably long component name###stable",
+                                  "An extremely long module supplied behavior name that cannot fit on one row###stable"}) {
+            ImRect popup;
+            ImDrawList *draw{};
+            for (int frame = 0; frame < 3; ++frame) {
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos({0, 0});
+                ImGui::SetNextWindowSize({width, 580});
+                ImGui::Begin("Component menu bounds", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                if (frame == 0)
+                    ImGui::OpenPopup("##component-bounds");
+                REQUIRE(Ui::BeginMenuPopup("##component-bounds"));
+                static_cast<void>(Ui::ContextMenuItem(label, nullptr, gui.fonts));
+                popup = {ImGui::GetWindowPos(),
+                         {ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), ImGui::GetWindowPos().y + ImGui::GetWindowHeight()}};
+                draw = ImGui::GetWindowDrawList();
+                CHECK(ImGui::GetCurrentWindow()->ScrollMax.x == 0);
+                Ui::EndMenuPopup();
+                ImGui::End();
+                ImGui::Render();
+            }
+            REQUIRE(draw);
+            CHECK(popup.GetWidth() > 176);
+            CHECK(popup.GetWidth() <= std::min(width - 16.0F, 340.0F));
+            for (const auto &vertex : draw->VtxBuffer)
+                if (vertex.col == Theme::U32(Theme::Text())) {
+                    CHECK(vertex.pos.x >= popup.Min.x);
+                    CHECK(vertex.pos.x <= popup.Max.x - 5.0F);
+                }
+        }
+    }
+}
+
+TEST_CASE("Context submenus flip at the right edge and remain inside the viewport", "[editor][gui][context-menu][submenu-placement]") {
+    using namespace Horo::Editor;
+    for (const bool rightEdge : {false, true}) {
+        for (const float y : {40.0F, 480.0F}) {
+            ImGuiTestContext gui{{900, 600}};
+            ImRect parent;
+            ImRect child;
+            for (int frame = 0; frame < 4; ++frame) {
+                ImGui::NewFrame();
+                ImGui::Begin("SubmenuPlacementHost");
+                if (frame == 0)
+                    ImGui::OpenPopup("placement-root");
+                ImGui::SetNextWindowPos({rightEdge ? 700.0F : 8.0F, y});
+                REQUIRE(Ui::BeginMenuPopup("placement-root"));
+                parent = {ImGui::GetWindowPos(),
+                          ImVec2{ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), ImGui::GetWindowPos().y + ImGui::GetWindowHeight()}};
+                if (frame == 0)
+                    ImGui::OpenPopup("##submenu_popup_Scripts");
+                REQUIRE(Ui::BeginContextSubmenu("Scripts", gui.fonts));
+                for (int item = 0; item < 6; ++item) {
+                    ImGui::PushID(item);
+                    static_cast<void>(Ui::ContextMenuItem("A long localized script component name###script", nullptr, gui.fonts));
+                    ImGui::PopID();
+                }
+                child = {ImGui::GetWindowPos(),
+                         ImVec2{ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), ImGui::GetWindowPos().y + ImGui::GetWindowHeight()}};
+                Ui::EndContextSubmenu();
+                Ui::EndMenuPopup();
+                ImGui::End();
+                ImGui::Render();
+                if (frame < 2)
+                    continue;
+                CHECK(child.Min.x >= 0);
+                CHECK(child.Max.x <= 900);
+                CHECK(child.Min.y >= 0);
+                CHECK(child.Max.y <= 600);
+                if (rightEdge)
+                    CHECK(child.Max.x == Catch::Approx(parent.Min.x).margin(1));
+                else
+                    CHECK(child.Min.x == Catch::Approx(parent.Max.x).margin(1));
+            }
+        }
+    }
+}

@@ -2,6 +2,7 @@
 #include "support/TypedIdentityTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <memory>
 
 namespace Horo::XR {
     namespace {
@@ -34,7 +35,9 @@ namespace Horo::XR {
                 return std::move(port).Value();
             }
 
-            XRTrackingSnapshot Snapshot(const std::uint64_t binding = 4) const {
+            /** @brief Cold-owns each large immutable snapshot off-stack; native Append still borrows the same value.
+             * @param binding Exact authored snapshot binding revision. @return Cold-owned real immutable snapshot. */
+            std::unique_ptr<XRTrackingSnapshot> Snapshot(const std::uint64_t binding = 4) const {
                 const std::array actions{XRTrackedActionRecord{device.id, 0, XRTrackedActionKind::Boolean, true, 1, 0}};
                 auto value = XRTrackingSnapshot::Create({.session = session,
                                                          .revision = revision,
@@ -50,7 +53,7 @@ namespace Horo::XR {
                                                          .actions = actions},
                                                         session, origin);
                 REQUIRE(value.HasValue());
-                return std::move(value).Value();
+                return std::make_unique<XRTrackingSnapshot>(std::move(value).Value());
             }
         };
     }  // namespace
@@ -66,7 +69,7 @@ namespace Horo::XR {
         REQUIRE(opened.HasValue());
         auto frame = std::move(opened).Value();
         const auto snapshot = fixture.Snapshot();
-        REQUIRE(projection.Append(snapshot, fixture.session, fixture.revision, fixture.origin, 4, frame).HasValue());
+        REQUIRE(projection.Append(*snapshot, fixture.session, fixture.revision, fixture.origin, 4, frame).HasValue());
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
         REQUIRE(frame.Commit().HasValue());
         CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
@@ -82,11 +85,11 @@ namespace Horo::XR {
         auto opened = port.Begin(fixture.collector.Commit());
         REQUIRE(opened.HasValue());
         auto frame = std::move(opened).Value();
-        CHECK(projection.Append(fixture.Snapshot(5), fixture.session, fixture.revision, fixture.origin, 4, frame).HasError());
+        CHECK(projection.Append(*fixture.Snapshot(5), fixture.session, fixture.revision, fixture.origin, 4, frame).HasError());
         auto replaced = fixture.session;
         ++replaced.slot.generation;
-        CHECK(projection.Append(fixture.Snapshot(), replaced, fixture.revision, fixture.origin, 4, frame).HasError());
-        CHECK(projection.Append(fixture.Snapshot(), fixture.session, fixture.revision, fixture.origin, 5, frame).HasError());
+        CHECK(projection.Append(*fixture.Snapshot(), replaced, fixture.revision, fixture.origin, 4, frame).HasError());
+        CHECK(projection.Append(*fixture.Snapshot(), fixture.session, fixture.revision, fixture.origin, 5, frame).HasError());
         REQUIRE(frame.Commit().HasValue());
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
     }
@@ -100,7 +103,7 @@ namespace Horo::XR {
         auto opened = port.Begin(fixture.collector.Commit());
         REQUIRE(opened.HasValue());
         auto frame = std::move(opened).Value();
-        CHECK(projection.Append(fixture.Snapshot(), fixture.session, fixture.revision, fixture.origin, 4, frame).HasError());
+        CHECK(projection.Append(*fixture.Snapshot(), fixture.session, fixture.revision, fixture.origin, 4, frame).HasError());
         CHECK(projection.Bind({}, 4).HasError());
         CHECK(projection.Bind(fixture.session, 0).HasError());
         REQUIRE(projection.Bind(fixture.session, 4).HasValue());
@@ -108,7 +111,7 @@ namespace Horo::XR {
         ++foreign.slot.generation;
         CHECK(projection.Bind(foreign, 5).HasError());
         CHECK(projection.Bind(fixture.session, 4).HasError());
-        REQUIRE(projection.Append(fixture.Snapshot(), fixture.session, fixture.revision, fixture.origin, 4, frame).HasValue());
+        REQUIRE(projection.Append(*fixture.Snapshot(), fixture.session, fixture.revision, fixture.origin, 4, frame).HasValue());
         REQUIRE(frame.Commit().HasValue());
         CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);

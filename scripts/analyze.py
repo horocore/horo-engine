@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from ctypes import wintypes as w
 from dataclasses import dataclass, field
-from pathlib import Path
+from email.utils import parsedate_to_datetime
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -15,12 +16,14 @@ import binascii
 import concurrent.futures
 import contextlib
 import csv
+import errno
 import ctypes as c
 import fnmatch
 import functools
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -48,6 +51,8 @@ from defusedxml import ElementTree as element_tree
 
 SUPPORTED_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".tpp"})
 TRANSLATION_UNIT_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
+REPOSITORY_INPUT_EXCLUSIONS = frozenset({"deprecated", "vendor", "build", ".git", ".cmake", ".sonar", ".codacy/generated",
+                                        "node_modules", "mock-studio", ".venv", "venv"})
 DEFAULT_BUILD_DIRECTORY = Path("build/sonar-local")
 COMPILE_COMMANDS_FILENAME = "compile_commands.json"
 DEFAULT_COMPILE_COMMANDS = DEFAULT_BUILD_DIRECTORY / COMPILE_COMMANDS_FILENAME
@@ -64,6 +69,15 @@ class AnalysisError(RuntimeError):
     # Codacy profiles alternate between the mutually exclusive D203 and D211 layouts.
     # noqa: D203,D211
     """A prerequisite or the local IDE bridge prevented analysis."""
+
+
+class BridgeRateLimited(AnalysisError):
+    """The owned IDE bridge requested a delay before another analysis attempt."""
+
+    def __init__(self, message: str, retry_after: float):
+        """Preserve the HTTP failure and the server's minimum retry delay."""
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -254,6 +268,23 @@ def bridge_url(port: int, path: str) -> str:
     return f"http://127.0.0.1:{port}{path}"
 
 
+def bridge_retry_after(value: str | None) -> float:
+    """Honor Retry-After seconds or an HTTP date; malformed values use a finite delay."""
+    if value is None:
+        return 5.0
+    try:
+        delay = float(value)
+    except ValueError:
+        try:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                return 5.0
+            delay = date.timestamp() - time.time()
+        except (ValueError, TypeError, OverflowError):
+            return 5.0
+    return delay if math.isfinite(delay) and delay >= 0 else 5.0
+
+
 def request_bridge(port: int, path: str, timeout: float, body: bytes | None = None) -> object:
     """Call the bridge with the localhost headers required by its origin checks."""
     url = bridge_url(port, path)
@@ -268,7 +299,11 @@ def request_bridge(port: int, path: str, timeout: float, body: bytes | None = No
             return json.loads(response.read().decode("utf-8")) if body is not None else response.status
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace").strip()
-        raise AnalysisError(f"IDE bridge returned HTTP {error.code}{': ' + detail if detail else ''}") from error
+        message = f"IDE bridge returned HTTP {error.code}{': ' + detail if detail else ''}"
+        if error.code == 429:
+            retry_after = error.headers.get("Retry-After") if error.headers is not None else None
+            raise BridgeRateLimited(message, bridge_retry_after(retry_after)) from error
+        raise AnalysisError(message) from error
     except URLError as error:
         raise AnalysisError(f"Cannot reach the SonarQube for IDE bridge: {error.reason}") from error
     except TimeoutError as error:
@@ -359,29 +394,107 @@ def filter_findings_to_ranges(
     return selected, len(findings) - len(selected)
 
 
-def analyze_when_indexed(port: int, files: Sequence[Path], request_timeout: float, startup_timeout: float) -> list[dict[str, object]]:
-    """Retry only the bridge's explicit not-yet-indexed startup response."""
-    body = json.dumps({"fileAbsolutePaths": [str(path) for path in files]}).encode("utf-8")
+def bridge_file_path(path: PurePath) -> str:
+    """Match VS Code's lowercase Windows drive URI without changing any path component."""
+    value = str(path)
+    if sys.platform == "win32" and re.match(r"^[A-Z]:[\\/]", value):
+        return value[0].lower() + value[1:]
+    return value
+
+
+def bridge_file_uri(path: PurePath) -> str:
+    """Use the same Windows drive identity in completion logs and analysis requests."""
+    if sys.platform == "win32":
+        return PureWindowsPath(bridge_file_path(path)).as_uri()
+    return path.as_uri()
+
+
+def _bridge_startup_retry_delay(error: AnalysisError, delay: float) -> float | None:
+    """Classify the two retryable startup responses without handling other bridge failures."""
+    if isinstance(error, BridgeRateLimited):
+        return max(delay, error.retry_after)
+    if str(error).startswith("IDE bridge returned HTTP 500:") and "No files were found to be indexed by SonarQube for IDE" in str(error):
+        return delay
+    return None
+
+
+def analyze_when_indexed(port: int, files: Sequence[PurePath], request_timeout: float, startup_timeout: float) -> list[dict[str, object]]:
+    """Back off for indexing and rate limits without retrying other failures or exceeding startup admission."""
+    body = json.dumps({"fileAbsolutePaths": [bridge_file_path(path) for path in files]}).encode("utf-8")
     deadline = time.monotonic() + startup_timeout
+    delay = 1.0
     while True:
+        if CANCELLED.is_set():
+            raise AnalysisError("Sonar analysis startup cancelled")
         try:
             response = request_bridge(port, BRIDGE_ANALYZE_PATH, request_timeout, body)
             return normalized_findings(response)
         except AnalysisError as error:
-            if "No files were found to be indexed by SonarQube for IDE" not in str(error) or time.monotonic() >= deadline:
+            retry_delay = _bridge_startup_retry_delay(error, delay)
+            if retry_delay is None or retry_delay >= deadline - time.monotonic():
                 raise
-            time.sleep(0.5)
+            if CANCELLED.wait(retry_delay):
+                raise AnalysisError("Sonar analysis startup cancelled") from error
+            if time.monotonic() >= deadline:
+                raise
+            delay = min(delay * 2, 10.0)
 
 
 # Native
+
+class MacOSUniqueInfo(c.Structure):
+    """ABI of proc_uniqidentifierinfo (sys/proc_info_private.h)."""
+
+    _fields_ = [("uuid", c.c_uint8 * 16), ("unique", c.c_uint64),
+                ("parent_unique", c.c_uint64), ("version", c.c_int32),
+                ("parent_version", c.c_int32), ("reserved", c.c_uint64 * 2)]
+
+
+@functools.lru_cache(maxsize=1)
+def _macos_library():
+    """Bind required native APIs; missing APIs fail closed."""
+    lib = c.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    lib.proc_pidinfo.argtypes = [c.c_int, c.c_int, c.c_uint64, c.c_void_p, c.c_int]
+    lib.proc_pidinfo.restype = c.c_int
+    lib.proc_signal_with_audittoken.argtypes = [c.POINTER(c.c_uint32 * 8), c.c_int]
+    lib.proc_signal_with_audittoken.restype = c.c_int
+    return lib
+
+
+def _macos_identity(pid):
+    """Read the generation and unique ID atomically from the kernel."""
+    info = MacOSUniqueInfo()
+    count = _macos_library().proc_pidinfo(pid, 17, 0, c.byref(info), c.sizeof(info))
+    if count != c.sizeof(info):
+        code = c.get_errno() or errno.EIO
+        raise OSError(code, "Cannot read macOS process generation")
+    return f"{info.unique}:{info.version & 0xffffffff}"
+
+
+def _macos_send_signal(pid, started, sig):
+    """Have the kernel compare PID generation while delivering the signal."""
+    version = int(started.split(":")[1])
+    token = (c.c_uint32 * 8)()
+    token[5], token[7] = pid, version
+    code = _macos_library().proc_signal_with_audittoken(c.byref(token), sig)
+    if code and code != errno.ESRCH:
+        raise OSError(code, "Cannot signal verified macOS process")
+
 
 def ensure_supported() -> None:
     """Require the native ownership facilities; never fall back to PID killing."""
     if sys.platform == "win32":
         return
+    if sys.platform == "darwin":
+        _psutil()
+        try:
+            _macos_library()
+        except (OSError, AttributeError) as error:
+            raise AnalysisError("macOS quality ownership requires libproc audit-token signalling") from error
+        return
     if sys.platform.startswith("linux") and hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
         return
-    raise AnalysisError("Managed quality processes require Linux with pidfd support or Windows")
+    raise AnalysisError("Managed quality processes require macOS, Linux with pidfd support or Windows")
 
 
 def _windows_directory(variable: str) -> Path:
@@ -396,6 +509,8 @@ def default_code_user_data() -> Path:
     ensure_supported()
     if sys.platform == "win32":
         return _windows_directory("APPDATA") / "Code"
+    if sys.platform == "darwin":
+        return Path.home() / "Library/Application Support/Code"
     return Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "Code"
 
 
@@ -404,6 +519,8 @@ def cache_home() -> Path:
     ensure_supported()
     if sys.platform == "win32":
         return _windows_directory("LOCALAPPDATA") / "horo-quality"
+    if sys.platform == "darwin":
+        return Path.home() / "Library/Caches/horo-quality"
     return Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "horo-quality"
 
 
@@ -527,7 +644,12 @@ class WindowsNative:
     def terminate(self, handle):
         if self.kernel.WaitForSingleObject(handle, 0) == 0:
             return
-        self.check(self.kernel.TerminateProcess(handle, 1))
+        if not self.kernel.TerminateProcess(handle, 1):
+            code = c.get_last_error()
+            # Concurrent termination can report access denied before the pinned handle signals completion.
+            if code == 5 and self.kernel.WaitForSingleObject(handle, 5000) == 0:
+                return
+            raise c.WinError(code)
         if self.kernel.WaitForSingleObject(handle, 5000) != 0:
             raise OSError("Timed out waiting for pinned Windows process termination")
 
@@ -654,17 +776,64 @@ def _command_executable(argv: list[str], env: dict | None) -> str:
 def _command(argv: list[str], env: dict | None):
     """Resolve executable authority explicitly; never interpolate a shell."""
     executable = _command_executable(argv, env)
+    return _format_command(executable, argv[1:])
+
+
+def _format_command(executable: str, arguments: list[str]):
+    """Format arguments without granting executable authority."""
     if sys.platform != "win32":
-        return [executable, *argv[1:]]
+        return [executable, *arguments]
     if Path(executable).suffix.lower() in {".cmd", ".bat"}:
         # cmd.exe expands even quoted percent/! variables and has no universal
         # argv escaping. Refuse such input instead of silently executing it.
-        values = [executable, *argv[1:]]
+        values = [executable, *arguments]
         if any(any(char in value for char in '&|<>^%!"\r\n()') for value in values):
             raise AnalysisError("Unsafe Windows batch arguments; use the tool's native executable instead")
         interpreter = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/cmd.exe"
         return f'"{interpreter}" /d /v:off /s /c "' + " ".join(f'"{value}"' for value in values) + '"'
-    return [executable, *argv[1:]]
+    return [executable, *arguments]
+
+
+def path_batches(prefix: list[str], paths: list[Path]) -> list[list[Path]]:
+    """Preserve exact Windows inputs within command-line limits."""
+    if sys.platform != "win32" or not paths:
+        return [paths]
+    # Plan size from trusted tools; native_run revalidates authority at launch.
+    try:
+        executable = _command_executable(prefix, None)
+    except AnalysisError:
+        # Missing tools fail closed at launch; never search the source CWD.
+        executable = prefix[0]
+    batch_launcher = Path(executable).suffix.lower() in {".cmd", ".bat"}
+    limit = 8191 if batch_launcher else 32767
+    # Reserve child-dispatch space. A single input may still use the hard limit.
+    batch_limit = limit - 1024
+
+    def fits(batch: list[Path], maximum: int) -> bool:
+        command = _format_command(executable, [*prefix[1:], *map(str, batch)])
+        text = command if isinstance(command, str) else subprocess.list2cmdline(command)
+        return len(text.encode("utf-16-le")) // 2 + 1 <= maximum
+
+    batches = []
+    current = []
+    for path in paths:
+        if not fits([*current, path], batch_limit):
+            if current:
+                batches.append(current)
+                current = []
+            if not fits([path], limit):
+                raise AnalysisError("One analysis input exceeds the Windows command-line limit")
+        current.append(path)
+    batches.append(current)
+    return batches
+
+
+def batch_time_remaining(deadline: float, label: str) -> float:
+    """Share one deadline across all batches."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AnalysisError(f"{label} timed out before all input batches completed")
+    return remaining
 
 
 @dataclass
@@ -759,6 +928,36 @@ def _close_command_job(native, job, process, completed: bool) -> None:
         native.close(job)
 
 
+def _macos_group_has_only_exited_members(group: int) -> bool:
+    """Prove that a denied signal addresses no executable process-group member."""
+    psutil = _psutil()
+    try:
+        for member in psutil.process_iter():
+            try:
+                if os.getpgid(member.pid) == group and member.status() not in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
+                    return False
+            except (ProcessLookupError, psutil.NoSuchProcess):
+                continue
+            except (PermissionError, psutil.AccessDenied):
+                return False
+    except (OSError, psutil.Error):
+        return False
+    return True
+
+
+def _signal_command_group(group: int, sig: int) -> None:
+    """Keep permission failures fatal unless macOS proves the group already exited."""
+    try:
+        os.killpg(group, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # Darwin can report EPERM while the last terminated child awaits reaping.
+        # A live or inaccessible member still leaves cleanup unproven.
+        if sys.platform != "darwin" or not _macos_group_has_only_exited_members(group):
+            raise
+
+
 def _drain_command_process(native, process, completed: bool) -> None:
     """Drain an owned leader and close its pipes and pinned handle on every exit."""
     try:
@@ -768,14 +967,12 @@ def _drain_command_process(native, process, completed: bool) -> None:
                 if process.poll() is None:
                     process.kill()
             elif not completed:
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGTERM)
+                _signal_command_group(process.pid, signal.SIGTERM)
                 try:
                     process.communicate(timeout=5)
                 except subprocess.TimeoutExpired:
                     pass
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
+                _signal_command_group(process.pid, signal.SIGKILL)
         finally:
             process.communicate(timeout=5)
     finally:
@@ -814,7 +1011,7 @@ def _psutil():
         import psutil
         return psutil
     except ImportError as error:
-        raise AnalysisError("Windows quality ownership requires psutil; install scripts/requirements.txt with this Python interpreter") from error
+        raise AnalysisError("Native quality ownership requires psutil; install scripts/requirements.txt with this Python interpreter") from error
 
 
 def native_processes() -> dict[int, dict]:
@@ -852,6 +1049,19 @@ def native_processes() -> dict[int, dict]:
                         native.close(handle)
         except (psutil.Error, OSError) as error:
             raise AnalysisError("Cannot enumerate Windows processes; check native process permissions") from error
+        return result
+    if sys.platform == "darwin":
+        psutil = _psutil()
+        for process in psutil.process_iter():
+            try:
+                started = _macos_identity(process.pid)
+                data = {"parent": process.ppid(), "started": started,
+                        "argv": process.cmdline(), "executable": process.exe(),
+                        "markers": {key: value for key, value in process.environ().items() if key in markers}}
+                if _macos_identity(process.pid) == started:
+                    result[process.pid] = data
+            except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError, PermissionError):
+                continue
         return result
     for entry in Path("/proc").iterdir():
         if not entry.name.isdecimal():
@@ -927,12 +1137,43 @@ def _linux_listener_matches(pids: set[int], ports: range) -> set[tuple[int, int]
     return matches
 
 
+def _macos_listener_matches(pids: set[int], ports: range) -> set[tuple[int, int]]:
+    """Query only owned processes; global socket enumeration needs root on macOS."""
+    import ipaddress
+    psutil = _psutil()
+    matches = set()
+    for pid in pids:
+        try:
+            started = _macos_identity(pid)
+            connections = psutil.Process(pid).net_connections(kind="tcp")
+            if _macos_identity(pid) != started:
+                raise AnalysisError("macOS listener process identity changed")
+            for connection in connections:
+                if connection.status != psutil.CONN_LISTEN or not connection.laddr:
+                    continue
+                address = ipaddress.ip_address(connection.laddr.ip)
+                mapped = getattr(address, "ipv4_mapped", None)
+                # Darwin's JVM can report IPv4 loopback as compatible IPv6
+                # (::127.0.0.1), which ipaddress does not classify as loopback.
+                compatible_loopback = (address.version == 6 and int(address) >> 32 == 0
+                                       and ipaddress.IPv4Address(int(address)).is_loopback)
+                if connection.laddr.port in ports and (address.is_loopback or compatible_loopback
+                                                       or (mapped and mapped.is_loopback)):
+                    matches.add((pid, connection.laddr.port))
+        except (psutil.NoSuchProcess, ProcessLookupError):
+            continue
+        except (psutil.Error, OSError, ValueError) as error:
+            raise AnalysisError("Cannot verify macOS listener ownership; check native permissions") from error
+    return matches
+
+
 def native_listener_port(pids: set[int], ports: range) -> tuple[int, int] | None:
     """Match active TCP loopback LISTEN sockets to an owned process tree."""
     ensure_supported()
     if not pids:
         return None
     matches = (_windows_listener_matches(pids, ports) if sys.platform == "win32"
+               else _macos_listener_matches(pids, ports) if sys.platform == "darwin"
                else _linux_listener_matches(pids, ports))
     if len(matches) > 1:
         raise AnalysisError("Owned Code session has ambiguous Sonar listeners")
@@ -948,6 +1189,25 @@ def terminate_processes(pids: set[int], table: dict) -> bool:
     ensure_supported()
     if any(not isinstance(pid, int) or pid <= 0 or not table.get(pid, {}).get("started") for pid in pids):
         return False
+    if sys.platform == "darwin":
+        try:
+            verified = []
+            for pid in sorted(pids):
+                try:
+                    current = _macos_identity(pid)
+                except ProcessLookupError:
+                    continue
+                if current != table[pid]["started"]:
+                    return False
+                verified.append((pid, current))
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                for pid, started in verified:
+                    _macos_send_signal(pid, started, sig)
+                if sig == signal.SIGTERM:
+                    time.sleep(0.2)
+            return True
+        except OSError as error:
+            raise AnalysisError("Cannot terminate verified macOS quality processes") from error
     native = _windows() if sys.platform == "win32" else None
     pinned = []
     try:
@@ -1065,14 +1325,18 @@ def lock(path: Path, timeout: float = 600):
             unlock(stream)
 
 
+def repository_input_path(path: Path) -> bool:
+    """Use the same first-party path scope for inventory and compiler-context admission."""
+    return not (any(part in REPOSITORY_INPUT_EXCLUSIONS for part in path.parts)
+                or str(path).startswith(".codacy/generated/"))
+
+
 def repository_files(root: Path) -> list[Path]:
     """List first-party inputs with Git's NUL protocol; never follow outside symlinks."""
     paths = paths_from_nul_output(run_git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"))
-    excluded = {"deprecated", "vendor", "build", ".git", ".cmake", ".sonar", ".codacy/generated",
-                "node_modules", "mock-studio", ".venv", "venv"}
     result = []
     for path in sorted(set(paths)):
-        if any(part in excluded for part in path.parts) or str(path).startswith(".codacy/generated/"):
+        if not repository_input_path(path):
             continue
         absolute = root / path
         if absolute.is_file() and absolute.resolve().is_relative_to(root):
@@ -1116,12 +1380,12 @@ def changed_ranges(root: Path, base_sha: str, paths: list[Path]) -> dict[str, li
 # CPD XML declarations are rejected before parsing; no external entities are accepted.
 
 
-def json_command(argv: list[str], root: Path, timeout: float = 600) -> tuple[dict, int]:
+def json_command(argv: list[str], root: Path, timeout: float = 600, report: Path | None = None) -> tuple[dict, int]:
     """Require structured output even when a tool's exit code allows partial results."""
     result = quality_run(argv, root, timeout)
     try:
-        payload = json.loads(result.stdout)
-    except ValueError as error:
+        payload = json.loads(report.read_text(encoding="utf-8") if report else result.stdout)
+    except (OSError, ValueError) as error:
         raise AnalysisError(f"{Path(argv[0]).name} returned no usable JSON (exit {result.returncode})") from error
     if not isinstance(payload, dict):
         raise AnalysisError(f"{Path(argv[0]).name} returned a non-object report")
@@ -1170,9 +1434,96 @@ def snapshot(root: Path, directory: Path) -> Path:
     return directory
 
 
-def codacy_check(root: Path, mirror: Path, selected: list[Path], config: dict, info: dict,
+def codacy_check(mirror: Path, selected: list[Path], config: dict, info: dict,
                  timeout: float) -> dict:
-    """Run configured tools and account for every routed path and execution result."""
+    """Run every selected input, retaining each batch's routing and completion evidence."""
+    if any(any(char in str(path) for char in "*?[") for path in selected):
+        raise AnalysisError("Codacy --files cannot safely select paths containing glob metacharacters")
+    prefix = codacy_arguments([item["toolId"] for item in config["tools"]], timeout,
+                               codacy_report_path(mirror, "0" * 32))
+    batches = path_batches([*prefix, "--files"], selected)
+    if len(batches) == 1:
+        return codacy_batch(mirror, selected, config, info, timeout)
+    deadline = time.monotonic() + timeout
+    results = []
+    for batch in batches:
+        remaining = batch_time_remaining(deadline, "Codacy analysis")
+        results.append(codacy_batch(mirror, batch, config, info, remaining))
+    return combine_codacy_batches(results, selected)
+
+
+def batch_items(results: list[dict], field: str) -> list:
+    """Collect records while retaining per-batch evidence."""
+    return [item for result in results for item in result.get(field, [])]
+
+
+def capability_items(results: list[dict], field: str) -> list:
+    """Collect each batch's runtime evidence."""
+    return [item for result in results for item in result.get("capability", {}).get(field, [])]
+
+
+def runtime_identity(entry: dict) -> tuple:
+    """Identify the analyzer runtime."""
+    return entry.get("version"), entry.get("installation"), entry.get("runner")
+
+
+def unverified_runtime_ids(results: list[dict]) -> set:
+    """Reject executions without runtime evidence."""
+    return {item["toolId"] for result in results for item in result.get("toolResults", [])
+            if item["toolId"] not in {ready["toolId"] for ready in result.get("capability", {}).get("ready", [])}}
+
+
+def combine_capabilities(results: list[dict], errors: list[dict]) -> dict:
+    """Keep consistent, successfully executed runtimes."""
+    unavailable = capability_items(results, "unavailable")
+    invalid = {item.get("toolId") for item in errors + unavailable} | unverified_runtime_ids(results)
+    ready = {}
+    for item in capability_items(results, "ready"):
+        tool = item["toolId"]
+        if tool in invalid:
+            continue
+        previous = ready.setdefault(tool, {**item, "filesRouted": 0})
+        if runtime_identity(previous) != runtime_identity(item):
+            invalid.add(tool)
+            errors.append({"toolId": tool, "reason": "runtime_changed_between_batches"})
+        previous["filesRouted"] += int(item.get("filesRouted", 0))
+    return {"ready": [item for tool, item in ready.items() if tool not in invalid], "unavailable": unavailable}
+
+
+def combine_codacy_batches(results: list[dict], selected: list[Path]) -> dict:
+    """Merge findings, failures and runtime identities."""
+    errors = batch_items(results, "errors")
+    capability = combine_capabilities(results, errors)
+    incomplete = any(result["status"] not in {"clean", "issues_found"} for result in results)
+    issues = batch_items(results, "issues")
+    status = "issues_found" if issues else "clean"
+    if incomplete or errors:
+        status = "incomplete"
+    return {"status": status,
+            "issues": issues, "errors": errors, "capability": capability,
+            "skipped": batch_items(results, "skipped"),
+            "unsupported": list({item["toolId"]: item for item in batch_items(results, "unsupported")}.values()),
+            "submitted": [str(path) for path in selected], "batches": results}
+
+
+def codacy_report_path(mirror: Path, nonce: str) -> Path:
+    """Keep complete CLI reports outside the source tree and separate between batches."""
+    return mirror.parent / "reports" / f"codacy-{nonce}.json"
+
+
+def codacy_arguments(tool_ids: list[str], timeout: float, report: Path | None = None) -> list[str]:
+    """Use identical planned and executed CLI flags."""
+    argv = ["codacy-analysis", "analyze", "--output-format", "json", "--no-log", "--no-update-notifier",
+            "--fail-if-missing", "--parallel-tools", "2", "--tool-timeout", str(int(timeout * 1000))]
+    for tool in tool_ids:
+        argv.extend(["--tool", tool])
+    if report:
+        argv.extend(["--output", str(report)])
+    return argv
+
+
+def codacy_routes(selected: list[Path], config: dict, info: dict) -> tuple[list[str], list[dict], list[dict]]:
+    """Route selected files through known configured analyzers without running tools."""
     extensions = {str(path): language(path) for path in selected}
     tools = []
     covered = set()
@@ -1194,24 +1545,33 @@ def codacy_check(root: Path, mirror: Path, selected: list[Path], config: dict, i
             covered.update(routed)
     skipped = [{"path": str(path), "reason": "no_configured_local_analyzer"}
                for path in selected if str(path) not in covered]
+    return tools, skipped, unsupported
+
+
+def codacy_batch(mirror: Path, selected: list[Path], config: dict, info: dict, timeout: float) -> dict:
+    """Run configured tools and account for every routed path and execution result."""
+    tools, skipped, unsupported = codacy_routes(selected, config, info)
     if not selected:
         return {"status": "not_applicable", "issues": [], "skipped": [], "unsupported": []}
     if not tools:
         return {"status": "incomplete", "issues": [], "skipped": skipped, "unsupported": unsupported}
-    argv = ["codacy-analysis", "analyze", "--output-format", "json", "--no-log", "--no-update-notifier",
-            "--fail-if-missing", "--parallel-tools", "2", "--tool-timeout", str(int(timeout * 1000))]
-    for tool in tools:
-        argv.extend(["--tool", tool])
+    report = codacy_report_path(mirror, uuid.uuid4().hex)
+    report.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    argv = codacy_arguments(tools, timeout, report)
     # Literal paths containing glob characters must not be silently expanded by the CLI.
     if any(any(char in str(path) for char in "*?[") for path in selected):
         raise AnalysisError("Codacy --files cannot safely select paths containing glob metacharacters")
     argv.extend(["--files", *[str(path) for path in selected]])
-    payload, code = json_command(argv, mirror, timeout)
+    payload, code = json_command(argv, mirror, timeout, report)
     errors = execution_errors(payload, tools)
     capability = payload.get("capability", {})
     incomplete = code not in {0, 1} or bool(errors or skipped or unsupported or capability.get("unavailable"))
-    payload.update(status="incomplete" if incomplete else ("issues_found" if payload.get("issues") else "clean"),
-                   errors=errors, skipped=skipped, unsupported=unsupported, cliExitCode=code)
+    status = "issues_found" if payload.get("issues") else "clean"
+    if incomplete:
+        status = "incomplete"
+    payload.update(status=status,
+                   errors=errors, skipped=skipped, unsupported=unsupported, cliExitCode=code,
+                   submitted=[str(path) for path in selected], rawReport=str(report))
     return payload
 
 
@@ -1272,21 +1632,29 @@ def complexity(root: Path, files: list[Path], capability: dict, timeout: float) 
     version = quality_run([str(executable), "--version"], root, timeout)
     if version.returncode or version.stdout.strip() != ready.get("version"):
         raise AnalysisError("Complexity Lizard version differs from the Codacy issue analyzer")
-    result = quality_run([str(executable), "--csv", *[str(root / path) for path in files]], root, timeout)
-    if result.returncode != 0 or result.stderr.strip():
-        raise AnalysisError("Lizard could not complete raw complexity analysis")
     totals = {str(path): {"path": str(path), "cyclomaticComplexity": 0, "functions": []} for path in files}
-    for row in csv.reader(io.StringIO(result.stdout)):
+    prefix = [str(executable), "--csv"]
+    deadline = time.monotonic() + timeout
+    for batch in path_batches(prefix, [root / path for path in files]):
+        result = quality_run([*prefix, *map(str, batch)], root, batch_time_remaining(deadline, "Complexity analysis"))
+        if result.returncode != 0 or result.stderr.strip():
+            raise AnalysisError("Lizard could not complete raw complexity analysis")
+        add_complexity_rows(result.stdout, root, totals, {str(path.relative_to(root)) for path in batch})
+    return {"status": "complete", "advisory": True, "version": ready["version"], "files": list(totals.values())}
+
+
+def add_complexity_rows(output: str, root: Path, totals: dict, submitted: set[str]) -> None:
+    """Accumulate validated per-batch Lizard CSV rows."""
+    for row in csv.reader(io.StringIO(output)):
         if len(row) != 11:
             raise AnalysisError("Unsupported Lizard CSV format")
         path = str(Path(row[6]).resolve().relative_to(root))
-        if path not in totals:
+        if path not in totals or path not in submitted:
             raise AnalysisError("Lizard returned a file outside the selected set")
         function = {"name": row[7], "cyclomaticComplexity": int(row[1]), "nloc": int(row[0]),
                     "startLine": int(row[9]), "endLine": int(row[10])}
         totals[path]["functions"].append(function)
         totals[path]["cyclomaticComplexity"] += function["cyclomaticComplexity"]
-    return {"status": "complete", "advisory": True, "version": ready["version"], "files": list(totals.values())}
 
 
 def parse_clones(xml: str, mirror: Path, selected: set[str]) -> list[dict]:
@@ -1357,14 +1725,27 @@ def secrets(root: Path, files: list[Path], timeout: float) -> dict:
     """
     if not files:
         return {"status": "not_applicable", "issues": []}
-    result = quality_run(["sonar", "analyze", "secrets", *[str(root / path) for path in files]], root, timeout)
+    prefix = ["sonar", "analyze", "secrets"]
+    batches = path_batches(prefix, [root / path for path in files])
+    deadline = time.monotonic() + timeout
+    codes = []
+    for batch in batches:
+        remaining = batch_time_remaining(deadline, "Secrets scan")
+        result = quality_run([*prefix, *map(str, batch)], root, remaining)
+        codes.append(secret_batch_exit(result))
+    code = 51 if 51 in codes else 0
+    return {"status": "issues_found" if code else "clean", "submitted": [str(path) for path in files],
+            "issues": [{"message": "Secrets detected; inspect with sonar analyze secrets <selected paths> locally"}]
+            if code else [], "cliExitCode": code, "batchExitCodes": codes}
+
+
+def secret_batch_exit(result: subprocess.CompletedProcess) -> int:
+    """Validate completion and redact scanner text."""
     if result.returncode not in {0, 51}:
         raise AnalysisError(f"Sonar secrets scan failed (exit {result.returncode})")
-    if result.returncode == 0 and "No secrets found" not in result.stdout:
+    if result.returncode == 0 and not any(message in result.stdout for message in ("No secrets found", "No issues found")):
         raise AnalysisError("Secrets CLI did not confirm completion")
-    return {"status": "issues_found" if result.returncode else "clean", "submitted": [str(path) for path in files],
-            "issues": [{"message": "Secrets detected; inspect with sonar analyze secrets <selected paths> locally"}]
-            if result.returncode else [], "cliExitCode": result.returncode}
+    return result.returncode
 
 
 # Session
@@ -1419,6 +1800,8 @@ def owned(record: dict, table: dict[int, dict]) -> bool:
 
 def ancestry_edge(parent: dict, child: dict) -> bool:
     """A reused Windows parent PID cannot adopt a pre-existing child."""
+    if sys.platform == "darwin":
+        return int(parent["started"].split(":")[0]) < int(child["started"].split(":")[0])
     if sys.platform != "win32":
         return True
     try:
@@ -1536,6 +1919,9 @@ def validate_secretstorage_records(profile: Path, encrypted: list[tuple]) -> Non
             ciphertext = _secretstorage_bytes(json.loads(value))
             if sys.platform == "win32":
                 valid = ciphertext.startswith(b"v10") and len(ciphertext) >= 31
+            elif sys.platform == "darwin":
+                valid = (ciphertext.startswith(b"v10") and len(ciphertext) >= 19
+                         and (len(ciphertext) - 3) % 16 == 0)
             else:
                 # Linux v10 uses Chromium's hardcoded obfuscation key. Require
                 # the v11 OS-keychain format; never import basic-text storage.
@@ -1586,6 +1972,24 @@ def selected_extension(extensions: Path) -> Path:
     return installed[0].parent
 
 
+def read_code_settings(path: Path) -> dict:
+    """Read VS Code JSONC without treating comment syntax inside strings as comments."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+        # Preserve strings verbatim, including escaped quotes and URL slashes.
+        tokens = r'"(?:[^"\\]|\\.)*"|//[^\r\n]*|/\*.*?\*/'
+        text = re.sub(tokens, lambda match: match[0] if match[0].startswith('"')
+                      else " " + "\n" * match[0].count("\n"), text, flags=re.DOTALL)
+        text = re.sub(r'"(?:[^"\\]|\\.)*"|,(\s*[}\]])',
+                      lambda match: match[0] if match[0].startswith('"') else match[1], text)
+        settings = json.loads(text)
+        if not isinstance(settings, dict):
+            raise ValueError("Settings must be an object")
+        return settings
+    except (OSError, ValueError) as error:
+        raise AnalysisError(f"Cannot read VS Code JSONC settings at {path}") from error
+
+
 def seed_profile(profile: Path, source: Path, extensions: Path) -> Path:
     """
     Copy connection metadata and only Sonar's encrypted SecretStorage records.
@@ -1599,9 +2003,9 @@ def seed_profile(profile: Path, source: Path, extensions: Path) -> Path:
     user.mkdir(parents=True, exist_ok=True, mode=0o700)
     settings_path = source / "User/settings.json"
     try:
-        settings = read_json(settings_path) if settings_path.exists() else {}
+        settings = read_code_settings(settings_path) if settings_path.exists() else {}
     except AnalysisError as error:
-        raise AnalysisError(f"A JSON VS Code settings file is required at {settings_path}") from error
+        raise AnalysisError(f"A valid JSONC VS Code settings file is required at {settings_path}") from error
     # Trust stays enabled; only the user may approve the managed workspace.
     copied = {"security.workspace.trust.enabled": True, "extensions.autoUpdate": False,
               "extensions.autoCheckUpdates": False, "sonarlint.output.showVerboseLogs": True,
@@ -1722,6 +2126,7 @@ def discover_main(table: dict, profile: Path, extension: Path, workspace: Path, 
                               f"{profile.parent / 'extensions'} {extension} {workspace}")
             executable_name = process["executable"].replace("\\", "/").rsplit("/", 1)[-1]
             code_main = (executable_name.casefold() == "code.exe" if sys.platform == "win32"
+                         else executable_name in {"Code", "Electron"} if sys.platform == "darwin"
                          else executable_name == "code")
             title_match = sys.platform.startswith("linux") and process["argv"] == [expected_title]
             # Electron's CLI uses the same executable/profile/markers as its
@@ -1791,7 +2196,7 @@ class SessionPool:
 
     def __init__(self, cache: Path, root: Path, timeout: float = 600):
         """Scope capacity to the repository and sessions to individual worktrees."""
-        self.directory = cache / "sessions"
+        self.directory = cache / ("sessions-macos" if sys.platform == "darwin" else "sessions")
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root = root
         self.timeout = timeout
@@ -1936,7 +2341,12 @@ class SessionPool:
     def open(self, slot: int, record: dict, workspace: Path, source: Path, extensions: Path,
              startup_timeout: float, activation_file: Path) -> dict:
         """Validate an existing session or launch one with durable ownership evidence."""
-        profile = self.directory / identity(self.root) / "profile"
+        # Darwin Unix-domain sockets are limited to 104 bytes including NUL.
+        # Keep the private profile shallow; registry/leases remain repository-scoped.
+        profile = (cache_home() / "p" / identity(self.root) / "u" if sys.platform == "darwin"
+                   else self.directory / identity(self.root) / "profile")
+        if sys.platform == "darwin" and len(os.fsencode(profile / "1.14-main.sock")) >= 104:
+            raise AnalysisError("macOS VS Code profile exceeds the Unix socket path limit")
         if self._reusable_session(record, profile, extensions):
             return record
         if record:
@@ -2014,6 +2424,9 @@ def compiler_entries(database: Path, root: Path) -> list[dict]:
             elif arg.startswith(("-I", "/I")) and len(arg) > 2:
                 includes.append((directory / arg[2:]).resolve())
         if output is None or not output.is_relative_to(database.parent):
+            # Excluded dependency caches can own separate binary directories; active project objects remain bounded.
+            if not repository_input_path(source.relative_to(root)):
+                continue
             raise AnalysisError(f"No in-build object target for {source.relative_to(root)}")
         result.append({"source": source, "target": output.relative_to(database.parent).as_posix(), "includes": includes})
     return result
@@ -2027,12 +2440,27 @@ def header_context(entries: list[dict], headers: list[Path], root: Path) -> dict
     The subsequent build and IDE sensor evidence validate the chosen context.
     Headers without a provable include chain are never declared clean.
     """
+    if not headers:
+        return {}
     include_pattern = re.compile(r'^\s*#\s*include\s*[<"]([^">]+)[">]', re.MULTILINE)
     contents = {}
     found = {}
     if any(not path.is_file() for path in headers):
         raise AnalysisError("Selected header is missing")
-    for entry in entries:
+    # Prefer nearby consumers before traversing unrelated engine include graphs.
+    # The complete entry list remains available for public/transitive contracts.
+    header_directories = {header.parent for header in headers}
+    header_stems = {header.stem for header in headers}
+    counterparts = [entry for entry in entries if entry["source"].stem in header_stems]
+
+    def context_distance(entry: dict) -> int:
+        directory = entry["source"].parent
+        return min(len(directory.parts) + len(other.parts)
+                   - 2 * len(Path(os.path.commonpath((directory, other))).parts)
+                   for other in header_directories)
+
+    ordered = sorted(entries, key=context_distance)
+    for index, entry in enumerate(counterparts + ordered):
         if CANCELLED.is_set():
             raise AnalysisError("Header context search cancelled")
         pending = [entry["source"]]
@@ -2045,11 +2473,24 @@ def header_context(entries: list[dict], headers: list[Path], root: Path) -> dict
             visited.add(path)
             if path in headers:
                 found.setdefault(path, entry)
+                if all(header in found for header in headers):
+                    return found
+                # Find each public header's direct implementation before walking its dependencies.
+                # The complete fallback pass still proves transitive consumers when names differ.
+                if index < len(counterparts) and path.stem == entry["source"].stem:
+                    break
             if path not in contents:
                 contents[path] = include_pattern.findall(path.read_text(encoding="utf-8", errors="replace"))
             for include in contents[path]:
                 for directory in [path.parent, *entry["includes"]]:
-                    candidate = (directory / include).resolve()
+                    candidate = directory / include
+                    try:
+                        # Missing Windows paths make realpath walk every parent. Probe first;
+                        # lstat still sends existing symlinks through normal canonical validation.
+                        candidate.lstat()
+                    except (FileNotFoundError, NotADirectoryError):
+                        continue
+                    candidate = candidate.resolve()
                     if candidate.is_file():
                         candidate = original_header(candidate, root)
                         pending.append(candidate)
@@ -2092,7 +2533,7 @@ def prepare(root: Path, cache: Path, files: list[Path], existing: Path | None,
         command.extend(["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug", "-DBUILD_TESTING=ON"])
         if sys.platform == "linux":
             command.extend(["-DHORO_BUILD_RENDER_VULKAN=ON", "-DHORO_ENABLE_IMGUI_UI_TESTS=ON",
-                            "-DHORO_ENABLE_OPENTELEMETRY=ON", "-DHORO_BUILD_NETWORK_GNS=ON"])
+                            "-DHORO_BUILD_NETWORK_GNS=ON"])
     configured = quality_run(command, root, timeout)
     if configured.returncode:
         raise AnalysisError("CMake configuration failed; " + configured.stderr[-2000:])
@@ -2109,9 +2550,9 @@ def prepare(root: Path, cache: Path, files: list[Path], existing: Path | None,
         make = "CMAKE_GENERATOR:INTERNAL=Unix Makefiles" in cmake_cache.read_text()
         if make:
             owners = {target.split("CMakeFiles/", 1)[1].split(".dir/", 1)[0] for target in targets}
-            commands = [["cmake", "--build", str(build), "--parallel", "2", "--target", *sorted(owners)]]
+            commands = [["cmake", "--build", str(build), "--parallel", "1", "--target", *sorted(owners)]]
         else:
-            commands = [["cmake", "--build", str(build), "--parallel", "2", "--target", *sorted(targets)]]
+            commands = [["cmake", "--build", str(build), "--parallel", "1", "--target", *sorted(targets)]]
         for command in commands:
             built = quality_run(command, root, timeout)
             if built.returncode:
@@ -2136,7 +2577,7 @@ def reusable_database(root: Path, files: list[Path]) -> Path | None:
     return database
 
 
-def verify_evidence(text: str, files: list[Path]) -> dict:
+def verify_evidence(text: str, files: Sequence[PurePath]) -> dict:
     """Require file-specific CFamily execution, active rules, and no sensor error."""
     # Only the explicit no-indexed-files retry may precede the completed request.
     # All sensor errors after its last occurrence remain fatal.
@@ -2148,7 +2589,22 @@ def verify_evidence(text: str, files: list[Path]) -> dict:
     branch_warning = "Couldn't access repository for path" in text
     # JGit in the IDE can fail to discover linked-worktree metadata. This affects
     # cloud branch matching, not CFamily compilation context; retain the warning.
-    sensor_text = "\n".join(line for line in text.splitlines()
+    # IDE 6.3 can log this telemetry RPC signature mismatch during an otherwise
+    # successful CFamily request. Match both exact lines; other errors, including
+    # adjacent sensor failures and unknown telemetry failures, remain fatal.
+    telemetry_message = "Cannot determine if user has Joined IDE Labs or not"
+    telemetry_exception = ("java.util.concurrent.ExecutionException: org.eclipse.lsp4j.jsonrpc.ResponseErrorException: "
+                           "Request sonarlint/hasJoinedIdeLabs defines 1 params but received none.")
+    telemetry_pattern = (r"(?m)^[^\n]*\[Error - [^\]\n]+\] " + re.escape(telemetry_message)
+                         + r"\r?\n" + re.escape(telemetry_exception) + r"\r?$")
+    sensor_log, telemetry_count = re.subn(telemetry_pattern, "", text)
+    log_prefix = r"(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \[info\] )?"
+    error_prefix = r"\[Error - [^\]\r\n]+\] \[sonarlint : sonarcloud-websocket-"
+    push_timeout_pattern = (
+        r"(?m)^" + log_prefix + error_prefix + r"(?P<stream>\d+)\] Error occurred on the WebSocket\r?\n"
+        + log_prefix + error_prefix + r"(?P=stream)\] java\.io\.IOException: Operation timed out\r?$")
+    sensor_log, push_timeout_count = re.subn(push_timeout_pattern, "", sensor_log)
+    sensor_text = "\n".join(line for line in sensor_log.splitlines()
                             if "Couldn't access repository for path" not in line)
     if "[Error -" in sensor_text or re.search(r"(?i)(failed to analy[sz]e|could not analy[sz]e|not set to a valid|not analyzed)", sensor_text):
         raise AnalysisError("Sonar log reports analysis errors; no clean result can be inferred")
@@ -2156,9 +2612,12 @@ def verify_evidence(text: str, files: list[Path]) -> dict:
     rules = [int(value) for value in re.findall(r"(\d+) (?:cpp|c)[,\]]", text)]
     if not counts or max(counts) < 1 or not rules or max(rules) < 1:
         raise AnalysisError("No positive CFamily sensor execution with active C/C++ rules in this request")
-    if "Analysis detected" not in text or any(path.as_uri() not in text for path in files):
+    if "Analysis detected" not in text or any(
+            path.as_uri() not in text and bridge_file_uri(path) not in text for path in files):
         raise AnalysisError("Sonar did not confirm completion for all submitted files")
     return {"compilationUnits": max(counts), "activeCppRules": True, "completion": True,
+            "ideLabsTelemetryWarning": telemetry_count > 0,
+            "cloudPushTransportWarning": push_timeout_count > 0,
             "branchMatching": "unavailable" if branch_warning else "no_error_reported"}
 
 
@@ -2204,7 +2663,62 @@ def request_analysis(root: Path, port: int, files: list[Path], timeout: float, s
     return findings
 
 
-def analyze_files(root: Path, record: dict, contexts: dict, files: list[Path], args) -> tuple[list, list]:
+class FileAnalysisError(AnalysisError):
+    """Retain the verified prefix and unverified last response when a file fails."""
+
+    def __init__(self, path: Path, error: Exception, findings: list, evidence: list, unverified: list):
+        super().__init__(f"{path}: {error}")
+        self.path = path
+        self.findings = list(findings)
+        self.evidence = list(evidence)
+        self.unverified = list(unverified)
+
+
+def sensor_evidence(profile: Path, offsets: dict, submitted: list[Path]) -> dict:
+    """Allow asynchronous log flushing without accepting missing sensor proof."""
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            return verify_evidence(log_delta(profile, offsets), submitted)
+        except AnalysisError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
+def mapped_findings(findings: list, root: Path) -> list:
+    """Map staged public headers back to their original worktree identities."""
+    result = []
+    for finding in findings:
+        reported = finding.get("filePath")
+        native = reported
+        if isinstance(reported, str) and sys.platform == "win32" and re.match(r"^/[A-Za-z]:[\\/]", reported):
+            native = reported[1:]
+        if isinstance(native, str) and Path(native).is_absolute():
+            mapped = original_header(Path(native), root)
+            if str(mapped) != reported:
+                finding = {**finding, "filePath": str(mapped), "reportedFilePath": reported}
+        result.append(finding)
+    return result
+
+
+def partition_sonar_findings(findings: list[dict], files: Sequence[PurePath]) -> tuple[list[dict], list[dict]]:
+    """Keep selected-file findings under the bridge's drive identity, retaining all other context."""
+    selected = {bridge_file_path(path) for path in files}
+    unique: dict[str, dict] = {}
+    contextual = []
+    for finding in findings:
+        reported = finding.get("filePath")
+        identity = bridge_file_path(Path(reported)) if isinstance(reported, str) else None
+        if identity in selected:
+            unique[json.dumps(finding, sort_keys=True)] = finding
+        else:
+            contextual.append(finding)
+    return list(unique.values()), contextual
+
+
+def analyze_files(root: Path, record: dict, contexts: dict, files: list[Path], args,
+                  checkpoint: Callable[[list, list], None] | None = None) -> tuple[list, list]:
     """Collect file-specific sensor evidence while the caller holds the lease."""
     profile = Path(record["profile"])
     findings, evidence = [], []
@@ -2212,26 +2726,68 @@ def analyze_files(root: Path, record: dict, contexts: dict, files: list[Path], a
         submitted = [path]
         if path in contexts:
             submitted.insert(0, contexts[path]["source"])
-        before = log_offsets(profile)
-        result = request_analysis(root, record["port"], submitted, args.timeout, args.startup_timeout)
-        deadline = time.monotonic() + 5
-        while True:
-            try:
-                proof = verify_evidence(log_delta(profile, before), submitted)
-                break
-            except AnalysisError:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.1)
-        for finding in result:
-            reported = finding.get("filePath")
-            if isinstance(reported, str) and Path(reported).is_absolute():
-                mapped = original_header(Path(reported), root)
-                if str(mapped) != reported:
-                    finding = {**finding, "filePath": str(mapped), "reportedFilePath": reported}
-            findings.append(finding)
+        result = []
+        try:
+            before = log_offsets(profile)
+            result = request_analysis(root, record["port"], submitted, args.timeout, args.startup_timeout)
+            proof = sensor_evidence(profile, before, submitted)
+        except (AnalysisError, OSError, ValueError) as error:
+            raise FileAnalysisError(path, error, findings, evidence, mapped_findings(result, root)) from error
+        findings.extend(mapped_findings(result, root))
         evidence.append({"path": str(path.relative_to(root)), **proof})
+        if checkpoint:
+            try:
+                checkpoint(findings, evidence)
+            except OSError as error:
+                raise FileAnalysisError(path, error, findings, evidence, []) from error
     return findings, evidence
+
+
+def evidence_warnings(evidence: list[dict]) -> list[str]:
+    """Retain non-sensor diagnostics alongside independently verified C++ evidence."""
+    warnings = []
+    if any(item["branchMatching"] == "unavailable" for item in evidence):
+        warnings.append("IDE could not match the linked-worktree Git branch; cloud branch parity is unverified")
+    if any(item.get("ideLabsTelemetryWarning") for item in evidence):
+        warnings.append("IDE Labs telemetry RPC signature mismatch; CFamily execution was independently verified")
+    if any(item.get("cloudPushTransportWarning") for item in evidence):
+        warnings.append("SonarCloud push WebSocket timed out; local CFamily execution was verified, live cloud synchronization is unverified")
+    return warnings
+
+
+def verified_evidence_paths(evidence: list[dict]) -> set[str]:
+    """Completion alone cannot qualify a file without positive active CFamily execution."""
+    return {item["path"] for item in evidence if item.get("completion") and item.get("activeCppRules")
+            and item.get("compilationUnits", 0) > 0}
+
+
+def file_analysis_batch(root: Path, cache: Path, record: dict, contexts: dict, files: list[Path], args,
+                        configuration: list) -> tuple[list, list, FileAnalysisError | None, Path]:
+    """Checkpoint one owned batch while the caller retains the verified session lease."""
+    progress_path = cache / "reports" / f"{time.time_ns()}-sonar-progress.json"
+    inputs = set(files) | {context["source"] for context in contexts.values()}
+    progress = {"worktree": str(root), "configurationIdentity": configuration, "profile": record["profile"],
+                "extension": {"path": record["extension"], "version": record["extensionVersion"]},
+                "inputHashes": {str(path.relative_to(root)): digest(path) for path in inputs},
+                "submitted": [str(path.relative_to(root)) for path in files]}
+
+    def checkpoint(findings, evidence):
+        write_json(progress_path, {**progress, "status": "running", "findings": findings, "evidence": evidence})
+
+    failure = None
+    try:
+        findings, evidence = analyze_files(root, record, contexts, files, args, checkpoint)
+    except FileAnalysisError as error:
+        findings, evidence, failure = error.findings, error.evidence, error
+    completed = verified_evidence_paths(evidence)
+    missing = [path for path in files if str(path.relative_to(root)) not in completed]
+    if missing and failure is None:
+        failure = FileAnalysisError(missing[0], AnalysisError("Missing verified CFamily completion"), findings, evidence, [])
+    write_json(progress_path, {**progress, "status": "incomplete" if failure else "complete",
+                               "findings": findings, "evidence": evidence,
+                               "error": str(failure) if failure else None,
+                               "unverifiedFindings": failure.unverified if failure else []})
+    return findings, evidence, failure, progress_path
 
 
 def sonar_check(root: Path, cache: Path, repository_cache: Path, files: list[Path], args) -> dict:
@@ -2256,16 +2812,19 @@ def sonar_check(root: Path, cache: Path, repository_cache: Path, files: list[Pat
             wait_binding(profile, args.project_key, args.timeout)
             record["bindingReady"] = True
             write_json(pool.directory / f"{slot}.json", record)
-        findings, evidence = analyze_files(root, record, contexts, files, args)
+        findings, evidence, failure, progress_path = file_analysis_batch(root, cache, record, contexts, files, args, configuration)
         if not record.get("bindingReady"):
             raise AnalysisError("Connected-mode project cache is missing; bind/authenticate the managed Sonar profile")
-    selected = {str(path) for path in files}
-    contextual = [item for item in findings if item.get("filePath") not in selected]
-    unique = {json.dumps(item, sort_keys=True): item for item in findings if item.get("filePath") in selected}
+    unique, contextual = partition_sonar_findings(findings, files)
     stale = digest(database) != configuration[1]
-    return {"status": "incomplete" if stale else ("issues_found" if unique else "clean"),
-            "stale": stale, "error": "Compilation database changed during analysis" if stale else None,
-            "findings": list(unique.values()),
+    errors = (["Compilation database changed during analysis"] if stale else []) + ([str(failure)] if failure else [])
+    completed = verified_evidence_paths(evidence)
+    return {"status": "incomplete" if stale or failure else ("issues_found" if unique else "clean"),
+            "stale": stale, "error": "; ".join(errors) if errors else None,
+            "findings": unique,
+            "unverifiedFindings": failure.unverified if failure else [],
+            "notAnalyzed": [str(path.relative_to(root)) for path in files if str(path.relative_to(root)) not in completed],
+            "progressReport": str(progress_path),
             "contextFindings": contextual, "evidence": evidence, "compileCommands": str(database),
             "bridge": {"port": record["port"], "pid": record["pid"], "started": record["started"]},
             "versions": [record["extensionVersion"]],
@@ -2273,8 +2832,7 @@ def sonar_check(root: Path, cache: Path, repository_cache: Path, files: list[Pat
             "backend": "local_sonar_ide", "connectedMode": True,
             "projectKey": args.project_key, "connectionId": args.connection_id,
             "configurationIdentity": configuration,
-            "warnings": ["IDE could not match the linked-worktree Git branch; cloud branch parity is unverified"]
-            if any(item["branchMatching"] == "unavailable" for item in evidence) else [],
+            "warnings": evidence_warnings(evidence),
             "submitted": [str(path.relative_to(root)) for path in files]}
 
 
@@ -2396,7 +2954,7 @@ def codacy_stage(root: Path, cache: Path, paths: list[Path], timeout: float) -> 
     mirror = snapshot(root, cache / "mirror")
     info = codacy_info(mirror)
     submitted = [path for path in paths if not excluded(path, config)]
-    result = codacy_check(root, mirror, submitted, config, info, timeout)
+    result = codacy_check(mirror, submitted, config, info, timeout)
     cpp = [path for path in submitted if path.suffix.lower() in SUPPORTED_SUFFIXES]
     result["complexity"] = guarded(complexity, root, cpp, result.get("capability", {}), timeout)
     result["duplication"] = guarded(duplication, root, mirror, cpp, config, info, timeout)
@@ -2727,7 +3285,6 @@ def format_summary(result: dict) -> str:
 
 def coverage_main(argv=None) -> int:
     """Write evidence; coverage differences remain diagnostic during the trial."""
-    from defusedxml.common import DefusedXmlException
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--gcovr-report", type=Path, required=True)
@@ -2751,7 +3308,7 @@ def coverage_main(argv=None) -> int:
         with open(output, "w", encoding="utf-8") as stream:
             stream.write(json.dumps(result, indent=2) + "\n")
         print(format_summary(result))
-    except (OSError, element_tree.ParseError, DefusedXmlException, ValueError, KeyError) as error:
+    except (OSError, element_tree.ParseError, ValueError, KeyError) as error:
         parser.exit(2, f"Coverage comparison failed: {error}\n")
     print(f"Line coverage equivalent: {result['equivalent']}")
     return 0

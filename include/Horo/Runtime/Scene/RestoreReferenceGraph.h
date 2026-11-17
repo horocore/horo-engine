@@ -111,6 +111,22 @@ namespace Horo::Runtime {
         std::span<const SaveParticipantId> preparedOwners; /**< Exact owner candidates already allocated and applied. */
     };
 
+    /** @brief Bounded owner contribution consumed by the existing aggregate reference resolver. */
+    struct RestoreReferenceContribution final {
+        std::vector<RestoreReferenceTarget> nodes;
+        std::vector<RestoreReferenceRequest> references;
+    };
+
+    /** @brief Optional engine-owned projection of actual native prepared reference inventory, after state application. */
+    class IRestoreReferenceContributor {
+    public:
+        virtual ~IRestoreReferenceContributor() = default;
+        [[nodiscard]] virtual std::size_t ReferenceCount() const noexcept = 0;
+        [[nodiscard]] virtual Result<RestoreReferenceContribution> Contribute(const RestoreReferenceAuthorities &,
+                                                                              const SaveParticipantId &,
+                                                                              const RestoreReferenceGraphLimits &) const = 0;
+    };
+
     /** @brief Immutable resolved graph with deterministic allocation order and separately admitted cyclic fixups. */
     class PreparedRestoreReferenceGraph final {
     public:
@@ -147,6 +163,10 @@ namespace Horo::Runtime {
                                       SceneRuntimeId candidate) noexcept;
         std::vector<RestoreReferenceTarget> order_;
         std::vector<ResolvedRestoreReference> references_;
+        friend class SceneRestoreBundle;
+        void RetireTransientParticipantPins(std::span<const SaveParticipantId>);
+        std::uint64_t registryGeneration_{};
+        std::vector<SaveParticipantBinding> retainedPublishedBindings_;
         SaveParticipantRegistrySnapshot participants_;
         std::shared_ptr<void> serviceLease_;
         SceneRuntimeId candidate_;

@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/renderer/EditorViewportScene.h"
@@ -208,11 +209,11 @@ namespace Horo::Editor {
             if (!view.worldStreamingPreviewError)
                 return "workspace.streaming.unavailable";
             const auto &code = view.worldStreamingPreviewError->code.Value();
-            if (code == WorldDocumentErrors::Capacity.code.Value())
+            if (code == GuiLive::HostSymbol<&WorldDocumentErrors::Capacity>().code.Value())
                 return "workspace.streaming.capacity";
-            if (code == WorldDocumentErrors::Stale.code.Value())
+            if (code == GuiLive::HostSymbol<&WorldDocumentErrors::Stale>().code.Value())
                 return "workspace.streaming.stale";
-            if (code == WorldDocumentErrors::Cancelled.code.Value())
+            if (code == GuiLive::HostSymbol<&WorldDocumentErrors::Cancelled>().code.Value())
                 return "workspace.streaming.cancelled";
             return "workspace.streaming.unavailable";
         }

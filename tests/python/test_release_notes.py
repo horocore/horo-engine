@@ -3,6 +3,7 @@
 
 import json
 import io
+import os
 from contextlib import redirect_stderr
 import sys
 import tarfile
@@ -125,10 +126,38 @@ class ReleaseNotesTests(unittest.TestCase):
             self.assertEqual((root / "generated" / "ReleaseNotesSnapshot.json").read_bytes(),
                              snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor")))
             self.assertTrue((root / "generated" / "GeneratedBuildInfo.h").is_file())
+            outputs = [root / "generated" / name for name in ("ReleaseNotesSnapshot.json", "GeneratedBuildInfo.h")]
+            for output in outputs:
+                os.utime(output, ns=(1_600_000_000_000_000_000, 1_600_000_000_000_000_000))
+            timestamps = [output.stat().st_mtime_ns for output in outputs]
+            with patch("sys.argv", arguments), patch.object(Path, "cwd", return_value=root):
+                self.assertEqual(parse_main(), 0)
+            self.assertEqual([output.stat().st_mtime_ns for output in outputs], timestamps)
+            source.write_text(SOURCE.replace("Reviewed feature.", "Updated reviewed feature."), encoding="utf-8")
+            with patch("sys.argv", arguments), patch.object(Path, "cwd", return_value=root):
+                self.assertEqual(parse_main(), 0)
+            for output, timestamp in zip(outputs, timestamps):
+                self.assertNotEqual(output.stat().st_mtime_ns, timestamp)
+                self.assertIn("Updated reviewed feature.", output.read_text(encoding="utf-8"))
+
+    def test_generated_files_reject_symlink_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "CHANGELOG.md"
+            source.write_text(SOURCE, encoding="utf-8")
+            arguments = ['dev.py', "--source", str(source),
+                         "--version", "0.2.0", "--product", "horo-editor"]
+            with patch("sys.argv", arguments), patch.object(Path, "cwd", return_value=root):
+                self.assertEqual(parse_main(), 0)
             outside = root / "outside"
             outside.mkdir()
             (root / "generated" / "ReleaseNotesSnapshot.json").unlink()
-            (root / "generated" / "ReleaseNotesSnapshot.json").symlink_to(outside / "stolen.json")
+            try:
+                (root / "generated" / "ReleaseNotesSnapshot.json").symlink_to(outside / "stolen.json")
+            except OSError as error:
+                if getattr(error, "winerror", None) == 1314:
+                    self.skipTest("Windows symlink privilege is unavailable")
+                raise
             errors = io.StringIO()
             with patch("sys.argv", arguments), patch.object(Path, "cwd", return_value=root), redirect_stderr(errors):
                 result = parse_main()
@@ -173,6 +202,7 @@ class ReleaseNotesTests(unittest.TestCase):
             tar_path, zip_path = write_archive_fixture(root, snapshot)
 
             for unsafe in ("../release-notes.json", str(root.parent / "absolute-release-notes.json"),
+                           "C:/release-notes.json", "C:release-notes.json",
                            "package/../release-notes.json", "package" + chr(92) + "release-notes.json"):
                 with self.subTest(unsafe=unsafe):
                     with tarfile.open(tar_path, "w:gz") as package:
@@ -180,7 +210,12 @@ class ReleaseNotesTests(unittest.TestCase):
                         member.size = len(snapshot)
                         package.addfile(member, io.BytesIO(snapshot))
                     with zipfile.ZipFile(zip_path, "w") as package:
-                        package.writestr(unsafe, snapshot)
+                        member = zipfile.ZipInfo(unsafe)
+                        # Preserve the hostile archive spelling that ZipInfo normalizes on Windows.
+                        member.filename = unsafe
+                        package.writestr(member, snapshot)
+                    with zipfile.ZipFile(zip_path) as package:
+                        self.assertEqual(package.infolist()[0].orig_filename, unsafe)
                     for archive in (tar_path, zip_path):
                         with self.assertRaisesRegex(NotesError, "unsafe package member path"):
                             verify_archive(snapshot, archive)
@@ -214,6 +249,22 @@ class ReleaseNotesTests(unittest.TestCase):
                 package.writestr("release-notes.json/", b"")
             with self.assertRaisesRegex(NotesError, "exactly one"):
                 verify_archive(snapshot, zip_path)
+
+    def test_zip_rejects_control_characters_in_raw_member_names(self):
+        snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "release.zip"
+            for unsafe in ("release-notes.json\0hidden", "package/\x01release-notes.json",
+                           "package/\nrelease-notes.json", "package/\x7frelease-notes.json"):
+                with self.subTest(unsafe=unsafe):
+                    member = zipfile.ZipInfo(unsafe)
+                    member.filename = unsafe
+                    with zipfile.ZipFile(archive, "w") as package:
+                        package.writestr(member, snapshot)
+                    with zipfile.ZipFile(archive) as package:
+                        self.assertEqual(package.infolist()[0].orig_filename, unsafe)
+                    with self.assertRaisesRegex(NotesError, "unsafe package member path"):
+                        verify_archive(snapshot, archive)
 
     def test_release_verifier_rejects_invalid_identity_and_snapshot(self):
         snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))

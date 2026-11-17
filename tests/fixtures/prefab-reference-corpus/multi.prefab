@@ -1,0 +1,57 @@
+{
+  "projectVersion": "0.2.0",
+  "assetId": "00000000-0000-0000-0000-000000000002",
+  "objects": [
+    {
+      "localId": 0,
+      "parentLocalId": null,
+      "name": "Root",
+      "localTransform": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": [],
+      "behaviors": []
+    },
+    {
+      "localId": 17,
+      "parentLocalId": 0,
+      "name": "Child",
+      "localTransform": {
+        "translation": [
+          2.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "components": [],
+      "behaviors": []
+    }
+  ],
+  "referencedAssets": []
+}

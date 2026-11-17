@@ -82,6 +82,7 @@ namespace Horo::Render {
         bool supportsGraphics{false};
         bool supportsPresentation{false};
         bool supportsTransfer{false};
+        bool supportsCompute{false}; /**< Actual VK_QUEUE_COMPUTE_BIT; graphics alone never implies compute. */
     };
 
     /** @brief Native-free Vulkan physical-device facts returned by the platform runtime seam. */
@@ -101,6 +102,7 @@ namespace Horo::Render {
         bool hostAllowed{true};           /**< Actual selected runtime's physical-device admission, independent of driver qualification. */
         bool vertexLayerRouting{false};   /**< Queried optional shaderOutputLayer feature; never part of baseline admission. */
         bool swapchainMaintenance{false}; /**< Actual optional feature; required only for interactive present-resource retirement. */
+        bool shaderDemote{false};         /**< Queried optional fragment demotion support; never part of baseline admission. */
     };
 
     /** @brief One bounded physical-device enumeration and its non-zero revision. */
@@ -137,6 +139,7 @@ namespace Horo::Render {
         std::uint32_t maxFramesInFlight{2};
         bool enableVertexLayerRouting{false};   /**< Exact optional feature request captured before VkDevice creation. */
         bool enableSwapchainMaintenance{false}; /**< Requires admitted extension and instance dependencies; never enabled headless. */
+        bool enableShaderDemote{false};         /**< Exact supported optional shader demotion feature enabled on the logical device. */
     };
 
     /**
@@ -220,6 +223,36 @@ namespace Horo::Render {
         /** @brief Publishes a prepared VFX block only through the canonical command owner's retirement proof. */
         [[nodiscard]] virtual Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &) {
             return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+        }
+
+        [[nodiscard]] virtual Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
+            const VfxGpuSimulationDescriptor &descriptor) const {
+            return Result<NativeVfxGpuPreparationResources>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+        }
+
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentVfxGpuKernel>> RealizeVfxGpuPrograms(const CookedVfxGpuPrograms &programs) {
+            return Result<std::shared_ptr<IResidentVfxGpuKernel>>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+        }
+
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentVfxGpuSimulation>> PrepareNativeVfxGpuSimulation(
+            const NativeVfxGpuSimulationPreparation &preparation) {
+            return Result<std::shared_ptr<IResidentVfxGpuSimulation>>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+        }
+
+        [[nodiscard]] virtual Result<std::size_t> PollNativeVfxGpuReceipts(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                           std::span<NativeGpuVfxStepReceipt> destination) {
+            return Result<std::size_t>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+        }
+
+        [[nodiscard]] virtual Result<std::size_t> CopyCompletedVfxGpuObservation(
+            const std::shared_ptr<IResidentVfxGpuSimulation> &simulation, const VfxGpuStepIdentity &step,
+            std::span<std::byte> destination) {
+            return Result<std::size_t>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+        }
+
+        [[nodiscard]] virtual Result<void> DiscardCompletedVfxGpuObservation(const std::shared_ptr<IResidentVfxGpuSimulation> &simulation,
+                                                                             const VfxGpuStepIdentity &step) {
+            return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
         }
 
         /** @brief Admits GUI ownership on the existing frame; only real matching native ports implement this. */

@@ -1,10 +1,9 @@
 #pragma once
 
 #include "Horo/Foundation/ErrorCode.h"
+#include "ProjectVersionErrors.h"
 
 namespace Horo::Application::ProjectErrors {
-    extern const ErrorCodeDescriptor VersionInvalid;
-    extern const ErrorCodeDescriptor HashInvalid;
     extern const ErrorCodeDescriptor RegistryInvalid;
     extern const ErrorCodeDescriptor RegistryDuplicateRelease;
     extern const ErrorCodeDescriptor RegistryBaselineMismatch;

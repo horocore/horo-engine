@@ -47,6 +47,38 @@ that affinity and synchronization are explicit.
 
 ## Job System Interface
 
+The scheduler prepares one immutable pre-cancelled error during cold construction,
+before starting workers. Admission copies that value directly into its unpublished
+terminal record, so checked string/vector moves cannot terminate inside `noexcept`.
+An error-copy allocation failure still leaves admission IDs, revision, queue and
+callback ownership unpublished. This adds one cold owned error per scheduler;
+no frame-path throughput claim is made. Error assembly copies message text only
+in checked MSVC builds and explicitly constructs its empty diagnostic vector at
+a fallible boundary. Other profiles retain message moves. Exact identities,
+messages and diagnostic contents are unchanged. Factory and admission allocation
+sweeps cover the failure boundaries without changing `Result` transfer policy.
+
+Scheduler construction is fallible, including checked standard-library
+bookkeeping. Its worker vector uses the fallible zero-count constructor. Before
+construction returns, the scheduler is unpublished and has no submitted jobs or
+external helpers. A worker-start failure therefore revokes helping, closes
+admission, signals both lanes and joins every already-owned worker directly,
+without calling the general allocating cancellation-snapshot path in `Shutdown`.
+The original exception then propagates to the constructing caller.
+
+Checked MSVC builds use ordered private job-record storage because that STL's
+hash-vector allocator constructor allocates a checked iterator proxy inside
+`noexcept`. Passing a zero bucket count still enters that same constructor.
+Release MSVC and other standard libraries retain the existing hash storage.
+The checked-build alternative has logarithmic record lookup; no throughput claim
+is made. Record bounds, producer FIFO, cancellation semantics and terminal FIFO
+retention are unchanged, and public snapshots remain explicitly sorted by job ID.
+No checked-iterator flag or allocation injection point is disabled. The partial
+CPU/I/O worker construction sweep covers every measured owner-thread allocation;
+test framework assertions run after the failure scope ends. The job-system suite is
+mandatory in Windows CI. Native qualification
+and scheduler workload measurements are recorded separately.
+
 Implementation status on 11 September 2026: the FND-001A and JOB-001.1 baselines
 provide the bounded worker queue, structured `TaskGroup`, typed bounded waits and
 exact-record helping. JOB-001.2 adds scheduler-owned bounded terminal retention,

@@ -1,0 +1,157 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "VSMain",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_9" : {
+            "name" : "type.ViewportParameters",
+            "members" : [
+                {
+                    "name" : "Mvp",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "ModelToWorld",
+                    "type" : "mat4",
+                    "offset" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "ShadowViewProjection",
+                    "type" : "mat4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 128,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "CameraAndLightCount",
+                    "type" : "vec4",
+                    "offset" : 384
+                },
+                {
+                    "name" : "SelectionColorAndStrength",
+                    "type" : "vec4",
+                    "offset" : 400
+                },
+                {
+                    "name" : "ShadowSettings",
+                    "type" : "vec4",
+                    "offset" : 416
+                },
+                {
+                    "name" : "ShadowCoordinates",
+                    "type" : "vec4",
+                    "offset" : 432
+                },
+                {
+                    "name" : "CascadeSplits",
+                    "type" : "vec4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 448,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "AtlasRects",
+                    "type" : "vec4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 512,
+                    "array_stride" : 16
+                },
+                {
+                    "name" : "CameraForward",
+                    "type" : "vec4",
+                    "offset" : 576
+                },
+                {
+                    "name" : "ShadowBiasFilter",
+                    "type" : "vec4",
+                    "offset" : 592
+                },
+                {
+                    "name" : "ClusterDimensions",
+                    "type" : "vec4",
+                    "offset" : 608
+                },
+                {
+                    "name" : "ClusterDepth",
+                    "type" : "vec4",
+                    "offset" : 624
+                },
+                {
+                    "name" : "ViewportDimensions",
+                    "type" : "vec4",
+                    "offset" : 640
+                },
+                {
+                    "name" : "ShadowIdentity",
+                    "type" : "vec4",
+                    "offset" : 656
+                },
+                {
+                    "name" : "BaseColor",
+                    "type" : "vec4",
+                    "offset" : 672
+                },
+                {
+                    "name" : "SceneColorPolicy",
+                    "type" : "vec4",
+                    "offset" : 688
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "in.var.POSITION",
+            "location" : 0
+        },
+        {
+            "type" : "vec3",
+            "name" : "in.var.NORMAL",
+            "location" : 1
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec3",
+            "name" : "out.var.TEXCOORD0",
+            "location" : 0
+        },
+        {
+            "type" : "vec3",
+            "name" : "out.var.TEXCOORD1",
+            "location" : 1
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_9",
+            "name" : "type.ViewportParameters",
+            "block_size" : 704,
+            "set" : 0,
+            "binding" : 0
+        }
+    ]
+}

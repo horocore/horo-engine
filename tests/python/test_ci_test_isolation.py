@@ -197,6 +197,28 @@ def test_generated_suite_properties_preserve_contracts_and_control_concurrency(t
         _assert_suite_overlap(events, groups)
 
 
+def test_suite_runtime_directories_recover_after_temporary_cleanup(tmp_path: Path) -> None:
+    """CTest must recreate its ephemeral work/home/temp directories without reconfiguration."""
+    build, evidence = prepare_isolation_project(tmp_path, True)
+    manifest = json.loads(run("ctest", "--test-dir", str(build), "--show-only=json-v1").stdout)
+    roots = set()
+    for test in manifest["tests"]:
+        _assert_suite_properties(test, True)
+        properties = {item["name"]: item["value"] for item in test["properties"]}
+        roots.add(Path(properties["WORKING_DIRECTORY"]).parent)
+    for root in roots:
+        # Remove only the empty directories of this freshly configured fixture.
+        # Keep namespace identities, properties and every unrelated build untouched.
+        for name in ("work", "tmp", "home"):
+            (root / name).rmdir()
+    run("ctest", "--test-dir", str(build), "--parallel", "2", "--output-on-failure", "-R", "^Suite")
+    for root in roots:
+        assert all((root / name).is_dir() for name in ("work", "tmp", "home"))
+    events = {path.stem: json.loads(path.read_text()) for path in evidence.glob("*.json")}
+    assert set(events) == {"SuiteA-one", "SuiteA-two", "SuiteB-one", "SuiteB-two"}
+    _assert_suite_overlap(events, ("SuiteA", "SuiteB"))
+
+
 def _run_coverage_executables(executables: list[Path]) -> None:
     for _ in range(4):
         children = []

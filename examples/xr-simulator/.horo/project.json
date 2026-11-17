@@ -1,0 +1,22 @@
+{
+  "horoVersion": "0.3.0",
+  "persistentContract": "sha256:285bfdfdb77e09706085550de98315000d8bb576e8baef48d3f3be1992fc29d7",
+  "projectId": "proj_65f7877a91bd11",
+  "name": "XRSimulator",
+  "projectVersion": "0.1.0",
+  "createdAt": "2026-11-04T19:34:29.765412Z",
+  "settings": {
+    "renderBackend": "opengl",
+    "physicsEnabled": false,
+    "targetFrameRate": 60,
+    "defaultScene": "Assets/Scenes/main.horo",
+    "assetCompression": "lz4",
+    "textureCompression": "bc7",
+    "buildProfile": "desktop-debug",
+    "requiredToolchain": {
+      "targetPlatform": "host",
+      "compilerFamily": "default",
+      "minimumCxxStandard": 20
+    }
+  }
+}

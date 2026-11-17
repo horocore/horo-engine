@@ -80,6 +80,12 @@ namespace Horo::Physics {
 
         class CollisionCookerStrategy final : public Assets::ICookerStrategy {
         public:
+            /** @brief Declares a source-only producer; all other byte-affecting settings are captured by CacheIdentity. */
+            Result<std::optional<std::vector<Assets::AssetId>>> InputDependencies(const Assets::CookSourceView &,
+                                                                                  const CancellationToken &) const override {
+                return Result<std::optional<std::vector<Assets::AssetId>>>::Success(std::vector<Assets::AssetId>{});
+            }
+
             CollisionCookerStrategy(Assets::AssetTypeId type, AssetCookTargetId target, const PhysicsShapeCookTargetDigest &physicsTarget,
                                     std::shared_ptr<const IPhysicsCollisionSourceImporter> importer, const Sha256Digest &configuration)
                 : type_(std::move(type)), target_(std::move(target)), physicsTarget_(physicsTarget), importer_(std::move(importer)),

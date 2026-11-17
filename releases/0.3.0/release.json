@@ -1,0 +1,18 @@
+{
+  "horoVersion": "0.3.0",
+  "contractBaseline": "0.3.0",
+  "projectContract": "project-contract.json",
+  "persistentContract": "sha256:285bfdfdb77e09706085550de98315000d8bb576e8baef48d3f3be1992fc29d7",
+  "migrationDefinitions": "sha256:e70ee64f23fd5b003620deeda5a6a90812928deb17717ab8880b6290de21caa3",
+  "migrationRecoveryContract": "sha256:ccca65a3a1fab86ad116098c3d5c1b8499118137470761e50eb174b7de121acb",
+  "supportedMigrationRecoveryContracts": [
+    {
+      "contract": "sha256:ccca65a3a1fab86ad116098c3d5c1b8499118137470761e50eb174b7de121acb",
+      "reader": "journal-v1"
+    }
+  ],
+  "decisionHash": "sha256:9fc44bb47474b097427538042991078aa7508ff03c45383317e3d41ecbe31711",
+  "minimumMigratableVersion": "0.0.1",
+  "migrationCheckpoints": [],
+  "developmentSnapshot": true
+}

@@ -2,11 +2,22 @@
 /** @file PrefabComponentProjection.h
  * @brief Canonical inert built-in component projection shared by source expansion and cooked runtime hosts.
  */
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Runtime/Scene/BuiltinSceneComponents.h"
 #include "Horo/Scene/SceneSourceModel.h"
 
 namespace Horo::SceneSource {
+    /** @brief Raw builtin envelope schema; distinct from nested typed component schemas. */
+    inline constexpr std::uint32_t PrefabBuiltinComponentPayloadSchemaVersion = 1;
+    /** @brief Owning codec semantic revision; increment when accepted field grammar/meaning changes. */
+    inline constexpr std::uint32_t PrefabBuiltinComponentCodecContractVersion = 1;
+    /** @brief Commits actual closed builtin identities/field mappings and owning Scene codec versions.
+     * @return Canonical semantic fingerprint; no source, runtime generation or caller digest is involved.
+     * @details Cold metadata work only; performs no I/O or publication. @throws std::bad_alloc On bounded metadata allocation failure.
+     */
+    [[nodiscard]] Sha256Digest PrefabBuiltinComponentCodecFingerprint();
+
     /** @brief Encodes one typed navigation occurrence with the canonical Scene codec.
      * @param kind Exact navigation component kind. @param instance Source-owned occurrence identity.
      * @param components Detached typed values. @return Portable canonical payload or typed invalid/unsupported error.

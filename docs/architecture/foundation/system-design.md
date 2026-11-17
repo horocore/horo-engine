@@ -56,9 +56,44 @@ coordinates the scene document, selection, viewport state, undo/redo commands,
 workspace persistence, and editor-local notifications. GUI panels and tabs do
 not become application-layer state authorities.
 
+`HoroGui` depends directly on Runtime for the graphical host's typed fixed-dispatch
+boundary. The application binds its actual scheduler issuer; `GuiScreenHost`
+forwards that same callback through its active screen and holds screen lifetime
+until fixed preparation and commit/abort finish. Navigation and shutdown are
+deferred to ordinary host update, outside no-fail fixed publication. GUI code
+does not issue clocks, dispatch proofs or simulation commitments.
+
 `EditorModalHost`, owned by application composition and borrowed by `GuiScreenHost`, composes transient screen-like
 workflows above the editor workspace. It owns modal focus and interaction
 exclusivity but not editor, project, build, or release state.
+
+## Application Source Ownership
+
+`src/` contains reusable libraries, including the editor libraries. ImGui screens,
+panels and editor presentation therefore belong under `src/editor/` in their
+existing GUI target; they are not executable bootstrap code.
+
+Executable-specific adapters and composition live with their host:
+
+- `apps/HoroEditor/composition/` owns Editor Play/Save adaptation, project Scene
+  composition, presentation, shader hot reload, terrain preparation and XR host
+  wiring. The shared Save format, capture barrier and Physics restore remain
+  owned by their Runtime/Physics libraries under `src/`.
+- `apps/HoroEditor/tools/shader_cook/` owns the graphical product's offline tool
+  authentication and package publication helpers.
+- `apps/horo-engine/composition/` owns terminal/headless network and Scene
+  composition and module-script package admission.
+- `apps/shared/` contains only composition used by multiple executable hosts:
+  module activation, package sessions, host signatures, navigation preparation,
+  Scene/Physics lifetime adaptation and animation owner identities. Keep each
+  family in its own directory and expose only its existing non-installed target
+  contract.
+
+There is no catch-all `apps/common` include root. Moving a file does not grant
+another target access to its private headers. Shared feature rules, serializers
+and state transitions belong to the owning library, rather than being copied
+into host adapters. The two hosts continue to select concrete services and own
+their lifetimes at their composition roots.
 
 ## Architecture Style
 
@@ -402,6 +437,64 @@ owner downstream of `AnimationApi`; it owns prepared per-instance storage and
 transactional fixed-tick pose/cursor/parameter publication, with no scene, renderer,
 platform or backend dependency. Compiler and prepared clip kernels stay in
 `AnimationApi`, while scene activation remains a separate composition consumer.
+
+`RuntimeScene` and `SceneSourceModel` consume `AnimationApi` only for inert typed
+animation components, validation and stable asset requirements in canonical Scene
+values. `EditorModel` may call those same component validators privately when
+editing whole-component transactions. These edges grant no graph execution,
+asset loading or pose ownership to Scene codecs or editor documents. Actual Scene
+activation, staged fixed-tick evaluation and retirement belong to a separate
+Animation Scene integration downstream of both RuntimeScene and AnimationRuntime;
+AnimationApi and AnimationRuntime never depend back on Scene or Editor.
+
+Animation runtime owner identities come from an explicit process-composition
+range, shared by the actual Play, preview and headless factories. The non-installed
+`HoroAnimationHostIdentityInternal` helper is a noncopyable, owner-thread,
+nonwrapping issuer over AnimationApi's existing identity type. Replacing a Scene
+service or workspace does not reset that authority; failed preparation consumes
+its issued identity. Separate issuers require disjoint ranges. No pointer hash,
+Scene-local counter, static allocator or persisted identity substitutes for it.
+
+The non-installed `HoroAnimationClipProgramInternal` boundary prepares an actual
+absolute Clip source as execution-local Clip-to-Output operands through the same
+Animation validators, binder and executor. It retains typed Clip lineage without
+creating a persistent Graph asset ID. Graph programs retain Graph lineage; runtime
+replacement checks that exact typed source. This introduces no second cursor,
+pose store or clock. Standalone additive clips require explicit base/reference
+operands and remain typed unsupported when that binding is absent; additive
+composition inside a real Graph uses its existing operand contract.
+
+`HoroAnimationCookedAssets` owns the portable generation-free Skeleton/Clip/Graph
+binary payload format downstream of AnimationApi, Assets and Foundation. Its
+UTF-8 implementation is private; runtime decoding does not depend on JSON or
+GraphSourceCodec. The non-installed `HoroAnimationClipPayloadBindingInternal`
+exports only the canonical Clip field handoff, not the private codec directory.
+The offline `HoroAnimationAssetSourceCodec` owns strict Skeleton/Clip source
+transport. Its non-installed cooked-field contract exposes the same canonical
+portable field codec by one forwarding header. `HoroAnimationSourceCodecInternal`
+similarly exposes only the two canonical source-codec headers needed by
+`HoroAnimationAssetCook`; it does not expose either source directory. The cook
+owner derives immutable native Skeleton/Clip/Graph payloads from the same Assets
+capture and contributes them to the existing resource phase. PrefabCookHost
+privately selects that cook owner and supplies its verified dependency projection
+to Prefab's existing closure validator. Runtime decoding and Scene integration
+acquire no JSON, source parsing, cook or cache dependency.
+
+`HoroAnimationSceneIntegration` owns Scene activation, bounded loaded-asset role
+discovery, structural candidates and actual fixed-attempt staging downstream of
+RuntimeScene and AnimationRuntime. It privately consumes the cooked codec and
+the narrow Graph commit, direct Clip program and Clip field bridges. Neither
+AnimationApi nor RuntimeScene depend back on this integration target. Hosts
+register its Scene participants and forward the existing scheduler callback;
+they do not register a second animation evaluation path.
+
+The non-installed `HoroAnimationSceneHostInternal` exposes only explicit factory
+selection (actual dispatch issuer, selected asset target, shared identity issuer,
+limits and optional input source) to application compositions. Each actual Scene
+host owns the adapter lifetime and cancellation scope. Committed asset snapshots
+route Animation loads to their original verified envelopes while preserving
+payload loading for other Scene consumers; this view shares existing providers
+and does not create a second cache or duplicate all payload buffers.
 
 `HoroEngine::SaveApi` owns canonical save identity, error and inert participant
 descriptor/registry contracts and depends only on Foundation. Runtime consumes
@@ -832,7 +925,7 @@ publication manifests, immutable generations and provider bytes.
 
 The non-installed executable adapter `HoroEditorUiStyleHostInternal` composes the
 bridge with actual native storage, project read/mutation authority and process
-jobs. It exports only its dedicated `apps/common/ui_style` internal seam, not a
+jobs. It exports only its dedicated `apps/HoroEditor/composition/ui_style` internal seam, not a
 repository-wide source root. Its returned workspace capability cancels/joins work
 before the host services die. GUI/controller clients receive typed themes,
 completion values and commands; they do not discover files, cook assets or select

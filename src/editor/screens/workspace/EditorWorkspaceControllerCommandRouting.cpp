@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorWorkspaceEvents.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
@@ -46,6 +47,7 @@ namespace Horo::Editor {
         RefreshWorldDocumentProjection();
         UpdateWorldBake();
         RefreshSourceDocumentProjection();
+        RefreshTerrainDocuments();
         RefreshPrefabDocuments();
     }
 
@@ -59,12 +61,18 @@ namespace Horo::Editor {
             RefreshWorldDocumentProjection();
             return;
         }
+        if (ProcessTerrainDocumentCommand(cmd))
+            return;
         if (ProcessWorldStreamingPreviewCommand(cmd) || ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) ||
             ProcessWorldSourceCommand(cmd) || ProcessUiCanvasCommand(cmd) || ProcessPrefabDocumentCommand(cmd) ||
             ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) ||
             ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
             ProcessLayoutCommand(cmd))
             return;
+        if (m_activeTerrainDocument) {
+            ProcessFocusedTerrainCommand(cmd);
+            return;
+        }
         if (m_activePrefabDocument) {
             ProcessFocusedPrefabCommand(cmd);
             return;
@@ -138,11 +146,11 @@ namespace Horo::Editor {
                 break;
             case EditorWorkspaceViewCommand::SaveSceneAs:
                 if (cmd.stringPayload.has_value())
-                    SaveSceneToPath(std::filesystem::path{*cmd.stringPayload}, false);
+                    SaveSceneToPath(WorkspaceNativePath(*cmd.stringPayload), false);
                 break;
             case EditorWorkspaceViewCommand::SaveSceneCopyAs:
                 if (cmd.stringPayload.has_value())
-                    SaveSceneToPath(std::filesystem::path{*cmd.stringPayload}, true);
+                    SaveSceneToPath(WorkspaceNativePath(*cmd.stringPayload), true);
                 break;
             case EditorWorkspaceViewCommand::ReloadExternalScene:
                 ReloadExternalScene();

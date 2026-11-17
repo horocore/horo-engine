@@ -1,3 +1,4 @@
+#include "BehaviorRestoreFixture.h"
 #include "GameplayRetirementFixture.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
@@ -90,8 +91,80 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-class MoveBehavior final : public IBehaviorInstance {
+namespace {
+    Tests::GameplayRetirementFixture *retirementFixture{};
+}
+
+class MoveBehavior final : public IBehaviorInstance, public IBehaviorRestorePreparation, public Tests::IGameplayBehaviorDurableFixture {
 public:
+    MoveBehavior() {
+        if (retirementFixture && retirementFixture->failBehaviorConstruction)
+            throw std::runtime_error{"behavior construction failure"};
+    }
+
+    BehaviorRestoreServices RequiredRestoreServices() const noexcept override {
+        return retirementFixture ? static_cast<BehaviorRestoreServices>(retirementFixture->restoreRequiredServices)
+                                 : BehaviorRestoreServices::None;
+    }
+
+    Result<void> PrepareInactive(const BehaviorRestoreInstance &) override {
+        if (retirementFixture && retirementFixture->restoreFailure == 6)
+            return Result<void>::Failure(MakeError(Runtime::SaveErrors::LifecycleCallbackFailed));
+        if (retirementFixture && retirementFixture->restoreFailure == 19)
+            throw std::runtime_error{"restore prehook failure"};
+        if (retirementFixture && retirementFixture->restoreFailure == 21)
+            throw std::bad_alloc{};
+        if (retirementFixture && retirementFixture->restoreFailure == 22)
+            throw 17;
+        if (retirementFixture)
+            ++retirementFixture->behaviorPrehooks;
+        fields_ = {};
+        return Result<void>::Success();
+    }
+
+    void OnCreate(BehaviorContext &) override {
+        fields_.value = 11;
+        if (retirementFixture)
+            ++retirementFixture->behaviorCreated;
+    }
+
+    void OnEnable(BehaviorContext &) override {
+        fields_.value = 13;
+        if (retirementFixture)
+            ++retirementFixture->behaviorEnabled;
+    }
+
+    void OnStart(BehaviorContext &) override {
+        fields_.value = 17;
+        if (retirementFixture)
+            ++retirementFixture->behaviorStarted;
+    }
+
+    void OnDestroy(BehaviorContext &) override {
+        if (retirementFixture && retirementFixture->restoreFailure == 20 && retirementFixture->armAllocationFailure)
+            retirementFixture->armAllocationFailure(retirementFixture->allocationOwner);
+    }
+
+    Tests::GameplayBehaviorDurableFields DurableFields() const override {
+        return fields_;
+    }
+
+    void SetDurableFields(Tests::GameplayBehaviorDurableFields fields) override {
+        fields_ = std::move(fields);
+    }
+
+    Result<std::vector<std::byte>> CaptureReloadState() const override {
+        return Tests::BehaviorRestoreFixture::EncodeReload(fields_);
+    }
+
+    Result<void> RestoreReloadState(std::span<const std::byte> bytes) override {
+        auto decoded = Tests::BehaviorRestoreFixture::DecodeReload(bytes);
+        if (decoded.HasError())
+            return Result<void>::Failure(decoded.ErrorValue());
+        fields_ = std::move(decoded).Value();
+        return Result<void>::Success();
+    }
+
     static BehaviorDescriptor DescribeBehavior() {
         BehaviorDescriptor descriptor;
         descriptor.displayName = "Dynamic Mover";
@@ -110,6 +183,9 @@ public:
         moved.translation.x += actions.front().x;
         static_cast<void>(context.SetLocalTransform(moved));
     }
+
+private:
+    Tests::GameplayBehaviorDurableFields fields_;
 };
 
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
@@ -218,29 +294,48 @@ private:
 HORO_BEHAVIOR(PrefabSpawnerBehavior, "game.tests.prefab_spawner")
 
 namespace {
-    Tests::GameplayRetirementFixture *retirementFixture{};
-
-    class DurableCandidate final : public IPreparedPersistenceState {
+    class DurableCandidate final : public IPreparedPersistenceState, public IPublishedGameplayPreparationRetirement {
     public:
         DurableCandidate(std::vector<std::byte> &active, std::vector<std::byte> candidate)
             : active_(active), candidate_(std::move(candidate)) {}
 
         void Publish() noexcept override {
             active_.swap(candidate_);
+            published_ = true;
+        }
+
+        Result<void> RetirePreparation() override {
+            if (!published_ || (retirementFixture && retirementFixture->restoreFailure == 5))
+                return Result<void>::Failure(MakeError(Runtime::SaveErrors::RestoreAdapterContractInvalid));
+            if (retirementFixture)
+                ++retirementFixture->preparationRetired;
+            return Result<void>::Success();
         }
 
     private:
+        bool published_{};
         std::vector<std::byte> &active_;
         std::vector<std::byte> candidate_;
     };
 
-    class DurableSource final : public IPersistenceSource {
+    class DurableSource final : public IPersistenceSource, public IBehaviorCandidatePersistenceSource {
     public:
+        Result<std::shared_ptr<IPersistenceSource>> BindRestoreCandidate(BehaviorPersistenceTarget target) override {
+            if (retirementFixture && retirementFixture->restoreFailure == 1)
+                return Result<std::shared_ptr<IPersistenceSource>>::Failure(MakeError(Runtime::SaveErrors::RestoreAdapterContractInvalid));
+            return Result<std::shared_ptr<IPersistenceSource>>::Success(
+                std::make_shared<Tests::BehaviorRestoreFixture::BoundSource>(std::move(target), retirementFixture));
+        }
+
         Result<std::vector<std::byte>> CaptureRuntimeState(std::uint64_t) const override {
+            if (retirementFixture)
+                ++retirementFixture->durableCaptured;
             return Result<std::vector<std::byte>>::Success(active_);
         }
 
         Result<std::unique_ptr<IPreparedPersistenceState>> PrepareRuntimeState(std::span<const std::byte> bytes) override {
+            if (retirementFixture)
+                ++retirementFixture->durablePrepared;
             return Result<std::unique_ptr<IPreparedPersistenceState>>::Success(
                 std::make_unique<DurableCandidate>(active_, std::vector<std::byte>{bytes.begin(), bytes.end()}));
         }
@@ -257,7 +352,7 @@ namespace {
             descriptor.participant.schemaVersion = ParticipantSchemaVersion::Create(1).Value();
             descriptor.participant.scope = index == 3 ? SaveParticipantScope::SlotPlayer : SaveParticipantScope::RuntimeScene;
             descriptor.participant.roles = SaveParticipantRole::Capture | SaveParticipantRole::Restore;
-            descriptor.participant.limits = {128, 1, 4};
+            descriptor.participant.limits = {65536, 1, 4};
             SaveIdentityDetail::Bytes record{};
             record.back() = index + 1;
             descriptor.record = SaveRecordId::FromBytes(record).Value();

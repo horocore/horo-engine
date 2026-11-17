@@ -82,7 +82,11 @@ namespace {
             ImGui::SetNextWindowSize({360, 600});
             ImGui::Begin("PhysicsInspector", nullptr, ImGuiWindowFlags_NoSavedSettings);
             EditorWorkspaceViewCommandData command;
-            panel.DrawPanel(ImGui::GetCursorScreenPos(), {340, 560}, controller.ViewModel(), command, gui);
+            auto view = controller.ViewModel();
+            view.physicsProfiles.push_back(
+                {Physics::CollisionProfileId::Parse("00000000-0000-0000-0000-000000000002").Value(), "Test profile"});
+            view.physicsMaterials.push_back({Assets::AssetId::Parse("00000000-0000-0000-0000-000000000003").Value(), "Test material"});
+            panel.DrawPanel(ImGui::GetCursorScreenPos(), {340, 560}, view, command, gui);
             ImGui::End();
             if (command.command != EditorWorkspaceViewCommand::None)
                 controller.ProcessCommand(command);
@@ -109,18 +113,21 @@ namespace {
         SelectContent(ui);
         IM_CHECK(ui.ItemExists("###InspectorAddComponent"));
         ui.ItemClick("###InspectorAddComponent");
-        ui.ItemClick("//**/###inspector_physics_body");
+        ui.ItemClick("//**/###workspace.physics.title");
+        ui.ItemClick("//**/###physics.body");
         ui.Yield();
         IM_CHECK(!host.Box().components.rigidBody);
-        IM_CHECK(ui.ItemExists("**/workspace.physics.profile"));
-        IM_CHECK(ui.ItemExists("**/workspace.physics.material_asset"));
+        IM_CHECK(ui.ItemExists("**/workspace.physics.profile/##reference/Combo#####reference"));
+        IM_CHECK(ui.ItemExists("**/workspace.physics.material_asset/##reference/Combo#####reference"));
     }
 
-    /** @brief Supplies deliberate author-entered fixture identities to the actual shared text controls. */
+    /** @brief Chooses deliberate fixture identities through the actual shared reference selectors. */
     void EnterBindings(ImGuiTestContext &ui) {
         SelectContent(ui);
-        ui.ItemInputValue("**/workspace.physics.profile", "00000000-0000-0000-0000-000000000002");
-        ui.ItemInputValue("**/workspace.physics.material_asset", "00000000-0000-0000-0000-000000000003");
+        ui.ItemClick("**/workspace.physics.profile/##reference/Combo#####reference");
+        ui.ItemClick("//**/###combo_option_1");
+        ui.ItemClick("**/workspace.physics.material_asset/##reference/Combo#####reference");
+        ui.ItemClick("//**/###combo_option_1");
     }
 }  // namespace
 
@@ -134,14 +141,14 @@ TEST_CASE("Physics creation uses the generic Inspector route and canonical Apply
         pipeline.Step("Box retains visible generic creation", [&](ImGuiTestContext &ui) {
             SelectContent(ui);
             IM_CHECK(ui.ItemExists("###InspectorAddComponent"));
-            IM_CHECK(!ui.ItemExists("**/workspace.physics.profile"));
+            IM_CHECK(!ui.ItemExists("**/workspace.physics.profile/##reference/Combo#####reference"));
         });
         pipeline.Step("Stage full body and collider cards without publication", [&](ImGuiTestContext &ui) {
             StageBody(ui, host);
         });
         pipeline.Step("Apply authored bindings once through document history", [&](ImGuiTestContext &ui) {
             EnterBindings(ui);
-            ui.ItemClick("Apply Physics edit");
+            ui.ItemClick("**/Apply");
             ui.Yield();
             IM_CHECK(host.controller.ViewModel().physicsEditError.empty());
             IM_CHECK(host.Box().components.rigidBody.has_value());
@@ -160,7 +167,7 @@ TEST_CASE("Physics creation uses the generic Inspector route and canonical Apply
             ui.Yield();
             SelectContent(ui);
             IM_CHECK(ui.ItemExists("###InspectorAddComponent"));
-            IM_CHECK(!ui.ItemExists("**/workspace.physics.profile"));
+            IM_CHECK(!ui.ItemExists("**/workspace.physics.profile/##reference/Combo#####reference"));
             IM_CHECK(!host.Box().components.rigidBody);
         });
     });

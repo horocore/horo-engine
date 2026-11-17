@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 #include <semaphore>
 #include <stdexcept>
@@ -287,39 +288,48 @@ namespace Horo::Application {
     }
 
     TEST_CASE("Even matching source identities cannot route malicious or symlinked paths", "[navigation][diagnostics][security]") {
+        const std::string_view scenario = GENERATE("parent traversal", "absolute", "Windows traversal", "drive path", "embedded NUL",
+                                                   "dot normalization", "symlinked ancestor", "symlinked file");
+        INFO(scenario);
         RoutingFixture routing;
         auto &source = routing.source;
         const auto &directory = routing.directory;
-        SECTION("parent traversal") {
+        if (scenario == "parent traversal") {
             source.target.relativePath = "../escape.scene";
         }
-        SECTION("absolute") {
+        if (scenario == "absolute") {
             const std::filesystem::path absolute = directory.root / "asset.scene";
             REQUIRE(absolute.is_absolute());
             const auto spelling = absolute.generic_u8string();
             source.target.relativePath.assign(spelling.begin(), spelling.end());
         }
-        SECTION("Windows traversal") {
+        if (scenario == "Windows traversal") {
             source.target.relativePath = "..\\escape.scene";
         }
-        SECTION("drive path") {
+        if (scenario == "drive path") {
             source.target.relativePath = "C:/escape.scene";
         }
-        SECTION("embedded NUL") {
+        if (scenario == "embedded NUL") {
             source.target.relativePath = std::string{"safe.scene\0other", 16};
         }
-        SECTION("dot normalization") {
+        if (scenario == "dot normalization") {
             source.target.relativePath = "./safe.scene";
         }
-        SECTION("symlinked ancestor") {
+        if (scenario == "symlinked ancestor") {
             REQUIRE(std::filesystem::create_directory(directory.root / "real"));
             std::ofstream(directory.root / "real" / "safe.scene") << "source";
-            std::filesystem::create_directory_symlink(directory.root / "real", directory.root / "link");
+            std::error_code error;
+            std::filesystem::create_directory_symlink(directory.root / "real", directory.root / "link", error);
+            if (error)
+                SKIP("Directory symlink creation is unavailable to this test account");
             source.target.relativePath = "link/safe.scene";
         }
-        SECTION("symlinked file") {
+        if (scenario == "symlinked file") {
             std::ofstream(directory.root / "real.scene") << "source";
-            std::filesystem::create_symlink(directory.root / "real.scene", directory.root / "link.scene");
+            std::error_code error;
+            std::filesystem::create_symlink(directory.root / "real.scene", directory.root / "link.scene", error);
+            if (error)
+                SKIP("File symlink creation is unavailable to this test account");
             source.target.relativePath = "link.scene";
         }
         const auto sequence = routing.Record();

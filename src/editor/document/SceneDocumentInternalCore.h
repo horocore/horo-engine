@@ -361,6 +361,10 @@ namespace Horo::Editor::SceneDocumentDetail {
             return presentation;
         if (Result<void> behaviors = ValidateBehaviorAuthoringComponents(components); behaviors.HasError())
             return behaviors;
+        if (components.animation) {
+            if (auto animation = Animation::ValidateAnimationAuthoringComponent(*components.animation); animation.HasError())
+                return animation;
+        }
         if (const Result<void> gameplay = Gameplay::ValidateSerializedComponents(components.gameplayComponents); gameplay.HasError())
             return gameplay;
         return Result<void>::Success();

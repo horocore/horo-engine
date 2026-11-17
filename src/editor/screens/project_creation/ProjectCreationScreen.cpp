@@ -20,8 +20,11 @@ namespace Horo::Editor {
     namespace {
         class ProjectCreationScreen final : public GuiScreen {
         public:
+            /** @brief Catalog scope shared by this surface and its view helpers. */
+            static constexpr GuiLocalizationScope kTextScope = ProjectCreationTextScope;
+
             explicit ProjectCreationScreen(const EditorServiceRegistry &services)
-                : host_(services.Get<GuiScreenHost>()), context_(services.GetConst<EditorGuiContext>()),
+                : GuiScreen(kTextScope), host_(services.Get<GuiScreenHost>()), context_(services.GetConst<EditorGuiContext>()),
                   creationService_(services.Get<ProjectCreationService>()), inputRouter_(services.Get<Input::InputRouter>()),
                   rendererAvailability_(services.GetConst<RendererAvailabilitySnapshot>()),
                   logoTexture_(services.TryGet<std::uintptr_t>() ? *services.TryGet<std::uintptr_t>() : 0),
@@ -50,8 +53,9 @@ namespace Horo::Editor {
             }
 
             void Draw(const GuiContentRegion &contentRegion) override {
-                const auto command = DrawProjectCreationView(controller_, state_, context_, inputRouter_, rendererAvailability_,
-                                                             contentRegion, logoTexture_);
+                const auto command =
+                    GuiLive::Invoke<&DrawProjectCreationView>(context_.theme.liveReload, controller_, state_, context_, inputRouter_,
+                                                              rendererAvailability_, contentRegion, logoTexture_);
                 if (command == ProjectCreationViewCommand::ReturnToWelcome) {
                     static_cast<void>(host_.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
                 } else if (command == ProjectCreationViewCommand::CreateProject) {
@@ -95,7 +99,7 @@ namespace Horo::Editor {
                 if (leaveResolved_) {
                     return LeaveDecision{.disposition = Allow, .requirement = std::nullopt};
                 }
-                if (const bool hasDraftChanges = !state_.projectName.empty() || !state_.projectPath.empty() || state_.step > 1;
+                if (const bool hasDraftChanges = !state_.projectName.empty() || !state_.projectParentDirectory.empty() || state_.step > 1;
                     hasDraftChanges &&
                     (std::holds_alternative<ApplicationCloseTarget>(target.value) ||
                      (std::holds_alternative<GuiRoute>(target.value) && std::get<GuiRoute>(target.value).kind == GuiRouteKind::Welcome))) {

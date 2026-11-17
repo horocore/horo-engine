@@ -7,6 +7,8 @@
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Foundation/CancellationToken.h"
 
+#include <memory>
+
 namespace Horo::Assets {
     /** @brief Read-only input views; storage is owned by the snapshot, not the source filesystem. */
     struct AssetCookPinnedSource final {
@@ -77,10 +79,54 @@ namespace Horo::Assets {
         [[nodiscard]] static Result<AssetCookInputSnapshot> CaptureRecords(
             const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry, std::span<const AssetRecord> records,
             const AssetCookLimits &limits, std::uint64_t maximumCapturedBytes, const CancellationToken &cancellation);
+        friend class AssetCookKeyProjection;
         struct State;
 
         explicit AssetCookInputSnapshot(std::shared_ptr<const State> state) noexcept : state_(std::move(state)) {}
 
         std::shared_ptr<const State> state_;
+    };
+
+    /** @brief Explicit domain producer declaration of all source inputs affecting one artifact.
+     * The producer must derive this complete closure from its actual immutable graph and provider contracts.
+     * Generic callers that cannot establish completeness leave key projection absent and retain whole-capture keys.
+     */
+    struct AssetCookKeySelection final {
+        AssetId asset;
+        std::vector<AssetId> inputs;
+        Sha256Digest producerSettings;
+    };
+
+    /** @brief Immutable validated per-artifact selections backed by one real complete input capture.
+     * This is cache identity only: the original complete capture and host publication fences remain authoritative.
+     */
+    class AssetCookKeyProjection final {
+    public:
+        /** @brief Validates complete producer selections and computes canonical digests from real pinned pairs.
+         * @param inputs Real whole-operation source capture. @param selections Unique artifact selections including self.
+         * @param maximumAssets Finite artifact and per-selection bound; aggregate references are capped at 1,048,576.
+         * @return Immutable projection or typed invalid/capacity error; no file, cache or output mutation.
+         */
+        [[nodiscard]] static Result<std::shared_ptr<const AssetCookKeyProjection>> Create(const AssetCookInputSnapshot &inputs,
+                                                                                          std::vector<AssetCookKeySelection> selections,
+                                                                                          std::size_t maximumAssets);
+        /** @brief Tests exact capture authority, independently from semantic key identity. @param inputs Candidate pin.
+         * @return True only for the same complete capture evidence and registry publication/root.
+         */
+        [[nodiscard]] bool Matches(const AssetCookInputSnapshot &inputs) const;
+        /** @brief Finds one complete immutable selection. @param asset Artifact. @return Borrowed selection or null. */
+        [[nodiscard]] const AssetCookKeySelection *Find(AssetId asset) const noexcept;
+        /** @brief Returns the actual-pair and producer commitment for an admitted artifact.
+         * @param asset Artifact with a matching selection. @return Digest, or zero when absent.
+         */
+        [[nodiscard]] Sha256Digest Digest(AssetId asset) const noexcept;
+
+    private:
+        /** @brief Retains the exact immutable capture after bounded selection admission. */
+        AssetCookKeyProjection(const AssetCookInputSnapshot &capture, std::vector<AssetCookKeySelection> selections,
+                               std::vector<Sha256Digest> digests);
+        AssetCookInputSnapshot capture_;
+        std::vector<AssetCookKeySelection> selections_;
+        std::vector<Sha256Digest> digests_;
     };
 }  // namespace Horo::Assets

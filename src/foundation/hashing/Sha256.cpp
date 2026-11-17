@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cstddef>
 #include <limits>
 #include <span>
@@ -34,19 +33,29 @@ namespace Horo {
                    (static_cast<std::uint32_t>(bytes[2]) << 8U) | static_cast<std::uint32_t>(bytes[3]);
         }
 
+        /** @brief Fixed SHA-256 rotations have no generic signed-distance branches in instrumented Debug builds. */
+        template <unsigned Shift> [[nodiscard]] constexpr std::uint32_t RotateRight(const std::uint32_t value) noexcept {
+            static_assert(Shift > 0 && Shift < 32);
+            return (value >> Shift) | (value << (32U - Shift));
+        }
+
         /**
          * @brief Incorporates one complete SHA-256 message block into the chaining state.
          * @param block Pointer to exactly 64 readable message bytes.
-         * @param state Chaining state updated in place.
+         * @param chainingState Chaining state updated in place.
          */
-        void ProcessBlock(const std::uint8_t *block, std::array<std::uint32_t, 8> &state) noexcept {
-            std::array<std::uint32_t, 64> words{};
+        void ProcessBlock(const std::uint8_t *block, std::array<std::uint32_t, 8> &chainingState) noexcept {
+            constexpr auto WordCount = RoundConstants.size();
+            std::array<std::uint32_t, WordCount> wordStorage{};
+            auto *const words = wordStorage.data();
+            auto *const state = chainingState.data();
+            const auto *const constants = RoundConstants.data();
             for (std::size_t index = 0; index < 16; ++index)
                 words[index] = LoadBigEndian(block + index * 4);
 
-            for (std::size_t index = 16; index < words.size(); ++index) {
-                const std::uint32_t s0 = std::rotr(words[index - 15], 7) ^ std::rotr(words[index - 15], 18) ^ (words[index - 15] >> 3U);
-                const std::uint32_t s1 = std::rotr(words[index - 2], 17) ^ std::rotr(words[index - 2], 19) ^ (words[index - 2] >> 10U);
+            for (std::size_t index = 16; index < WordCount; ++index) {
+                const std::uint32_t s0 = RotateRight<7>(words[index - 15]) ^ RotateRight<18>(words[index - 15]) ^ (words[index - 15] >> 3U);
+                const std::uint32_t s1 = RotateRight<17>(words[index - 2]) ^ RotateRight<19>(words[index - 2]) ^ (words[index - 2] >> 10U);
                 words[index] = words[index - 16] + s0 + words[index - 7] + s1;
             }
 
@@ -59,11 +68,11 @@ namespace Horo {
             std::uint32_t g = state[6];
             std::uint32_t h = state[7];
 
-            for (std::size_t index = 0; index < words.size(); ++index) {
-                const std::uint32_t sum1 = std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25);
+            for (std::size_t index = 0; index < WordCount; ++index) {
+                const std::uint32_t sum1 = RotateRight<6>(e) ^ RotateRight<11>(e) ^ RotateRight<25>(e);
                 const std::uint32_t choice = (e & f) ^ (~e & g);
-                const std::uint32_t temporary1 = h + sum1 + choice + RoundConstants[index] + words[index];
-                const std::uint32_t sum0 = std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22);
+                const std::uint32_t temporary1 = h + sum1 + choice + constants[index] + words[index];
+                const std::uint32_t sum0 = RotateRight<2>(a) ^ RotateRight<13>(a) ^ RotateRight<22>(a);
                 const std::uint32_t majority = (a & b) ^ (a & c) ^ (b & c);
                 const std::uint32_t temporary2 = sum0 + majority;
 
@@ -113,18 +122,34 @@ namespace Horo {
     bool Sha256Builder::Update(const std::span<const std::byte> input) noexcept {
         if (finalized_ || input.size() > std::numeric_limits<std::uint64_t>::max() / 8U - totalBytes_)
             return false;
+        if (input.empty())
+            return true;
         totalBytes_ += input.size();
-        std::size_t offset = 0;
-        while (offset < input.size()) {
-            const std::size_t copied = std::min(block_.size() - blockBytes_, input.size() - offset);
+        const auto blockSize = block_.size();
+        const auto *bytes = reinterpret_cast<const std::uint8_t *>(input.data());
+        auto remaining = input.size();
+        if (blockBytes_ != 0) {
+            const auto copied = std::min(blockSize - blockBytes_, remaining);
             for (std::size_t index = 0; index < copied; ++index)
-                block_[blockBytes_ + index] = std::to_integer<std::uint8_t>(input[offset + index]);
+                block_[blockBytes_ + index] = bytes[index];
             blockBytes_ += copied;
-            offset += copied;
-            if (blockBytes_ == block_.size()) {
-                ProcessBlock(block_.data(), state_);
-                blockBytes_ = 0;
-            }
+            bytes += copied;
+            remaining -= copied;
+            if (blockBytes_ != blockSize)
+                return true;
+            ProcessBlock(block_.data(), state_);
+            blockBytes_ = 0;
+        }
+        // Complete caller-owned blocks need neither a byte loop nor a staging copy.
+        while (remaining >= blockSize) {
+            ProcessBlock(bytes, state_);
+            bytes += blockSize;
+            remaining -= blockSize;
+        }
+        if (remaining != 0) {
+            for (std::size_t index = 0; index < remaining; ++index)
+                block_[index] = bytes[index];
+            blockBytes_ = remaining;
         }
         return true;
     }

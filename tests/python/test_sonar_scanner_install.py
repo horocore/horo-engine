@@ -5,6 +5,13 @@ from pathlib import Path
 import subprocess  # nosec B404 - black-box tests execute only the repository-owned installer.
 import zipfile
 
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.name != "posix",
+    reason="Linux scanner installer tests require native POSIX shell execution and executable file modes",
+)
+
 
 INSTALLER = Path(__file__).resolve().parents[2] / ".github/scripts/install_sonar_scanner.sh"
 VERSION = "7.2.0.5079"

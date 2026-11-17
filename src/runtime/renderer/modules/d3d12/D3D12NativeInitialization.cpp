@@ -1,4 +1,5 @@
 #include "D3D12Initialization.h"
+#include "D3D12NativeCommands.h"
 #include "D3D12NativeResources.h"
 
 #if defined(_WIN32) && defined(_M_X64)
@@ -181,7 +182,24 @@ namespace Horo::Render {
                 return resources_.get();
             }
 
+            Result<void> InitializeCommands(const D3D12CommandConfiguration &configuration) override {
+                if (!resources_)
+                    return Result<void>::Failure(
+                        D3D12CommandError("render.d3d12.commands_unavailable", "Initialize the canonical resource service first."));
+                const std::array<ID3D12CommandQueue *, 3> nativeQueues{queues_[0].Get(), queues_[1].Get(), queues_[2].Get()};
+                auto created = CreateD3D12Commands(device_.Get(), nativeQueues, *resources_, configuration);
+                if (created.HasError())
+                    return Result<void>::Failure(std::move(created).ErrorValue());
+                commands_ = std::move(created).Value();
+                return Result<void>::Success();
+            }
+
+            ID3D12Commands *Commands() noexcept override {
+                return commands_.get();
+            }
+
             void Release() noexcept override {
+                commands_.reset();
                 resources_.reset();
                 for (auto &queue : queues_) {
                     queue.Reset();
@@ -202,6 +220,7 @@ namespace Horo::Render {
             ComPtr<ID3D12Device> device_;
             std::array<ComPtr<ID3D12CommandQueue>, 3> queues_;
             std::unique_ptr<ID3D12Resources> resources_;
+            std::unique_ptr<ID3D12Commands> commands_;
         };
 #else
         /** @brief Returns actionable unsupported-host errors without native acquisition. */

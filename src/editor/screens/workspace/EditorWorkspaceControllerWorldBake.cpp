@@ -1,4 +1,5 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 namespace Horo::Editor {
@@ -13,10 +14,10 @@ namespace Horo::Editor {
                 if (const auto *record = registry.Find(page.head.sourceAsset)) {
                     const auto relative = record->sourcePath.String();
                     const auto absolute = (root / relative).lexically_normal();
-                    sources.push_back({page.head, {absolute.string(), 1, 1}, relative});
+                    sources.push_back({page.head, {WorkspacePathText(absolute), 1, 1}, relative});
                 } else if (!documentSource.empty()) {
                     const auto absolute = (root / documentSource).lexically_normal();
-                    sources.push_back({page.head, {absolute.string(), 1, 1}, {}});
+                    sources.push_back({page.head, {WorkspacePathText(absolute), 1, 1}, {}});
                 }
             }
             return sources;
@@ -62,8 +63,7 @@ namespace Horo::Editor {
             return Result<std::shared_ptr<const ProjectMutationLease>>::Success(std::move(existing));
         if (!m_mutations)
             return Result<std::shared_ptr<const ProjectMutationLease>>::Failure(MakeError(Application::WorldBakeErrors::Dependency));
-        auto lease = m_mutations->TryAcquire(
-            {std::filesystem::path{m_viewModel.projectRoot}, ProjectMutationOwner::Asset, "world.bake.source.capture"});
+        auto lease = m_mutations->TryAcquire({ProjectRoot(), ProjectMutationOwner::Asset, "world.bake.source.capture"});
         if (lease.HasError())
             return Result<std::shared_ptr<const ProjectMutationLease>>::Failure(lease.ErrorValue());
         auto retained = std::make_shared<const ProjectMutationLease>(std::move(lease).Value());
@@ -105,8 +105,7 @@ namespace Horo::Editor {
         if (m_localization)
             request.title = m_localization->Get("editor", mode == Application::WorldBakeMode::Bake ? "workspace.world.bake"
                                                                                                    : "workspace.world.validate");
-        request.sources =
-            CapturePageSources(*current.Value(), registry, std::filesystem::path{m_viewModel.projectRoot}, m_viewModel.worldDocumentSource);
+        request.sources = CapturePageSources(*current.Value(), registry, ProjectRoot(), m_viewModel.worldDocumentSource);
         const auto accepted = m_worldBake->Submit(std::move(request));
         UpdateWorldBake();
         return accepted;

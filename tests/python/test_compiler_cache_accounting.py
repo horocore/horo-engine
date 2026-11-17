@@ -198,12 +198,15 @@ def test_real_import_recounts_entries_and_enforces_the_selected_budget(tmp_path,
     source.mkdir()
     (source / "fixture.c").write_text("int cache_fixture(void) { return 7; }\n")
     (source / "CMakeLists.txt").write_text(f'''cmake_minimum_required(VERSION 3.25)
+# MSVC /Zi bypasses ccache; embedded debug information keeps this real-cache fixture cacheable.
+set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
 project(CompilerCacheAccounting C)
 set(CMAKE_C_COMPILER_LAUNCHER "{executable}")
 add_library(cache_fixture OBJECT fixture.c)
 add_custom_target(cache_statistics COMMAND "{executable}" --print-stats)
 ''', encoding="utf-8")
-    run("cmake", "-S", str(source), "-B", str(build))
+    # Visual Studio generators do not implement compiler launchers; this fixture must actually populate ccache.
+    run("cmake", "-G", "Ninja", "-S", str(source), "-B", str(build))
     run("cmake", "--build", str(build), "--target", "cache_fixture", "--parallel", "1")
     original = cache_statistics(build)
     assert original["files_in_cache"] > 0

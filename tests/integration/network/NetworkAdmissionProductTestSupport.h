@@ -69,6 +69,7 @@ namespace Horo::Network::AdmissionTests {
             auto input = DefaultNetworkProjectSettings(Id<NetworkProjectSettingsId>(10)).Value();
             input.supportedRoles = NetworkProjectRoleSet::Client | NetworkProjectRoleSet::DedicatedServer;
             input.defaultRole = NetworkProjectRole::Client;
+            input.replication.completeness = NetworkReplicationInventoryCompleteness::Complete;
             input.protocol = {protocols[0].id, {{1, 0}, {1, 0}}, 42};
             input.transport.requirement = NetworkProjectTransportRequirement::Required;
             input.transport.capabilities.requiredDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;

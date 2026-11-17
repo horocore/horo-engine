@@ -7,25 +7,35 @@
 
 #include <array>
 #include <exception>
+#include <initializer_list>
+#include <memory>
 #include <mutex>
 #include <new>
+#include <string>
 #include <system_error>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace Horo::Runtime {
     struct SaveOperationDetail::SharedState final {
-        mutable std::mutex mutex;
+        using CallbackList = std::vector<SaveOperationCompletionCallback>;
+
+        SharedState() {
+            // Copy construction is fallible here; the terminal path later assigns into this existing Error.
+            terminalSnapshot.terminalError.emplace(abandonmentError);
+        }
+
+        std::mutex mutex;
         SaveOperationSnapshot snapshot;
-        std::optional<SaveOperationSnapshot> terminalSnapshot;
+        SaveOperationSnapshot terminalSnapshot;
         CancellationToken parentCancellation;
         std::size_t maximumCompletionCallbacks{};
-        std::vector<SaveOperationCompletionCallback> completionCallbacks;
+        std::unique_ptr<CallbackList> completionCallbacks{
+            std::make_unique<CallbackList>(std::initializer_list<SaveOperationCompletionCallback>{})};
         bool commitStarted{};
-        Error cancellationError;
-        Error deadlineError;
-        Error abandonmentError;
+        Error cancellationError{MakeError(SaveErrors::OperationCancelled, std::string(std::size_t{0}, '\0'))};
+        Error deadlineError{MakeError(SaveErrors::OperationDeadlineExceeded, std::string(std::size_t{0}, '\0'))};
+        Error abandonmentError{MakeError(SaveErrors::OperationAbandoned, std::string(std::size_t{0}, '\0'))};
     };
 
     namespace {
@@ -33,7 +43,7 @@ namespace Horo::Runtime {
 
         struct CompletionDispatch final {
             std::shared_ptr<SharedState> state;
-            std::vector<SaveOperationCompletionCallback> callbacks;
+            std::unique_ptr<SharedState::CallbackList> callbacks;
         };
 
         enum class PreflightDisposition : std::uint8_t {
@@ -49,7 +59,7 @@ namespace Horo::Runtime {
         };
 
         struct TransitionRequest;
-        using TransitionHandler = SaveOperationTransitionResult (*)(const std::shared_ptr<SharedState> &, TransitionRequest &,
+        using TransitionHandler = SaveOperationTransitionResult (*)(const std::shared_ptr<SharedState> &, const TransitionRequest &,
                                                                     CompletionDispatch &) noexcept;
 
         struct TransitionRequest final {
@@ -57,7 +67,7 @@ namespace Horo::Runtime {
             SaveOperationStage stage{SaveOperationStage::Queued};
             SaveOperationProgress progress{};
             SaveOperationCommitOutcome outcome{SaveOperationCommitOutcome::NotCommitted};
-            std::optional<Error> error;
+            Error *error{};  // Borrowed only for the synchronous transition; final storage owns the transferred error.
         };
 
         struct StagePolicy final {
@@ -91,15 +101,12 @@ namespace Horo::Runtime {
                         true},
         };
 
-        static_assert(std::is_nothrow_move_constructible_v<SaveOperationSnapshot>);
-        static_assert(std::is_nothrow_move_assignable_v<SaveOperationSnapshot>);
-
         [[nodiscard]] const SaveOperationSnapshot &CurrentSnapshot(const SharedState &state) noexcept {
-            return state.terminalSnapshot.has_value() ? *state.terminalSnapshot : state.snapshot;
+            return state.snapshot.IsTerminal() ? state.terminalSnapshot : state.snapshot;
         }
 
         [[nodiscard]] bool IsTerminal(const SharedState &state) noexcept {
-            return state.terminalSnapshot.has_value();
+            return state.snapshot.IsTerminal();
         }
 
         template <typename Enum> [[nodiscard]] bool IsKnown(const Enum value, const Enum last) noexcept {
@@ -158,13 +165,29 @@ namespace Horo::Runtime {
 
         [[nodiscard]] CompletionDispatch TerminalizeLocked(const std::shared_ptr<SharedState> &state,
                                                            const SaveOperationState terminalState, const SaveOperationCommitOutcome outcome,
-                                                           std::optional<Error> error = std::nullopt) noexcept {
+                                                           Error *error = nullptr) noexcept {
             state->snapshot.state = terminalState;
             state->snapshot.commit = outcome;
             state->snapshot.cancellable = false;
-            state->snapshot.terminalError = std::move(error);
             ++state->snapshot.revision;
-            state->terminalSnapshot.emplace(std::move(state->snapshot));
+            // Copy inert metadata without resetting the Error slot reserved at admission.
+            const SaveOperationSnapshot &source = state->snapshot;
+            SaveOperationSnapshot &terminal = state->terminalSnapshot;
+            terminal.operation = source.operation;
+            terminal.kind = source.kind;
+            terminal.state = source.state;
+            terminal.stage = source.stage;
+            terminal.progress = source.progress;
+            terminal.commit = source.commit;
+            terminal.cancellationReason = source.cancellationReason;
+            terminal.cancellationRequested = source.cancellationRequested;
+            terminal.cancellable = source.cancellable;
+            terminal.deadline = source.deadline;
+            terminal.revision = source.revision;
+            if (error)
+                terminal.terminalError = std::move(*error);
+            else
+                terminal.terminalError.reset();
             return CompletionDispatch{state, std::move(state->completionCallbacks)};
         }
 
@@ -172,9 +195,8 @@ namespace Horo::Runtime {
                                                       const SaveCancellationReason reason) noexcept {
             if (!state->snapshot.cancellationRequested)
                 MarkCancellationRequested(*state, reason);
-            Error error =
-                reason == SaveCancellationReason::Deadline ? std::move(state->deadlineError) : std::move(state->cancellationError);
-            return TerminalizeLocked(state, SaveOperationState::Cancelled, SaveOperationCommitOutcome::NotCommitted, std::move(error));
+            Error &error = reason == SaveCancellationReason::Deadline ? state->deadlineError : state->cancellationError;
+            return TerminalizeLocked(state, SaveOperationState::Cancelled, SaveOperationCommitOutcome::NotCommitted, &error);
         }
 
         [[nodiscard]] PreflightResult PreflightLocked(const std::shared_ptr<SharedState> &state,
@@ -193,13 +215,13 @@ namespace Horo::Runtime {
         void Dispatch(const CompletionDispatch &dispatch) noexcept {
             if (!dispatch.state)
                 return;
-            const SaveOperationSnapshot &snapshot = *dispatch.state->terminalSnapshot;
+            const SaveOperationSnapshot &snapshot = dispatch.state->terminalSnapshot;
             RecordSaveOperationTerminal(snapshot);
-            if (dispatch.callbacks.empty())
+            if (!dispatch.callbacks || dispatch.callbacks->empty())
                 return;
             SaveStageObservation observers{SaveTelemetryStage::Participant, snapshot.operation};
             bool callbackFailed{};
-            for (const auto &callback : dispatch.callbacks) {
+            for (const auto &callback : *dispatch.callbacks) {
                 try {
                     callback(snapshot);
                 } catch (...) {
@@ -245,7 +267,7 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] SaveOperationTransitionResult PublishProgressLocked(const std::shared_ptr<SharedState> &state,
-                                                                          TransitionRequest &request, CompletionDispatch &) noexcept {
+                                                                          const TransitionRequest &request, CompletionDispatch &) noexcept {
             if (!IsValidProgressTransition(*state, request))
                 return SaveOperationTransitionResult::InvalidTransition;
             state->snapshot.state = SaveOperationState::Running;
@@ -255,7 +277,8 @@ namespace Horo::Runtime {
             return SaveOperationTransitionResult::Applied;
         }
 
-        [[nodiscard]] SaveOperationTransitionResult CompleteLocked(const std::shared_ptr<SharedState> &state, TransitionRequest &request,
+        [[nodiscard]] SaveOperationTransitionResult CompleteLocked(const std::shared_ptr<SharedState> &state,
+                                                                   const TransitionRequest &request,
                                                                    CompletionDispatch &dispatch) noexcept {
             const bool validMutation =
                 RequiresCommit(state->snapshot.kind) && state->commitStarted && request.outcome == SaveOperationCommitOutcome::Committed;
@@ -268,19 +291,19 @@ namespace Horo::Runtime {
             return SaveOperationTransitionResult::Applied;
         }
 
-        [[nodiscard]] SaveOperationTransitionResult FailLocked(const std::shared_ptr<SharedState> &state, TransitionRequest &request,
+        [[nodiscard]] SaveOperationTransitionResult FailLocked(const std::shared_ptr<SharedState> &state, const TransitionRequest &request,
                                                                CompletionDispatch &dispatch) noexcept {
             if (const bool validOutcome = request.outcome == SaveOperationCommitOutcome::NotCommitted ||
                                           (state->commitStarted && request.outcome == SaveOperationCommitOutcome::Unknown);
-                !validOutcome)
+                !request.error || !validOutcome)
                 return SaveOperationTransitionResult::InvalidTransition;
-            dispatch = TerminalizeLocked(state, SaveOperationState::Failed, request.outcome, std::move(request.error));
+            dispatch = TerminalizeLocked(state, SaveOperationState::Failed, request.outcome, request.error);
             return SaveOperationTransitionResult::Applied;
         }
 
         [[nodiscard]] SaveOperationTransitionResult ApplyTransition(const std::shared_ptr<SharedState> &state,
                                                                     const std::chrono::steady_clock::time_point now,
-                                                                    TransitionRequest request) {
+                                                                    const TransitionRequest &request) {
             if (!state)
                 return SaveOperationTransitionResult::AlreadyTerminal;
             CompletionDispatch dispatch;
@@ -314,7 +337,7 @@ namespace Horo::Runtime {
                     const SaveOperationCommitOutcome outcome = preflight.disposition == CommitStarted
                                                                    ? SaveOperationCommitOutcome::Unknown
                                                                    : SaveOperationCommitOutcome::NotCommitted;
-                    dispatch = TerminalizeLocked(state, SaveOperationState::Failed, outcome, std::move(state->abandonmentError));
+                    dispatch = TerminalizeLocked(state, SaveOperationState::Failed, outcome, &state->abandonmentError);
                 }
             } catch (const std::system_error &) {
                 // Destructors never propagate platform mutex failures.
@@ -376,12 +399,12 @@ namespace Horo::Runtime {
         {
             std::lock_guard lock(state->mutex);
             if (IsTerminal(*state)) {
-                terminal = std::addressof(*state->terminalSnapshot);
+                terminal = std::addressof(state->terminalSnapshot);
             } else {
-                if (state->completionCallbacks.size() >= state->maximumCompletionCallbacks)
+                if (state->completionCallbacks->size() >= state->maximumCompletionCallbacks)
                     return Result<void>::Failure(MakeError(SaveErrors::OperationCallbackCapacityExceeded));
                 try {
-                    state->completionCallbacks.push_back(std::move(callback));
+                    state->completionCallbacks->push_back(std::move(callback));
                 } catch (const std::bad_alloc &) {
                     return Result<void>::Failure(MakeError(SaveErrors::OperationCallbackCapacityExceeded));
                 }
@@ -501,9 +524,16 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveOperationController::Fail */
-    SaveOperationTransitionResult SaveOperationController::Fail(Error error, const SaveOperationCommitOutcome outcome,
+    SaveOperationTransitionResult SaveOperationController::Fail(const Error &error, const SaveOperationCommitOutcome outcome,
                                                                 const std::chrono::steady_clock::time_point now) {
-        return ApplyTransition(state_, now, {.handler = FailLocked, .outcome = outcome, .error = std::move(error)});
+        Error owned = error;
+        return Fail(std::move(owned), outcome, now);
+    }
+
+    /** @copydoc SaveOperationController::Fail */
+    SaveOperationTransitionResult SaveOperationController::Fail(Error &&error, const SaveOperationCommitOutcome outcome,
+                                                                const std::chrono::steady_clock::time_point now) {
+        return ApplyTransition(state_, now, {.handler = FailLocked, .outcome = outcome, .error = &error});
     }
 
     void SaveOperationController::Abandon() noexcept {
@@ -523,10 +553,7 @@ namespace Horo::Runtime {
             state->snapshot.deadline = descriptor.deadline;
             state->parentCancellation = std::move(descriptor.parentCancellation);
             state->maximumCompletionCallbacks = descriptor.maximumCompletionCallbacks;
-            state->completionCallbacks.reserve(descriptor.maximumCompletionCallbacks);
-            state->cancellationError = MakeError(SaveErrors::OperationCancelled);
-            state->deadlineError = MakeError(SaveErrors::OperationDeadlineExceeded);
-            state->abandonmentError = MakeError(SaveErrors::OperationAbandoned);
+            state->completionCallbacks->reserve(descriptor.maximumCompletionCallbacks);
             return Result<SaveOperationController>::Success(SaveOperationController{std::move(state)});
         } catch (const std::bad_alloc &) {
             return Result<SaveOperationController>::Failure(MakeError(SaveErrors::OperationAllocationFailed));

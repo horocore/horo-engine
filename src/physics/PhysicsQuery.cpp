@@ -25,7 +25,8 @@ namespace Horo::Physics {
             if (!Math::IsFinite(query.origin) || !IsUnitDirection(query.direction) || !std::isfinite(query.maximumDistanceMeters) ||
                 query.maximumDistanceMeters <= 0)
                 return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid,
-                                                       "Ray queries require a finite origin, unit direction and positive distance."));
+                                                       "Ray queries require a finite origin, unit direction and "
+                                                       "positive distance."));
             return Result<void>::Success();
         }
 
@@ -36,8 +37,9 @@ namespace Horo::Physics {
             if (const auto pose = ValidatePhysicsPose(query.pose); pose.HasError())
                 return pose;
             if (!IsUnitDirection(query.direction) || !std::isfinite(query.maximumDistanceMeters) || query.maximumDistanceMeters <= 0)
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Sweep queries require a unit direction and positive finite distance."));
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid,
+                                                       "Sweep queries require a unit direction and positive finite "
+                                                       "distance."));
             return Result<void>::Success();
         }
 
@@ -48,7 +50,8 @@ namespace Horo::Physics {
             return ValidatePhysicsPose(query.pose);
         }
 
-        /** @brief Validates transient capsule dimensions, owned up basis and local position before native construction. */
+        /** @brief Validates transient capsule dimensions, owned up basis and local
+         * position before native construction. */
         [[nodiscard]] Result<void> ValidateGeometry(const PhysicsCapsuleOverlapQuery &query, const PhysicsWorldId) {
             if (const auto shape = ValidatePhysicsShapeDescriptor(PhysicsShapeDescriptor{query.capsule}); shape.HasError())
                 return shape;
@@ -79,7 +82,8 @@ namespace Horo::Physics {
             return Result<void>::Success();
         }
 
-        /** @brief Validates supported enum values without assuming their underlying representation. */
+        /** @brief Validates supported enum values without assuming their underlying
+         * representation. */
         [[nodiscard]] bool IsSupported(const PhysicsQueryTriggerPolicy value) noexcept {
             return value == PhysicsQueryTriggerPolicy::Exclude || value == PhysicsQueryTriggerPolicy::Include;
         }
@@ -102,12 +106,14 @@ namespace Horo::Physics {
             return hit.subshape.has_value() ? hit.subshape->Value() : 0;
         }
 
-        /** @brief Orders blocking evidence ahead of overlap evidence at an exact-distance tie. */
+        /** @brief Orders blocking evidence ahead of overlap evidence at an
+         * exact-distance tie. */
         [[nodiscard]] std::uint8_t ResponseRank(const PhysicsQueryResponse response) noexcept {
             return response == PhysicsQueryResponse::Block ? 0U : 1U;
         }
 
-        /** @brief Returns the finite travel bound for ray/sweep queries, when applicable. */
+        /** @brief Returns the finite travel bound for ray/sweep queries, when
+         * applicable. */
         [[nodiscard]] std::optional<float> MaximumTravelDistance(const PhysicsQueryGeometry &geometry) noexcept {
             if (const auto *ray = std::get_if<PhysicsRayQuery>(&geometry))
                 return ray->maximumDistanceMeters;
@@ -118,7 +124,8 @@ namespace Horo::Physics {
             return std::nullopt;
         }
 
-        /** @brief Maps an absent normal before present normals in the final deterministic tie-break. */
+        /** @brief Maps an absent normal before present normals in the final
+         * deterministic tie-break. */
         [[nodiscard]] auto NormalKey(const PhysicsQueryHit &hit) noexcept {
             return std::tuple{hit.normal.has_value(), hit.normal.has_value() ? hit.normal->x : 0.0F,
                               hit.normal.has_value() ? hit.normal->y : 0.0F, hit.normal.has_value() ? hit.normal->z : 0.0F};
@@ -203,14 +210,67 @@ namespace Horo::Physics {
             return Result<void>::Success();
         }
 
+        /** @brief Semantic evidence requires physical support and coherent copied
+         * authoring/generation fields. */
+        bool ValidSurfaceDetails(const PhysicsQueryHit &hit) noexcept {
+            if (!hit.surface)
+                return true;
+            return hit.material.has_value() && hit.surface->surface.IsValid() && hit.surface->catalogRevision != 0 &&
+                   hit.surface->mappingGeneration != 0 && hit.surface->collider == hit.collider;
+        }
+
         /** @brief Validates optional stable subshape/material evidence. */
         [[nodiscard]] Result<void> ValidateHitDetails(const PhysicsQueryHit &hit) {
             if (hit.subshape.has_value() && !hit.subshape->IsValid())
                 return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "A reported subshape identity must be non-zero."));
             if (hit.material.has_value() &&
                 (!hit.material->asset.IsValid() || hit.material->assetGeneration == 0 || !hit.material->slot.IsValid()))
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid,
+                                                       "Material evidence requires exact asset, generation and slot "
+                                                       "identity."));
+            if (!ValidSurfaceDetails(hit))
+                return Result<void>::Failure(MakeError(SurfaceErrors::Invalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validate exact fixture selectors and the finite response vocabulary.
+         */
+        Result<void> ValidateFixtureSelectors(const PhysicsQueryFixtureDescriptor &fixture) {
+            if (!fixture.layer.IsValid() || !fixture.profile.IsValid() || !fixture.channel.IsValid())
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid,
+                                                       "Query fixtures require stable layer, profile and channel "
+                                                       "identities."));
+            if (static_cast<std::uint8_t>(fixture.response) > static_cast<std::uint8_t>(PhysicsQueryFixtureResponse::Block))
+                return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown query fixture response."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validate optional copied physical identities independently from
+         * compound topology. */
+        Result<void> ValidateFixtureEvidence(const PhysicsQueryFixtureDescriptor &fixture) {
+            if (fixture.subshape && !fixture.subshape->IsValid())
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Fixture subshape identity must be non-zero."));
+            if (fixture.material &&
+                (!fixture.material->asset.IsValid() || fixture.material->assetGeneration == 0 || !fixture.material->slot.IsValid()))
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Fixture material evidence is incomplete."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Compound contributors own their individual identities and retain
+         * uniform native sensor policy. */
+        Result<void> ValidateCompoundFixturePolicy(const PhysicsQueryFixtureDescriptor &fixture) {
+            const auto *compound = std::get_if<PhysicsCompoundShapeDescriptor>(&fixture.shape);
+            if (!compound)
+                return Result<void>::Success();
+            if (fixture.subshape || fixture.material || fixture.surface)
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid,
+                                                       "Compound child identity and material must be specified on "
+                                                       "each child."));
+            if (std::ranges::any_of(compound->children, [&fixture](const PhysicsCompoundChild &child) {
+                return child.trigger != fixture.trigger;
+            }))
                 return Result<void>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Material evidence requires exact asset, generation and slot identity."));
+                    MakeError(PhysicsErrors::OperationUnsupported, "A native compound body cannot mix trigger and solid children."));
             return Result<void>::Success();
         }
 
@@ -266,31 +326,16 @@ namespace Horo::Physics {
             return shape;
         if (const auto pose = ValidatePhysicsPose(fixture.pose); pose.HasError())
             return pose;
-        if (!fixture.layer.IsValid() || !fixture.profile.IsValid() || !fixture.channel.IsValid())
-            return Result<void>::Failure(
-                MakeError(PhysicsErrors::DescriptorInvalid, "Query fixtures require stable layer, profile and channel identities."));
-        if (static_cast<std::uint8_t>(fixture.response) > static_cast<std::uint8_t>(PhysicsQueryFixtureResponse::Block))
-            return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown query fixture response."));
-        if (fixture.subshape.has_value() && !fixture.subshape->IsValid())
-            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Fixture subshape identity must be non-zero."));
-        if (fixture.material.has_value() &&
-            (!fixture.material->asset.IsValid() || fixture.material->assetGeneration == 0 || !fixture.material->slot.IsValid()))
-            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Fixture material evidence is incomplete."));
-        if (const auto *compound = std::get_if<PhysicsCompoundShapeDescriptor>(&fixture.shape)) {
-            if (fixture.subshape.has_value() || fixture.material.has_value())
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Compound child identity and material must be specified on each child."));
-            if (std::ranges::any_of(compound->children, [&fixture](const PhysicsCompoundChild &child) {
-                return child.trigger != fixture.trigger;
-            }))
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::OperationUnsupported, "A native compound body cannot mix trigger and solid children."));
-        }
-        return Result<void>::Success();
+        if (auto selectors = ValidateFixtureSelectors(fixture); selectors.HasError())
+            return selectors;
+        if (auto evidence = ValidateFixtureEvidence(fixture); evidence.HasError())
+            return evidence;
+        return ValidateCompoundFixturePolicy(fixture);
     }
 
     namespace {
-        /** @brief Validates inert frame ownership and shape without claiming live body or snapshot liveness. */
+        /** @brief Validates inert frame ownership and shape without claiming live body
+         * or snapshot liveness. */
         Result<void> ValidateBodyPoseFrame(const PhysicsQueryDescriptor &descriptor) {
             if (!descriptor.bodyPoseFrame)
                 return Result<void>::Success();
@@ -371,20 +416,20 @@ namespace Horo::Physics {
         const auto rightNormal = NormalKey(right);
         const auto leftKey = std::tie(left.distanceMeters, leftResponse, left.body.slot.index, left.body.slot.generation,
                                       left.shape.slot.index, left.shape.slot.generation, leftSubshape, left.position.x, left.position.y,
-                                      left.position.z, leftNormal, left.penetrationDepthMeters);
+                                      left.position.z, leftNormal, left.penetrationDepthMeters, left.collider);
         const auto rightKey = std::tie(right.distanceMeters, rightResponse, right.body.slot.index, right.body.slot.generation,
                                        right.shape.slot.index, right.shape.slot.generation, rightSubshape, right.position.x,
-                                       right.position.y, right.position.z, rightNormal, right.penetrationDepthMeters);
+                                       right.position.y, right.position.z, rightNormal, right.penetrationDepthMeters, right.collider);
         if (const auto ordering = leftKey <=> rightKey; ordering != 0)
             return ordering < 0;
         if (left.material.has_value() != right.material.has_value())
             return !left.material.has_value();
         if (!left.material.has_value())
-            return false;
+            return left.surface < right.surface;
         const auto leftSlot = left.material->slot.Value();
         const auto rightSlot = right.material->slot.Value();
-        return std::tie(left.material->asset.Bytes(), left.material->assetGeneration, leftSlot) <=>
-                   std::tie(right.material->asset.Bytes(), right.material->assetGeneration, rightSlot) <
+        return std::tie(left.material->asset.Bytes(), left.material->assetGeneration, leftSlot, left.surface) <=>
+                   std::tie(right.material->asset.Bytes(), right.material->assetGeneration, rightSlot, right.surface) <
                0;
     }
 }  // namespace Horo::Physics

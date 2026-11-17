@@ -286,7 +286,8 @@ namespace Horo::Extensions {
                                                                contribution.owningModule + '.'));
                 const bool editorSurface = contribution.type == "editor.panel" || contribution.type == "editor.activity_item" ||
                                            contribution.type == "editor.settings_page" || contribution.type == "editor.modal" ||
-                                           contribution.type == "editor.modal_page";
+                                           contribution.type == "editor.modal_page" || contribution.type == "editor.command" ||
+                                           contribution.type == "editor.theme";
                 if (editorSurface && !HasRole(*owner->second, ExtensionModuleRole::EditorPresentation))
                     return Result<void>::Failure(MakeError(ExtensionErrors::ModuleResolutionFailed,
                                                            "An editor surface requires editor-presentation authority. Involved modules: " +

@@ -159,8 +159,8 @@ namespace Horo::Network {
     NetworkChaosScenario::NetworkChaosScenario(NetworkChaosScenario &&other) noexcept
         : descriptor_(other.descriptor_), transport_(std::move(other.transport_)), topology_(other.topology_), timeline_(other.timeline_),
           checkpoints_(other.checkpoints_), disconnected_(other.disconnected_), pendingRestarts_(other.pendingRestarts_),
-          evidence_(other.evidence_), nextAction_(other.nextAction_), nextCheckpoint_(other.nextCheckpoint_), stalled_(other.stalled_),
-          terminal_(other.terminal_) {
+          restarted_(other.restarted_), evidence_(other.evidence_), nextAction_(other.nextAction_), nextCheckpoint_(other.nextCheckpoint_),
+          stalled_(other.stalled_), terminal_(other.terminal_) {
         RebindViews();
         other.terminal_ = true;
     }
@@ -224,20 +224,24 @@ namespace Horo::Network {
                 stalled_ = false;
                 return Result<void>::Success();
             case Disconnect:
-            case Restart: {
-                const auto index = TopologyIndex(action.connection);
-                if (index == descriptor_.topology.size() || pendingRestarts_[index].next.IsValid())
-                    return Fail<void>(NetworkChaosErrors::Invalid);
-                if (const auto closed = transport_.Close(action.connection); closed.HasError())
-                    return Result<void>::Failure(closed.ErrorValue());
-                if (action.kind == Restart)
-                    pendingRestarts_[index] = {action.connection, action.connection.NextGeneration().Value()};
-                return Result<void>::Success();
-            }
+            case Restart:
+                return ApplyLifecycleAction(action);
             case Count:
                 return Fail<void>(NetworkChaosErrors::Invalid);
         }
         return Fail<void>(NetworkChaosErrors::Invalid);
+    }
+
+    Result<void> NetworkChaosScenario::ApplyLifecycleAction(const NetworkChaosAction &action) {
+        const auto index = TopologyIndex(action.connection);
+        if (index == descriptor_.topology.size() || pendingRestarts_[index].next.IsValid())
+            return Fail<void>(NetworkChaosErrors::Invalid);
+        if (const auto closed = transport_.Close(action.connection); closed.HasError())
+            return Result<void>::Failure(closed.ErrorValue());
+        restarted_[index] = {};
+        if (action.kind == NetworkChaosActionKind::Restart)
+            pendingRestarts_[index] = {action.connection, action.connection.NextGeneration().Value()};
+        return Result<void>::Success();
     }
 
     Result<void> NetworkChaosScenario::CompleteRestarts(const std::span<const DeterministicTransportEvent> events) {
@@ -245,8 +249,11 @@ namespace Horo::Network {
             if (event.kind != DeterministicTransportEventKind::Disconnected)
                 continue;
             const auto index = TopologyIndex(event.connection);
-            if (index != descriptor_.topology.size())
+            if (index != descriptor_.topology.size()) {
                 disconnected_[index] = event.connection;
+                if (restarted_[index].next == event.connection)
+                    restarted_[index] = {};
+            }
         }
         for (std::size_t index = 0; index < descriptor_.topology.size(); ++index) {
             const auto &pending = pendingRestarts_[index];
@@ -255,6 +262,7 @@ namespace Horo::Network {
             // Open clears the transport's terminal slot. Its real event must already be in this or an earlier drain.
             if (const auto opened = transport_.Open(pending.next); opened.HasError())
                 return opened;
+            restarted_[index] = pending;
             pendingRestarts_[index] = {};
         }
         return Result<void>::Success();
@@ -308,6 +316,19 @@ namespace Horo::Network {
         return advanced;
     }
 
+    /** @copydoc NetworkChaosScenario::RestartedConnection */
+    Result<ConnectionHandle> NetworkChaosScenario::RestartedConnection(const NetworkChaosScope scope,
+                                                                       const ConnectionHandle previous) const {
+        if (scope != descriptor_.scope)
+            return Fail<ConnectionHandle>(NetworkChaosErrors::StaleScope);
+        if (terminal_)
+            return Fail<ConnectionHandle>(NetworkErrors::TransportShuttingDown);
+        const auto index = TopologyIndex(previous);
+        if (index == descriptor_.topology.size() || restarted_[index].previous != previous)
+            return Fail<ConnectionHandle>(NetworkErrors::NetworkLifecycleOperationStale);
+        return Result<ConnectionHandle>::Success(restarted_[index].next);
+    }
+
     /** @copydoc NetworkChaosScenario::Close */
     Result<std::size_t> NetworkChaosScenario::Close(const NetworkChaosScope scope, const ConnectionHandle connection) {
         if (scope != descriptor_.scope)
@@ -317,8 +338,11 @@ namespace Horo::Network {
         const auto closed = transport_.Close(connection);
         if (closed.HasValue()) {
             const auto index = TopologyIndex(connection);
-            if (index != descriptor_.topology.size() && pendingRestarts_[index].previous == connection)
-                pendingRestarts_[index] = {};
+            if (index != descriptor_.topology.size()) {
+                restarted_[index] = {};
+                if (pendingRestarts_[index].previous == connection)
+                    pendingRestarts_[index] = {};
+            }
         }
         return closed;
     }

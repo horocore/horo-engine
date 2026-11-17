@@ -54,8 +54,9 @@ namespace Horo::Editor {
 
         /** @brief Applies immutable active-frame styles and borrowed host-owned atlas faces.
          * @param theme Current source theme. @param fonts Optional host atlas; null uses the active GUI font.
+         * @param family Registered code family; missing identities retain the bundled fallback.
          */
-        void Configure(const SourceEditorTheme &theme, const Theme::Fonts *fonts);
+        void Configure(const SourceEditorTheme &theme, const Theme::Fonts *fonts, std::string_view family = {});
         /** @brief Binds the exact current mirror and its optional validated syntax during synchronous drawing.
          * @param buffer Current private mirror. @param syntax Normalized spans, or null while an edit awaits publication.
          */

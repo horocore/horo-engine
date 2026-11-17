@@ -13,6 +13,15 @@ The build system is designed to be:
 - explicit about dependencies between modules
 - easy to extend without breaking downstream targets
 
+## Source Encoding
+
+C++ source files and narrow string literals use UTF-8. MSVC builds apply
+`/utf-8` to C++ translation units so Unicode literals and filesystem fixtures
+do not depend on the developer machine's ANSI code page. Existing native
+workspace style tests retain their exact Japanese filename and displayed-label
+checks. The headless workspace style suite is mandatory in Windows CI. C
+translation units and non-MSVC compiler flags are unchanged.
+
 ## CMake Presets
 
 CMake presets live in `CMakePresets.json` and `CMakeUserPresets.json` (optional,
@@ -128,6 +137,29 @@ options or per-target compile definitions for those.
 
 Targets are grouped into libraries and executables. Library targets follow the
 module structure defined in [System Design](../foundation/system-design.md).
+
+`apps/CMakeLists.txt` is the assembly list for executable composition. It includes
+the existing target declarations from their owning host:
+
+- `apps/shared/cmake/Composition.cmake`: multi-host packages, signatures,
+  module activation, Scene/Physics lifetime adaptation, animation identities and
+  native navigation preparation.
+- `apps/HoroEditor/cmake/Composition.cmake`: Editor-specific adapter libraries.
+- `apps/HoroEditor/cmake/Host.cmake`: the graphical executable, platform setup,
+  live UI, packaging and concrete backend selection.
+- `apps/HoroEditor/cmake/ShaderTools.cmake`: offline graphical-product cook tools.
+- `apps/horo-engine/cmake/Host.cmake`: terminal/network composition and its
+  headless link-boundary check.
+- `apps/cmake/SdkTools.cmake`: extension validation, conformance, package tools
+  and SDK staging.
+
+These files use `include`, retaining the `apps/` source and binary directory
+scope. Relative sources, source properties and generated internal-header paths
+therefore keep their existing identities. Target names, compile contracts and
+dependencies remain explicit; this organization introduces no additional target
+or public include root. Shared composition is declared before its consumers;
+offline Editor tools follow the optional graphical executable so their existing
+`if(TARGET HoroEditor)` attachment remains effective.
 
 ```text
 apps/

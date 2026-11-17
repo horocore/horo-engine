@@ -18,6 +18,11 @@ namespace Horo::Platform::Android {
 
     AndroidLifecycleAdapter::AndroidLifecycleAdapter(AndroidLifecycleController &controller) noexcept : controller_(controller) {}
 
+    /** @copydoc AndroidLifecycleAdapter::IsBoundTo */
+    bool AndroidLifecycleAdapter::IsBoundTo(const AndroidLifecycleController &controller) const noexcept {
+        return &controller_ == &controller;
+    }
+
     Result<void> AndroidLifecycleAdapter::OnProcessCreated() {
         return controller_.Enqueue({.kind = AndroidLifecycleEvent::Kind::ProcessCreated});
     }

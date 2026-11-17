@@ -16,7 +16,7 @@ namespace {
         const auto digest = FormatSha256(ComputeSha256({}));
         return {{"schemaVersion", 1},
                 {"backend", 7},
-                {"contractVersion", {1, 1, 0}},
+                {"contractVersion", {1, 2, 0}},
                 {"build", "test-build"},
                 {"releaseChannel", "development"},
                 {"platform", {{"os", "linux"}, {"architecture", "x64"}, {"sdkAbi", "horo-sdk-2"}}},

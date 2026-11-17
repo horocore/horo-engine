@@ -14,18 +14,10 @@
 #include <cmath>
 #include <format>
 #include <memory>
-#include <numbers>
 #include <utility>
 #include <variant>
 
 namespace Horo::Editor::InspectorPanelDetail {
-    constexpr float DegreesToRadians = std::numbers::pi_v<float> / 180.0F;
-
-    /** @brief Reports whether the Inspector's degree-based perspective draft is valid. */
-    [[nodiscard]] inline bool IsValidFieldOfViewDegrees(const float value) noexcept {
-        return std::isfinite(value) && value > 0.0F && value < 180.0F;
-    }
-
     /** @brief Resolves the selected object without exposing iterator details to the panel flow. */
     [[nodiscard]] inline const SceneObject *FindSelectedObject(const EditorWorkspaceViewModel &viewModel) noexcept {
         if (!viewModel.primarySelection.has_value())
@@ -316,63 +308,6 @@ namespace Horo::Editor::InspectorPanelDetail {
             Ui::EndMenuPopup();
         }
         ImGui::PopID();
-    }
-
-    /** @brief Draws the component and behavior entries in the Inspector add-component popup. */
-    inline void DrawAddComponentMenuItems(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
-                                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        const auto selectComponent = [&command, &object](const ComponentType type) {
-            command.command = EditorWorkspaceViewCommand::AddComponentToObject;
-            command.objectPayload = object.id;
-            command.componentTypePayload = type;
-        };
-        if (!object.components.camera.has_value() &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.inspector.kind.camera") + "###inspector_component_camera")
-                                    .c_str(),
-                                nullptr, context.theme.fonts))
-            selectComponent(ComponentType::Camera);
-        if (!object.components.light.has_value() &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.inspector.kind.light") + "###inspector_component_light")
-                                    .c_str(),
-                                nullptr, context.theme.fonts))
-            selectComponent(ComponentType::Light);
-        if (!object.components.triggerVolume.has_value() &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.inspector.kind.trigger_volume") +
-                                 "###inspector_component_trigger_volume")
-                                    .c_str(),
-                                nullptr, context.theme.fonts))
-            selectComponent(ComponentType::TriggerVolume);
-        if (!object.components.audioSource.has_value() &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.inspector.kind.audio_source") +
-                                 "###inspector_component_audio_source")
-                                    .c_str(),
-                                nullptr, context.theme.fonts))
-            selectComponent(ComponentType::AudioSource);
-        if (!object.components.characterController &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.inspector.character.title") +
-                                 "###inspector_component_character")
-                                    .c_str(),
-                                nullptr, context.theme.fonts))
-            selectComponent(ComponentType::CharacterController);
-        if (!object.components.audioListener.has_value() &&
-            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.inspector.kind.audio_listener") +
-                                 "###inspector_component_audio_listener")
-                                    .c_str(),
-                                nullptr, context.theme.fonts))
-            selectComponent(ComponentType::AudioListener);
-        for (const Gameplay::BehaviorDescriptor &descriptor : viewModel.availableBehaviors) {
-            const bool alreadyAttached =
-                std::ranges::any_of(object.components.behaviors, [&descriptor](const Gameplay::BehaviorComponent &behavior) {
-                return behavior.typeId == descriptor.typeId;
-            });
-            const std::string behaviorLabel = descriptor.displayName + "###inspector_behavior_" + descriptor.typeId.Value();
-            if ((!alreadyAttached || descriptor.allowMultiple) &&
-                Ui::ContextMenuItem(behaviorLabel.c_str(), nullptr, context.theme.fonts)) {
-                command.command = EditorWorkspaceViewCommand::AttachBehaviorToObject;
-                command.objectPayload = object.id;
-                command.behaviorTypePayload = descriptor.typeId;
-            }
-        }
     }
 
     /** @brief Adopts a component-removal command when no earlier Inspector command won the frame. */

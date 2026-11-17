@@ -1,8 +1,10 @@
 #include "AssetProviderRead.h"
 #include "Horo/Assets/AssetProvider.h"
+#include "Horo/Foundation/Platform.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -73,6 +75,39 @@ namespace {
         FilesystemAssetProvider bounded{root, AssetProviderLimits{2}};
         REQUIRE((bounded.Load(id, active.Token()).ErrorValue().code.Value() == "asset.provider.too_large"));
         std::filesystem::remove_all(root);
+    }
+
+    TEST_CASE("Filesystem provider loads bounded artifacts from long native cooked roots", "[unit][runtime][assets][long-path]") {
+        NativeDurableFileSystem files;
+        const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto root =
+            std::filesystem::canonical(std::filesystem::temp_directory_path()) / ("horo-provider-long-" + std::to_string(unique));
+        const auto created = files.CreateDirectoryPath(root, DirectoryCreationMode::Single);
+        REQUIRE(created.HasValue());
+        REQUIRE(created.Value());
+        std::vector<std::filesystem::path> directories{root};
+        for (unsigned index = 0; index < 4; ++index) {
+            directories.push_back(directories.back() / (std::string(72, 'b') + " " + std::to_string(index)));
+            REQUIRE(files.CreateDirectoryPath(directories.back(), DirectoryCreationMode::Single).HasValue());
+        }
+        const auto id = Id("00112233-4455-6677-8899-aabbccddeeff");
+        const auto path = directories.back() / (id.ToString() + ".cooked");
+        REQUIRE(path.native().size() > 260);
+        const std::string contents{"retained cooked bytes"};
+        REQUIRE(files.WriteDurable(path, std::as_bytes(std::span{contents})).HasValue());
+        CancellationSource cancellation;
+        FilesystemAssetProvider provider{directories.back()};
+        REQUIRE(provider.Exists(id, cancellation.Token()).Value());
+        const auto loaded = provider.Load(id, cancellation.Token());
+        REQUIRE(loaded.HasValue());
+        CHECK(std::string(loaded.Value().begin(), loaded.Value().end()) == contents);
+        FilesystemAssetProvider bounded{directories.back(), AssetProviderLimits{2}};
+        CHECK(bounded.Load(id, cancellation.Token()).HasError());
+        cancellation.RequestCancellation();
+        CHECK(provider.Load(id, cancellation.Token()).HasError());
+        REQUIRE(files.RemoveDurable(path).HasValue());
+        for (auto directory = directories.rbegin(); directory != directories.rend(); ++directory)
+            REQUIRE(files.RemoveDurable(*directory).HasValue());
     }
 
     TEST_CASE("Exact Artifact Read Rejects Truncation", "[unit][runtime][assets]") {

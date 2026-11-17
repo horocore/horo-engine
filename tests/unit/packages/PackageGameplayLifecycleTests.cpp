@@ -1,3 +1,4 @@
+#include "../runtime/ai/BehaviorTreeRuntimeTestSupport.h"
 #include "GameplayModuleTestSupport.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameEventRegistry.h"
@@ -21,6 +22,7 @@ namespace {
                                      {"entry", entry},
                                      {"requiredCapabilities", {"runtime.participate"}}}}}};
         std::vector<std::pair<std::string, std::string>> files;
+        files.emplace_back("extensions/native/Node.horo_script", "return {role='condition',check=function() return true end}");
         if (withBackend) {
             const auto backend = "backend" + std::filesystem::path{HORO_PACKAGE_NATIVE_FIXTURE}.extension().string();
             descriptor["modules"].push_back({{"id", "fixture.backend"},
@@ -199,4 +201,93 @@ TEST_CASE("Optional SDK failure preserves an actual native backend in the same v
     });
     REQUIRE(runtime != active->modules.end());
     CHECK(runtime->diagnostic.has_value());
+}
+
+TEST_CASE("Verified package decision nodes retain exact locked version and real generated factories", "[packages][decision-node]") {
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto generation = fixture.base.service->Active()->generation;
+    auto acquired = fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation);
+    REQUIRE(acquired.HasValue());
+    auto contribution = std::move(acquired).Value();
+    CHECK(contribution.package == fixture.enabled.package);
+    CHECK(contribution.version == fixture.base.install.ActiveGraph()->packages[0].lock.version);
+    CHECK(contribution.artifact == fixture.base.install.ActiveGraph()->packages[0].lock.artifactDigest);
+    CHECK(contribution.activationGeneration == generation);
+    REQUIRE(contribution.nodes->Contracts().size() == 1);
+    CHECK(contribution.nodes->Contracts()[0].descriptor.type.Value() == 201);
+    CHECK(contribution.nodes->Contracts()[0].descriptor.origin.kind == AI::DecisionDescriptorSourceKind::Package);
+    CHECK(fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation + 1).HasError());
+    fixture.base.service->Shutdown();
+    CHECK_FALSE(contribution.nodes->CanAdmit());
+    CHECK(fixture.retirement->Close().HasError());
+    contribution.nodes.reset();
+    CHECK(fixture.retirement->Close().HasValue());
+}
+
+TEST_CASE("Verified package script nodes use actual declared bytes and inherit native activation retirement", "[packages][decision-node]") {
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto generation = fixture.base.service->Active()->generation;
+    auto compiled =
+        fixture.gameplay->CompileDecisionNode(fixture.enabled.package, "game.tests", generation,
+                                              Parse<PackagePath>("extensions/native/Node.horo_script"),
+                                              AI::DecisionNodeTypeId::Create(202).Value(), AI::DecisionProviderId::Create(702).Value(), 1);
+    REQUIRE(compiled.HasValue());
+    auto program = std::move(compiled).Value();
+    auto acquired = program->Acquire();
+    REQUIRE(acquired.HasValue());
+    auto nodes = std::move(acquired).Value();
+    CHECK(nodes->Contracts()[0].descriptor.source.source == "extensions/native/Node.horo_script");
+    CHECK(nodes->Contracts()[0].descriptor.source.line == 0);
+    AI::BehaviorTreeTestSupport::Fixture world({AI::BehaviorTreeTestSupport::Node(1, AI::BehaviorTreeOperation::Task)});
+    AI::DecisionAssetDescriptor asset{.asset = AI::DecisionGraphAssetId::Create(100).Value(),
+                                      .blackboardSchema = world.schema->Identity(),
+                                      .nodes = {{.id = AI::DecisionNodeId::Create(1).Value(),
+                                                 .type = AI::DecisionNodeTypeId::Create(202).Value(),
+                                                 .source = {__FILE__, __LINE__, 1}}},
+                                      .source = {__FILE__, __LINE__, 1}};
+    const std::array descriptors{nodes->Contracts()[0].descriptor};
+    auto bound = AI::DecisionAssetCompiler::Compile(asset, {}, descriptors, std::array{world.schema});
+    REQUIRE(bound.HasValue());
+    for (const auto &diagnostic : bound.Value().validation.Diagnostics())
+        UNSCOPED_INFO(diagnostic.code.Value() << " " << diagnostic.path << " " << diagnostic.source.source);
+    REQUIRE(bound.Value().IsValid());
+    auto created = nodes->CreateExecutor(nodes, *bound.Value().plan, {});
+    REQUIRE(created.HasValue());
+    auto executor = std::move(created).Value();
+    auto snapshot = world.blackboard->Snapshot();
+    REQUIRE(snapshot.HasValue());
+    const AI::BehaviorTreeEvaluationContext context{AI::DecisionNodeId::Create(1).Value(), {}, snapshot.Value(), 1};
+    REQUIRE(executor->Check(context).HasValue());
+    CHECK(executor->Check(context).Value());
+    fixture.base.service->Shutdown();
+    CHECK_FALSE(nodes->CanAdmit());
+    CHECK(executor->Check(context).HasError());
+    CHECK(program->Acquire().HasError());
+    CHECK(fixture.retirement->Close().HasError());
+    executor.reset();
+    nodes.reset();
+    program.reset();
+    CHECK(fixture.retirement->Close().HasValue());
+}
+
+TEST_CASE("Package node admission rejects denied retired foreign and undeclared source selections", "[packages][decision-node]") {
+    GameplayFixture fixture;
+    CHECK(fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", 1).HasError());
+    REQUIRE(fixture.Activate().HasValue());
+    const auto generation = fixture.base.service->Active()->generation;
+    CHECK(fixture.gameplay
+              ->CompileDecisionNode(fixture.enabled.package, "game.tests", generation,
+                                    Parse<PackagePath>("extensions/native/Missing.horo_script"),
+                                    AI::DecisionNodeTypeId::Create(202).Value(), AI::DecisionProviderId::Create(702).Value(), 1)
+              .HasError());
+    bool foreignRejected{};
+    std::jthread worker([&] {
+        foreignRejected = fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation).HasError();
+    });
+    worker.join();
+    CHECK(foreignRejected);
+    fixture.base.service->Shutdown();
+    CHECK(fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation).HasError());
 }

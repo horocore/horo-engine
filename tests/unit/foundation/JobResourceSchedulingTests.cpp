@@ -149,8 +149,17 @@ namespace {
         }
         REQUIRE(constructionRequests > 0);
         for (std::size_t index = 0; index < constructionRequests; ++index) {
-            const Tests::AllocationProbe::ScopedFailure failure{index};
-            CHECK_THROWS_AS(JobSystem{config}, std::bad_alloc);
+            INFO(index);
+            bool failed{};
+            {
+                const Tests::AllocationProbe::ScopedFailure failure{index};
+                try {
+                    JobSystem jobs{config};
+                } catch (const std::bad_alloc &) {
+                    failed = true;
+                }
+            }
+            CHECK(failed);
         }
     }
 

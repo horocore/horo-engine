@@ -10,10 +10,12 @@
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <imgui_internal.h>
 #include <limits>
+#include <thread>
 
 namespace {
     using namespace Horo;
@@ -193,4 +195,42 @@ TEST_CASE("Owner session reset replaces lexical projections even when document I
     REQUIRE(view->syntax.Syntax().language == SourceLanguage::HoroScript);
     REQUIRE(view->widget.HasHighlight(second.Revision()));
     REQUIRE_FALSE(fixture.Frame(view->widget));
+}
+
+TEST_CASE("Pointer clicks reveal the insertion caret immediately during its hidden blink phase", "[editor][source][widget][caret]") {
+    WidgetFixture fixture;
+    fixture.first.Publish(fixture.Open("caret.lua", "local value = 1\nreturn value\n"));
+    const auto visibleCaret = [&] {
+        const auto rgba = ResolveSourceEditorTheme(Theme::GetActiveTokens()).cursor;
+        const auto *draw = ImGui::GetDrawData();
+        for (int list = 0; list < draw->CmdListsCount; ++list)
+            for (int i = 0; i + 3 < draw->CmdLists[list]->VtxBuffer.Size; ++i) {
+                const auto *vertices = &draw->CmdLists[list]->VtxBuffer[i];
+                const auto rendered = ImGui::ColorConvertU32ToFloat4(vertices[0].col);
+                constexpr float channelTolerance = 1.1F / 255.0F;
+                if (std::abs(rendered.x - rgba[0]) <= channelTolerance && std::abs(rendered.y - rgba[1]) <= channelTolerance &&
+                    std::abs(rendered.z - rgba[2]) <= channelTolerance && vertices[0].col == vertices[2].col &&
+                    vertices[2].pos.x - vertices[0].pos.x > 0 && vertices[2].pos.x - vertices[0].pos.x <= 1.1F &&
+                    vertices[2].pos.y - vertices[0].pos.y >= 14.0F)
+                    return true;
+            }
+        return false;
+    };
+    static_cast<void>(fixture.Frame(fixture.first));
+    static_cast<void>(fixture.Frame(fixture.first));
+    REQUIRE(visibleCaret());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (visibleCaret() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        static_cast<void>(fixture.Frame(fixture.first));
+    }
+    REQUIRE_FALSE(visibleCaret());
+    ImGui::GetIO().AddMousePosEvent(140, 65);
+    static_cast<void>(fixture.Frame(fixture.first));
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    static_cast<void>(fixture.Frame(fixture.first));
+    REQUIRE(visibleCaret());
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    static_cast<void>(fixture.Frame(fixture.first));
+    REQUIRE(visibleCaret());
 }

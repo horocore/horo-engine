@@ -216,10 +216,11 @@ namespace Horo::Audio {
 
         /**
          * @brief Preallocates and admits one package stream on the control lane.
-         * @param request Validated exact decoder facts and bounded prefetch policy.
+         * @param request Borrowed exact decoder facts and bounded prefetch policy; admission retains an independent owned copy.
          * @return Generation-checked identity or typed invalid/capacity error; no worker starts yet.
+         * Allocation failure publishes neither a stream nor a byte reservation and preserves the caller's request.
          */
-        [[nodiscard]] Result<AudioStreamHandle> Admit(AudioStreamRequest request);
+        [[nodiscard]] Result<AudioStreamHandle> Admit(const AudioStreamRequest &request);
         /** @brief Borrows the sole callback endpoint. @param handle Live stream identity. @return Port or stale/duplicate error. */
         [[nodiscard]] Result<AudioStreamRenderPort> RenderPort(AudioStreamHandle handle);
         /** @brief Borrow the sole port with a control-owned retirement pin.

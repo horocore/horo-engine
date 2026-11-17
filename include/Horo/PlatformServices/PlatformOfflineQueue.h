@@ -191,6 +191,8 @@ namespace Horo::PlatformServices {
         Action action{Action::Clear};
         PresenceStatusId status;
         std::string detail;
+        /** @brief Keeps aggregate initialization and fallible copies of owned text on checked-library hosts. */
+        ~PlatformOfflinePresenceDesiredState() = default;
         [[nodiscard]] bool operator==(const PlatformOfflinePresenceDesiredState &) const noexcept = default;
     };
 
@@ -273,7 +275,9 @@ namespace Horo::PlatformServices {
     struct PlatformOfflineAdmission final {
         PlatformOfflineAdmissionDisposition disposition{PlatformOfflineAdmissionDisposition::Accepted};
         PlatformOfflineOperationHandle operation;
-        std::vector<PlatformOfflineIntentId> superseded;
+        std::vector<PlatformOfflineIntentId> superseded = std::vector<PlatformOfflineIntentId>(std::size_t{0});
+        /** @brief Keeps aggregate initialization and fallible copies of owned receipt IDs. */
+        ~PlatformOfflineAdmission() = default;
     };
 
     /** @brief Explicit finite limits for the in-memory queue policy core. */
@@ -315,11 +319,11 @@ namespace Horo::PlatformServices {
 
         /**
          * @brief Admits or joins one caller-owned logical intent.
-         * @param intent Typed intent with an already allocated Horo identity.
+         * @param intent Borrowed typed intent with an already allocated Horo identity; admission retains an independent owned copy.
          * @param now Monotonic time supplied by the queue owner.
-         * @return Admission receipt, or typed invalid/capacity/identity/clock failure.
+         * @return Admission receipt, or typed invalid/capacity/identity/clock failure. Allocation failure leaves prior receipts unchanged.
          */
-        [[nodiscard]] Result<PlatformOfflineAdmission> Admit(PlatformOfflineIntent intent, TimePoint now);
+        [[nodiscard]] Result<PlatformOfflineAdmission> Admit(const PlatformOfflineIntent &intent, TimePoint now);
 
         /**
          * @brief Returns the aggregate operation for a live or retained producer receipt.
@@ -424,6 +428,7 @@ namespace Horo::PlatformServices {
 
     private:
         struct State;
+        struct AdmissionCommit;
         PlatformOfflineQueueConfig config_;
         std::vector<State> operations_;
         std::size_t activeIntentCount_{};
@@ -450,17 +455,17 @@ namespace Horo::PlatformServices {
         /** @brief Counts active receipts for one protected subject. @param subject Subject partition. @return Active count. */
         [[nodiscard]] std::size_t ActiveForSubject(const PlatformOfflineSubjectPartition &subject) const noexcept;
         /** @brief Attempts bounded coalescing into a pending lane tail. @return Admission, no-op, or typed capacity failure. */
-        [[nodiscard]] Result<std::optional<PlatformOfflineAdmission>> TryCoalesceTail(State *tail, PlatformOfflineIntent &intent,
-                                                                                      TimePoint now);
+        [[nodiscard]] Result<std::optional<PlatformOfflineAdmission>> TryCoalesceTail(State *tail, const PlatformOfflineIntent &intent,
+                                                                                      TimePoint now, AdmissionCommit &commit);
         /** @brief Admits a new aggregate after joining/coalescing was ruled out. @return New admission or typed capacity failure. */
-        [[nodiscard]] Result<PlatformOfflineAdmission> AdmitFresh(PlatformOfflineIntent intent, TimePoint now, TimePoint expiresAt,
-                                                                  State *tail);
+        [[nodiscard]] Result<PlatformOfflineAdmission> AdmitFresh(const PlatformOfflineIntent &intent, TimePoint now, TimePoint expiresAt,
+                                                                  State *tail, AdmissionCommit &commit);
         /**
          * @brief Prepares active presence receipt IDs before a replacement admission mutates queue state.
          * @param presenceTail Pending or suspended presence operation to replace, or null.
-         * @return Superseded receipt IDs in their stable admission order.
+         * @param superseded Receives superseded receipt IDs in their stable admission order before publication.
          */
-        [[nodiscard]] std::vector<PlatformOfflineIntentId> PrepareSupersededPresenceIds(const State *presenceTail) const;
+        void PrepareSupersededPresenceIds(const State *presenceTail, std::vector<PlatformOfflineIntentId> &superseded) const;
         /** @brief Checks whether all active receipts in a state remain before their deadlines. @return True when live. */
         [[nodiscard]] static bool ReceiptsRemainLive(const State &state, TimePoint now);
         /** @brief Copies immutable operation and receipt state. @param state Queue-owned record. @return Detached snapshot. */

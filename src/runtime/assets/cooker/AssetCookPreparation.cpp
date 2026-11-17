@@ -2,6 +2,7 @@
 
 #include "../AssetErrors.h"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -75,6 +76,18 @@ namespace Horo::Assets::Detail {
                 .target = request.target,
                 .artifactFormatVersion = AssetCookArtifact::CurrentFormatVersion,
             };
+            if (request.keyProjection) {
+                if (!request.pinnedInputs || !request.keyProjection->Matches(*request.pinnedInputs))
+                    return Result<AssetCookCacheKey>::Failure(MakeError(CookErrors::MalformedArtifact));
+                const auto *selection = request.keyProjection->Find(record.id);
+                if (!selection)
+                    return Result<AssetCookCacheKey>::Failure(MakeError(CookErrors::MalformedArtifact));
+                std::vector<AssetCookDependencyIdentity> selected;
+                for (const auto &dependency : dependencies)
+                    if (std::ranges::binary_search(selection->inputs, dependency.id))
+                        selected.push_back(dependency);
+                return BuildAssetCookCacheKeyV2(inputs, selected, request.keyProjection->Digest(record.id), request.limits.maximumAssets);
+            }
             if (request.pinnedInputs)
                 return BuildAssetCookCacheKeyV2(inputs, dependencies, request.pinnedInputs->ClosureDigest(), request.limits.maximumAssets);
             return Result<AssetCookCacheKey>::Success(BuildAssetCookCacheKey(inputs));

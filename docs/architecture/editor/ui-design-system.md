@@ -1,5 +1,29 @@
 # GUI Design System
 
+## Required surface localization scopes
+
+Every `EditorModal`, `IWorkspacePanel`, `IGlobalDockPane`, and `GuiScreen` must explicitly initialize
+its shared `LocalizedGui` base with a `GuiLocalizationScope`. There is no default
+scope. Scopes are validated static literals, defined once by the owning surface
+and shared with its view helpers. Localization catalogs retain their existing
+canonical keys; surface code supplies keys relative to its declared scope.
+Embedded pane and inspector classes inherit `LocalizedGui` directly and declare
+their own vocabulary scope; generic dock adapters retain the dock's scope.
+
+The shared resolver always uses the caller's current localization authority.
+Surfaces must not cache translated string references across locale activation.
+Production scoped lookups compare segmented keys against the existing catalog
+without allocating a concatenated lookup key. Extension-provided messages and
+model-owned canonical message keys remain explicit external lookups.
+
+Presentation decisions use named functions, early returns, or exhaustive enum
+switches. Nested conditional operators are not used in modal, panel, or screen
+presentation. Simple two-way conditional expressions remain appropriate when
+they do not obscure state or ownership.
+
+See [GUI localization scope migration](../../guides/gui-localization-scope-migration.md)
+for the public constructor and localization adapter migration.
+
 ## Purpose
 
 The Horo graphical host uses Dear ImGui as its rendering toolkit and provides a
@@ -319,6 +343,7 @@ mutate the built-in icon table.
 Panels select icons by meaning rather than by the visual source. The selected
 scene object uses `UiIcon::SceneObject` in both Hierarchy and Inspector; the
 package icon has its own identity even when it currently uses the same glyph.
+
 - Primitive components remain feature-independent.
 - Composite components are built by composing primitives.
 - Screens, panels, and modal workflows orchestrate components and application
@@ -627,7 +652,7 @@ Theme sources are:
 - custom presets in `~/.horo/themes/*.json` (current implementation; target:
   `Platform::UserConfigDirectory()/horo/themes/*.theme.json`)
 - an optional project override at `<project>/.horo/theme.json`
-- an explicit external preset selected through `HORO_THEME_FILE`
+- an explicit external preset selected through `HORO_THEME_OVERRIDE`
 
 Current theme file format (flat, for rapid iteration):
 
@@ -673,6 +698,46 @@ structured diagnostic. Color, spacing, shape, dimensions, and motion changes
 apply live. Typography changes that require a font-atlas rebuild are prepared
 outside rendering and swapped at a safe frame boundary; they do not require an
 application restart.
+
+The local Debug watcher currently implements bounded background inspection of
+the selected JSON source, owner-thread frame-boundary publication and a
+`Theme::ThemeReloadedEvent`. Font-atlas replacement is not part of this watcher.
+The optional native Windows/MSVC and macOS/AppleClang Debug RCC++ integration replaces actual registered
+built-in GUI drawing through `GuiLive::IRegistry`, borrowed from `ThemeContext`.
+Its typed dispatch preserves reference arguments and value/void results, rejects
+signature mismatches, and publishes completed modules only before a frame. There
+is no per-screen virtual interface. `HoroGui` owns the registered sources and
+generated adapters; a dedicated non-installed internal target carries compiler
+metadata to application composition. `HoroEditorGuiLiveReloadHost` owns the shared
+Windows/macOS runtime lifecycle; executable composition passes typed generated
+build inputs, and native compiler/watcher selection stays in the private RCC++
+backend. This is engine-development built-in GUI iteration only; project/game
+source compilation and external plugins retain their separate authorities.
+No repository-wide private include root
+is published to the application.
+
+The development import bridge resolves Horo/ImGui calls against the running
+host, sharing its context, design tokens and service authorities. This trusted
+built-in compiler path is distinct from external package schemas and does not
+extend their capabilities. Editor/panel/modal objects remain host-owned and are
+borrowed only for synchronous drawing. Member adapters bypass original virtual
+tables explicitly. Common screen, workspace, dock and modal call sites own
+dispatch; GUI drawing bodies contain no live-reload guards. Generated registrations
+derive entry/signature identities and map polymorphic draws by their concrete
+host type. `GuiLiveReload.h` is owned by `EditorServices`, allowing its modal host
+to dispatch through this backend-neutral contract without a dependency on
+`HoroGui`. Modals never store the registry; headless hosts default to none.
+Shared component and presentation-helper sources are compiled with registered
+entries into one replacement module. Their inventory derives from the owning
+`HoroGui` target; component implementations need no per-file dispatch guard.
+The shell, status bar and snackbar use the same dispatch contract. Theme/font
+authority and native source-widget/platform backends remain in the host.
+Mutable state stays in original owners, rather
+than module statics. Header, object-layout and signature changes require a host
+rebuild/restart. A failed compile/link keeps the last working module. Disabled
+builds use null dispatch and retain ordinary GUI linkage.
+See [Local editor UI iteration](../../guides/editor-live-development.md) for its
+explicit source scope and development-only build option.
 
 ## User Customization
 
@@ -759,3 +824,110 @@ design-system primitives for user-facing controls.
   precedence, and immutable resolved settings.
 - [Localization](./localization.md): translated text, font fallback,
   right-to-left layout, and pseudo-localization scenarios.
+
+## Workspace transport and native decorations
+
+The workspace toolbar uses the active `Bg0` surface for both native ImGui
+window and menu-bar layers. The 44 logical pixel row presents a centered,
+stable three-slot transport: Play/Stop, Pause/Resume and Step. These are shared
+icon controls with hover, focus, disabled and persistent selected states.
+The profile configuration action follows the transport when available width
+permits it; application menus remain native on macOS. Engine version metadata
+is not reserved space beside primary workspace actions.
+
+The canonical `EditorPlayState` controls enablement and dispatch. Starting and
+Stopping cannot admit a second transition, and Step is enabled only while
+Paused. Icons produce existing typed workspace commands rather than controlling
+or selecting runtime/render backends directly.
+
+Executable composition owns `EditorWindowChrome`, a target-private native
+adapter that receives the same theme surface before GUI frame traversal. It
+caches applied surface/text RGB values, updates macOS transparent title-bar
+background and light/dark appearance, and applies supported Windows DWM caption
+attributes. An owned AppKit title-bar accessory renders the native window title
+with the active text color so inactive-window title contrast remains readable.
+Native handles and OS APIs remain inside platform-specific executable sources.
+Linux server-side decorations remain window-manager owned because SDL exposes
+no portable per-window caption color API. Native traffic-light/window controls
+and operating-system status indicators retain their native behavior.
+
+## Settings rows and heading casing
+
+Descriptionless settings rows (including keymaps) measure their control group
+once and center the label against that measured height. Equal theme spacing
+above and below the row keeps both columns centered. Setting rows use whitespace
+rather than dividers; only section headings retain their separator. Rows
+with descriptions retain their existing wrapped two-column layout.
+
+Settings section headings preserve localized title casing, such as `Input
+Mapping`, rather than forcing uppercase at rendering time. English and Turkish
+catalogs own their spelling; technical identifiers such as DX11 remain unchanged.
+
+Settings footer actions measure localized labels with the exact button font role
+and component padding. Minimum widths are lower bounds; UI scale applies once.
+The action group remains right aligned and the status is clipped before that
+group so long feedback cannot paint underneath the actions.
+
+Settings use a compact supporting-copy role: default 14 logical pixels, derived
+from the active caption size at a 14/18 ratio and bounded below by 14 times UI
+scale. This intentional settings-specific tier implements the compact settings
+request; it does not shrink body labels, controls, hit targets or global caption
+roles. Described rows wrap within the information column, use theme-backed small
+cell padding and XS label/hint spacing without per-row dividers.
+Groups use small leading and XS trailing gaps, with no leading gap for the first
+group. The settings shell uses a 48-pixel header and 20/14 content padding; sidebar
+rows retain a 32-pixel hit target with vertically centered text.
+
+## Scale gizmo geometry
+
+Scale handles are equal-edge cubes in the normalized gizmo world/local frame.
+Their eight corners, axis shafts and face normals share the camera rotation and
+pivot screen scale; faces never use a fixed 2D depth offset. Front-facing convex
+faces are wound clockwise for ImGui antialiasing and supply the same polygons to
+picking, with a small screen-space edge tolerance. Axes draw back to front; an
+overlapping cube selects the nearest axis, and cube hits retain precedence over
+shaft hits. The central uniform-scale handle and end-on fallback remain distinct.
+Equal 3D axis lengths naturally foreshorten with camera orientation; normalizing
+all screen lengths independently would misrepresent the world/local frame.
+
+Context-menu row auto-fit measures the visible localized label (excluding stable
+`###` IDs), optional icon, shortcut and submenu indicator. Popup width is bounded
+by the display and the shared maximum. Labels reserve right padding and adornment
+space; remaining overflow is ellipsized and the full visible label appears on
+hover. Menu text retains its normal typography role.
+
+### Physics component authoring
+
+Add Component groups supported entries by Rendering, Audio, Gameplay, Scripts,
+and Physics. Scripts lists registered behavior descriptors and provides the
+existing source-creation workflow. Collider and Trigger Collider are separate
+creation intents over the same typed collider model. A new local collider stages
+an explicit static body when needed; this does not activate native Physics.
+
+The main Physics form exposes editable properties and named collision-profile
+and Physics-material references. Internal generation/schema/slot metadata is not
+part of the main form. Component identity is a disabled input in Details.
+Reference choices come from committed project settings and the pinned asset
+registry, refreshed on settings save and asset projection changes. Missing
+references remain unresolved and receive actionable empty-state guidance; draw
+must not read files or synthesize project identities. Apply and Discard retain
+the existing detached transaction boundary.
+
+### Host leave confirmations
+
+Leave guards use the shared modal shell in its opt-in native modal-popup mode;
+existing EditorModalHost surfaces retain their default window mode. The popup
+mode adds balanced OpenPopup/BeginPopupModal/EndPopup ownership without moving
+navigation policy into the design system. Callers skip body/footer rendering
+when IsOpen is false. Header X and Escape map to Stay only when that action is
+allowed by the current typed requirement. Footer actions are measured in their
+actual font and locale, right-aligned with padding, and stacked at narrow widths.
+Resolution occurs after the shell has closed, through the existing host revision
+and allowed-action checks.
+
+This additive C++ shell option changes ModalShellProps/ScopedModalShell layout:
+rebuild GUI consumers and restart existing Live UI hosts before using the new
+binary. Existing source callers keep their default non-popup behavior; only the
+host leave view opts in. No extension C ABI changes. Render regressions cover
+both default shell users and the popup mode, including localized narrow layouts
+and allowed/disallowed close actions.

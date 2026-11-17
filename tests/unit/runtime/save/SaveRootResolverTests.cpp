@@ -243,11 +243,9 @@ namespace Horo::Runtime {
             if (renameError == std::errc::permission_denied) {
                 const auto retained = original / "server" / std::get<ServerWorldOwner>(name.owner).owner.ToString() / "slots" /
                                       (slot.ToString() + ".horosave");
-                std::ifstream input{retained, std::ios::binary};
-                REQUIRE(input.good());
-                REQUIRE(input.get() == 3);
-                REQUIRE(input.get() == 4);
-                REQUIRE(input.get() == std::char_traits<char>::eof());
+                const auto bytes = NativeDurableFileSystem{}.ReadFileBounded(retained, 128);
+                REQUIRE(bytes.HasValue());
+                REQUIRE(bytes.Value() == std::vector<std::uint8_t>{3, 4});
                 SUCCEED("Windows denied namespace replacement while child handles were held");
                 return;
             }
@@ -308,16 +306,14 @@ namespace Horo::Runtime {
             const auto slots = root.CanonicalPath() / name.environment.ToString() / "server" /
                                std::get<ServerWorldOwner>(name.owner).owner.ToString() / "slots";
             const auto alias = slots / upper;
-            {
-                std::ofstream output{alias, std::ios::binary};
-                REQUIRE(output.good());
-                output << "old";
-            }
+            NativeDurableFileSystem files;
+            const std::string original{"old"};
+            REQUIRE(files.WriteDurable(alias, std::as_bytes(std::span{original})).HasValue());
             const std::array candidate{std::byte{9}};
             REQUIRE(storage.Replace(slot, candidate).HasError());
-            std::ifstream input{alias, std::ios::binary};
-            std::string content;
-            input >> content;
+            const auto retained = files.ReadFileBounded(alias, 128);
+            REQUIRE(retained.HasValue());
+            const std::string content(retained.Value().begin(), retained.Value().end());
             REQUIRE(content == "old");
         }
 #endif

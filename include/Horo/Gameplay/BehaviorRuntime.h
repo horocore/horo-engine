@@ -13,12 +13,16 @@
 #include <vector>
 
 namespace Horo::Gameplay {
+    enum class BehaviorRestoreServices : std::uint32_t;
+
     /** @brief Runtime-only state captured for one stable behavior attachment. */
     struct BehaviorInstanceReloadState {
         BehaviorInstanceId instanceId;
         BehaviorTypeId typeId;
         std::vector<std::byte> payload;
         bool started{};
+        Runtime::EntityRef
+            entity; /**< Exact same-Scene in-memory attachment owner; never persisted or passed through native SDK exports. */
     };
 
     /** @brief Complete bounded behavior snapshot used by one native reload transaction. */
@@ -44,6 +48,8 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayNavigationContext> navigation;   /**< Exact module/Scene Navigation scope. */
         std::shared_ptr<const GameplayCharacterContext> character;     /**< Character scope dependent on the admitted Physics scope. */
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact host UI grant, independently derived by the runner. */
+        std::shared_ptr<const GameplayVfxContext> vfx;                 /**< Explicit module/Scene presentation grant. */
+        std::string vfxModuleId; /**< Trusted composition principal; never inferred from an effect tag or behavior type. */
     };
 
     /** @brief Owns every behavior instance attached to one active runtime scene. */
@@ -88,6 +94,12 @@ namespace Horo::Gameplay {
         BehaviorRuntime(const BehaviorRuntime &) = delete;
         BehaviorRuntime &operator=(const BehaviorRuntime &) = delete;
 
+        /** @brief Copies the genuine latest VFX source transaction's Scene publication witness.
+         * @return Read-only tracked receipt, or empty for a source tick with no structural commands.
+         * @details Cleared before every FixedUpdate attempt. This is not a commit grant; the host must inspect its actual outcome.
+         */
+        [[nodiscard]] std::shared_ptr<const Runtime::SceneStructuralReceipt> VfxStructuralReceipt() const noexcept;
+
         /** @brief Delivers queued events/input, runs one deterministic tick, and commits mutations.
          * @param input Current tick input. @param delta Validated fixed step. @return Success or a lifecycle/callback error. */
         [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta) const;
@@ -125,6 +137,19 @@ namespace Horo::Gameplay {
 
     private:
         struct Impl;
+        friend class BehaviorRuntimeRestoreAccess;
+        [[nodiscard]] static bool RestoreBindingAdmitted(const Impl &) noexcept;
+        [[nodiscard]] static Result<std::shared_ptr<void>> AcquireRestoreGeneration(const BehaviorRegistry &);
+        [[nodiscard]] static Result<void> BindRestoreVfx(Impl &, BehaviorRuntimeServiceBindings &);
+        [[nodiscard]] static Result<void> BindRestorePhysics(Impl &, BehaviorRuntimeServiceBindings &);
+        [[nodiscard]] static Result<void> BindRestoreNavigationUi(Impl &, BehaviorRuntimeServiceBindings &);
+        [[nodiscard]] static Result<void> BindRestoreServices(Impl &, BehaviorRuntimeServiceBindings,
+                                                              std::shared_ptr<const GameplayPrefabContext>);
+        [[nodiscard]] static Result<void> CheckRestorePhysicsServices(const Impl &, std::uint32_t);
+        [[nodiscard]] static Result<void> CheckRestoreServices(const Impl &, BehaviorRestoreServices);
+        [[nodiscard]] Result<void> RestoreReloadInstance(std::size_t, const BehaviorInstanceReloadState &) const;
+        [[nodiscard]] Result<void> RunFixedInstance(std::size_t, std::span<const GameplayInputAction>, FixedDeltaTime,
+                                                    Runtime::SceneCommandBuffer &) const;
         /** @brief Activates instances and rolls back failed factory/lifecycle construction.
          * @param impl Complete host-routed state with admitted scopes.
          * @return Active runner or original typed activation/rollback failure.

@@ -7,6 +7,9 @@
 
 namespace Horo::PlatformServices {
     struct PlatformOfflineQueue::State final {
+        // Fallible copies preserve checked-library allocation failures during vector growth.
+        ~State() = default;
+
         struct Receipt final {
             PlatformOfflineIntent intent;
             TimePoint admittedAt;

@@ -52,7 +52,9 @@ namespace Horo::XR {
         }
 
         TEST_CASE("XR contract versions reject malformed and incompatible producers", "[unit][xr][contract]") {
+            REQUIRE(CurrentXRContractVersion == XRContractVersion{1, 2, 0});
             REQUIRE(RequireXRContractVersion(CurrentXRContractVersion, CurrentXRContractVersion).HasValue());
+            RequireFailureIdentity(RequireXRContractVersion(CurrentXRContractVersion, {1, 1, 0}), XRErrors::ContractVersionIncompatible);
             RequireFailureIdentity(RequireXRContractVersion(CurrentXRContractVersion, {1, 0, 0}), XRErrors::ContractVersionIncompatible);
             REQUIRE(RequireXRContractVersion({1, 2, 9}, {1, 3, 0}).HasValue());
             REQUIRE(RequireXRContractVersion({1, 2, 9}, {1, 2, 0}).HasValue());
@@ -106,14 +108,14 @@ namespace Horo::XR {
 
         TEST_CASE("XR capability snapshot owns exact immutable versioned evidence", "[unit][xr][capability]") {
             auto descriptor = MakeDescriptor();
-            descriptor.contractVersion = {1, 1, 4};
+            descriptor.contractVersion = {1, 2, 4};
             descriptor.states[static_cast<std::size_t>(XRCapability::Projection)] = XRCapabilityState::Available;
             const auto result = XRCapabilitySnapshot::Create(descriptor);
             REQUIRE(result.HasValue());
             const auto snapshot = result.Value();
             descriptor.states.fill(XRCapabilityState::Denied);
 
-            REQUIRE(snapshot.ContractVersion() == XRContractVersion{1, 1, 4});
+            REQUIRE(snapshot.ContractVersion() == XRContractVersion{1, 2, 4});
             REQUIRE(snapshot.System() == MakeSystem());
             REQUIRE(snapshot.Revision().Value() == 7);
             REQUIRE(snapshot.State(XRCapability::Projection) == XRCapabilityState::Available);

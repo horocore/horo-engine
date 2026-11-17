@@ -337,6 +337,63 @@ namespace {
         std::filesystem::remove_all(root, ignored);
     }
 
+    TEST_CASE("Native durable filesystem retains long Unicode path identity through write read copy and replacement",
+              "[unit][foundation][filesystem][long-path]") {
+        Horo::NativeDurableFileSystem files;
+        const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto root = std::filesystem::canonical(std::filesystem::temp_directory_path()) / std::format("horo-long-path-{}", unique);
+        const auto created = files.CreateDirectoryPath(root, Horo::DirectoryCreationMode::Single);
+        REQUIRE(created.HasValue());
+        REQUIRE(created.Value());
+        std::vector<std::filesystem::path> directories{root};
+        for (unsigned index = 0; index < 4; ++index) {
+            directories.push_back(directories.back() / (std::string(72, 'a') + " " + std::to_string(index)));
+            REQUIRE(files.CreateDirectoryPath(directories.back(), Horo::DirectoryCreationMode::Single).HasValue());
+        }
+        const auto source = directories.back() / std::filesystem::path{u8"retained \u00FC source.bin"};
+        const auto copied = directories.back() / "copied.bin";
+        const auto published = directories.back() / "published.bin";
+        const auto privateFile = directories.back() / "private.bin";
+        const auto lockFile = directories.back() / "publication.lock";
+        REQUIRE(source.native().size() > 260);
+        const std::string contents{"exact retained bytes"};
+        const auto bytes = std::as_bytes(std::span{contents});
+        REQUIRE(files.WriteDurable(source, bytes).HasValue());
+        REQUIRE(files.CopyDurable(source, copied).HasValue());
+        Horo::AtomicFileReplacementReceipt receipt;
+        REQUIRE(files.AtomicReplaceTracked(copied, published, receipt).HasValue());
+        REQUIRE(receipt.WasCommitted());
+        const auto read = files.ReadFileBounded(published, 1024);
+        REQUIRE(read.HasValue());
+        CHECK(std::string(read.Value().begin(), read.Value().end()) == contents);
+        bool privateCreated{};
+        REQUIRE(files.WritePrivateDurable(privateFile, bytes, privateCreated).HasValue());
+        CHECK(privateCreated);
+        REQUIRE(files.AppendPrivateDurable(privateFile, contents.size(), bytes).HasValue());
+        const auto appended = files.ReadFileBounded(privateFile, 1024);
+        REQUIRE(appended.HasValue());
+        CHECK(std::string(appended.Value().begin(), appended.Value().end()) == contents + contents);
+        {
+            auto lock = files.TryAcquireExclusive(lockFile, "long-path owner");
+            REQUIRE(lock.HasValue());
+            CHECK(lock.Value().ProtectsPath(lockFile));
+            CHECK(files.TryAcquireExclusive(lockFile, "competing owner").HasError());
+        }
+        {
+            auto reacquired = files.TryAcquireExclusive(lockFile, "next owner");
+            REQUIRE(reacquired.HasValue());
+        }
+        const auto entries = files.ListDirectory(directories.back(), 4);
+        REQUIRE(entries.HasValue());
+        CHECK(entries.Value().size() == 4);
+        REQUIRE(files.RemoveDurable(source).HasValue());
+        REQUIRE(files.RemoveDurable(published).HasValue());
+        REQUIRE(files.RemoveDurable(privateFile).HasValue());
+        REQUIRE(files.RemoveDurable(lockFile).HasValue());
+        for (auto directory = directories.rbegin(); directory != directories.rend(); ++directory)
+            REQUIRE(files.RemoveDurable(*directory).HasValue());
+    }
+
     TEST_CASE("Native Durable Filesystem Serializes Locks And Replaces Files", "[unit][foundation]") {
         const auto temporary = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
         std::error_code ignored;

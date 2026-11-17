@@ -22,6 +22,8 @@ namespace Horo::Editor {
         [[nodiscard]] std::string &MutableBaseName() noexcept;
         [[nodiscard]] const Result<void> &Validation() const noexcept;
         void SetBaseName(std::string baseName);
+        void SetKind(GameplayBehaviorKind kind, std::string destination);
+        void SetDestination(std::string destination);
         [[nodiscard]] std::optional<CreateGameplayBehaviorRequest> Confirm() const;
         [[nodiscard]] std::optional<CreateGameplayBehaviorRequest> Dispatch(GameplayBehaviorFilenameModalAction action) const;
 

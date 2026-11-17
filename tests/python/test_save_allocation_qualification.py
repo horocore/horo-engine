@@ -112,7 +112,12 @@ def test_cli_rejects_report_paths_outside_its_workspace(tmp_path: Path, monkeypa
     workspace.mkdir()
     if escape_kind == "symlink":
         link = workspace / "linked.xml"
-        link.symlink_to(outside)
+        try:
+            link.symlink_to(outside)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                pytest.skip("Creating symlinks requires Windows symlink privilege")
+            raise
         argument = link.name
     elif escape_kind == "absolute":
         argument = str(outside)

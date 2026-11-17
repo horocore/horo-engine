@@ -1,7 +1,8 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const studio = new URL('../', import.meta.url).pathname;
+const studio = fileURLToPath(new URL('../', import.meta.url));
 const repository = resolve(studio, '..');
 // The catalog is a fixed path relative to this script.
 // eslint-disable-next-line security/detect-non-literal-fs-filename
@@ -53,7 +54,7 @@ for (const path of await filesUnder(join(studio, 'public'))) {
 
 // The design index is a fixed path relative to this script.
 // eslint-disable-next-line security/detect-non-literal-fs-filename
-const designIndex = await readFile(join(studio, 'designs.md'), 'utf8');
+const designIndex = (await readFile(join(studio, 'designs.md'), 'utf8')).replace(/\r\n/g, '\n');
 
 for (const path of await filesUnder(join(repository, 'docs'))) {
   if (!path.endsWith('.md')) continue;

@@ -44,6 +44,7 @@ namespace Horo::SceneCook {
         /** @brief Copies the shared portable component fields without hidden defaults or disabled-component filtering. */
         template <typename Destination, typename Source> Destination CopyComponents(const Source &source) {
             return {.camera = source.camera,
+                    .animation = source.animation,
                     .light = source.light,
                     .audioSource = source.audioSource,
                     .audioListener = source.audioListener,
@@ -135,45 +136,88 @@ namespace Horo::SceneCook {
                                                                               digest.Value()}});
         }
 
+        /** @brief Selects only the schema required by the complete typed component inventory. */
+        std::string_view FormatFor(const Runtime::RuntimeSceneDefinition &definition) {
+            const bool animation = std::ranges::any_of(definition.Entities(), [](const auto &entity) {
+                return entity.components.animation.has_value();
+            });
+            return animation ? AnimationCookedSceneFormat : CookedSceneFormat;
+        }
+
+        /** @brief Checks exact top-level members and closed format spelling before indexed payload reads. */
+        bool ValidEnvelopeShape(const Json &root) {
+            if (!Foundation::HasAllowedFields(root, {"format", "scene", "revision", "entities", "dependencies", "triggerMigration"}) ||
+                !root["format"].is_string())
+                return false;
+            const auto &format = root["format"].get_ref<const Json::string_t &>();
+            return format == CookedSceneFormat || format == AnimationCookedSceneFormat;
+        }
+
+        /** @brief Preserves exact selected Scene/revision identity and typed collection admission. */
+        bool ValidEnvelopeIdentity(const Json &root, Runtime::SceneDefinitionId scene, Runtime::SceneDefinitionRevision revision) {
+            return root["scene"].is_number_unsigned() && root["scene"] == scene.value && root["revision"].is_number_unsigned() &&
+                   root["revision"] == revision.value && root["entities"].is_array() && root["dependencies"].is_array() &&
+                   root["triggerMigration"].is_array();
+        }
+
+        /** @brief Decodes every entity through the single canonical component projection. */
+        Result<void> ReadEntities(Runtime::SceneDefinitionBuilder &builder, const Json &values) {
+            for (const auto &value : values) {
+                auto entity = DecodeEntity(value);
+                if (entity.HasError())
+                    return Result<void>::Failure(entity.ErrorValue());
+                builder.Add(std::move(entity).Value());
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Admits exact declared asset identities; no unexpanded prefab may enter a source-free Scene. */
+        Result<void> ReadDependencies(Runtime::SceneDefinitionBuilder &builder, const Json &values) {
+            for (const auto &value : values) {
+                if (!Foundation::HasAllowedFields(value, {"id", "type"}) || !value["id"].is_string() || !value["type"].is_string())
+                    return Result<void>::Failure(MakeError(SceneCookErrors::Invalid));
+                const auto id = Assets::AssetId::Parse(value["id"].get<std::string>());
+                const auto type = Assets::AssetTypeId::Parse(value["type"].get<std::string>());
+                if (id.HasError() || type.HasError() || type.Value().Value() == "core.prefab")
+                    return Result<void>::Failure(MakeError(SceneCookErrors::Invalid));
+                if (auto required = builder.RequireAsset({id.Value(), type.Value()}); required.HasError())
+                    return required;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Retains complete migration evidence before final canonical builder validation. */
+        Result<void> ReadMigration(Runtime::SceneDefinitionBuilder &builder, const Json &values) {
+            for (const auto &value : values) {
+                auto evidence = DecodeMigration(value);
+                if (evidence.HasError())
+                    return Result<void>::Failure(evidence.ErrorValue());
+                if (auto admitted = builder.RequireTriggerVolume(std::move(evidence).Value()); admitted.HasError())
+                    return admitted;
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Validates and commits all entity and dependency values through the containing-scene owner. */
         Result<Runtime::RuntimeSceneDefinition> DecodeDocument(const Json &root, const Runtime::SceneDefinitionId scene,
                                                                const Runtime::SceneDefinitionRevision revision,
                                                                const CookedSceneLimits &limits) {
-            if (!Foundation::HasAllowedFields(root, {"format", "scene", "revision", "entities", "dependencies", "triggerMigration"}) ||
-                !root["format"].is_string() || std::string_view{root["format"].get_ref<const Json::string_t &>()} != CookedSceneFormat ||
-                !root["scene"].is_number_unsigned() || root["scene"] != scene.value || !root["revision"].is_number_unsigned() ||
-                root["revision"] != revision.value || !root["entities"].is_array() || !root["dependencies"].is_array() ||
-                !root["triggerMigration"].is_array())
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
+            using Return = Result<Runtime::RuntimeSceneDefinition>;
+            if (!ValidEnvelopeShape(root) || !ValidEnvelopeIdentity(root, scene, revision))
+                return Return::Failure(MakeError(SceneCookErrors::Invalid));
             if (!WithinLimits(root["entities"].size(), root["dependencies"].size(), limits) ||
                 root["triggerMigration"].size() > root["entities"].size())
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::TooLarge));
+                return Return::Failure(MakeError(SceneCookErrors::TooLarge));
             Runtime::SceneDefinitionBuilder builder{scene, revision};
-            for (const auto &value : root["entities"]) {
-                auto entity = DecodeEntity(value);
-                if (entity.HasError())
-                    return Result<Runtime::RuntimeSceneDefinition>::Failure(entity.ErrorValue());
-                builder.Add(std::move(entity).Value());
-            }
-            for (const auto &value : root["dependencies"]) {
-                if (!Foundation::HasAllowedFields(value, {"id", "type"}) || !value["id"].is_string() || !value["type"].is_string())
-                    return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
-                const auto id = Assets::AssetId::Parse(value["id"].get<std::string>());
-                const auto type = Assets::AssetTypeId::Parse(value["type"].get<std::string>());
-                if (id.HasError() || type.HasError() || type.Value().Value() == "core.prefab")
-                    return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
-                if (auto required = builder.RequireAsset({id.Value(), type.Value()}); required.HasError())
-                    return Result<Runtime::RuntimeSceneDefinition>::Failure(required.ErrorValue());
-            }
-            for (const auto &value : root["triggerMigration"]) {
-                auto evidence = DecodeMigration(value);
-                if (evidence.HasError())
-                    return Result<Runtime::RuntimeSceneDefinition>::Failure(evidence.ErrorValue());
-                if (auto admitted = builder.RequireTriggerVolume(std::move(evidence).Value()); admitted.HasError())
-                    return Result<Runtime::RuntimeSceneDefinition>::Failure(admitted.ErrorValue());
-            }
+            if (auto entities = ReadEntities(builder, root["entities"]); entities.HasError())
+                return Return::Failure(entities.ErrorValue());
+            if (auto dependencies = ReadDependencies(builder, root["dependencies"]); dependencies.HasError())
+                return Return::Failure(dependencies.ErrorValue());
+            if (auto migration = ReadMigration(builder, root["triggerMigration"]); migration.HasError())
+                return Return::Failure(migration.ErrorValue());
             return std::move(builder).Build();
         }
+
     }  // namespace
 
     /** @copydoc EncodeCookedSceneDefinition */
@@ -208,7 +252,7 @@ namespace Horo::SceneCook {
                                  {"payload", FormatSha256(binding.materialPayloadDigest)}});
         }
         const std::string encoded =
-            Json{{"format", CookedSceneFormat},     {"scene", definition.Id().value},          {"revision", definition.Revision().value},
+            Json{{"format", FormatFor(definition)}, {"scene", definition.Id().value},          {"revision", definition.Revision().value},
                  {"entities", std::move(entities)}, {"dependencies", std::move(dependencies)}, {"triggerMigration", std::move(migration)}}
                 .dump() +
             '\n';

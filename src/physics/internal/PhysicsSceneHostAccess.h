@@ -3,6 +3,7 @@
 /** @file PhysicsSceneHostAccess.h
  * @brief Non-installed application-owner access to the one aggregate-owned published Physics/Character pair.
  */
+#include "../PhysicsSceneStateTarget.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 
@@ -26,5 +27,7 @@ namespace Horo::Physics::Detail {
          * @pre The owner thread serializes access with replacement/rollback/close; the Scene service remains sole candidate owner.
          */
         [[nodiscard]] static Result<PhysicsSceneHostScope> Borrow(PhysicsSceneActivationCandidate &candidate);
+        /** @brief Issues exact existing candidate ownership, checking actual current publication state. */
+        [[nodiscard]] static Result<PhysicsSceneStateTarget> StateTarget(PhysicsSceneActivationCandidate &, bool published);
     };
 }  // namespace Horo::Physics::Detail

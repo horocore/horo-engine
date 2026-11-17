@@ -1113,3 +1113,77 @@ are released through the same frontend registry. The owner neither interprets lo
 completion nor force-clears published native handles. Renderer reconstruction/terminal
 teardown remains the host's ADR-179 responsibility. This bridge does not add an alternate
 device-loss recovery authority.
+
+
+## Source-authoring palettes and tools (TRF-006.5 / TRF-006.6)
+
+The workspace edits one `TerrainAuthoringDocument` through its owning
+`TerrainDocumentHost`. Viewport controls, the foliage palette and selection retain
+const projections and issue complete typed intents. An intent captures workspace,
+document instance, owner session, dataset, source revision and capability revision.
+Layer strokes additionally capture the persisted semantic layer set, revision and
+source digest; foliage assignments capture the actual definition asset, type,
+revision and digest. The host revalidates external resource bytes under the shared
+project mutation authority before admitting canonical changes. There is no second
+mutable source in a palette, renderer, modal or worker.
+
+A legacy heightfield is converted explicitly before adding optional channels or
+placements. Conversion publishes the lossless version-1 terrain source container
+and prepares a fresh document session, revoking old gestures. All stored semantic
+layers remain reachable through the complete palette (at most 16); at most four
+weight targets are active in a stroke. Painting preserves the remaining stored
+channels and uses canonical integer normalization. Carve and restore write binary
+hole samples. Restore picks the actual underlying height triangles, while ordinary
+visible picking respects holes. Bounded wireframe, selected-layer weight markers
+and authored placement markers are source feedback, not proof of native terrain,
+material or foliage rendering.
+
+Foliage palette entries come from actual tracked `core.foliage.type` sources with
+registered mesh and material references. Nothing selects a missing type silently.
+The resource modal uses frozen actual project choices and the project's existing
+asset-root spelling; UUID text and palette indexes are not asset identities. The
+Application factory issues persistent source and semantic identities and publishes
+ordinary canonical bytes and sidecars through `ProjectAssetImportCommitter`.
+Publication receipts, including uncertain native outcomes, remain available even
+if the source document changes or closes during creation. Refresh and selection
+are fenced again after the callback; a late result cannot resurrect a closed owner.
+
+A foliage paint command receives gesture provenance from existing workspace,
+session and operation authorities at admission. It deterministically derives new
+instance IDs from that provenance and source samples using checked world-space
+tile coordinates. Bounded same-type occupied-sample lookup prevents a later
+gesture from stacking new identities over retained placements; it never rewrites
+an existing transform. Empty repaint intent succeeds without submitting an empty
+canonical transaction. Erase operates on exact stable IDs. Selection is transient
+and non-owning: selecting does not allocate a source operation ID, increment the
+source revision or create undo history. Replacement and close clear selection.
+Undo/redo and save/reopen retain accepted instance IDs and authored transforms.
+
+`HoroTerrainImport` owns `TerrainAuthoredPlacement`, used definition references,
+and bounded source/type codecs. The persisted foliage section includes precisely
+used immutable definition bindings; the transient resource catalogue is not an
+additional source authority. Canonical encoding orders placements by stable ID
+and definitions by type, without changing caller data. Explicit encoded-byte and
+work measurement shares codec admission with the containing raster source.
+`CookAuthoredFoliagePlacement` consumes actual canonical samples and admitted type
+policy, producing the existing sealed placement proof while preserving accepted
+IDs. The Application cook closure supplies real verified tile regions and source
+height/normal/hole samples. Hole suppression affects derived output only, retaining
+authored data for restore and history. This adds no invented mesh bounds, native
+backend handles or runtime activation claim.
+
+The GUI retains one explicitly composed cook session for the workspace. Cooking
+requires a saved canonical source capture and runs through the existing asset cook
+and publication service. Draw and polling never capture files or read mutable
+source on a worker. Source edits, replacement and close cancel adoption without
+joining the worker; results are adopted only for the exact captured source and
+owner fence. Terminal receipt storage is allocated before `Start`; `Poll` transfers
+the actual receipt by a nonthrowing move, retaining committed stale evidence
+without a terminal allocation. Teardown retires and drains before borrowed services
+are destroyed, then retains any final receipt. Cancellation is not a declaration
+that publication could not have committed.
+
+The Editor spelling of `TerrainAuthoredPlacement` remains an alias for source
+compatibility. Moving the carrier to Terrain changes C++ mangled signatures;
+consumers of affected C++ document/cook APIs must rebuild. This does not alter the
+Gameplay C extension ABI or introduce a new external scripting contract.

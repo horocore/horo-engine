@@ -53,12 +53,14 @@ namespace Horo::Render {
             for (std::size_t at = 0; at + 1 < tokens.size(); ++at) {
                 if (tokens[at] != name || tokens[at + 1] != "(")
                     continue;
-                std::size_t depth = 1, end = at + 2;
-                for (; end < tokens.size() && depth != 0; ++end) {
+                std::size_t depth = 1;
+                std::size_t end = at + 2;
+                while (end < tokens.size() && depth != 0) {
                     if (tokens[end] == "(")
                         ++depth;
                     if (tokens[end] == ")")
                         --depth;
+                    ++end;
                 }
                 if (depth != 0)
                     throw InvalidVfxEvidence{};
@@ -110,6 +112,31 @@ namespace Horo::Render {
                 throw InvalidVfxEvidence{};
         }
 
+        /** @brief Proves one native argument's type and packing before selecting its canonical role. */
+        std::size_t NativeArgumentRole(const std::vector<std::string_view> &tokens, const std::size_t at, std::string_view kind) {
+            std::size_t role = 4;
+            if (kind == "buffer") {
+                if (at < 4 || tokens[at - 2] != "&" || tokens[at - 4] != "constant")
+                    throw InvalidVfxEvidence{};
+                const auto type = tokens[at - 3];
+                if (type == "VfxInstances" || type == "type_VfxInstances")
+                    role = 0;
+                if (type == "VfxMaterial" || type == "type_VfxMaterial")
+                    role = 1;
+                if (role < 2)
+                    NativeStruct(tokens, type, role == 0);
+            } else if (kind == "texture" && tokens[at - 1] == "BaseColor") {
+                if (at < 5 || tokens[at - 5] != "texture2d" || tokens[at - 4] != "<" || tokens[at - 3] != "float" || tokens[at - 2] != ">")
+                    throw InvalidVfxEvidence{};
+                role = 2;
+            } else if (kind == "sampler" && tokens[at - 1] == "BaseColorSampler") {
+                if (at < 2 || tokens[at - 2] != "sampler")
+                    throw InvalidVfxEvidence{};
+                role = 3;
+            }
+            return role;
+        }
+
         /** @brief Takes each native slot from its actual argument attribute and proves uniform native packing. */
         std::array<std::uint32_t, 4> NativePlacements(const std::string &source, const bool vertex) {
             constexpr auto Missing = 0xffffffffU;
@@ -122,27 +149,7 @@ namespace Horo::Render {
                 if (kind != "buffer" && kind != "texture" && kind != "sampler")
                     continue;
                 const auto index = AttributeIndex(tokens, at);
-                std::size_t role = 4;
-                if (kind == "buffer") {
-                    if (at < 4 || tokens[at - 2] != "&" || tokens[at - 4] != "constant")
-                        throw InvalidVfxEvidence{};
-                    const auto type = tokens[at - 3];
-                    if (type == "VfxInstances" || type == "type_VfxInstances")
-                        role = 0;
-                    if (type == "VfxMaterial" || type == "type_VfxMaterial")
-                        role = 1;
-                    if (role < 2)
-                        NativeStruct(tokens, type, role == 0);
-                } else if (kind == "texture" && tokens[at - 1] == "BaseColor") {
-                    if (at < 5 || tokens[at - 5] != "texture2d" || tokens[at - 4] != "<" || tokens[at - 3] != "float" ||
-                        tokens[at - 2] != ">")
-                        throw InvalidVfxEvidence{};
-                    role = 2;
-                } else if (kind == "sampler" && tokens[at - 1] == "BaseColorSampler") {
-                    if (at < 2 || tokens[at - 2] != "sampler")
-                        throw InvalidVfxEvidence{};
-                    role = 3;
-                }
+                const auto role = NativeArgumentRole(tokens, at, kind);
                 if (role == 4 || result[role] != Missing)
                     throw InvalidVfxEvidence{};
                 result[role] = index;
@@ -203,17 +210,18 @@ namespace Horo::Render {
                              NativeStageEvidence &result) {
             if (at + 9 >= tokens.size() || tokens[at + 1] != "(" || tokens[at + 3] != "=" || tokens[at + 5] != ")" || tokens[at + 9] != ";")
                 throw InvalidVfxEvidence{};
-            const auto direction = tokens[at + 6], type = tokens[at + 7];
+            const auto direction = tokens[at + 6];
+            const auto type = tokens[at + 7];
             std::uint32_t location{};
             const auto number = tokens[at + 4];
-            const auto parsed = std::from_chars(number.data(), number.data() + number.size(), location);
-            if (parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size() || location > 2 ||
+            if (const auto parsed = std::from_chars(number.data(), number.data() + number.size(), location);
+                parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size() || location > 2 ||
                 (direction != "in" && direction != "out") || type.size() != 4 || !type.starts_with("vec") || type[3] < '2' ||
                 type[3] > '4' || !Identifier(tokens[at + 8]))
                 throw InvalidVfxEvidence{};
-            result.interfaces.push_back({stage, direction == "in" ? ShaderInterfaceDirection::Input : ShaderInterfaceDirection::Output,
-                                         location, ShaderValueType::Float32, 1, static_cast<std::uint8_t>(type[3] - '0'), 1,
-                                         std::string{tokens[at + 8]}});
+            result.interfaces.emplace_back(stage, direction == "in" ? ShaderInterfaceDirection::Input : ShaderInterfaceDirection::Output,
+                                           location, ShaderValueType::Float32, 1, static_cast<std::uint8_t>(type[3] - '0'), 1,
+                                           std::string{tokens[at + 8]});
         }
 
         /** @brief Proves zero-base matrix-vector position evaluation and its final assignment structurally. */
@@ -247,58 +255,88 @@ namespace Horo::Render {
             if (tokens.size() < 3 || tokens[0] != "#" || tokens[1] != "version" || tokens[2] != "410")
                 throw InvalidVfxEvidence{};
             NativeStageEvidence result;
-            for (std::size_t at = 3; at < tokens.size(); ++at) {
+            std::size_t at = 3;
+            while (at < tokens.size()) {
                 if (tokens[at] == "layout" && at + 2 < tokens.size() && tokens[at + 2] == "location")
                     OpenGLInterface(tokens, at, stage, result);
-                if (tokens[at] != "uniform")
-                    continue;
-                if (at + 1 >= tokens.size())
-                    throw InvalidVfxEvidence{};
-                at = tokens[at + 1] == "sampler2D" ? OpenGLSample(tokens, at, result) : OpenGLBlock(tokens, at, result);
+                if (tokens[at] == "uniform") {
+                    if (at + 1 >= tokens.size())
+                        throw InvalidVfxEvidence{};
+                    at = tokens[at + 1] == "sampler2D" ? OpenGLSample(tokens, at, result) : OpenGLBlock(tokens, at, result);
+                }
+                ++at;
             }
             if (stage == ShaderStage::Vertex)
                 OpenGLMatrixLowering(tokens, result);
             return result;
         }
 
+        /** @brief Closed semantic layout proven independently by native Metal and OpenGL evidence. */
+        struct ParameterLayout final {
+            std::string_view name;
+            std::string_view type;
+            std::uint32_t offset;
+            std::uint8_t rows;
+            std::uint8_t columns;
+            std::uint32_t arrayStride;
+            std::uint32_t matrixStride;
+        };
+
         /** @brief Validates an actual reflected member against the proven closed native array/matrix layout. */
         ShaderReflectedParameter Parameter(const Json &member, const bool instances, const std::size_t index) {
             using namespace VfxShaderParameterIds;
             constexpr std::uint32_t instanceArrayCount{MaximumVfxDrawInstances};
-            constexpr std::array<std::string_view, 4> names{"ClipFromLocal", "InstanceColor", "Tint", "AlphaCutoff"};
+            constexpr std::array<ParameterLayout, 4> layouts{{{"ClipFromLocal", "mat4", 0U, 4, 4, 64U, 16U},
+                                                              {"InstanceColor", "vec4", 8192U, 1, 4, 16U, 0U},
+                                                              {"Tint", "vec4", 0U, 1, 4, 0U, 0U},
+                                                              {"AlphaCutoff", "float", 16U, 1, 1, 0U, 0U}}};
             const auto role = instances ? index : index + 2;
-            const bool matrix = role == 0;
-            const std::uint32_t offset = role == 1 ? 8192U : role == 3 ? 16U : 0U;
-            if (member.at("name") != names[role] ||
-                member.at("type") != (matrix      ? "mat4"
-                                      : role == 3 ? "float"
-                                                  : "vec4") ||
-                Unsigned(member.at("offset")) != offset || member.contains("physical_pointer"))
+            const auto &layout = layouts[role];
+            const bool matrix = layout.matrixStride != 0;
+            if (member.at("name").get_ref<const std::string &>() != layout.name || !member.at("type").is_string() ||
+                member.at("type").get_ref<const std::string &>() != layout.type || Unsigned(member.at("offset")) != layout.offset ||
+                member.contains("physical_pointer"))
                 throw InvalidVfxEvidence{};
             if (instances) {
-                const auto &array = member.at("array"), &literal = member.at("array_size_is_literal");
+                const auto &array = member.at("array");
+                const auto &literal = member.at("array_size_is_literal");
                 if (!array.is_array() || array.size() != 1 || Unsigned(array[0]) != MaximumVfxDrawInstances || !literal.is_array() ||
-                    literal.size() != 1 || literal[0] != true || Unsigned(member.at("array_stride")) != (matrix ? 64U : 16U))
+                    literal.size() != 1 || literal[0] != true || Unsigned(member.at("array_stride")) != layout.arrayStride)
                     throw InvalidVfxEvidence{};
             } else if (member.contains("array") || member.contains("array_stride")) {
                 throw InvalidVfxEvidence{};
             }
             // Native float4x4 arrays prove column-vector storage only. A different translator lowering
             // requires its own evidence/qualification; copying SPIR-V row-major packing would be unsafe.
-            if (matrix ? Unsigned(member.at("matrix_stride")) != 16 || member.value("row_major", false)
+            if (matrix ? Unsigned(member.at("matrix_stride")) != layout.matrixStride || member.value("row_major", false)
                        : member.contains("matrix_stride") || member.contains("row_major"))
                 throw InvalidVfxEvidence{};
             return {{static_cast<std::uint32_t>(role + 1)},
                     instances ? Instances : Material,
                     ShaderValueType::Float32,
-                    static_cast<std::uint8_t>(matrix ? 4 : 1),
-                    static_cast<std::uint8_t>(role == 3 ? 1 : 4),
+                    layout.rows,
+                    layout.columns,
                     instances ? instanceArrayCount : 1U,
-                    offset,
-                    instances ? (matrix ? 64U : 16U) : 0,
-                    matrix ? 16U : 0,
+                    layout.offset,
+                    layout.arrayStride,
+                    layout.matrixStride,
                     true,
                     true};
+        }
+
+        /** @brief Validates the serialized name before resolving an OpenGL interface from exactly one native placement. */
+        std::string NativeInterfaceName(const Json &value, ShaderStage stage, ShaderInterfaceDirection direction, std::uint32_t location,
+                                        std::uint8_t columns, const NativeStageEvidence &native, ShaderTargetBackend backend) {
+            std::string name = value.at("name").get<std::string>();
+            if (backend == ShaderTargetBackend::OpenGL) {
+                const auto matches = [&](const auto &entry) {
+                    return entry.stage == stage && entry.direction == direction && entry.location == location && entry.columns == columns;
+                };
+                if (std::ranges::count_if(native.interfaces, matches) != 1)
+                    throw InvalidVfxEvidence{};
+                name = std::ranges::find_if(native.interfaces, matches)->nativeName;
+            }
+            return name;
         }
 
         /** @brief Reconciles JSON semantics with actual backend names; GL fragment-output lookup cannot use SPIR-V names. */
@@ -314,18 +352,10 @@ namespace Horo::Render {
                     if (type.size() != 4 || !type.starts_with("vec") || type[3] < '2' || type[3] > '4' || value.contains("array"))
                         throw InvalidVfxEvidence{};
                     const auto location = Unsigned(value.at("location"));
-                    std::string name = value.at("name").get<std::string>();
-                    if (candidate.backend == ShaderTargetBackend::OpenGL) {
-                        const auto matches = [&](const auto &entry) {
-                            return entry.stage == stage && entry.direction == direction && entry.location == location &&
-                                   entry.columns == static_cast<std::uint8_t>(type[3] - '0');
-                        };
-                        if (std::ranges::count_if(native.interfaces, matches) != 1)
-                            throw InvalidVfxEvidence{};
-                        name = std::ranges::find_if(native.interfaces, matches)->nativeName;
-                    }
-                    candidate.stageInterface.push_back({stage, direction, location, ShaderValueType::Float32, 1,
-                                                        static_cast<std::uint8_t>(type[3] - '0'), 1, std::move(name)});
+                    std::string name = NativeInterfaceName(value, stage, direction, location, static_cast<std::uint8_t>(type[3] - '0'),
+                                                           native, candidate.backend);
+                    candidate.stageInterface.emplace_back(stage, direction, location, ShaderValueType::Float32, 1,
+                                                          static_cast<std::uint8_t>(type[3] - '0'), 1, std::move(name));
                     ++count;
                 }
             }
@@ -348,6 +378,45 @@ namespace Horo::Render {
                        .pairedSampler = role == 2 ? VfxShaderParameterIds::BaseColorSampler : ShaderBindingId{}};
         }
 
+        /** @brief Maps only the two admitted native block names to canonical uniform roles. */
+        std::size_t UniformRole(std::string_view name) noexcept {
+            if (name == "VfxInstances" || name == "type.VfxInstances")
+                return 0;
+            if (name == "VfxMaterial" || name == "type.VfxMaterial")
+                return 1;
+            return 2;
+        }
+
+        /** @brief Both stages must publish exactly the same admitted member layout. */
+        void UniformParameters(const Json &members, const std::size_t role, ShaderReflectionCandidate &candidate) {
+            if (!members.is_array() || members.size() != 2)
+                throw InvalidVfxEvidence{};
+            for (std::size_t index = 0; index < 2; ++index) {
+                const auto parameter = Parameter(members[index], role == 0, index);
+                auto &retained = candidate.parameters[role * 2 + index];
+                if (retained.active && (retained.byteOffset != parameter.byteOffset || retained.arrayStride != parameter.arrayStride ||
+                                        retained.matrixStride != parameter.matrixStride || retained.columnMajor != parameter.columnMajor))
+                    throw InvalidVfxEvidence{};
+                retained = parameter;
+            }
+        }
+
+        /** @brief Reconciles one unique intermediate block with its native placement before publication. */
+        void UniformBlock(const Json &json, const Json &block, const bool vertex, const NativeStageEvidence &native,
+                          ShaderReflectionCandidate &candidate, std::array<bool, 2> &seen) {
+            const auto name = block.at("name").get<std::string>();
+            const auto role = UniformRole(name);
+            if (role == 2 || seen[role] || (!vertex && role == 0) || native.bindings[role] == 0xffffffffU ||
+                Unsigned(block.at("set")) != 0 || Unsigned(block.at("binding")) != role || block.contains("array"))
+                throw InvalidVfxEvidence{};
+            seen[role] = true;
+            if (const auto bytes = Unsigned(block.at("block_size")); role == 0 ? bytes != 10240 : bytes != 20 && bytes != 32)
+                throw InvalidVfxEvidence{};
+            UniformParameters(json.at("types").at(block.at("type").get<std::string>()).at("members"), role, candidate);
+            Activate(candidate, role, native.bindings[role], native.names[role],
+                     vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment);
+        }
+
         /** @brief Validates the actual intermediate block and the same translation's native structure/slot together. */
         void Uniforms(const Json &json, const bool vertex, const NativeStageEvidence &native, ShaderReflectionCandidate &candidate) {
             std::array<bool, 2> seen{};
@@ -355,34 +424,8 @@ namespace Horo::Render {
                 const auto &blocks = json.at("ubos");
                 if (!blocks.is_array() || blocks.size() > 2)
                     throw InvalidVfxEvidence{};
-                for (const auto &block : blocks) {
-                    const auto name = block.at("name").get<std::string>();
-                    const std::size_t role = name == "VfxInstances" || name == "type.VfxInstances" ? 0
-                                             : name == "VfxMaterial" || name == "type.VfxMaterial" ? 1
-                                                                                                   : 2;
-                    if (role == 2 || seen[role] || (!vertex && role == 0) || native.bindings[role] == 0xffffffffU ||
-                        Unsigned(block.at("set")) != 0 || Unsigned(block.at("binding")) != role || block.contains("array"))
-                        throw InvalidVfxEvidence{};
-                    seen[role] = true;
-                    const auto bytes = Unsigned(block.at("block_size"));
-                    if (role == 0 ? bytes != 10240 : bytes != 20 && bytes != 32)
-                        throw InvalidVfxEvidence{};
-                    const auto &members = json.at("types").at(block.at("type").get<std::string>()).at("members");
-                    if (!members.is_array() || members.size() != 2)
-                        throw InvalidVfxEvidence{};
-                    for (std::size_t index = 0; index < 2; ++index) {
-                        const auto parameter = Parameter(members[index], role == 0, index);
-                        auto &retained = candidate.parameters[role * 2 + index];
-                        // Both stages must describe exactly the same member layout.
-                        if (retained.active &&
-                            (retained.byteOffset != parameter.byteOffset || retained.arrayStride != parameter.arrayStride ||
-                             retained.matrixStride != parameter.matrixStride || retained.columnMajor != parameter.columnMajor))
-                            throw InvalidVfxEvidence{};
-                        retained = parameter;
-                    }
-                    Activate(candidate, role, native.bindings[role], native.names[role],
-                             vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment);
-                }
+                for (const auto &block : blocks)
+                    UniformBlock(json, block, vertex, native, candidate, seen);
             }
             for (std::size_t role = 0; role < seen.size(); ++role)
                 if (seen[role] != (native.bindings[role] != 0xffffffffU) || (vertex && !seen[role]))
@@ -403,9 +446,9 @@ namespace Horo::Render {
                 const auto &entries = json.at(key);
                 if (!entries.is_array() || entries.size() != 1 || native.bindings[role] == 0xffffffffU)
                     throw InvalidVfxEvidence{};
-                const auto &entry = entries[0];
-                if (entry.at("name") != name || entry.at("type") != type || Unsigned(entry.at("set")) != 0 ||
-                    Unsigned(entry.at("binding")) != role || entry.contains("array"))
+                if (const auto &entry = entries[0]; entry.at("name") != name || entry.at("type") != type ||
+                                                    Unsigned(entry.at("set")) != 0 || Unsigned(entry.at("binding")) != role ||
+                                                    entry.contains("array"))
                     throw InvalidVfxEvidence{};
                 Activate(candidate, role, native.bindings[role], native.names[role], ShaderStageVisibility::Fragment);
             }
@@ -422,9 +465,9 @@ namespace Horo::Render {
             const auto json = guard.Parse(stage.json.begin(), stage.json.end());
             if (guard.HasDuplicate() || guard.IsTooDeep() || json.is_discarded() || !json.is_object())
                 throw InvalidVfxEvidence{};
-            const auto &entries = json.at("entryPoints");
-            if (!entries.is_array() || entries.size() != 1 || entries[0].at("name") != stage.entryPoint ||
-                entries[0].at("mode") != (vertex ? "vert" : "frag"))
+            if (const auto &entries = json.at("entryPoints"); !entries.is_array() || entries.size() != 1 ||
+                                                              entries[0].at("name") != stage.entryPoint ||
+                                                              entries[0].at("mode") != (vertex ? "vert" : "frag"))
                 throw InvalidVfxEvidence{};
             for (const auto key : {"textures", "images", "ssbos", "push_constants", "subpass_inputs", "counters", "acceleration_structures",
                                    "tensors", "specialization_constants"})
@@ -445,8 +488,8 @@ namespace Horo::Render {
         try {
             const auto canonical = MakeVfxShaderManifest(target);
             const auto expected = ComputeShaderInterfaceCompatibilityId(canonical);
-            const auto actual = ComputeShaderInterfaceCompatibilityId(manifest);
-            if ((target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL) || stages.size() != 2 ||
+            if (const auto actual = ComputeShaderInterfaceCompatibilityId(manifest);
+                (target.backend != ShaderTargetBackend::Metal && target.backend != ShaderTargetBackend::OpenGL) || stages.size() != 2 ||
                 native.size() != 2 || manifest.sourceRevision != canonical.sourceRevision || expected.HasError() || actual.HasError() ||
                 expected.Value() != actual.Value())
                 throw InvalidVfxEvidence{};
@@ -457,8 +500,8 @@ namespace Horo::Render {
                 candidate.targetBindings.push_back({.id = binding.id, .active = false});
             }
             for (const auto &parameter : canonical.parameters)
-                candidate.parameters.push_back({parameter.id, parameter.binding, parameter.type, parameter.rows, parameter.columns,
-                                                parameter.arrayCount, 0, 0, 0, true, false});
+                candidate.parameters.emplace_back(parameter.id, parameter.binding, parameter.type, parameter.rows, parameter.columns,
+                                                  parameter.arrayCount, 0, 0, 0, true, false);
             Stage(stages[0], native[0], true, candidate);
             Stage(stages[1], native[1], false, candidate);
             std::ranges::sort(candidate.stageInterface, {}, [](const auto &entry) {

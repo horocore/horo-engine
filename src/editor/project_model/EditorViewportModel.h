@@ -85,6 +85,8 @@ namespace Horo::Editor {
 
         /** @brief Changes editor projection while preserving apparent scale at the orbit target. */
         [[nodiscard]] Result<void> SetProjection(Runtime::CameraProjection projection);
+        /** @brief Admit an explicit finite host-composed asset-preview pose without changing Scene authoring. */
+        [[nodiscard]] Result<void> SetCamera(const EditorViewportCamera &camera);
 
         /** @brief Frames validated world bounds with a deterministic margin. */
         [[nodiscard]] Result<void> Focus(const Math::Aabb &worldBounds, float aspect);

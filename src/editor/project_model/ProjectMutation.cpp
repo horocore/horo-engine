@@ -2,6 +2,7 @@
 
 #include <mutex>
 #include <unordered_set>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -41,12 +42,37 @@ namespace Horo::Editor {
 
         DurableFileSystem &files;
         std::mutex mutex;
-        std::unordered_set<std::string> activeRoots;  // NOSONAR(cpp:S6045)
+        std::unordered_set<std::filesystem::path> activeRoots;  // NOSONAR(cpp:S6045)
     };
 
+    namespace {
+        /** @brief Rolls back this admission's in-process reservation until the complete lease takes ownership. */
+        struct PendingMutationRegistration final {
+            PendingMutationRegistration(std::shared_ptr<ProjectMutationCoordinator::State> value, const std::filesystem::path &key)
+                : owner(std::move(value)), rootKey(key) {}
+
+            PendingMutationRegistration(const PendingMutationRegistration &) = delete;
+            PendingMutationRegistration &operator=(const PendingMutationRegistration &) = delete;
+
+            ~PendingMutationRegistration() {
+                if (!armed)
+                    return;
+                std::lock_guard lock(owner->mutex);
+                owner->activeRoots.erase(rootKey);
+            }
+
+            std::shared_ptr<ProjectMutationCoordinator::State> owner;
+            const std::filesystem::path &rootKey;
+            bool armed{};
+        };
+    }  // namespace
+
     struct ProjectMutationLease::State {
+        State(const std::shared_ptr<ProjectMutationCoordinator::State> &value, const std::filesystem::path &key, ExclusiveFileLock &&held)
+            : owner(value), rootKey(key), native(std::move(held)) {}
+
         std::shared_ptr<ProjectMutationCoordinator::State> owner;
-        std::string rootKey;
+        std::filesystem::path rootKey;
         ExclusiveFileLock native;
 
         ~State() {
@@ -73,23 +99,20 @@ namespace Horo::Editor {
         const auto root = std::filesystem::weakly_canonical(request.projectRoot, error);
         if (error || !std::filesystem::is_directory(root))
             return Result<ProjectMutationLease>::Failure(MakeError(Locked, "Project root is unavailable."));
-        const std::string key = root.generic_string();
+        const std::filesystem::path &key = root;
+        PendingMutationRegistration admission{state_, key};
         {
-            std::lock_guard lock(state_->mutex);
-            if (!state_->activeRoots.emplace(key).second)
+            std::lock_guard lock(admission.owner->mutex);
+            if (!admission.owner->activeRoots.emplace(key).second)
                 return Result<ProjectMutationLease>::Failure(MakeError(Locked));
+            admission.armed = true;
         }
-        auto native = state_->files.TryAcquireExclusive(root / ".horo/local/project-mutation.lock",
-                                                        OwnerName(request.owner) + ":" + request.operationId);
-        if (native.HasError()) {
-            std::lock_guard lock(state_->mutex);
-            state_->activeRoots.erase(key);
+        auto native = admission.owner->files.TryAcquireExclusive(root / ".horo/local/project-mutation.lock",
+                                                                 OwnerName(request.owner) + ":" + request.operationId);
+        if (native.HasError())
             return Result<ProjectMutationLease>::Failure(MakeError(Locked, native.ErrorValue().message));
-        }
-        auto lease = std::make_unique<ProjectMutationLease::State>();
-        lease->owner = state_;
-        lease->rootKey = key;
-        lease->native = std::move(native).Value();
+        auto lease = std::make_unique<ProjectMutationLease::State>(admission.owner, key, std::move(native).Value());
+        admission.armed = false;
         return Result<ProjectMutationLease>::Success(ProjectMutationLease(std::move(lease)));
     }
 }  // namespace Horo::Editor

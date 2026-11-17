@@ -2,7 +2,8 @@
 
 /**
  * @file PhysicsCollisionSchema.h
- * @brief Project-authored collision policy and immutable normalized Physics schema.
+ * @brief Project-authored collision policy and immutable normalized Physics
+ * schema.
  */
 
 #include "Horo/Foundation/Result.h"
@@ -13,6 +14,9 @@
 #include <vector>
 
 namespace Horo::Physics {
+    namespace Detail {
+        struct PhysicsStateSchemaAccounting;
+    }
     /** @brief Project-authored simulation response for one unordered layer pair. */
     enum class SimulationPairResponse : std::uint8_t {
         Ignore,
@@ -21,7 +25,8 @@ namespace Horo::Physics {
         Count
     };
 
-    /** @brief Project-authored response of one collision profile to one query channel. */
+    /** @brief Project-authored response of one collision profile to one query
+     * channel. */
     enum class CollisionQueryResponse : std::uint8_t {
         Ignore,
         Overlap,
@@ -39,7 +44,8 @@ namespace Horo::Physics {
         bool admitsOverlap{true};
     };
 
-    /** @brief One explicit response for an unordered pair of enabled collision layers. */
+    /** @brief One explicit response for an unordered pair of enabled collision
+     * layers. */
     struct CollisionPairDefinition final {
         CollisionLayerId first;
         CollisionLayerId second;
@@ -79,7 +85,8 @@ namespace Horo::Physics {
         std::vector<CollisionProfileDefinition> profiles;
     };
 
-    /** @brief Immutable, canonical, identity-sorted filter data safe for per-world compilation. */
+    /** @brief Immutable, canonical, identity-sorted filter data safe for per-world
+     * compilation. */
     class NormalizedCollisionSchema final {
     public:
         NormalizedCollisionSchema(const NormalizedCollisionSchema &) = delete;
@@ -88,9 +95,12 @@ namespace Horo::Physics {
         NormalizedCollisionSchema &operator=(NormalizedCollisionSchema &&) = delete;
 
         /**
-         * @brief Validates a complete authored schema and compiles canonical immutable filter data.
-         * @param authored Project-owned serialization representation; input order is not significant.
-         * @return Normalized schema or a stable descriptor/capacity error without partial publication.
+         * @brief Validates a complete authored schema and compiles canonical
+         * immutable filter data.
+         * @param authored Project-owned serialization representation; input order is
+         * not significant.
+         * @return Normalized schema or a stable descriptor/capacity error without
+         * partial publication.
          */
         [[nodiscard]] static Result<NormalizedCollisionSchema> Create(const ProjectCollisionSchema &authored);
 
@@ -100,7 +110,8 @@ namespace Horo::Physics {
         [[nodiscard]] std::span<const CollisionPairDefinition> Pairs() const noexcept;
         /** @brief Returns identity-sorted query channels. */
         [[nodiscard]] std::span<const CollisionQueryChannelDefinition> QueryChannels() const noexcept;
-        /** @brief Returns identity-sorted profiles with identity-sorted complete responses. */
+        /** @brief Returns identity-sorted profiles with identity-sorted complete
+         * responses. */
         [[nodiscard]] std::span<const CollisionProfileDefinition> Profiles() const noexcept;
         /** @brief Returns the required default profile identity. */
         [[nodiscard]] CollisionProfileId DefaultProfile() const noexcept;
@@ -111,15 +122,18 @@ namespace Horo::Physics {
         [[nodiscard]] Result<SimulationPairResponse> ResolvePair(CollisionLayerId first, CollisionLayerId second) const;
         /** @brief Resolves an exact profile without substituting the default. */
         [[nodiscard]] Result<const CollisionProfileDefinition *> ResolveProfile(CollisionProfileId id) const;
-        /** @brief Resolves an explicit profile eligible for static sensor simulation and lifecycle events.
+        /** @brief Resolves an explicit profile eligible for static sensor simulation
+         * and lifecycle events.
          * @param id Exact project profile; no default substitution.
-         * @return Borrowed profile or a typed invalid/unknown profile or layer diagnostic; no allocation or native work.
+         * @return Borrowed profile or a typed invalid/unknown profile or layer
+         * diagnostic; no allocation or native work.
          */
         [[nodiscard]] Result<const CollisionProfileDefinition *> ResolveStaticSensorProfile(CollisionProfileId id) const;
         /** @brief Resolves one profile/channel response without fallback. */
         [[nodiscard]] Result<CollisionQueryResponse> ResolveQuery(CollisionProfileId profile, PhysicsQueryChannelId channel) const;
 
     private:
+        friend struct Detail::PhysicsStateSchemaAccounting;
         NormalizedCollisionSchema(CollisionProfileId defaultProfile, std::vector<CollisionLayerDefinition> layers,
                                   std::vector<CollisionPairDefinition> pairs, std::vector<CollisionQueryChannelDefinition> channels,
                                   std::vector<CollisionProfileDefinition> profiles, std::uint64_t fingerprint);

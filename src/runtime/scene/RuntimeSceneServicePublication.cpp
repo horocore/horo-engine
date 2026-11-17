@@ -4,6 +4,9 @@
 #include "RuntimeSceneErrors.h"
 #include "RuntimeScenePublicationInternal.h"
 
+#include <new>
+#include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -16,14 +19,17 @@ namespace Horo::Runtime {
 
     /** @brief Private no-fail transfer retaining the retired Scene through save operation completion. */
     struct RuntimeSceneService::AggregateTransfer final : IStagedRestoreAggregatePublication {
-        explicit AggregateTransfer(RuntimeSceneService &service) noexcept : service(service) {}
+        explicit AggregateTransfer(RuntimeSceneService &service) noexcept : service(service), retired(service.pending_) {}
 
         void PublishPrepared() noexcept override {
             for (const auto &candidate : service.pending_.candidates)
                 candidate->Publish();
             service.pending_.restore = std::move(service.aggregateRestore_);
-            retired = std::move(service.active_);
-            service.active_ = std::move(service.pending_);
+            // Reuse the prepared buffers: publication cannot allocate checked-library iterator proxies.
+            service.active_.scene.swap(service.pending_.scene);
+            service.active_.candidates.swap(service.pending_.candidates);
+            std::swap(service.active_.datasets, service.pending_.datasets);
+            service.active_.restore.swap(service.pending_.restore);
             if (service.publicationReceipt_) {
                 const auto view = service.active_.scene->View();
                 service.publicationReceipt_->snapshot = {ScenePublicationStatus::Published, view.RuntimeId(), view.StructuralRevision(),
@@ -32,7 +38,7 @@ namespace Horo::Runtime {
         }
 
         RuntimeSceneService &service;
-        SceneAggregate retired;
+        SceneAggregate &retired;
     };
 
     /** @copydoc RuntimeSceneService::PreparePendingPublication */
@@ -76,7 +82,41 @@ namespace Horo::Runtime {
         ScenePublicationDetail::ShutdownCandidates(transfer.retired.candidates);
         transfer.retired.restore.reset();
         transfer.retired.scene.reset();
+        static_cast<void>(RetirePublishedRestorePreparationInternal());
         return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeSceneService::NextRuntimeId */
+    SceneRuntimeId RuntimeSceneService::NextRuntimeId() const noexcept {
+        HORO_INVARIANT_MSG(std::this_thread::get_id() == restoreRetirementOwner_,
+                           "Scene identity cursor belongs to its construction owner lane.");
+        return SceneRuntimeId{nextRuntimeId_};
+    }
+
+    std::optional<Error> RuntimeSceneService::MakeRestoreRetirementFallback() {
+        return MakeError(SceneErrors::InvalidCandidate,
+                         "Published Scene preparation retirement remains pending after a cleanup boundary failure.");
+    }
+
+    Result<bool> RuntimeSceneService::RetirePublishedRestorePreparationInternal() {
+        if (!active_.restore)
+            return Result<bool>::Success(true);
+        auto *transient = dynamic_cast<ISceneRestoreTransientRetirement *>(active_.restore.get());
+        if (!transient)
+            return Result<bool>::Success(true);
+        try {
+            if (!restoreRetirementFallback_)
+                restoreRetirementFallback_ = MakeRestoreRetirementFallback();
+            auto result = transient->RetirePublishedTransient();
+            if (result.HasError())
+                operationError_ = result.ErrorValue();
+            return result;
+        } catch (...) {
+            static_assert(std::is_nothrow_swappable_v<std::optional<Error>>);
+            if (restoreRetirementFallback_)
+                operationError_.swap(restoreRetirementFallback_);
+            return Result<bool>::Success(false);
+        }
     }
 
     Result<void> RuntimeSceneService::CommitDeferredChanges(const CancellationToken &cancellation) {

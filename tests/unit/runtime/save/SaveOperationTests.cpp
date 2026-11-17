@@ -373,13 +373,23 @@ TEST_CASE("Invalid commit outcome representations never publish terminal state",
 
 TEST_CASE("Operation admission maps every allocation point to typed failure", "[unit][runtime][save][operation]") {
     const SaveOperationDescriptor descriptor{.operation = 51, .kind = SaveOperationKind::Save, .maximumCompletionCallbacks = 1};
+    const auto admissionAllocations = [&] {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
+        auto created = CreateSaveOperation(descriptor);
+        const auto requests = measurement.Snapshot().requests;
+        REQUIRE(created.HasValue());
+        return requests;
+    }();
+    REQUIRE(admissionAllocations > 0);
     bool admitted = false;
-    for (std::size_t successfulAllocations = 0; successfulAllocations < 16 && !admitted; ++successfulAllocations) {
+    for (std::size_t successfulAllocations = 0; successfulAllocations <= admissionAllocations; ++successfulAllocations) {
+        INFO(successfulAllocations);
         auto created = [&] {
             Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
             return CreateSaveOperation(descriptor);
         }();
         admitted = created.HasValue();
+        CHECK(admitted == (successfulAllocations == admissionAllocations));
         if (!admitted)
             CHECK(created.ErrorValue().code.Value() == SaveErrors::OperationAllocationFailed.code.Value());
     }
@@ -391,38 +401,54 @@ TEST_CASE("Terminal transitions and abandonment allocate no storage after admiss
     const auto cancelledHandle = cancelled.Handle();
     SaveCancellationRequestResult request;
     SaveCommitGateResult cancelledGate;
+    std::size_t cancellationAllocations{};
     {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
         Tests::AllocationProbe::ScopedFailure failure;
         request = cancelledHandle.RequestCancellation();
         cancelledGate = cancelled.BeginCommit();
+        cancellationAllocations = measurement.Snapshot().requests;
     }
+    CHECK(cancellationAllocations == 0);
     CHECK(request == SaveCancellationRequestResult::Requested);
     CHECK(cancelledGate == SaveCommitGateResult::CancellationWon);
 
     auto completed = Operation(SaveOperationKind::RefreshCatalog, 54);
     SaveOperationTransitionResult completion;
+    std::size_t completionAllocations{};
     {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
         Tests::AllocationProbe::ScopedFailure failure;
         completion = completed.Complete(SaveOperationCommitOutcome::NotCommitted);
+        completionAllocations = measurement.Snapshot().requests;
     }
+    CHECK(completionAllocations == 0);
     CHECK(completion == SaveOperationTransitionResult::Applied);
 
     auto failed = Operation(SaveOperationKind::Save, 55);
     SaveOperationTransitionResult failureResult;
     Error failureError = MakeError(SaveErrors::CompositionInjectedFailure);
+    std::size_t failureAllocations{};
     {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
         Tests::AllocationProbe::ScopedFailure failure;
         failureResult = failed.Fail(std::move(failureError), SaveOperationCommitOutcome::NotCommitted);
+        failureAllocations = measurement.Snapshot().requests;
     }
+    CHECK(failureAllocations == 0);
     CHECK(failureResult == SaveOperationTransitionResult::Applied);
 
     auto abandonedController = Operation(SaveOperationKind::Save, 56);
     const SaveOperationHandle abandoned = abandonedController.Handle();
     std::optional<SaveOperationController> owner{std::move(abandonedController)};
+    std::size_t abandonmentAllocations{};
     {
+        Tests::AllocationProbe::ScopedMeasurement measurement;
         Tests::AllocationProbe::ScopedFailure failure;
         owner.reset();
+        abandonmentAllocations = measurement.Snapshot().requests;
     }
+    CHECK(abandonmentAllocations == 0);
     CHECK(Snapshot(abandoned).state == SaveOperationState::Failed);
 }
 
@@ -514,4 +540,21 @@ TEST_CASE("Operation errors expose stable actionable descriptors", "[unit][runti
         CHECK_FALSE(descriptor->summary.empty());
         CHECK_FALSE(descriptor->remediationHint.empty());
     }
+}
+
+TEST_CASE("Rejected rvalue failures retain the caller error until an applied transition", "[unit][runtime][save][operation]") {
+    auto terminal = Operation();
+    REQUIRE(terminal.Fail(MakeError(SaveErrors::CompositionInjectedFailure), SaveOperationCommitOutcome::NotCommitted) ==
+            SaveOperationTransitionResult::Applied);
+    auto ignored = MakeError(SaveErrors::CompositionInjectedFailure, "retained after terminal rejection");
+    CHECK(terminal.Fail(std::move(ignored), SaveOperationCommitOutcome::NotCommitted) == SaveOperationTransitionResult::AlreadyTerminal);
+    CHECK(ignored.message == "retained after terminal rejection");
+
+    auto cancelled = Operation();
+    REQUIRE(cancelled.Handle().RequestCancellation() == SaveCancellationRequestResult::Requested);
+    auto superseded = MakeError(SaveErrors::CompositionInjectedFailure, "retained after cancellation wins");
+    CHECK(cancelled.Fail(std::move(superseded), SaveOperationCommitOutcome::NotCommitted) ==
+          SaveOperationTransitionResult::CancellationWon);
+    CHECK(superseded.message == "retained after cancellation wins");
+    CHECK(Snapshot(cancelled.Handle()).state == SaveOperationState::Cancelled);
 }

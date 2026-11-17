@@ -17,6 +17,17 @@ namespace Horo::Application {
                 return {.version = "horo.ui-style.v1", .settingsDigest = schema_.fingerprint, .settingsSchemaVersion = 1};
             }
 
+            Result<std::optional<std::vector<Assets::AssetId>>> InputDependencies(const Assets::CookSourceView &source,
+                                                                                  const CancellationToken &) const override {
+                auto document = AdmitSource(source);
+                if (document.HasError())
+                    return Result<std::optional<std::vector<Assets::AssetId>>>::Failure(document.ErrorValue());
+                std::vector<Assets::AssetId> dependencies;
+                for (const auto &dependency : document.Value().dependencies)
+                    dependencies.push_back(dependency.asset);
+                return Result<std::optional<std::vector<Assets::AssetId>>>::Success(std::move(dependencies));
+            }
+
             Result<Assets::CookOutputSink> Cook(const Assets::CookSourceView &source,
                                                 const CancellationToken &cancellation) const override {
                 if (cancellation.IsCancellationRequested())

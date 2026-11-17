@@ -19,13 +19,13 @@ namespace Horo::Render {
         /** @brief Writes finite numeric-only JSON records; no untrusted labels, native payloads or paths are serialized. */
         class GraphJsonWriter {
         public:
-            GraphJsonWriter(const std::size_t maxBytes, const std::stop_token cancellation)
+            GraphJsonWriter(const std::size_t maxBytes, const CancellationToken cancellation)
                 : maxBytes_(maxBytes), cancellation_(cancellation) {
                 bytes_.reserve(std::min(maxBytes, std::size_t{4096}));
             }
 
             void Text(const std::string_view value) {
-                if (cancellation_.stop_requested())
+                if (cancellation_.IsCancellationRequested())
                     throw ExportFailure{&RenderGraphInspectionErrors::Cancelled};
                 if (value.size() > maxBytes_ - bytes_.size())
                     throw ExportFailure{&RenderGraphInspectionErrors::CapacityExceeded};
@@ -72,7 +72,7 @@ namespace Horo::Render {
 
         private:
             std::size_t maxBytes_;
-            std::stop_token cancellation_;
+            CancellationToken cancellation_;
             std::string bytes_;
         };
 
@@ -162,7 +162,7 @@ namespace Horo::Render {
 
     /** @copydoc ExportRenderGraphInspection */
     Result<std::string> ExportRenderGraphInspection(const RenderGraphInspectionSnapshot &snapshot, const std::size_t maxBytes,
-                                                    const std::stop_token cancellation) {
+                                                    const CancellationToken cancellation) {
         if (maxBytes == 0 || maxBytes > RenderGraphInspectionLimits::HardMaxBytes)
             return Result<std::string>::Failure(MakeError(RenderGraphInspectionErrors::InvalidLimits));
         try {

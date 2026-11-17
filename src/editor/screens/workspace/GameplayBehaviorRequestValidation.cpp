@@ -1,5 +1,8 @@
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
 
+#include "Horo/Foundation/Utf8.h"
+#include "WorkspacePathText.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -137,8 +140,11 @@ namespace Horo::Editor {
     }  // namespace
 
     Result<void> ValidateCreateGameplayBehaviorRequest(const CreateGameplayBehaviorRequest &request) {
-        const std::filesystem::path destination{request.destination};
-        const std::filesystem::path baseName{request.baseName};
+        if (!IsValidUtf8ScalarSequence(request.destination) || !IsValidUtf8ScalarSequence(request.baseName) ||
+            request.destination.find('\0') != std::string::npos)
+            return Result<void>::Failure(InvalidRequestError());
+        const std::filesystem::path destination = WorkspaceNativePath(request.destination);
+        const std::filesystem::path baseName = WorkspaceNativePath(request.baseName);
         // Project-relative paths are serialized with a portable '/' root. On Windows
         // `std::filesystem::path::is_absolute()` rejects that form because it has no
         // drive root, even though it is an absolute project path for the editor.

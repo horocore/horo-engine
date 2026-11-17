@@ -1140,11 +1140,18 @@ The temporary typed `core.materials.default` resolution uses the shared neutral
 viewport material and a bounded forward-preview lighting path. Render extraction
 emits at most sixteen immutable world-space Directional, Point, or Spot light
 values; both editor executors consume the same color, intensity, range, cone, and
-normal-transform semantics. The first non-zero Directional light receives a
-scene-bounds-fitted, texel-snapped 2048² orthographic shadow view with 3×3 PCF;
-that selection and matrix are backend-neutral while native shadow resources remain
-private to each executor. This is a viewport-quality baseline, not the general
-material/PBR, clustered-lighting, cascaded-shadow, or punctual-shadow system.
+normal-transform semantics. The first non-zero Directional light uses the shared
+`DirectionalShadowFrame` contract: one through four camera-frustum cascades,
+texel stabilization, receiver blending, bounded PCF and typed quality profiles.
+OpenGL and Metal consume the same prepared atlas rectangles and matrices; Vulkan
+records a bounded depth-pass batch followed by lit sampling. Resources remain
+private to each executor, and a failed profile replacement preserves the prior
+ready generation. OpenGL reuses only a successfully rendered matching atlas;
+Metal and Vulkan conservatively redraw until submission completion can authorize
+reuse. See [Directional Shadows](../../guides/directional-shadows.md) for units,
+rebuild boundaries and qualification limits. This editor viewport implementation
+does not establish the general material/PBR, clustered-lighting or punctual-shadow
+system, nor native Vulkan image/performance acceptance.
 The selected Light's influence geometry is also backend-neutral: Directional,
 Point, and Spot line lists are built from the same immutable render snapshot,
 then depth-tested without writing scene depth in each executor. Always-visible,

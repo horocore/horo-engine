@@ -170,7 +170,7 @@ namespace Horo::Application {
                                   .archivePath = std::format("logs/{}.jsonl", baseName),
                                   .optional = true,
                                   .redactSensitiveText = true});
-        bundle.entries.push_back({.sourcePath = directory / std::format("{}.operations.jsonl", baseName),
+        bundle.entries.push_back({.sourcePath = directory / "operations" / std::format("{}.jsonl", baseName),
                                   .archivePath = std::format("history/{}.operations.jsonl", baseName),
                                   .optional = true,
                                   .redactSensitiveText = true});
@@ -180,7 +180,7 @@ namespace Horo::Application {
                                       .archivePath = std::format("logs/{}{}.jsonl", baseName, suffix),
                                       .optional = true,
                                       .redactSensitiveText = true});
-            bundle.entries.push_back({.sourcePath = directory / std::format("{}{}.operations.jsonl", baseName, suffix),
+            bundle.entries.push_back({.sourcePath = directory / "operations" / std::format("{}{}.jsonl", baseName, suffix),
                                       .archivePath = std::format("history/{}{}.operations.jsonl", baseName, suffix),
                                       .optional = true,
                                       .redactSensitiveText = true});

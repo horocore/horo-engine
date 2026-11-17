@@ -61,7 +61,11 @@ HoroEditorApp
 
 `GuiScreenHost` owns the active screen object and navigation state.
 `EditorWorkspaceScreen` composes `EditorLayer`, which owns panel and modal hosts.
-The host-owned status bar persists across route replacement; see
+The host-owned status bar persists across route replacement except during
+`ProjectCreation`, where the wizard owns the full content height and its own
+Back/Next action footer. The host retains status registrations while suppressing
+both status-bar drawing and its height reservation for that route; returning to
+another route restores the bar. See
 [Editor Status Bar](./editor-status-bar.md).
 
 ## Screen Registration and Service Provisioning (Registry Architecture)

@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "name": "viewport-ambient",
+  "configurationDigest": "9e3ec773a7fbc0bb6666e428dedd8ccec4f59b8b6d40506c825cc7a8c02ff2ff",
+  "sourceLinearRec709Rgb": [
+    0.6800000071525574,
+    0.699999988079071,
+    0.7400000095367432
+  ],
+  "independentIngressAcesCgRgb": [
+    0.6896331906318665,
+    0.6991342306137085,
+    0.734380304813385
+  ],
+  "ambientFloat32Rgb": [
+    0.055170655250549316,
+    0.055930737406015396,
+    0.05875042453408241
+  ],
+  "rawSceneRgb": [
+    0.05517578125,
+    0.055938720703125,
+    0.058746337890625
+  ],
+  "displayLinearRgb": [
+    0.018451951444149017,
+    0.019337544217705727,
+    0.021132664754986763
+  ],
+  "looks": [
+    {
+      "interpolation": "Trilinear",
+      "lookLinearAcesCg": [
+        0.49934840202331543,
+        0.3822418749332428,
+        0.38434869050979614
+      ],
+      "displayLinearRgb": [
+        0.30666598677635193,
+        0.2196296751499176,
+        0.22541731595993042
+      ]
+    },
+    {
+      "interpolation": "Tetrahedral",
+      "lookLinearAcesCg": [
+        1.0667647123336792,
+        0.2875049114227295,
+        0.5742707252502441
+      ],
+      "displayLinearRgb": [
+        0.7610357999801636,
+        0.1412280648946762,
+        0.32322680950164795
+      ]
+    }
+  ],
+  "producer": "OpenColorIO2.5.0 CGconfig4.0.0 ACES2 with optimization NONE",
+  "scope": "actual independent pinned OCIO CPU ingress/output references with explicit float32 ambient and binary16 scene quantization; not GPU or application proof",
+  "originalReferenceSHA256": "2fce815cbff895e30ca9105d48ce40ff75bfe0980202ff6e018ff047b9a46af5"
+}

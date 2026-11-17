@@ -1,4 +1,5 @@
 #include "HeadlessMeshCooker.h"
+#include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetCookCache.h"
 #include "Horo/Assets/AssetCookOutput.h"
@@ -12,7 +13,6 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "NativeCacheFiles.h"
-#include "ProjectAssetImportCommitter.h"
 #include "assets/AssetCookPublicationFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -154,7 +154,9 @@ TEST_CASE("Full pipeline: create project, import, cook, load", "[native][integra
     item.createMetaSidecar = true;
     item.supportsMetaSidecar = true;
 
-    ProjectAssetImportCommitter committer{&registry};
+    NativeDurableFileSystem importFiles;
+    Editor::ProjectMutationCoordinator importMutations{importFiles};
+    Application::ProjectAssetImportCommitter committer{importMutations, importFiles, &registry};
     FixedAssetIdGenerator idGenerator;
     auto destination = ProjectPath::Parse(item.destinationFolder);
     REQUIRE((destination.HasValue()));

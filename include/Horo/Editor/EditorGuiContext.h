@@ -1,5 +1,11 @@
 #pragma once
 
+/** @file EditorGuiContext.h
+ * @brief Borrowed GUI services, theme and optional drawing registry.
+ */
+
+#include "Horo/Editor/GuiLiveReload.h"
+
 namespace Horo {
     class EngineDataBus;
 }
@@ -18,6 +24,7 @@ namespace Horo::Editor {
     /** @brief Provides theme configuration and font atlas access for the GUI. */
     struct ThemeContext {
         const Theme::Fonts &fonts;
+        const GuiLive::IRegistry *liveReload = nullptr; /**< Borrowed; outlives every GUI frame using this context. */
     };
 
     /**

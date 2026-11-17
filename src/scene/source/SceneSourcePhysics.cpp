@@ -77,18 +77,25 @@ namespace Horo::SceneSource::Detail {
             WireJson materials = WireJson::array();
             for (const Runtime::PhysicsColliderMaterialBinding &binding : collider.materials)
                 materials.push_back({{"slot", binding.slot.Value()}, {"material", binding.material.ToString()}});
-            colliders.push_back({{"id", collider.id.value},
-                                 {"collider", collider.collider.value},
-                                 {"schemaVersion", collider.schemaVersion},
-                                 {"generation", collider.generation},
-                                 {"body", PhysicsBodyReferenceJson(collider.body)},
-                                 {"source", PhysicsColliderSourceJson(collider.source)},
-                                 {"localPose", PhysicsPoseJson(collider.localPose)},
-                                 {"scale", Vec3Json(collider.scale)},
-                                 {"collisionProfile", collider.collisionProfile.ToString()},
-                                 {"materials", std::move(materials)},
-                                 {"sensor", collider.sensor},
-                                 {"enabled", collider.enabled}});
+            WireJson encodedCollider{{"id", collider.id.value},
+                                     {"collider", collider.collider.value},
+                                     {"schemaVersion", collider.schemaVersion},
+                                     {"generation", collider.generation},
+                                     {"body", PhysicsBodyReferenceJson(collider.body)},
+                                     {"source", PhysicsColliderSourceJson(collider.source)},
+                                     {"localPose", PhysicsPoseJson(collider.localPose)},
+                                     {"scale", Vec3Json(collider.scale)},
+                                     {"collisionProfile", collider.collisionProfile.ToString()},
+                                     {"materials", std::move(materials)},
+                                     {"sensor", collider.sensor},
+                                     {"enabled", collider.enabled}};
+            if (collider.schemaVersion >= Runtime::PhysicsColliderComponentSchemaVersion) {
+                WireJson surfaces = WireJson::array();
+                for (const auto &binding : collider.surfaceBindings)
+                    surfaces.push_back({{"slot", binding.slot.Value()}, {"surface", binding.surface.ToString()}});
+                encodedCollider["surfaceBindings"] = std::move(surfaces);
+            }
+            colliders.push_back(std::move(encodedCollider));
         }
         if (!colliders.empty())
             value["colliders"] = std::move(colliders);

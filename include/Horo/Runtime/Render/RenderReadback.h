@@ -18,6 +18,10 @@
 #include <variant>
 
 namespace Horo::Render {
+    namespace detail {
+        struct PreparedReadbackPayload;
+    }
+
     /** @brief Backend-neutral source generation copied by one readback request. */
     using RenderReadbackSource = std::variant<RenderBufferHandle, RenderTextureHandle>;
 
@@ -83,6 +87,39 @@ namespace Horo::Render {
         bool acceptingRequests{false};
     };
 
+    /** @brief Allocation-free expected outcomes for cold-prepared readback operations. */
+    enum class RenderReadbackPreparedStatus : std::uint8_t {
+        Complete,
+        InvalidDescriptor,
+        InvalidRequest,
+        InvalidTransition,
+        CapacityExceeded,
+        Stopped,
+        WrongThread,
+        ResultPending,
+        Cancelled,
+        TimedOut,
+        Failed
+    };
+
+    /** @brief One cold, finite writable/result pool within the existing queue. */
+    struct RenderReadbackPreparedStorage final {
+        std::uint32_t slotCount{};
+        std::size_t maximumBytesPerResult{};
+        std::size_t alignment{1};
+    };
+
+    struct RenderReadbackPreparedRequest final {
+        RenderReadbackPreparedStatus status{RenderReadbackPreparedStatus::InvalidRequest};
+        RenderReadbackId id;
+    };
+
+    /** @brief Synchronous writable borrow, valid only until the next queue lifecycle operation on that request. */
+    struct RenderReadbackPreparedMapping final {
+        RenderReadbackPreparedStatus status{RenderReadbackPreparedStatus::InvalidRequest};
+        std::span<std::byte> bytes;
+    };
+
     /**
      * @brief Move-only lease over immutable mapped bytes.
      *
@@ -91,6 +128,8 @@ namespace Horo::Render {
      */
     class RenderReadbackResult final {
     public:
+        /** @brief Creates an empty destination for allocation-free prepared acquisition. */
+        RenderReadbackResult() noexcept;
         ~RenderReadbackResult();
         RenderReadbackResult(const RenderReadbackResult &) = delete;
         RenderReadbackResult &operator=(const RenderReadbackResult &) = delete;
@@ -108,7 +147,10 @@ namespace Horo::Render {
         class Impl;
         friend class RenderReadbackQueue;
         explicit RenderReadbackResult(std::unique_ptr<Impl> implementation) noexcept;
+        explicit RenderReadbackResult(std::shared_ptr<const detail::PreparedReadbackPayload>) noexcept;
+        void ReleasePreparedLease() noexcept;
         std::unique_ptr<Impl> implementation_;
+        std::shared_ptr<const detail::PreparedReadbackPayload> prepared_;
     };
 
     /**
@@ -135,6 +177,44 @@ namespace Horo::Render {
         RenderReadbackQueue &operator=(const RenderReadbackQueue &) = delete;
         RenderReadbackQueue(RenderReadbackQueue &&) = delete;
         RenderReadbackQueue &operator=(RenderReadbackQueue &&) = delete;
+
+        /** @brief Allocates the fixed writable/result pool before any request; succeeds once on an empty accepting queue.
+         * @param storage Finite slot, byte and alignment envelope within the existing queue limits.
+         * @param maximumRetainedPayloadBytes Complete known queue/pool CPU payload allowance.
+         * @return Actual retained object/vector-capacity payload bytes; excludes allocator/control-block and driver overhead.
+         */
+        [[nodiscard]] Result<std::size_t> PreparePayloadStorage(RenderReadbackPreparedStorage storage,
+                                                                std::size_t maximumRetainedPayloadBytes);
+        /** @brief Returns known fixed queue/metadata/prepared-storage CPU payload bytes without allocator/control-block overhead.
+         * @details Legacy Complete allocations are governed by limits/Snapshot and are not part of this cold prepared-only query.
+         * Hosts mixing legacy completion with prepared storage must reserve those separate dynamic result bytes as well.
+         */
+        [[nodiscard]] std::size_t RetainedPayloadBytes() const noexcept;
+        /** @brief Admits an exact request into the existing identity/lifecycle authority without allocating, including pressure failure. */
+        [[nodiscard]] RenderReadbackPreparedRequest RequestPrepared(const RenderReadbackDescriptor &) noexcept;
+        /** @brief Borrows exact submitted prepared storage for synchronous native completion copy.
+         * @pre The frontend has independently observed actual GPU completion before asking the backend to write these bytes.
+         * No pointer may escape the synchronous copy, and terminal requests never expose writable bytes.
+         */
+        [[nodiscard]] RenderReadbackPreparedMapping WritablePrepared(RenderReadbackId) noexcept;
+        /** @brief Publishes prepared bytes only for the exact submitted completion point; performs no copy or allocation.
+         * @pre Caller supplies genuine reached completion evidence; queue validates identity/equality, not native fence progress.
+         */
+        [[nodiscard]] RenderReadbackPreparedStatus CompletePrepared(RenderReadbackId, RenderTimelinePoint) noexcept;
+        /** @brief Transfers an immutable preallocated lease without allocation; expected pending/terminal failures are static statuses.
+         * @details Failure leaves the output unchanged. Leases may outlive the queue and die on consumer threads.
+         */
+        [[nodiscard]] RenderReadbackPreparedStatus AcquirePrepared(RenderReadbackId, RenderReadbackResult &) noexcept;
+        /** @brief Acknowledges one acquired prepared result only after every consumer lease has retired.
+         * @return Complete releases its exact record/slot; ResultPending retains backpressure; unknown/foreign/stale IDs fail closed.
+         * @details Prepared acquisition retains a Ready metadata record until this explicit owner acknowledgement.
+         * Snapshot request/ready counts include these held records, which are not reacquirable.
+         */
+        [[nodiscard]] RenderReadbackPreparedStatus RetirePreparedResult(RenderReadbackId) noexcept;
+        /** @brief Reclaims only pool slots whose request and every immutable consumer lease have retired; owner thread only.
+         * @details Retained-byte accounting may conservatively remain charged until this collection or queue destruction.
+         */
+        [[nodiscard]] std::size_t CollectPreparedResults() noexcept;
 
         /**
          * @brief Admits one source generation and exact bounded result size.

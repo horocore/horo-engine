@@ -718,6 +718,9 @@ Run
 
 A blend tree blends multiple clips based on up to two float parameters.
 
+The implemented typed authoring, group namespace, marker fallback, transaction,
+and migration contract is [Blend spaces and instance-scoped synchronization](animation-blend-tree-sync.md).
+
 Common patterns:
 
 - 1D blend by speed
@@ -729,6 +732,14 @@ Interpolation rules:
 - rotations use spherical linear interpolation (SLERP) or normalized lerp
 - translations and scales use linear interpolation
 - blend weights are normalized and clamped
+
+## Action Playback and Animation Sequences
+
+Typed gameplay actions, named slots, section/loop sequences, request queues,
+interruption, masks, bounded envelopes and terminal result ownership follow
+[Action playback, slots and animation sequences](animation-actions-and-sequences.md).
+They use the existing graph instance's fixed tick and Commit boundary. Cinematic
+sequence ownership and clip-notify dispatch remain separate contracts.
 
 ## Inverse Kinematics
 

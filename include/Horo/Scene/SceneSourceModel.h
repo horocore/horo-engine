@@ -4,12 +4,13 @@
  * @file SceneSourceModel.h
  * @brief Backend-neutral authored Scene values shared by bounded source decoding and editor documents.
  *
- * Legacy-only documents retain Scene schema1; Character requires schema2 and explicit navigation sources require schema3.
- * Older readers reject newer document schemas rather than dropping authored data.
- * Editor visibility and lock fields are retained as inert authoring data and never grant runtime capabilities.
+ * Legacy-only documents retain Scene schema1; Character requires schema2 explicit navigation sources require schema3 and animation bindings
+ * require schema4. Older readers reject newer document schemas rather than dropping authored data. Editor visibility and lock fields are
+ * retained as inert authoring data and never grant runtime capabilities.
  */
 
 #include "Horo/AI/AISceneComponents.h"
+#include "Horo/Animation/AnimationComponents.h"
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
@@ -50,6 +51,8 @@ namespace Horo::SceneSource {
     /** @brief Typed authored component values attached to one scene object. */
     struct SceneObjectComponentSet {
         std::optional<Runtime::CameraComponent> camera;
+        std::optional<Animation::AnimationAuthoringComponent>
+            animation; /**< Durable inert binding; live instance remains Animation-owned. */
         std::optional<Runtime::LightComponent> light;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolume;
         std::optional<Runtime::AudioSourceComponent> audioSource;

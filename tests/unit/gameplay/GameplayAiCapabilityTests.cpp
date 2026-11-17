@@ -109,7 +109,7 @@ namespace Horo::Gameplay {
         Fixture fixture;
         auto old = fixture.runtime.CapabilityAtSafePoint();
         bool denied{};
-        std::thread foreign([&] {
+        std::jthread foreign([&fixture, &denied] {
             denied = fixture.context->ResolveAgent(fixture.scene.agent.agent.agent).HasError();
         });
         foreign.join();
@@ -128,9 +128,17 @@ namespace Horo::Gameplay {
     TEST_CASE("Gameplay AI failed task allocation publishes neither execution nor module ownership",
               "[gameplay][ai][capability][allocation]") {
         const bool explicitDiagnostics = GENERATE(false, true);
+        const bool isolated = GENERATE(false, true);
+        const bool includeFields = GENERATE(false, true);
+        CAPTURE(explicitDiagnostics, isolated, includeFields);
         Fixture fixture;
         const auto definition = MakeIdentity<AI::TaskId>(41);
         Telemetry::OperationContext diagnostics;
+        std::vector<Log::MdcField> fields;
+        if (includeFields)
+            fields.emplace_back("module.source", "native-ai-image");
+        diagnostics.diagnosticContext =
+            isolated ? Log::LogContextSnapshot::Isolated(std::move(fields)) : Log::LogContextSnapshot{std::move(fields)};
         const auto start = [&] {
             return explicitDiagnostics ? fixture.context->StartTask(fixture.agent, definition, diagnostics)
                                        : fixture.context->StartTask(fixture.agent, definition);

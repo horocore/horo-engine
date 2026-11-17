@@ -11,6 +11,7 @@
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
+#include "Horo/Physics/SurfaceMaterial.h"
 
 #include <array>
 #include <cstdint>
@@ -121,6 +122,18 @@ namespace Horo::Character {
         return static_cast<CharacterCollisionFlags>(static_cast<std::uint16_t>(left) | static_cast<std::uint16_t>(right));
     }
 
+    /** @brief No semantic value is invented when the project has not configured its surface capability. */
+    enum class CharacterSurfaceAvailability : std::uint8_t {
+        Unavailable,
+        Available
+    };
+    /** @brief The exact selected semantic value came from Physics or an explicit captured default. */
+    enum class CharacterSemanticSurfaceSource : std::uint8_t {
+        None,
+        Query,
+        DescriptorDefault
+    };
+
     /** @brief Allocation-free selectors intersected with the controller's query channel; triggers are always excluded. */
     struct CharacterCollisionSelectors final {
         std::optional<Physics::CollisionLayerId> requiredLayer;
@@ -167,6 +180,8 @@ namespace Horo::Character {
         bool allowDynamicPlatformAttachment{};                       /**< Dynamic support is ineligible unless explicitly admitted. */
         bool inheritPlatformHeading{}; /**< Admit only platform twist about Character up; pitch/roll never tilt the capsule. */
         CharacterPlatformLeaveVelocityPolicy platformLeaveVelocity{CharacterPlatformLeaveVelocityPolicy::None};
+        std::optional<Physics::SurfaceMaterialId>
+            defaultSurface; /**< Explicit project-valid semantic default; never a physical asset cast. */
     };
 
     /** @brief Operation that may publish a new collision-root transform. */
@@ -236,9 +251,10 @@ namespace Horo::Character {
         float distanceMeters{};
         Math::Vec3 relativeVelocityMetersPerSecond{};               /**< Surface velocity relative to the queried Character frame. */
         std::optional<Physics::PhysicsShapeSubresourceId> subshape; /**< Exact authored child; absent for primitive support. */
-        bool trigger{};                                     /**< Defensive eligibility evidence: never physical contact or support. */
-        std::optional<Physics::CollisionLayerId> layer;     /**< Required when the request selects a layer. */
-        std::optional<Physics::CollisionProfileId> profile; /**< Required when the request selects a profile. */
+        bool trigger{};                                         /**< Defensive eligibility evidence: never physical contact or support. */
+        std::optional<Physics::CollisionLayerId> layer;         /**< Required when the request selects a layer. */
+        std::optional<Physics::CollisionProfileId> profile;     /**< Required when the request selects a profile. */
+        std::optional<Physics::PhysicsSurfaceEvidence> surface; /**< Actual captured semantic collider mapping, when configured. */
     };
 
     /** @brief Read-only capsule sweep request for one bounded movement iteration. */
@@ -511,6 +527,9 @@ namespace Horo::Character {
         float penetrationDepthMeters{};
         std::optional<Physics::PhysicsShapeSubresourceId> subshape; /**< Copied Physics provenance, never a native child index. */
         CharacterMaterialSource materialSource{CharacterMaterialSource::Query}; /**< Fallback does not claim a collider binding. */
+        std::optional<Physics::PhysicsSurfaceEvidence> surface;
+        CharacterSemanticSurfaceSource surfaceSource{CharacterSemanticSurfaceSource::None};
+        std::optional<Math::Vec3> impactVelocityMetersPerSecond; /**< Actual inbound sweep velocity, absent for a support-only probe. */
     };
 
     /** @brief One committed change of support state; repeated contacts do not repeat a transition. */
@@ -570,6 +589,10 @@ namespace Horo::Character {
         bool platformCarryRejected{};                      /**< Carry was blocked or stopped at a solver bound; support is detached. */
         CharacterMovementTermination termination{
             CharacterMovementTermination::Complete}; /**< Owned solver-limit diagnostic, not contact truncation. */
+        bool sliding{}; /**< Actual Character-owned steep-slope continuation selected during this committed solve. */
+        CharacterSurfaceAvailability surfaceAvailability{CharacterSurfaceAvailability::Unavailable};
+        std::optional<Physics::PhysicsSurfaceEvidence> groundSurface;
+        CharacterSemanticSurfaceSource groundSurfaceSource{CharacterSemanticSurfaceSource::None};
     };
 
     /**

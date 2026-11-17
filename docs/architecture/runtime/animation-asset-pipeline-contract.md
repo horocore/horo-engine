@@ -78,7 +78,7 @@ The following `AssetTypeId` values are reserved for this contract:
 |---|---|---|
 | `core.animation.skeleton` | `SkeletonAssetData` | none |
 | `core.animation.skeletal_mesh_binding` | `SkeletalMeshSkinningData` | one `core.mesh`, one `core.animation.skeleton` |
-| `core.animation.clip` | `AnimationClipData` | one `core.animation.skeleton`; optional additive reference-pose asset after that asset kind has its own contract |
+| `core.animation.clip` | `AnimationClipData` | one `core.animation.skeleton`; additive reference-pose identity names the Graph operand contract, not an additional AssetId |
 
 The sidecar-owned `AssetId` is the only persistent identity of the record. A
 decoded candidate injects that identity into `SkeletonId`, `SkeletalMeshId`, or
@@ -165,6 +165,14 @@ and equal-time keys use the canonical order from ANI-001.6. Import never bakes a
 runtime publication generation into the document; the loader binds the current
 immutable dependency generation before `AnimationClipAsset::Create`.
 
+`AnimationReferencePoseId` is a stable local integer identity, not an `AssetId`.
+An additive clip payload retains that identity and omits its process-local
+reference-pose generation. The owner binds a fresh immutable generation; the real
+Graph's explicit ReferencePose operand supplies the pose used by the existing
+sampler. No separate reference-pose asset lookup or implicit base pose is inferred.
+A standalone Clip source without explicit base/reference operands fails typed
+unsupported instead of silently changing additive semantics.
+
 Compression in authoring data is policy intent, not proof that bytes are runtime
 compatible. Only ANI-001.7's complete compatibility value and the AST artifact
 envelope can prove a cooked publication.
@@ -244,25 +252,29 @@ renderer-specific skinning resource is realized later by Renderer and cannot be
 smuggled into this payload. Unsupported target/profile combinations fail before
 output writes; they never fall back to another target or compression tier.
 
-The AST `CacheKeyV1` remains authoritative. Its source and metadata digests cover
-the canonical authoring payload and cooker-visible settings. The effective
-settings digest additionally covers the Animation payload format version,
-Animation contract versions, coordinate/time normalization version, exact
-compression profile, and every byte-affecting option. Dependency-aware animation
-cooking must use the future AST dependency-aware key; it cannot pretend V1 covers
-dependency contents. Until that host capability exists, a contribution requiring
-non-empty dependency content must fail explicitly rather than publish an
-under-keyed artifact.
+Dependency-free artifacts may retain AST `CacheKeyV1`. Its source and metadata
+inputs cover the canonical authoring payload and cooker-visible settings. The
+effective settings digest covers the Animation payload format, semantic contracts,
+coordinate/time normalization, compression profile, and every byte-affecting option.
 
-This is an explicit delivery prerequisite, not an optional optimization. The
-owning policy and version transition are tracked in Asset Pipeline's
+Dependency-aware Animation cooking uses the existing AST `CacheKeyV2` path through
+`AssetCookService`. The host supplies a real `AssetCookInputSnapshot`, retaining
+its complete source/metadata closure and publication fences. A producer may supply
+an `AssetCookKeyProjection` only when it proves each artifact's complete input
+selection against that same capture. An asserted digest or asset ID list alone
+cannot grant input authority or make a V1 entry dependency-aware.
+
+When a dependent cooker consumes cooked resources, the existing joined
+`AssetCookDependentPhase` supplies verified candidate envelopes from the same
+unpublished operation. Their host-computed complete-envelope identities enter
+the dependent V2 key. The Animation composition must account for every semantic
+source and resource byte that affects its output, including inactive graph
+branches and actions. Failure to establish that closure returns a typed failure;
+there is no fallback to V1, a previous resource generation, or a private cache.
+The owning policy remains Asset Pipeline's
 [Incremental Cook And Cache Reuse](./asset-pipeline.md#incremental-cook-and-cache-reuse)
-contract. Before scheduling an implementation issue for clip or skeletal-mesh
-binding cooking, delivery planning must add a native `blocked by` relationship to
-the issue that implements that dependency-aware Assets extension. Until that
-issue exists and lands, only dependency-free skeleton cooking can advance past
-validation; clips and skeletal-mesh bindings remain deliberately unavailable
-instead of bypassing cache identity.
+contract. These host capabilities already exist; each Animation producer must
+still compose and qualify its actual capture, dependency and publication path.
 
 The host owns output sinks, hashing, envelope encoding, cache verification,
 generation staging, manifest replacement, and rollback. The Animation cooker

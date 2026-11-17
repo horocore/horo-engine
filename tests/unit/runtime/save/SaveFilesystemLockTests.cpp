@@ -83,7 +83,7 @@ namespace Horo::Runtime {
                 auto newPin = PinArchiveRead(directory, slot, second.size());
                 REQUIRE(newPin.HasValue());
                 newRead.emplace(std::move(newPin).Value());
-                REQUIRE(std::filesystem::remove(target));
+                REQUIRE(NativeDurableFileSystem{}.RemoveDurable(target).HasValue());
                 CHECK(storage.Read(slot, second.size()).HasError());
             }
             // Both directory entries are retired and the namespace owner is destroyed before byte I/O.

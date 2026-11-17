@@ -26,6 +26,7 @@ namespace Horo {
     using PlatformFileInternal::FsError;
     using PlatformFileInternal::IoFailed;
     using PlatformFileInternal::LockBusy;
+    using PlatformFileInternal::NativeApiPath;
 #if !defined(_WIN32)
     using PlatformFileInternal::FlushFileDescriptor;
 #endif
@@ -36,7 +37,7 @@ namespace Horo {
                                               const std::span<const std::byte> bytes, bool *created = nullptr,
                                               const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
             const DWORD disposition = expectedOffset == 0U ? CREATE_NEW : OPEN_EXISTING;
-            HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, disposition,
+            HANDLE handle = CreateFileW(NativeApiPath(path).c_str(), GENERIC_WRITE, 0, nullptr, disposition,
                                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
             if (handle == INVALID_HANDLE_VALUE)
                 return false;
@@ -220,10 +221,10 @@ namespace Horo {
         bool created{};
         switch (mode) {
             case DirectoryCreationMode::Single:
-                created = std::filesystem::create_directory(path, error);
+                created = std::filesystem::create_directory(NativeApiPath(path), error);
                 break;
             case DirectoryCreationMode::Parents:
-                created = std::filesystem::create_directories(path, error);
+                created = std::filesystem::create_directories(NativeApiPath(path), error);
                 break;
             default:
                 return Result<bool>::Failure(FsError(IoFailed, path));
@@ -236,7 +237,7 @@ namespace Horo {
     /** @copydoc DurableFileSystem::AvailableBytes */
     Result<std::uint64_t> NativeDurableFileSystem::AvailableBytes(const std::filesystem::path &path) const {
         std::error_code error;
-        const auto info = std::filesystem::space(path, error);
+        const auto info = std::filesystem::space(NativeApiPath(path), error);
         if (error)
             return Result<std::uint64_t>::Failure(FsError(IoFailed, path));
         return Result<std::uint64_t>::Success(info.available);
@@ -245,11 +246,11 @@ namespace Horo {
     /** @copydoc DurableFileSystem::WriteDurable */
     Result<void> NativeDurableFileSystem::WriteDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes) {
         std::error_code error;
-        std::filesystem::create_directories(path.parent_path(), error);
+        std::filesystem::create_directories(NativeApiPath(path.parent_path()), error);
         if (error)
             return Result<void>::Failure(FsError(IoFailed, path));
 #if defined(_WIN32)
-        HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        HANDLE handle = CreateFileW(NativeApiPath(path).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle == INVALID_HANDLE_VALUE)
             return Result<void>::Failure(FsError(IoFailed, path));
         DWORD written{};
@@ -303,12 +304,13 @@ namespace Horo {
     /** @copydoc DurableFileSystem::CopyDurable */
     Result<void> NativeDurableFileSystem::CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) {
         std::error_code error;
-        std::filesystem::create_directories(destination.parent_path(), error);
-        if (error || !std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error))
+        std::filesystem::create_directories(NativeApiPath(destination.parent_path()), error);
+        if (error || !std::filesystem::copy_file(NativeApiPath(source), NativeApiPath(destination),
+                                                 std::filesystem::copy_options::overwrite_existing, error))
             return Result<void>::Failure(FsError(IoFailed, error ? destination : source));
 #if defined(_WIN32)
-        HANDLE handle =
-            CreateFileW(destination.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        HANDLE handle = CreateFileW(NativeApiPath(destination).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
         const bool flushed = handle != INVALID_HANDLE_VALUE && FlushFileBuffers(handle);
         if (handle != INVALID_HANDLE_VALUE)
             CloseHandle(handle);
@@ -336,11 +338,13 @@ namespace Horo {
         if (receipt.WasCommitted())
             return Result<void>::Failure(FsError(IoFailed, destination));
         std::error_code error;
-        std::filesystem::create_directories(destination.parent_path(), error);
+        std::filesystem::create_directories(NativeApiPath(destination.parent_path()), error);
         if (error)
             return Result<void>::Failure(FsError(IoFailed, destination));
 #if defined(_WIN32)
-        if (const BOOL ok = MoveFileExW(prepared.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH); !ok)
+        if (const BOOL ok = MoveFileExW(NativeApiPath(prepared).c_str(), NativeApiPath(destination).c_str(),
+                                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+            !ok)
             return Result<void>::Failure(FsError(IoFailed, destination));
 #else
         if (::rename(prepared.c_str(), destination.c_str()) != 0)
@@ -352,7 +356,7 @@ namespace Horo {
 
     /** @copydoc DurableFileSystem::RemoveDurable */
     Result<void> NativeDurableFileSystem::RemoveDurable(const std::filesystem::path &path) {
-        if (std::error_code error; !std::filesystem::remove(path, error) && error)
+        if (std::error_code error; !std::filesystem::remove(NativeApiPath(path), error) && error)
             return Result<void>::Failure(FsError(IoFailed, path));
         return SyncDirectory(path.parent_path());
     }

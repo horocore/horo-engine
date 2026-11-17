@@ -4,6 +4,7 @@
 #include "editor/renderer/opengl/EditorGuiRendererOpenGL.h"
 #include "editor/renderer/opengl/EditorViewportRendererOpenGL.h"
 #include "editor/renderer/opengl/SdlOpenGLPresentationPort.h"
+#include "renderer/RenderBackendDrainTestSupport.h"
 
 #include <SDL3/SDL.h>
 #include <array>
@@ -70,8 +71,9 @@ namespace Horo::Render::OpenGLSmokeTests {
                                              const EditorViewportSceneView &scene, const EditorViewportExtent extent) {
         for (std::size_t attempt = 0; attempt < 4; ++attempt) {
             viewport.RequestExtent(extent);
-            auto prepared = viewport.PrepareResources(frontend, RenderSceneView{ToRenderCamera(scene.camera), scene.meshResources,
-                                                                                scene.instances, scene.lights});
+            auto prepared =
+                viewport.PrepareResources(frontend, RenderSceneView{ToRenderCamera(scene.camera), scene.meshResources, scene.instances,
+                                                                    scene.lights, scene.lightSceneDomain, scene.lightSnapshotRevision});
             Check(prepared.HasValue());
             Check(frontend.ProcessResourceRequests().HasValue());
             if (prepared.Value().has_value())
@@ -90,11 +92,17 @@ namespace Horo::Render::OpenGLSmokeTests {
         replacementMeshes.front().handle.generation = 2;
         std::vector<EditorViewportInstance> replacementInstances{scene.instances.begin(), scene.instances.end()};
         replacementInstances.front().mesh.generation = 2;
-        const EditorViewportSceneView replacementScene{scene.camera, replacementMeshes, replacementInstances, scene.lights};
-        const RenderSceneView renderScene{ToRenderCamera(replacementScene.camera), replacementScene.meshResources,
-                                          replacementScene.instances, replacementScene.lights};
+        const EditorViewportSceneView replacementScene{scene.camera, replacementMeshes,      replacementInstances,
+                                                       scene.lights, scene.lightSceneDomain, scene.lightSnapshotRevision};
+        const RenderSceneView renderScene{ToRenderCamera(replacementScene.camera),
+                                          replacementScene.meshResources,
+                                          replacementScene.instances,
+                                          replacementScene.lights,
+                                          replacementScene.lightSceneDomain,
+                                          replacementScene.lightSnapshotRevision};
 
         RenderTargetHandle resizedTarget;
+        bool deferredGeneration{};
         RenderTargetHandle currentTarget = activeTarget;
         viewport.RequestExtent(resizedExtent);
         for (std::size_t attempt = 0; attempt < 6; ++attempt) {
@@ -111,15 +119,23 @@ namespace Horo::Render::OpenGLSmokeTests {
             const EditorViewportExtent passExtent = viewport.RequestedExtent();
             Check(passExtent.IsValid());
 
+            const StaticMeshPassDescriptor descriptor{.target = currentTarget,
+                                                      .extent = {passExtent.width, passExtent.height},
+                                                      .scene = renderScene};
+            const auto lighting = viewport.PrepareLightingFrame(descriptor, {});
+            if (lighting.HasError()) {
+                Check(lighting.ErrorValue().code.Value() == LightCullingErrors::Pending.code.Value());
+                deferredGeneration = true;
+                continue;
+            }
+
             auto begun = frontend.BeginFrame(FrameDescriptor{.frameNumber = 2 + attempt, .outputExtent = {640, 480}});
             Check(begun.HasValue());
             RenderFrameScope frame = std::move(begun).Value();
             const std::array passes{RenderPassDescriptor{
                 .id = RenderPassId{1},
                 .kind = RenderPassKind::Graphics,
-                .staticMesh = StaticMeshPassDescriptor{.target = currentTarget,
-                                                       .extent = {passExtent.width, passExtent.height},
-                                                       .scene = renderScene},
+                .staticMesh = descriptor,
             }};
             Check(frame.Execute(passes).HasValue());
             Check(frame.Present().HasValue());
@@ -128,6 +144,7 @@ namespace Horo::Render::OpenGLSmokeTests {
                 resizedTarget = currentTarget;
         }
         Check(resizedTarget.IsValid());
+        Check(deferredGeneration);
         Check(viewport.RequestedExtent() == resizedExtent);
         Check(viewport.TextureView().textureId != activeTexture.textureId);
     }
@@ -223,7 +240,12 @@ namespace Horo::Render::OpenGLSmokeTests {
         std::array<RenderLight, 1> lights;
 
         [[nodiscard]] EditorViewportSceneView View() const noexcept {
-            return {.camera = {}, .meshResources = meshResources, .instances = instances, .lights = lights};
+            return {.camera = {},
+                    .meshResources = meshResources,
+                    .instances = instances,
+                    .lights = lights,
+                    .lightSceneDomain = 1,
+                    .lightSnapshotRevision = 1};
         }
     };
 
@@ -233,7 +255,8 @@ namespace Horo::Render::OpenGLSmokeTests {
             .lights = {RenderLight{.kind = RenderLightKind::Directional,
                                    .direction = Math::Normalize(Math::Vec3{0.5F, -1.0F, -0.5F}),
                                    .color = {1.0F, 0.95F, 0.88F},
-                                   .intensity = 2.0F}},
+                                   .intensity = 2.0F,
+                                   .stableIdentity = 101}},
         };
         constexpr std::array primitiveTypes{Box, Sphere, Capsule, Cylinder, Cone, Plane, Quad};
         constexpr std::array positions{Math::Vec2{0, 0},         Math::Vec2{-1.0F, 0.7F}, Math::Vec2{0, 0.9F},    Math::Vec2{1.0F, 0.7F},
@@ -268,10 +291,11 @@ namespace Horo::Render::OpenGLSmokeTests {
         const std::array passes{RenderPassDescriptor{
             .id = RenderPassId{1},
             .kind = RenderPassKind::Graphics,
-            .staticMesh = StaticMeshPassDescriptor{.target = target,
-                                                   .extent = {extent.width, extent.height},
-                                                   .scene = RenderSceneView{ToRenderCamera(scene.camera), scene.meshResources,
-                                                                            scene.instances, scene.lights}},
+            .staticMesh =
+                StaticMeshPassDescriptor{.target = target,
+                                         .extent = {extent.width, extent.height},
+                                         .scene = RenderSceneView{ToRenderCamera(scene.camera), scene.meshResources, scene.instances,
+                                                                  scene.lights, scene.lightSceneDomain, scene.lightSnapshotRevision}},
         }};
         ConfigureCallerOpenGLState(callerState);
         Check(frame.Execute(passes).HasValue());
@@ -379,6 +403,9 @@ namespace Horo::Render::OpenGLSmokeTests {
         InitializeGui(gui, *window, presentationPort);
         const CallerOpenGLState callerState = CreateCallerOpenGLState();
         EditorViewportRendererOpenGL viewport{*frontend};
+        Horo::Editor::EditorViewportLightingProfile lighting;
+        lighting.requested = LightPreparationMode::BaselineForwardCpu;
+        Check(viewport.RequestLightingProfile(lighting, {}).HasValue());
         Check(viewport.Initialize().HasValue());
         ViewportSceneFixture fixture = CreateViewportScene();
         const EditorViewportSceneView scene = fixture.View();
@@ -400,6 +427,8 @@ namespace Horo::Render::OpenGLSmokeTests {
         CheckSeamlessResourceTransition(viewport, *frontend, scene, target, textureView);
 
         frontend->DetachStaticMeshPassExecutor(viewport);
+        // Keep the owner and current context alive until the actual closing fence drains.
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
         viewport.Shutdown();
         gui.Shutdown();
         gui.Shutdown();

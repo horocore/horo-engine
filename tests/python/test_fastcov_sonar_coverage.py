@@ -58,16 +58,29 @@ def test_empty_reports_fail() -> None:
         converter.convert({"sources": {}}, root)
 
 
-def test_outside_sources_and_symlinks_fail(tmp_path: Path) -> None:
+def test_outside_sources_fail(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    outside = tmp_path / "outside.cpp"
+    outside.write_text("callback();")
+    with pytest.raises(ValueError):
+        converter.convert({"sources": {str(outside): {"": {"lines": {"1": 1}}}}}, root)
+
+
+def test_symlink_sources_fail(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     outside = tmp_path / "outside.cpp"
     outside.write_text("callback();")
     link = root / "link.cpp"
-    link.symlink_to(outside)
-    for path in (outside, link):
-        with pytest.raises(ValueError):
-            converter.convert({"sources": {str(path): {"": {"lines": {"1": 1}}}}}, root)
+    try:
+        link.symlink_to(outside)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Creating symlinks requires Windows symlink privilege")
+        raise
+    with pytest.raises(ValueError):
+        converter.convert({"sources": {str(link): {"": {"lines": {"1": 1}}}}}, root)
 
 
 def test_invalid_source_line_fails(tmp_path: Path) -> None:

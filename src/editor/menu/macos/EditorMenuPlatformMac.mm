@@ -159,21 +159,6 @@ namespace Horo::Editor {
         return invocation;
     }
 
-    /** @copydoc RevealInNativeFileManager */
-    bool RevealInNativeFileManager(const std::filesystem::path &absolutePath) noexcept {
-        if (!absolutePath.is_absolute())
-            return false;
-        NSString *path = ToNSString(absolutePath.string());
-        if (path == nil)
-            return false;
-        NSURL *url = [NSURL fileURLWithPath:path];
-        [path release];
-        if (url == nil)
-            return false;
-        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ url ]];
-        return true;
-    }
-
     /** @copydoc OpenInExternalEditor */
     bool OpenInExternalEditor(const std::filesystem::path &absolutePath) noexcept {
         if (!absolutePath.is_absolute())

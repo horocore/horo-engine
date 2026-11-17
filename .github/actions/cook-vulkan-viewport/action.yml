@@ -46,6 +46,9 @@ runs:
         "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/editor/viewport.hlsl \
           "$asset_root/shaders/editor/viewport-vulkan" "$RUNNER_TEMP/viewport-cook-scratch" \
           "${executables[0]}" "${executables[1]}" "${executables[2]}"
+        "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/editor/viewport_shadow.hlsl \
+          "$asset_root/shaders/editor/viewport-shadow-vulkan" "$RUNNER_TEMP/viewport-shadow-cook-scratch" \
+          "${executables[0]}" "${executables[1]}" "${executables[2]}" --shadow
         cp "$tool_root/catalog.tsv" "$asset_root/catalog.tsv"
         [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
         HORO_VIEWPORT_SOURCE_TREE="$(git rev-parse 'HEAD^{tree}')" \

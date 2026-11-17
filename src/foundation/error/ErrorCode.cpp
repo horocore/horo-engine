@@ -23,7 +23,13 @@ namespace Horo {
             .code = descriptor.code,
             .domain = descriptor.domain,
             .severity = descriptor.defaultSeverity,
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+            // Checked string moves allocate a proxy inside noexcept; copying keeps error assembly fallible.
+            .message = message,
+#else
             .message = std::move(message),
+#endif
+            .diagnostics = std::vector<Diagnostic>(std::size_t{0}),
         };
     }
 

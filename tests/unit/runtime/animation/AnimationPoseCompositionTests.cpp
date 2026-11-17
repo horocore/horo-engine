@@ -152,6 +152,9 @@ namespace Horo::Animation {
         REQUIRE(encoded.HasValue());
         auto old = nlohmann::ordered_json::parse(encoded.Value());
         old["schemaVersion"] = 2;
+        // Legacy schemas have no action catalog fields.
+        old["payload"].erase("actionSlots");
+        old["payload"].erase("actions");
         old["contractVersion"]["minor"] = 0;
         for (auto &node : old["payload"]["definitions"][0]["nodes"])
             node.erase("settings");

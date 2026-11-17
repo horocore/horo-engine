@@ -6,6 +6,7 @@
 #include <fstream>
 #include <functional>
 #include <stdexcept>
+#include <string>
 
 namespace Horo::Editor::PCGDocumentTestSupport {
     template <typename T> T Id(std::uint64_t value) {
@@ -172,6 +173,11 @@ namespace Horo::Editor::PCGDocumentTestSupport {
         }
     };
 
+    inline std::filesystem::path StagingPath(std::filesystem::path source) {
+        source += ".source-publication.tmp";
+        return source;
+    }
+
     class Project final {
     public:
         Project() : mutations(files) {
@@ -179,7 +185,8 @@ namespace Horo::Editor::PCGDocumentTestSupport {
             root = std::filesystem::temp_directory_path() / ("horo-pcg-document-" + std::to_string(tick));
             std::filesystem::create_directories(root / "assets/graphs");
             root = std::filesystem::canonical(root);
-            path = root / Identity().key.source.Value();
+            const std::string source{Identity().key.source.Value()};
+            path = root / std::filesystem::path{std::u8string{source.begin(), source.end()}};
             Write(Capture());
         }
 

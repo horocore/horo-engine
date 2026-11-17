@@ -318,6 +318,20 @@ merged into one report. GUI automation may also contribute line coverage when
 instrumentation is stable, but visual and interaction acceptance remains a
 separate quality gate.
 
+The hosted Sonar workflow separates instrumented build/test work from the full
+CFamily scan. The coverage producer has a 240-minute budget; the `SonarCloud`
+consumer has an independent 360-minute budget for a cold analysis cache. These
+are execution caps for the full merge gate, not fast-lane feedback targets.
+
+The producer publishes the original compilation database, generated/dependency
+headers and coverage reports under its actual artifact ID. The consumer checks
+the exact source commit/tree, original workspace/SDK paths and SHA-256 identities
+of captured inputs and system dependencies before restoring generated files.
+Tracked source is supplied by the same checkout and cannot be replaced by the
+artifact. Missing coverage evidence fails the required `SonarCloud` check.
+This retains the native environment and absolute-path requirements of
+[CFamily compilation-database analysis](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/languages/c-family/prerequisites).
+
 Coverage has two independent gates:
 
 - SonarQube applies an aggregate **New Code** regression floor of 80% to the

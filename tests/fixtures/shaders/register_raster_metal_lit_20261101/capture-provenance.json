@@ -1,0 +1,32 @@
+{
+  "kind": "actual-authenticated-macos-toolchain-text-capture",
+  "sourceSha256": "d76b40e07ff52e977fc1549784c127885fb1a73c31a4ba6296ccd34098c9089b",
+  "context": "Root ran all12 actual external processes through authenticated production toolchain, including native metallib construction. This fixture contains captured reflection/source TEXT ONLY, no binary/metallib or GPU proof. The accompanying test normalizes these exact captured texts using canonical current manifest/names.",
+  "captureRun": "382-real-lit-capture-v1",
+  "files": [
+    {
+      "file": "vertex.json",
+      "capture": "process-3-output-0.json",
+      "bytes": 4104,
+      "sha256": "b84628c619d2519ae18bb6384d32828692a3407ff08b70c45383af1efca37467"
+    },
+    {
+      "file": "vertex.metal",
+      "capture": "process-4-output-0.native",
+      "bytes": 3307,
+      "sha256": "20362032960b6a716c8fb9970f01a3a990f21d2191963f3b59e0f0ae730436cd"
+    },
+    {
+      "file": "fragment.json",
+      "capture": "process-9-output-0.json",
+      "bytes": 8277,
+      "sha256": "0d98cc8a4bed2ebb0b552d62057601fd864ddec1d84a357a50a5d7295fe6e6cd"
+    },
+    {
+      "file": "fragment.metal",
+      "capture": "process-10-output-0.native",
+      "bytes": 18374,
+      "sha256": "5be2e56989ca3e4a7fe819c0c79eb15c6a807cdd01e8afc9ac0a6e2e331b0c6d"
+    }
+  ]
+}

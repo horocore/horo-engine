@@ -37,7 +37,12 @@ def test_tool_rejects_a_resolved_symlink_escape_even_with_matching_bytes(tmp_pat
     escaped.write_bytes(executable.read_bytes())
     escaped.chmod(0o755)
     executable.unlink()
-    executable.symlink_to(escaped)
+    try:
+        executable.symlink_to(escaped)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Creating symlinks requires Windows symlink privilege")
+        raise
     with pytest.raises(ValueError, match="escapes"):
         project.verify_shader_tool_executable(root, "release/bin/dxc", digest)
     assert escaped.read_bytes() == b"verified compiler fixture"

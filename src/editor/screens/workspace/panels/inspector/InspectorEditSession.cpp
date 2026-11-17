@@ -310,8 +310,6 @@ namespace Horo::Editor {
         }
         if (edit.cancelRequested) {
             m_draft.camera = object.components.camera;
-            if (m_draft.camera.has_value())
-                m_draft.cameraFieldOfViewDegrees = m_draft.camera->verticalFieldOfViewRadians * RadiansToDegrees;
             return {};
         }
         if (!allowCommands || !edit.committed || !IsValidCameraComponent(*m_draft.camera) || *m_draft.camera == *object.components.camera)
@@ -425,10 +423,6 @@ namespace Horo::Editor {
 
     void InspectorEditSession::ResetLightDraft(const SceneObject &object) {
         m_draft.light = object.components.light;
-        if (!m_draft.light.has_value())
-            return;
-        m_draft.lightInnerConeDegrees = m_draft.light->innerConeRadians * RadiansToDegrees;
-        m_draft.lightOuterConeDegrees = m_draft.light->outerConeRadians * RadiansToDegrees;
     }
 
     /** @brief Captures a displayed UUID without turning a numeric runtime identity into an asset identity. */
@@ -494,13 +488,7 @@ namespace Horo::Editor {
         m_draft.object = primaryId;
         m_draft.name = primaryObject->name;
         m_draft.camera = m_baselines.size() == 1 ? primaryObject->components.camera : std::nullopt;
-        if (m_draft.camera.has_value())
-            m_draft.cameraFieldOfViewDegrees = m_draft.camera->verticalFieldOfViewRadians * RadiansToDegrees;
         m_draft.light = m_baselines.size() == 1 ? primaryObject->components.light : std::nullopt;
-        if (m_draft.light.has_value()) {
-            m_draft.lightInnerConeDegrees = m_draft.light->innerConeRadians * RadiansToDegrees;
-            m_draft.lightOuterConeDegrees = m_draft.light->outerConeRadians * RadiansToDegrees;
-        }
         m_draft.triggerVolume = m_baselines.size() == 1 ? primaryObject->components.triggerVolume : std::nullopt;
         m_draft.audioSource = m_baselines.size() == 1 ? primaryObject->components.audioSource : std::nullopt;
         if (m_baselines.size() == 1)

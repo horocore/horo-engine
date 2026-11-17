@@ -251,6 +251,11 @@ namespace {
         Check(state.descriptor.presentMode == PresentMode::Immediate);
         Check(backend->Capabilities().backend == RenderBackendId{"metal"});
         Check(backend->Capabilities().presentsToWindow);
+        const auto &caps = backend->Capabilities();
+        Check(!caps.supportsExplicitGraphSubmissions && !caps.supportsSubmissionObservation &&
+              !caps.support.features.Supports(RenderCapability::VfxGpuSimulation) &&
+              !caps.support.features.Supports(RenderCapability::VfxGpuDraw) &&
+              !caps.support.features.Supports(RenderCapability::VfxGpuReadback));
 
         ExerciseFrameLifecycle(*backend, state);
 

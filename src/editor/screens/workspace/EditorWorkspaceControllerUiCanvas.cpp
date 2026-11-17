@@ -181,7 +181,7 @@ namespace Horo::Editor {
         if (!m_mutations)
             return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::WriteFailed));
         NativeDurableFileSystem files;
-        const auto saved = owner.Save(m_viewModel.projectRoot, *m_mutations, files);
+        const auto saved = owner.Save(ProjectRoot(), *m_mutations, files);
         if (saved.HasError())
             return Result<void>::Failure(saved.ErrorValue());
         if (saved.Value().status != UiCanvasDocumentSaveStatus::Saved)

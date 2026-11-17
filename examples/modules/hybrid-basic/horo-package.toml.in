@@ -1,0 +1,7 @@
+schemaVersion = 1
+
+[package]
+id = "@EXAMPLE_ID@"
+version = "1.0.0"
+kind = "extension"
+displayName = "Reference Extension"

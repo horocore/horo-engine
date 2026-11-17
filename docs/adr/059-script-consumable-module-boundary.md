@@ -314,6 +314,37 @@ an orphan operation, a callback into a destroyed VM, or provider-owned serialize
 identity. The full runtime/platform fixture matrix and performance evidence are
 owned by [EXT-005.7](https://github.com/HoroCore/horo-engine/issues/174).
 
+## EXT-005.4 Implementation Profile
+
+The module-operation adapters are Lua 5.4.8 and QuickJS-NG 0.18.0. They consume
+one existing script-export descriptor/value/invocation boundary through the same
+canonical backend and invocation registries. The product owns explicit Headless
+and Editor Play operation contexts. QuickJS is a module-operation runtime; it is
+not a second project-object behavior authoring language. ADR-006's accepted Lua
+behavior decision remains unchanged. This implementation profile does not change
+this ADR's **Proposed** status or assert architectural approval not recorded here.
+
+`ScriptModuleBindingCache` retains bounded derived binding recipes, not executable
+provider authority. Compiled adapter identity incorporates the exact pinned VM
+source, binding implementation, build profile and context profile. Imports retain
+actual resolved module/provider generations. The lower native bridge invokes the
+existing admitted concrete service member; it never adds a provider registration
+or begins a second invocation.
+
+The explicit operation profile uses bounded cooperative execution: Lua's supported
+instruction ceilings are positive multiples of its 1,000-instruction hook quantum;
+QuickJS uses actual interrupt/deadline/cancellation and bounded owner job draining,
+not a claimed exact opcode count. Neither profile admits VM/native loaders,
+bytecode, ambient filesystem/process bindings, blocking Atomics or shared memory.
+Marshalling accepts bounded copied plain data and generation-safe host handles.
+
+Cold product admission revalidates the current independent signed publisher policy
+and exact immutable capture against evidence retained from actual native loading.
+An admitted operation has a finite deadline (five seconds by default). Normal
+owner Poll and worker calls perform no trust-file I/O; this is an operation-scoped
+trust snapshot, not continuous filesystem revocation monitoring. Actual host,
+provider, context and Scene scope revocations still close call/delivery admission.
+
 ## Compatibility And Migration
 
 ADR-055's existing service export and script API records become the manifest-side

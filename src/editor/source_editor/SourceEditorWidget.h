@@ -10,12 +10,17 @@
 #include <span>
 #include <variant>
 
+namespace Horo::Input {
+    struct InputBindingProfile;
+}
+
 namespace Horo::Editor::Theme {
     struct Fonts;
 }
 
 namespace Horo::Editor {
     struct SourceSyntax;
+    struct CodeEditorSettings;
 
     /** @brief Half-open, revision-relative document byte selection. */
     struct SourceWidgetSelection final {
@@ -46,6 +51,11 @@ namespace Horo::Editor {
         float dpiScale{1.0F};
         bool requestFocus{};
         bool inputEnabled{true};
+        const Input::InputBindingProfile *keymap{}; /**< Borrowed only for this synchronous frame. */
+        float fontSizePx{};                         /**< Logical code font size; zero inherits the current theme. */
+        bool skipKeyboard{};                        /**< A host registry action already consumed this frame's text/navigation key. */
+        const CodeEditorSettings *preferences{};    /**< Borrowed immutable settings for this frame. */
+        std::string_view fontFamily;                /**< Host atlas family identity; unavailable families use bundled fallback. */
     };
 
     /** @brief Editor-thread RAII presentation mirror; never reads or writes files or owns a document/language service.
@@ -100,6 +110,13 @@ namespace Horo::Editor {
          * @param publication Authoritative history result with originating view metadata. @return True only when consumed by this view.
          */
         [[nodiscard]] bool Restore(const SourceEditingPublication &publication);
+        /** @brief Sets a bounded view-local font zoom without changing document bytes or the Settings base size.
+         * @param steps Pixel steps relative to the configured code font; zero resets zoom.
+         */
+        void SetFontZoom(int steps);
+        /** @brief Returns view-local font zoom. @return Signed logical pixel steps. */
+        [[nodiscard]] int FontZoom() const noexcept;
+
         /** @brief Scrolls this instance through the same path as a mouse wheel. @param lines Signed logical display-line delta; positive
          * scrolls down. */
         void Scroll(float lines);

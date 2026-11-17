@@ -57,7 +57,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationInvalid{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_invalid"},
+        .code = ErrorCode{"extensions.script_invocation_invalid"},
         .defaultSeverity = ErrorSeverity::Error,
         .summary = "The script invocation request or lifecycle transition is malformed.",
         .remediationHint = "Use a validated descriptor generation, declared function, bounded values, and finite policy.",
@@ -67,7 +67,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationThreadViolation{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_thread_violation"},
+        .code = ErrorCode{"extensions.script_invocation_thread_violation"},
         .defaultSeverity = ErrorSeverity::Error,
         .summary = "The script invocation crossed its declared owner-thread or safe-point boundary.",
         .remediationHint = "Submit and drain from the context owner thread; keep provider work behind the host ABI.",
@@ -77,7 +77,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationReentrant{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_reentrant"},
+        .code = ErrorCode{"extensions.script_invocation_reentrant"},
         .defaultSeverity = ErrorSeverity::Error,
         .summary = "The script invocation attempted a forbidden recursive lifecycle transition.",
         .remediationHint = "Return to the declared safe point before submitting or delivering the nested call.",
@@ -87,7 +87,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationUnavailable{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_unavailable"},
+        .code = ErrorCode{"extensions.script_invocation_unavailable"},
         .defaultSeverity = ErrorSeverity::Error,
         .summary = "The requested script invocation authority is unavailable or revoked.",
         .remediationHint = "Refresh the provider/context generation and recreate the binding.",
@@ -97,7 +97,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationProviderDuplicate{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_provider_duplicate"},
+        .code = ErrorCode{"extensions.script_invocation_provider_duplicate"},
         .defaultSeverity = ErrorSeverity::Error,
         .summary = "The script invocation provider generation is already registered.",
         .remediationHint = "Register one exact provider generation and revoke it before replacement.",
@@ -107,7 +107,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationCapacityExceeded{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_capacity_exceeded"},
+        .code = ErrorCode{"extensions.script_invocation_capacity_exceeded"},
         .defaultSeverity = ErrorSeverity::Error,
         .summary = "The script invocation registry or its context/provider bound is full.",
         .remediationHint = "Drain completions, finish existing calls, or use an explicit larger host bound.",
@@ -117,7 +117,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationShutdown{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_shutdown"},
+        .code = ErrorCode{"extensions.script_invocation_shutdown"},
         .defaultSeverity = ErrorSeverity::Error,
         .summary = "The script invocation registry is shutting down.",
         .remediationHint = "Stop submitting work and recreate the binding after the host lifecycle restarts.",
@@ -127,7 +127,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationBackpressure{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_backpressure"},
+        .code = ErrorCode{"extensions.script_invocation_backpressure"},
         .defaultSeverity = ErrorSeverity::Warning,
         .summary = "The script invocation completion queue applied its bounded backpressure policy.",
         .remediationHint = "Drain the context safe-point queue; progress may be coalesced but terminal completion remains reserved.",
@@ -137,7 +137,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationCancelled{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_cancelled"},
+        .code = ErrorCode{"extensions.script_invocation_cancelled"},
         .defaultSeverity = ErrorSeverity::Warning,
         .summary = "The script invocation was cooperatively cancelled.",
         .remediationHint = "Observe the cancellation source and stop provider work at a bounded point.",
@@ -147,7 +147,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationTimeout{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_timeout"},
+        .code = ErrorCode{"extensions.script_invocation_timeout"},
         .defaultSeverity = ErrorSeverity::Warning,
         .summary = "The script invocation exceeded its finite timeout.",
         .remediationHint = "Complete work within the declared timeout or use an explicit larger policy bound.",
@@ -157,7 +157,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationProviderRevoked{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_provider_revoked"},
+        .code = ErrorCode{"extensions.script_invocation_provider_revoked"},
         .defaultSeverity = ErrorSeverity::Warning,
         .summary = "The script provider generation was revoked before invocation completion.",
         .remediationHint = "Rebind against the current provider generation after reload or shutdown.",
@@ -167,7 +167,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationContextRevoked{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_context_revoked"},
+        .code = ErrorCode{"extensions.script_invocation_context_revoked"},
         .defaultSeverity = ErrorSeverity::Warning,
         .summary = "The script context was revoked before completion delivery.",
         .remediationHint = "Destroy runtime bindings before context teardown and do not retain pending VM objects.",
@@ -177,7 +177,7 @@ namespace Horo::Extensions::ExtensionErrors {
 
     const ErrorCodeDescriptor ScriptInvocationAbandoned{
         .domain = ScriptBoundaryDomain,
-        .code = ErrorCode{"script_invocation_abandoned"},
+        .code = ErrorCode{"extensions.script_invocation_abandoned"},
         .defaultSeverity = ErrorSeverity::Error,
         .summary = "The script invocation producer was destroyed before publishing a terminal result.",
         .remediationHint = "Keep the host-owned controller alive until provider work publishes completion or failure.",

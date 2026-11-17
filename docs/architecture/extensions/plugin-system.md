@@ -1662,3 +1662,47 @@ contract; module import adapters migrate to `ScriptCapabilityContext::Create`, `
 and binding `Begin`. No runtime adapter may treat the low-level registration API as an
 alternative permission authority. Public consumer coverage verifies the new header through
 the owning target's staged include boundary.
+
+## Editor customization contributions
+
+Editor customization uses the existing `.horopkg` inventory, module resolution,
+artifact admission and retirement authority. It does not introduce another plugin
+loader or script runtime. Module descriptors remain inert. Registration happens
+explicitly during native module load; GUI traversal consumes copied data only.
+
+- Commands: `editor.command` claims opt in through the schema2
+  `HoroEditorActivityDescriptorV2` profile in `EditorActivityAbi.h`. The owning
+  editor-presentation module requires `editor.commands`. The existing ABI1.4
+  activity entry point remains unchanged; schema1 descriptors remain valid.
+  A command references one initial form node and its exact action identity.
+  It publishes localized metadata into `EditorCommandRegistry` and routes through
+  `EditorActivityHost::QueueCommand`, then the existing cancellation-aware job and
+  native retirement lease. Disabled/hidden/removed nodes, stale activations,
+  modal input withdrawal and busy actions reject invocation. Ordinary custom
+  controls acquire no global shortcut authority by publishing an action node.
+- Themes: an `editor.theme` claim owned by an editor-presentation module includes
+  a package-relative `resource` pointing to a JSON theme. The GUI composition root
+  reads it only after that package has passed normal activation. Absolute paths,
+  parent traversal and symlink components are rejected. The existing bounded
+  theme parser supplies both native ImGui colors and design tokens. Themes contain
+  data, not drawing callbacks. The stable contribution ID is persisted in
+  `appearance.themeId`; the builtin preset remains the fallback preference.
+  Shutdown withdraws package themes. Selecting a missing ID preserves the stored
+  preference and reports its absence without executing package code.
+- Settings: use the existing `editor.settings_page` contribution and versioned
+  `EditorPageAbi.h` transport. Typed fields, scope, validation, cancellation,
+  durable writes and live theme capture remain owned by `EditorPageHost`.
+  Modules never receive the editor settings store, ImGui, or document pointers.
+
+Live command shortcuts are merged with builtin action metadata for conflict
+validation in `EditorSettingsService`, Settings Keymaps and the workspace input
+adapter. User overrides remain in the single `input.bindingProfile` authority.
+Absent module overrides remain dormant across removal/reinstallation and are
+filtered out of the builtin runtime router. They cannot execute unless their
+exact live command is published again. A conflicting live catalog suspends module
+shortcut dispatch until the user resolves it in Keymaps. Bare character bindings
+are not dispatched while a text input owns typing. Command defaults use physical
+`Ctrl`/`Meta` semantics; modules may select their platform default at compilation.
+
+See [Authoring editor customization modules](../../guides/editor-customization-modules.md)
+for the concrete ABI and manifest profile.

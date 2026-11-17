@@ -280,9 +280,34 @@ namespace Horo::Runtime {
                                                                                                                   : std::to_address(found);
     }
 
+    namespace {
+        SaveRestoreReferenceTarget ProjectRestoreTarget(const RestoreReferenceTarget &target) {
+            return std::visit([]<typename Type>(const Type &value) -> SaveRestoreReferenceTarget {
+                if constexpr (std::is_same_v<Type, RestoreEntityReference>)
+                    return SaveRestoreEntityTarget{value.target.entity, value.generation.value};
+                else if constexpr (std::is_same_v<Type, RestoreComponentReference>)
+                    return SaveRestoreComponentTarget{{value.entity.target.entity, value.entity.generation.value}};
+                else if constexpr (std::is_same_v<Type, RestoreAssetReference>)
+                    return SaveRestoreAssetTarget{SaveAssetId::FromBytes(value.asset.Bytes()).Value()};
+                else if constexpr (std::is_same_v<Type, RestoreServiceReference>)
+                    return SaveRestoreServiceTarget{value.generation};
+                else
+                    return SaveRestoreParticipantTarget{value.participant, value.schema, value.record};
+            }, target);
+        }
+
+        SaveRestoreReferenceDisposition ProjectDisposition(SaveReferenceDisposition disposition) noexcept {
+            if (disposition == SaveReferenceDisposition::Missing)
+                return SaveRestoreReferenceDisposition::OptionalAbsent;
+            if (disposition == SaveReferenceDisposition::Remapped)
+                return SaveRestoreReferenceDisposition::Remapped;
+            return SaveRestoreReferenceDisposition::Resolved;
+        }
+    }  // namespace
+
     /** @copydoc PreparedRestoreReferenceGraph::MakeContext */
     Result<SaveRestoreReferenceContext> PreparedRestoreReferenceGraph::MakeContext(const SaveRestoreReferenceGeneration generation) const {
-        if (generation.registry != participants_.Generation() || generation.candidateScene != candidate_.value)
+        if (generation.registry != registryGeneration_ || generation.candidateScene != candidate_.value)
             return Result<SaveRestoreReferenceContext>::Failure(MakeError(SaveErrors::RestoreActivationStale));
         try {
             std::vector<SaveRestoreReferenceResult> results;
@@ -290,23 +315,8 @@ namespace Horo::Runtime {
             for (const auto &reference : references_) {
                 const auto &target = reference.disposition == SaveReferenceDisposition::Remapped ? *reference.request.permittedReplacement
                                                                                                  : reference.request.target;
-                const auto projected = std::visit([]<typename Type>(const Type &value) -> SaveRestoreReferenceTarget {
-                    if constexpr (std::is_same_v<Type, RestoreEntityReference>)
-                        return SaveRestoreEntityTarget{value.target.entity, value.generation.value};
-                    else if constexpr (std::is_same_v<Type, RestoreComponentReference>)
-                        return SaveRestoreComponentTarget{{value.entity.target.entity, value.entity.generation.value}};
-                    else if constexpr (std::is_same_v<Type, RestoreAssetReference>)
-                        return SaveRestoreAssetTarget{SaveAssetId::FromBytes(value.asset.Bytes()).Value()};
-                    else if constexpr (std::is_same_v<Type, RestoreServiceReference>)
-                        return SaveRestoreServiceTarget{value.generation};
-                    else
-                        return SaveRestoreParticipantTarget{value.participant, value.schema, value.record};
-                }, target);
-                auto disposition = SaveRestoreReferenceDisposition::Resolved;
-                if (reference.disposition == SaveReferenceDisposition::Missing)
-                    disposition = SaveRestoreReferenceDisposition::OptionalAbsent;
-                else if (reference.disposition == SaveReferenceDisposition::Remapped)
-                    disposition = SaveRestoreReferenceDisposition::Remapped;
+                const auto projected = ProjectRestoreTarget(target);
+                const auto disposition = ProjectDisposition(reference.disposition);
                 results.push_back({reference.request.owner,
                                    {reference.request.identity},
                                    disposition,
@@ -319,11 +329,21 @@ namespace Horo::Runtime {
         }
     }
 
+    void PreparedRestoreReferenceGraph::RetireTransientParticipantPins(std::span<const SaveParticipantId> retired) {
+        std::vector<SaveParticipantBinding> retained;
+        retained.reserve(participants_.Bindings().size());
+        for (const auto &binding : participants_.Bindings())
+            if (std::ranges::find(retired, binding.Descriptor().participant) == retired.end())
+                retained.push_back(binding);
+        retainedPublishedBindings_ = std::move(retained);
+        participants_ = {};
+    }
+
     PreparedRestoreReferenceGraph::PreparedRestoreReferenceGraph(std::vector<RestoreReferenceTarget> order,
                                                                  std::vector<ResolvedRestoreReference> references,
                                                                  SaveParticipantRegistrySnapshot participants,
                                                                  std::shared_ptr<void> serviceLease,
                                                                  const SceneRuntimeId candidate) noexcept
-        : order_(std::move(order)), references_(std::move(references)), participants_(std::move(participants)),
-          serviceLease_(std::move(serviceLease)), candidate_(candidate) {}
+        : order_(std::move(order)), references_(std::move(references)), registryGeneration_(participants.Generation()),
+          participants_(std::move(participants)), serviceLease_(std::move(serviceLease)), candidate_(candidate) {}
 }  // namespace Horo::Runtime

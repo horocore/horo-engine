@@ -3,6 +3,7 @@
 /** @file UiCanvasInspectorPanel.h
  * @brief Transient Runtime UI inspector surface; canonical source/history stay in UiCanvasDocument.
  */
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "UiInspectorAuthoringWidgets.h"
 #include "UiInspectorWidgets.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
@@ -15,8 +16,14 @@ namespace Horo::Editor {
     };
 
     /** @brief Owner-thread inspector draft and bounded shared controls; retains no source pointers. */
-    class UiCanvasInspectorPanel final {
+    class UiCanvasInspectorPanel final : public LocalizedGui {
     public:
+        /** @brief Localization scope for the embedded UI inspector surface. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.ui_inspector"};
+
+        /** @brief Creates an unattached inspector with its required localization scope. */
+        UiCanvasInspectorPanel() : LocalizedGui(kTextScope) {}
+
         /** @brief Releases draft admission and all source leases on document detach/close. */
         void Clear() noexcept;
         /** @brief Draws a selected canonical element and emits one fenced command on Apply.

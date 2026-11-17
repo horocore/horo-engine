@@ -2,6 +2,7 @@
 #include "Horo/Application/ProjectCompatibility.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "editor/screens/workspace/WorkspacePathText.h"
 
 #include <nlohmann/json.hpp>
 
@@ -68,13 +69,13 @@ namespace Horo::Editor {
         input.layers.front().name = "Unsaved collision";
         Commit(*owner, input);
         EditorWorkspaceViewCommandData copy{.command = EditorWorkspaceViewCommand::SaveSceneCopyAs,
-                                            .stringPayload = (project.root / "Assets/Copy.horo").string()};
+                                            .stringPayload = WorkspacePathText(project.root / "Assets/Copy.horo")};
         controller.ProcessCommand(copy);
         CHECK(std::filesystem::exists(project.root / "Assets/Copy.horo"));
         CHECK(controller.CollisionSettings().Value() == owner);
         CHECK(owner->IsDirty());
         EditorWorkspaceViewCommandData invalid{.command = EditorWorkspaceViewCommand::SaveSceneAs,
-                                               .stringPayload = (project.root / ".horo/Rejected.horo").string()};
+                                               .stringPayload = WorkspacePathText(project.root / ".horo/Rejected.horo")};
         controller.ProcessCommand(invalid);
         CHECK(controller.CollisionSettings().Value() == owner);
         CHECK(owner->Snapshot().HasValue());
@@ -91,7 +92,7 @@ namespace Horo::Editor {
         auto old = controller.CollisionSettings();
         REQUIRE(old.HasValue());
         EditorWorkspaceViewCommandData saveAs{.command = EditorWorkspaceViewCommand::SaveSceneAs,
-                                              .stringPayload = (project.root / "Assets/New.horo").string()};
+                                              .stringPayload = WorkspacePathText(project.root / "Assets/New.horo")};
         controller.ProcessCommand(saveAs);
         CHECK(old.Value()->Snapshot().HasError());
         auto replacement = controller.CollisionSettings();

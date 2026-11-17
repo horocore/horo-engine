@@ -121,6 +121,15 @@ Surface loss or replacement:
 
 Headless Android test compositions provide an explicit no-presentation profile.
 
+### PLT-001.3 implementation and qualification
+
+The private window owner, the distinct Vulkan 1.1 development presentation target,
+and the GameActivity composition are being integrated under HORO-2198. The
+[window/presentation delivery guide](../../guides/android-window-presentation.md)
+records the effective maintenance-feature requirements, source/ownership boundary,
+and current evidence. Portable host tests, native NDK compilation, package assembly
+and physical-device qualification remain distinct outcomes.
+
 ## Input, Sensors, Focus, And Permissions
 
 Android touch, keyboard, gamepad, and admitted sensor events enter the existing

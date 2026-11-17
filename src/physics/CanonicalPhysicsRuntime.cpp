@@ -3,6 +3,7 @@
 #include "CanonicalWorldSettings.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "PhysicsWorldBindingValidation.h"
 
 #include <Jolt/Jolt.h>
 
@@ -47,11 +48,11 @@
 
 namespace Horo::Physics::Detail {
     namespace {
-        /** @brief Compiles only validated enabled layers before installing native callback adapters. */
+        /** @brief Compiles only validated enabled layers before installing native
+         * callback adapters. */
         Result<void> CompileSimulationTable(CanonicalWorld &world, const PhysicsWorldSimulationBinding &simulation) {
-            if (static_cast<bool>(simulation.schema) != (simulation.generation != 0))
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Collision schema owner and generation must be supplied together."));
+            if (auto valid = ValidateWorldSimulationBinding(simulation); valid.HasError())
+                return valid;
             world.simulation.binding = simulation;
             if (!simulation.schema)
                 return Result<void>::Success();
@@ -139,7 +140,8 @@ namespace Horo::Physics::Detail {
 
     namespace {
 
-        /** @brief Restricts process-global callback routing to one joined native step. */
+        /** @brief Restricts process-global callback routing to one joined native step.
+         */
         class DiagnosticRoute final {
         public:
             explicit DiagnosticRoute(DiagnosticInbox &inbox) noexcept : inbox_(&inbox) {
@@ -166,7 +168,8 @@ namespace Horo::Physics::Detail {
             bool admitted_{};
         };
 
-        /** @brief Rejects foreign native ownership rather than replacing global hooks or factories. */
+        /** @brief Rejects foreign native ownership rather than replacing global hooks
+         * or factories. */
         bool NativeGlobalsAreUnowned() noexcept {
             const std::array globalsUnowned{
                 JPH::Factory::sInstance == nullptr, JPH::Allocate == nullptr,    JPH::Reallocate == nullptr, JPH::Free == nullptr,
@@ -219,8 +222,9 @@ namespace Horo::Physics::Detail {
         if (runtime.value == nullptr)
             return Result<CanonicalWorldHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (settings.Values().world.capacity.maximumBodies == 0)
-            return Result<CanonicalWorldHandle>::Failure(
-                MakeError(PhysicsErrors::OperationUnsupported, "Canonical broad-phase initialization requires non-zero body capacity."));
+            return Result<CanonicalWorldHandle>::Failure(MakeError(PhysicsErrors::OperationUnsupported,
+                                                                   "Canonical broad-phase initialization requires non-zero body "
+                                                                   "capacity."));
         const auto translated = TranslateCanonicalWorldSettings(settings);
         if (translated.HasError())
             return Result<CanonicalWorldHandle>::Failure(translated.ErrorValue());
@@ -229,6 +233,7 @@ namespace Horo::Physics::Detail {
         auto world = std::make_unique<CanonicalWorld>(*static_cast<CanonicalRuntime *>(runtime.value), values.maximumBodies,
                                                       settings.Values().budgets.maximumShapes, settings.Values().budgets.maximumShapes,
                                                       settings.Values().world.capacity.maximumConstraints);
+        world->settingsIdentity = settings.Identity();
         if (const auto compiled = CompileSimulationTable(*world, simulation); compiled.HasError())
             return Result<CanonicalWorldHandle>::Failure(compiled.ErrorValue());
         world->native.scratch = std::make_unique<JPH::TempAllocatorImpl>(static_cast<std::size_t>(values.scratchBytes));

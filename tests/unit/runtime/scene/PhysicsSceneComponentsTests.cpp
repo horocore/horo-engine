@@ -125,7 +125,7 @@ namespace {
         const auto &components = definition.Value().Entities().front().components;
         REQUIRE(components.rigidBody->body.value == 10);
         REQUIRE(components.colliders.front().collider.value == 20);
-        REQUIRE(components.colliders.front().schemaVersion == Runtime::PhysicsSceneComponentSchemaVersion);
+        REQUIRE(components.colliders.front().schemaVersion == Runtime::PhysicsColliderComponentSchemaVersion);
 
         Runtime::SceneDefinitionBuilder missingCollider{{4}, {10}};
         missingCollider.Add({.object = {1}, .components = {.rigidBody = Body()}});

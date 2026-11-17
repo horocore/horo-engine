@@ -182,6 +182,10 @@ namespace Horo::XR {
         [[nodiscard]] const XRResolvedActionBindings *Current() const noexcept;
         /** @brief Returns the non-wrapping current binding generation. @return Zero before initial admission. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
+        /** @brief Returns the immutable canonical session supplied at construction.
+         * @return Exact existing owner; this read-only query issues no identity or admission.
+         */
+        [[nodiscard]] const XRSessionId &Session() const noexcept;
         /** @brief Closes admission and neutralizes the prior projection exactly once. */
         void Shutdown() noexcept;
 

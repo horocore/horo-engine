@@ -11,6 +11,7 @@
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
+#include "PhysicsStateConstructionStorage.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -90,7 +91,8 @@ namespace Horo::Physics::Detail {
 
     /** @brief Admits one owner-thread query fixture without exposing its native representation. */
     [[nodiscard]] Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(CanonicalWorldHandle world, PhysicsWorldId owner,
-                                                                          const PhysicsQueryFixtureDescriptor &fixture);
+                                                                          const PhysicsQueryFixtureDescriptor &fixture,
+                                                                          const StateDetail::ConstructionRecipeLease *recipe = nullptr);
     /** @brief Retires one exact owner-thread query fixture and its native body/shape. */
     [[nodiscard]] Result<void> DestroyCanonicalQueryFixture(CanonicalWorldHandle world, const PhysicsQueryFixture &fixture);
     /** @brief Executes one immediate query and projects only stable Horo evidence. */
@@ -178,10 +180,12 @@ namespace Horo::Physics::Detail {
                                                                 CanonicalContactSink contactSink, CanonicalContactTestOptions options);
     /** @brief Admits one analytic scene shape into an unpublished owner-thread world. */
     [[nodiscard]] Result<ShapeHandle> CreateCanonicalSceneShape(CanonicalWorldHandle world, PhysicsWorldId owner,
-                                                                const PhysicsShapeDescriptor &descriptor);
+                                                                const PhysicsShapeDescriptor &descriptor,
+                                                                const StateDetail::ConstructionRecipeLease *recipe = nullptr);
     /** @brief Admits one immutable compound scene shape from resident child shapes. */
     [[nodiscard]] Result<ShapeHandle> CreateCanonicalSceneCompoundShape(CanonicalWorldHandle world, PhysicsWorldId owner,
-                                                                        std::span<const PhysicsSceneShapeInstance> instances);
+                                                                        std::span<const PhysicsSceneShapeInstance> instances,
+                                                                        const StateDetail::ConstructionRecipeLease *recipe = nullptr);
     /** @brief Admits one scene body after its shape has been staged. */
     [[nodiscard]] Result<BodyHandle> CreateCanonicalSceneBody(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                               const PhysicsSceneBodyDescriptor &descriptor);
@@ -191,10 +195,10 @@ namespace Horo::Physics::Detail {
      * @param descriptors Complete nonempty body group, at most 256, referring to already owned shapes.
      * @return Unpublished RAII batch or typed failure with old resident state unchanged.
      */
-    [[nodiscard]] Result<CanonicalSceneBodyBatch> PrepareCanonicalSceneBodies(CanonicalWorldHandle world, PhysicsWorldId owner,
-                                                                              std::span<const PhysicsSceneBodyDescriptor> descriptors,
-                                                                              std::span<const PhysicsSceneGroupShape> shapes = {},
-                                                                              std::span<const PhysicsSceneGroupBody> groupBodies = {});
+    [[nodiscard]] Result<CanonicalSceneBodyBatch> PrepareCanonicalSceneBodies(
+        CanonicalWorldHandle world, PhysicsWorldId owner, std::span<const PhysicsSceneBodyDescriptor> descriptors,
+        std::span<const PhysicsSceneGroupShape> shapes = {}, std::span<const PhysicsSceneGroupBody> groupBodies = {},
+        std::span<const StateDetail::ConstructionRecipeLease> recipes = {});
     /** @brief Reports a live unpublished body batch; stepping/direct body admission must wait for its owner transaction. */
     [[nodiscard]] bool HasPendingCanonicalSceneBodies(CanonicalWorldHandle world) noexcept;
     /** @brief Aborts unpublished native bodies before native-world destruction; retained wrappers become stale. */

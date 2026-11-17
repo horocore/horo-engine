@@ -15,7 +15,19 @@ namespace Horo::Render {
     namespace {
         /** @brief Checks the bounded immutable draw envelope before any frontend lease is acquired. */
         bool ValidMaterialDrawEnvelope(const RenderMaterialPass &pass) {
-            return pass.color.IsValid() && !pass.draws.empty() && pass.draws.size() <= RenderMaterialPass::MaximumDraws;
+            return pass.color.IsValid() && (!pass.draws.empty() || (pass.depthOnly && pass.depthClear.has_value())) &&
+                   pass.draws.size() <= RenderMaterialPass::MaximumDraws;
+        }
+
+        Result<void> ValidateBatchCapability(const RenderMaterialPass &pass, const RenderBackendCapabilities &capabilities) {
+            if (pass.precedingPasses.size() >= RenderMaterialPass::MaximumPasses)
+                return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+            if (pass.submission && !capabilities.supportsExplicitMaterialSubmissions)
+                return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+            if (const bool extended = !pass.precedingPasses.empty() || pass.depthOnly || pass.region.has_value();
+                extended && !capabilities.supportsMaterialPassBatches)
+                return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+            return Result<void>::Success();
         }
 
         /** @brief Allocation-free evidence that execution unwound after its frame cleanup. */
@@ -24,13 +36,55 @@ namespace Horo::Render {
 
     /** @brief Bounded borrowed draw identities resolved before one completion lease is acquired. */
     struct RenderFrameScope::MaterialExecutionInstances {
-        std::array<RenderMaterialDrawInstance, RenderMaterialPass::MaximumDraws> draws;
-        std::array<Detail::RenderGraphResidentIdentity, RenderMaterialPass::MaximumDraws + 1> pins;
+        std::array<RenderMaterialDrawInstance, RenderMaterialPass::MaximumBatchDraws> draws;
+        std::array<RenderMaterialDraw, RenderMaterialPass::MaximumBatchDraws> sources;
+        std::array<Detail::RenderGraphResidentIdentity, RenderMaterialPass::MaximumBatchDraws + RenderMaterialPass::MaximumPasses> pins;
+        std::array<RenderMaterialExecutionRequest, RenderMaterialPass::MaximumPasses> requests;
+        std::size_t drawCount{};
+        std::size_t pinCount{};
+        std::size_t passCount{};
+
+        Result<void> Prepare(RenderFrameScope &frame, const RenderMaterialPass &pass) {
+            if (auto valid = ValidateBatchCapability(pass, frame.backend_->Capabilities()); valid.HasError())
+                return valid;
+            if (auto preceding = PreparePreceding(frame, pass.precedingPasses); preceding.HasError())
+                return preceding;
+            return frame.ResolveMaterialDraws(pass, *this);
+        }
+
+        Result<void> PreparePreceding(RenderFrameScope &frame, std::span<const RenderMaterialPass> preceding) {
+            for (const auto &pass : preceding) {
+                if (!pass.precedingPasses.empty() || pass.submission)
+                    return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+                if (auto resolved = frame.ResolveMaterialDraws(pass, *this); resolved.HasError())
+                    return resolved;
+            }
+            return Result<void>::Success();
+        }
+
+        Result<void> Execute(RenderFrameScope &frame) {
+            const auto retained =
+                frame.owner_->graphResourceLeases_->AcquireMaterial(std::span{pins}.first(pinCount), std::span{sources}.first(drawCount));
+            if (retained.HasError())
+                return Result<void>::Failure(retained.ErrorValue());
+            auto request = requests[passCount - 1];
+            request.lease = retained.Value();
+            request.precedingPasses = std::span{requests}.first(passCount - 1);
+            return frame.ExecuteMaterialRequest(request);
+        }
     };
 
     /** @copydoc RenderFrameScope::ResolveMaterialDraws */
     Result<void> RenderFrameScope::ResolveMaterialDraws(const RenderMaterialPass &pass, MaterialExecutionInstances &instances) const {
-        instances.pins[0] = {Detail::RenderResourceClass::RenderTarget, {pass.target.owner, pass.target.slot, pass.target.generation}};
+        if (!owner_->IsLiveTarget(pass.target, pass.extent) || !ValidMaterialDrawEnvelope(pass) ||
+            pass.draws.size() > instances.draws.size() - instances.drawCount)
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+        const auto target = owner_->BackendInstance(pass.target);
+        if (target.HasError())
+            return Result<void>::Failure(target.ErrorValue());
+        const auto begin = instances.drawCount;
+        instances.pins[instances.pinCount++] = {Detail::RenderResourceClass::RenderTarget,
+                                                {pass.target.owner, pass.target.slot, pass.target.generation}};
         for (std::size_t index = 0; index < pass.draws.size(); ++index) {
             const auto &draw = pass.draws[index];
             if (!draw.material || draw.material->Id().owner != owner_->resourceRegistry_->Owner())
@@ -38,9 +92,17 @@ namespace Horo::Render {
             const auto mesh = owner_->BackendInstance(draw.mesh);
             if (mesh.HasError())
                 return Result<void>::Failure(mesh.ErrorValue());
-            instances.draws[index] = {mesh.Value(), &draw.material->BackendBinding().NativeBinding()};
-            instances.pins[index + 1] = {Detail::RenderResourceClass::Mesh, {draw.mesh.owner, draw.mesh.slot, draw.mesh.generation}};
+            instances.sources[instances.drawCount] = draw;
+            instances.draws[instances.drawCount++] = {mesh.Value(), &draw.material->BackendBinding().NativeBinding()};
+            instances.pins[instances.pinCount++] = {Detail::RenderResourceClass::Mesh,
+                                                    {draw.mesh.owner, draw.mesh.slot, draw.mesh.generation}};
         }
+        instances.requests[instances.passCount++] = {frame_,          target.Value(),
+                                                     pass.extent,     pass.color,
+                                                     pass.depthClear, std::span{instances.draws}.subspan(begin, pass.draws.size()),
+                                                     nullptr,         nullptr,
+                                                     pass.submission, pass.depthOnly,
+                                                     pass.region,     {}};
         return Result<void>::Success();
     }
 
@@ -90,35 +152,16 @@ namespace Horo::Render {
         try {
             if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
                 return MaterialExecutionOutcome{admitted};
-            if (!owner_->IsLiveTarget(pass.target, pass.extent) || !ValidMaterialDrawEnvelope(pass)) {
-                Abort();
-                return MaterialExecutionOutcome{Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady))};
-            }
-            if (pass.submission.has_value() && !backend_->Capabilities().supportsExplicitMaterialSubmissions) {
-                Abort();
-                return MaterialExecutionOutcome{Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported))};
-            }
-            const auto target = owner_->BackendInstance(pass.target);
-            if (target.HasError()) {
-                Abort();
-                return MaterialExecutionOutcome{Result<void>::Failure(target.ErrorValue())};
-            }
             MaterialExecutionInstances instances;
-            if (const auto resolved = ResolveMaterialDraws(pass, instances); resolved.HasError()) {
+            if (auto prepared = instances.Prepare(*this, pass); prepared.HasError()) {
                 Abort();
-                return MaterialExecutionOutcome{resolved};
+                return MaterialExecutionOutcome{prepared};
             }
-            const auto retained =
-                owner_->graphResourceLeases_->AcquireMaterial(std::span{instances.pins}.first(pass.draws.size() + 1), pass.draws);
-            if (retained.HasError()) {
-                Abort();
-                return MaterialExecutionOutcome{Result<void>::Failure(retained.ErrorValue())};
-            }
-            if (const auto consumed = ExecuteMaterialRequest({frame_, target.Value(), pass.extent, pass.color, pass.depthClear,
-                                                              std::span{instances.draws}.first(pass.draws.size()), retained.Value(),
-                                                              nullptr, pass.submission});
-                consumed.HasError())
+            if (auto consumed = instances.Execute(*this); consumed.HasError()) {
+                if (backend_ != nullptr)
+                    Abort();
                 return MaterialExecutionOutcome{consumed};
+            }
             executed_ = true;
             return MaterialExecutionOutcome{Result<void>::Success()};
         } catch (...) {

@@ -73,6 +73,7 @@ namespace Horo::Render {
         std::optional<RenderTextureFormat> depthFormat{RenderTextureFormat::Depth24Stencil8};
         std::uint32_t sampleCount{1};
         RenderViewRouting viewRouting{RenderViewRouting::SingleView};
+        bool depthOnly{}; /**< Explicit zero-color depth pipeline; requires an admitted depth format. */
         [[nodiscard]] bool operator==(const RenderGraphicsPipelineState &) const noexcept = default;
     };
 

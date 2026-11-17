@@ -3,6 +3,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
@@ -19,8 +20,14 @@ namespace Horo::Editor {
     struct EditorWorkspaceViewCommandData;
 
     /** @brief Stateful Build Output tab hosted by the global bottom dock. */
-    class GlobalDockBuildOutputPane {
+    class GlobalDockBuildOutputPane : public LocalizedGui {
     public:
+        /** @brief Catalog scope for this embedded dock surface. */
+        static constexpr GuiLocalizationScope kTextScope{"workspace.global_dock.build_output"};
+
+        /** @brief Creates a pane with its required localization scope. */
+        GlobalDockBuildOutputPane() : LocalizedGui(kTextScope) {}
+
         /** @brief Coarse status filter applied to typed build-output records. */
         enum class StatusFilter : std::uint8_t {
             All,

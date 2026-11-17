@@ -46,10 +46,9 @@ TEST_CASE("Frontend graph inspection uses real frame identity and never turns ca
     CHECK(captured.Value()->Context().frame.IsValid());
     CHECK(captured.Value()->Context().revision == 1);
     CHECK(frontend->GraphInspectionSnapshot().Value() == captured.Value());
-    std::stop_source stopped;
-    stopped.request_stop();
-    Test::RequireError(scope.CaptureInspection(sources.graph, sources.schedule, sources.lifetime, sources.execution, {},
-                                               stopped.get_token()),
+    CancellationSource stopped;
+    stopped.RequestCancellation();
+    Test::RequireError(scope.CaptureInspection(sources.graph, sources.schedule, sources.lifetime, sources.execution, {}, stopped.Token()),
                        "render.graph.inspection.cancelled");
     CHECK(frontend->GraphInspectionSnapshot().Value() == captured.Value());
     const std::array passes{RenderPassDescriptor{.id = {1}, .kind = RenderPassKind::Graphics}};

@@ -7,6 +7,18 @@
 namespace {
     constexpr std::array PhysicsKeys{
         "workspace.physics.title",
+        "workspace.inspector.add_rendering",
+        "workspace.inspector.add_audio",
+        "workspace.inspector.add_gameplay",
+        "workspace.inspector.add_scripts",
+        "workspace.inspector.create_script",
+        "workspace.physics.details",
+        "workspace.physics.choose_reference",
+        "workspace.physics.missing_reference",
+        "workspace.physics.no_profiles",
+        "workspace.physics.no_materials",
+        "workspace.physics.add_trigger",
+
         "workspace.physics.compound_children",
         "workspace.physics.edit_child",
         "workspace.physics.edit_compound",

@@ -5,6 +5,40 @@
 namespace Horo::Editor {
     using namespace SceneDocumentTestSupport;
 
+    TEST_CASE("Real prefab Inspector projection consumes immutable default and instance value diffs", "[prefab][value-snapshot][editor]") {
+        const auto asset = PrefabAsset().Asset();
+        const auto resolver = ScenePrefabResolver(asset, {{.localId = {}, .name = "Root"}});
+        const auto instance = Prefab::PrefabInstanceId::Create(1).Value();
+        const auto candidate = resolver.Resolve(asset, instance, ScenePrefabLimits()).Value();
+        Math::Transform moved;
+        moved.translation = {4, 0, 0};
+        auto edited = Prefab::PreparePrefabValueEdit(candidate, {},
+                                                     {Prefab::PrefabValueEditKind::Assign,
+                                                      Prefab::PrefabObjectAddress::Create({}, {}).Value(), moved},
+                                                     nullptr, ScenePrefabLimits())
+                          .Value();
+        SceneDocument document;
+        REQUIRE(
+            document.LoadSaved({}, {{.instanceId = instance, .sourcePrefab = PrefabAsset(), .valueOverrides = edited.rebased}}).HasValue());
+        auto sources = BuildScenePrefabProjection(document.Snapshot(), resolver, ScenePrefabLimits()).Value();
+        auto projection = BuildPrefabHierarchyProjection(PrefabAsset(9).Asset(), 1, document.Snapshot().revision.value,
+                                                         std::make_shared<const SceneSource::ScenePrefabProjection>(std::move(sources)), 2,
+                                                         {}, ScenePrefabLimits());
+        REQUIRE(projection.HasValue());
+        REQUIRE(projection.Value().entries[1].valueDiff.size() == 1);
+        const auto &diff = projection.Value().entries[1].valueDiff[0];
+        CHECK(diff.changed);
+        CHECK(std::string_view{diff.originKey} == "workspace.prefab.diff.origin.instance");
+        CHECK(diff.source != diff.effective);
+        CHECK_FALSE(diff.schemaDefault);
+        CHECK_FALSE(projection.Value().entries[1].valueDiffIncomplete);
+        const auto retained = diff.effective;
+        REQUIRE(document.LoadSaved({}, {{.instanceId = instance, .sourcePrefab = PrefabAsset()}}).HasValue());
+        auto current = BuildScenePrefabProjection(document.Snapshot(), resolver, ScenePrefabLimits()).Value();
+        CHECK(current.instances[0].valueSnapshot->Values()[0].origin == Prefab::PrefabValueOrigin::Source);
+        CHECK(diff.effective == retained);
+    }
+
     TEST_CASE("Prefab hierarchy keeps source-qualified member selection separate across placements", "[editor][prefab][hierarchy]") {
         const auto asset = PrefabAsset().Asset();
         const auto resolver =

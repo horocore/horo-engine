@@ -93,7 +93,7 @@ namespace Horo::Editor {
 
     private:
         SemanticHistoryLimits limits_;
-        std::vector<Entry> entries_;
+        std::vector<Entry> entries_ = std::vector<Entry>(std::size_t{0});
         std::size_t cursor_{};
         std::size_t bytes_{};
     };

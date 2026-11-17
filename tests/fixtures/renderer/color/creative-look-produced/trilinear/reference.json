@@ -1,0 +1,259 @@
+{
+  "cases": [
+    {
+      "displayLinearRgb": [
+        0.0002889600582420826,
+        0.007423040457069874,
+        0.015450194478034973
+      ],
+      "input": [
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "lookLinearAcesCg": [
+        0.015625,
+        0.03125,
+        0.0625
+      ],
+      "name": "probe-0"
+    },
+    {
+      "displayLinearRgb": [
+        0.005985601339489222,
+        0.2930998206138611,
+        0.48535478115081787
+      ],
+      "input": [
+        -1.0,
+        -1.0,
+        3.0
+      ],
+      "lookLinearAcesCg": [
+        0.125,
+        0.5,
+        1.0
+      ],
+      "name": "probe-1"
+    },
+    {
+      "displayLinearRgb": [
+        0.010918110609054565,
+        0.53031986951828,
+        0.03181023895740509
+      ],
+      "input": [
+        -1.0,
+        3.0,
+        -1.0
+      ],
+      "lookLinearAcesCg": [
+        0.25,
+        1.0,
+        0.0625
+      ],
+      "name": "probe-2"
+    },
+    {
+      "displayLinearRgb": [
+        2.9802322387695312e-08,
+        0.7179851531982422,
+        0.14704152941703796
+      ],
+      "input": [
+        -1.0,
+        3.0,
+        3.0
+      ],
+      "lookLinearAcesCg": [
+        0.0625,
+        2.0,
+        0.125
+      ],
+      "name": "probe-3"
+    },
+    {
+      "displayLinearRgb": [
+        0.9999998807907104,
+        0.07797789573669434,
+        0.1635376662015915
+      ],
+      "input": [
+        3.0,
+        -1.0,
+        -1.0
+      ],
+      "lookLinearAcesCg": [
+        2.0,
+        0.125,
+        0.25
+      ],
+      "name": "probe-4"
+    },
+    {
+      "displayLinearRgb": [
+        0.7993165850639343,
+        0.004918896127492189,
+        0.2888011038303375
+      ],
+      "input": [
+        3.0,
+        -1.0,
+        3.0
+      ],
+      "lookLinearAcesCg": [
+        1.0,
+        0.0625,
+        0.5
+      ],
+      "name": "probe-5"
+    },
+    {
+      "displayLinearRgb": [
+        0.2841341197490692,
+        0.15227806568145752,
+        0.9409704804420471
+      ],
+      "input": [
+        3.0,
+        3.0,
+        -1.0
+      ],
+      "lookLinearAcesCg": [
+        0.5,
+        0.25,
+        2.0
+      ],
+      "name": "probe-6"
+    },
+    {
+      "displayLinearRgb": [
+        0.9999998807907104,
+        0.4657207131385803,
+        0.6297417879104614
+      ],
+      "input": [
+        3.0,
+        3.0,
+        3.0
+      ],
+      "lookLinearAcesCg": [
+        4.0,
+        1.0,
+        2.0
+      ],
+      "name": "probe-7"
+    },
+    {
+      "displayLinearRgb": [
+        0.07219170033931732,
+        0.4466129243373871,
+        0.30570587515830994
+      ],
+      "input": [
+        -0.5,
+        0.5,
+        2.0
+      ],
+      "lookLinearAcesCg": [
+        0.33343505859375,
+        0.8277587890625,
+        0.58251953125
+      ],
+      "name": "probe-8"
+    },
+    {
+      "displayLinearRgb": [
+        0.4878716468811035,
+        0.2705841362476349,
+        0.3557555675506592
+      ],
+      "input": [
+        1.0,
+        1.0,
+        0.0
+      ],
+      "lookLinearAcesCg": [
+        0.8427734375,
+        0.486328125,
+        0.671875
+      ],
+      "name": "probe-9"
+    },
+    {
+      "displayLinearRgb": [
+        0.5593688488006592,
+        0.22190894186496735,
+        0.3303760886192322
+      ],
+      "input": [
+        1.0,
+        0.0,
+        1.0
+      ],
+      "lookLinearAcesCg": [
+        0.8896484375,
+        0.400390625,
+        0.6015625
+      ],
+      "name": "probe-10"
+    },
+    {
+      "displayLinearRgb": [
+        0.27452513575553894,
+        0.386049747467041,
+        0.29653027653694153
+      ],
+      "input": [
+        0.0,
+        1.0,
+        1.0
+      ],
+      "lookLinearAcesCg": [
+        0.5537109375,
+        0.751953125,
+        0.53125
+      ],
+      "name": "probe-11"
+    },
+    {
+      "displayLinearRgb": [
+        0.5172410011291504,
+        0.3325108587741852,
+        0.38401859998703003
+      ],
+      "input": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "lookLinearAcesCg": [
+        0.994140625,
+        0.62109375,
+        0.75
+      ],
+      "name": "probe-12"
+    }
+  ],
+  "interpolation": "Trilinear",
+  "outputProcessor": {
+    "config": {
+      "bytes": 32807,
+      "file": "cg-config-v4.0.0_aces-v2.0_ocio-v2.5.ocio",
+      "sha256": "9e3ec773a7fbc0bb6666e428dedd8ccec4f59b8b6d40506c825cc7a8c02ff2ff"
+    },
+    "cpuCacheID": "CPU Processor: from 32f to 32f oFlags 0 ops:  <MatrixOffsetOp forward c7a1a04189ae8f6071f39b513a99d277 > <MatrixOffsetOp forward d311c617860dffdf8aba12c5794f6059 > <RangeOp forward [0, 1024, 0, 1024] > <MatrixOffsetOp forward 6578a6ca65b6f955c27a60fc8e4f4b34 > <FixedFunctionOp ACES_OutputTransform20 (Forward) 100 0.64 0.33 0.3 0.6 0.15 0.06 0.3127 0.329> <RangeOp forward [0, 1, 0, 1] > <MatrixOffsetOp forward aa5f3b649f1376c7168dafbea6c69649 > <MatrixOffsetOp forward dbd888b169b88d25d86a491bfd3dfa08 > <GammaOp monCurveMirrorRev r:2.4, 0.055 g:2.4, 0.055 b:2.4, 0.055 a:1, 0  > <GammaOp monCurveMirrorFwd r:2.4, 0.055 g:2.4, 0.055 b:2.4, 0.055 a:1, 0  >",
+    "gpuCacheID": "hlsl_sm_5.0 HoroColorOutput horo_color_ outColor 1 5df162b6d9e466c1667cb0bcfb503e53",
+    "processorCacheID": "bf6bce96a2de99221946c5a43d1ffc47"
+  },
+  "processor": "direct-OCIO-CPU-optimization-none-Lut3D-then-output",
+  "profile": "aces2-sdr100-rec709-linear-v1",
+  "schemaVersion": 1,
+  "scope": "reference-values-only-no-native-execution-or-conformance-claim",
+  "sourceSHA256": "f6869fbae748494ea141e906b10086a7dad5f1da1f568eca0f738345b8f97d8f",
+  "tool": {
+    "receiptSHA256": "b7304099348a6aaa1048d78f8bfe576e240392f894270e55caa56ec878c72c96",
+    "version": "2.5.0",
+    "wheelSHA256": "ff161077cb547dd06c71b8829ef775ec064f12b4c9b4c61cfa80ba080e9352ff"
+  }
+}

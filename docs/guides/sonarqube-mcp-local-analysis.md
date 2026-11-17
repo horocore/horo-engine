@@ -9,11 +9,13 @@ neither checks nor doctor perform Vortex analysis or entitlement probes.
 Coverage, C/C++ taint analysis, Sonar duplication, and the full hosted quality
 gates remain CI responsibilities. Codacy CPD is a local duplication estimate.
 
-Managed sessions support native Windows and Linux. `analyze.py` internally selects the
+Managed sessions support native macOS, Windows and Linux. `analyze.py` internally selects the
 OS adapter for file locks, subprocess cancellation, process identity, loopback
 listener ownership and safe termination. Linux retains `/proc` and pidfd checks;
 Windows uses native process handles and a Job Object for bounded command cleanup,
-with `psutil` for process/connection discovery. Other platforms fail explicitly.
+with `psutil` for process/connection discovery. macOS uses libproc process generations and audit-token signalling, per-process
+psutil socket discovery, POSIX process groups and flock leases. Missing native
+APIs or denied inspection fail closed. Other platforms fail explicitly.
 A supported OS is not evidence of authenticated connected mode or C++ analysis;
 those are still verified separately for every managed session.
 
@@ -84,8 +86,7 @@ trust, copies the user's trusted-folder records, or silently trusts a worktree.
 Accept the normal trust prompt for a worktree you trust; Restricted Mode can prevent
 Sonar activation and is not a clean scan. Sessions created with the old trust-disabled
 profile are not reused without retirement and a secure profile refresh.
-The source settings file currently must be JSON,
-without JSONC comments. An absent settings file supplies no connections, not implicit
+The source settings file accepts VS Code JSONC comments and trailing commas. An absent settings file supplies no connections, not implicit
 authentication. Inline-token-only connections must be migrated to VS Code
 SecretStorage first. Environment tokens used by the CLI are not an IDE connection.
 
@@ -108,7 +109,7 @@ leaking into the next lease. Generated state is never committed.
 Without `--compile-commands`, the helper first checks the canonical
 `build/skeleton/compile_commands.json` for this worktree and selected sources.
 If that verified build is unavailable, it configures an external Debug/Ninja build
-with tests and the optional Vulkan, ImGui UI tests, OpenTelemetry and GNS targets
+with tests and the optional Vulkan, ImGui UI tests and GNS targets
 enabled to cover the Linux CI composition. This first configure can download
 dependencies and take materially longer than subsequent checks.
 
@@ -116,11 +117,23 @@ An existing database must be accompanied by its CMake cache naming the exact
 worktree source root. CMake refreshes configuration, then only the selected
 translation units' object targets are built with Ninja. Make builds use their
 owning targets so CMake dependencies and generated headers are prepared.
+Dependency translation units excluded from the first-party inventory may own
+objects in a separate CMake cache; they do not block selected project contexts.
+Active project objects still require an output inside the selected build.
+Header searches try the nearest consumers first and retain all candidates as
+fallbacks for transitive includes.
 Staged public-header copies are mapped back only when their contents match the
 source header.
 Header-only selections require a literal include chain to a compiled translation
 unit. Macro-generated include chains without provable context are incomplete.
 Platform-guarded files absent from this build are incomplete, not clean.
+
+Include lookup probes each candidate before canonicalizing it. Only missing files
+and non-directory search components advance to the next search directory; other
+filesystem errors remain incomplete. Existing symlinks still undergo canonical
+resolution, and staged headers still require the original content identity.
+This avoids repeatedly walking nonexistent Windows path parents without changing
+include search order or the subsequent native-build and C++ sensor requirements.
 
 Requests require fresh Sonar logs naming all submitted files, active C/C++ rules,
 a positive count of analyzed compilation units and completed analysis. Sensor
@@ -131,12 +144,33 @@ warning when C++ execution succeeds. Cloud branch parity remains unverified. Log
 is version dependent: an extension update changing these diagnostics may require
 an adapter update rather than relaxing the check.
 
+IDE 6.3's exact `hasJoinedIdeLabs` RPC parameter mismatch is retained as a
+telemetry warning when its known header and exception signature both match.
+It does not supply C++ evidence: positive sensor execution and completion are
+still required, and adjacent sensor errors or unknown RPC failures remain fatal.
+
+The exact paired SonarCloud push-WebSocket idle-timeout messages are reported
+separately from independently verified local CFamily execution. This warning
+leaves live cloud synchronization unverified; authentication failures, other
+transport errors and sensor failures remain fatal.
+
+Each verified file is checkpointed outside the checkout. A failed request stops
+the remaining requests and returns an incomplete report retaining the verified
+prefix, the unverified last response and the files not analyzed. The progress
+report includes input hashes and the compilation/profile identity; a running or
+incomplete checkpoint never constitutes a clean check.
+
 ## Codacy configuration and metrics
 
 The checked-in `.codacy/codacy.config.json` selects tools and rules. `check` never
 resynchronizes it. `doctor` reads remote configuration into a disposable cache
 and reports tool/pattern/exclusion differences, without changing cloud settings
 or importing them into the repository. Missing authentication is reported.
+
+Analysis batches write unique raw JSON reports outside the checkout using the
+CLI's `--output` option. The helper reads that complete file rather than piped
+stdout, which CLI 0.22 can truncate when exiting with findings. A missing or
+malformed report remains incomplete even if stdout resembles a clean result.
 
 The CLI runs against a copied, Git-indexed input mirror, because its adapters
 write `.codacy/generated`. Mirror Git operations affect only the disposable cache;
@@ -172,7 +206,15 @@ agent interpreter:
   --compile-commands build/skeleton/compile_commands.json
 ```
 
-The default VS Code source profile is `%APPDATA%/Code`; Linux uses
+The default VS Code source profile on macOS is `~/Library/Application Support/Code`,
+with managed state under `~/Library/Caches/horo-quality`. Private profiles use
+a shallow `p/<worktree-id>/u` path because macOS Unix sockets are limited to
+104 bytes; a path that still exceeds this limit fails before launch. Install the pinned
+`psutil` dependency from `scripts/requirements.txt` into the invoking Python.
+macOS imports only Keychain-backed Chromium v10 records; trust and authentication
+remain explicit user actions in the managed window.
+
+On Windows the source profile is `%APPDATA%/Code`; Linux uses
 `~/.config/Code`. Extensions default to `~/.vscode/extensions`. Override
 `--code-user-data` and `--extensions-directory` for Insiders, portable Code or a
 non-default installation. Cache state stays outside the source tree; Windows uses
@@ -205,6 +247,16 @@ Do not run general `sonar analyze` or Vortex entitlement probes in this workflow
 Secret scanner text is not stored because
 it can contain credential values; a finding directs you to inspect it locally.
 Never put tokens in repository files, report output or command arguments.
+
+On Windows, selected paths are submitted in sequential batches that fit the
+native executable or batch launcher's UTF-16 command-line limit, with dispatch
+headroom for CLI child tools and npm-style batch launchers. The same
+provider timeout covers all batches. Every Codacy batch retains its submitted
+paths and independently checked tool execution evidence; any incomplete batch
+keeps the whole provider incomplete. Secrets findings are retained across
+batches without retaining scanner text, and every batch must confirm completion.
+Analyzer runtime identity must remain consistent across batches before it is
+reused for raw complexity measurements, which use the same bounded path handling.
 
 ## Validation and troubleshooting
 

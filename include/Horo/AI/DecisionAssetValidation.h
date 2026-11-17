@@ -6,6 +6,7 @@
  */
 
 #include "Horo/AI/BlackboardSchema.h"
+#include "Horo/AI/DecisionControl.h"
 #include "Horo/Foundation/Diagnostics.h"
 #include "Horo/Foundation/Result.h"
 
@@ -17,76 +18,10 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace Horo::AI {
-    struct DecisionGraphAssetIdentityTag;
-    struct DecisionNodeIdentityTag;
-    struct DecisionNodeTypeIdentityTag;
-    struct DecisionProviderIdentityTag;
-
-    /** @brief Stable identity of one persisted decision graph asset. */
-    using DecisionGraphAssetId = AiStableIdentity<DecisionGraphAssetIdentityTag>;
-    /** @brief Stable identity of one persisted decision graph node. */
-    using DecisionNodeId = AiStableIdentity<DecisionNodeIdentityTag>;
-    /** @brief Stable identity of one native, package, or script node descriptor. */
-    using DecisionNodeTypeId = AiStableIdentity<DecisionNodeTypeIdentityTag>;
-    /** @brief Stable identity of one descriptor provider. */
-    using DecisionProviderId = AiStableIdentity<DecisionProviderIdentityTag>;
-
-    /** @brief Current semantic decision-asset schema version. */
-    inline constexpr std::uint32_t CurrentDecisionAssetSchemaVersion = 1;
-
-    /**
-     * @brief Inclusive version interval used for explicit compatibility admission.
-     * @details A range is part of the authored contract; validators never select a version by display name or load order.
-     */
-    struct DecisionVersionRange final {
-        std::uint32_t minimum{1};
-        std::uint32_t maximum{std::numeric_limits<std::uint32_t>::max()};
-
-        /** @brief Checks the reserved zero version and ordering rules. @return Whether the interval is well formed. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return minimum != 0 && maximum != 0 && minimum <= maximum;
-        }
-
-        /**
-         * @brief Tests one version against this interval.
-         * @param version Candidate version.
-         * @return Whether the candidate is inside the inclusive interval.
-         */
-        [[nodiscard]] constexpr bool Contains(const std::uint32_t version) const noexcept {
-            return IsValid() && version >= minimum && version <= maximum;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const DecisionVersionRange &) const noexcept = default;
-    };
-
-    /** @brief Runtime plan family expected by one decision asset or dependency. */
-    enum class DecisionPlanKind : std::uint8_t {
-        BehaviorTree,
-        StateMachine,
-        Utility,
-        Count,
-    };
-
-    /** @brief Origin family of a node descriptor contribution. */
-    enum class DecisionDescriptorSourceKind : std::uint8_t {
-        Native,
-        Package,
-        Script,
-        Count,
-    };
-
-    /** @brief Stable provider metadata copied into a compiled plan without exposing provider ABI. */
-    struct DecisionDescriptorOrigin final {
-        DecisionDescriptorSourceKind kind{DecisionDescriptorSourceKind::Native}; /**< Contribution family. */
-        DecisionProviderId provider;                                             /**< Stable provider identity. */
-        std::uint32_t version{1};                                                /**< Descriptor contract version. */
-
-        [[nodiscard]] constexpr auto operator<=>(const DecisionDescriptorOrigin &) const noexcept = default;
-    };
-
     /**
      * @brief One typed blackboard contract required by a node descriptor or authored node use.
      * @details The key identity is the only lookup identity. Display labels and serialized array positions are not consulted.
@@ -99,6 +34,12 @@ namespace Horo::AI {
         BlackboardKeyPresence presence{BlackboardKeyPresence::Optional};            /**< Whether an instance value must be present. */
         bool requireDefault{}; /**< Whether schema admission must provide a default value. */
         SourceLocation source; /**< Authored source location for diagnostics. */
+
+        [[nodiscard]] bool operator==(const DecisionBlackboardRequirement &other) const noexcept {
+            return std::tie(key, kind, cardinality, access, presence, requireDefault, source.source, source.line, source.column) ==
+                   std::tie(other.key, other.kind, other.cardinality, other.access, other.presence, other.requireDefault,
+                            other.source.source, other.source.line, other.source.column);
+        }
     };
 
     /**
@@ -119,6 +60,7 @@ namespace Horo::AI {
         DecisionVersionRange descriptorVersion{1, std::numeric_limits<std::uint32_t>::max()}; /**< Accepted descriptor versions. */
         std::vector<DecisionBlackboardRequirement> requirements;                              /**< Node-specific typed key uses. */
         SourceLocation source;                                                                /**< Node source location. */
+        DecisionControlKind intrinsic{DecisionControlKind::Unspecified}; /**< Core semantics have no provider/type identity. */
     };
 
     /** @brief Stable, versioned reference to another decision asset used as a subtree or subplan. */
@@ -199,6 +141,7 @@ namespace Horo::AI {
         std::vector<DecisionAssetValidationDiagnostic> diagnostics_;
 
         friend class DecisionAssetCompiler;
+        friend class DecisionGraphCompiler;
     };
 
     /** @brief One resolved schema key captured into a flat immutable decision plan. */
@@ -219,6 +162,7 @@ namespace Horo::AI {
         DecisionDescriptorOrigin origin;      /**< Resolved provider metadata. */
         std::size_t firstBlackboardBinding{}; /**< First binding in DecisionAssetPlan::Bindings(). */
         std::size_t blackboardBindingCount{}; /**< Number of bindings owned by this node. */
+        DecisionControlKind intrinsic{DecisionControlKind::Unspecified};
     };
 
     /** @brief Stable dependency-table entry; it contains no runtime pointer. */
@@ -294,6 +238,8 @@ namespace Horo::AI {
         [[nodiscard]] std::span<const DecisionPlanBlackboardBinding> Bindings() const noexcept;
         /** @brief Returns stable subplan dependencies. @return Borrowed dependency-table view. */
         [[nodiscard]] std::span<const DecisionPlanDependency> Dependencies() const noexcept;
+        /** @brief Actual retained logical container extents, excluding the separately owned schema lease. */
+        [[nodiscard]] std::uint64_t StorageBytes() const noexcept;
         /**
          * @brief Returns one node's precomputed binding range.
          * @param node Stable authored node identity.

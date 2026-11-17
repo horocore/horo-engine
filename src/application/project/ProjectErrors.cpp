@@ -7,22 +7,6 @@ namespace Horo::Application::ProjectErrors {
         const ErrorDomainId Domain{"horo.application.project"};
     }  // namespace
 
-    const ErrorCodeDescriptor VersionInvalid{.domain = Domain,
-                                             .code = ErrorCode{"project.version.invalid"},
-                                             .defaultSeverity = ErrorSeverity::Error,
-                                             .summary = "Horo project version is invalid.",
-                                             .remediationHint = "Use canonical SemVer without build metadata.",
-                                             .retryable = false,
-                                             .userActionable = true};
-
-    const ErrorCodeDescriptor HashInvalid{.domain = Domain,
-                                          .code = ErrorCode{"project.contract_hash.invalid"},
-                                          .defaultSeverity = ErrorSeverity::Error,
-                                          .summary = "Project contract hash is invalid.",
-                                          .remediationHint = "Use a canonical lowercase SHA-256 identity.",
-                                          .retryable = false,
-                                          .userActionable = true};
-
     const ErrorCodeDescriptor RegistryInvalid{.domain = Domain,
                                               .code = ErrorCode{"project.compatibility_registry.invalid"},
                                               .defaultSeverity = ErrorSeverity::Error,
@@ -43,26 +27,26 @@ namespace Horo::Application::ProjectErrors {
                                                        .code = ErrorCode{"project.compatibility_registry.baseline_mismatch"},
                                                        .defaultSeverity = ErrorSeverity::Error,
                                                        .summary = "Release compatibility baseline is inconsistent.",
-                                                       .remediationHint =
-                                                           "Reference an existing baseline decision with the same persistent contract.",
+                                                       .remediationHint = "Reference an existing baseline decision with the same "
+                                                                          "persistent contract.",
                                                        .retryable = false,
                                                        .userActionable = true};
 
-    const ErrorCodeDescriptor
-        RegistryPatchContractDrift{.domain = Domain,
-                                   .code = ErrorCode{"project.compatibility_registry.patch_contract_drift"},
-                                   .defaultSeverity = ErrorSeverity::Error,
-                                   .summary = "A patch release changed its persistent contract.",
-                                   .remediationHint = "Move the contract change to a new release line and provide a migration definition.",
-                                   .retryable = false,
-                                   .userActionable = true};
+    const ErrorCodeDescriptor RegistryPatchContractDrift{.domain = Domain,
+                                                         .code = ErrorCode{"project.compatibility_registry.patch_contract_drift"},
+                                                         .defaultSeverity = ErrorSeverity::Error,
+                                                         .summary = "A patch release changed its persistent contract.",
+                                                         .remediationHint = "Move the contract change to a new release line and "
+                                                                            "provide a migration definition.",
+                                                         .retryable = false,
+                                                         .userActionable = true};
 
     const ErrorCodeDescriptor ProofRejected{.domain = Domain,
                                             .code = ErrorCode{"project.version.compatibility_proof_untrusted"},
                                             .defaultSeverity = ErrorSeverity::Error,
                                             .summary = "Project compatibility proof is not trusted.",
-                                            .remediationHint =
-                                                "Open the project with a Horo release that can verify its compatibility proof.",
+                                            .remediationHint = "Open the project with a Horo release that can verify "
+                                                               "its compatibility proof.",
                                             .retryable = false,
                                             .userActionable = true};
 
@@ -184,8 +168,8 @@ namespace Horo::Application::ProjectErrors {
                                                    .code = ErrorCode{"project.migration.path_missing"},
                                                    .defaultSeverity = ErrorSeverity::Error,
                                                    .summary = "No supported migration path exists.",
-                                                   .remediationHint =
-                                                       "Open the project with a Horo release whose support horizon includes it.",
+                                                   .remediationHint = "Open the project with a Horo release whose support "
+                                                                      "horizon includes it.",
                                                    .retryable = false,
                                                    .userActionable = true};
 
@@ -201,8 +185,8 @@ namespace Horo::Application::ProjectErrors {
                                                        .code = ErrorCode{"project.migration.provider_missing"},
                                                        .defaultSeverity = ErrorSeverity::Error,
                                                        .summary = "A required migration provider is unavailable.",
-                                                       .remediationHint =
-                                                           "Restore the trusted package or plugin provider before opening the project.",
+                                                       .remediationHint = "Restore the trusted package or plugin provider before "
+                                                                          "opening the project.",
                                                        .retryable = false,
                                                        .userActionable = true};
 
@@ -218,8 +202,8 @@ namespace Horo::Application::ProjectErrors {
                                                         .code = ErrorCode{"project.migration.inventory_invalid"},
                                                         .defaultSeverity = ErrorSeverity::Error,
                                                         .summary = "Project migration inventory is unsafe or ambiguous.",
-                                                        .remediationHint =
-                                                            "Remove escaping symlinks, duplicate paths, or portable case collisions.",
+                                                        .remediationHint = "Remove escaping symlinks, duplicate paths, or portable "
+                                                                           "case collisions.",
                                                         .retryable = false,
                                                         .userActionable = true};
 

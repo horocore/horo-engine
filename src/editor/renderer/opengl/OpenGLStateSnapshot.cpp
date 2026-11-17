@@ -1,5 +1,7 @@
 #include "OpenGLStateSnapshot.h"
 
+#include <algorithm>
+
 namespace Horo::Editor {
     namespace {
         void RestoreCapability(const GLenum capability, const GLboolean enabled) noexcept {
@@ -11,7 +13,8 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc OpenGLStateSnapshot::OpenGLStateSnapshot */
-    OpenGLStateSnapshot::OpenGLStateSnapshot() noexcept {
+    OpenGLStateSnapshot::OpenGLStateSnapshot(const std::uint32_t shadowUnit, const std::span<const std::uint32_t> uniformSlots) noexcept
+        : shadowUnit_(shadowUnit) {
         depthTestEnabled_ = glIsEnabled(GL_DEPTH_TEST);
         scissorTestEnabled_ = glIsEnabled(GL_SCISSOR_TEST);
         blendEnabled_ = glIsEnabled(GL_BLEND);
@@ -21,10 +24,19 @@ namespace Horo::Editor {
         glGetIntegerv(GL_CURRENT_PROGRAM, &program_);
         glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vertexArray_);
         glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &arrayBuffer_);
+        glGetIntegerv(GL_UNIFORM_BUFFER_BINDING, &uniformBuffer_);
+        uniformCount_ = std::min(uniformSlots.size(), uniforms_.size());
+        for (std::size_t index = 0; index < uniformCount_; ++index) {
+            auto &binding = uniforms_[index];
+            binding.slot = uniformSlots[index];
+            glGetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, binding.slot, &binding.buffer);
+            glGetInteger64i_v(GL_UNIFORM_BUFFER_START, binding.slot, &binding.offset);
+            glGetInteger64i_v(GL_UNIFORM_BUFFER_SIZE, binding.slot, &binding.size);
+        }
         glGetIntegerv(GL_DEPTH_FUNC, &depthFunction_);
         glGetIntegerv(GL_CULL_FACE_MODE, &cullFaceMode_);
         glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture_);
-        glActiveTexture(GL_TEXTURE7);
+        glActiveTexture(GL_TEXTURE0 + shadowUnit_);
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &shadowTexture_);
         glGetIntegerv(GL_VIEWPORT, viewport_.data());
         glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColor_.data());
@@ -36,6 +48,15 @@ namespace Horo::Editor {
     OpenGLStateSnapshot::~OpenGLStateSnapshot() {
         glBindVertexArray(static_cast<GLuint>(vertexArray_));
         glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer_));
+        for (std::size_t index = 0; index < uniformCount_; ++index) {
+            const auto &binding = uniforms_[index];
+            if (binding.buffer != 0 && binding.size > 0)
+                glBindBufferRange(GL_UNIFORM_BUFFER, binding.slot, static_cast<GLuint>(binding.buffer),
+                                  static_cast<GLintptr>(binding.offset), static_cast<GLsizeiptr>(binding.size));
+            else
+                glBindBufferBase(GL_UNIFORM_BUFFER, binding.slot, static_cast<GLuint>(binding.buffer));
+        }
+        glBindBuffer(GL_UNIFORM_BUFFER, static_cast<GLuint>(uniformBuffer_));
         glUseProgram(static_cast<GLuint>(program_));
         glDepthFunc(static_cast<GLenum>(depthFunction_));
         RestoreCapability(GL_DEPTH_TEST, depthTestEnabled_);
@@ -49,7 +70,7 @@ namespace Horo::Editor {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(drawFramebuffer_));
         glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(readFramebuffer_));
         glViewport(viewport_[0], viewport_[1], viewport_[2], viewport_[3]);
-        glActiveTexture(GL_TEXTURE7);
+        glActiveTexture(GL_TEXTURE0 + shadowUnit_);
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(shadowTexture_));
         glActiveTexture(static_cast<GLenum>(activeTexture_));
     }

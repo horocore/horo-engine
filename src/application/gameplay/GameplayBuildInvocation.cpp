@@ -28,6 +28,10 @@ namespace Horo::Application::Detail {
                         GameplayLibraries(request).empty() ? std::string{}
                                                            : GameplayLibraryPathToUtf8(buildRoot / "gameplay_source_libraries.json")),
         };
+#if defined(_WIN32)
+        // Embed MSVC debug information so isolated compiler Jobs do not retain a background mspdbsrv process.
+        arguments.emplace_back("-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded");
+#endif
         if (request.environment.cxxCompiler.has_value())
             arguments.push_back(std::format("-DCMAKE_CXX_COMPILER={}", GameplayLibraryPathToUtf8(*request.environment.cxxCompiler)));
         if (request.environment.generator.has_value()) {

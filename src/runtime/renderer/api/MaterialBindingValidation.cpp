@@ -139,6 +139,12 @@ namespace Horo::Render {
             });
         }
 
+        /** @brief Admits parameter-block or readonly storage-element metadata without granting writable material storage. */
+        [[nodiscard]] bool HasParameterElements(const ShaderReflectedBinding &resource) {
+            return resource.kind == ShaderResourceKind::UniformBuffer ||
+                   (resource.kind == ShaderResourceKind::StorageBuffer && resource.access == ShaderResourceAccess::ReadOnly);
+        }
+
         /** @brief Verifies that every packed reflected parameter is covered by each bound array element. */
         [[nodiscard]] bool CoversParameters(const MaterialBindingDescriptor &descriptor, const MaterialBindingLimits &limits) {
             for (const auto &parameter : descriptor.layout.parameters) {
@@ -147,7 +153,7 @@ namespace Horo::Render {
                 const auto resource = std::ranges::find(descriptor.layout.resources, parameter.binding, &ShaderReflectedBinding::id);
                 const auto end = ParameterEnd(parameter, limits.maximumParameterBytes);
                 if (resource == descriptor.layout.resources.end() || !parameter.id.IsValid() || !end.has_value() ||
-                    resource->kind != ShaderResourceKind::UniformBuffer)
+                    !HasParameterElements(*resource) || !UniqueParameter(descriptor.layout, parameter))
                     return false;
                 if (!CoversBinding(descriptor.resources, parameter.binding, *end))
                     return false;

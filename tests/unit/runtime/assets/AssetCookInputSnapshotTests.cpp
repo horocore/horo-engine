@@ -432,3 +432,41 @@ TEST_CASE("Cook input capture rejects malformed metadata aliases at its own read
     CHECK(registry.Snapshot().Records().data() == publication.Records().data());
     CHECK(registry.Snapshot().Revision() == publication.Revision());
 }
+
+TEST_CASE("Producer key projections are canonical bounded and tied to actual immutable captures", "[native][prefab-cook][closure-key]") {
+    const TestProject project;
+    const auto inputs = CaptureProject(project);
+    const auto asset = TestMeshRecord().id;
+    const auto projection = AssetCookKeyProjection::Create(inputs, {{asset, {asset}, {}}}, 8);
+    REQUIRE(projection.HasValue());
+    CHECK(projection.Value()->Matches(inputs));
+    const auto copied = inputs;
+    CHECK(projection.Value()->Matches(copied));
+    const auto recaptured = CaptureProject(project);
+    CHECK_FALSE(projection.Value()->Matches(recaptured));
+    const auto equivalent = AssetCookKeyProjection::Create(recaptured, {{asset, {asset}, {}}}, 8);
+    REQUIRE(equivalent.HasValue());
+    CHECK(projection.Value()->Digest(asset) == equivalent.Value()->Digest(asset));
+    CHECK(AssetCookKeyProjection::Create(inputs, {{asset, {}, {}}}, 8).HasError());
+    CHECK(AssetCookKeyProjection::Create(inputs, {{asset, {asset, asset}, {}}}, 8).HasError());
+    CHECK(AssetCookKeyProjection::Create(inputs, {{asset, {asset}, {}}, {asset, {asset}, {}}}, 8).HasError());
+    CHECK(AssetCookKeyProjection::Create(inputs, {{asset, {Id("00000000-0000-0000-0000-000000000099")}, {}}}, 8).HasError());
+    CHECK(AssetCookKeyProjection::Create(inputs, {{asset, {asset}, {}}}, 0).HasError());
+}
+
+TEST_CASE("Producer key projections reject a replaced pin and preserve the published generation", "[native][prefab-cook][closure-key]") {
+    PinnedCookFixture fixture;
+    auto projection = AssetCookKeyProjection::Create(*fixture.request.pinnedInputs, {{TestMeshRecord().id, {TestMeshRecord().id}, {}}}, 8);
+    REQUIRE(projection.HasValue());
+    fixture.request.keyProjection = projection.Value();
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    const auto cached = fixture.Cook();
+    REQUIRE(cached.HasValue());
+    CHECK(cached.Value().cacheHits == 1);
+    fixture.Capture();
+    REQUIRE(fixture.Cook().HasError());
+    const auto active = ResolveCurrentCookGeneration(NativeDurableFileSystem{}, fixture.cooked.path);
+    REQUIRE(active.HasValue());
+    CHECK(active.Value().manifestDigest == first.Value().generation.manifestDigest);
+}

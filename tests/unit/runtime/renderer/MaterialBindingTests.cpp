@@ -47,6 +47,31 @@ namespace {
         }
     };
 
+    /** @brief Models the real clustered raster element metadata, independently of full resident buffer capacities. */
+    MaterialBindingDescriptor ClusteredDescriptor() {
+        auto descriptor = Descriptor();
+        const std::array<std::size_t, 3> ranges{64 * 32, 16 * 256, 4 * 1024};
+        for (std::uint32_t index = 0; index < ranges.size(); ++index) {
+            const ShaderBindingId binding{index + 4};
+            descriptor.layout.resources.push_back(
+                {binding, ShaderResourceKind::StorageBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment, true});
+            descriptor.layout.targetBindings.push_back({binding, 0, 0, index + 3, "", {}, true});
+            descriptor.resources.push_back({binding, 0, MaterialBufferBinding{{Owner, index + 10, 1}, 0, ranges[index]}});
+        }
+        const std::array fields{ShaderReflectedParameter{{100}, {4}, ShaderValueType::Float32, 1, 4, 1, 0},
+                                ShaderReflectedParameter{{101}, {4}, ShaderValueType::Float32, 1, 3, 1, 16},
+                                ShaderReflectedParameter{{102}, {4}, ShaderValueType::Uint32, 1, 1, 1, 28},
+                                ShaderReflectedParameter{{103}, {4}, ShaderValueType::Float32, 1, 4, 1, 32},
+                                ShaderReflectedParameter{{104}, {4}, ShaderValueType::Float32, 1, 2, 1, 48},
+                                ShaderReflectedParameter{{105}, {4}, ShaderValueType::Uint32, 1, 1, 1, 56},
+                                ShaderReflectedParameter{{106}, {4}, ShaderValueType::Uint32, 1, 1, 1, 60}};
+        descriptor.layout.parameters.insert(descriptor.layout.parameters.end(), fields.begin(), fields.end());
+        for (std::uint32_t index = 0; index < 4; ++index)
+            descriptor.layout.parameters.push_back({{110 + index}, {5}, ShaderValueType::Uint32, 1, 1, 1, index * 4});
+        descriptor.layout.parameters.push_back({{120}, {6}, ShaderValueType::Uint32, 1, 1, 1, 0});
+        return descriptor;
+    }
+
     [[nodiscard]] std::unique_ptr<MaterialBindingTable> Table(Backend &backend, const MaterialBindingLimits &limits = {}) {
         auto table = MaterialBindingTable::Create(Owner, backend, limits);
         REQUIRE(table.HasValue());
@@ -461,4 +486,89 @@ TEST_CASE("Canonical matrix array packing rejects malformed strides and truncate
         layout.parameters[0].byteOffset = 65536 - 2047;
     }
     ErrorIs(PackMaterialParameterBinding(layout, {1}, std::span{&value, 1}), MaterialBindingErrors::InvalidDescriptor);
+}
+
+TEST_CASE("Material publication admits uniform parameters and complete readonly storage element metadata",
+          "[renderer][material][clustered]") {
+    Backend backend;
+    auto table = Table(backend);
+    auto descriptor = ClusteredDescriptor();
+    SECTION("full buffers") {}
+    SECTION("one minimum reflected element per storage binding") {
+        const std::array<std::size_t, 3> ends{64, 16, 4};
+        for (std::size_t index = 0; index < ends.size(); ++index)
+            std::get<MaterialBufferBinding>(descriptor.resources[index + 1].value).byteCount = ends[index];
+    }
+    const auto result = table->Publish(descriptor);
+    REQUIRE(result.HasValue());
+    CHECK(backend.calls == 1);
+    CHECK(table->Snapshot().retainedParameterBytes == 12);
+    ErrorIs(ComputeMaterialParameterBufferByteSize(descriptor.layout, {4}), MaterialBindingErrors::InvalidDescriptor);
+    std::array<std::byte, 64> packed{};
+    ErrorIs(PackMaterialParameterBinding(descriptor.layout, {4}, {}, packed), MaterialBindingErrors::InvalidDescriptor);
+}
+
+TEST_CASE("Material storage element metadata cannot exceed its record or admitted buffer range", "[renderer][material][clustered]") {
+    Backend backend;
+    auto table = Table(backend);
+    auto descriptor = ClusteredDescriptor();
+    SECTION("short light record") {
+        std::get<MaterialBufferBinding>(descriptor.resources[1].value).byteCount = 63;
+    }
+    SECTION("short membership record") {
+        std::get<MaterialBufferBinding>(descriptor.resources[2].value).byteCount = 15;
+    }
+    SECTION("short reference record") {
+        std::get<MaterialBufferBinding>(descriptor.resources[3].value).byteCount = 3;
+    }
+    SECTION("offset does not extend borrowed range") {
+        auto &buffer = std::get<MaterialBufferBinding>(descriptor.resources[1].value);
+        buffer.offset = 1024;
+        buffer.byteCount = 63;
+    }
+    SECTION("field exceeds finite element budget despite large buffer") {
+        descriptor.layout.parameters[1].byteOffset = 64 * 1024;
+        std::get<MaterialBufferBinding>(descriptor.resources[1].value).byteCount = 1024 * 1024;
+    }
+    SECTION("active unbound parameter") {
+        descriptor.layout.parameters[1].binding = {99};
+    }
+    SECTION("inactive resource with active fields") {
+        descriptor.layout.resources[1].active = false;
+    }
+    SECTION("duplicate element parameter identity") {
+        descriptor.layout.parameters.push_back(descriptor.layout.parameters[1]);
+    }
+    ErrorIs(table->Publish(descriptor), MaterialBindingErrors::InvalidDescriptor);
+    CHECK(backend.calls == 0);
+}
+
+TEST_CASE("Material element metadata remains restricted to readable buffer resources", "[renderer][material][clustered]") {
+    Backend backend;
+    auto table = Table(backend);
+    auto descriptor = ClusteredDescriptor();
+    SECTION("texture cannot carry buffer fields") {
+        descriptor.layout.resources[1].kind = ShaderResourceKind::SampledTexture;
+        descriptor.resources[1].value = RenderTextureViewHandle{Owner, 10, 1};
+    }
+    SECTION("write-only storage") {
+        descriptor.layout.resources[1].access = ShaderResourceAccess::ReadWrite;
+    }
+    SECTION("read-write storage") {
+        descriptor.layout.resources[1].access = ShaderResourceAccess::ReadWrite;
+    }
+    SECTION("invalid field type") {
+        descriptor.layout.parameters[1].type = static_cast<ShaderValueType>(255);
+    }
+    SECTION("inline bytes cannot substitute storage") {
+        descriptor.resources[1].value = MaterialParameterBinding{std::vector<std::byte>(64)};
+    }
+    ErrorIs(table->Publish(descriptor), MaterialBindingErrors::InvalidDescriptor);
+    CHECK(backend.calls == 0);
+}
+
+TEST_CASE("Inactive reflected storage fields retain existing material admission semantics", "[renderer][material][clustered]") {
+    auto descriptor = ClusteredDescriptor();
+    descriptor.layout.parameters.push_back({{999}, {99}, ShaderValueType::Float32, 1, 1, 1, 0, 0, 0, true, false});
+    CHECK(ValidateMaterialBindingDescriptor(descriptor, Owner).HasValue());
 }

@@ -72,9 +72,11 @@ namespace {
     }
 
     void RequireValidRegistry(const Editor::ProjectGameplayRegistry &registry) {
-        for (const auto &diagnostic : registry.Diagnostics())
-            UNSCOPED_INFO(diagnostic.source.string() << ": " << diagnostic.error.domain.Value() << ":" << diagnostic.error.code.Value()
-                                                     << ": " << diagnostic.error.message);
+        for (const auto &diagnostic : registry.Diagnostics()) {
+            const auto source = diagnostic.source.u8string();
+            UNSCOPED_INFO(std::string(source.begin(), source.end()) << ": " << diagnostic.error.domain.Value() << ":"
+                                                                    << diagnostic.error.code.Value() << ": " << diagnostic.error.message);
+        }
         REQUIRE_FALSE(registry.HasBlockingDiagnostics());
     }
 
@@ -377,4 +379,52 @@ TEST_CASE("editor replication capture preserves missing canonical project source
     CHECK(registry->ReplicationMetadataError()->domain.Value() == expected.ErrorValue().domain.Value());
     CHECK(registry->ReplicationMetadataError()->code.Value() == expected.ErrorValue().code.Value());
     CHECK_FALSE(registry->ReplicationMetadata());
+}
+
+TEST_CASE("project gameplay registry reloads Unicode Lua sources and preserves Unicode native artifacts") {
+    TemporaryProject project;
+    const auto source = project.root / "assets" / "scripts" / std::filesystem::path{u8"\u884c\u4e3a.horo_script"};
+    auto metadata = source;
+    metadata += ".meta";
+    Write(source, Source(1));
+    Write(metadata, R"({"schemaVersion":1,"runtime":"lua","behaviorTypeId":"game.tests.watched"})");
+    const auto originalArtifact = std::filesystem::path{HORO_TEST_GAME_MODULE_PATH};
+    auto artifact = project.root / std::filesystem::path{u8"\u6a21\u5757"};
+    artifact += originalArtifact.extension();
+    REQUIRE(std::filesystem::copy_file(originalArtifact, artifact));
+    REQUIRE(Gameplay::GameModuleHost{}.ValidateArtifact(artifact, Tests::NativeRetirementExpectation()).HasValue());
+    Tests::WriteGameplayModuleManifest(project.root, artifact, "game.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                                       Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH));
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    REQUIRE(registry->HasNativeModule());
+    Tests::ActiveBehaviorRuntime active = Tests::ActivateBehaviorRuntime(Definition(Runtime::SceneDefinitionId{1}, "game.tests.watched"),
+                                                                         Runtime::SceneRuntimeId{1}, registry->Registry());
+    REQUIRE(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{1}).x == 1.0F);
+    Write(source, Source(3));
+    Tests::AdvanceLastWriteTime(source);
+    REQUIRE(registry->ReloadChangedLuaSources().empty());
+    CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{1}).x == 4.0F);
+    auto preserved = registry->PreserveNativeArtifactForRollback(project.root / ".horo" / "local" / "rollback");
+    REQUIRE(preserved.HasValue());
+    CHECK(std::filesystem::is_regular_file(preserved.Value().path));
+    CHECK(preserved.Value().path.extension() == artifact.extension());
+    CHECK(preserved.Value().path.stem().u8string().find(artifact.stem().u8string()) != std::u8string::npos);
+}
+
+TEST_CASE("Unicode Lua input failures retain typed diagnostics and native locations") {
+    TemporaryProject project;
+    const auto source = project.root / std::filesystem::path{u8"\u884c\u4e3a.horo_script"};
+    auto metadata = source;
+    metadata += ".meta";
+    const auto sourceUtf8 = source.u8string();
+    const auto metadataUtf8 = metadata.u8string();
+    auto missing = Gameplay::LuaBehaviorProgram::LoadFiles(source, metadata);
+    REQUIRE(missing.HasError());
+    CHECK(missing.ErrorValue().message.find(std::string{sourceUtf8.begin(), sourceUtf8.end()}) != std::string::npos);
+    Write(source, Source(1));
+    Write(metadata, "{invalid}");
+    auto malformed = Gameplay::LuaBehaviorProgram::LoadFiles(source, metadata);
+    REQUIRE(malformed.HasError());
+    CHECK(malformed.ErrorValue().message.find(std::string{metadataUtf8.begin(), metadataUtf8.end()}) != std::string::npos);
 }

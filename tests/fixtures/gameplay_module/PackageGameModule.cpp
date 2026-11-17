@@ -1,6 +1,7 @@
 #include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Gameplay/GameModule.h"
 #include "Horo/Gameplay/GameServiceRegistry.h"
+#include "Horo/Gameplay/NativeDecisionNode.h"
 
 #include <memory>
 
@@ -62,6 +63,44 @@ namespace {
         }
     };
 }  // namespace
+
+namespace {
+    class PackageDecisionNode final : public Horo::AI::IBehaviorTreeExecutor {
+    public:
+        static Horo::AI::DecisionNodeContract DescribeDecisionNode() {
+            using namespace Horo::AI;
+            DecisionNodeContract contract;
+            contract.descriptor.origin = {DecisionDescriptorSourceKind::Package, DecisionProviderId::Create(701).Value(), 1};
+            contract.role = DecisionNodeRole::Condition;
+            return contract;
+        }
+
+        explicit PackageDecisionNode(std::span<const Horo::AI::BehaviorTreeProperty>) {}
+
+        Horo::Result<Horo::AI::AiTaskState> Start(const Horo::AI::BehaviorTreeEvaluationContext &,
+                                                  const Horo::AI::AiTaskOperationContext &) noexcept override {
+            return Horo::Result<Horo::AI::AiTaskState>::Success(Horo::AI::AiTaskState::Succeeded);
+        }
+
+        Horo::Result<Horo::AI::AiTaskState> Resume(const Horo::AI::BehaviorTreeEvaluationContext &,
+                                                   const Horo::AI::AiTaskOperationContext &) noexcept override {
+            return Horo::Result<Horo::AI::AiTaskState>::Success(Horo::AI::AiTaskState::Succeeded);
+        }
+
+        void Abort(const Horo::AI::AiTaskOperationContext &, Horo::AI::AiTaskCancellationReason) noexcept override {}
+
+        void Cleanup(const Horo::AI::AiTaskOperationContext &, const Horo::AI::AiTaskTerminalResult &) noexcept override {}
+
+        Horo::Result<bool> Check(const Horo::AI::BehaviorTreeEvaluationContext &) noexcept override {
+            return Horo::Result<bool>::Success(true);
+        }
+
+        Horo::Result<void> Service(const Horo::AI::BehaviorTreeEvaluationContext &) noexcept override {
+            return Horo::Result<void>::Success();
+        }
+    };
+}  // namespace
+HORO_AI_NODE(PackageDecisionNode, "201")
 
 /** @brief Constructs the real package fixture module through the supported native SDK boundary. */
 extern "C" HORO_GAME_EXPORT Horo::Gameplay::IGameModule *CreateGameModule() noexcept {

@@ -48,6 +48,36 @@ namespace Horo::Render::D3D12Detail {
         }
     }  // namespace
 
+    /** @copydoc Resources::WaitForCommandAccess */
+    Result<void> Resources::WaitForCommandAccess(const Resource &resource) {
+        for (std::size_t index = 0; index < resource.commandFences.size(); ++index) {
+            if (!resource.commandFences[index] || resource.commandFenceValues[index] == 0)
+                continue;
+            const HRESULT status = queue_->Wait(resource.commandFences[index].Get(), resource.commandFenceValues[index]);
+            if (FAILED(status))
+                return Result<void>::Failure(
+                    ResourceError("render.d3d12.command_wait_failed",
+                                  "Transfer admission failed before execution; retain earlier command ownership and retry after recovery.",
+                                  status));
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc Resources::CheckHostWriteAvailable */
+    Result<void> Resources::CheckHostWriteAvailable(const Resource &resource) const {
+        for (std::size_t index = 0; index < resource.commandFences.size(); ++index) {
+            if (!resource.commandFences[index])
+                continue;
+            const auto completed = resource.commandFences[index]->GetCompletedValue();
+            if (completed == UINT64_MAX)
+                return Result<void>::Failure(ResourceError("render.d3d12.device_lost", "Recover the removed device before host writes."));
+            if (completed < resource.commandFenceValues[index])
+                return Result<void>::Failure(
+                    ResourceError("render.d3d12.command_pending", "Poll GPU graph retirement before overwriting host-visible storage."));
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc Resources::Upload */
     Result<D3D12TransferId> Resources::Upload(std::uint64_t instance, std::span<const std::byte> bytes, std::size_t offset,
                                               const CancellationToken &cancellation) {
@@ -66,7 +96,8 @@ namespace Horo::Render::D3D12Detail {
     Result<D3D12TransferId> Resources::Write(const std::shared_ptr<Resource> &resource, std::span<const std::byte> bytes,
                                              std::size_t offset, const CancellationToken &cancellation) {
         if (resource->kind == Resource::Kind::Buffer && resource->buffer.access == RenderBufferAccess::HostVisible) {
-            // Host writes must be prepared before GPU submission; frontend ownership pins enforce that boundary.
+            if (auto available = CheckHostWriteAvailable(*resource); available.HasError())
+                return Result<D3D12TransferId>::Failure(available.ErrorValue());
             void *mapped = nullptr;
             const D3D12_RANGE readRange{0, 0};
             const HRESULT status = resource->native->Map(0, &readRange, &mapped);
@@ -145,15 +176,12 @@ namespace Horo::Render::D3D12Detail {
         transfer.resource = resource;
         transfer.readback = readback;
         transfer.payloadBytes = bytes;
-        if (auto footprints = PrepareFootprints(transfer); footprints.HasError())
-            return Result<D3D12TransferId>::Failure(footprints.ErrorValue());
-        auto prepared = PrepareStaging(transfer, payload);
-        if (prepared.HasError())
+        if (auto prepared = PrepareTransfer(transfer, payload, offset); prepared.HasError())
             return Result<D3D12TransferId>::Failure(prepared.ErrorValue());
-        if (auto commands = PrepareCopyCommands(transfer, offset); commands.HasError())
-            return Result<D3D12TransferId>::Failure(commands.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Failure<D3D12TransferId>("render.d3d12.cancelled", "Copy cancelled before GPU submission.");
+        if (auto ordered = WaitForCommandAccess(*resource); ordered.HasError())
+            return Result<D3D12TransferId>::Failure(ordered.ErrorValue());
         // Reserved vector capacity makes publication non-allocating before the irreversible Execute call.
         transfers_.push_back(std::move(transfer));
         auto &submitted = transfers_.back();
@@ -163,9 +191,19 @@ namespace Horo::Render::D3D12Detail {
         return Result<D3D12TransferId>::Success(submitted.id);
     }
 
+    /** @copydoc Resources::PrepareTransfer */
+    Result<void> Resources::PrepareTransfer(Transfer &transfer, std::span<const std::byte> payload, const std::size_t offset) {
+        if (auto footprints = PrepareFootprints(transfer); footprints.HasError())
+            return footprints;
+        if (auto staging = PrepareStaging(transfer, payload); staging.HasError())
+            return staging;
+        return PrepareCopyCommands(transfer, offset);
+    }
+
     /** @copydoc Resources::SubmitCommands */
     Result<void> Resources::SubmitCommands(Transfer &transfer) {
         ID3D12CommandList *commands[]{transfer.commands.Get()};
+        lastSubmittedFence_ = transfer.fence;
         queue_->ExecuteCommandLists(1, commands);
         transfer.resource->activationPending = false;
         if (testHooks_.afterExecute)

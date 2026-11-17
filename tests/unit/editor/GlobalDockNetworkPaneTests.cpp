@@ -94,6 +94,7 @@ namespace {
 }  // namespace
 
 TEST_CASE("Net pane renders actual loopback evidence and acknowledged typed capture actions", "[unit][editor][gui][network]") {
+    Harness harness;
     Application::NetworkDebuggerService service;
     REQUIRE(service.Begin(17, 6, true, Network::NetworkDiagnosticProvider::Deterministic));
     const auto source = service.Producer().Source();
@@ -112,7 +113,6 @@ TEST_CASE("Net pane renders actual loopback evidence and acknowledged typed capt
     REQUIRE(metrics.Publish());
     const auto measured = metrics.Snapshot();
     REQUIRE(service.Publish(source, &measured));
-    Harness harness;
     GlobalDockNetworkPane pane;
     pane.Attach(&service, &service);
     harness.Draw(pane);
@@ -165,6 +165,9 @@ TEST_CASE("Net pane disabled stale and narrow localized states never present a l
     REQUIRE(harness.Toolbar());
     REQUIRE(harness.Toolbar()->ScrollMax.x > 0);
     REQUIRE(harness.Toolbar()->Size.x <= 180);
+    const auto metrics = ResolveGlobalDockPaneMetrics();
+    REQUIRE(harness.Toolbar()->DC.CursorStartPos.x >= harness.Toolbar()->Pos.x + metrics.contentPadding - 0.1F);
+    REQUIRE(harness.Toolbar()->DC.CursorStartPos.y >= harness.Toolbar()->Pos.y + 7.0F);
     REQUIRE(pane.Projection().state == Application::NetworkDebuggerState::Stale);
     for (auto state : {Application::NetworkDebuggerState::Detached, Application::NetworkDebuggerState::Disabled,
                        Application::NetworkDebuggerState::Stale, Application::NetworkDebuggerState::Live})

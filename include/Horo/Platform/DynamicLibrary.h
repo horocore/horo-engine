@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Result.h"
 
+#include <filesystem>
 #include <memory>
 #include <string_view>
 
@@ -27,4 +28,11 @@ namespace Horo::Platform {
      * @return Result containing the loaded library, or an error if loading failed.
      */
     [[nodiscard]] Result<std::unique_ptr<DynamicLibrary>> LoadDynamicLibrary(std::string_view path);
+
+    /**
+     * @brief Loads a library from an absolute native filesystem path without a text encoding round trip.
+     * @param path Path to the library. It must resolve to a regular file and contain no traversal components.
+     * @return The loaded library or a typed validation or load error.
+     */
+    [[nodiscard]] Result<std::unique_ptr<DynamicLibrary>> LoadDynamicLibraryAtPath(const std::filesystem::path &path);
 }  // namespace Horo::Platform

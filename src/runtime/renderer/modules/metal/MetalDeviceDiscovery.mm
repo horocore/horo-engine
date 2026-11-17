@@ -56,23 +56,53 @@ namespace Horo::Render::Detail {
             return texture != nil;
         }
 
+        /** @brief Probes the exact ordinary color usage combination before advertising upload/readback support.
+         * Blits use no additional MTLTextureUsage bits; actual allocations/uploads remain independently validated.
+         */
+        void QueryColorFormat(id<MTLDevice> device, MetalFormatCapabilities &formats, RenderTextureFormat format,
+                              MTLPixelFormat native) noexcept {
+            using enum RenderTextureUsage;
+            auto usage = static_cast<RenderTextureUsage>(0);
+            if (CanCreatePaintTexture(device, native, MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget))
+                usage = Sampled | RenderAttachment | CopySource | CopyDestination;
+            else if (CanCreatePaintTexture(device, native, MTLTextureUsageShaderRead))
+                usage = Sampled | CopySource | CopyDestination;
+            formats.usages[static_cast<std::size_t>(format)] = usage;
+        }
+
+        /** @brief Float color tables need only sampled reads and cold uploads, not new attachment or readback roles. */
+        void QueryColorTableFormat(id<MTLDevice> device, MetalFormatCapabilities &formats, RenderTextureFormat format,
+                                   MTLPixelFormat native) noexcept {
+            if (CanCreatePaintTexture(device, native, MTLTextureUsageShaderRead))
+                formats.usages[static_cast<std::size_t>(format)] = RenderTextureUsage::Sampled | RenderTextureUsage::CopyDestination;
+        }
+
+        /** @brief Advertises depth observation only for an actual private render-target allocation; blits need no extra native usage. */
+        void QueryDepthFormat(id<MTLDevice> device, MetalFormatCapabilities &formats) noexcept {
+            using enum RenderTextureUsage;
+            auto usage = static_cast<RenderTextureUsage>(0);
+            if (CanCreatePaintTexture(device, MTLPixelFormatDepth32Float, MTLTextureUsageRenderTarget))
+                usage = RenderAttachment | CopySource;
+            if (CanCreatePaintTexture(device, MTLPixelFormatDepth32Float, MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget))
+                usage = usage | Sampled | RenderAttachment;
+            formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = usage;
+        }
+
         [[nodiscard]] MetalFormatCapabilities QueryFormats(id<MTLDevice> device) noexcept {
             MetalFormatCapabilities formats;
-            const auto sampledAttachment = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
             const auto enableUsage = [&formats](const RenderTextureFormat format, const RenderTextureUsage usage) {
                 formats.usages[static_cast<std::size_t>(format)] = usage;
             };
-            enableUsage(RenderTextureFormat::Rgba8Unorm, sampledAttachment);
-            if (CanCreatePaintTexture(device, MTLPixelFormatRGBA8Unorm, MTLTextureUsageShaderRead))
-                enableUsage(RenderTextureFormat::Rgba8Unorm, sampledAttachment | RenderTextureUsage::CopyDestination);
-            enableUsage(RenderTextureFormat::Bgra8Unorm, sampledAttachment);
+            QueryColorFormat(device, formats, RenderTextureFormat::Rgba8Unorm, MTLPixelFormatRGBA8Unorm);
+            QueryColorFormat(device, formats, RenderTextureFormat::Bgra8Unorm, MTLPixelFormatBGRA8Unorm);
+            QueryColorTableFormat(device, formats, RenderTextureFormat::R32Float, MTLPixelFormatR32Float);
+            QueryColorFormat(device, formats, RenderTextureFormat::Rgba32Float, MTLPixelFormatRGBA32Float);
             // Native depth textures can also be sampled by the viewport's shadow pass.
-            enableUsage(RenderTextureFormat::Depth32Float, sampledAttachment);
+            QueryDepthFormat(device, formats);
             if (device.depth24Stencil8PixelFormatSupported) {
                 enableUsage(RenderTextureFormat::Depth24Stencil8, RenderTextureUsage::RenderAttachment);
             }
-            if (CanCreatePaintTexture(device, MTLPixelFormatRGBA16Float, MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget))
-                enableUsage(RenderTextureFormat::Rgba16Float, sampledAttachment);
+            QueryColorFormat(device, formats, RenderTextureFormat::Rgba16Float, MTLPixelFormatRGBA16Float);
             if (CanCreatePaintTexture(device, MTLPixelFormatDepth32Float_Stencil8, MTLTextureUsageRenderTarget))
                 enableUsage(RenderTextureFormat::Depth32FloatStencil8, RenderTextureUsage::RenderAttachment);
             constexpr std::array sampleCounts{1U, 2U, 4U, 8U};

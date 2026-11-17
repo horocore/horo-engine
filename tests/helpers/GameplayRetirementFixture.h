@@ -12,6 +12,12 @@ namespace Horo::Tests {
     struct GameplayRetirementFixture final {
         std::shared_ptr<const Gameplay::GameplayPhysicsContext> physics;
         unsigned failPhase{};
+        unsigned restoreFailure{};
+        unsigned restoreRequiredServices{};
+        unsigned behaviorCreated{}, behaviorEnabled{}, behaviorStarted{}, behaviorPrehooks{}, behaviorCaptured{}, behaviorMaterialized{},
+            behaviorFixed{};
+        unsigned preparationRetired{};
+        bool failBehaviorConstruction{};
         unsigned created{};
         unsigned registered{};
         unsigned started{};
@@ -27,5 +33,7 @@ namespace Horo::Tests {
         void (*armAllocationFailure)(void *) noexcept {};
         void (*onStop)(void *){};
         void (*publish)(void *, std::shared_ptr<Gameplay::GameplayEventLease>){};
+        unsigned durableCaptured{};
+        unsigned durablePrepared{};
     };
 }  // namespace Horo::Tests

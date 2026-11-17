@@ -22,10 +22,10 @@ namespace Horo::Editor {
         };
 
         constexpr std::array Rows{
-            AudioRow{"workspace.global_dock.audio.bus.master", "0.0 dB", 0.78F, "12"},
-            AudioRow{"workspace.global_dock.audio.bus.music", "−6.0 dB", 0.58F, "2"},
-            AudioRow{"workspace.global_dock.audio.bus.sfx", "−1.5 dB", 0.69F, "7"},
-            AudioRow{"workspace.global_dock.audio.bus.ambient", "−9.0 dB", 0.39F, "3"},
+            AudioRow{"bus.master", "0.0 dB", 0.78F, "12"},
+            AudioRow{"bus.music", "−6.0 dB", 0.58F, "2"},
+            AudioRow{"bus.sfx", "−1.5 dB", 0.69F, "7"},
+            AudioRow{"bus.ambient", "−9.0 dB", 0.39F, "3"},
         };
 
     }  // namespace
@@ -56,7 +56,7 @@ namespace Horo::Editor {
         const GlobalDockPaneRegions regions =
             ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockAudioPane::kTextScope.Text(context.localization, key);
         };
 
         DrawGlobalDockToolbarSurface(regions.toolbarOrigin, regions.toolbarWidth, metrics.toolbarHeight);
@@ -66,10 +66,9 @@ namespace Horo::Editor {
         const float searchWidth = ResolveGlobalDockSearchWidth(regions.toolbarWidth, fixedWidth);
         float x = regions.toolbarOrigin.x + metrics.toolbarPaddingX;
 
-        const std::string &searchHint = localized("workspace.global_dock.audio.search");
+        const std::string &searchHint = localized("search");
         x = DrawGlobalDockSearchControl({x, controlY}, searchWidth, "##AudioSearch", m_search, searchHint, fonts);
-        const std::array<std::string, 2> deviceLabels{localized("workspace.global_dock.audio.device.default"),
-                                                      localized("workspace.global_dock.audio.device.headphones")};
+        const std::array<std::string, 2> deviceLabels{localized("device.default"), localized("device.headphones")};
         const std::array<const char *, 2> deviceItems{deviceLabels[0].c_str(), deviceLabels[1].c_str()};
         ImGui::SetCursorScreenPos({x, controlY});
         ImGui::SetNextItemWidth(deviceWidth);
@@ -85,17 +84,15 @@ namespace Horo::Editor {
     float GlobalDockAudioPane::MeasureToolbarActions(const EditorGuiContext &context) const {
         const auto &fonts = context.theme.fonts;
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockAudioPane::kTextScope.Text(context.localization, key);
         };
-        const GlobalDockToolbarChipProps meters{.id = "AudioMeters", .label = localized("workspace.global_dock.audio.meters")};
-        const GlobalDockToolbarChipProps voices{.id = "AudioVoices", .label = localized("workspace.global_dock.audio.voices")};
+        const GlobalDockToolbarChipProps meters{.id = "AudioMeters", .label = localized("meters")};
+        const GlobalDockToolbarChipProps voices{.id = "AudioVoices", .label = localized("voices")};
         const GlobalDockToolbarChipProps pause{.id = "AudioPause",
-                                               .label = localized(m_paused ? "workspace.global_dock.audio.resume"
-                                                                           : "workspace.global_dock.audio.pause"),
+                                               .label = localized(m_paused ? "resume" : "pause"),
                                                .icon = m_paused ? Ui::UiIcon::Play : Ui::UiIcon::Pause};
         const GlobalDockToolbarChipProps mute{.id = "AudioMuteAll",
-                                              .label = localized(m_allMuted ? "workspace.global_dock.audio.unmute_all"
-                                                                            : "workspace.global_dock.audio.mute_all"),
+                                              .label = localized(m_allMuted ? "unmute_all" : "mute_all"),
                                               .icon = Ui::UiIcon::VolumeOff};
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         return MeasureGlobalDockToolbarChip(meters, fonts) + MeasureGlobalDockToolbarChip(voices, fonts) +
@@ -106,22 +103,16 @@ namespace Horo::Editor {
     void GlobalDockAudioPane::DrawToolbarActions(float x, const float y, const EditorGuiContext &context) {
         const auto &fonts = context.theme.fonts;
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockAudioPane::kTextScope.Text(context.localization, key);
         };
-        const GlobalDockToolbarChipProps meters{.id = "AudioMeters",
-                                                .label = localized("workspace.global_dock.audio.meters"),
-                                                .active = m_viewSelection == 0};
-        const GlobalDockToolbarChipProps voices{.id = "AudioVoices",
-                                                .label = localized("workspace.global_dock.audio.voices"),
-                                                .active = m_viewSelection == 1};
+        const GlobalDockToolbarChipProps meters{.id = "AudioMeters", .label = localized("meters"), .active = m_viewSelection == 0};
+        const GlobalDockToolbarChipProps voices{.id = "AudioVoices", .label = localized("voices"), .active = m_viewSelection == 1};
         const GlobalDockToolbarChipProps pause{.id = "AudioPause",
-                                               .label = localized(m_paused ? "workspace.global_dock.audio.resume"
-                                                                           : "workspace.global_dock.audio.pause"),
+                                               .label = localized(m_paused ? "resume" : "pause"),
                                                .active = m_paused,
                                                .icon = m_paused ? Ui::UiIcon::Play : Ui::UiIcon::Pause};
         const GlobalDockToolbarChipProps muteAll{.id = "AudioMuteAll",
-                                                 .label = localized(m_allMuted ? "workspace.global_dock.audio.unmute_all"
-                                                                               : "workspace.global_dock.audio.mute_all"),
+                                                 .label = localized(m_allMuted ? "unmute_all" : "mute_all"),
                                                  .tone = GlobalDockTone::Error,
                                                  .active = m_allMuted,
                                                  .toneLabel = true,
@@ -150,17 +141,13 @@ namespace Horo::Editor {
 
     float GlobalDockAudioPane::DrawMetrics(const ImVec2 &origin, const float width, const EditorGuiContext &context) const {
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockAudioPane::kTextScope.Text(context.localization, key);
         };
         const std::array<GlobalDockMetricCardProps, 4> cards{
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.audio.metric.master_peak"), .value = "−3.2 dB"},
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.audio.metric.voices"), .value = "12 / 64"},
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.audio.metric.callback"),
-                                      .value = "0.31 ms",
-                                      .valueTone = GlobalDockTone::Positive},
-            GlobalDockMetricCardProps{.label = localized("workspace.global_dock.audio.metric.underruns"),
-                                      .value = "0",
-                                      .valueTone = GlobalDockTone::Positive},
+            GlobalDockMetricCardProps{.label = localized("metric.master_peak"), .value = "−3.2 dB"},
+            GlobalDockMetricCardProps{.label = localized("metric.voices"), .value = "12 / 64"},
+            GlobalDockMetricCardProps{.label = localized("metric.callback"), .value = "0.31 ms", .valueTone = GlobalDockTone::Positive},
+            GlobalDockMetricCardProps{.label = localized("metric.underruns"), .value = "0", .valueTone = GlobalDockTone::Positive},
         };
         return DrawGlobalDockMetricGrid(origin, width, cards, context.theme.fonts);
     }
@@ -170,7 +157,7 @@ namespace Horo::Editor {
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
+            return GlobalDockAudioPane::kTextScope.Text(context.localization, key);
         };
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         const ImVec2 headerMin = origin;
@@ -185,11 +172,11 @@ namespace Horo::Editor {
             drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {textX, headerY}, Theme::U32(Theme::Muted()),
                               localized(key).c_str());
         };
-        headerText(layout.bus, "workspace.global_dock.audio.column.bus");
-        headerText(layout.gain, "workspace.global_dock.audio.column.gain");
-        headerText(layout.level, "workspace.global_dock.audio.column.level");
-        headerText(layout.voices, "workspace.global_dock.audio.column.voices");
-        headerText(layout.controls, "workspace.global_dock.audio.column.controls");
+        headerText(layout.bus, "column.bus");
+        headerText(layout.gain, "column.gain");
+        headerText(layout.level, "column.level");
+        headerText(layout.voices, "column.voices");
+        headerText(layout.controls, "column.controls");
 
         const ImVec2 rowsOrigin{headerMin.x, headerMin.y + metrics.tableHeaderHeight};
         const float rowsHeight = std::max(1.0F, height - metrics.tableHeaderHeight);
@@ -208,7 +195,7 @@ namespace Horo::Editor {
     void GlobalDockAudioPane::DrawBusRow(const std::size_t index, const float width, const TableLayout &layout,
                                          const EditorGuiContext &context) {
         const AudioRow &row = Rows[index];
-        const std::string &bus = context.localization.Get("editor", row.busKey);
+        const std::string &bus = GlobalDockAudioPane::kTextScope.Text(context.localization, row.busKey);
         if (!GlobalDockContainsCaseInsensitive(bus, std::string_view{m_search.data()}))
             return;
         const Theme::Fonts &fonts = context.theme.fonts;

@@ -141,7 +141,10 @@ namespace Horo::Runtime {
                                                                           ICanonicalCaptureSink &sink) const = 0;
     };
 
-    /** @brief One immutable descriptor and its owned adapter lease. */
+    /** @brief One immutable accepted descriptor and its owned adapter lease.
+     * @details Binding copies share the accepted metadata and adapter. Registry close releases live bindings;
+     * issued snapshots retain both owners until their final binding retires.
+     */
     class SaveParticipantBinding final {
     public:
         /** @brief Returns inert participant metadata. @return Borrowed descriptor owned by this binding. */
@@ -151,9 +154,10 @@ namespace Horo::Runtime {
 
     private:
         friend class CanonicalStateParticipantRegistry;
-        SaveParticipantBinding(CanonicalStateParticipantDescriptor descriptor, std::shared_ptr<const ICanonicalStateAdapter> adapter);
+        SaveParticipantBinding(std::shared_ptr<const CanonicalStateParticipantDescriptor> descriptor,
+                               std::shared_ptr<const ICanonicalStateAdapter> adapter);
 
-        CanonicalStateParticipantDescriptor descriptor_;
+        std::shared_ptr<const CanonicalStateParticipantDescriptor> descriptor_;
         std::shared_ptr<const ICanonicalStateAdapter> adapter_;
     };
 

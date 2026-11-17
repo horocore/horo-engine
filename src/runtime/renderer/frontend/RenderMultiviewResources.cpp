@@ -56,6 +56,38 @@ namespace Horo::Render::Detail {
             }
             return Result<void>::Success();
         }
+
+        Result<void> ResolveRasterReads(std::span<const RenderGraphMaterialRead> reads, ResolvedMultiviewResources &output,
+                                        const RenderResourceRegistry &registry) {
+            for (const auto &read : reads) {
+                if (!read.texture.IsValid())
+                    continue;
+                if (auto resolved = Resolve(read.texture, RenderResourceClass::TextureView, output.views, output.viewCount, registry);
+                    resolved.HasError())
+                    return resolved;
+            }
+            return Result<void>::Success();
+        }
+
+        Result<void> ResolveMaterialRaster(const RenderGraphMaterialRaster &raster, ResolvedMultiviewResources &output,
+                                           const RenderResourceRegistry &registry) {
+            if (raster.draws.size() > RenderGraphMaterialRaster::MaximumDraws ||
+                raster.reads.size() > RenderGraphMaterialRaster::MaximumReads)
+                return Result<void>::Failure(MakeError(MultiviewExtractionErrors::CapacityExceeded));
+            for (const auto &draw : raster.draws)
+                if (auto resolved = Resolve(draw.mesh, RenderResourceClass::Mesh, output.meshes, output.meshCount, registry);
+                    resolved.HasError())
+                    return resolved;
+            for (const auto view : {raster.colorView, raster.depthView}) {
+                if (!view.IsValid())
+                    continue;
+                if (auto resolved = Resolve(view, RenderResourceClass::TextureView, output.views, output.viewCount, registry);
+                    resolved.HasError())
+                    return resolved;
+            }
+            return ResolveRasterReads(raster.reads, output, registry);
+        }
+
     }  // namespace
 
     /** @copydoc ResolveMultiviewResources */
@@ -64,6 +96,9 @@ namespace Horo::Render::Detail {
         ResolvedMultiviewResources output;
         std::size_t scenes = 0;
         for (const auto &entry : workloads) {
+            if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&entry.workload))
+                if (auto resolved = ResolveMaterialRaster(*raster, output, registry); resolved.HasError())
+                    return Result<ResolvedMultiviewResources>::Failure(resolved.ErrorValue());
             if (const auto *scene = std::get_if<RenderGraphMultiview>(&entry.workload)) {
                 if (++scenes > 1)
                     return Result<ResolvedMultiviewResources>::Failure(MakeError(MultiviewExtractionErrors::CapacityExceeded));

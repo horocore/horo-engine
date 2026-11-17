@@ -256,7 +256,7 @@ namespace Horo::Tests::OpenXRProduct {
         Json Component(const Sha256Digest &loader, const Sha256Digest &provenance) const {
             return {{"schemaVersion", 1},
                     {"backend", 7},
-                    {"contractVersion", {1, 1, 0}},
+                    {"contractVersion", {1, 2, 0}},
                     {"build", "test-build"},
                     {"releaseChannel", "development"},
                     {"platform", {{"os", platform.operatingSystem}, {"architecture", platform.architecture}, {"sdkAbi", platform.sdkAbi}}},

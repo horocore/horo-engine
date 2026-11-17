@@ -2,7 +2,8 @@
 
 /**
  * @file PrefabDocument.h
- * @brief Versioned, bounded and backend-neutral prefab authoring document contract.
+ * @brief Versioned, bounded and backend-neutral prefab authoring document
+ * contract.
  */
 
 #include "Horo/Application/ProjectVersion.h"
@@ -14,7 +15,10 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Prefab/PrefabLimits.h"
+#include "Horo/Prefab/PrefabMetrics.h"
+#include "Horo/Prefab/PrefabResolvedObject.h"
 #include "Horo/Prefab/PrefabSourceRevision.h"
+#include "Horo/Prefab/PrefabValueOverrideTypes.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -29,25 +33,17 @@ namespace Horo::Prefab {
     /** @brief Maximum UTF-8 bytes in one prefab-local display name. */
     inline constexpr std::size_t MaximumPrefabObjectNameBytes = PrefabHardLimits::ObjectNameBytes;
 
-    /** @brief One authored prefab-local hierarchy object and its portable payloads. */
-    struct PrefabObjectNode final {
-        LocalObjectId localId;                              /**< Stable sparse slot; zero is reserved for the root. */
-        std::optional<LocalObjectId> parentLocalId;         /**< Empty only for the root object. */
-        std::string name;                                   /**< Advisory UTF-8 display name, never identity. */
-        Math::Transform localTransform;                     /**< Backend-neutral local transform. */
-        std::vector<RawComponentPayload> components;        /**< Typed or opaque project component envelopes. */
-        std::vector<Gameplay::BehaviorComponent> behaviors; /**< Portable schema-checked behavior payloads. */
-
-        [[nodiscard]] bool operator==(const PrefabObjectNode &) const noexcept = default;
-    };
-
-    /** @brief One direct nested prefab occurrence mounted under a concrete local object. */
+    /** @brief One direct nested prefab occurrence mounted under a concrete local
+     * object. */
     struct NestedPrefabPlacement final {
-        LocalObjectId placementLocalId;             /**< Unique non-root slot in the containing source. */
-        std::optional<LocalObjectId> parentLocalId; /**< Containing object; empty mounts beneath the root. */
-        PrefabAssetReference sourcePrefab;          /**< Path-independent nested source identity. */
-        PrefabSourceRevision authoredAgainst;       /**< Exact project-versioned source revision. */
-        Math::Transform localRootTransform;         /**< Backend-neutral transform applied at the mount. */
+        LocalObjectId placementLocalId;                       /**< Unique non-root slot in the containing source. */
+        std::optional<LocalObjectId> parentLocalId;           /**< Containing object; empty mounts beneath the root. */
+        PrefabAssetReference sourcePrefab;                    /**< Path-independent nested source identity. */
+        PrefabSourceRevision authoredAgainst;                 /**< Exact project-versioned source revision. */
+        Math::Transform localRootTransform;                   /**< Backend-neutral transform applied at
+                                                                 the mount. */
+        std::optional<PrefabValueOverrideSet> valueOverrides; /**< Typed deltas over the fully resolved referenced
+                                                                 source, before mounting. */
 
         [[nodiscard]] bool operator==(const NestedPrefabPlacement &) const noexcept = default;
     };
@@ -57,31 +53,46 @@ namespace Horo::Prefab {
         std::vector<NestedPrefabPlacement> nestedPlacements;        /**< Concrete-only direct nested occurrences. */
         std::optional<PrefabAssetReference> variantParent;          /**< Variant-only immediate parent asset. */
         std::optional<PrefabSourceRevision> variantAuthoredAgainst; /**< Required with @ref variantParent. */
+        std::optional<PrefabValueOverrideSet> variantOverrides;     /**< Typed deltas over the complete effective immediate
+                                                                       parent. */
 
         [[nodiscard]] bool operator==(const PrefabComposition &) const noexcept = default;
     };
 
-    /** @brief Mutable candidate data validated before immutable document publication. */
+    /** @brief Mutable candidate data validated before immutable document
+     * publication. */
     struct PrefabDocumentData final {
         Application::HoroVersion projectVersion;       /**< Unified project schema version. */
         Assets::AssetId assetId;                       /**< Sidecar-owned authoritative asset identity. */
         std::vector<PrefabObjectNode> objects;         /**< Canonical parent-before-child order; root first. */
-        std::optional<PrefabComposition> composition;  /**< Optional concrete nesting or exclusive variant source. */
+        std::optional<PrefabComposition> composition;  /**< Optional concrete nesting or exclusive variant source.
+                                                        */
         std::vector<Assets::AssetId> referencedAssets; /**< Unique explicit Asset Registry dependencies. */
 
         [[nodiscard]] bool operator==(const PrefabDocumentData &) const noexcept = default;
     };
 
-    /** @brief Bounded parser controls for one canonical JSON prefab source document. */
+    /** @brief Bounded parser controls for one canonical JSON prefab source
+     * document. */
     struct PrefabSourceParseLimits final {
-        std::size_t maximumSourceBytes{PrefabHardLimits::SourceDocumentBytes}; /**< Encoded UTF-8 source bytes admitted before parsing. */
-        std::size_t maximumJsonDepth{PrefabHardLimits::SourceJsonDepth};       /**< Maximum nested JSON container depth. */
-        std::optional<Application::HoroVersion> expectedProjectVersion;        /**< Optional exact unified project version to require. */
+        std::size_t maximumSourceBytes{PrefabHardLimits::SourceDocumentBytes}; /**< Encoded UTF-8 source bytes
+                                                                                  admitted before parsing. */
+        std::size_t maximumJsonDepth{PrefabHardLimits::SourceJsonDepth};       /**< Maximum nested JSON container
+                                                                                  depth. */
+        std::optional<Application::HoroVersion> expectedProjectVersion;        /**< Optional exact unified project version to
+                                                                                  require. */
 
-        [[nodiscard]] bool operator==(const PrefabSourceParseLimits &) const noexcept = default;
+        const PrefabMetricHandles *metrics{}; /**< Explicit host observer borrowed only during synchronous
+                                                 parsing; never serialized. */
+
+        [[nodiscard]] bool operator==(const PrefabSourceParseLimits &other) const noexcept {
+            return maximumSourceBytes == other.maximumSourceBytes && maximumJsonDepth == other.maximumJsonDepth &&
+                   expectedProjectVersion == other.expectedProjectVersion;
+        }
     };
 
-    /** @brief Compatibility of preserved project-owned data with the currently available provider snapshot. */
+    /** @brief Compatibility of preserved project-owned data with the currently
+     * available provider snapshot. */
     enum class PrefabProviderStatus : std::uint8_t {
         Current,
         Missing,
@@ -105,68 +116,108 @@ namespace Horo::Prefab {
         PrefabProviderStatus status{PrefabProviderStatus::Missing};
     };
 
-    /** @brief One referenced project-owned asset payload supplied without transferring ownership. */
+    /** @brief One referenced project-owned asset payload supplied without
+     * transferring ownership. */
     struct PrefabReferencedGameAsset final {
         Assets::AssetId assetId;
         const Gameplay::SerializedGameAsset *payload{};
     };
 
-    /** @brief Provider compatibility for one referenced project-owned asset payload. */
+    /** @brief Provider compatibility for one referenced project-owned asset
+     * payload. */
     struct PrefabAssetProviderInspection final {
         Assets::AssetId assetId;
         std::optional<Assets::AssetTypeId> type;
         PrefabProviderStatus status{PrefabProviderStatus::Missing};
     };
 
-    /** @brief Immutable editor/headless projection that never owns or mutates preserved payload bytes. */
+    /** @brief Immutable editor/headless projection that never owns or mutates
+     * preserved payload bytes. */
     struct PrefabProviderInspection final {
         std::vector<PrefabComponentProviderInspection> components;
         std::vector<PrefabBehaviorProviderInspection> behaviors;
         std::vector<PrefabAssetProviderInspection> assets;
 
-        /** @brief Reports whether any preserved payload cannot currently be reclaimed. @return True for a degraded projection. */
+        /** @brief Reports whether any preserved payload cannot currently be
+         * reclaimed. @return True for a degraded projection. */
         [[nodiscard]] bool IsDegraded() const noexcept;
     };
 
-    /** @brief Immutable validated source document suitable for save, import and cook boundaries. */
+    /** @brief Immutable validated source document suitable for save, import and
+     * cook boundaries. */
     class PrefabDocument final {
     public:
         /**
-         * @brief Validates and takes ownership of one complete authoring candidate transactionally.
-         * @param candidate Candidate project version, identity, hierarchy, payloads and optional composition.
-         * @param limits Immutable project policy captured before this operation begins.
-         * @return Immutable document or a stable prefab/gameplay/application validation error.
+         * @brief Validates and takes ownership of one complete authoring candidate
+         * transactionally.
+         * @param candidate Candidate project version, identity, hierarchy, payloads
+         * and optional composition.
+         * @param limits Immutable project policy captured before this operation
+         * begins.
+         * @return Immutable document or a stable prefab/gameplay/application
+         * validation error.
          */
         [[nodiscard]] static Result<PrefabDocument> Create(PrefabDocumentData candidate, const PrefabLimitProfile &limits);
+        /** @brief Revalidate this immutable source against an accepted next-operation
+         * policy without copying its payload.
+         * @param limits Complete validated project profile.
+         * @return Canonical source/hierarchy/composition/budget validation outcome;
+         * this document remains unchanged.
+         * @throws std::bad_alloc If bounded validation scratch storage cannot be
+         * allocated.
+         * @details Cold authoring/save boundary only. Metadata scratch storage is
+         * bounded by the admitted profile. */
+        [[nodiscard]] Result<void> ValidateLimits(const PrefabLimitProfile &limits) const;
 
         /**
-         * @brief Parses, validates and transactionally publishes one complete canonical source candidate.
+         * @brief Parses, validates and transactionally publishes one complete
+         * canonical source candidate.
          * @param source UTF-8 canonical JSON source bytes.
          * @param limits Immutable project policy captured before parsing begins.
-         * @param parseLimits Parser byte/depth bounds and optional project-version expectation.
-         * @return Immutable document, or a stable parse, version, identity, hierarchy or bounds error.
+         * @param parseLimits Parser byte/depth bounds and optional project-version
+         * expectation.
+         * @return Immutable document, or a stable parse, version, identity, hierarchy
+         * or bounds error.
          */
         [[nodiscard]] static Result<PrefabDocument> Parse(std::string_view source, const PrefabLimitProfile &limits,
                                                           const PrefabSourceParseLimits &parseLimits = {});
 
-        /** @brief Returns the immutable validated source data. @return Borrowed document data. */
+        /** @brief Returns the immutable validated source data. @return Borrowed
+         * document data. */
         [[nodiscard]] const PrefabDocumentData &Data() const noexcept;
 
+        /** @brief Checks exact canonical source spelling while allowing only layer
+         * record-array permutations.
+         * @param source Original encoded bytes. @return True only for this document's
+         * exact canonical representation modulo ordering of records/conflicts/orphans
+         * within an existing override layer; all scalar lexemes and other fields stay
+         * exact.
+         * @details Validation-only scratch never becomes output or replaces the
+         * canonical serializer. */
+        [[nodiscard]] Result<bool> MatchesCanonicalInput(std::string_view source) const;
+
         /**
-         * @brief Serializes the complete document into deterministic canonical UTF-8 JSON.
-         * @return Canonical source bytes, a document validation error, or a typed allocation failure.
-         * @details Structural encoder cleanup never allocates; failure leaves the immutable source unchanged.
+         * @brief Serializes the complete document into deterministic canonical UTF-8
+         * JSON.
+         * @return Canonical source bytes, a document validation error, or a typed
+         * allocation failure.
+         * @details Structural encoder cleanup never allocates; failure leaves the
+         * immutable source unchanged.
          */
         [[nodiscard]] Result<std::string> SerializeCanonical() const;
 
         /**
-         * @brief Inspects preserved project payloads against one explicit provider snapshot without changing the document.
-         * @param assets Pinned Asset Registry snapshot owning referenced identities and type classification.
+         * @brief Inspects preserved project payloads against one explicit provider
+         * snapshot without changing the document.
+         * @param assets Pinned Asset Registry snapshot owning referenced identities
+         * and type classification.
          * @param components Available component schema registry.
          * @param behaviors Available inert behavior descriptors.
          * @param gameAssetTypes Available project-owned asset type registry.
-         * @param referencedGameAssets Referenced asset identities paired with their separately owned opaque authored payloads.
-         * @return Stable per-occurrence compatibility projection, or a validation error for malformed provider input.
+         * @param referencedGameAssets Referenced asset identities paired with their
+         * separately owned opaque authored payloads.
+         * @return Stable per-occurrence compatibility projection, or a validation
+         * error for malformed provider input.
          */
         [[nodiscard]] Result<PrefabProviderInspection> InspectProviders(
             const Assets::AssetRegistrySnapshot &assets, const Gameplay::ComponentRegistry &components,

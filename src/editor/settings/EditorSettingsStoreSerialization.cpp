@@ -173,7 +173,7 @@ namespace Horo::Editor::SettingsStoreInternal {
             out << R"(    "confirmExitWithUnsavedChanges": )" << BoolString(source.confirmExitWithUnsavedChanges) << ",\n";
             out << R"(    "restoreWorkspaceLayout": )" << BoolString(source.restoreWorkspaceLayout) << ",\n";
             out << R"(    "defaultSceneOnProjectOpen": ")" << EscapeJsonString(source.defaultSceneOnProjectOpen) << "\",\n";
-            out << R"(    "languageTag": ")" << EscapeJsonString(source.languageTag) << "\",\n";
+            out << R"(    "languageTag": ")" << EscapeJsonString(source.languageTag) << "\"\n";
             out << "  },\n";
         }
 
@@ -181,6 +181,7 @@ namespace Horo::Editor::SettingsStoreInternal {
             const EditorSettings &source = settings.source;
             out << "  \"appearance\": {\n";
             out << R"(    "themePreset": ")" << ToString(source.themePreset) << "\",\n";
+            out << R"(    "themeId": ")" << EscapeJsonString(source.themeId) << "\",\n";
             out << R"(    "accentColorHex": ")" << EscapeJsonString(source.accentColorHex) << "\",\n";
             out << R"(    "uiScalePercent": )" << settings.uiScalePercent << ",\n";
             out << R"(    "codeFontSizePx": )" << settings.codeFontSizePx << ",\n";
@@ -194,7 +195,9 @@ namespace Horo::Editor::SettingsStoreInternal {
             out << "  \"input\": {\n";
             out << R"(    "orbitSensitivity": )" << settings.orbitSensitivity << ",\n";
             out << R"(    "panSensitivity": )" << settings.panSensitivity << ",\n";
-            out << R"(    "invertOrbitY": )" << BoolString(source.invertOrbitY) << "\n";
+            out << R"(    "invertOrbitY": )" << BoolString(source.invertOrbitY) << ",\n";
+            const auto profile = Input::SerializeBindingProfile(source.keymap.profile);
+            out << R"(    "bindingProfile": )" << profile.Value() << "\n";
             out << "  },\n";
         }
 
@@ -250,6 +253,16 @@ namespace Horo::Editor::SettingsStoreInternal {
         out << "  \"schemaVersion\": 1,\n";
         WriteEditorGroup(out, sanitized);
         WriteAppearanceGroup(out, sanitized);
+        out << "  \"codeEditor\": {\n";
+        for (const auto &entry : CodeEditorBooleanSettings())
+            out << "    \"" << entry.key << "\": " << BoolString(settings.codeEditor.*entry.member) << ",\n";
+        const auto integers = CodeEditorIntegerSettings();
+        for (std::size_t index = 0; index < integers.size(); ++index) {
+            const auto &entry = integers[index];
+            out << "    \"" << entry.key << "\": " << std::clamp(settings.codeEditor.*entry.member, entry.minimum, entry.maximum)
+                << (index + 1 == integers.size() ? "\n" : ",\n");
+        }
+        out << "  },\n";
         WriteInputGroup(out, sanitized);
         WriteRenderingGroup(out, sanitized);
         WriteAudioGroup(out, sanitized);

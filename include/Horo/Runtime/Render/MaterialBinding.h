@@ -9,11 +9,83 @@
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/StandardPbrMaterial.h"
 
+#include <array>
+#include <cstddef>
 #include <memory>
 #include <optional>
+#include <span>
+#include <type_traits>
 #include <variant>
 
 namespace Horo::Render {
+    /** @brief Borrowed flat material-pass sequence whose element may be incomplete while its enclosing pass is declared.
+     * @details Stores only a pointer and count. It retains no objects, allocates nothing, and does not change the
+     * canonical flat batch bounds or frame-completion ownership. Construct from a valid span/array whose storage
+     * outlives synchronous admission. Iteration and standard-span conversion require a complete Pass type.
+     * @tparam Pass Exact material-pass element type; this view is scoped to the two material batch contracts below.
+     */
+    template <class Pass> class RenderMaterialBorrowedBatch final {
+    public:
+        /** @brief Creates an empty non-owning sequence. */
+        constexpr RenderMaterialBorrowedBatch() noexcept = default;
+
+        /** @brief Borrows an exact const-compatible span after its element type is complete.
+         * @tparam U Source element. @tparam Extent Source span extent. @param passes Valid borrowed source sequence.
+         */
+        template <class U, std::size_t Extent>
+            requires std::is_convertible_v<U (*)[], const Pass (*)[]>
+        constexpr RenderMaterialBorrowedBatch(std::span<U, Extent> passes) noexcept : data_(passes.data()), size_(passes.size()) {}
+
+        /** @brief Borrows an exact const-compatible fixed array.
+         * @tparam U Source element. @tparam Extent Array size. @param passes Borrowed source array.
+         */
+        template <class U, std::size_t Extent>
+            requires std::is_convertible_v<const U (*)[], const Pass (*)[]>
+        constexpr RenderMaterialBorrowedBatch(const std::array<U, Extent> &passes) noexcept : data_(passes.data()), size_(Extent) {}
+
+        /** @brief Borrows an exact const-compatible native array.
+         * @tparam U Source element. @tparam Extent Array size. @param passes Borrowed source array.
+         */
+        template <class U, std::size_t Extent>
+            requires std::is_convertible_v<U (*)[], const Pass (*)[]>
+        constexpr RenderMaterialBorrowedBatch(U (&passes)[Extent]) noexcept : data_(passes), size_(Extent) {}
+
+        /** @brief Returns the borrowed first-element pointer. @return Pointer, including null for the default empty sequence. */
+        [[nodiscard]] constexpr const Pass *data() const noexcept {
+            return data_;
+        }
+
+        /** @brief Returns the borrowed element count. @return Number of elements, without claiming batch admission. */
+        [[nodiscard]] constexpr std::size_t size() const noexcept {
+            return size_;
+        }
+
+        /** @brief Tests whether the borrowed sequence is empty. @return True exactly when the count is zero. */
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return size_ == 0;
+        }
+
+        /** @brief Begins readonly iteration after Pass is complete. @return First-element iterator. */
+        [[nodiscard]] constexpr const Pass *begin() const noexcept {
+            return data_;
+        }
+
+        /** @brief Ends readonly iteration after Pass is complete. @return Past-the-end iterator. */
+        [[nodiscard]] constexpr const Pass *end() const noexcept {
+            return size_ == 0 ? data_ : data_ + size_;
+        }
+
+        /** @brief Borrows one admitted element after Pass is complete. @param index Index strictly below size(). @return Element reference.
+         */
+        [[nodiscard]] constexpr const Pass &operator[](std::size_t index) const noexcept {
+            return data_[index];
+        }
+
+    private:
+        const Pass *data_{};
+        std::size_t size_{};
+    };
+
     /** @brief Exact buffer generation and admitted byte range. */
     struct MaterialBufferBinding {
         RenderBufferHandle buffer;
@@ -111,14 +183,20 @@ namespace Horo::Render {
 
     /** @brief Bounded explicit native material consumer; no compilation, resource creation or variant selection occurs in-frame. */
     struct RenderMaterialPass {
-        static constexpr std::size_t MaximumDraws = 128;
+        static constexpr std::size_t MaximumDraws = RenderGraphMaterialRaster::MaximumDraws;
+        static constexpr std::size_t MaximumPasses = 5;
+        static constexpr std::size_t MaximumBatchDraws = MaximumDraws * MaximumPasses;
         RenderTargetHandle target;
         FramebufferExtent extent;
         PrimaryOutputAttachment color;
         std::optional<float> depthClear{1.0F}; /**< Null means preserve depth; a value requests an explicit depth clear. */
         std::span<const RenderMaterialDraw> draws;
         std::optional<RenderQueueSubmission>
-            submission; /**< Explicit frontend order/timeline; required by Vulkan, borrowed waits copied at admission. */
+            submission;   /**< Explicit frontend order/timeline; required by Vulkan, borrowed waits copied at admission. */
+        bool depthOnly{}; /**< Requires a depth attachment and no color pipeline/attachment. */
+        std::optional<RenderMaterialRegion> region; /**< Raster viewport/scissor; attachment clears still cover the complete atlas. */
+        RenderMaterialBorrowedBatch<RenderMaterialPass>
+            precedingPasses; /**< At most four flat ordered passes sharing this submission and lease. */
     };
 
     /** @brief Synchronously borrowed resolved mesh and native adapter, retained by the submitted-frame lease. */
@@ -138,6 +216,9 @@ namespace Horo::Render {
         IRenderGraphResourceLease *lease{nullptr};
         RenderGraphLeaseTransfer *transfer{nullptr};
         std::optional<RenderQueueSubmission> submission;
+        bool depthOnly{};
+        std::optional<RenderMaterialRegion> region;
+        RenderMaterialBorrowedBatch<RenderMaterialExecutionRequest> precedingPasses;
     };
 
     /** @brief Visible admission outcome; an authored fallback carries the exact unsupported cause. */

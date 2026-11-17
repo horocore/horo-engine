@@ -1,5 +1,6 @@
 #pragma once
 /** @file EditorActivityHost.h @brief Explicit owner-lane composition of copied extension activity contributions. */
+#include "Horo/Extensions/EditorCommandRegistry.h"
 #include "Horo/Extensions/EditorSurfaceRegistry.h"
 #include "Horo/Extensions/EditorSvgIcon.h"
 #include "Horo/Extensions/ExtensionRetirement.h"
@@ -20,6 +21,12 @@ namespace Horo::Extensions {
         EditorSurfaceSnapshot surface;
         std::shared_ptr<const EditorSvgIcon> icon;
         std::uint64_t revision{};
+    };
+
+    /** @brief Copied command metadata, valid only while its provider generation remains active. */
+    struct EditorActivityCommandProjection final {
+        EditorCommandDescriptor command;
+        EditorSurfaceProviderIdentity provider;
     };
 
     /**
@@ -57,6 +64,13 @@ namespace Horo::Extensions {
                                                std::string_view nodeId, std::string_view actionId, std::uint64_t revision) const;
         /** @brief Returns retained prepared data until the next owner-lane Update. */
         [[nodiscard]] std::span<const EditorActivityProjection> Prepared() const noexcept;
+        /** @brief Returns retained explicit command contributions until the next Update. */
+        [[nodiscard]] std::span<const EditorActivityCommandProjection> PreparedCommands() const noexcept;
+        /** @brief Queues a live registered command through the existing bounded scheduled activity action path.
+         * @param id Registered command identity. @return Success or a typed stale/disabled/busy rejection.
+         * @details Requires owner-lane input admission; removed/disabled action nodes cannot execute.
+         */
+        [[nodiscard]] Result<void> QueueCommand(std::string_view id) const;
         /** @brief Revokes every session and clears pending focus before host shutdown. */
         void BeginShutdown() noexcept;
         /** @brief Resolves copied package text for an exact live provider, with en-US fallback and no allocation.

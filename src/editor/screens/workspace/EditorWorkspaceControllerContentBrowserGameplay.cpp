@@ -1,6 +1,7 @@
 #include "Horo/Editor/ProjectIntegrityValidatorService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
+#include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
@@ -26,10 +27,10 @@ namespace Horo::Editor {
             return;
         }
 
-        const std::filesystem::path projectRoot = NormalizeAbsolute(m_viewModel.projectRoot);
+        const std::filesystem::path projectRoot = NormalizeAbsolute(ProjectRoot());
         const std::filesystem::path assetsRoot = ProjectLayout::AssetRoot(projectRoot);
         const std::filesystem::path scriptsRoot = ProjectLayout::ScriptsRoot(projectRoot);
-        const std::filesystem::path requestedDirectory = NormalizeAbsolute(request.destination);
+        const std::filesystem::path requestedDirectory = NormalizeAbsolute(WorkspaceNativePath(request.destination));
         std::filesystem::path directory;
         if (nativeBehavior)
             directory = projectRoot / "source" / "gameplay";
@@ -69,13 +70,13 @@ namespace Horo::Editor {
             return;
         }
 
-        const std::filesystem::path source = directory / (request.baseName + (nativeBehavior ? ".cpp" : ".horo_script"));
+        const std::filesystem::path source = directory / WorkspaceNativePath(request.baseName + (nativeBehavior ? ".cpp" : ".horo_script"));
         if (std::filesystem::exists(source, filesystemError) || filesystemError) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.name_exists";
             return;
         }
 
-        const std::string behaviorName = source.stem().string();
+        const std::string behaviorName = WorkspacePathText(source.stem());
         const std::string typeId =
             std::format("game.{}.{}.{}", BehaviorNamespace(projectRoot), nativeBehavior ? "cpp" : "lua", BehaviorSlug(behaviorName));
         const std::string contents =
@@ -83,7 +84,7 @@ namespace Horo::Editor {
         if (const Result<void> written = WriteBehaviorFiles(*m_durableFiles, source, contents, nativeBehavior, typeId);
             written.HasError()) {
             LOG_ERROR("editor.asset_actions", "Create %s behavior files failed for '%s': %s", nativeBehavior ? "native" : "lua",
-                      source.string().c_str(), written.ErrorValue().message.c_str());
+                      WorkspacePathText(source).c_str(), written.ErrorValue().message.c_str());
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.create_behavior_failed";
             return;
         }
@@ -93,13 +94,15 @@ namespace Horo::Editor {
         }
 
         static_cast<void>(m_durableFiles->SyncDirectory(directory));
+        if (nativeBehavior)
+            NavigateContentBrowser(directory, true);
         RefreshContentBrowserAfterMutation();
         if (nativeBehavior)
             m_nativeBuildDebounceSeconds = 0.25F;
         else
             RefreshGameplayRegistry();
         LOG_INFO("editor.asset_actions", "Create %s behavior completed: source='%s'", nativeBehavior ? "native" : "lua",
-                 source.string().c_str());
+                 WorkspacePathText(source).c_str());
     }
 
     void EditorWorkspaceController::RefreshGameplayRegistry() {
@@ -109,8 +112,7 @@ namespace Horo::Editor {
             m_nativeGameplayReloadPending = true;
             return;
         }
-        std::unique_ptr<ProjectGameplayRegistry> candidate =
-            ProjectGameplayRegistry::Discover(m_viewModel.projectRoot, m_gameplayRetirements);
+        std::unique_ptr<ProjectGameplayRegistry> candidate = ProjectGameplayRegistry::Discover(ProjectRoot(), m_gameplayRetirements);
         if (m_playSession.IsActive()) {
             m_pendingGameplayRegistry = std::move(candidate);
             return;
@@ -118,30 +120,35 @@ namespace Horo::Editor {
         if (m_gameplayRegistry && candidate->HasBlockingDiagnostics()) {
             for (const auto &diagnostic : candidate->Diagnostics())
                 LOG_ERROR("editor.gameplay", "Gameplay discovery retained the last working generation for %s: %s",
-                          diagnostic.source.string().c_str(), diagnostic.error.message.c_str());
+                          WorkspacePathText(diagnostic.source).c_str(), diagnostic.error.message.c_str());
             return;
         }
         m_gameplayRegistry = std::move(candidate);
+        BindPlaySaveSources();
         RefreshAvailableBehaviorProjection();
     }
 
     void EditorWorkspaceController::RefreshAvailableBehaviorProjection() {
+        ++m_viewModel.availableBehaviorsRevision;
         InvalidateInspectorBehaviorBindings();
         m_viewModel.availableBehaviors.clear();
         for (const Gameplay::BehaviorRegistration &registration : m_gameplayRegistry->Registry().Registrations())
             m_viewModel.availableBehaviors.push_back(registration.descriptor);
         for (const ProjectGameplayDiagnostic &diagnostic : m_gameplayRegistry->Diagnostics())
-            LOG_ERROR("editor.gameplay", "Gameplay source '%s' is invalid: %s", diagnostic.source.string().c_str(),
+            LOG_ERROR("editor.gameplay", "Gameplay source '%s' is invalid: %s", WorkspacePathText(diagnostic.source).c_str(),
                       diagnostic.error.message.c_str());
     }
 
     void EditorWorkspaceController::ApplyPendingGameplayRegistry() {
-        if (!m_pendingGameplayRegistry || m_playSession.State() == EditorPlaySessionState::Starting)
+        if (!m_pendingGameplayRegistry || m_playSession.State() == EditorPlaySessionState::Starting ||
+            m_playSession.State() == EditorPlaySessionState::Stopping)
+            return;
+        if (m_playSession.IsActive() && !m_playSession.PrepareSaveRetirement())
             return;
         if (m_pendingGameplayRegistry->HasBlockingDiagnostics()) {
             for (const ProjectGameplayDiagnostic &diagnostic : m_pendingGameplayRegistry->Diagnostics())
-                LOG_ERROR("editor.gameplay", "Gameplay registry candidate was rejected for '%s': %s", diagnostic.source.string().c_str(),
-                          diagnostic.error.message.c_str());
+                LOG_ERROR("editor.gameplay", "Gameplay registry candidate was rejected for '%s': %s",
+                          WorkspacePathText(diagnostic.source).c_str(), diagnostic.error.message.c_str());
             m_pendingGameplayRegistry.reset();
             return;
         }
@@ -154,28 +161,41 @@ namespace Horo::Editor {
             return;
         }
         m_gameplayRegistry = std::move(m_pendingGameplayRegistry);
+        BindPlaySaveSources();
         RefreshAvailableBehaviorProjection();
         LOG_INFO("editor.gameplay", "Gameplay module reloaded at a fixed-tick safe point.");
     }
 
-    void EditorWorkspaceController::ApplyNativeGameplayReload() {
+    /** @copydoc EditorWorkspaceController::CanApplyNativeGameplayReload */
+    bool EditorWorkspaceController::CanApplyNativeGameplayReload() {
         if (m_nativeGameplayReloadQuarantined || !m_nativeGameplayReloadPending ||
-            m_playSession.State() == EditorPlaySessionState::Starting)
+            m_playSession.State() == EditorPlaySessionState::Starting || m_playSession.State() == EditorPlaySessionState::Stopping)
+            return false;
+        return m_playSession.PrepareSaveRetirement();
+    }
+
+    void EditorWorkspaceController::ApplyNativeGameplayReload() {
+        if (!CanApplyNativeGameplayReload())
             return;
         m_nativeGameplayReloadPending = false;
         m_pendingGameplayRegistry.reset();
         if (!m_gameplayRegistry || !m_gameplayRegistry->HasNativeModule() || !m_playSession.IsActive())
             return;
 
-        const std::filesystem::path projectRoot{m_viewModel.projectRoot};
+        const std::filesystem::path projectRoot{ProjectRoot()};
         auto begun = BeginNativeGameplayReload(projectRoot);
         if (begun.HasError()) {
+            (void)RebindSaveAfterUnchangedNativeFailure();
             LogNativeReloadFailure("could not begin safely", begun.ErrorValue());
             return;
         }
         NativeGameplayReloadTransaction transaction = std::move(begun).Value();
         if (Result<void> retired = RetireNativeGameplayGeneration(transaction); retired.HasError()) {
             Error error = retired.ErrorValue();
+            if (RebindSaveAfterUnchangedNativeFailure()) {
+                LogNativeReloadFailure("preparation failed; the original generation remains active", error);
+                return;
+            }
             DegradeNativeGameplayReload(transaction, error);
             LogNativeReloadFailure("could not retire safely", error);
             return;
@@ -187,6 +207,19 @@ namespace Horo::Editor {
             return;
         }
         RollbackNativeGameplayReload(projectRoot, std::move(transaction), candidate.ErrorValue());
+    }
+
+    /** @copydoc EditorWorkspaceController::RebindSaveAfterUnchangedNativeFailure */
+    bool EditorWorkspaceController::RebindSaveAfterUnchangedNativeFailure() {
+        if (const auto state = m_playSession.State(); state != EditorPlaySessionState::Playing && state != EditorPlaySessionState::Paused)
+            return false;
+        if (!m_gameplayRegistry || !m_playSession.SceneView())
+            return false;
+        BindPlaySaveSources();
+        const auto binding = m_playSession.SaveBinding().lock();
+        if (binding && binding->saveError)
+            LogNativeReloadFailure("kept the live generation but could not rebind Play save sources", *binding->saveError);
+        return true;
     }
 
     Result<EditorWorkspaceController::NativeGameplayReloadTransaction> EditorWorkspaceController::BeginNativeGameplayReload(
@@ -239,6 +272,10 @@ namespace Horo::Editor {
                                                                NativeGameplayReloadTransaction &transaction) {
         m_gameplayRegistry = std::move(generation);
         transaction.phase = NativeGameplayReloadTransaction::Phase::Committed;
+        BindPlaySaveSources();
+        const auto binding = m_playSession.SaveBinding().lock();
+        if (binding && binding->saveError)
+            LogNativeReloadFailure("committed the native generation but could not rebind Play save sources", *binding->saveError);
         RefreshAvailableBehaviorProjection();
         LOG_INFO("editor.gameplay", "Native gameplay generation reloaded transactionally at a fixed-tick safe point.");
     }
@@ -256,6 +293,7 @@ namespace Horo::Editor {
             activated = m_playSession.RestoreAfterReload(rollback->Registry(), transaction.playSnapshot);
         if (activated.HasValue()) {
             m_gameplayRegistry = std::move(rollback);
+            BindPlaySaveSources();
             transaction.phase = NativeGameplayReloadTransaction::Phase::RolledBack;
             RefreshAvailableBehaviorProjection();
             LogNativeReloadFailure("rejected the candidate and restored the previous generation", candidateError);

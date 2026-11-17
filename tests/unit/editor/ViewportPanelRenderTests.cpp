@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <limits>
 #include <optional>
 #include <string>
@@ -68,11 +69,13 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
 
     Input::FrameNumber inputFrame = 1;
     ImVec2 viewportOrigin;
+    float viewportScrollY{};
 
     const auto drawFrame = [&] {
         ImGui::NewFrame();
         inputCollector.BeginFrame(inputFrame++);
         inputCollector.SetPointerPosition(io.MousePos.x, io.MousePos.y);
+        inputCollector.AddPointerWheel(io.MouseWheelH, io.MouseWheel);
         inputCollector.SetPointerButton(Input::PointerButton::Primary, io.MouseDown[ImGuiMouseButton_Left]);
         inputCollector.SetPointerButton(Input::PointerButton::Secondary, io.MouseDown[ImGuiMouseButton_Right]);
         inputCollector.SetPointerButton(Input::PointerButton::Middle, io.MouseDown[ImGuiMouseButton_Middle]);
@@ -85,6 +88,9 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
         viewportOrigin = ImGui::GetCursorScreenPos();
         panel.DrawPanel(viewportOrigin, ImVec2(400.0F, 280.0F), viewModel, command, context);
+        const auto &children = ImGui::GetCurrentWindow()->DC.ChildWindows;
+        REQUIRE_FALSE(children.empty());
+        viewportScrollY = children.front()->Scroll.y;
         ImGui::End();
         ImGui::Render();
     };
@@ -165,6 +171,16 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     command = {};
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     drawFrame();
+    command = {};
+    io.AddMouseWheelEvent(0.0F, -0.25F);
+    drawFrame();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::NavigateViewport);
+    REQUIRE(command.viewportNavigationPayload.has_value());
+    REQUIRE(command.viewportNavigationPayload->dollyScale > 1.0F);
+    REQUIRE(command.viewportNavigationPayload->dollyScale < 1.1F);
+    command = {};
+    drawFrame();
+    REQUIRE(viewportScrollY == 0.0F);
     command = {};
     io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
     drawFrame();

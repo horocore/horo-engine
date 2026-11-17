@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Render/RenderShaderResources.h"
+#include "OpenGLProgramValidation.h"
 #include "OpenGLShaderRealization.h"
 
 #include <span>

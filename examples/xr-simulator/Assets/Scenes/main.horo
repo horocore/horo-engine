@@ -1,0 +1,130 @@
+{
+  "objects": [
+    {
+      "components": {},
+      "editor": {
+        "locked": false,
+        "visible": true
+      },
+      "id": 1,
+      "meshAsset": null,
+      "name": "XR Tracking Origin",
+      "parent": null,
+      "primitiveMesh": null,
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "components": {
+        "behaviors": [
+          {
+            "enabled": true,
+            "fields": [],
+            "instanceId": 1,
+            "schemaVersion": 1,
+            "typeId": "game.xr_simulator.movement"
+          }
+        ]
+      },
+      "editor": {
+        "locked": false,
+        "visible": true
+      },
+      "id": 2,
+      "meshAsset": null,
+      "name": "Semantic Movement Cube",
+      "parent": null,
+      "primitiveMesh": {
+        "id": "primitive.mesh.box",
+        "parameters": {
+          "size": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "version": 1
+      },
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "components": {
+        "light": {
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enabled": true,
+          "innerConeRadians": 0.349065899848938,
+          "intensity": 1.0,
+          "kind": "directional",
+          "outerConeRadians": 0.7853981852531433,
+          "range": 10.0
+        }
+      },
+      "editor": {
+        "locked": false,
+        "visible": true
+      },
+      "id": 3,
+      "meshAsset": null,
+      "name": "Sample Light",
+      "parent": null,
+      "primitiveMesh": null,
+      "transform": {
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    }
+  ],
+  "prefabInstances": [],
+  "schemaVersion": 1
+}

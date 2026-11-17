@@ -2,8 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
-#include <format>
 #include <fstream>
+#include <string>
 
 namespace {
     /** @brief Owns an exclusively created canonical root for native lock-file tests. */
@@ -23,8 +23,8 @@ namespace {
     private:
         [[nodiscard]] static std::filesystem::path CreateRoot() {
             const auto root =
-                std::filesystem::current_path() /
-                std::filesystem::path{std::format("publication lock ü {}", std::chrono::steady_clock::now().time_since_epoch().count())};
+                std::filesystem::current_path() / std::filesystem::path{u8"publication lock \u00fc \u56fe "}.concat(
+                                                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
             REQUIRE(std::filesystem::create_directory(root));
             return std::filesystem::canonical(root);
         }

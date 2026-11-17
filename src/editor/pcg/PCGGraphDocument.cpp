@@ -406,7 +406,9 @@ namespace Horo::Editor {
                 return Result<Assets::AssetSourcePublication>::Failure(MakeError(PCGDocumentError(Reason::Conflict)));
             if (save.snapshot_.session != state_->session || save.replacementEpoch_ != state_->replacementEpoch ||
                 save.snapshot_.catalogRevision != state_->catalog.revision || save.snapshot_.acceptedSource != state_->acceptedSource ||
-                path != root / state_->identity.key.source.Value() || save.snapshot_.revision > state_->revision)
+                path != root / std::filesystem::path{std::u8string{state_->identity.key.source.Value().begin(),
+                                                                   state_->identity.key.source.Value().end()}} ||
+                save.snapshot_.revision > state_->revision)
                 return Result<Assets::AssetSourcePublication>::Failure(MakeError(PCGDocumentError(Reason::Stale)));
             auto projectLease = mutations.TryAcquire({root, ProjectMutationOwner::Asset, "pcg-source-save"});
             if (projectLease.HasError())

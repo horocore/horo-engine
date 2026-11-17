@@ -88,6 +88,14 @@ namespace Horo::Character {
         });
     }
 
+    Result<CharacterEventCapture> CharacterCapability::CaptureEvents(const CharacterEventCaptureRequest &request,
+                                                                     std::span<CharacterMovementEvent> events,
+                                                                     std::span<CharacterEventTerminalState> terminal) const {
+        return WithWorld(state_, [&request, &events, &terminal](const CharacterWorld &world) {
+            return Result<CharacterEventCapture>::Success(world.CaptureEvents(request, events, terminal));
+        });
+    }
+
     /** @copydoc CharacterCapability::Revoke */
     void CharacterCapability::Revoke() const noexcept {
         if (state_)
