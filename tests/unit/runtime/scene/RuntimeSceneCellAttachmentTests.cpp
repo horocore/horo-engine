@@ -1,4 +1,5 @@
 #include "../world_streaming/StreamingCellCandidateTestSupport.h"
+#include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -217,6 +218,79 @@ namespace Horo::Runtime {
         REQUIRE_FALSE(service.ActiveScene()->Find({10}).has_value());
         REQUIRE(service.ActiveScene()->Find({20}) == unaffected);
         REQUIRE(service.ActiveScene()->BaselineCount() == 1);
+    }
+
+    TEST_CASE("Perception retires listeners and sources when their Scene cell unloads", "[scene][cell_attachment][lifecycle][ai]") {
+        Counts counts;
+        RuntimeSceneService service;
+        Activate(service);
+        const auto cell = Payload();
+        const auto request = Request(service, cell);
+        Attach(service, cell, request, Owner(cell, request, counts));
+
+        AI::PerceptionSpatialBroadphase perception;
+        const auto sense = AI::SenseTypeIds::Sight;
+        const auto root = *service.ActiveScene()->Find({100});
+        const AI::PerceptionSpatialListener resident{.entity = root, .senses = {sense}, .senseCount = 1};
+        const auto publishCell = [&](const std::uint64_t revision) {
+            const auto view = *service.ActiveScene();
+            const auto listener = view.Find({10});
+            const auto source = view.Find({11});
+            REQUIRE(listener);
+            REQUIRE(source);
+            const std::array listeners{resident, AI::PerceptionSpatialListener{.entity = *listener, .senses = {sense}, .senseCount = 1}};
+            const std::array sources{AI::PerceptionSpatialSource{.entity = *source, .layers = 1, .senses = {sense}, .senseCount = 1}};
+            const auto published = perception.Publish(view, revision, listeners, sources);
+            REQUIRE(published.HasValue());
+            return published.Value();
+        };
+        const AI::PerceptionSpatialQuery query{.listener = root, .sense = sense, .radiusMillimeters = 1000, .visibleLayers = 1};
+        const auto before = publishCell(1);
+        const auto oldListener = *service.ActiveScene()->Find({10});
+        const auto oldSource = *service.ActiveScene()->Find({11});
+        REQUIRE(before->ListenerCount() == 2);
+        REQUIRE(before->Allows(oldListener, oldSource, sense));
+        const auto pending = before->Query(query);
+        REQUIRE(pending.HasValue());
+        REQUIRE(pending.Value().count == 1);
+        REQUIRE(pending.Value().candidates[0].entity == oldSource);
+
+        REQUIRE(QueueRuntimeSceneCellDetachment(service, cell.Identity(), request, Owner(cell, request, counts)).HasValue());
+        REQUIRE(before->ReadAuthorization()->IsCurrent());
+        Commit(service);
+        REQUIRE_FALSE(service.TakeOperationError().has_value());
+        const auto unloaded = *service.ActiveScene();
+        REQUIRE_FALSE(FindRuntimeSceneCellAttachment(unloaded, cell.Identity(), request.fence.epoch));
+        REQUIRE(unloaded.Get(oldListener).HasError());
+        REQUIRE(unloaded.Get(oldSource).HasError());
+        REQUIRE(perception.Publish(unloaded, 2, std::span{&resident, 1}, {}).HasValue());
+        const auto current = perception.Current();
+        CHECK(current->ListenerCount() == 1);
+        CHECK(current->SourceCount() == 0);
+        CHECK(current->ListenerPosition(oldListener).HasError());
+        CHECK(current->Query(query).Value().count == 0);
+        CHECK_FALSE(before->ReadAuthorization()->IsCurrent());
+        CHECK(before->Query(query).HasError());
+
+        auto reload = request;
+        reload.fence.generation = IdentityFrom<W::StreamingGeneration>(2);
+        Attach(service, cell, reload, Owner(cell, reload, counts));
+        const auto reloaded = *service.ActiveScene();
+        const auto newListener = *reloaded.Find({10});
+        const auto newSource = *reloaded.Find({11});
+        CHECK(newListener != oldListener);
+        CHECK(newSource != oldSource);
+        CHECK(reloaded.Get(pending.Value().candidates[0].entity).HasError());
+        const auto after = publishCell(3);
+        CHECK(after->ListenerCount() == 2);
+        CHECK(after->SourceCount() == 1);
+        CHECK_FALSE(after->Allows(oldListener, newSource, sense));
+        CHECK_FALSE(after->Allows(newListener, oldSource, sense));
+        CHECK(after->Allows(newListener, newSource, sense));
+        const auto reacquired = after->Query(query);
+        REQUIRE(reacquired.HasValue());
+        REQUIRE(reacquired.Value().count == 1);
+        CHECK(reacquired.Value().candidates[0].entity == newSource);
     }
 
     TEST_CASE("Cell cancellation and stale provider barrier preserve canonical storage", "[scene][cell_attachment][rollback]") {
