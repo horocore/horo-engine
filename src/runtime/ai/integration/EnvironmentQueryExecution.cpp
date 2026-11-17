@@ -92,6 +92,19 @@ namespace Horo::AI {
             const auto *actor = std::get_if<Runtime::EntityRef>(&item);
             return actor && scene.Get(*actor).HasError();
         }
+
+        /** @brief Projects only the bounded winning prefix and checks its captured actor generations. */
+        void CopyDebugWinners(QueryDebugSnapshot &snapshot, const QueryExecutionResult &result, const std::size_t limit,
+                              const Runtime::RuntimeSceneView &scene) {
+            snapshot.terminalStatus = result.status;
+            snapshot.winnerCount = result.winners.size();
+            const auto count = std::min(snapshot.winnerCount, limit);
+            snapshot.winners.reserve(count);
+            for (const auto &winner : std::span{result.winners}.first(count)) {
+                snapshot.stale = snapshot.stale || RetiredActor(winner.item, scene);
+                snapshot.winners.push_back(winner.score);
+            }
+        }
     }  // namespace
 
     QueryExecution::QueryExecution(QueryExecutionInputs inputs, const QueryGeneratorProvenance provenance, QueryScoringPlan scoring,
@@ -399,16 +412,8 @@ namespace Horo::AI {
         snapshot.stale = snapshot.stale || std::ranges::any_of(snapshot.candidates, [&](const QueryDebugCandidate &candidate) {
             return RetiredActor(items_[candidate.index], scene);
         });
-        if (published_) {
-            snapshot.terminalStatus = result_.status;
-            snapshot.winnerCount = result_.winners.size();
-            const auto count = std::min(snapshot.winnerCount, settings_.debugCapture.maximumSamples);
-            snapshot.winners.reserve(count);
-            for (const auto &winner : std::span{result_.winners}.first(count)) {
-                snapshot.stale = snapshot.stale || RetiredActor(winner.item, scene);
-                snapshot.winners.push_back(winner.score);
-            }
-        }
+        if (published_)
+            CopyDebugWinners(snapshot, result_, settings_.debugCapture.maximumSamples, scene);
         if (snapshot.stale)
             for (auto &candidate : snapshot.candidates)
                 candidate.point.reset();
