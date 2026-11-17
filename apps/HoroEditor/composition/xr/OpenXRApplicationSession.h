@@ -95,9 +95,11 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<XR::OpenXRInternal::OpenXRSelectedVulkanBinding *> BorrowGraphics(const XR::XRSessionId &candidate);
         /** @brief Creates the same unpublished native session and captures actual session-dependent census.
+         * @param scope Whether failed acquisition belongs to full startup or a session-only probe.
          * @return Real spaces/formats or original typed failure; no Horo session identity is issued.
          */
-        [[nodiscard]] Result<XR::OpenXRInternal::NativeSessionCensus> PrepareSession();
+        [[nodiscard]] Result<XR::OpenXRInternal::NativeSessionCensus> PrepareSession(
+            XR::OpenXRInternal::NativeSessionPreparationScope scope = XR::OpenXRInternal::NativeSessionPreparationScope::Owner);
         /** @brief Performs one cold test using the selected native owner, graphics binding and configuration.
          * @param bindings Same installed declaration used by Play to check requested action and space limits.
          * @return Actual creation/census and retirement result, or typed failure with any cleanup cause.

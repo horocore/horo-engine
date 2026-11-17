@@ -135,7 +135,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRApplicationSession::PrepareSession */
-    Result<NativeSessionCensus> OpenXRApplicationSession::PrepareSession() {
+    Result<NativeSessionCensus> OpenXRApplicationSession::PrepareSession(const NativeSessionPreparationScope scope) {
         using Outcome = Result<NativeSessionCensus>;
         if (const auto current = Current(); current.HasError())
             return Outcome::Failure(current.ErrorValue());
@@ -147,7 +147,7 @@ namespace Horo::Application::Internal {
                 return Outcome::Failure(current.ErrorValue());
             return Outcome::Success(*sessionCensus_);
         }
-        if (auto prepared = native_->PrepareSession(request); prepared.HasError())
+        if (auto prepared = native_->PrepareSession(request, scope); prepared.HasError())
             return Outcome::Failure(prepared.ErrorValue());
         auto observed = native_->DiscoverSession(request);
         if (observed.HasError())
@@ -166,7 +166,7 @@ namespace Horo::Application::Internal {
             return admitted;
         if (auto retired = RetirePreparation(); retired.HasError())
             return Result<void>::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
-        const auto prepared = PrepareSession();
+        const auto prepared = PrepareSession(NativeSessionPreparationScope::Session);
         if (auto retired = RetirePreparation(); retired.HasError())
             return Result<void>::Failure(WrapError(XRSessionErrors::SetupCleanupPending, std::move(retired).ErrorValue()));
         if (prepared.HasError())

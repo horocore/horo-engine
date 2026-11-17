@@ -76,6 +76,12 @@ namespace Horo::XR::OpenXRInternal {
         XRLoaderPreflightAttempt activeAttempt;
     };
 
+    /** @brief Describes which prefix belongs to one failed native session preparation. */
+    enum class NativeSessionPreparationScope : std::uint8_t {
+        Owner,   /**< Full initial startup owns the selected instance and system. */
+        Session, /**< Reversible probe borrows the already selected instance and system. */
+    };
+
     /** @brief Borrowed activation input; no spans or snapshot references escape Create. */
     struct NativeSessionRequest final {
         XRSessionId candidate;
@@ -128,10 +134,12 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Creates an unpublished native session so real session-dependent facts can be enumerated.
          * @param request Exact discovery/preflight/attempt with independently validated selected graphics binding; no Horo session identity
          * exists yet.
-         * @return Preparation outcome; failure follows the same debt-preserving reverse cleanup.
+         * @param scope Ownership rollback scope on failure. Session-scoped probes retain the selected discovery.
+         * @return Preparation outcome; failure reverses its owned resource prefix or retains exact cleanup debt.
          * @post Session() remains invalid. No feature plan or space/format availability is fabricated.
          */
-        [[nodiscard]] Result<void> PrepareSession(const NativeSessionPreparation &request);
+        [[nodiscard]] Result<void> PrepareSession(const NativeSessionPreparation &request,
+                                                  NativeSessionPreparationScope scope = NativeSessionPreparationScope::Owner);
         /** @brief Borrows an unpublished session solely for bounded backend discovery/negotiation.
          * @param request Exact successful preparation attempt and retained install/runtime.
          * @return Prepared native tuple; no activation or frame-use authority is transferred.

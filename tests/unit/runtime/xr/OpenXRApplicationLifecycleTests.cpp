@@ -385,6 +385,12 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.play->PumpSetupTest();
             CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Permission);
             CHECK(fixture.script.native.liveSessions == 0);
+            CHECK(fixture.script.native.liveInstances == 1);
+            fixture.script.native.fail = {};
+            REQUIRE(fixture.play->RequestSetupTest().HasValue());
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().test == Editor::EditorXrSetupTestState::Passed);
+            CHECK(fixture.script.native.liveSessions == 0);
         }
         SECTION("a retained exact session must retire on retry") {
             fixture.script.native.failRetirement = true;

@@ -210,6 +210,34 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.script.calls.back() == "destroy-instance");
     }
 
+    TEST_CASE("OpenXR rejected reversible probe preserves the selected discovery for retry", "[unit][xr][native]") {
+        Fixture fixture;
+        REQUIRE(fixture.owner.PrepareDiscovery(Discovery(fixture)).HasValue());
+        const auto discovery = fixture.owner.BorrowDiscovery(fixture.preflight.Attempt());
+        REQUIRE(discovery.HasValue());
+        fixture.script.fail = "session";
+        fixture.script.failureResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+        const auto failed = fixture.owner.PrepareSession(Preparation(fixture), NativeSessionPreparationScope::Session);
+        RequireFailureIdentity(failed, XRErrors::PermissionDenied);
+        CHECK(fixture.script.calls.back() == "release-graphics");
+        CHECK(fixture.script.liveInstances == 1);
+        CHECK(fixture.script.liveSessions == 0);
+        CHECK_FALSE(fixture.owner.Session().IsValid());
+        const auto retained = fixture.owner.BorrowDiscovery(fixture.preflight.Attempt());
+        REQUIRE(retained.HasValue());
+        CHECK(retained.Value().instance == discovery.Value().instance);
+        CHECK(retained.Value().system == discovery.Value().system);
+
+        fixture.script.fail = {};
+        REQUIRE(fixture.owner.PrepareSession(Preparation(fixture), NativeSessionPreparationScope::Session).HasValue());
+        CHECK(fixture.script.liveSessions == 1);
+        REQUIRE(fixture.owner.RetireSession().HasValue());
+        CHECK(fixture.script.liveInstances == 1);
+        CHECK(fixture.script.liveSessions == 0);
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.script.liveInstances == 0);
+    }
+
     TEST_CASE("OpenXR failed final admission retains session graphics and instance debt for close retry", "[unit][xr][native]") {
         Fixture fixture;
         REQUIRE(fixture.owner.PrepareDiscovery(Discovery(fixture)).HasValue());
