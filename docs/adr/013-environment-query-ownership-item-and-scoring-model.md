@@ -210,6 +210,15 @@ Dead entities cause a miss rather than silent filtering/re-ranking. Caller-owned
 result storage survives eviction, but Actor handles do not keep entities alive.
 Consumers revalidate generation and freshness before subsequent use.
 
+`QueryResultCache` is composed per Scene. A host supplies the canonical
+dynamic inputs and a complete ordered dependency footprint, and the cache
+also compares the actual captured context values. Incomplete read sets bypass
+reuse. Only complete adaptive results enter the cache. The host opts into
+shared point-only data explicitly. Actor-bearing, opaque-context, and
+agent-private results stay isolated. The entry count, resident logical byte
+charge, and simulation-tick lifetime are explicit limits. The host charges
+insertion staging and caller-retained snapshots to the enclosing EQS budget.
+
 ### Cancellation, Capacity And Validation
 
 Query handles include manager/scene incarnation, slot and generation. Cancellation

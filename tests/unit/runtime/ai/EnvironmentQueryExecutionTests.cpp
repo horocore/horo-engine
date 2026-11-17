@@ -1,6 +1,7 @@
 #include "AllocationProbe.h"
 #include "EnvironmentQueryTestSupport.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryCache.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
@@ -157,7 +158,8 @@ namespace Horo::AI {
         };
 
         [[nodiscard]] std::unique_ptr<QueryExecution> MakeExecution(ExecutionProbe &probe, Runtime::RuntimeScene &scene,
-                                                                    bool reverseStages = false, bool deterministic = false) {
+                                                                    bool reverseStages = false, bool deterministic = false,
+                                                                    QueryExecutionInputs *capturedInputs = nullptr) {
             QueryFixture fixture;
             const QueryTestDescriptor test{MakeIdentity<QueryTestId>(17), fixture.generator.origin, fixture.items[0].id, {1, 1}, {}, {}};
             const auto registry = fixture.Registry(std::span{&test, 1});
@@ -174,6 +176,8 @@ namespace Horo::AI {
             const auto contexts = capture.Capture(plan, registry, providers.Value(), view, Source(view));
             REQUIRE(contexts.HasValue());
             const QueryExecutionInputs inputs{{AiRuntimeIncarnation::Create(7).Value(), {1, 1}}, contexts.Value()};
+            if (capturedInputs)
+                *capturedInputs = inputs;
             const QueryGeneratorProvenance provenance{plan.Stages()[0].id, fixture.generator.id, fixture.generator.origin.provider, 1};
             const auto admit = [&]() {
                 if (deterministic)
@@ -185,6 +189,99 @@ namespace Horo::AI {
             auto execution = admit();
             REQUIRE(execution.HasValue());
             return std::move(execution).Value();
+        }
+
+        TEST_CASE("EQS cache retains complete results under exact scene, dependency and owner bounds", "[unit][ai][eqs][cache]") {
+            auto scene = MakeScene();
+            ExecutionProbe probe;
+            ExecutionSource authority{probe};
+            QueryExecutionInputs inputs;
+            auto query = MakeExecution(probe, *scene, false, false, &inputs);
+            for (std::uint64_t tick = 5; tick <= 8 && !query->Published(); ++tick) {
+                if (!query->Sync(tick)) {
+                    AiWorkBudget budget{64};
+                    query->Advance(tick, {budget, budget, budget});
+                }
+            }
+            const auto *result = query->Published();
+            REQUIRE(result);
+            REQUIRE(result->status == QueryExecutionStatus::Completed);
+            const auto tick = result->publicationTick;
+            auto created = QueryResultCache::Create(scene->View().RuntimeId(), {1, 8192, 3});
+            REQUIRE(created.HasValue());
+            auto cache = std::move(created).Value();
+            std::array canonical{std::byte{1}};
+            std::array dependencies{QueryCacheDependency{MakeIdentity<QueryProviderId>(1), 1, 2, 0, 3}};
+            QueryCacheKey key{inputs.contexts->Query(), {}, canonical, dependencies, true};
+            key.artifact.bytes[0] = 1;
+            REQUIRE(cache.Store(scene->View(), inputs, authority, key, *result, tick).Value());
+            const auto retained = cache.Lookup(scene->View(), inputs, authority, key, tick);
+            REQUIRE(retained);
+            CHECK(retained->agent == inputs.agent);
+            CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick + 3));
+
+            SECTION("live dependency, authority and Scene must match") {
+                ++dependencies[0].revision;
+                CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));
+                --dependencies[0].revision;
+                ++dependencies[0].incarnation;
+                CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));
+                --dependencies[0].incarnation;
+                key.completeFootprint = false;
+                CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));
+                key.completeFootprint = true;
+                auto otherScene = MakeScene(88);
+                CHECK_FALSE(cache.Lookup(otherScene->View(), inputs, authority, key, tick));
+                probe.current = false;
+                CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));
+            }
+            SECTION("eviction never invalidates caller snapshots and private data cannot cross agents") {
+                auto other = inputs;
+                ++other.agent.slot.generation;
+                CHECK_FALSE(cache.Lookup(scene->View(), other, authority, key, tick));
+                canonical[0] = std::byte{2};
+                CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));
+                REQUIRE(cache.Store(scene->View(), inputs, authority, key, *result, tick).Value());
+                canonical[0] = std::byte{1};
+                CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));
+                CHECK(retained->winners.size() == result->winners.size());
+            }
+            SECTION("byte budget and invalid results do not create entries") {
+                auto limited = QueryResultCache::Create(scene->View().RuntimeId(), {1, 256, 3});
+                REQUIRE(limited.HasValue());
+                auto small = std::move(limited).Value();
+                ExpectError(small.Store(scene->View(), inputs, authority, key, *result, tick), AIErrors::EnvironmentQueryLimitExceeded);
+                auto partial = *result;
+                partial.status = QueryExecutionStatus::PartialSuccess;
+                CHECK_FALSE(cache.Store(scene->View(), inputs, authority, key, partial, tick).Value());
+                CHECK_FALSE(small.Lookup(scene->View(), inputs, authority, key, tick));
+            }
+            SECTION("point-only sharing removes the producing agent identity") {
+                key.sharedPointData = true;
+                REQUIRE(cache.Store(scene->View(), inputs, authority, key, *result, tick).Value());
+                auto other = inputs;
+                ++other.agent.slot.generation;
+                const auto shared = cache.Lookup(scene->View(), other, authority, key, tick);
+                REQUIRE(shared);
+                CHECK_FALSE(shared->agent.IsValid());
+            }
+            SECTION("retired winner identities miss without changing a retained snapshot") {
+                const auto entity = Source(scene->View()).querier;
+                auto actorResult = *result;
+                REQUIRE_FALSE(actorResult.winners.empty());
+                actorResult.winners.front().item = entity;
+                key.sharedPointData = true;
+                CHECK_FALSE(cache.Store(scene->View(), inputs, authority, key, actorResult, tick).Value());
+                key.sharedPointData = false;
+                REQUIRE(cache.Store(scene->View(), inputs, authority, key, actorResult, tick).Value());
+                const auto actors = cache.Lookup(scene->View(), inputs, authority, key, tick);
+                REQUIRE(actors);
+                Runtime::SceneCommandBuffer unload;
+                unload.Destroy(entity);
+                REQUIRE(scene->Commit(unload).HasValue());
+                CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));
+                CHECK(std::get<Runtime::EntityRef>(actors->winners.front().item) == entity);
+            }
         }
 
         TEST_CASE("Deterministic EQS uses real reserved owner scheduling and publishes the same semantic result tick",

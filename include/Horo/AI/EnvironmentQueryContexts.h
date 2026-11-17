@@ -57,6 +57,11 @@ namespace Horo::AI {
     /** @brief Immutable owned values fixed for one query execution revision. */
     class QueryContextSnapshot final {
     public:
+        /** @brief Returns the template identity that admitted these values. @return Exact query identity. */
+        [[nodiscard]] QueryId Query() const noexcept {
+            return query_;
+        }
+
         /** @brief Returns the source scene incarnation. @return Exact generation-checked runtime ID. */
         [[nodiscard]] Runtime::SceneRuntimeId Scene() const noexcept;
         /** @brief Returns the submission execution revision. @return Non-zero revision. */

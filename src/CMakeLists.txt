@@ -1807,6 +1807,7 @@ add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/EnvironmentQueryContexts.cpp
     runtime/ai/integration/EnvironmentQueryGenerators.cpp
     runtime/ai/integration/EnvironmentQueryExecution.cpp
+    runtime/ai/integration/EnvironmentQueryCache.cpp
     runtime/ai/integration/EnvironmentQueryOwnerSource.cpp
     runtime/ai/integration/EnvironmentQueryPerception.cpp
         runtime/ai/integration/PerceptionSpatialBroadphase.cpp)
