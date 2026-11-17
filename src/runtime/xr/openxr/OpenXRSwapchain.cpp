@@ -328,6 +328,17 @@ namespace Horo::XR::OpenXRInternal {
         return FinishClose();
     }
 
+    /** @copydoc OpenXRSwapchain::CloseAfterSessionLoss */
+    Result<bool> OpenXRSwapchain::CloseAfterSessionLoss(const XRSessionId &owner) {
+        if (auto thread = CheckThread(); thread.HasError())
+            return Result<bool>::Failure(thread.ErrorValue());
+        if (!owner.IsValid() || owner != request_.target.session)
+            return Result<bool>::Failure(MakeError(XRErrors::IdentityStale));
+        lost_ = true;
+        releasedImage_ = {};
+        return Close();
+    }
+
     /** @copydoc OpenXRSwapchain::ValidateAcquisition */
     Result<void> OpenXRSwapchain::ValidateAcquisition(const XRSwapchainImageId &image) const {
         if (auto current = CheckCurrent(); current.HasError())

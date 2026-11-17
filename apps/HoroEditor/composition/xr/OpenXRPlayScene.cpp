@@ -178,6 +178,8 @@ namespace Horo::Application::Internal {
         using Output = Result<std::shared_ptr<SceneState>>;
         if (auto lane = owner.Lane(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
+        if (owner.instanceLost_)
+            return Output::Failure(MakeError(XRErrors::RuntimeUnavailable, "Reopen the editor to select a fresh XR instance and device."));
         if (owner.setupCleanupPending_)
             return Output::Failure(MakeError(XRSessionErrors::SetupCleanupPending));
         if (owner.scene_ || !owner.input_.port || !owner.input_.geometry || !owner.input_.router ||

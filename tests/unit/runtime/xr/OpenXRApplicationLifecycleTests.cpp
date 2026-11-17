@@ -511,6 +511,76 @@ namespace Horo::Tests::OpenXRApplication {
         }
     }  // namespace
 
+    TEST_CASE("Real installed Play suspends XR admission while the bounded event poll has unread work", "[xr][application][play][events]") {
+        ApplicationFixture fixture{true};
+        auto scene = PublishPlay(fixture);
+        using enum Host::OpenXRPlayPresentation;
+        REQUIRE(fixture.play->PresentationState() == FrameAdmitted);
+        const auto polls = fixture.script.events.polls;
+        for (std::uint32_t index = 0; index < Native::OpenXRSessionEvents::MaximumEventsPerPoll; ++index)
+            fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+        fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK(fixture.play->PresentationState() == Pending);
+        CHECK(fixture.script.events.polls - polls == Native::OpenXRSessionEvents::MaximumEventsPerPoll);
+        const auto prepared = fixture.play->PrepareRenderFrame(1);
+        REQUIRE(prepared.HasValue());
+        CHECK_FALSE(prepared.Value());
+        CHECK(fixture.script.frames.waits == 0);
+        CHECK_FALSE(fixture.play->MirrorView(1).IsValid());
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK(fixture.play->PresentationState() == FrameAdmitted);
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    TEST_CASE("Real installed Play consumes runtime loss before the frame tail and fences future preparation",
+              "[xr][application][play][events]") {
+        ApplicationFixture fixture{true};
+        auto scene = PublishPlay(fixture);
+        fixture.script.clock.sample = 1;
+        REQUIRE(fixture.play->PrepareRenderFrame(1).Value());
+        REQUIRE(fixture.play->FinishGui(false).HasValue());
+        bool instanceLost = false;
+        SECTION("session loss preserves the same selected discovery for a new Play occurrence") {
+            fixture.script.events.pollResult = XR_ERROR_SESSION_LOST;
+        }
+        SECTION("instance loss rejects reuse of the startup-selected graphics binding") {
+            fixture.script.events.loseInstance = true;
+            instanceLost = true;
+        }
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK_FALSE(fixture.play->UsesXrScene());
+        CHECK_FALSE(fixture.play->MirrorView(1).IsValid());
+        CHECK(fixture.script.frames.ends == 0);
+        CHECK(fixture.script.swapchain.releases == 0);
+        REQUIRE(fixture.play->PollEvents().HasValue());
+        CHECK(fixture.script.native.liveSessions == 0);
+        CHECK(fixture.script.native.liveInstances == 1);
+        CHECK(fixture.script.frames.ends == 0);
+        CHECK(fixture.script.swapchain.releases == 0);
+        CHECK(fixture.script.events.ends == 0);
+        CHECK(fixture.vulkan->native.commandState.state.waitCalls == 0);
+        scene->Shutdown();
+        REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Idle).HasValue());
+        auto replacement = RequireValue(Runtime::RuntimeScene::Create(fixture.definition, {2}));
+        auto participant = fixture.play->MakeSceneParticipant();
+        auto prepared = participant->Prepare(fixture.definition, replacement->View());
+        if (instanceLost) {
+            REQUIRE(prepared.HasError());
+            CHECK(prepared.ErrorValue().code.Value() == XR::XRErrors::RuntimeUnavailable.code.Value());
+            CHECK_FALSE(fixture.play->ReadSetup().rendererReady);
+            CHECK(fixture.play->RequestSetupTest().HasError());
+        } else {
+            REQUIRE(prepared.HasValue());
+            CHECK(prepared.Value()->ValidatePublication().HasValue());
+            CHECK(fixture.script.native.liveSessions == 1);
+            prepared.Value()->Shutdown();
+        }
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("Real installed Play closes nonrendering and failed predictions through the native zero-layer protocol",
               "[xr][application][play][frame]") {
         ApplicationFixture fixture{true};

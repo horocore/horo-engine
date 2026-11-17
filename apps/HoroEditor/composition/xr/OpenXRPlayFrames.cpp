@@ -142,8 +142,10 @@ namespace Horo::Application::Internal {
             return Pending;
         if (!scene_ && !render_)
             return Inactive;
-        return UsesXrScene() && sessions_.Snapshot().admitsFrames && frames_.Snapshot().phase == XRFramePhase::Idle ? FrameAdmitted
-                                                                                                                    : Pending;
+        return UsesXrScene() && eventsBound_ && !eventsPending_ && sessions_.Snapshot().admitsFrames &&
+                       frames_.Snapshot().phase == XRFramePhase::Idle
+                   ? FrameAdmitted
+                   : Pending;
     }
 
     /** @copydoc OpenXRPlayHost::AbortRenderFrame */
@@ -165,7 +167,9 @@ namespace Horo::Application::Internal {
         if (auto lane = Lane(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
         const Operation operation{*this};
-        if (!UsesXrScene() || !render_ || !eventsBound_ || eventsPending_)
+        if (eventsPending_)
+            return Output::Success(false);
+        if (!UsesXrScene() || !render_ || !eventsBound_)
             return Output::Failure(MakeError(XRErrors::OperationUnavailable));
         if (auto valid = scene_->Validate(*this); valid.HasError())
             return Output::Failure(valid.ErrorValue());
@@ -354,6 +358,12 @@ namespace Horo::Application::Internal {
         using Output = Result<bool>;
         if (host.render_ && host.render_->session != candidate)
             return Output::Failure(MakeError(XRErrors::IdentityStale));
+        if (host.sessions_.Snapshot().state != XRSessionState::Lost && host.events_ && host.events_->Running()) {
+            const auto observed = host.events_->Poll(false);
+            if (observed.HasError())
+                return Output::Failure(observed.ErrorValue());
+            static_cast<void>(host.ApplyEventObservation(observed.Value()));
+        }
         const bool lost = host.sessions_.Snapshot().state == XRSessionState::Lost;
         if (!lost) {
             if (auto tail = host.ProgressTail(); tail.HasError())
@@ -361,12 +371,8 @@ namespace Horo::Application::Internal {
             if (host.frames_.Snapshot().phase != XRFramePhase::Idle)
                 return Output::Success(false);  // Normal stopping must finish the actual native frame protocol.
         }
-        if (!lost && host.events_ && host.events_->Running()) {
-            if (auto progressed = host.events_->Poll(false); progressed.HasError())
-                return Output::Failure(progressed.ErrorValue());
-            if (host.events_->Running())
-                return Output::Success(false);
-        }
+        if (!lost && host.events_ && host.events_->Running())
+            return Output::Success(false);
         return RetireGraphics(host, lost);
     }
 
@@ -380,7 +386,8 @@ namespace Horo::Application::Internal {
                 if (auto retired = host.render_->RetireViewsAfterLoss(); retired.HasError())
                     return Output::Failure(retired.ErrorValue());
             }
-            if (const auto closed = host.render_->color.Close(); closed.HasError() || !closed.Value())
+            if (const auto closed = lost ? host.render_->color.CloseAfterSessionLoss(host.render_->session) : host.render_->color.Close();
+                closed.HasError() || !closed.Value())
                 return closed;
             // Native Close observed actual canonical image retirement and destroyed native views. No submitted
             // signal, CPU handle drop, Scene callback or desktop Present substitutes for this evidence.

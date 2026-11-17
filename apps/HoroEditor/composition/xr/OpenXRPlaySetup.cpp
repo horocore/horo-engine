@@ -31,7 +31,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::SetupIdle */
     bool OpenXRPlayHost::SetupIdle() const noexcept {
-        return std::this_thread::get_id() == lane_ && !closing_ && !busy_ && !scene_ && !render_ && !events_ &&
+        return std::this_thread::get_id() == lane_ && !closing_ && !busy_ && !instanceLost_ && !scene_ && !render_ && !events_ &&
                input_.play == Editor::EditorPlayState::Idle;
     }
 
@@ -40,6 +40,11 @@ namespace Horo::Application::Internal {
         if (std::this_thread::get_id() != lane_ || closing_)
             return {};
         auto report = setup_;
+        if (instanceLost_) {
+            report.rendererReady = false;
+            report.issue = Editor::EditorXrSetupIssue::Stale;
+            return report;
+        }
         report.mayRequestTest = SetupIdle() && queuedSetupTest_.value == 0;
         if (!report.mayRequestTest && report.test == Editor::EditorXrSetupTestState::NotRun &&
             report.issue == Editor::EditorXrSetupIssue::None)
@@ -52,6 +57,8 @@ namespace Horo::Application::Internal {
         using Request = Result<Editor::EditorXrSetupTestId>;
         if (auto lane = Lane(); lane.HasError())
             return Request::Failure(std::move(lane).ErrorValue());
+        if (instanceLost_)
+            return Request::Failure(MakeError(XR::XRErrors::CapabilityStale));
         if (!SetupIdle() || queuedSetupTest_.value)
             return Request::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         if (lastSetupTest_ == std::numeric_limits<std::uint64_t>::max())

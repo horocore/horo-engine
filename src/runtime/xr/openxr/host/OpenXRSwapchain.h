@@ -224,6 +224,13 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Closes admission and progresses release/destruction without waiting; repeat until true.
          * @return True only when native allocation and image borrows are gone; false while ready-wait/retirement is pending. */
         [[nodiscard]] Result<bool> Close();
+        /** @brief Retires the same loss-revoked session's swapchain without waiting on or releasing native images.
+         * @param owner Exact session that owns this resource and whose frame admission was revoked.
+         * @return True only after renderer references and actual native destruction have completed.
+         * @pre The host has stopped native frame work for this exact lost owner.
+         * @post No image-release receipt is issued. A renderer/native failure preserves retirement for retry.
+         */
+        [[nodiscard]] Result<bool> CloseAfterSessionLoss(const XRSessionId &owner);
         /** @brief Returns the exact currently imported publication, or unavailable after revocation/loss/release. */
         [[nodiscard]] Result<NativeSwapchainAcquisition> Current() const;
         /** @brief Fences one exact ready/imported acquisition before backend import or graph admission.

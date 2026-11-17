@@ -420,6 +420,14 @@ visibility-loss, instance-loss, and session-loss events are normal inputs. Every
 session-owned handle carries a generation so stale actions, spaces, swapchain
 images, and snapshots fail before native use.
 
+The OpenXR event adapter stops dispatch when it observes native session loss,
+instance loss, or missing event history. Both native loss notifications and
+lost-result codes revoke the canonical publication while keeping frame and
+resource retirement obligations. The editor consumes events before progressing
+the frame tail, and suppresses new input and render admission while the poll
+budget leaves events pending. Instance loss requires rebuilding the selected
+instance and graphics binding before another Play attempt.
+
 Frame submission follows the runtime's predicted timing contract:
 
 ```text

@@ -161,38 +161,45 @@ namespace Horo::Application::Internal {
         const Operation operation{*this};
         if (sessions_.Snapshot().state == XRSessionState::Lost && scene_)
             scene_->Retire(*this);
-        if (auto tail = ProgressTail(); tail.HasError()) {
-            RevokeEventAdmission();
-            return tail;
-        }
         if (scene_ && scene_->retiring) {
             const auto retired = SceneState::ProgressRetirement(*this);
             if (retired.HasError())
                 return Result<void>::Failure(retired.ErrorValue());
-            if (!retired.Value())
+            return Result<void>::Success();
+        }
+        if (eventsBound_) {
+            const bool wantsPlay =
+                input_.admitted && (input_.play == Editor::EditorPlayState::Starting || input_.play == Editor::EditorPlayState::Playing ||
+                                    input_.play == Editor::EditorPlayState::Paused);
+            const auto observed = events_->Poll(wantsPlay);
+            if (observed.HasError()) {
+                RevokeEventAdmission();
+                return Result<void>::Failure(observed.ErrorValue());
+            }
+            if (!ApplyEventObservation(observed.Value()))
                 return Result<void>::Success();
         }
-        if (!eventsBound_)
-            return Result<void>::Success();
-        const bool wantsPlay =
-            input_.admitted && (input_.play == Editor::EditorPlayState::Starting || input_.play == Editor::EditorPlayState::Playing ||
-                                input_.play == Editor::EditorPlayState::Paused);
-        const auto observed = events_->Poll(wantsPlay);
-        if (observed.HasError()) {
+        if (auto tail = ProgressTail(); tail.HasError()) {
             RevokeEventAdmission();
-            return Result<void>::Failure(observed.ErrorValue());
-        }
-        eventsPending_ = observed.Value().morePending;
-        if (sessions_.Snapshot().state == XRSessionState::Lost) {
-            if (scene_)
-                scene_->Retire(*this);
-            return Result<void>::Success();
-        }
-        if (observed.Value().bindingsChanged || observed.Value().originChanged || observed.Value().exitRequested) {
-            RevokeEventAdmission();
-            return Result<void>::Failure(MakeError(XRErrors::CapabilityStale));
+            return tail;
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::ApplyEventObservation */
+    bool OpenXRPlayHost::ApplyEventObservation(const NativeSessionEventObservation &observed) noexcept {
+        eventsPending_ = observed.morePending;
+        instanceLost_ |= observed.loss == NativeSessionEventLoss::Instance;
+        if (observed.loss != NativeSessionEventLoss::None || observed.exitRequested) {
+            if (scene_)
+                scene_->Retire(*this);
+            return false;
+        }
+        if (observed.bindingsChanged || observed.originChanged) {
+            RevokeEventAdmission();
+            return false;
+        }
+        return true;
     }
 
     /** @copydoc OpenXRPlayHost::RevokeEventAdmission */

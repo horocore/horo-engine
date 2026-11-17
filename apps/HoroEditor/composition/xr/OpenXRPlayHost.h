@@ -159,6 +159,10 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Lane() const;
         /** @brief Checks current owner lane and absence of Play work before a private session test. */
         [[nodiscard]] bool SetupIdle() const noexcept;
+        /** @brief Captures a bounded event result and revokes the exact Scene/Input authority when it cannot continue.
+         * @return True when the ordinary frame tail can continue for the same native owner.
+         */
+        [[nodiscard]] bool ApplyEventObservation(const XR::OpenXRInternal::NativeSessionEventObservation &observed) noexcept;
         struct FrameState;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();
@@ -289,5 +293,6 @@ namespace Horo::Application::Internal {
         bool pendingDetach_{};
         bool closing_{};
         bool setupCleanupPending_{};
+        bool instanceLost_{}; /**< The startup-selected graphics device cannot be rebound to a different instance in place. */
     };
 }  // namespace Horo::Application::Internal

@@ -7,21 +7,28 @@
 
 #include <algorithm>
 #include <bit>
+#include <utility>
 
 namespace Horo::Tests::OpenXR {
     struct EventScript final {
         static inline thread_local EventScript *active{};
-        std::array<XrSessionState, 16> states{};
+        std::array<XrSessionState, OpenXRSessionEvents::MaximumEventsPerPoll + 16> states{};
         std::size_t count{};
         std::size_t cursor{};
         XrSession session{};
         unsigned begins{};
         unsigned exits{};
         unsigned ends{};
+        unsigned polls{};
         bool running{};
         OpenXRSessionEvents *reenter{};
         bool reentryRejected{};
         bool loseEvents{};
+        bool loseInstance{};
+        XrResult pollResult{XR_SUCCESS};
+        XrResult beginResult{XR_SUCCESS};
+        XrResult exitResult{XR_SUCCESS};
+        XrResult endResult{XR_SUCCESS};
 
         template <typename Event> static void CopyEvent(XrEventDataBuffer &buffer, const Event &event) {
             static_assert(std::is_trivially_copyable_v<Event> && sizeof(Event) <= sizeof(XrEventDataBuffer));
@@ -36,6 +43,15 @@ namespace Horo::Tests::OpenXR {
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Poll(XrInstance, XrEventDataBuffer *buffer) {
+            ++active->polls;
+            if (active->pollResult != XR_SUCCESS)
+                return std::exchange(active->pollResult, XR_SUCCESS);
+            if (active->loseInstance) {
+                active->loseInstance = false;
+                const XrEventDataInstanceLossPending event{XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING, nullptr, 1};
+                CopyEvent(*buffer, event);
+                return XR_SUCCESS;
+            }
             if (active->loseEvents) {
                 active->loseEvents = false;
                 const XrEventDataEventsLost event{XR_TYPE_EVENT_DATA_EVENTS_LOST, nullptr, 1};
@@ -59,24 +75,28 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(session == active->session);
             REQUIRE(info->primaryViewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
             REQUIRE_FALSE(active->running);
-            active->running = true;
             ++active->begins;
-            return XR_SUCCESS;
+            const auto result = std::exchange(active->beginResult, XR_SUCCESS);
+            if (result == XR_SUCCESS)
+                active->running = true;
+            return result;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Exit(XrSession session) {
             REQUIRE(session == active->session);
             REQUIRE(active->running);
             ++active->exits;
-            return XR_SUCCESS;
+            return std::exchange(active->exitResult, XR_SUCCESS);
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL End(XrSession session) {
             REQUIRE(session == active->session);
             REQUIRE(active->running);
-            active->running = false;
             ++active->ends;
-            return XR_SUCCESS;
+            const auto result = std::exchange(active->endResult, XR_SUCCESS);
+            if (result == XR_SUCCESS)
+                active->running = false;
+            return result;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance, const char *name, PFN_xrVoidFunction *output) {

@@ -111,7 +111,9 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(f.events.Poll(true).HasValue());
             REQUIRE(f.frames.ReserveWait(f.session).status == XRFrameStatus::Ok);
             f.script.loseEvents = true;
-            REQUIRE(f.events.Poll(true).HasError());
+            const auto observed = f.events.Poll(true);
+            REQUIRE(observed.HasValue());
+            CHECK(observed.Value().loss == NativeSessionEventLoss::EventHistory);
             REQUIRE(f.sessions.Snapshot().state == XRSessionState::Lost);
             REQUIRE_FALSE(f.sessions.Snapshot().admitsFrames);
             REQUIRE_FALSE(f.sessions.Snapshot().admitsActions);
@@ -122,6 +124,108 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(f.native.script.liveSessions == 1);
             REQUIRE(f.frames.Snapshot().phase != XRFramePhase::Idle);
             REQUIRE(f.frames.CancelWait() == XRFrameStatus::Ok);
+        }
+
+        TEST_CASE("OpenXR focus and visibility remain independent of running frame admission", "[xr][native][events]") {
+            EventFixture f;
+            f.script.Push(XR_SESSION_STATE_READY);
+            f.script.Push(XR_SESSION_STATE_VISIBLE);
+            f.script.Push(XR_SESSION_STATE_FOCUSED);
+            REQUIRE(f.events.Poll(true).HasValue());
+            REQUIRE(f.sessions.Admit(f.session, true).HasValue());
+
+            f.script.Push(XR_SESSION_STATE_VISIBLE);
+            REQUIRE(f.events.Poll(true).HasValue());
+            CHECK(f.sessions.Snapshot().state == XRSessionState::Visible);
+            CHECK(f.sessions.Admit(f.session, true).HasError());
+            CHECK(f.sessions.Admit(f.session, false).HasValue());
+
+            f.script.Push(XR_SESSION_STATE_SYNCHRONIZED);
+            REQUIRE(f.events.Poll(true).HasValue());
+            CHECK(f.sessions.Snapshot().state == XRSessionState::Running);
+            CHECK(f.sessions.Admit(f.session, true).HasError());
+            CHECK(f.sessions.Admit(f.session, false).HasValue());
+            CHECK(f.script.begins == 1);
+            CHECK(f.script.ends == 0);
+        }
+
+        TEST_CASE("OpenXR event polls bound backlog work and resume from the exact unread event", "[xr][native][events]") {
+            EventFixture f;
+            f.script.Push(XR_SESSION_STATE_READY);
+            f.script.Push(XR_SESSION_STATE_VISIBLE);
+            f.script.Push(XR_SESSION_STATE_FOCUSED);
+            REQUIRE(f.events.Poll(true).HasValue());
+            const auto polled = f.script.polls;
+            for (std::uint32_t index = 0; index < OpenXRSessionEvents::MaximumEventsPerPoll; ++index)
+                f.script.Push(XR_SESSION_STATE_FOCUSED);
+            f.script.Push(XR_SESSION_STATE_VISIBLE);
+            const auto first = f.events.Poll(true);
+            REQUIRE(first.HasValue());
+            CHECK(first.Value().morePending);
+            CHECK(f.script.polls - polled == OpenXRSessionEvents::MaximumEventsPerPoll);
+            CHECK(f.sessions.Snapshot().admitsActions);
+            const auto second = f.events.Poll(true);
+            REQUIRE(second.HasValue());
+            CHECK_FALSE(second.Value().morePending);
+            CHECK_FALSE(f.sessions.Snapshot().admitsActions);
+        }
+
+        TEST_CASE("OpenXR instance loss stops event dispatch and preserves debt even after a stopping event", "[xr][native][events]") {
+            EventFixture f;
+            f.script.Push(XR_SESSION_STATE_READY);
+            REQUIRE(f.events.Poll(true).HasValue());
+            REQUIRE(f.frames.ReserveWait(f.session).status == XRFrameStatus::Ok);
+            f.script.Push(XR_SESSION_STATE_STOPPING);
+            REQUIRE(f.events.Poll(false).HasValue());
+            REQUIRE(f.script.ends == 0);
+            REQUIRE(f.frames.CancelWait() == XRFrameStatus::Ok);
+
+            f.script.loseInstance = true;
+            f.script.Push(XR_SESSION_STATE_READY);
+            const auto observed = f.events.Poll(false);
+            REQUIRE(observed.HasValue());
+            CHECK(observed.Value().loss == NativeSessionEventLoss::Instance);
+            CHECK(f.sessions.Snapshot().state == XRSessionState::Lost);
+            CHECK(f.events.Running());
+            CHECK(f.script.ends == 0);
+            CHECK(f.script.cursor < f.script.count);
+            const auto polled = f.script.polls;
+            const auto retained = f.events.Poll(false);
+            REQUIRE(retained.HasValue());
+            CHECK(retained.Value().loss == NativeSessionEventLoss::Instance);
+            CHECK(f.script.polls == polled);
+        }
+
+        TEST_CASE("OpenXR native loss results become terminal observations without reporting native progress", "[xr][native][events]") {
+            EventFixture f;
+            f.script.Push(XR_SESSION_STATE_READY);
+            bool wantsPlay = true;
+            auto reason = NativeSessionEventLoss::Session;
+            SECTION("poll reports instance loss") {
+                f.script.pollResult = XR_ERROR_INSTANCE_LOST;
+                reason = NativeSessionEventLoss::Instance;
+            }
+            SECTION("begin reports a pending session loss") {
+                f.script.beginResult = XR_SESSION_LOSS_PENDING;
+            }
+            SECTION("request exit reports session loss") {
+                REQUIRE(f.events.Poll(true).HasValue());
+                f.script.exitResult = XR_ERROR_SESSION_LOST;
+                wantsPlay = false;
+            }
+            SECTION("end reports a pending session loss") {
+                REQUIRE(f.events.Poll(true).HasValue());
+                f.script.Push(XR_SESSION_STATE_STOPPING);
+                f.script.endResult = XR_SESSION_LOSS_PENDING;
+            }
+            const auto observed = f.events.Poll(wantsPlay);
+            REQUIRE(observed.HasValue());
+            CHECK(observed.Value().loss == reason);
+            CHECK(f.sessions.Snapshot().state == XRSessionState::Lost);
+            CHECK_FALSE(f.sessions.Snapshot().admitsFrames);
+            CHECK_FALSE(f.sessions.Snapshot().admitsActions);
+            CHECK(f.events.Running() == f.script.running);
+            CHECK(f.native.script.liveSessions == 1);
         }
     }  // namespace
 }  // namespace Horo::Tests::OpenXR
