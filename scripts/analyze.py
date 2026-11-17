@@ -644,7 +644,12 @@ class WindowsNative:
     def terminate(self, handle):
         if self.kernel.WaitForSingleObject(handle, 0) == 0:
             return
-        self.check(self.kernel.TerminateProcess(handle, 1))
+        if not self.kernel.TerminateProcess(handle, 1):
+            code = c.get_last_error()
+            # A pinned process can exit after the first wait; Windows then reports access denied.
+            if code == 5 and self.kernel.WaitForSingleObject(handle, 0) == 0:
+                return
+            raise c.WinError(code)
         if self.kernel.WaitForSingleObject(handle, 5000) != 0:
             raise OSError("Timed out waiting for pinned Windows process termination")
 
