@@ -1,4 +1,4 @@
-"""Exercise exclusive MCP stdio through the trusted CMake-built executable, with bounded waits."""
+"""Exercise native CLI progress failures and exclusive MCP stdio with bounded waits."""
 import contextlib
 import json
 import os
@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 
@@ -21,7 +22,7 @@ class NativeCli:
         self.binary = str(binary.resolve(strict=True))
 
     @contextlib.contextmanager
-    def start(self, arguments, *, windows_console=False):
+    def start(self, arguments, *, windows_console=False, stdout=subprocess.PIPE, environment=None):
         startup = None
         flags = 0
         if os.name == "nt" and windows_console:
@@ -30,8 +31,8 @@ class NativeCli:
             startup.wShowWindow = subprocess.SW_HIDE
             flags = subprocess.CREATE_NEW_CONSOLE
         with subprocess.Popen([self.binary, *arguments], shell=False, close_fds=True,
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              startupinfo=startup, creationflags=flags) as process:
+                              stdin=subprocess.PIPE, stdout=stdout, stderr=subprocess.PIPE,
+                              startupinfo=startup, creationflags=flags, env=environment, restore_signals=True) as process:
             watchdog = threading.Timer(25, process.kill)
             watchdog.start()
             try:
@@ -110,6 +111,26 @@ def check_interrupts(cli, checks):
             process.wait(timeout=15)
             output, diagnostics = process.communicate(timeout=5)
             checks.assertEqual((process.returncode, output), (7, b""), diagnostics)
+
+
+def check_closed_progress_output(cli, checks):
+    """A real pipe without readers must retain cooperative host teardown and exit 1."""
+    with tempfile.TemporaryDirectory(prefix="horo-cli-broken-output-") as directory:
+        home = Path(directory)
+        environment = {key: directory for key in ("HOME", "USERPROFILE", "TEMP", "TMP")}
+        if os.name == "nt" and "SystemRoot" in os.environ:
+            environment["SystemRoot"] = os.environ["SystemRoot"]
+        read_end, write_end = os.pipe()
+        os.close(read_end)
+        with os.fdopen(write_end, "wb", buffering=0) as broken_output:
+            arguments = ["diagnostics", "bundle", "--output-path", str(home / "output.zip"), "--output", "jsonl"]
+            with cli.start(arguments, windows_console=os.name == "nt", stdout=broken_output,
+                           environment=environment) as process:
+                process.wait(timeout=15)
+                output, diagnostics = process.communicate(timeout=5)
+                checks.assertEqual((process.returncode, output), (1, None), diagnostics)
+        checks.assertTrue((home / ".horo/logs/horo-engine.shutdown.json").is_file(), diagnostics)
+        checks.assertFalse((home / "output.zip.tmp").exists())
 
 
 def windows_kernel():
@@ -231,6 +252,7 @@ def run(executable):
     checks = unittest.TestCase()
     check_eof(cli, checks)
     check_terminal(cli, checks)
+    check_closed_progress_output(cli, checks)
     check_authority(cli, checks)
     check_interrupts(cli, checks)
     check_timeout(cli, checks)

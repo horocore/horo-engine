@@ -117,6 +117,7 @@ namespace Horo::Application::Internal {
         REQUIRE(retained);
         CHECK(retained->message.size() == 4096);
         CHECK(retained->completion == 1.0F);
+        mailbox.Report({"done", 1.0F, "finished"});
         buffer.Release();
         REQUIRE(pump.Finish().HasValue());
         CHECK(pump.Finish().HasValue());
@@ -126,6 +127,10 @@ namespace Horo::Application::Internal {
         std::string line;
         REQUIRE(std::getline(records, line));
         CHECK(nlohmann::json::parse(line).at("type") == "progress");
+        REQUIRE(std::getline(records, line));
+        const auto finalProgress = nlohmann::json::parse(line);
+        CHECK(finalProgress.at("type") == "progress");
+        CHECK(finalProgress.at("phase") == "done");
         REQUIRE(std::getline(records, line));
         CHECK(nlohmann::json::parse(line).at("type") == "result");
         CHECK(diagnostics.str().empty());

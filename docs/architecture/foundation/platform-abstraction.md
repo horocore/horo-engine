@@ -322,6 +322,15 @@ maps to `job.cancelled`; timeout maps to `job.cancelled` with cause
 `platform.process.timeout`; forced termination maps to
 `platform.process.terminated`.
 
+Native POSIX launches establish a child-owned process group, an unblocked signal
+mask, and default dispositions for `SIGINT`, `SIGTERM` and `SIGPIPE`. Host-side
+presentation or cancellation suppression must not disable child cancellation or
+change pipe behavior across GUI, CLI and MCP callers. This deliberately replaces
+implicit inheritance of those controls. Existing callers that require a different
+child policy must establish it in the launched program after startup, rather than
+changing the host's signal state to configure the child. The request API remains
+backend-neutral and its shape is unchanged.
+
 ## Native Dialogs
 
 File pickers, credential prompts, and other native dialogs temporarily enter

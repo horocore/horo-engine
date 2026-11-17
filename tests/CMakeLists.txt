@@ -4138,6 +4138,9 @@ add_executable(HoroPlatformTests
 )
 
 add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)
+if(UNIX)
+    target_sources(HoroPlatformTests PRIVATE unit/platform/ExternalProcessSignalPolicyTests.cpp)
+endif()
 target_compile_features(HoroProcessTestChild PRIVATE cxx_std_20)
 target_link_libraries(HoroProcessTestChild PRIVATE HoroEngine::Platform)
 add_dependencies(HoroPlatformTests HoroProcessTestChild)

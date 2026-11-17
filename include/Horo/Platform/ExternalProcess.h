@@ -105,7 +105,10 @@ namespace Horo {
                                                                 const CancellationToken &cancellation) = 0;
     };
 
-    /** @brief Native POSIX/Windows implementation with process-tree cancellation. */
+    /** @brief Native POSIX/Windows implementation with process-tree cancellation.
+     * @details POSIX children start in their own process group with an unblocked signal mask and default
+     * SIGINT, SIGTERM and SIGPIPE dispositions. Host presentation/cancellation signal suppression stays in the host.
+     */
     class NativeExternalProcessRunner final : public IExternalProcessRunner {
     public:
         /** @copydoc IExternalProcessRunner::Run */

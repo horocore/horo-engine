@@ -14,11 +14,28 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
+#include <pthread.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
 
 namespace {
+#if !defined(_WIN32)
+    /** @brief Checks the native child's control policy before it installs any application handlers. */
+    bool HasDefaultControlSignals() {
+        sigset_t mask{};
+        if (pthread_sigmask(SIG_SETMASK, nullptr, &mask) != 0)
+            return false;
+        for (const int controlSignal : {SIGINT, SIGTERM, SIGPIPE}) {
+            struct sigaction disposition{};
+            if (sigaction(controlSignal, nullptr, &disposition) != 0 || disposition.sa_handler != SIG_DFL ||
+                sigismember(&mask, controlSignal) != 0)
+                return false;
+        }
+        return sigismember(&mask, SIGUSR1) == 0;
+    }
+#endif
     [[noreturn]] void Heartbeat(const std::filesystem::path &path) {
         for (;;) {
             std::ofstream stream{path, std::ios::app};
@@ -94,6 +111,12 @@ int main(const int argc, char **argv) {
     }
 #endif
 #if !defined(_WIN32)
+    if (mode == "signal-policy") {
+        if (!HasDefaultControlSignals())
+            return 4;
+        std::cout << "default-control-signals\n";
+        return 0;
+    }
     if (mode == "signalled") {
         std::raise(SIGTERM);
         return 99;

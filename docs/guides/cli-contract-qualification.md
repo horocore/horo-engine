@@ -40,6 +40,25 @@ new API through its existing declared Foundation dependency.
 
 ## Regression sources
 
+### Disconnected output and child-signal migration
+
+Executing native CLI commands now hold the same POSIX broken-pipe disposition
+used by MCP stdio: a closed progress reader reaches stream failure and host
+exit 1 through owned teardown. Previously SIGPIPE could terminate the process
+before its invocation owners drained. The progress worker performs its final
+drain before join. The regression closes the real pipe's read end before launch,
+uses an isolated home, and requires exit 1, a clean shutdown marker and no staging
+file. It has not yet been run natively for this final candidate.
+
+`NativeExternalProcessRunner` now establishes its POSIX child's signal mask and
+default SIGINT/SIGTERM/SIGPIPE dispositions explicitly. This keeps GUI, CLI and
+MCP child behavior independent of host-side presentation/cancellation handlers.
+Callers needing specialized child policy establish it in the launched program.
+The request API shape and header ownership are unchanged; the Platform public
+header consumer and real child-policy/termination regression require validation.
+Argument/environment allocations precede native staging, and spawn attributes
+own their partial initialization through setup and launch failures.
+
 | Acceptance | Executable evidence source |
 | --- | --- |
 | Registry, generated help, parser, precedence, stdin, interaction, dispatch admission | `HoroCliCommandRegistryTests` |
