@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Ui/UiAnimationOwner.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiCpuWorkProbe.h"
 #include "UiRenderPaintValidation.h"
 
 #include <algorithm>
@@ -307,6 +308,7 @@ namespace Horo::Runtime::Ui {
     /** @brief Preallocated snapshot slots and owner-thread admission state for one exact view. */
     struct UiRenderExtractor::Storage final {
         UiRenderExtractorDescriptor descriptor;
+        UiCpuWorkStatistics cpuWork{descriptor.measureCpuWork};
         UiRenderExtractorState lifecycle{UiRenderExtractorState::Active};
         std::vector<std::shared_ptr<UiRenderSnapshot::Storage>> slots;
         std::size_t nextSlot{};
@@ -506,7 +508,10 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRenderExtractor::Extract */
     Result<UiRenderSnapshot> UiRenderExtractor::Extract(const UiElementTree &tree, const UiRenderSnapshotDescriptor &descriptor,
                                                         const UiRenderProjection &projection) {
-        if (!storage_ || storage_->lifecycle != UiRenderExtractorState::Active)
+        if (!storage_)
+            return Failure<UiRenderSnapshot>(UiErrors::RenderSnapshotLifecycleUnavailable);
+        UiCpuWorkProbe work{storage_->cpuWork};
+        if (storage_->lifecycle != UiRenderExtractorState::Active)
             return Failure<UiRenderSnapshot>(UiErrors::RenderSnapshotLifecycleUnavailable);
         if (const auto validated = storage_->Validate(tree, descriptor, projection); validated.HasError())
             return Result<UiRenderSnapshot>::Failure(validated.ErrorValue());
@@ -522,6 +527,7 @@ namespace Horo::Runtime::Ui {
         }
         publishLease.Commit();
         storage_->lastRevision = descriptor.snapshotRevision;
+        work.Succeed();
         return Result<UiRenderSnapshot>::Success(UiRenderSnapshot{std::move(slot)});
     }
 
@@ -569,6 +575,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRenderExtractor::IsDrained */
     bool UiRenderExtractor::IsDrained() const noexcept {
         return !storage_ || storage_->IsDrained();
+    }
+
+    /** @copydoc UiRenderExtractor::CpuWorkStatistics */
+    UiCpuWorkStatistics UiRenderExtractor::CpuWorkStatistics() const noexcept {
+        return storage_ ? storage_->cpuWork : UiCpuWorkStatistics{};
     }
 
     /** @copydoc UiRenderExtractor::State */

@@ -224,6 +224,7 @@ namespace Horo::Runtime::Ui {
         UiRenderViewId view;                 /**< Exact Horo view incarnation owned by this extractor. */
         UiRenderSnapshotLimits limits;       /**< Maximum capacity reserved in every storage slot. */
         std::uint32_t concurrentSnapshots{}; /**< Simultaneously leased snapshot slots. */
+        bool measureCpuWork{};               /**< Samples projection extraction attempts on the owner thread. */
 
         /** @brief Validates view identity, table limits, and the bounded slot count. @return Whether this store can be created. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -352,6 +353,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Returns the current admission lifecycle. @return Active or Closed. */
         [[nodiscard]] UiRenderExtractorState State() const noexcept;
+        /** @brief Reads lifetime extraction timing on the owner thread. @return Disabled evidence after move. */
+        [[nodiscard]] UiCpuWorkStatistics CpuWorkStatistics() const noexcept;
 
     private:
         struct Storage;

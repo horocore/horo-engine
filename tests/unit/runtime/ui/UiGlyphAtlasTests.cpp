@@ -77,6 +77,8 @@ namespace Horo::Runtime::Ui {
             const auto fallbackUpload = atlas.RequestUpload(Raster(Key(0), bytes));
             REQUIRE(fallbackUpload.HasValue());
             REQUIRE(atlas.Snapshot().pendingEntries == 1);
+            REQUIRE(atlas.Snapshot().occupiedTiles == 1);
+            REQUIRE(atlas.Snapshot().tileCapacity >= atlas.Snapshot().occupiedTiles);
             REQUIRE(atlas.Snapshot().pendingUploadBytes == bytes.size());
 
             auto frame = atlas.BeginFrame();

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Runtime/Ui/UiCanvasSpace.h"
+#include "Horo/Runtime/Ui/UiCpuWorkStatistics.h"
 #include "Horo/Runtime/Ui/UiElementTree.h"
 #include "Horo/Runtime/Ui/UiLayoutWork.h"
 
@@ -609,6 +610,7 @@ namespace Horo::Runtime::Ui {
         std::uint32_t invalidationCapacity{};             /**< Maximum queued dirty records. */
         std::uint32_t concurrentSnapshots{};              /**< Preallocated immutable storage slots; at least two. */
         UiInteractionRevision initialInteractionRevision; /**< First successful publication revision. */
+        bool measureCpuWork{};                            /**< Samples layout preparation attempts on the owner thread. */
         /** @brief Validates identities and all hard-bounded capacities. @return Whether this descriptor can be created. */
         [[nodiscard]] bool IsValid() const noexcept;
     };
@@ -753,6 +755,8 @@ namespace Horo::Runtime::Ui {
         void Shutdown() const noexcept;
         /** @brief Returns the explicit admission lifecycle. @return Active, Retiring, or Stopped. */
         [[nodiscard]] UiLayoutEngineState State() const noexcept;
+        /** @brief Reads lifetime preparation timing on the owner thread. @return Disabled evidence after move. */
+        [[nodiscard]] UiCpuWorkStatistics CpuWorkStatistics() const noexcept;
         /** @brief Reports whether no external immutable snapshot lease remains. @return True when retirement may finish. */
         [[nodiscard]] bool IsDrained() const noexcept;
 

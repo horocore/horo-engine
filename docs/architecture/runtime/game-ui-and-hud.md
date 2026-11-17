@@ -1042,6 +1042,21 @@ retained geometry, Null execution and editor outline preview alone do not establ
 native paint capability. Each interactive backend needs actual pixel/readback and
 lifecycle evidence before that capability is qualified.
 
+Runtime UI owners can opt into lifetime CPU samples at construction. Layout
+samples the candidate preparation used by publication, text samples shaping,
+and render owners sample extraction and geometry construction. A sample records
+monotonic duration and whether the operation produced its result. Disabled
+owners do not read the clock. Successful work uses the same storage and
+publication paths as unprofiled work.
+
+At a diagnostics safe point an immutable geometry plan can report its exact view
+and snapshot revision, draw batches, vertices, indices, clips and used geometry
+bytes. Its caller-bounded scan reports the sum of canvas-space triangle areas as a
+workload proxy. Projection, mask, clip, blending and native pass execution can
+change actual pixel coverage. Atlas inspection reports occupied and reserved
+tiles, including pending uploads, and capacity pressure. These APIs do not
+sample native GPU timing or claim allocator-level totals.
+
 ### Render-graph composition admission
 
 `Horo/Runtime/Render/UiRenderComposition.h` is the single typed bridge from an

@@ -79,10 +79,10 @@ namespace Horo::Runtime::Ui {
             return std::move(result).Value();
         }
 
-        UiLayoutEngine Engine(const std::uint32_t snapshots = 3) {
+        UiLayoutEngine Engine(const std::uint32_t snapshots = 3, const bool measureCpuWork = false) {
             const auto tree = TreeDescriptor();
-            auto result = UiLayoutEngine::Create(
-                {tree.instance, tree.canvas, tree.document, tree.limits.elements, 8, snapshots, Rev<UiInteractionRevision>(1)});
+            auto result = UiLayoutEngine::Create({tree.instance, tree.canvas, tree.document, tree.limits.elements, 8, snapshots,
+                                                  Rev<UiInteractionRevision>(1), measureCpuWork});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }
@@ -297,6 +297,23 @@ namespace Horo::Runtime::Ui {
             REQUIRE(candidate.Candidate().Records().size() == 4);
             candidate.Abandon();
             REQUIRE(engine.IsDrained());
+        }
+
+        TEST_CASE("Layout timing records production preparation without changing publication", "[runtime_ui][layout][profile]") {
+            auto tree = Tree();
+            auto engine = Engine(3, true);
+            CountingEvaluator evaluator;
+            REQUIRE(engine.Update(tree, Request(evaluator)).HasValue());
+            REQUIRE(engine.Update(tree, Request(evaluator)).HasValue());
+            auto replacement = Engine(3, true);
+            CHECK(replacement.CpuWorkStatistics().attempts == 0);
+            engine.Shutdown();
+            REQUIRE(engine.Update(tree, Request(evaluator)).HasError());
+            const auto timing = engine.CpuWorkStatistics();
+            CHECK(timing.enabled);
+            CHECK(timing.attempts == 3);
+            CHECK(timing.succeeded == 2);
+            CHECK(timing.elapsedNanoseconds >= timing.lastNanoseconds);
         }
 
         TEST_CASE("Incremental layout publishes immutable authored-order geometry", "[runtime_ui][layout]") {

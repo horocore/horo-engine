@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiRenderGeometry.h"
 
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiCpuWorkProbe.h"
 #include "UiRenderGeometryInternal.h"
 
 #include <algorithm>
@@ -398,6 +399,7 @@ namespace Horo::Runtime::Ui {
     /** @brief Preallocated geometry slots for one exact view. */
     struct UiRenderGeometryArena::Storage final {
         UiRenderGeometryArenaDescriptor descriptor;
+        UiCpuWorkStatistics cpuWork{descriptor.measureCpuWork};
         UiRenderGeometryArenaState lifecycle{UiRenderGeometryArenaState::Active};
         std::vector<std::shared_ptr<UiRenderGeometryPlan::Storage>> slots;
         std::size_t nextSlot{};
@@ -523,6 +525,36 @@ namespace Horo::Runtime::Ui {
         return storage_->batches;
     }
 
+    /** @copydoc UiRenderGeometryPlan::Inspect */
+    Result<UiRenderGeometryInspection> UiRenderGeometryPlan::Inspect(const std::size_t maximumIndices) const {
+        using Inspection = UiRenderGeometryInspection;
+        if (!IsValid())
+            return Failure<Inspection>(UiErrors::RenderGeometryLifecycleUnavailable);
+        const auto indices = Indices();
+        if (indices.size() > maximumIndices)
+            return Failure<Inspection>(UiErrors::RenderGeometryCapacityExceeded);
+        const auto batches = Batches();
+        const auto vertices = Vertices();
+        const auto &descriptor = Descriptor();
+        const auto clipped = std::ranges::count_if(batches, [](const UiRenderGeometryBatch &batch) {
+            return batch.key.clip != NoUiRenderIndex;
+        });
+        double twiceArea{};
+        // Published geometry owns complete triangle triples with validated indices.
+        for (std::size_t index = 0; index < indices.size(); index += 3) {
+            const auto &a = vertices[indices[index]];
+            const auto &b = vertices[indices[index + 1]];
+            const auto &c = vertices[indices[index + 2]];
+            twiceArea += std::abs((static_cast<double>(b.x) - a.x) * (static_cast<double>(c.y) - a.y) -
+                                  (static_cast<double>(b.y) - a.y) * (static_cast<double>(c.x) - a.x));
+        }
+        constexpr double twiceSquareUnitsPerSquareDip = 2.0 * UiScalarUnitsPerDip * UiScalarUnitsPerDip;
+        return Result<Inspection>::Success(
+            {descriptor.view, descriptor.snapshotRevision, descriptor.batchCount, descriptor.vertexCount, descriptor.indexCount,
+             static_cast<std::uint32_t>(SourceSnapshot().Clips().size()), static_cast<std::uint32_t>(clipped),
+             vertices.size_bytes() + indices.size_bytes() + batches.size_bytes(), twiceArea / twiceSquareUnitsPerSquareDip});
+    }
+
     /** @copydoc UiRenderGeometryArena::Create */
     Result<UiRenderGeometryArena> UiRenderGeometryArena::Create(const UiRenderGeometryArenaDescriptor &descriptor) {
         if (!descriptor.view.IsValid())
@@ -555,6 +587,7 @@ namespace Horo::Runtime::Ui {
                                                                       const UiResolvedScreenCanvas *canvas) {
         if (!storage_)
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryLifecycleUnavailable);
+        UiCpuWorkProbe work{storage_->cpuWork};
         if (storage_->lifecycle != UiRenderGeometryArenaState::Active) {
             ++storage_->failedBuilds;
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryLifecycleUnavailable);
@@ -582,6 +615,7 @@ namespace Horo::Runtime::Ui {
         storage_->peakVertices = std::max(storage_->peakVertices, static_cast<std::uint32_t>(slot->vertices.size()));
         storage_->peakIndices = std::max(storage_->peakIndices, static_cast<std::uint32_t>(slot->indices.size()));
         storage_->peakBatches = std::max(storage_->peakBatches, static_cast<std::uint32_t>(slot->batches.size()));
+        work.Succeed();
         return Result<UiRenderGeometryPlan>::Success(UiRenderGeometryPlan{std::move(slot)});
     }
 
@@ -609,6 +643,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRenderGeometryArena::State */
     UiRenderGeometryArenaState UiRenderGeometryArena::State() const noexcept {
         return storage_ ? storage_->lifecycle : UiRenderGeometryArenaState::Closed;
+    }
+
+    /** @copydoc UiRenderGeometryArena::CpuWorkStatistics */
+    UiCpuWorkStatistics UiRenderGeometryArena::CpuWorkStatistics() const noexcept {
+        return storage_ ? storage_->cpuWork : UiCpuWorkStatistics{};
     }
 
     /** @copydoc UiRenderGeometryArena::Statistics */

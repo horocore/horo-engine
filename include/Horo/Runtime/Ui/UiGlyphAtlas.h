@@ -281,6 +281,8 @@ namespace Horo::Runtime::Ui {
         std::uint64_t evictionCount{};    /**< Total successful bounded evictions. */
         std::uint64_t pressureCount{};    /**< Requests rejected because no safe tile was available. */
         bool acceptingRequests{};         /**< False after StopAdmission or Shutdown. */
+        std::uint32_t occupiedTiles{};    /**< Allocated atlas tiles, including pending and failed entries. */
+        std::uint32_t tileCapacity{};     /**< Total physically reserved tiles across the atlas pages. */
     };
 
     /** @brief Explicit lifecycle state of one glyph atlas owner. */

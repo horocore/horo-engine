@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "Horo/Runtime/Ui/UiTextUnicode.h"
+#include "UiCpuWorkProbe.h"
 #include "UiTextShapingInternal.h"
 
 #include <algorithm>
@@ -27,6 +28,7 @@ namespace Horo::Runtime::Ui {
 
     struct UiTextShaper::Storage final {
         UiTextShaperDescriptor descriptor;
+        UiCpuWorkStatistics cpuWork{descriptor.measureCpuWork};
         UiTextShaperState lifecycle{UiTextShaperState::Active};
         std::vector<std::shared_ptr<UiTextShape::Storage>> slots;
         std::size_t nextSlot{};
@@ -490,6 +492,7 @@ namespace Horo::Runtime::Ui {
     Result<UiTextShape> UiTextShaper::Shape(const UiTextShapingRequest &request) {
         if (!storage_)
             return Failure<UiTextShape>(UiErrors::TextLifecycleUnavailable);
+        UiCpuWorkProbe work{storage_->cpuWork};
         if (const auto admitted = storage_->ValidateAdmission(request); admitted.HasError())
             return Result<UiTextShape>::Failure(admitted.ErrorValue());
         auto slot = storage_->TryAcquire();
@@ -531,6 +534,7 @@ namespace Horo::Runtime::Ui {
                 storage_->nextRevision = 0;
             else
                 ++storage_->nextRevision;
+            work.Succeed();
             return Result<UiTextShape>::Success(UiTextShape{std::move(slot)});
         } catch (const std::bad_alloc &) {
             return Failure<UiTextShape>(UiErrors::CapacityExceeded);
@@ -557,6 +561,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiTextShaper::IsDrained */
     bool UiTextShaper::IsDrained() const noexcept {
         return !storage_ || storage_->IsDrained();
+    }
+
+    /** @copydoc UiTextShaper::CpuWorkStatistics */
+    UiCpuWorkStatistics UiTextShaper::CpuWorkStatistics() const noexcept {
+        return storage_ ? storage_->cpuWork : UiCpuWorkStatistics{};
     }
 
     /** @copydoc UiTextShaper::State */

@@ -1,7 +1,9 @@
+#include "Horo/Runtime/Ui/UiCpuWorkStatistics.h"
 #include "Horo/Runtime/Ui/UiHotReload.h"
 #include "Horo/Runtime/Ui/UiLayoutInspector.h"
 #include "Horo/Runtime/Ui/UiLayoutWork.h"
 #include "Horo/Runtime/Ui/UiPresentationProfiles.h"
+#include "Horo/Runtime/Ui/UiRenderGeometry.h"
 #include "Horo/Runtime/Ui/UiTheme.h"
 
 #include <type_traits>
@@ -22,5 +24,7 @@ static_assert(requires(const Horo::Runtime::Ui::UiComputedStyleSnapshot &compute
 });
 
 static_assert(std::is_copy_constructible_v<Horo::Runtime::Ui::UiCanvasInspectionSnapshot>);
+static_assert(std::is_trivially_copyable_v<Horo::Runtime::Ui::UiCpuWorkStatistics>);
+static_assert(requires(const Horo::Runtime::Ui::UiRenderGeometryPlan &plan) { plan.Inspect(16); });
 static_assert(requires(const Horo::Runtime::Ui::UiHotReload &publisher, const Horo::Runtime::Ui::UiReloadLease &lease,
                        Horo::Runtime::Ui::UiCanvasId canvas) { publisher.Inspect(lease, canvas); });

@@ -358,7 +358,9 @@ namespace Horo::Runtime::Ui {
                                       .pendingUploadBytes = storage_->pendingBytes,
                                       .evictionCount = storage_->evictionCount,
                                       .pressureCount = storage_->pressureCount,
-                                      .acceptingRequests = storage_->IsActive()};
+                                      .acceptingRequests = storage_->IsActive(),
+                                      .occupiedTiles = static_cast<std::uint32_t>(storage_->entries.size() - storage_->freeEntries.size()),
+                                      .tileCapacity = static_cast<std::uint32_t>(storage_->entries.size())};
         for (const auto &entry : storage_->entries) {
             if (entry.state == Storage::EntryState::Resident)
                 ++snapshot.residentEntries;

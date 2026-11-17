@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiLayout.h"
 
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiCpuWorkProbe.h"
 
 #include <algorithm>
 #include <atomic>
@@ -115,6 +116,7 @@ namespace Horo::Runtime::Ui {
         };
 
         UiLayoutEngineDescriptor descriptor;
+        UiCpuWorkStatistics cpuWork{descriptor.measureCpuWork};
         UiLayoutEngineState lifecycle{UiLayoutEngineState::Active};
         std::vector<Node> activeNodes;
 
@@ -698,7 +700,10 @@ namespace Horo::Runtime::Ui {
     Result<UiLayoutEngine::PreparedUpdate> UiLayoutEngine::PrepareInternal(const UiElementTree &tree, const UiLayoutUpdateRequest &request,
                                                                            const PreparedUpdate *primary) const {
         const auto owner = storage_;
-        if (!owner || owner->lifecycle != UiLayoutEngineState::Active)
+        if (!owner)
+            return Failure<PreparedUpdate>(UiErrors::LayoutLifecycleUnavailable);
+        UiCpuWorkProbe work{owner->cpuWork};
+        if (owner->lifecycle != UiLayoutEngineState::Active)
             return Failure<PreparedUpdate>(UiErrors::LayoutLifecycleUnavailable);
         if (owner->prepared)
             return Failure<PreparedUpdate>(UiErrors::LayoutCandidateBusy);
@@ -723,6 +728,7 @@ namespace Horo::Runtime::Ui {
             owner->current->leases.fetch_add(1);
             owner->reservedInteraction = owner->published.interaction;
             reservation.retained = true;
+            work.Succeed();
             return Result<PreparedUpdate>::Success(PreparedUpdate{owner, UiLayoutSnapshot{owner->current}, false, tree, request,
                                                                   primary ? primary->owner_ : nullptr,
                                                                   primary ? primary->owner_->reservationSequence : 0});
@@ -743,6 +749,7 @@ namespace Horo::Runtime::Ui {
         if (published.HasError())
             return Result<PreparedUpdate>::Failure(published.ErrorValue());
         reservation.retained = true;
+        work.Succeed();
         return Result<PreparedUpdate>::Success(PreparedUpdate{owner, UiLayoutSnapshot{std::move(published).Value()}, true, tree, request,
                                                               primary ? primary->owner_ : nullptr,
                                                               primary ? primary->owner_->reservationSequence : 0});
@@ -881,6 +888,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiLayoutEngine::State */
     UiLayoutEngineState UiLayoutEngine::State() const noexcept {
         return storage_ ? storage_->lifecycle : UiLayoutEngineState::Stopped;
+    }
+
+    /** @copydoc UiLayoutEngine::CpuWorkStatistics */
+    UiCpuWorkStatistics UiLayoutEngine::CpuWorkStatistics() const noexcept {
+        return storage_ ? storage_->cpuWork : UiCpuWorkStatistics{};
     }
 
     /** @copydoc UiLayoutEngine::PublishedInteraction */
