@@ -31,6 +31,9 @@ namespace Horo::AI {
         QueryGeneratorProvenance provenance;
         std::size_t maximumItems{};
         std::span<QueryGeneratedItem> items;
+
+        /** @brief Checks provenance, the hard item ceiling and destination size. @return True for an admitted output. */
+        [[nodiscard]] bool IsValid() const noexcept;
     };
 
     /** @brief Bounded generation evidence. Only the first itemCount entries are published. */

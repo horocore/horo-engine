@@ -11,14 +11,6 @@ namespace Horo::AI {
     namespace {
         using Generation = Result<QueryGenerationResult>;
 
-        /** @brief Checks that the complete configured output fits caller-owned storage. */
-        [[nodiscard]] bool ValidOutput(const QueryGeneratorOutput &output) {
-            const auto &origin = output.provenance;
-            return origin.stage.IsValid() && origin.generator.IsValid() && origin.provider.IsValid() && origin.revision > 0 &&
-                   output.maximumItems > 0 && output.maximumItems <= EnvironmentQuerySchemaLimits::MaximumResults &&
-                   output.maximumItems <= output.items.size();
-        }
-
         /** @brief Adds a bounded lattice offset while preserving the full global millimeter range. */
         [[nodiscard]] std::optional<std::int64_t> Offset(const std::int64_t base, const std::int64_t delta) {
             if (delta > 0 && base > std::numeric_limits<std::int64_t>::max() - delta)
@@ -61,11 +53,17 @@ namespace Horo::AI {
         }
     }  // namespace
 
+    /** @copydoc QueryGeneratorOutput::IsValid */
+    bool QueryGeneratorOutput::IsValid() const noexcept {
+        return provenance.stage.IsValid() && provenance.generator.IsValid() && provenance.provider.IsValid() && provenance.revision > 0 &&
+               maximumItems > 0 && maximumItems <= EnvironmentQuerySchemaLimits::MaximumResults && maximumItems <= items.size();
+    }
+
     /** @copydoc GenerateQueryLattice */
     Result<QueryGenerationResult> GenerateQueryLattice(const QueryContextSnapshot &contexts, const QueryContextId center,
                                                        const QueryPointLattice &lattice, const QueryGeneratorOutput &output) {
         constexpr std::uint32_t maxOuterSteps = 31;  // (2 * 31 + 1)^2 bounded lattice visits per pass.
-        if (!ValidOutput(output) || lattice.stepMillimeters == 0 || lattice.outerSteps > maxOuterSteps ||
+        if (!output.IsValid() || lattice.stepMillimeters == 0 || lattice.outerSteps > maxOuterSteps ||
             lattice.innerSteps.value_or(0) > lattice.outerSteps)
             return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         if (contexts.Revision() != output.provenance.revision)
@@ -85,7 +83,7 @@ namespace Horo::AI {
     /** @copydoc GenerateQueryPoints */
     Result<QueryGenerationResult> GenerateQueryPoints(const std::span<const Math::WorldCoordinate64> points,
                                                       const QueryGeneratorOutput &output) {
-        if (!ValidOutput(output))
+        if (!output.IsValid())
             return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         if (points.size() > output.maximumItems)
             return Generation::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
@@ -96,7 +94,7 @@ namespace Horo::AI {
     /** @copydoc GenerateQueryPerceivedEntities */
     Result<QueryGenerationResult> GenerateQueryPerceivedEntities(const QueryPerceivedEntitySource &source,
                                                                  const QueryGeneratorOutput &output) {
-        if (!ValidOutput(output))
+        if (!output.IsValid())
             return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         const auto current = source.publication.Current(source.scene, source.filtering, source.blackboard);
         if (current.HasError())

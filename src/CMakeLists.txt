@@ -1832,7 +1832,7 @@ target_link_libraries(HoroAISightIntegration PUBLIC HoroEngine::AISceneIntegrati
 add_library(HoroAINavigationIntegration STATIC runtime/ai/integration/EnvironmentQueryNavigation.cpp)
 add_library(HoroEngine::AINavigationIntegration ALIAS HoroAINavigationIntegration)
 target_compile_features(HoroAINavigationIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroAINavigationIntegration PUBLIC HoroEngine::AI HoroEngine::NavigationRuntime)
+target_link_libraries(HoroAINavigationIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NavigationRuntime)
 
 add_library(HoroGameplayPerceptionIntegration STATIC gameplay/runtime/PerceptionEventSource.cpp)
 add_library(HoroEngine::GameplayPerceptionIntegration ALIAS HoroGameplayPerceptionIntegration)

@@ -100,8 +100,11 @@ authored or Navigation-projected points preserve the provider's canonical input
 order. The perception path accepts only the currently authorized revision and
 deduplicates weak entity references. Each successful batch records the stage,
 generator, provider, and revision. Consumers supply bounded output storage and
-link the scene integration target. Navigation request dispatch and staged
-execution are composed separately from these kernels.
+link the scene integration target. The Navigation integration consumes bounded
+surface results under the exact Navigation snapshot and origin revision. It keeps
+the provider's canonical order, counts non-finite and out-of-range coordinates, and
+rejects stale or truncated batches without exposing partial output. Navigation
+request dispatch and staged execution are composed separately from these kernels.
 
 GeometryLineOfSightTest measures physical obstruction through Physics.
 PerceivedVisibilityTest asks what an agent senses/remembers through Perception.

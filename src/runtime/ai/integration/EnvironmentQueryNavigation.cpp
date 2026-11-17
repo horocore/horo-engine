@@ -4,7 +4,9 @@
 #include "Horo/Navigation/NavigationErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace Horo::AI {
@@ -14,6 +16,25 @@ namespace Horo::AI {
             return left.snapshot == right.snapshot && left.world == right.world && left.topology == right.topology &&
                    left.obstacleRevision == right.obstacleRevision && left.filterRevision == right.filterRevision &&
                    left.profileRevision == right.profileRevision && left.originRevision == right.originRevision;
+        }
+
+        /** @brief Rounds an exact provider-local point to millimeters before adding the integer global origin. */
+        [[nodiscard]] std::optional<Math::WorldCoordinate64> SurfacePoint(std::array<std::int64_t, 3> origin,
+                                                                          const Math::Vec3 local) noexcept {
+            const std::array axes{local.x, local.y, local.z};
+            constexpr auto Minimum = std::numeric_limits<std::int64_t>::min();
+            constexpr auto Maximum = std::numeric_limits<std::int64_t>::max();
+            constexpr double Lower = static_cast<double>(Minimum);
+            for (std::size_t axis = 0; axis < axes.size(); ++axis) {
+                const auto millimeters = std::round(static_cast<double>(axes[axis]) * 1000.0);
+                if (!std::isfinite(millimeters) || millimeters < Lower || millimeters >= -Lower)
+                    return std::nullopt;
+                const auto offset = static_cast<std::int64_t>(millimeters);
+                if ((offset > 0 && origin[axis] > Maximum - offset) || (offset < 0 && origin[axis] < Minimum - offset))
+                    return std::nullopt;
+                origin[axis] += offset;
+            }
+            return Math::WorldCoordinate64::FromMillimeters(origin[0], origin[1], origin[2]);
         }
 
         /** @brief Translates complete path evidence without promoting a partial search to no-path. */
@@ -43,6 +64,38 @@ namespace Horo::AI {
             return Sample::Success(sample);
         }
     }  // namespace
+
+    /** @copydoc GenerateQueryNavigationSurface */
+    Result<QueryGenerationResult> GenerateQueryNavigationSurface(const QueryNavigationSurfaceSource &surface,
+                                                                 const Navigation::NavigationPathPublication &current,
+                                                                 const QueryGeneratorOutput &output) {
+        using Generation = Result<QueryGenerationResult>;
+        if (!output.IsValid())
+            return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        const auto &source = surface.source;
+        if (!Navigation::ValidateNavigationOutcomeProvenance(source) || !current.activation.IsValid() ||
+            source.world != current.activation.world || source.topology != current.activation.topology ||
+            !SameRoot(source, current.source) || source.completionTick > current.tick ||
+            output.provenance.revision != source.snapshot.Value())
+            return Generation::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        const auto &samples = surface.samples.samples;
+        if (surface.samples.truncated || samples.size() > output.maximumItems)
+            return Generation::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        if (std::ranges::any_of(samples, [&source](const auto &hit) {
+            return hit.provenance.world != source.world || hit.provenance.topology != source.topology;
+        }))
+            return Generation::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+
+        QueryGenerationResult result{.provenance = output.provenance};
+        const auto origin = surface.origin.Millimeters();
+        for (const auto &hit : samples) {
+            if (const auto point = SurfacePoint(origin, hit.position))
+                output.items[result.itemCount++] = *point;
+            else
+                ++result.invalidCoordinateCount;
+        }
+        return Generation::Success(result);
+    }
 
     /** @copydoc QueryNavigationProbe::QueryNavigationProbe */
     QueryNavigationProbe::QueryNavigationProbe(Navigation::NavigationCoordinator &coordinator) noexcept : coordinator_(coordinator) {}
