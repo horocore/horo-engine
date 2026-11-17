@@ -87,28 +87,45 @@ namespace Horo::Render::Detail {
                    (transfer || state.scope == RenderGraphPipelineScope::Graphics);
         }
 
-        /** @brief Admits only native queue scopes implemented by this graphics/transfer command path. */
-        bool ValidExecutionScope(const RenderGraphLogicalState &state) {
+        /** @brief Admits compute only for the exact queue explicitly verified by the caller. */
+        bool ValidExecutionScope(const RenderGraphLogicalState &state, const RenderQueueId admittedComputeQueue) {
             return state.queue.IsValid() && state.scope != RenderGraphPipelineScope::External &&
-                   state.scope != RenderGraphPipelineScope::Compute;
+                   (state.scope != RenderGraphPipelineScope::Compute || state.queue == admittedComputeQueue);
+        }
+
+        /** @brief Maps only explicitly admitted compute buffer storage, never image or graphics operations. */
+        Result<NativeState> ComputeStorageState(const RenderGraphLogicalState &state, const RenderGraphResourceKind kind, const bool read,
+                                                const bool write) {
+            if (kind != RenderGraphResourceKind::Buffer || state.operation != RenderGraphSynchronizationOperation::Storage)
+                return Result<NativeState>::Failure(
+                    MakeError(VulkanBackendErrors::UnsupportedOperation, "Native compute access requires buffer storage."));
+            if (state.layout != RenderGraphTextureLayout::NotApplicable)
+                return Result<NativeState>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Native compute buffer layout must be not applicable."));
+            return Result<NativeState>::Success(
+                {VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 AccessMask(read, write, VK_ACCESS_2_SHADER_STORAGE_READ_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)});
         }
 
         /** @brief Rejects unsupported scopes instead of emitting native masks unavailable on a queue. */
-        [[nodiscard]] Result<NativeState> Translate(const RenderGraphLogicalState &state, const bool texture) {
+        [[nodiscard]] Result<NativeState> Translate(const RenderGraphLogicalState &state, const RenderGraphResourceKind kind,
+                                                    const RenderQueueId admittedComputeQueue) {
             using enum RenderGraphSynchronizationAccess;
             if (state.access == None)
                 return UndefinedState(state);
-            if (!ValidExecutionScope(state))
+            if (!ValidExecutionScope(state, admittedComputeQueue))
                 return Result<NativeState>::Failure(
                     MakeError(VulkanBackendErrors::UnsupportedOperation, "Native compute/external access scope is not admitted."));
             const bool read = state.access == Read || state.access == ReadWrite;
             const bool write = state.access == Write || state.access == ReadWrite;
             if (!read && !write)
                 return Result<NativeState>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Unknown native graph access."));
+            if (state.scope == RenderGraphPipelineScope::Compute)
+                return ComputeStorageState(state, kind, read, write);
             auto translated = TranslateOperation(state, read, write);
             if (translated.HasError())
                 return translated;
-            if (!ValidPlacement(state, texture, translated.Value()))
+            if (!ValidPlacement(state, kind == RenderGraphResourceKind::Texture, translated.Value()))
                 return Result<NativeState>::Failure(
                     MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Native graph layout/scope differs from declared operation."));
             return translated;
@@ -176,10 +193,10 @@ namespace Horo::Render::Detail {
         const bool acquire = options.acquire;
         const bool discardPriorAccess = options.discardPriorAccess;
         const bool texture = resource.kind == RenderGraphResourceKind::Texture;
-        auto oldState = Translate(before, texture);
+        auto oldState = Translate(before, resource.kind, options.admittedSourceComputeQueue);
         if (oldState.HasError())
             return Result<VulkanGraphBarrier>::Failure(std::move(oldState).ErrorValue());
-        auto newState = Translate(after, texture);
+        auto newState = Translate(after, resource.kind, options.admittedDestinationComputeQueue);
         if (newState.HasError())
             return Result<VulkanGraphBarrier>::Failure(std::move(newState).ErrorValue());
         auto source = oldState.Value();

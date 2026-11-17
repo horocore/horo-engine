@@ -17,16 +17,30 @@ namespace Horo::Render::Detail {
         bool texture{false};
     };
 
-    /** @brief Exact native ownership role and discarded-access policy for a single barrier. */
+    /** @brief Exact native ownership/discard policy and caller-verified compute storage queues for one barrier. */
     struct VulkanGraphBarrierOptions {
         std::uint32_t sourceFamily{VK_QUEUE_FAMILY_IGNORED};
         std::uint32_t destinationFamily{VK_QUEUE_FAMILY_IGNORED};
         bool release{false};
         bool acquire{false};
         bool discardPriorAccess{false};
+        RenderQueueId admittedSourceComputeQueue;      /**< Invalid unless this call admits compute on the source's exact queue. */
+        RenderQueueId admittedDestinationComputeQueue; /**< Independent destination admission; never inferred from the source. */
     };
 
-    /** @brief Creates one native dependency without native side effects. */
+    /**
+     * @brief Creates one native dependency without native side effects.
+     * @param resource Exact prevalidated whole-resource native binding.
+     * @param before Source logical access, or the canonical undefined state.
+     * @param after Destination logical access, or the canonical undefined state.
+     * @param options Ownership/discard policy and independent compute-buffer-storage admissions.
+     * A valid compute admission must name the corresponding state's exact effective queue, whose
+     * native compute operation support the caller has already verified on this binding's device.
+     * These call-local facts do not query a device, admit storage images, or publish capabilities.
+     * Queue IDs alone cannot prove device provenance; that remains the native owner's obligation.
+     * Default/invalid admissions deny compute, including on graphics queues.
+     * @return Whole-resource dependency or the original typed unsupported/invalid-state failure.
+     */
     [[nodiscard]] Result<VulkanGraphBarrier> TranslateVulkanGraphBarrier(const VulkanGraphResource &resource,
                                                                          const RenderGraphLogicalState &before,
                                                                          const RenderGraphLogicalState &after,
