@@ -6,6 +6,7 @@
  */
 
 #include "Horo/AI/EnvironmentQuerySchema.h"
+#include "Horo/Math/WorldCoordinate64.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -70,6 +71,21 @@ namespace Horo::AI {
         std::optional<bool> filter;
         std::optional<double> metric;
     };
+
+    /** @brief Geometric distance from two captured points. Path distance belongs to Navigation. */
+    enum class QueryDistanceMetric : std::uint8_t {
+        Euclidean,
+        Manhattan,
+        Chebyshev,
+    };
+
+    /** @brief Produces a finite geometric distance sample in meters using canonical world points.
+     * @param stage Exact compiled test stage receiving the sample. @param metric Declared distance definition.
+     * @param from First point. @param to Second point.
+     * @return Metric sample for normalization, or a typed failure for an invalid stage or metric.
+     */
+    [[nodiscard]] Result<QueryTestSample> EvaluateQueryDistance(QueryStageId stage, QueryDistanceMetric metric,
+                                                                Math::WorldCoordinate64 from, Math::WorldCoordinate64 to);
 
     /** @brief One bounded reason per candidate, identifying the first failed mandatory test in StageId order. */
     enum class QueryScoreStatus : std::uint8_t {

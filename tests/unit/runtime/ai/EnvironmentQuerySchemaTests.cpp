@@ -4,6 +4,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -143,6 +144,34 @@ namespace Horo::AI {
                         AIErrors::EnvironmentQuerySchemaInvalid);
             std::array duplicate{eligible, eligible};
             ExpectError(scoring.Value().SelectBest(duplicate, 1), AIErrors::EnvironmentQueryIdentityConflict);
+        }
+
+        TEST_CASE("EQS geometric distances preserve local precision across the canonical world range", "[unit][ai][eqs][scoring]") {
+            constexpr auto Maximum = std::numeric_limits<std::int64_t>::max();
+            constexpr auto Minimum = std::numeric_limits<std::int64_t>::min();
+            const auto from = Math::WorldCoordinate64::FromMillimeters(Maximum, Minimum, -12'000);
+            const auto to = Math::WorldCoordinate64::FromMillimeters(Maximum - 3000, Minimum + 4000, 0);
+            const auto stage = MakeIdentity<QueryStageId>(8);
+            const std::array expected{std::pair{QueryDistanceMetric::Euclidean, 13.0}, std::pair{QueryDistanceMetric::Manhattan, 19.0},
+                                      std::pair{QueryDistanceMetric::Chebyshev, 12.0}};
+            for (const auto &[metric, meters] : expected) {
+                const auto sample = EvaluateQueryDistance(stage, metric, from, to);
+                REQUIRE(sample.HasValue());
+                CHECK(sample.Value().stage == stage);
+                CHECK(sample.Value().metric == meters);
+                const auto reverse = EvaluateQueryDistance(stage, metric, to, from);
+                REQUIRE(reverse.HasValue());
+                CHECK(reverse.Value().metric == meters);
+            }
+            const auto full = EvaluateQueryDistance(stage, QueryDistanceMetric::Euclidean, from,
+                                                    Math::WorldCoordinate64::FromMillimeters(Minimum, Maximum, 0));
+            REQUIRE(full.HasValue());
+            REQUIRE(full.Value().metric.has_value());
+            CHECK(std::isfinite(*full.Value().metric));
+            CHECK(*full.Value().metric > 1.8e16);
+            ExpectError(EvaluateQueryDistance({}, QueryDistanceMetric::Euclidean, from, to), AIErrors::EnvironmentQuerySchemaInvalid);
+            ExpectError(EvaluateQueryDistance(stage, static_cast<QueryDistanceMetric>(255), from, to),
+                        AIErrors::EnvironmentQuerySchemaInvalid);
         }
 
         TEST_CASE("EQS excludes non-finite mandatory scores from every winning prefix", "[unit][ai][eqs][scoring]") {

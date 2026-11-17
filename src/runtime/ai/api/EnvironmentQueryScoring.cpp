@@ -8,6 +8,13 @@
 
 namespace Horo::AI {
     namespace {
+        /** @brief Subtracts before converting to double, preserving local separation at large world origins. */
+        [[nodiscard]] double AxisDistance(const std::int64_t from, const std::int64_t to) noexcept {
+            const auto low = static_cast<std::uint64_t>(std::min(from, to));
+            const auto high = static_cast<std::uint64_t>(std::max(from, to));
+            return static_cast<double>(high - low) / 1000.0;
+        }
+
         /** @brief Checks scoring coefficients before they can be used by any candidate. */
         [[nodiscard]] bool ValidRange(const QueryScoreRange &range) noexcept {
             const double width = range.maximum - range.minimum;
@@ -80,6 +87,34 @@ namespace Horo::AI {
             return left.itemIndex < right.itemIndex;
         }
     }  // namespace
+
+    /** @copydoc EvaluateQueryDistance */
+    Result<QueryTestSample> EvaluateQueryDistance(const QueryStageId stage, const QueryDistanceMetric metric,
+                                                  const Math::WorldCoordinate64 from, const Math::WorldCoordinate64 to) {
+        using Sample = Result<QueryTestSample>;
+        if (!stage.IsValid())
+            return Sample::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        const auto left = from.Millimeters();
+        const auto right = to.Millimeters();
+        const auto x = AxisDistance(left[0], right[0]);
+        const auto y = AxisDistance(left[1], right[1]);
+        const auto z = AxisDistance(left[2], right[2]);
+        double meters;
+        switch (metric) {
+            case QueryDistanceMetric::Euclidean:
+                meters = std::sqrt(x * x + y * y + z * z);
+                break;
+            case QueryDistanceMetric::Manhattan:
+                meters = x + y + z;
+                break;
+            case QueryDistanceMetric::Chebyshev:
+                meters = std::max({x, y, z});
+                break;
+            default:
+                return Sample::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        }
+        return Sample::Success({.stage = stage, .metric = meters});
+    }
 
     /** @copydoc QueryScoringPlan::ResolveRule */
     Result<QueryScoringPlan::Stage> QueryScoringPlan::ResolveRule(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
