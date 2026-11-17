@@ -38,10 +38,11 @@ namespace Horo::Tests::PlatformMigration {
         salt.bytes.front() = std::byte{1};
         auto initial = PreparePlatformServicesInitialDocuments(project.Read(".horo/project.json"), salt);
         REQUIRE(initial.HasValue());
-        auto root = nlohmann::json::parse(initial.Value().projectSource);
+        auto documents = std::move(initial).Value();
+        auto root = nlohmann::json::parse(documents.projectSource);
         root["settings"]["platformServices"]["provider"] = {{"mode", "exact"}, {"key", "platform.not_installed"}};
-        initial.Value().projectSource = root.dump(2) + "\n";
-        project.WriteInitial(initial.Value());
+        documents.projectSource = root.dump(2) + "\n";
+        project.WriteInitial(documents);
         JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 8});
         auto random = std::make_shared<Random>();
         random->fail = true;
@@ -50,8 +51,8 @@ namespace Horo::Tests::PlatformMigration {
         REQUIRE(prepared.HasValue());
         CHECK(random->calls == 0);
         CHECK(prepared.Value().Changes().empty());
-        CHECK(project.Read(".horo/project.json") == initial.Value().projectSource);
-        const auto source = DecodeProjectSourceDocument(initial.Value().projectSource);
+        CHECK(project.Read(".horo/project.json") == documents.projectSource);
+        const auto source = DecodeProjectSourceDocument(documents.projectSource);
         REQUIRE(source.HasValue());
         const auto portable = DecodeProjectPlatformServicesConfigurationCandidate(source.Value(), PlatformServicesHostProfile::Cook);
         REQUIRE(portable.HasValue());
