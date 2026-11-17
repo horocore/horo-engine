@@ -376,8 +376,11 @@ namespace Horo {
                 return;
             }
             for (const SourceEntry *entry : SortedEntries(*source.values, limits.maximumKeysPerSource)) {
-                if (std::optional<Diagnostic> finding = ValidateSourceEntry(schema, source, *entry, limits); finding.has_value())
+                if (std::optional<Diagnostic> finding = ValidateSourceEntry(schema, source, *entry, limits)) {
+                    if (const auto *descriptor = schema.FindDescriptor(entry->first))
+                        finding->path = descriptor->key.Value();
                     findings.push_back(std::move(*finding));
+                }
             }
         }
 
