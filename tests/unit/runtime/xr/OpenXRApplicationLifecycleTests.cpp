@@ -561,6 +561,7 @@ namespace Horo::Tests::OpenXRApplication {
         enum class Outcome {
             FocusLoss,
             Malformed,
+            Replacement,
             PartialCreate,
             Unsupported
         };
