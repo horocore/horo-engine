@@ -37,8 +37,13 @@ namespace Horo::Debug {
         /** @brief Rejects unregistered namespaces and arbitrary unqualified aliases. */
         bool RegisteredName(const std::string_view name, const RegistryPolicy &policy) {
             const auto dot = name.find('.');
-            if (dot == std::string_view::npos)
-                return name == "help" || name == "find" || name == "version" || name == "clear" || name == "screenshot";
+            if (dot == std::string_view::npos) {
+#if !defined(HORO_PROFILE_SERVER)
+                if (policy.profile != ProductProfile::Server && name == "screenshot")
+                    return true;
+#endif
+                return name == "help" || name == "find" || name == "version" || name == "clear";
+            }
             const auto prefix = name.substr(0, dot);
             return std::ranges::find(EngineNamespaces, prefix) != std::end(EngineNamespaces) ||
                    std::ranges::find(policy.projectNamespaces, prefix) != policy.projectNamespaces.end();

@@ -141,6 +141,15 @@ TEST_CASE("Console discovery and submission share principal and profile policy",
     CHECK(CommandRegistry::Create(commands, {}).HasError());
 }
 
+TEST_CASE("Server console rejects unqualified screenshot metadata before registration", "[console][profile]") {
+    const std::array commands{Command(1, "screenshot")};
+    RegistryPolicy policy;
+    policy.profile = ProductProfile::Server;
+    const auto registry = CommandRegistry::Create(commands, policy);
+    REQUIRE(registry.HasError());
+    CHECK(registry.ErrorValue().code.Value() == "console.invalid_descriptor");
+}
+
 TEST_CASE("Console startup admission history privacy and retention are bounded", "[console]") {
     const std::array<DebugArgumentDescriptor, 1> args{{{"token", {}, DebugArgumentType::String, true, {}, true}}};
     std::array commands{Command(1, "game.login"), Command(2, "version")};
