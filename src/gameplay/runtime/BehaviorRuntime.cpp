@@ -88,6 +88,9 @@ namespace Horo::Gameplay {
         if (impl_->inactive || impl_->shutdown || impl_->structuralPending)
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Behavior runtime is shut down."));
         impl_->events.BeginTick();
+        // Preserve event retirement without constructing an unused command buffer on the fixed path.
+        if (impl_->instances.empty())
+            return Result<void>::Success();
         Runtime::SceneCommandBuffer commands;
         for (std::size_t index = 0; index < impl_->instances.size(); ++index)
             if (auto updated = RunFixedInstance(index, input, delta, commands); updated.HasError())
