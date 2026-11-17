@@ -2999,6 +2999,31 @@ The engine supports two explicit simulation scheduling modes for AI:
 
 Client hosts in networked multiplayer run neither mode for remote AI; they perform presentation-only state interpolation.
 
+### Scene decision scheduling tiers
+
+Hosts can compose an `AiDecisionSimulationProfile` through
+`AiTaskSchedulerSettings` in best-effort mode. The Scene-configured scheduler
+accepts the latest `AiDecisionRelevance` for an exact registered agent through
+`SetRelevanceAtSafePoint`. The host supplies integer millimetres from the nearest
+simulation anchor, active gameplay or streaming region membership, gameplay
+pins, and committed urgent stimuli. Missing distance evidence preserves full
+cadence. The camera and renderer are outside the input contract.
+
+| Admitted tier | Work and retained state |
+| --- | --- |
+| Full | Runs the registered cadence and accepts owner wakes. Gameplay pins and urgent stimuli select this tier regardless of distance. |
+| Reduced | Uses the slower of the registered cadence and the profile interval. Owner events can advance evaluation. |
+| Event-only | Suppresses periodic evaluation and admits gameplay wakes. Retained intents can finish publishing under the existing command budget. |
+| Suspended | Drops uncommitted intents, cancels optional workers, and suppresses pending worker publication before mailbox pumping. The agent registration, schema, blackboard, and canonical controller state remain owned by the Scene. |
+
+Closer relevance and gameplay pins promote on the next decision boundary. A
+demotion requires the same candidate tier for the profile's positive fixed-tick
+delay. A suspended registration can wake to event-only on committed perception
+or an explicit owner request and is reclassified from the latest facts. Its
+executor retains canonical state and retires transient callback identities when
+its optional work is cancelled. Deterministic scheduling rejects a relevance
+profile and keeps every admitted agent at its reserved full-rate cadence.
+
 ## Gameplay AI Profiles And Simulation Budgets
 
 Gameplay decision cadence and perception query fidelity are configured through

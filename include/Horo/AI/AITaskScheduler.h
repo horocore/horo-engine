@@ -28,6 +28,31 @@ namespace Horo::AI {
         Count
     };
 
+    /** @brief Owner scheduling tier, ordered from most active to least active. */
+    enum class AiSimulationTier : std::uint8_t {
+        Full,
+        Reduced,
+        EventOnly,
+        Suspended,
+    };
+
+    /** @brief Host-authored best-effort distance bands and temporal hysteresis. */
+    struct AiDecisionSimulationProfile final {
+        std::uint64_t fullDistanceMillimeters{};       /**< Inclusive full cadence limit. */
+        std::uint64_t reducedDistanceMillimeters{};    /**< Inclusive reduced cadence limit. */
+        std::uint64_t suspensionDistanceMillimeters{}; /**< Beyond this band, unrelated agents may suspend. */
+        std::uint64_t reducedIntervalTicks{};          /**< Minimum positive reduced cadence, greater than one. */
+        std::uint64_t demotionDelayTicks{};            /**< Positive ticks for which the candidate tier must persist. */
+    };
+
+    /** @brief Immutable gameplay-owned relevance facts. View/frustum state is outside this contract. */
+    struct AiDecisionRelevance final {
+        std::optional<std::uint64_t> anchorDistanceMillimeters; /**< Distance to the nearest simulation anchor; absence preserves Full. */
+        bool activeSimulationRegion{}; /**< Gameplay or streaming relevance keeps distant agents at least event-driven. */
+        bool gameplayPinned{};         /**< Gameplay-essential work remains Full. */
+        bool urgentStimulus{};         /**< High-priority committed gameplay stimulus promotes immediately. */
+    };
+
     /** @brief Non-copyable allowance; every node/query/command step must consume before doing work. */
     class AiWorkBudget final {
     public:
@@ -100,6 +125,7 @@ namespace Horo::AI {
         std::uint64_t tick{};
         DecisionWakeReasons reasons;
         CancellationToken cancellation;
+        AiSimulationTier tier{AiSimulationTier::Full};
     };
 
     /**
@@ -119,7 +145,9 @@ namespace Horo::AI {
         /** @brief Publishes a bounded prefix of evaluated intents. @param context Evaluation identity, revalidated by the scheduler.
          * @param budget Command allowance. @return True when all intents are committed, false to retain the bounded remainder. */
         [[nodiscard]] virtual Result<bool> Commit(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept = 0;
-        /** @brief Discards retained intents and transient evaluation at cancellation. Must be idempotent. */
+        /** @brief Discards retained intents and transient evaluation at cancellation. Must be idempotent.
+         * @details A relevance-profile executor can be evaluated again after cancellation. Discard only optional work,
+         * retire any of its pending callback generations and keep the canonical controller and blackboard state. */
         virtual void Cancel() noexcept = 0;
     };
 
@@ -145,6 +173,7 @@ namespace Horo::AI {
         std::size_t pendingWorkers{128};
         std::uint64_t starvationTicks{8};
         AiSchedulingMode mode{AiSchedulingMode::Deterministic};
+        std::optional<AiDecisionSimulationProfile> simulationProfile; /**< Opt-in; accepted only in BestEffort mode. */
     };
 
     /** @brief Observable bounded outcomes for the most recent fixed tick; repeated calls never replenish it. */
@@ -191,6 +220,15 @@ namespace Horo::AI {
         /** @brief Coalesces causes without queue growth. @param agent Exact registered handle. @param reasons Nonempty causes.
          * @return Success or typed stale/lifecycle failure. */
         [[nodiscard]] Result<void> Wake(AgentHandle agent, DecisionWakeReasons reasons);
+        /** @brief Stores exact-generation gameplay facts for the next decision tick.
+         * @param agent Registered live generation. @param relevance Latest owner-composed immutable facts.
+         * @return Success or a typed unavailable-profile, phase or stale-agent failure.
+         * @pre Before the first decision phase or after intent dispatch; no publication during callbacks.
+         */
+        [[nodiscard]] Result<void> SetRelevanceAtSafePoint(AgentHandle agent, const AiDecisionRelevance &relevance);
+        /** @brief Reads the current admitted tier. @param agent Exact registered generation.
+         * @return Current tier or a typed stale-agent failure. */
+        [[nodiscard]] Result<AiSimulationTier> SimulationTier(AgentHandle agent);
         /** @brief Cancels and removes one registration. @param agent Exact handle. @return Success or typed stale/reentrant failure. */
         [[nodiscard]] Result<void> Unregister(AgentHandle agent);
         /** @brief Executes bounded owner slices at AiDecisionEvaluate. @param tick Positive nondecreasing simulation tick.
@@ -215,6 +253,8 @@ namespace Horo::AI {
 
     private:
         struct Entry;
+        /** @brief Locates an exact handle in the active registration index, including the insertion point. */
+        [[nodiscard]] std::vector<std::size_t>::iterator HandlePosition(AgentHandle agent) noexcept;
         /** @brief Resolves exact registration. @param agent Exact handle. @return Slot or null. */
         [[nodiscard]] Entry *Find(AgentHandle agent) noexcept;
         /** @brief Advances one admitted owner slice, retaining bounded intents and original failures. @param entry Admitted agent. */
@@ -229,6 +269,12 @@ namespace Horo::AI {
         /** @brief Compares stable priority, age and persistent identity. @param a Left slot. @param b Right slot.
          * @return Whether the left slot precedes the right. */
         [[nodiscard]] bool Before(const Entry &a, const Entry &b) const noexcept;
+        /** @brief Applies promotions and stable demotions before any worker publication for the tick. */
+        void ApplyRelevance();
+        /** @brief Applies a changed tier, retaining the registration and owner lifetime. */
+        void ChangeTier(Entry &entry, AiSimulationTier tier) noexcept;
+        /** @brief Resolves periodic cadence; zero means external events only or suspension. */
+        [[nodiscard]] std::uint64_t PeriodicInterval(const Entry &entry) const noexcept;
         /** @brief Builds stable priority/age/identity order into reserved storage. */
         void Order();
         /** @brief Rechecks lifetime immediately around callbacks. @param entry Owned slot. @return Whether retired. */
@@ -239,6 +285,7 @@ namespace Horo::AI {
         AiTaskSchedulerSettings settings_;
         std::unique_ptr<AiTaskJobService> jobs_;
         std::vector<Entry> entries_;
+        std::vector<std::size_t> activeByHandle_; /**< Exact handle lookup for high-frequency relevance publications. */
         std::vector<std::size_t> order_;
         AiSchedulingReport report_;
         Entry *evaluating_{};

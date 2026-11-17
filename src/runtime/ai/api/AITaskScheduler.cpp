@@ -6,6 +6,13 @@
 
 namespace Horo::AI {
     namespace {
+        /** @brief Checks increasing bands and strictly positive best-effort cadence settings. */
+        [[nodiscard]] bool ValidProfile(const AiDecisionSimulationProfile &profile) noexcept {
+            return profile.fullDistanceMillimeters > 0 && profile.fullDistanceMillimeters < profile.reducedDistanceMillimeters &&
+                   profile.reducedDistanceMillimeters < profile.suspensionDistanceMillimeters && profile.reducedIntervalTicks > 1 &&
+                   profile.demotionDelayTicks > 0;
+        }
+
         /** @brief Validates finite scene admission independently of runtime/backend availability. */
         [[nodiscard]] bool Valid(const AiTaskSchedulerSettings &s) noexcept {
             return s.maximumAgents > 0 && s.maximumAgents <= AiTaskSchedulerSettings::HardAgents && s.evaluationsPerTick > 0 &&
@@ -13,7 +20,27 @@ namespace Horo::AI {
                    s.workUnitsPerTick <= AiTaskSchedulerSettings::HardWorkUnits && s.commandsPerTick > 0 &&
                    s.commandsPerTick <= AiTaskSchedulerSettings::HardWorkUnits && s.workerSubmissionsPerTick > 0 &&
                    s.workerSubmissionsPerTick <= AiTaskJobService::HardCapacity && s.pendingWorkers > 0 &&
-                   s.pendingWorkers <= AiTaskJobService::HardCapacity && s.starvationTicks > 0 && s.mode < AiSchedulingMode::Count;
+                   s.pendingWorkers <= AiTaskJobService::HardCapacity && s.starvationTicks > 0 && s.mode < AiSchedulingMode::Count &&
+                   (!s.simulationProfile || (s.mode == AiSchedulingMode::BestEffort && ValidProfile(*s.simulationProfile)));
+        }
+
+        /** @brief Uses only host-captured simulation facts and conservatively preserves unknown relevance. */
+        [[nodiscard]] AiSimulationTier DesiredTier(const AiDecisionSimulationProfile &profile,
+                                                   const AiDecisionRelevance &relevance) noexcept {
+            if (relevance.gameplayPinned || relevance.urgentStimulus || !relevance.anchorDistanceMillimeters ||
+                *relevance.anchorDistanceMillimeters <= profile.fullDistanceMillimeters)
+                return AiSimulationTier::Full;
+            const auto distance = *relevance.anchorDistanceMillimeters;
+            if (distance <= profile.reducedDistanceMillimeters)
+                return AiSimulationTier::Reduced;
+            if (distance <= profile.suspensionDistanceMillimeters || relevance.activeSimulationRegion)
+                return AiSimulationTier::EventOnly;
+            return AiSimulationTier::Suspended;
+        }
+
+        /** @brief Only trusted event or explicit owner wakes can reactivate a suspended registration. */
+        [[nodiscard]] bool WakesSuspended(const DecisionWakeReasons &reasons) noexcept {
+            return reasons.perception || reasons.explicitRequest;
         }
 
         /** @brief Advances cadence without overflow or missed-interval catch-up. */
@@ -30,6 +57,10 @@ namespace Horo::AI {
         std::shared_ptr<const void> image;  // Code remains pinned through executor destruction.
         std::shared_ptr<IAiScheduledDecision> executor;
         DecisionWakeReasons pending{.activation = true};
+        AiDecisionRelevance relevance;
+        AiSimulationTier tier{AiSimulationTier::Full};
+        AiSimulationTier demotionTarget{AiSimulationTier::Full};
+        std::uint64_t demotionSince{};
         AiDecisionSliceContext context;
         std::uint64_t nextTick{1};
         std::uint64_t waitingSince{1};
@@ -71,6 +102,7 @@ namespace Horo::AI {
     AiTaskScheduler::AiTaskScheduler(ConstructionKey, JobSystem &jobs, const AiRuntimeIncarnation incarnation,
                                      const AiTaskSchedulerSettings &settings)
         : incarnation_(incarnation), settings_(settings), entries_(settings.maximumAgents) {
+        activeByHandle_.reserve(settings.maximumAgents);
         order_.reserve(settings.maximumAgents);
         auto service = AiTaskJobService::Create(jobs, settings.pendingWorkers);
         if (service.HasError())
@@ -91,12 +123,17 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc AiTaskScheduler::HandlePosition */
+    std::vector<std::size_t>::iterator AiTaskScheduler::HandlePosition(const AgentHandle agent) noexcept {
+        return std::ranges::lower_bound(activeByHandle_, agent, {}, [this](const std::size_t slot) {
+            return entries_[slot].agent;
+        });
+    }
+
     /** @copydoc AiTaskScheduler::Find */
     AiTaskScheduler::Entry *AiTaskScheduler::Find(const AgentHandle agent) noexcept {
-        const auto found = std::ranges::find_if(entries_, [agent](const Entry &entry) {
-            return entry.agent == agent;
-        });
-        return found == entries_.end() ? nullptr : std::to_address(found);
+        const auto found = HandlePosition(agent);
+        return found != activeByHandle_.end() && entries_[*found].agent == agent ? &entries_[*found] : nullptr;
     }
 
     /** @copydoc AiTaskScheduler::FitsDeterministic */
@@ -152,14 +189,22 @@ namespace Horo::AI {
         free->executor = std::move(captured.executor);
         free->waitingSince = report_.tick == 0 ? 1 : report_.tick;
         free->nextTick = free->waitingSince;
+        activeByHandle_.insert(HandlePosition(agent), static_cast<std::size_t>(free - entries_.data()));
         return Result<void>::Success();
     }
 
     /** @copydoc AiTaskScheduler::Wake */
-    Result<void> AiTaskScheduler::Wake(const AgentHandle agent, const DecisionWakeReasons reasons) {
+    Result<void> AiTaskScheduler::Wake(const AgentHandle agent, DecisionWakeReasons reasons) {
         auto *entry = Find(agent);
         if (closed_ || inPhase_ || !entry || !entry->executor || entry->cancellation.IsCancellationRequested() || !reasons.Any())
             return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        if (entry->tier == AiSimulationTier::Suspended) {
+            reasons = {.perception = reasons.perception, .explicitRequest = reasons.explicitRequest};
+        } else if (entry->tier == AiSimulationTier::EventOnly) {
+            reasons.polling = false;
+        }
+        if (!reasons.Any())
+            return Result<void>::Success();
         if (!entry->pending.Any())
             entry->waitingSince = report_.tick == 0 ? 1 : report_.tick;
         entry->pending.activation |= reasons.activation;
@@ -171,8 +216,90 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
+    /** @copydoc AiTaskScheduler::SetRelevanceAtSafePoint */
+    Result<void> AiTaskScheduler::SetRelevanceAtSafePoint(const AgentHandle agent, const AiDecisionRelevance &relevance) {
+        if (closed_ || inPhase_ || (report_.tick != 0 && !committed_))
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (!settings_.simulationProfile)
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+        auto *entry = Find(agent);
+        if (!entry || !entry->executor || entry->cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        entry->relevance = relevance;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiTaskScheduler::SimulationTier */
+    Result<AiSimulationTier> AiTaskScheduler::SimulationTier(const AgentHandle agent) {
+        auto *entry = Find(agent);
+        if (closed_ || inPhase_ || !entry || !entry->executor || entry->cancellation.IsCancellationRequested())
+            return Result<AiSimulationTier>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        return Result<AiSimulationTier>::Success(entry->tier);
+    }
+
+    /** @copydoc AiTaskScheduler::PeriodicInterval */
+    std::uint64_t AiTaskScheduler::PeriodicInterval(const Entry &entry) const noexcept {
+        switch (entry.tier) {
+            case AiSimulationTier::Full:
+                return entry.policy.intervalTicks;
+            case AiSimulationTier::Reduced:
+                return std::max(entry.policy.intervalTicks, settings_.simulationProfile->reducedIntervalTicks);
+            case AiSimulationTier::EventOnly:
+            case AiSimulationTier::Suspended:
+                return 0;
+        }
+        return 0;
+    }
+
+    /** @copydoc AiTaskScheduler::ChangeTier */
+    void AiTaskScheduler::ChangeTier(Entry &entry, const AiSimulationTier tier) noexcept {
+        const auto previous = entry.tier;
+        entry.tier = tier;
+        entry.demotionSince = 0;
+        entry.pending.polling = false;
+        const auto interval = PeriodicInterval(entry);
+        entry.nextTick = interval == 0 ? 0 : Next(entry.evaluatedTick, interval);
+        if (tier == AiSimulationTier::Suspended) {
+            entry.pending = {};
+            entry.intents = false;
+            entry.context = {};
+            jobs_->DiscardAgentWork(entry.agent);
+            entry.executor->Cancel();
+        } else if (tier < previous) {
+            if (!entry.pending.Any())
+                entry.waitingSince = report_.tick;
+            entry.pending.activation = true;
+        }
+    }
+
+    /** @copydoc AiTaskScheduler::ApplyRelevance */
+    void AiTaskScheduler::ApplyRelevance() {
+        const auto &profile = *settings_.simulationProfile;
+        for (auto &entry : entries_) {
+            if (closed_)
+                break;
+            if (!entry.executor || entry.cancellation.IsCancellationRequested())
+                continue;
+            auto desired = DesiredTier(profile, entry.relevance);
+            if (entry.tier == AiSimulationTier::Suspended && desired == entry.tier && WakesSuspended(entry.pending))
+                desired = AiSimulationTier::EventOnly;
+            if (desired == entry.tier) {
+                entry.demotionSince = 0;
+            } else if (desired < entry.tier) {
+                ChangeTier(entry, desired);
+            } else if (entry.demotionSince == 0 || desired != entry.demotionTarget) {
+                entry.demotionTarget = desired;
+                entry.demotionSince = report_.tick;
+            } else if (report_.tick - entry.demotionSince >= profile.demotionDelayTicks) {
+                ChangeTier(entry, desired);
+            }
+        }
+    }
+
     /** @copydoc AiTaskScheduler::Retire */
     void AiTaskScheduler::Retire(Entry &entry) noexcept {
+        if (!closed_)
+            activeByHandle_.erase(HandlePosition(entry.agent));
         jobs_->CancelAgent(entry.agent, AiTaskCancellationReason::OwnerShutdown);
         entry.executor->Cancel();
         entry.executor.reset();
@@ -216,7 +343,8 @@ namespace Horo::AI {
                     entry.waitingSince = entry.nextTick;
                 entry.pending.polling = true;
             }
-            order_.push_back(i);
+            if (!settings_.simulationProfile || entry.pending.Any() || entry.intents)
+                order_.push_back(i);
         }
         std::ranges::sort(order_, [this](const auto lhs, const auto rhs) {
             return Before(entries_[lhs], entries_[rhs]);
@@ -250,9 +378,10 @@ namespace Horo::AI {
         report_.workUnits += units;
         ++report_.evaluated;
         entry.evaluatedTick = tick;
-        entry.context = {entry.agent, tick, entry.pending, entry.cancellation};
+        entry.context = {entry.agent, tick, entry.pending, entry.cancellation, entry.tier};
         entry.pending = {};
-        entry.nextTick = Next(tick, entry.policy.intervalTicks);
+        const auto interval = PeriodicInterval(entry);
+        entry.nextTick = interval == 0 ? 0 : Next(tick, interval);
         AiWorkBudget budget{units};
         evaluating_ = &entry;
         evaluatingBudget_ = &budget;
@@ -275,8 +404,10 @@ namespace Horo::AI {
             ++report_.exhausted;
         if (outcome != AiSliceOutcome::Complete || budget.Exhausted()) {
             ++report_.yielded;
-            entry.pending.explicitRequest = true;
-            entry.waitingSince = tick;
+            if (!settings_.simulationProfile) {
+                entry.pending.explicitRequest = true;
+                entry.waitingSince = tick;
+            }
         }
     }
 
@@ -299,7 +430,8 @@ namespace Horo::AI {
     Result<AiSchedulingReport> AiTaskScheduler::EvaluateAtDecision(const std::uint64_t tick) {
         if (const auto validated = ValidateDecisionTick(tick); validated.HasError())
             return Result<AiSchedulingReport>::Failure(validated.ErrorValue());
-        if (tick != report_.tick) {
+        const bool newTick = tick != report_.tick;
+        if (newTick) {
             report_ = {.tick = tick};
             committed_ = false;
             for (auto &entry : entries_) {
@@ -308,8 +440,12 @@ namespace Horo::AI {
             }
         }
         inPhase_ = true;
-        jobs_->Pump();
-        Order();
+        if (newTick && settings_.simulationProfile)
+            ApplyRelevance();
+        if (!closed_) {
+            jobs_->Pump();
+            Order();
+        }
         report_.deferred = 0;
         report_.starved = 0;
         for (const auto index : order_) {
@@ -318,7 +454,7 @@ namespace Horo::AI {
             auto &entry = entries_[index];
             if (RetireIfCancelled(entry))
                 continue;
-            if (!entry.pending.Any())
+            if (entry.tier == AiSimulationTier::Suspended || !entry.pending.Any())
                 continue;
             if (tick - entry.waitingSince >= settings_.starvationTicks)
                 ++report_.starved;
@@ -417,6 +553,7 @@ namespace Horo::AI {
         for (auto &entry : entries_)
             if (entry.executor)
                 Retire(entry);
+        activeByHandle_.clear();
     }
 
     /** @copydoc AiTaskScheduler::~AiTaskScheduler */

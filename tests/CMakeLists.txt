@@ -1240,7 +1240,9 @@ target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneInte
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
 target_include_directories(HoroAITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 
-add_executable(HoroAITaskSchedulerTests unit/runtime/ai/AITaskSchedulerTests.cpp)
+add_executable(HoroAITaskSchedulerTests
+        unit/runtime/ai/AITaskSchedulerTests.cpp
+        unit/runtime/ai/AITaskSimulationProfileTests.cpp)
 target_compile_features(HoroAITaskSchedulerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAITaskSchedulerTests PRIVATE HoroEngine::AISceneIntegration)
 target_include_directories(HoroAITaskSchedulerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
