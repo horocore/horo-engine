@@ -409,6 +409,15 @@ def bridge_file_uri(path: PurePath) -> str:
     return path.as_uri()
 
 
+def _bridge_startup_retry_delay(error: AnalysisError, delay: float) -> float | None:
+    """Classify the two retryable startup responses without handling other bridge failures."""
+    if isinstance(error, BridgeRateLimited):
+        return max(delay, error.retry_after)
+    if str(error).startswith("IDE bridge returned HTTP 500:") and "No files were found to be indexed by SonarQube for IDE" in str(error):
+        return delay
+    return None
+
+
 def analyze_when_indexed(port: int, files: Sequence[PurePath], request_timeout: float, startup_timeout: float) -> list[dict[str, object]]:
     """Back off for indexing and rate limits without retrying other failures or exceeding startup admission."""
     body = json.dumps({"fileAbsolutePaths": [bridge_file_path(path) for path in files]}).encode("utf-8")
@@ -421,14 +430,8 @@ def analyze_when_indexed(port: int, files: Sequence[PurePath], request_timeout: 
             response = request_bridge(port, BRIDGE_ANALYZE_PATH, request_timeout, body)
             return normalized_findings(response)
         except AnalysisError as error:
-            if isinstance(error, BridgeRateLimited):
-                retry_delay = max(delay, error.retry_after)
-            elif (str(error).startswith("IDE bridge returned HTTP 500:")
-                  and "No files were found to be indexed by SonarQube for IDE" in str(error)):
-                retry_delay = delay
-            else:
-                raise
-            if retry_delay >= deadline - time.monotonic():
+            retry_delay = _bridge_startup_retry_delay(error, delay)
+            if retry_delay is None or retry_delay >= deadline - time.monotonic():
                 raise
             if CANCELLED.wait(retry_delay):
                 raise AnalysisError("Sonar analysis startup cancelled") from error
