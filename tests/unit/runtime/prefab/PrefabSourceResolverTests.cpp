@@ -71,6 +71,19 @@ namespace Horo::Prefab {
             return composition;
         }
 
+        /** @brief Checks bounded shared diagnostic projection independently from the resolver topology fixture. */
+        void CheckExpansionDiagnostic(const Error &error, const PrefabDiagnosticContext &context) {
+            CHECK(error.message.size() <= MaximumPrefabDiagnosticMessageBytes);
+            const auto diagnostic =
+                MakePrefabDiagnosticRecord(PrefabDiagnosticCategory::Expansion, PrefabDiagnosticOperation::Expand, error, context);
+            REQUIRE(diagnostic.HasValue());
+            CHECK(diagnostic.Value().code.Value() == error.code.Value());
+            CHECK(diagnostic.Value().prefabAsset == context.prefabAsset);
+            CHECK(diagnostic.Value().revision == context.revision);
+            CHECK(diagnostic.Value().registryRevision == context.registryRevision);
+            CHECK(MakePrefabBuildOutputRecord(diagnostic.Value()).message == error.message);
+        }
+
         /** @brief Builds the shared two-source nested resolver fixture with a caller-selected placement and inner hierarchy. */
         Result<PrefabSourceResolverSnapshot> BuildNestedResolverSnapshot(Assets::AssetRegistry &registry, const LocalObjectId placement,
                                                                          std::vector<PrefabObjectNode> nestedObjects) {
@@ -259,6 +272,13 @@ namespace Horo::Prefab {
             const auto rejected = snapshot.Value().Resolve(ResolverAsset(depth + 2), instance, ResolverLimits());
             REQUIRE(rejected.HasError());
             CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::HierarchyDepthExceeded.code.Value());
+            INFO(rejected.ErrorValue().message);
+            const auto rejectedEdge = "VariantParent " + ResolverAsset(2).ToString() + " -> " + ResolverAsset(1).ToString();
+            CHECK(rejected.ErrorValue().message.find(rejectedEdge) != std::string::npos);
+            CheckExpansionDiagnostic(rejected.ErrorValue(), {.prefabAsset = ResolverAsset(depth + 2),
+                                                             .revision = ResolverRevision(depth + 2),
+                                                             .registryRevision = registry.Snapshot().Revision(),
+                                                             .instance = instance});
             CHECK(accepted.Value().Objects().front().sourcePrefab == ResolverAsset(1));
             REQUIRE(snapshot.Value().Resolve(ResolverAsset(depth + 1), instance, ResolverLimits()).HasValue());
         }
@@ -292,19 +312,15 @@ namespace Horo::Prefab {
             REQUIRE(rejected.HasError());
             const auto &error = rejected.ErrorValue();
             REQUIRE(error.code.Value() == PrefabErrors::HierarchyDepthExceeded.code.Value());
-            CHECK(error.message.size() <= MaximumPrefabDiagnosticMessageBytes);
+            INFO(error.message);
             CHECK(error.message.find(ResolverAsset(1).ToString()) != std::string::npos);
-            CHECK(error.message.find(ResolverAsset(count - 1).ToString()) != std::string::npos);
-            const auto diagnostic =
-                MakePrefabDiagnosticRecord(PrefabDiagnosticCategory::Expansion, PrefabDiagnosticOperation::Expand, error,
-                                           {.prefabAsset = ResolverAsset(1),
-                                            .revision = ResolverRevision(1),
-                                            .registryRevision = registry.Snapshot().Revision(),
-                                            .instance = instance});
-            REQUIRE(diagnostic.HasValue());
-            CHECK(diagnostic.Value().code.Value() == error.code.Value());
-            CHECK(diagnostic.Value().revision == ResolverRevision(1));
-            CHECK(MakePrefabBuildOutputRecord(diagnostic.Value()).message == error.message);
+            const auto rejectedEdge =
+                "NestedPlacement " + ResolverAsset(count - 1).ToString() + " -> " + ResolverAsset(count).ToString() + " placement=1";
+            CHECK(error.message.find(rejectedEdge) != std::string::npos);
+            CheckExpansionDiagnostic(error, {.prefabAsset = ResolverAsset(1),
+                                             .revision = ResolverRevision(1),
+                                             .registryRevision = registry.Snapshot().Revision(),
+                                             .instance = instance});
             REQUIRE(snapshot.Value().Resolve(ResolverAsset(count), instance, ResolverLimits()).HasValue());
         }
 
