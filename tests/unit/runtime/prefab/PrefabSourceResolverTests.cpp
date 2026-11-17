@@ -241,6 +241,30 @@ namespace Horo::Prefab {
             REQUIRE(candidate.Value().Objects().size() == 2);
             CHECK(candidate.Value().Objects()[0].sourcePrefab == base);
             CHECK(candidate.Value().Objects()[1].key.object.SourceObject() == LocalObjectId{4});
+
+            auto changed = std::vector(snapshot.Sources().begin(), snapshot.Sources().end());
+            REQUIRE(changed.front().document.Data().assetId == base);
+            changed.front().sourceRevision = ResolverRevision(8);
+            const auto strict = BuildPrefabSourceResolverSnapshot(registry.Snapshot(), changed, ResolverLimits());
+            REQUIRE(strict.HasError());
+            CHECK(strict.ErrorValue().code.Value() == PrefabErrors::DependencyRevisionMismatch.code.Value());
+            const auto rebased = BuildPrefabSourceResolverSnapshot(registry.Snapshot(), std::move(changed), ResolverLimits(), {}, {},
+                                                                   PrefabSourceRevisionPolicy::PreserveLayerRebase);
+            REQUIRE(rebased.HasValue());
+            const auto refreshed = rebased.Value().ResolveOverrides(variant, PrefabInstanceId::Create(3).Value(), ResolverLimits());
+            REQUIRE(refreshed.HasValue());
+            CHECK_FALSE(refreshed.Value().effective);
+            const auto captured = rebased.Value().CaptureResolutionRevision(variant, ResolverLimits());
+            REQUIRE(captured.HasValue());
+            const auto &revision = captured.Value();
+            REQUIRE(revision.revisionSkews.size() == 1);
+            CHECK(revision.revisionSkews.front().target == base);
+            CHECK(revision.revisionSkews.front().authored == baseRevision);
+            CHECK(revision.revisionSkews.front().actual == ResolverRevision(8));
+            const auto stale = rebased.Value().ValidateRevisionPublication(variant, candidate.Value().Revision(), {}, ResolverLimits());
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == PrefabErrors::ResolutionStale.code.Value());
+            REQUIRE(rebased.Value().ValidateRevisionPublication(variant, revision, {}, ResolverLimits()).HasValue());
         }
 
         TEST_CASE("Prefab variant stress admits the hard inheritance depth and rejects its next edge",

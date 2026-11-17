@@ -80,15 +80,15 @@ namespace Horo::Prefab::Detail {
         /** @brief Checks the next variant edge before recursion; a root itself consumes no edge allowance. */
         Result<void> VisitVariant(Inspection &inspection, const PrefabComposition &composition, std::size_t nestedEdges,
                                   std::size_t variantEdges) {
-            if (variantEdges >= inspection.operation.limits.Policy().maximumVariantInheritanceDepth)
-                return Fail(inspection, PrefabErrors::HierarchyDepthExceeded);
             const auto asset = composition.variantParent->Asset();
-            const auto *parent = Find(inspection, asset);
-            if (!parent)
-                return Fail(inspection, PrefabErrors::DependencyUnavailable, asset);
             auto &path = inspection.operation.originChain;
             path.push_back({PrefabCompositionOrigin::Variant, inspection.operation.active.back(), asset, {}});
             const PopEdge pop{path};
+            if (variantEdges >= inspection.operation.limits.Policy().maximumVariantInheritanceDepth)
+                return Fail(inspection, PrefabErrors::HierarchyDepthExceeded, asset);
+            const auto *parent = Find(inspection, asset);
+            if (!parent)
+                return Fail(inspection, PrefabErrors::DependencyUnavailable, asset);
             return Visit(inspection, *parent, nestedEdges, variantEdges + 1);
         }
 
@@ -110,15 +110,15 @@ namespace Horo::Prefab::Detail {
             if (!document.composition)
                 return Result<void>::Success();
             for (const auto &placement : document.composition->nestedPlacements) {
-                if (nestedEdges >= inspection.operation.limits.Policy().maximumNestedPrefabDepth)
-                    return Fail(inspection, PrefabErrors::HierarchyDepthExceeded);
                 const auto asset = placement.sourcePrefab.Asset();
-                const auto *nested = Find(inspection, asset);
-                if (!nested)
-                    return Fail(inspection, PrefabErrors::DependencyUnavailable, asset);
                 auto &path = inspection.operation.originChain;
                 path.emplace_back(PrefabCompositionOrigin::Nested, document.assetId, asset, placement.placementLocalId);
                 const PopEdge pop{path};
+                if (nestedEdges >= inspection.operation.limits.Policy().maximumNestedPrefabDepth)
+                    return Fail(inspection, PrefabErrors::HierarchyDepthExceeded, asset);
+                const auto *nested = Find(inspection, asset);
+                if (!nested)
+                    return Fail(inspection, PrefabErrors::DependencyUnavailable, asset);
                 if (auto visited = Visit(inspection, *nested, nestedEdges + 1, variantEdges); visited.HasError())
                     return visited;
             }
