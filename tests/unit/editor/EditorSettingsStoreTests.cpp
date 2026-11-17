@@ -66,6 +66,13 @@ namespace {
         }
         EditorSettingsDocument valid{.settings = DefaultEditorSettings()};
         valid.settings.defaultSceneOnProjectOpen = "Assets/Scenes/quoted\"\\\b\f\x01";
+        CHECK_FALSE(SaveEditorSettingsDocument(&valid));
+        {
+            std::ifstream stream{path, std::ios::binary};
+            const std::string malformed{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+            CHECK(malformed == "{} trailing");
+        }
+        REQUIRE_FALSE(load(R"({"appearance":{"uiScalePercent":125}})").parseError);
         REQUIRE(SaveEditorSettingsDocument(&valid));
         const auto roundTrip = LoadEditorSettingsDocument();
         REQUIRE_FALSE(roundTrip.parseError);
