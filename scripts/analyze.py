@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from ctypes import wintypes as w
 from dataclasses import dataclass, field
-from pathlib import Path
+from email.utils import parsedate_to_datetime
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -22,6 +23,7 @@ import functools
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -67,6 +69,15 @@ class AnalysisError(RuntimeError):
     # Codacy profiles alternate between the mutually exclusive D203 and D211 layouts.
     # noqa: D203,D211
     """A prerequisite or the local IDE bridge prevented analysis."""
+
+
+class BridgeRateLimited(AnalysisError):
+    """The owned IDE bridge requested a delay before another analysis attempt."""
+
+    def __init__(self, message: str, retry_after: float):
+        """Preserve the HTTP failure and the server's minimum retry delay."""
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -257,6 +268,23 @@ def bridge_url(port: int, path: str) -> str:
     return f"http://127.0.0.1:{port}{path}"
 
 
+def bridge_retry_after(value: str | None) -> float:
+    """Honor Retry-After seconds or an HTTP date; malformed values use a finite delay."""
+    if value is None:
+        return 5.0
+    try:
+        delay = float(value)
+    except ValueError:
+        try:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                return 5.0
+            delay = date.timestamp() - time.time()
+        except (ValueError, TypeError, OverflowError):
+            return 5.0
+    return delay if math.isfinite(delay) and delay >= 0 else 5.0
+
+
 def request_bridge(port: int, path: str, timeout: float, body: bytes | None = None) -> object:
     """Call the bridge with the localhost headers required by its origin checks."""
     url = bridge_url(port, path)
@@ -271,7 +299,11 @@ def request_bridge(port: int, path: str, timeout: float, body: bytes | None = No
             return json.loads(response.read().decode("utf-8")) if body is not None else response.status
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace").strip()
-        raise AnalysisError(f"IDE bridge returned HTTP {error.code}{': ' + detail if detail else ''}") from error
+        message = f"IDE bridge returned HTTP {error.code}{': ' + detail if detail else ''}"
+        if error.code == 429:
+            retry_after = error.headers.get("Retry-After") if error.headers is not None else None
+            raise BridgeRateLimited(message, bridge_retry_after(retry_after)) from error
+        raise AnalysisError(message) from error
     except URLError as error:
         raise AnalysisError(f"Cannot reach the SonarQube for IDE bridge: {error.reason}") from error
     except TimeoutError as error:
@@ -362,18 +394,47 @@ def filter_findings_to_ranges(
     return selected, len(findings) - len(selected)
 
 
-def analyze_when_indexed(port: int, files: Sequence[Path], request_timeout: float, startup_timeout: float) -> list[dict[str, object]]:
-    """Retry only the bridge's explicit not-yet-indexed startup response."""
-    body = json.dumps({"fileAbsolutePaths": [str(path) for path in files]}).encode("utf-8")
+def bridge_file_path(path: PurePath) -> str:
+    """Match VS Code's lowercase Windows drive URI without changing any path component."""
+    value = str(path)
+    if sys.platform == "win32" and re.match(r"^[A-Z]:[\\/]", value):
+        return value[0].lower() + value[1:]
+    return value
+
+
+def bridge_file_uri(path: PurePath) -> str:
+    """Use the same Windows drive identity in completion logs and analysis requests."""
+    if sys.platform == "win32":
+        return PureWindowsPath(bridge_file_path(path)).as_uri()
+    return path.as_uri()
+
+
+def analyze_when_indexed(port: int, files: Sequence[PurePath], request_timeout: float, startup_timeout: float) -> list[dict[str, object]]:
+    """Back off for indexing and rate limits without retrying other failures or exceeding startup admission."""
+    body = json.dumps({"fileAbsolutePaths": [bridge_file_path(path) for path in files]}).encode("utf-8")
     deadline = time.monotonic() + startup_timeout
+    delay = 1.0
     while True:
+        if CANCELLED.is_set():
+            raise AnalysisError("Sonar analysis startup cancelled")
         try:
             response = request_bridge(port, BRIDGE_ANALYZE_PATH, request_timeout, body)
             return normalized_findings(response)
         except AnalysisError as error:
-            if "No files were found to be indexed by SonarQube for IDE" not in str(error) or time.monotonic() >= deadline:
+            if isinstance(error, BridgeRateLimited):
+                retry_delay = max(delay, error.retry_after)
+            elif (str(error).startswith("IDE bridge returned HTTP 500:")
+                  and "No files were found to be indexed by SonarQube for IDE" in str(error)):
+                retry_delay = delay
+            else:
                 raise
-            time.sleep(0.5)
+            if retry_delay >= deadline - time.monotonic():
+                raise
+            if CANCELLED.wait(retry_delay):
+                raise AnalysisError("Sonar analysis startup cancelled") from error
+            if time.monotonic() >= deadline:
+                raise
+            delay = min(delay * 2, 10.0)
 
 
 # Native
@@ -2508,7 +2569,7 @@ def reusable_database(root: Path, files: list[Path]) -> Path | None:
     return database
 
 
-def verify_evidence(text: str, files: list[Path]) -> dict:
+def verify_evidence(text: str, files: Sequence[PurePath]) -> dict:
     """Require file-specific CFamily execution, active rules, and no sensor error."""
     # Only the explicit no-indexed-files retry may precede the completed request.
     # All sensor errors after its last occurrence remain fatal.
@@ -2543,7 +2604,8 @@ def verify_evidence(text: str, files: list[Path]) -> dict:
     rules = [int(value) for value in re.findall(r"(\d+) (?:cpp|c)[,\]]", text)]
     if not counts or max(counts) < 1 or not rules or max(rules) < 1:
         raise AnalysisError("No positive CFamily sensor execution with active C/C++ rules in this request")
-    if "Analysis detected" not in text or any(path.as_uri() not in text for path in files):
+    if "Analysis detected" not in text or any(
+            path.as_uri() not in text and bridge_file_uri(path) not in text for path in files):
         raise AnalysisError("Sonar did not confirm completion for all submitted files")
     return {"compilationUnits": max(counts), "activeCppRules": True, "completion": True,
             "ideLabsTelemetryWarning": telemetry_count > 0,
@@ -2621,12 +2683,30 @@ def mapped_findings(findings: list, root: Path) -> list:
     result = []
     for finding in findings:
         reported = finding.get("filePath")
-        if isinstance(reported, str) and Path(reported).is_absolute():
-            mapped = original_header(Path(reported), root)
+        native = reported
+        if isinstance(reported, str) and sys.platform == "win32" and re.match(r"^/[A-Za-z]:[\\/]", reported):
+            native = reported[1:]
+        if isinstance(native, str) and Path(native).is_absolute():
+            mapped = original_header(Path(native), root)
             if str(mapped) != reported:
                 finding = {**finding, "filePath": str(mapped), "reportedFilePath": reported}
         result.append(finding)
     return result
+
+
+def partition_sonar_findings(findings: list[dict], files: Sequence[PurePath]) -> tuple[list[dict], list[dict]]:
+    """Keep selected-file findings under the bridge's drive identity, retaining all other context."""
+    selected = {bridge_file_path(path) for path in files}
+    unique: dict[str, dict] = {}
+    contextual = []
+    for finding in findings:
+        reported = finding.get("filePath")
+        identity = bridge_file_path(Path(reported)) if isinstance(reported, str) else None
+        if identity in selected:
+            unique[json.dumps(finding, sort_keys=True)] = finding
+        else:
+            contextual.append(finding)
+    return list(unique.values()), contextual
 
 
 def analyze_files(root: Path, record: dict, contexts: dict, files: list[Path], args,
@@ -2727,15 +2807,13 @@ def sonar_check(root: Path, cache: Path, repository_cache: Path, files: list[Pat
         findings, evidence, failure, progress_path = file_analysis_batch(root, cache, record, contexts, files, args, configuration)
         if not record.get("bindingReady"):
             raise AnalysisError("Connected-mode project cache is missing; bind/authenticate the managed Sonar profile")
-    selected = {str(path) for path in files}
-    contextual = [item for item in findings if item.get("filePath") not in selected]
-    unique = {json.dumps(item, sort_keys=True): item for item in findings if item.get("filePath") in selected}
+    unique, contextual = partition_sonar_findings(findings, files)
     stale = digest(database) != configuration[1]
     errors = (["Compilation database changed during analysis"] if stale else []) + ([str(failure)] if failure else [])
     completed = verified_evidence_paths(evidence)
     return {"status": "incomplete" if stale or failure else ("issues_found" if unique else "clean"),
             "stale": stale, "error": "; ".join(errors) if errors else None,
-            "findings": list(unique.values()),
+            "findings": unique,
             "unverifiedFindings": failure.unverified if failure else [],
             "notAnalyzed": [str(path.relative_to(root)) for path in files if str(path.relative_to(root)) not in completed],
             "progressReport": str(progress_path),
