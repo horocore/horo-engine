@@ -5,15 +5,17 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree
 
 CASE = "Physics canonical restart executes in separate verified same-binary processes"
+
 def digest(path):
     value = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(block)
     return value.hexdigest()
+
 
 def run_child(binary, directory, mode, expected):
     if digest(binary) != expected:
@@ -26,10 +28,11 @@ def run_child(binary, directory, mode, expected):
         raise RuntimeError(f"Native {mode} child failed with exit {completed.returncode}; report {directory / (mode + '.xml')}")
     if digest(binary) != expected:
         raise RuntimeError("The actual executable changed while a child ran")
-    report = ET.parse(directory / (mode + ".xml")).getroot()
+    report = ElementTree.parse(directory / (mode + ".xml"), forbid_dtd=True).getroot()
     cases = list(report.iter("testcase"))
     if not cases or any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error")):
         raise RuntimeError("A real non-skipped passing native child case is required")
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -45,6 +48,7 @@ def main():
     run_child(binary, output, "capture", expected)
     run_child(binary, output, "restore", expected)
     print(f"Both genuine native children passed; exact executable SHA256 {expected}")
+
 
 if __name__ == "__main__":
     main()
