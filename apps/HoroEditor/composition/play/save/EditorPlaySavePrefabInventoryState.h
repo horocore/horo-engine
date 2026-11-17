@@ -300,8 +300,8 @@ namespace Horo::Application::Internal {
             using enum Horo::Runtime::PersistentEntityDisposition;
             auto recipe = entry.recipe;
             for (std::size_t index = 0; index < entry.runtime.size(); ++index) {
-                if (auto &record = recipe.members[index].record; view.Get(entry.runtime[index]).HasError())
-                    record.disposition = Tombstone;
+                if (view.Get(entry.runtime[index]).HasError())
+                    recipe.members[index].record.disposition = Tombstone;
             }
             if (recipe.members.front().record.disposition == Tombstone) {
                 recipe.disposition = Tombstone;
