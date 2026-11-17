@@ -11,6 +11,7 @@ namespace Horo::AI::Detail {
     struct AgentRuntimeState final {
         AiAgentRuntimeRecord record;
         std::shared_ptr<const BlackboardSchema> schema;
+        std::shared_ptr<const AiControllerPerceptionEndpoints> perceptionEndpoints;
         BlackboardInstanceBinding blackboardBinding;
         std::unique_ptr<BlackboardInstance> blackboard;
         std::unique_ptr<AiTaskLifecycle> task;
@@ -54,6 +55,11 @@ namespace Horo::AI::Detail {
     void CancelOwnedWork(AgentRuntimeState &agent) noexcept;
     /** @brief Tears down every owned agent. @param state Detached or active population. */
     void ShutdownStateContents(AiSceneRuntimeState &state) noexcept;
+
+    /** @brief Rejects a staged registration set that would exceed the canonical spatial owner's bounds. */
+    [[nodiscard]] Result<void> ValidatePerceptionCapacity(std::span<const AgentRuntimeState> residents,
+                                                          std::span<const AgentRuntimeState> additions = {},
+                                                          std::span<const std::size_t> removals = {});
 
     /** @brief Builds one detached structural adapter against a retained owner publication. */
     [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant(

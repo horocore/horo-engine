@@ -187,25 +187,34 @@ namespace Horo::AI {
             const AiControllerDescriptor *descriptor =
                 input.controller ? FindDescriptor(descriptors, input.controller->controller) : nullptr;
             const bool shouldStart = sceneStartup && controllerStartup;
-            const bool missing = shouldStart && descriptor == nullptr;
-            if (missing && settings.missingController == AiMissingControllerPolicy::Reject)
-                return Failure(AIErrors::ControllerDescriptorMissing,
-                               "An enabled AI controller has no matching immutable activation descriptor.");
+            const bool needsPerception = input.controller && input.controller->requiredCapabilities.Contains(AiCapability::Perception);
+            const auto authoredEndpoints = needsPerception && descriptor ? descriptor->perceptionEndpoints : nullptr;
+            if (shouldStart && descriptor) {
+                if (const auto valid = ValidateAiControllerBinding(*input.controller, *descriptor); valid.HasError())
+                    return valid;
+            }
+            const ErrorCodeDescriptor *missing = descriptor ? nullptr : &AIErrors::ControllerDescriptorMissing;
+            if (descriptor && needsPerception && settings.requirePerceptionEndpoints && !authoredEndpoints)
+                missing = &AIErrors::PerceptionDependencyMissing;
+            if (shouldStart && missing && settings.missingController == AiMissingControllerPolicy::Reject)
+                return Result<void>::Failure(MakeError(*missing));
             const auto schemaPublication = ResolveAgentSchema(descriptor, input.controller, handle);
+            const auto endpoints =
+                authoredEndpoints ? std::make_shared<const AiControllerPerceptionEndpoints>(*authoredEndpoints) : nullptr;
             if (!shouldStart || missing) {
-                prepared.emplace(AgentRuntimeState{.record = AiAgentRuntimeRecord{.handle = handle,
-                                                                                  .owner = input.owner,
-                                                                                  .agent = input.agent,
-                                                                                  .controller = input.controller,
-                                                                                  .state = missing ? AiAgentActivationState::Degraded
-                                                                                                   : AiAgentActivationState::Disabled},
-                                                   .schema = schemaPublication.schema,
-                                                   .blackboardBinding = schemaPublication.binding});
+                prepared.emplace(
+                    AgentRuntimeState{.record = AiAgentRuntimeRecord{.handle = handle,
+                                                                     .owner = input.owner,
+                                                                     .agent = input.agent,
+                                                                     .controller = input.controller,
+                                                                     .state = shouldStart && missing ? AiAgentActivationState::Degraded
+                                                                                                     : AiAgentActivationState::Disabled},
+                                      .schema = schemaPublication.schema,
+                                      .perceptionEndpoints = endpoints,
+                                      .blackboardBinding = schemaPublication.binding});
                 return Result<void>::Success();
             }
 
-            if (const Result<void> valid = ValidateAiControllerBinding(*input.controller, *descriptor); valid.HasError())
-                return Result<void>::Failure(valid.ErrorValue());
             if (!HasCapabilities(settings.availableCapabilities, input.controller->requiredCapabilities))
                 return Failure(AIErrors::CapabilityUnavailable, "An enabled AI controller requires an unavailable host capability.");
 
@@ -223,6 +232,7 @@ namespace Horo::AI {
                                                .hasBlackboard = true,
                                                .hasRunningTask = false},
                 .schema = schemaPublication.schema,
+                .perceptionEndpoints = endpoints,
                 .blackboardBinding = schemaPublication.binding,
                 .blackboard = std::move(blackboard).Value(),
             });
@@ -253,6 +263,8 @@ namespace Horo::AI {
                         state->agentsByOwner.emplace(input.owner, slotIndex);
                     }
                 }
+                if (auto capacity = Detail::ValidatePerceptionCapacity(state->agents); capacity.HasError())
+                    return Result<std::unique_ptr<Detail::AiSceneRuntimeState>>::Failure(capacity.ErrorValue());
             } catch (const std::bad_alloc &) {
                 if (state != nullptr)
                     ShutdownStateContents(*state);

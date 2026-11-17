@@ -11,6 +11,7 @@
 #include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/AiDecisionTaskReservation.h"
 #include "Horo/AI/BlackboardInstance.h"
+#include "Horo/Math/WorldCoordinate64.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include <cstddef>
@@ -22,6 +23,14 @@
 
 namespace Horo::AI {
     class AiSceneRuntime;
+    class PerceptionSpatialBroadphase;
+    class PerceptionSpatialSnapshot;
+
+    /** @brief Host-captured absolute position of an exact live Perception endpoint. */
+    struct AiScenePerceptionPosition final {
+        Runtime::EntityRef entity;
+        Math::WorldCoordinate64 position;
+    };
 
     inline constexpr std::size_t MaximumAiSceneAgents = 65'536;
 
@@ -189,6 +198,7 @@ namespace Horo::AI {
                                                   .Union(AiCapabilitySet::Of(AiCapability::Navigation))
                                                   .Union(AiCapabilitySet::Of(AiCapability::Perception))};
         AiMissingControllerPolicy missingController{AiMissingControllerPolicy::Reject};
+        bool requirePerceptionEndpoints{}; /**< Product Scene hosts require explicitly admitted endpoint metadata. */
 
         /** @brief Checks product limits and closed capability bits. @return True when the settings are usable. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
@@ -298,6 +308,16 @@ namespace Horo::AI {
          * @details Call on the simulation owner after BlackboardSync; no mutable blackboard or Scene pointer escapes.
          */
         [[nodiscard]] Result<BlackboardSnapshot> CaptureDecisionSnapshotAtSafePoint(AgentHandle agent) const;
+
+        /** @brief Publishes the currently registered Perception endpoints through the canonical spatial owner.
+         * @param scene Exact committed Scene. @param revision Positive owner-issued spatial revision.
+         * @param positions Exact host-captured global positions in ascending entity order.
+         * @param spatial Borrowed owner. @param filtering Complete authoritative Gameplay filter policy.
+         * @return One complete immutable publication or a typed failure preserving the previous spatial publication.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const PerceptionSpatialSnapshot>> PublishPerceptionAtSafePoint(
+            const Runtime::RuntimeSceneView &scene, std::uint64_t revision, std::span<const AiScenePerceptionPosition> positions,
+            PerceptionSpatialBroadphase &spatial, const PerceptionFilteringPolicy &filtering = {}) const;
 
         /**
          * @brief Disables one agent, cancelling its task before revoking its capabilities and blackboard.

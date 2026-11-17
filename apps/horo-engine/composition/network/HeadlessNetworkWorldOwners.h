@@ -3,6 +3,7 @@
  * @brief Target-private generation-owned Scene, Physics and fixed-participant lifetimes.
  */
 #include "HeadlessNetworkServices.h"
+#include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
@@ -38,6 +39,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         bool closeRequested{};
         bool closed{};
         std::unique_ptr<AI::AiSceneRuntime> ai;
+        AI::PerceptionSpatialBroadphase perception;
+        std::uint64_t perceptionRevision{};
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */
     };

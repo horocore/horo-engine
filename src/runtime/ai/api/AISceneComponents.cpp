@@ -2,6 +2,8 @@
 
 #include "Horo/AI/AIErrors.h"
 
+#include <algorithm>
+#include <array>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -32,6 +34,38 @@ namespace Horo::AI {
 
         [[nodiscard]] bool IsValid(const DecisionPlanKind kind) noexcept {
             return kind < DecisionPlanKind::Count;
+        }
+
+        /** @brief Admits only available listener routes and known source senses from the authored registry. */
+        [[nodiscard]] Result<void> ValidatePerceptionEndpoints(const AiControllerPerceptionEndpoints &endpoints) {
+            if (!endpoints.registry || (endpoints.listeners.empty() && endpoints.sources.empty()))
+                return Result<void>::Failure(MakeError(AIErrors::PerceptionDescriptorInvalid));
+            if (endpoints.listeners.size() > AiControllerPerceptionEndpoints::MaximumSenses ||
+                endpoints.sources.size() > AiControllerPerceptionEndpoints::MaximumSenses)
+                return Result<void>::Failure(MakeError(AIErrors::PerceptionDescriptorLimitExceeded));
+            if (auto policy = ValidatePerceptionParticipant(endpoints.participant, endpoints.listenerFilter); policy.HasError())
+                return policy;
+            std::array<SenseTypeId, AiControllerPerceptionEndpoints::MaximumSenses> resolved{};
+            auto next = resolved.begin();
+            const auto listeners = endpoints.registry->Listeners();
+            for (const auto listener : endpoints.listeners) {
+                const auto found = std::ranges::find_if(listeners, [listener](const auto &entry) {
+                    return entry.descriptor.identity == listener;
+                });
+                if (found == listeners.end() || found->availability != PerceptionListenerAvailability::Available)
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+                if (std::find(resolved.begin(), next, found->descriptor.sense) != next)
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDescriptorConflict));
+                *next++ = found->descriptor.sense;
+            }
+            const auto senses = endpoints.registry->Senses();
+            for (auto source = endpoints.sources.begin(); source != endpoints.sources.end(); ++source) {
+                if (std::ranges::find(senses, *source, &SenseTypeDescriptor::identity) == senses.end())
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+                if (std::find(endpoints.sources.begin(), source, *source) != source)
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDescriptorConflict));
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -67,6 +101,8 @@ namespace Horo::AI {
             descriptor.blackboardSchema->Version() != planSchema->Version())
             return Failure(AIErrors::ControllerDescriptorIncompatible,
                            "AI controller descriptor dependencies do not agree on decision asset, kind, or blackboard schema.");
+        if (descriptor.perceptionEndpoints)
+            return ValidatePerceptionEndpoints(*descriptor.perceptionEndpoints);
         return Result<void>::Success();
     }
 

@@ -7,12 +7,15 @@
 
 #include "Horo/AI/AIIdentity.h"
 #include "Horo/AI/DecisionAssetValidation.h"
+#include "Horo/AI/PerceptionDescriptorRegistry.h"
+#include "Horo/AI/PerceptionFiltering.h"
 #include "Horo/Foundation/Result.h"
 
 #include <compare>
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <vector>
 
 namespace Horo::AI {
     /** @brief Current semantic version of the authored AI scene component contract. */
@@ -102,6 +105,16 @@ namespace Horo::AI {
         const AiControllerComponent *controller{};
     };
 
+    /** @brief Inert authored endpoint selection resolved against the host's admitted Perception registry. */
+    struct AiControllerPerceptionEndpoints final {
+        static constexpr std::size_t MaximumSenses = 16;
+        std::shared_ptr<const PerceptionDescriptorRegistry> registry;
+        std::vector<PerceptionListenerTypeId> listeners;
+        std::vector<SenseTypeId> sources;
+        PerceptionParticipantFilter participant;
+        PerceptionListenerFilter listenerFilter;
+    };
+
     /**
      * @brief Fully admitted immutable controller dependencies used during scene activation.
      * @details A descriptor is inert metadata. It owns no runtime lifecycle and invoking validation does not register or activate anything.
@@ -112,6 +125,7 @@ namespace Horo::AI {
         DecisionPlanKind decisionKind{DecisionPlanKind::BehaviorTree};
         std::shared_ptr<const BlackboardSchema> blackboardSchema;
         std::shared_ptr<const DecisionAssetPlan> decisionPlan;
+        std::shared_ptr<const AiControllerPerceptionEndpoints> perceptionEndpoints;
     };
 
     /**

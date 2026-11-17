@@ -1310,6 +1310,16 @@ Navigation owner reconciliation. These scopes retain no Scene or provider
 borrow. A host still supplies the actual Perception and Navigation descriptors
 and owners.
 
+In a configured authoritative headless world, controller endpoint declarations
+are validated against the host's immutable Perception registry before the Scene
+commits. The AI owner stages the complete endpoint population with AI records
+and preserves authored source data. The host may publish these registrations
+through the existing spatial owner using explicit global position evidence.
+Absent required controller endpoint metadata or an unavailable host position
+authority stops activation. A missing position in a later capture preserves the
+previous spatial publication, with exact agent lifetime revocation still
+excluding retired endpoints.
+
 ### Selection Physics endpoint codec domain
 
 Selection creation rewrites internal collider and constraint body endpoints into

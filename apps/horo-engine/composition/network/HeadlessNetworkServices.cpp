@@ -195,6 +195,12 @@ namespace Horo::Application::Internal {
         return world ? world->AnimationOwner() : nullptr;
     }
 
+    /** @copydoc InspectHeadlessPerception */
+    std::shared_ptr<const AI::PerceptionSpatialSnapshot> InspectHeadlessPerception(const Network::INetworkModeService &service) noexcept {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->PerceptionSnapshot() : nullptr;
+    }
+
     std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
                                                                      Runtime::SceneObjectId object) noexcept {
         const auto *world = dynamic_cast<const WorldService *>(&service);

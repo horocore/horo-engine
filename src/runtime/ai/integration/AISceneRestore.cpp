@@ -136,7 +136,7 @@ namespace Horo::AI {
                                                               const Detail::AgentRuntimeState &destination,
                                                               const Runtime::RuntimeSceneView scene,
                                                               const std::span<const BlackboardSchemaMigration> migrations,
-                                                              const AiCapabilitySet available) {
+                                                              const AiSceneRuntimeSettings &settings) {
             if (const auto valid = ValidateAgentState(source, destination); valid.HasError())
                 return Result<Detail::RestoreAgent>::Failure(valid.ErrorValue());
             Detail::RestoreAgent staged{.handle = destination.record.handle,
@@ -156,7 +156,10 @@ namespace Horo::AI {
             }
             if (!destination.schema || !staged.replacementSchema.IsValid())
                 return Result<Detail::RestoreAgent>::Failure(MakeError(AIErrors::CanonicalSchemaUnsupported));
-            if ((source.controller->authored.requiredCapabilities.bits & ~available.bits) != 0)
+            const auto required = source.controller->authored.requiredCapabilities;
+            if (settings.requirePerceptionEndpoints && required.Contains(AiCapability::Perception) && !destination.perceptionEndpoints)
+                return Result<Detail::RestoreAgent>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+            if ((required.bits & ~settings.availableCapabilities.bits) != 0)
                 return Result<Detail::RestoreAgent>::Failure(MakeError(AIErrors::CapabilityUnavailable));
             auto migrated = MigrateCanonicalBlackboard(*source.controller->blackboard, *destination.schema, migrations);
             if (migrated.HasError())
@@ -264,7 +267,7 @@ namespace Horo::AI {
                 });
                 if (source == state.agents.end() || source->authored.agent != slot.record.agent.agent)
                     return RestoreResult::Failure(MakeError(AIErrors::CanonicalStateInvalid));
-                auto agent = StageAgent(*source, slot, scene, migrations, settings_.availableCapabilities);
+                auto agent = StageAgent(*source, slot, scene, migrations, settings_);
                 if (agent.HasError())
                     return RestoreResult::Failure(agent.ErrorValue());
                 staged->agents.push_back(std::move(agent).Value());

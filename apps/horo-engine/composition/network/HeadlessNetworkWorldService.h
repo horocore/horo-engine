@@ -4,6 +4,7 @@
  */
 #include "HeadlessAnimationFixed.h"
 #include "HeadlessNetworkWorldOwners.h"
+#include "Horo/AI/AIErrors.h"
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class WorldService final : public Network::INetworkModeService {
@@ -20,6 +21,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         const Runtime::SceneAnimationRuntime *AnimationOwner() const noexcept {
             return std::this_thread::get_id() == owners_->owner && record_ ? record_->animation.get() : nullptr;
+        }
+
+        std::shared_ptr<const AI::PerceptionSpatialSnapshot> PerceptionSnapshot() const noexcept {
+            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || record_->closed)
+                return {};
+            return record_->perception.Current();
         }
 
         std::optional<Runtime::EntityRef> AnimationEntity(Runtime::SceneObjectId object) const noexcept {
@@ -109,9 +116,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return lane;
             if (owners_->gameplay && owners_->gameplay->moduleRetirements)
                 (void)owners_->gameplay->moduleRetirements->Drain();
-            if (owners_->configured && request_.service == Network::NetworkModeServiceKind::Physics && gameplay_) {
-                const Runtime::FrameContext frame{.frameNumber = ++phaseFrame_, .cancellation = record_->sceneCancellation};
-                return gameplay_->OnPhase(phase, frame);
+            if (owners_->configured && request_.service == Network::NetworkModeServiceKind::Physics && configuredActivated_) {
+                if (gameplay_) {
+                    const Runtime::FrameContext frame{.frameNumber = ++phaseFrame_, .cancellation = record_->sceneCancellation};
+                    if (auto advanced = gameplay_->OnPhase(phase, frame); advanced.HasError())
+                        return advanced;
+                }
+                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges)
+                    return PublishConfiguredPerception();
             }
             return Result<void>::Success();
         }
@@ -236,6 +248,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return vfx;
             if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary); prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
+            if (auto perception = PublishConfiguredPerception(); perception.HasError())
+                return perception;
             return PrepareConfiguredTemplates();
         }
 
@@ -259,7 +273,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         Result<void> PrepareConfiguredAi() const {
             const auto &input = *owners_->configured;
-            auto ai = AI::AiSceneRuntime::Create(input.aiSettings);
+            auto settings = input.aiSettings;
+            if (IsAuthoritativeWorld()) {
+                settings.requirePerceptionEndpoints = true;
+                if (!OwnsPerception())
+                    settings.availableCapabilities.bits &= ~AI::AiCapabilitySet::Of(AI::AiCapability::Perception).bits;
+            }
+            auto ai = AI::AiSceneRuntime::Create(settings);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             record_->ai = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
@@ -270,6 +290,37 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (auto added = record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(input.aiControllers));
                 added.HasError())
                 return added;
+            return Result<void>::Success();
+        }
+
+        /** @brief Identifies the local world that owns authoritative simulation. */
+        bool IsAuthoritativeWorld() const noexcept {
+            const auto world = request_.world;
+            return world == Network::NetworkModeWorldKind::Standalone || world == Network::NetworkModeWorldKind::AuthorityServer;
+        }
+
+        /** @brief Only an authoritative host with explicit global positions owns a Perception publication. */
+        bool OwnsPerception() const noexcept {
+            return IsAuthoritativeWorld() && owners_->configured->perceptionPositions;
+        }
+
+        /** @brief Matches the real Scene's publication, preserving the prior spatial capture on dependency failure. */
+        Result<void> PublishConfiguredPerception() const {
+            if (!OwnsPerception())
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Success();
+            if (record_->perceptionRevision == std::numeric_limits<std::uint64_t>::max())
+                return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialLimitExceeded));
+            auto positions = owners_->configured->perceptionPositions(*scene);
+            if (positions.HasError())
+                return Result<void>::Failure(positions.ErrorValue());
+            const auto published = record_->ai->PublishPerceptionAtSafePoint(*scene, record_->perceptionRevision + 1, positions.Value(),
+                                                                             record_->perception, owners_->configured->perceptionFiltering);
+            if (published.HasError())
+                return Result<void>::Failure(published.ErrorValue());
+            ++record_->perceptionRevision;
             return Result<void>::Success();
         }
 

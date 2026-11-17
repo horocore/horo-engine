@@ -1,3 +1,4 @@
+#include "HeadlessNetworkServices.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Gameplay/GameplayErrors.h"
@@ -11,6 +12,42 @@ namespace Horo::Application::PrefabAtomicTest {
     using enum Fault;
 
     namespace {
+        /** @brief Captures a declared registry for both real host and prefab admission. */
+        std::shared_ptr<const AI::AiControllerPerceptionEndpoints> PerceptionEndpoints() {
+            const AI::PerceptionDescriptorOrigin origin{AI::PerceptionDescriptorSourceKind::Native,
+                                                        AI::TestSupport::MakeIdentity<AI::PerceptionProviderId>(71), 1};
+            const auto sense = AI::SenseTypeIds::Sight;
+            const auto stimulus = AI::TestSupport::MakeIdentity<AI::StimulusTypeId>(81);
+            const auto listener = AI::TestSupport::MakeIdentity<AI::PerceptionListenerTypeId>(91);
+            const std::array senses{AI::SenseTypeDescriptor{sense, origin, "Sight"}};
+            const std::array stimuli{AI::StimulusTypeDescriptor{stimulus, origin, "Visible actor"}};
+            const std::array listeners{AI::PerceptionListenerDescriptor{.identity = listener,
+                                                                        .origin = origin,
+                                                                        .displayName = "Sight",
+                                                                        .sense = sense,
+                                                                        .stimuli = {{stimulus}},
+                                                                        .stimulusCount = 1}};
+            auto registry = AI::PerceptionDescriptorRegistry::Capture({senses, stimuli, listeners}, {});
+            REQUIRE(registry.HasValue());
+            return std::make_shared<const AI::AiControllerPerceptionEndpoints>(
+                AI::AiControllerPerceptionEndpoints{.registry = std::make_shared<const AI::PerceptionDescriptorRegistry>(
+                                                        std::move(registry).Value()),
+                                                    .listeners = {listener},
+                                                    .sources = {sense}});
+        }
+
+        /** @brief Supplies explicit absolute positions for this fixture's known Scene facts. */
+        Result<std::vector<AI::AiScenePerceptionPosition>> PerceptionPositions(const Runtime::RuntimeSceneView &scene) {
+            std::vector<AI::AiScenePerceptionPosition> positions;
+            for (std::size_t slot = 0; slot < scene.SlotCount(); ++slot) {
+                const auto entity = scene.EntityAt(slot);
+                if (entity && entity->components->aiController)
+                    positions.push_back(
+                        {entity->entity, Math::WorldCoordinate64::FromMillimeters(static_cast<std::int64_t>(slot) * 1000, 0, 0)});
+            }
+            return Result<std::vector<AI::AiScenePerceptionPosition>>::Success(std::move(positions));
+        }
+
         /** @brief Verifies the Scene's actual remapped values equal the published AI owner's records. */
         void RequireAllOwners(Fixture &fixture, std::size_t count, std::uint32_t bodies) {
             REQUIRE(fixture.Count() == count);
@@ -245,6 +282,123 @@ namespace Horo::Application::PrefabAtomicTest {
             const auto remaining = spatial.Value()->Query({.listener = resident->owner, .sense = sense, .visibleLayers = 1});
             REQUIRE(remaining.HasValue());
             CHECK(remaining.Value().count == 0);
+        }
+
+        TEST_CASE("Scene AI stages declared Perception endpoints for real cooked prefab spawn and despawn",
+                  "[prefab][integration][atomic][ai][perception]") {
+            Fixture fixture{false, Fault::None, {.requirePerceptionEndpoints = true}, PerceptionEndpoints()};
+            fixture.Tick(1);
+            fixture.Reach(3);
+            const auto prefab = fixture.SpawnOperation().Spawned();
+            REQUIRE(prefab.HasValue());
+            const auto root = prefab.Value().Root();
+            AI::PerceptionSpatialBroadphase broadphase;
+            const auto scene = *fixture.scenes.ActiveScene();
+            const auto positions = PerceptionPositions(scene);
+            REQUIRE(positions.HasValue());
+            const auto spatial = fixture.ai.PublishPerceptionAtSafePoint(scene, 1, positions.Value(), broadphase);
+            REQUIRE(spatial.HasValue());
+            CHECK(spatial.Value()->SourceCount() == 3);
+            CHECK(spatial.Value()->ListenerCount() == 3);
+            CHECK(spatial.Value()->Allows(fixture.controller.owner, root, AI::SenseTypeIds::Sight));
+            CHECK(fixture.ai.PublishPerceptionAtSafePoint(scene, 2, {}, broadphase).HasError());
+            CHECK(broadphase.Current() == spatial.Value());
+
+            fixture.Tick(2);
+            fixture.Reach(1);
+            CHECK_FALSE(spatial.Value()->Allows(fixture.controller.owner, root, AI::SenseTypeIds::Sight));
+            const auto replacementScene = *fixture.scenes.ActiveScene();
+            const auto replacementPositions = PerceptionPositions(replacementScene);
+            REQUIRE(replacementPositions.HasValue());
+            const auto replacement = fixture.ai.PublishPerceptionAtSafePoint(replacementScene, 2, replacementPositions.Value(), broadphase);
+            REQUIRE(replacement.HasValue());
+            CHECK(replacement.Value()->SourceCount() == 1);
+            CHECK(replacement.Value()->ListenerCount() == 1);
+        }
+
+        TEST_CASE("Configured headless Scene requires authored Perception endpoints and authoritative positions",
+                  "[prefab][integration][ai][perception][host]") {
+            using namespace Network;
+            auto controller = AI::TestSupport::MakeFixture(1, 11, 1, 0);
+            controller.agent.controller->requiredCapabilities = AI::AiCapabilitySet::Of(AI::AiCapability::Perception);
+            Runtime::SceneDefinitionBuilder source{{7}, {1}};
+            source.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
+            auto definition = std::move(source).Build();
+            REQUIRE(definition.HasValue());
+
+            JobSystem jobs{{1, 8}};
+            Assets::MemoryAssetProvider bytes;
+            Assets::AssetLoadService loader{jobs, bytes};
+            Assets::AssetRegistry registry;
+            const Internal::HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + std::chrono::seconds{3}};
+            std::array catalog{controller.descriptor};
+            Internal::HeadlessSceneActivationInput input{Physics::PhysicsRuntimeMode::Canonical,
+                                                         Physics::Settings(),
+                                                         registry,
+                                                         loader,
+                                                         load,
+                                                         catalog};
+            input.perceptionPositions = PerceptionPositions;
+            bool admitted = false;
+            auto role = NetworkProjectRole::Standalone;
+            auto world = NetworkModeWorldKind::Standalone;
+            SECTION("complete host configuration publishes one endpoint pair") {
+                catalog.front().perceptionEndpoints = PerceptionEndpoints();
+                admitted = true;
+            }
+            SECTION("missing endpoint declaration rejects preparation") {}
+            SECTION("headless authority requires an explicit position provider") {
+                catalog.front().perceptionEndpoints = PerceptionEndpoints();
+                input.perceptionPositions = {};
+            }
+            SECTION("host cannot publish when coordinate evidence is missing") {
+                catalog.front().perceptionEndpoints = PerceptionEndpoints();
+                input.perceptionPositions = [](const Runtime::RuntimeSceneView &) {
+                    return Result<std::vector<AI::AiScenePerceptionPosition>>::Success({});
+                };
+            }
+            SECTION("the paired client preserves existing Scene admission without publishing endpoints") {
+                role = NetworkProjectRole::ListenServer;
+                world = NetworkModeWorldKind::Client;
+                admitted = true;
+            }
+
+            const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
+                                                                                    std::move(definition).Value()),
+                                                                                std::move(input));
+            REQUIRE(composed.HasValue());
+            const auto built = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)](
+                {NetworkModeServiceKind::Scene, role, {}, world, {7}});
+            REQUIRE(built.HasValue());
+            auto &sceneService = *built.Value();
+            const auto prepared = sceneService.Prepare();
+            if (admitted) {
+                REQUIRE(prepared.HasValue());
+                REQUIRE(sceneService.Activate().HasValue());
+                const auto spatial = Internal::InspectHeadlessPerception(sceneService);
+                if (world == NetworkModeWorldKind::Standalone) {
+                    REQUIRE(spatial);
+                    CHECK(spatial->SourceCount() == 1);
+                    CHECK(spatial->ListenerCount() == 1);
+                    CHECK(spatial->Scene() == Runtime::SceneRuntimeId{7});
+                    const auto physics = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Physics)](
+                        {NetworkModeServiceKind::Physics, role, {}, world, {7}});
+                    REQUIRE(physics.HasValue());
+                    REQUIRE(physics.Value()->Prepare().HasValue());
+                    REQUIRE(physics.Value()->Activate().HasValue());
+                    REQUIRE(physics.Value()->RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+                    const auto refreshed = Internal::InspectHeadlessPerception(sceneService);
+                    REQUIRE(refreshed);
+                    CHECK(refreshed->Revision() == spatial->Revision() + 1);
+                    physics.Value()->Shutdown();
+                } else {
+                    CHECK_FALSE(spatial);
+                }
+            } else {
+                REQUIRE(prepared.HasError());
+                CHECK_FALSE(Internal::InspectHeadlessPerception(sceneService));
+            }
+            sceneService.Shutdown();
         }
 
         /** @brief Observes whether aggregate retirement revokes the actual owner token before scheduler callbacks. */

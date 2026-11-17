@@ -1,13 +1,49 @@
 #include "Horo/AI/AIScenePerceptionSource.h"
 
+#include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
 
 #include <algorithm>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace Horo::AI {
     namespace {
+        /** @brief Appends one fully admitted endpoint using exact host-captured coordinates. */
+        void AppendEndpoints(const Detail::AgentRuntimeState &agent, const Math::WorldCoordinate64 position,
+                             std::vector<PerceptionSpatialListener> &listeners, std::vector<PerceptionSpatialSource> &sources) {
+            const auto &endpoints = *agent.perceptionEndpoints;
+            const auto owner = agent.cancellation.Token();
+            if (!endpoints.listeners.empty()) {
+                PerceptionSpatialListener listener{.entity = agent.record.owner,
+                                                   .position = position,
+                                                   .filtering = endpoints.participant,
+                                                   .admission = endpoints.listenerFilter,
+                                                   .ownerCancellation = owner};
+                const auto registered = endpoints.registry->Listeners();
+                for (const auto identity : endpoints.listeners) {
+                    const auto entry = std::ranges::lower_bound(registered, identity, {}, [](const auto &value) {
+                        return value.descriptor.identity;
+                    });
+                    listener.senses[listener.senseCount++] = entry->descriptor.sense;
+                }
+                listeners.push_back(std::move(listener));
+            }
+            if (!endpoints.sources.empty()) {
+                PerceptionSpatialSource source{.entity = agent.record.owner,
+                                               .position = position,
+                                               .layers = endpoints.participant.layers,
+                                               .senseCount = endpoints.sources.size(),
+                                               .team = endpoints.participant.team,
+                                               .listenerMask = endpoints.participant.mask,
+                                               .visibility = endpoints.participant.visibility,
+                                               .ownerCancellation = owner};
+                std::ranges::copy(endpoints.sources, source.senses.begin());
+                sources.push_back(std::move(source));
+            }
+        }
+
         /** @brief Checks the current structural revision rather than trusting a retained entity slot. */
         [[nodiscard]] bool SceneSourceAlive(void *context, const PerceptionSourceRef &source) {
             const auto &scene = *static_cast<Runtime::RuntimeScene *>(context);
@@ -73,6 +109,59 @@ namespace Horo::AI {
             return next;
         }
     }  // namespace
+
+    /** @copydoc Detail::ValidatePerceptionCapacity */
+    Result<void> Detail::ValidatePerceptionCapacity(const std::span<const AgentRuntimeState> residents,
+                                                    const std::span<const AgentRuntimeState> additions,
+                                                    const std::span<const std::size_t> removals) {
+        std::size_t listeners{};
+        std::size_t sources{};
+        const auto count = [&](const AgentRuntimeState &agent) {
+            if (agent.retired || !agent.perceptionEndpoints)
+                return;
+            listeners += !agent.perceptionEndpoints->listeners.empty();
+            sources += !agent.perceptionEndpoints->sources.empty();
+        };
+        for (std::size_t index = 0; index < residents.size(); ++index)
+            if (!std::ranges::binary_search(removals, index))
+                count(residents[index]);
+        for (const auto &agent : additions)
+            count(agent);
+        if (listeners > PerceptionSpatialLimits::Listeners || sources > PerceptionSpatialLimits::Sources)
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialLimitExceeded));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiSceneRuntime::PublishPerceptionAtSafePoint */
+    Result<std::shared_ptr<const PerceptionSpatialSnapshot>> AiSceneRuntime::PublishPerceptionAtSafePoint(
+        const Runtime::RuntimeSceneView &scene, const std::uint64_t revision, const std::span<const AiScenePerceptionPosition> positions,
+        PerceptionSpatialBroadphase &spatial, const PerceptionFilteringPolicy &filtering) const {
+        using Publication = Result<std::shared_ptr<const PerceptionSpatialSnapshot>>;
+        if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
+            return Publication::Failure(owner.ErrorValue());
+        if (!scene.IsCurrent() || scene.RuntimeId() != active_->binding.scene)
+            return Publication::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        const auto byEntity = &AiScenePerceptionPosition::entity;
+        if (positions.size() > MaximumAiSceneAgents || !std::ranges::is_sorted(positions, {}, byEntity) ||
+            std::ranges::adjacent_find(positions, {}, byEntity) != positions.end())
+            return Publication::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
+        try {
+            std::vector<PerceptionSpatialListener> listeners;
+            std::vector<PerceptionSpatialSource> sources;
+            for (const auto &agent : active_->agents) {
+                if (agent.retired || agent.record.state != AiAgentActivationState::Active || !agent.perceptionEndpoints)
+                    continue;
+                const auto entity = agent.record.owner;
+                const auto position = std::ranges::lower_bound(positions, entity, {}, byEntity);
+                if (position == positions.end() || position->entity != entity)
+                    return Publication::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+                AppendEndpoints(agent, position->position, listeners, sources);
+            }
+            return spatial.Publish(scene, revision, listeners, sources, filtering);
+        } catch (const std::bad_alloc &) {
+            return Publication::Failure(MakeError(AIErrors::AgentCapacityExceeded));
+        }
+    }
 
     /** @copydoc ProjectPerceptionSource */
     PerceptionSourceRef ProjectPerceptionSource(const Runtime::EntityRef entity) noexcept {

@@ -11,6 +11,7 @@
 #include "NetworkProductComposition.h"
 #include "ScenePhysicsHost.h"
 
+#include <functional>
 #include <memory>
 
 namespace Horo::Vfx {
@@ -48,6 +49,9 @@ namespace Horo::Application::Internal {
         std::shared_ptr<AnimationRuntimeIdentitySource> animationIdentities; /**< One cold host issuer shared by all records/travel. */
         std::shared_ptr<const Runtime::SceneAnimationInputSource>
             animationInputs; /**< Exact optional adjacent-owner snapshot, no new store. */
+        std::function<Result<std::vector<AI::AiScenePerceptionPosition>>(const Runtime::RuntimeSceneView &)>
+            perceptionPositions; /**< Authority-projected global positions in ascending entity order. */
+        AI::PerceptionFilteringPolicy perceptionFiltering;
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
@@ -69,6 +73,9 @@ namespace Horo::Application::Internal {
 
     /** @brief Borrow canonical Animation observation on the service owner lane; no ownership or mutation grant. */
     [[nodiscard]] const Runtime::SceneAnimationRuntime *InspectHeadlessAnimation(const Network::INetworkModeService &service) noexcept;
+    /** @brief Reads the authoritative world's last complete spatial publication on its owner lane. */
+    [[nodiscard]] std::shared_ptr<const AI::PerceptionSpatialSnapshot> InspectHeadlessPerception(
+        const Network::INetworkModeService &service) noexcept;
     [[nodiscard]] std::optional<Runtime::EntityRef> InspectHeadlessAnimationEntity(const Network::INetworkModeService &service,
                                                                                    Runtime::SceneObjectId object) noexcept;
 

@@ -201,8 +201,15 @@ namespace Horo::Application::PrefabAtomicTest {
         Sha256Digest materialArtifact;
         std::uint64_t frame{};
 
-        explicit Fixture(bool aiFirst = false, Fault fault = Fault::None, const AI::AiSceneRuntimeSettings &aiSettings = {})
+        explicit Fixture(bool aiFirst = false, Fault fault = Fault::None, const AI::AiSceneRuntimeSettings &aiSettings = {},
+                         std::shared_ptr<const AI::AiControllerPerceptionEndpoints> endpoints = {})
             : ai(std::move(AI::AiSceneRuntime::Create(aiSettings)).Value()) {
+            if (endpoints) {
+                controller.descriptor.perceptionEndpoints = std::move(endpoints);
+                controller.agent.controller->requiredCapabilities =
+                    controller.agent.controller->requiredCapabilities.Union(AI::AiCapabilitySet::Of(AI::AiCapability::Perception));
+                catalog.front() = controller.descriptor;
+            }
             PublishRegistry();
             PublishMaterial(fault);
             artifact = PublishTemplate(fault);

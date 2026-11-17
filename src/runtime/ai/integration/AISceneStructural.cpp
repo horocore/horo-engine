@@ -164,6 +164,8 @@ namespace Horo::AI::Detail {
             if (prepared.HasError())
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(prepared.ErrorValue());
             candidate->additions = std::move(prepared).Value();
+            if (auto capacity = ValidatePerceptionCapacity(state.agents, candidate->additions, candidate->removals); capacity.HasError())
+                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(capacity.ErrorValue());
             PreparePublicationStorage(*candidate, agents, appended);
             return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
         }
